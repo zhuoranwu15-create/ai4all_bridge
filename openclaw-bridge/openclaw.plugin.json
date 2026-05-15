@@ -1,0 +1,28 @@
+{
+  "id": "ai4all-openclaw-bridge",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "backendUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8000"
+      },
+      "secret": {
+        "type": "string",
+        "default": "dev-secret"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "default": 8000,
+        "minimum": 1000,
+        "maximum": 30000
+      },
+      "onlyChannel": {
+        "type": "string",
+        "default": "openclaw-weixin"
+      }
+    }
+  }
+}

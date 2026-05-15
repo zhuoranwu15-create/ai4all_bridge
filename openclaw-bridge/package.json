@@ -1,0 +1,14 @@
+{
+  "name": "ai4all-openclaw-bridge",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  },
+  "dependencies": {
+    "openclaw": "file:/opt/homebrew/lib/node_modules/openclaw"
+  }
+}
