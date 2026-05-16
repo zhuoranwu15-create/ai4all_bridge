@@ -1,10 +1,13 @@
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
+
+logger = logging.getLogger("ai4all.db")
 
 
 def _db_path() -> Path:
@@ -25,58 +28,160 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_from_contacts_schema(conn: sqlite3.Connection) -> None:
+    logger.info("db migration: contacts → accounts schema detected, starting migration")
+
+    # Disable FK enforcement so we can rebuild sessions/profiles while messages references them
+    conn.execute("PRAGMA foreign_keys = OFF")
+
+    # 1. Add status and notes to accounts
+    _ensure_column(conn, "accounts", "status", "TEXT NOT NULL DEFAULT 'active'")
+    _ensure_column(conn, "accounts", "notes", "TEXT")
+
+    # Copy status/notes from contacts (one contact per account in the old model)
+    conn.execute(
+        """
+        UPDATE accounts
+        SET status = COALESCE(
+                (SELECT c.status FROM contacts c WHERE c.account_id = accounts.id LIMIT 1),
+                'active'
+            ),
+            notes = (SELECT c.notes FROM contacts c WHERE c.account_id = accounts.id LIMIT 1)
+        """
+    )
+
+    # 2. Rebuild sessions: remove contact_id FK, add sender_id/chat_id/sender_name
+    conn.execute(
+        """
+        CREATE TABLE sessions_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            sender_id TEXT,
+            chat_id TEXT,
+            sender_name TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(account_id, session_key),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO sessions_new(id, account_id, session_key, sender_id, chat_id, sender_name,
+                                  status, created_at, updated_at)
+        SELECT s.id, s.account_id, s.session_key,
+               c.sender_id, c.chat_id, c.sender_name,
+               s.status, s.created_at, s.updated_at
+        FROM sessions s
+        LEFT JOIN contacts c ON c.id = s.contact_id
+        """
+    )
+    conn.execute("DROP TABLE sessions")
+    conn.execute("ALTER TABLE sessions_new RENAME TO sessions")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_sessions_account_key "
+        "ON sessions(account_id, session_key)"
+    )
+
+    # 3. Rebuild profiles: remove contact_id, make account_id UNIQUE
+    conn.execute(
+        """
+        CREATE TABLE profiles_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL UNIQUE,
+            display_name TEXT,
+            style TEXT,
+            preferences_json TEXT NOT NULL DEFAULT '{}',
+            system_prompt TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        )
+        """
+    )
+    # Take the latest profile per account
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO profiles_new(
+            account_id, display_name, style, preferences_json, system_prompt,
+            created_at, updated_at
+        )
+        SELECT p.account_id, p.display_name, p.style, p.preferences_json, p.system_prompt,
+               p.created_at, p.updated_at
+        FROM profiles p
+        JOIN (
+            SELECT account_id, MAX(id) AS max_id FROM profiles GROUP BY account_id
+        ) latest ON p.id = latest.max_id
+        """
+    )
+    conn.execute("DROP TABLE profiles")
+    conn.execute("ALTER TABLE profiles_new RENAME TO profiles")
+
+    # 4. Drop contacts
+    conn.execute("DROP TABLE contacts")
+
+    conn.execute("PRAGMA foreign_keys = ON")
+    logger.info("db migration: contacts → accounts complete")
+
+
 def init_db() -> None:
     with connect() as conn:
+        # Run one-time migration if old schema detected
+        if _table_exists(conn, "contacts"):
+            _migrate_from_contacts_schema(conn)
+
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
                 channel TEXT,
                 display_name TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS contacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id TEXT NOT NULL,
-                sender_id TEXT NOT NULL,
-                sender_name TEXT,
-                chat_id TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 notes TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(account_id, sender_id),
-                FOREIGN KEY(account_id) REFERENCES accounts(id)
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT NOT NULL,
-                contact_id INTEGER NOT NULL,
                 session_key TEXT NOT NULL,
+                sender_id TEXT,
+                chat_id TEXT,
+                sender_name TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(account_id, session_key),
-                FOREIGN KEY(account_id) REFERENCES accounts(id),
-                FOREIGN KEY(contact_id) REFERENCES contacts(id)
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
 
             CREATE TABLE IF NOT EXISTS profiles (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_id TEXT NOT NULL,
-                contact_id INTEGER NOT NULL,
+                account_id TEXT NOT NULL UNIQUE,
                 display_name TEXT,
                 style TEXT,
                 preferences_json TEXT NOT NULL DEFAULT '{}',
                 system_prompt TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(account_id, contact_id),
-                FOREIGN KEY(account_id) REFERENCES accounts(id),
-                FOREIGN KEY(contact_id) REFERENCES contacts(id)
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
 
             CREATE TABLE IF NOT EXISTS messages (
@@ -103,19 +208,30 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_messages_session_created
             ON messages(session_id, id);
+
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                date TEXT NOT NULL,
+                message_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(account_id, date),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
             """
         )
-        _ensure_column(conn, "contacts", "status", "TEXT NOT NULL DEFAULT 'active'")
-        _ensure_column(conn, "contacts", "notes", "TEXT")
+        # Ensure new columns exist on accounts (for DBs created before this change)
+        _ensure_column(conn, "accounts", "status", "TEXT NOT NULL DEFAULT 'active'")
+        _ensure_column(conn, "accounts", "notes", "TEXT")
+        _ensure_column(conn, "accounts", "daily_limit", "INTEGER")
+        _ensure_column(conn, "accounts", "rpm_limit", "INTEGER")
         _ensure_column(conn, "messages", "latency_ms", "INTEGER")
         _ensure_column(conn, "messages", "error", "TEXT")
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in existing:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
+# ---------------------------------------------------------------------------
+# Session / account creation
+# ---------------------------------------------------------------------------
 
 def get_or_create_session(
     *,
@@ -137,55 +253,51 @@ def get_or_create_session(
             """,
             (account_id, channel),
         )
-        conn.execute(
-            """
-            INSERT INTO contacts(account_id, sender_id, sender_name, chat_id, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(account_id, sender_id) DO UPDATE SET
-                sender_name = COALESCE(excluded.sender_name, contacts.sender_name),
-                chat_id = COALESCE(excluded.chat_id, contacts.chat_id),
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (account_id, sender_id, sender_name, chat_id),
-        )
-        contact = conn.execute(
-            "SELECT * FROM contacts WHERE account_id = ? AND sender_id = ?",
-            (account_id, sender_id),
+        account = conn.execute(
+            "SELECT * FROM accounts WHERE id = ?", (account_id,)
         ).fetchone()
+
         conn.execute(
             """
-            INSERT INTO sessions(account_id, contact_id, session_key, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions(account_id, session_key, sender_id, chat_id, sender_name, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(account_id, session_key) DO UPDATE SET
-                contact_id = excluded.contact_id,
+                sender_id = COALESCE(excluded.sender_id, sessions.sender_id),
+                chat_id = COALESCE(excluded.chat_id, sessions.chat_id),
+                sender_name = COALESCE(excluded.sender_name, sessions.sender_name),
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (account_id, contact["id"], session_key),
+            (account_id, session_key, sender_id, chat_id, sender_name),
         )
         session = conn.execute(
             "SELECT * FROM sessions WHERE account_id = ? AND session_key = ?",
             (account_id, session_key),
         ).fetchone()
+
         conn.execute(
             """
-            INSERT INTO profiles(account_id, contact_id, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(account_id, contact_id) DO UPDATE SET
+            INSERT INTO profiles(account_id, updated_at)
+            VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id) DO UPDATE SET
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (account_id, contact["id"]),
+            (account_id,),
         )
         profile = conn.execute(
-            "SELECT * FROM profiles WHERE account_id = ? AND contact_id = ?",
-            (account_id, contact["id"]),
+            "SELECT * FROM profiles WHERE account_id = ?",
+            (account_id,),
         ).fetchone()
+
         return {
-            "account": {"id": account_id, "channel": channel},
-            "contact": dict(contact),
+            "account": dict(account),
             "session": dict(session),
             "profile": dict(profile),
         }
 
+
+# ---------------------------------------------------------------------------
+# Messages
+# ---------------------------------------------------------------------------
 
 def insert_message(
     *,
@@ -270,194 +382,6 @@ def clear_session_messages(*, session_id: int) -> int:
         return int(cursor.rowcount)
 
 
-def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                s.id,
-                s.account_id,
-                s.session_key,
-                s.status,
-                s.created_at,
-                s.updated_at,
-                c.sender_id,
-                c.sender_name,
-                c.chat_id,
-                p.style,
-                p.display_name AS profile_display_name,
-                COUNT(m.id) AS message_count,
-                MAX(m.created_at) AS last_message_at
-            FROM sessions s
-            JOIN contacts c ON c.id = s.contact_id
-            LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = s.account_id
-            LEFT JOIN messages m ON m.session_id = s.id
-            GROUP BY s.id
-            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def list_accounts() -> List[Dict[str, Any]]:
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                a.id,
-                a.channel,
-                a.display_name,
-                a.created_at,
-                a.updated_at,
-                COUNT(DISTINCT c.id) AS contact_count,
-                COUNT(DISTINCT s.id) AS session_count
-            FROM accounts a
-            LEFT JOIN contacts c ON c.account_id = a.id
-            LEFT JOIN sessions s ON s.account_id = a.id
-            GROUP BY a.id
-            ORDER BY a.updated_at DESC
-            """
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def list_contacts(*, account_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-    query = """
-        SELECT
-            c.id,
-            c.account_id,
-            c.sender_id,
-            c.sender_name,
-            c.chat_id,
-            c.status,
-            c.notes,
-            c.created_at,
-            c.updated_at,
-            p.display_name AS profile_display_name,
-            p.style,
-            COUNT(DISTINCT s.id) AS session_count,
-            COUNT(m.id) AS message_count,
-            MAX(m.created_at) AS last_message_at
-        FROM contacts c
-        LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = c.account_id
-        LEFT JOIN sessions s ON s.contact_id = c.id
-        LEFT JOIN messages m ON m.session_id = s.id
-    """
-    params: List[Any] = []
-    if account_id:
-        query += " WHERE c.account_id = ?"
-        params.append(account_id)
-    query += """
-        GROUP BY c.id
-        ORDER BY COALESCE(last_message_at, c.updated_at) DESC
-        LIMIT ?
-    """
-    params.append(limit)
-    with connect() as conn:
-        rows = conn.execute(query, params).fetchall()
-    return [dict(row) for row in rows]
-
-
-def get_contact(*, contact_id: int) -> Optional[Dict[str, Any]]:
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                c.*,
-                p.id AS profile_id,
-                p.display_name AS profile_display_name,
-                p.style,
-                p.preferences_json,
-                p.system_prompt
-            FROM contacts c
-            LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = c.account_id
-            WHERE c.id = ?
-            """,
-            (contact_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def update_contact(
-    *,
-    contact_id: int,
-    status: Optional[str] = None,
-    notes: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
-    current = get_contact(contact_id=contact_id)
-    if current is None:
-        return None
-    with connect() as conn:
-        conn.execute(
-            """
-            UPDATE contacts
-            SET status = ?,
-                notes = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (
-                status if status is not None else current.get("status"),
-                notes if notes is not None else current.get("notes"),
-                contact_id,
-            ),
-        )
-    return get_contact(contact_id=contact_id)
-
-
-def set_contact_status(*, contact_id: int, status: str) -> Optional[Dict[str, Any]]:
-    return update_contact(contact_id=contact_id, status=status)
-
-
-def update_profile_for_contact(
-    *,
-    contact_id: int,
-    display_name: Optional[str] = None,
-    style: Optional[str] = None,
-    system_prompt: Optional[str] = None,
-    preferences: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    contact = get_contact(contact_id=contact_id)
-    if contact is None:
-        return None
-    with connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO profiles(account_id, contact_id, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(account_id, contact_id) DO NOTHING
-            """,
-            (contact["account_id"], contact_id),
-        )
-    session = get_latest_session_for_contact(contact_id=contact_id)
-    if session is None:
-        return None
-    return update_profile_for_session(
-        session_id=session["id"],
-        display_name=display_name,
-        style=style,
-        system_prompt=system_prompt,
-        preferences=preferences,
-    )
-
-
-def get_latest_session_for_contact(*, contact_id: int) -> Optional[Dict[str, Any]]:
-    with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT *
-            FROM sessions
-            WHERE contact_id = ?
-            ORDER BY updated_at DESC, id DESC
-            LIMIT 1
-            """,
-            (contact_id,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
 def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -475,19 +399,278 @@ def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str
     return [dict(row) for row in reversed(rows)]
 
 
-def get_session(*, session_id: int) -> Optional[Dict[str, Any]]:
+def list_recent_message_raw(*, limit: int = 20) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                m.id,
+                m.account_id,
+                m.session_id,
+                m.message_id,
+                m.direction,
+                m.role,
+                m.message_type,
+                m.content,
+                m.raw_json,
+                m.created_at,
+                s.session_key
+            FROM messages m
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.direction = 'inbound'
+            ORDER BY m.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [_decode_raw_message(row) for row in rows]
+
+
+def get_message_raw(*, message_db_id: int) -> Optional[Dict[str, Any]]:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT s.*, c.sender_id, c.sender_name, c.chat_id
-            FROM sessions s
-            JOIN contacts c ON c.id = s.contact_id
-            WHERE s.id = ?
+            SELECT
+                m.id,
+                m.account_id,
+                m.session_id,
+                m.message_id,
+                m.direction,
+                m.role,
+                m.message_type,
+                m.content,
+                m.raw_json,
+                m.created_at,
+                s.session_key
+            FROM messages m
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.id = ?
             """,
+            (message_db_id,),
+        ).fetchone()
+    return _decode_raw_message(row) if row else None
+
+
+def _decode_raw_message(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    raw_json = item.pop("raw_json", None)
+    try:
+        item["raw"] = json.loads(raw_json or "{}")
+    except json.JSONDecodeError:
+        item["raw"] = {"_decode_error": True, "raw_json": raw_json}
+    return item
+
+
+# ---------------------------------------------------------------------------
+# Sessions
+# ---------------------------------------------------------------------------
+
+def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.account_id,
+                s.session_key,
+                s.sender_id,
+                s.chat_id,
+                s.sender_name,
+                s.status,
+                s.created_at,
+                s.updated_at,
+                p.style,
+                p.display_name AS profile_display_name,
+                COUNT(m.id) AS message_count,
+                MAX(m.created_at) AS last_message_at
+            FROM sessions s
+            LEFT JOIN profiles p ON p.account_id = s.account_id
+            LEFT JOIN messages m ON m.session_id = s.id
+            GROUP BY s.id
+            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_session(*, session_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
     return dict(row) if row else None
 
+
+def list_sessions_for_account(*, account_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.account_id,
+                s.session_key,
+                s.sender_id,
+                s.chat_id,
+                s.sender_name,
+                s.status,
+                s.created_at,
+                s.updated_at,
+                COUNT(m.id) AS message_count,
+                MAX(m.created_at) AS last_message_at
+            FROM sessions s
+            LEFT JOIN messages m ON m.session_id = s.id
+            WHERE s.account_id = ?
+            GROUP BY s.id
+            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
+            LIMIT ?
+            """,
+            (account_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+def list_accounts() -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.id,
+                a.channel,
+                a.display_name,
+                a.status,
+                a.notes,
+                a.created_at,
+                a.updated_at,
+                COUNT(DISTINCT s.id) AS session_count,
+                COUNT(m.id) AS message_count,
+                MAX(m.created_at) AS last_active_at
+            FROM accounts a
+            LEFT JOIN sessions s ON s.account_id = a.id
+            LEFT JOIN messages m ON m.account_id = a.id
+            GROUP BY a.id
+            ORDER BY a.updated_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_account(*, account_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                a.id,
+                a.channel,
+                a.display_name,
+                a.status,
+                a.notes,
+                a.created_at,
+                a.updated_at,
+                COUNT(DISTINCT s.id) AS session_count,
+                COUNT(m.id) AS message_count,
+                MAX(m.created_at) AS last_active_at
+            FROM accounts a
+            LEFT JOIN sessions s ON s.account_id = a.id
+            LEFT JOIN messages m ON m.account_id = a.id
+            WHERE a.id = ?
+            GROUP BY a.id
+            """,
+            (account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_account(
+    *,
+    account_id: str,
+    display_name: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    current = get_account(account_id=account_id)
+    if current is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE accounts
+            SET display_name = ?,
+                notes = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                display_name if display_name is not None else current.get("display_name"),
+                notes if notes is not None else current.get("notes"),
+                account_id,
+            ),
+        )
+    return get_account(account_id=account_id)
+
+
+def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, Any]]:
+    current = get_account(account_id=account_id)
+    if current is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, account_id),
+        )
+    return get_account(account_id=account_id)
+
+
+def get_daily_usage(*, account_id: str, date: str) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT message_count FROM daily_usage WHERE account_id = ? AND date = ?",
+            (account_id, date),
+        ).fetchone()
+    return int(row["message_count"]) if row else 0
+
+
+def increment_daily_usage(*, account_id: str, date: str) -> int:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO daily_usage(account_id, date, message_count, updated_at)
+            VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id, date) DO UPDATE SET
+                message_count = message_count + 1,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (account_id, date),
+        )
+        row = conn.execute(
+            "SELECT message_count FROM daily_usage WHERE account_id = ? AND date = ?",
+            (account_id, date),
+        ).fetchone()
+    return int(row["message_count"]) if row else 1
+
+
+def get_usage_last_7_days(*, account_id: str) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT date, message_count FROM daily_usage
+            WHERE account_id = ?
+            ORDER BY date DESC
+            LIMIT 7
+            """,
+            (account_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
 
 def get_profile_for_session(*, session_id: int) -> Optional[Dict[str, Any]]:
     with connect() as conn:
@@ -495,7 +678,7 @@ def get_profile_for_session(*, session_id: int) -> Optional[Dict[str, Any]]:
             """
             SELECT p.*
             FROM profiles p
-            JOIN sessions s ON s.contact_id = p.contact_id AND s.account_id = p.account_id
+            JOIN sessions s ON s.account_id = p.account_id
             WHERE s.id = ?
             """,
             (session_id,),
@@ -503,15 +686,24 @@ def get_profile_for_session(*, session_id: int) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def update_profile_for_session(
+def get_profile_for_account(*, account_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM profiles WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_profile_for_account(
     *,
-    session_id: int,
+    account_id: str,
     display_name: Optional[str] = None,
     style: Optional[str] = None,
     system_prompt: Optional[str] = None,
     preferences: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    current = get_profile_for_session(session_id=session_id)
+    current = get_profile_for_account(account_id=account_id)
     if current is None:
         return None
 
@@ -531,14 +723,34 @@ def update_profile_for_session(
                 system_prompt = ?,
                 preferences_json = ?,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE account_id = ?
             """,
             (
                 display_name if display_name is not None else current.get("display_name"),
                 style if style is not None else current.get("style"),
                 system_prompt if system_prompt is not None else current.get("system_prompt"),
                 json.dumps(next_preferences, ensure_ascii=False),
-                current["id"],
+                account_id,
             ),
         )
-    return get_profile_for_session(session_id=session_id)
+    return get_profile_for_account(account_id=account_id)
+
+
+def update_profile_for_session(
+    *,
+    session_id: int,
+    display_name: Optional[str] = None,
+    style: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    session = get_session(session_id=session_id)
+    if session is None:
+        return None
+    return update_profile_for_account(
+        account_id=session["account_id"],
+        display_name=display_name,
+        style=style,
+        system_prompt=system_prompt,
+        preferences=preferences,
+    )
