@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     ai4all_bridge_secret: str = "dev-secret"
     admin_token: str = "dev-admin-token"
     database_path: str = "data/ai4all.sqlite3"
+    user_profiles_dir: str = "data/user_profiles"
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
@@ -17,6 +18,11 @@ class Settings(BaseSettings):
         "你要自然、温和、简洁地回应用户，优先提供情绪陪伴、日常建议和生活协助。"
         "不要把自己定位为心理咨询师，不做诊断。"
     )
+
+    rate_limit_daily: int = 100
+    rate_limit_rpm: int = 5
+    rate_limit_daily_message: str = "今天聊得有点多了，我晚些时候再继续陪你。"
+    rate_limit_rpm_message: str = "消息来得太快了，稍等一下再发我吧。"
 
     class Config:
         env_file = ".env"
