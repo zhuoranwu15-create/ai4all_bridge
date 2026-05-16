@@ -44,6 +44,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("ai4all")
 
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
+app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
 
 class ProfileUpdateRequest(BaseModel):
