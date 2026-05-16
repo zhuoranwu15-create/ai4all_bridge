@@ -9,6 +9,8 @@ from app.config import settings
 
 logger = logging.getLogger("ai4all.db")
 
+_UNSET = object()
+
 
 def _db_path() -> Path:
     path = Path(settings.database_path)
@@ -590,8 +592,10 @@ def get_account(*, account_id: str) -> Optional[Dict[str, Any]]:
 def update_account(
     *,
     account_id: str,
-    display_name: Optional[str] = None,
-    notes: Optional[str] = None,
+    display_name=_UNSET,
+    notes=_UNSET,
+    daily_limit=_UNSET,
+    rpm_limit=_UNSET,
 ) -> Optional[Dict[str, Any]]:
     current = get_account(account_id=account_id)
     if current is None:
@@ -602,12 +606,16 @@ def update_account(
             UPDATE accounts
             SET display_name = ?,
                 notes = ?,
+                daily_limit = ?,
+                rpm_limit = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (
-                display_name if display_name is not None else current.get("display_name"),
-                notes if notes is not None else current.get("notes"),
+                current.get("display_name") if display_name is _UNSET else display_name,
+                current.get("notes") if notes is _UNSET else notes,
+                current.get("daily_limit") if daily_limit is _UNSET else daily_limit,
+                current.get("rpm_limit") if rpm_limit is _UNSET else rpm_limit,
                 account_id,
             ),
         )

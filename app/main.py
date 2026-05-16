@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.db import (
     clear_session_messages,
-    get_contact,
+    get_account,
+    get_message_raw,
+    get_profile_for_account,
     get_profile_for_session,
     get_session,
     get_duplicate_reply,
@@ -17,17 +19,19 @@ from app.db import (
     init_db,
     insert_message,
     list_accounts,
-    list_contacts,
+    list_recent_message_raw,
     list_session_messages,
     list_sessions,
+    list_sessions_for_account,
     list_recent_messages,
-    set_contact_status,
-    update_contact,
-    update_profile_for_contact,
+    set_account_status,
+    update_account,
+    update_profile_for_account,
     update_profile_for_session,
 )
 from app.llm import generate_reply
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
+from app.user_profiles import ensure_user_profile, read_user_profile
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -43,9 +47,11 @@ class ProfileUpdateRequest(BaseModel):
     preferences: Optional[dict] = Field(default=None)
 
 
-class ContactUpdateRequest(BaseModel):
-    status: Optional[str] = None
+class AccountUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
     notes: Optional[str] = None
+    daily_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
 
 
 @app.on_event("startup")
@@ -71,10 +77,18 @@ def verify_admin_auth(authorization: Optional[str] = Header(default=None)) -> No
         )
 
 
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "env": settings.app_env}
 
+
+# ---------------------------------------------------------------------------
+# Debug (no auth)
+# ---------------------------------------------------------------------------
 
 @app.get("/debug/sessions")
 def debug_sessions(limit: int = 50) -> dict:
@@ -90,6 +104,29 @@ def debug_messages(session_id: int, limit: int = 100) -> dict:
         "session": session,
         "profile": get_profile_for_session(session_id=session_id),
         "messages": list_session_messages(session_id=session_id, limit=limit),
+    }
+
+
+@app.get("/debug/messages/raw")
+def debug_recent_message_raw(limit: int = 20) -> dict:
+    return {"messages": list_recent_message_raw(limit=limit)}
+
+
+@app.get("/debug/messages/{message_db_id}/raw")
+def debug_message_raw(message_db_id: int) -> dict:
+    message = get_message_raw(message_db_id=message_db_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    return {"message": message}
+
+
+@app.get("/debug/accounts/{account_id}/user-profile")
+def debug_get_user_profile(account_id: str) -> dict:
+    path = ensure_user_profile(account_id)
+    return {
+        "account_id": account_id,
+        "path": str(path),
+        "content": path.read_text(encoding="utf-8"),
     }
 
 
@@ -123,79 +160,101 @@ def debug_update_profile(session_id: int, payload: ProfileUpdateRequest) -> dict
     return {"status": "ok", "profile": profile}
 
 
+# ---------------------------------------------------------------------------
+# Admin — accounts
+# ---------------------------------------------------------------------------
+
 @app.get("/admin/accounts")
 def admin_accounts(_: None = Depends(verify_admin_auth)) -> dict:
     return {"accounts": list_accounts()}
 
 
-@app.get("/admin/accounts/{account_id}/contacts")
-def admin_account_contacts(
+@app.get("/admin/accounts/{account_id}")
+def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {
+        "account": account,
+        "profile": get_profile_for_account(account_id=account_id),
+        "sessions": list_sessions_for_account(account_id=account_id),
+    }
+
+
+@app.patch("/admin/accounts/{account_id}")
+def admin_update_account(
     account_id: str,
-    limit: int = 100,
+    payload: AccountUpdateRequest,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    return {"contacts": list_contacts(account_id=account_id, limit=limit)}
+    updates = payload.model_dump(exclude_unset=True)
+    account = update_account(account_id=account_id, **updates)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
 
 
-@app.get("/admin/contacts/{contact_id}")
-def admin_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    contact = get_contact(contact_id=contact_id)
-    if contact is None:
-        raise HTTPException(status_code=404, detail="contact not found")
-    return {"contact": contact}
+@app.post("/admin/accounts/{account_id}/disable")
+def admin_disable_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = set_account_status(account_id=account_id, status="disabled")
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
 
 
-@app.patch("/admin/contacts/{contact_id}")
-def admin_update_contact(
-    contact_id: int,
-    payload: ContactUpdateRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    if payload.status is not None and payload.status not in {"active", "disabled"}:
-        raise HTTPException(status_code=400, detail="status must be active or disabled")
-    contact = update_contact(
-        contact_id=contact_id,
-        status=payload.status,
-        notes=payload.notes,
-    )
-    if contact is None:
-        raise HTTPException(status_code=404, detail="contact not found")
-    return {"status": "ok", "contact": contact}
+@app.post("/admin/accounts/{account_id}/enable")
+def admin_enable_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = set_account_status(account_id=account_id, status="active")
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
 
 
-@app.post("/admin/contacts/{contact_id}/disable")
-def admin_disable_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    contact = set_contact_status(contact_id=contact_id, status="disabled")
-    if contact is None:
-        raise HTTPException(status_code=404, detail="contact not found")
-    return {"status": "ok", "contact": contact}
-
-
-@app.post("/admin/contacts/{contact_id}/enable")
-def admin_enable_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    contact = set_contact_status(contact_id=contact_id, status="active")
-    if contact is None:
-        raise HTTPException(status_code=404, detail="contact not found")
-    return {"status": "ok", "contact": contact}
-
-
-@app.patch("/admin/contacts/{contact_id}/profile")
-def admin_update_contact_profile(
-    contact_id: int,
+@app.patch("/admin/accounts/{account_id}/profile")
+def admin_update_account_profile(
+    account_id: str,
     payload: ProfileUpdateRequest,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    profile = update_profile_for_contact(
-        contact_id=contact_id,
+    profile = update_profile_for_account(
+        account_id=account_id,
         display_name=payload.display_name,
         style=payload.style,
         system_prompt=payload.system_prompt,
         preferences=payload.preferences,
     )
     if profile is None:
-        raise HTTPException(status_code=404, detail="contact/profile not found")
+        raise HTTPException(status_code=404, detail="account/profile not found")
     return {"status": "ok", "profile": profile}
 
+
+@app.get("/admin/accounts/{account_id}/sessions")
+def admin_account_sessions(
+    account_id: str,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"sessions": list_sessions_for_account(account_id=account_id, limit=limit)}
+
+
+@app.get("/admin/accounts/{account_id}/user-profile")
+def admin_get_user_profile(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    path = ensure_user_profile(account_id)
+    return {
+        "account_id": account_id,
+        "path": str(path),
+        "content": path.read_text(encoding="utf-8"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Admin — sessions
+# ---------------------------------------------------------------------------
 
 @app.get("/admin/sessions")
 def admin_sessions(limit: int = 100, _: None = Depends(verify_admin_auth)) -> dict:
@@ -221,6 +280,33 @@ def admin_reset_session(session_id: int, _: None = Depends(verify_admin_auth)) -
     deleted = clear_session_messages(session_id=session_id)
     return {"status": "ok", "session_id": session_id, "deleted": deleted}
 
+
+# ---------------------------------------------------------------------------
+# Admin — messages
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/messages/raw")
+def admin_recent_message_raw(
+    limit: int = 20,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {"messages": list_recent_message_raw(limit=limit)}
+
+
+@app.get("/admin/messages/{message_db_id}/raw")
+def admin_message_raw(
+    message_db_id: int,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    message = get_message_raw(message_db_id=message_db_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    return {"message": message}
+
+
+# ---------------------------------------------------------------------------
+# Bridge endpoint
+# ---------------------------------------------------------------------------
 
 @app.post("/openclaw/turn", response_model=OpenClawTurnResponse)
 def openclaw_turn(
@@ -254,14 +340,14 @@ def openclaw_turn(
         chat_id=payload.chat_id,
         session_key=session_key,
     )
+    account = session_state["account"]
     session = session_state["session"]
-    contact = session_state["contact"]
+    profile_path = ensure_user_profile(account_id)
 
-    if contact.get("status") == "disabled":
+    if account.get("status") == "disabled":
         logger.info(
-            "openclaw_turn ignored disabled contact account=%s contact_id=%s session=%s",
+            "openclaw_turn ignored disabled account account=%s session=%s",
             account_id,
-            contact.get("id"),
             session_key,
         )
         return OpenClawTurnResponse(
@@ -322,11 +408,13 @@ def openclaw_turn(
                 limit=settings.llm_context_messages,
             )
             profile = session_state.get("profile") or {}
+            file_profile = read_user_profile(account_id)
             reply = generate_reply(
                 user_text=text,
                 history=history,
                 system_prompt=profile.get("system_prompt"),
                 style=profile.get("style"),
+                user_profile=file_profile,
             )
         except Exception as err:
             logger.exception("reply generation failed: %s", err)
@@ -365,5 +453,6 @@ def openclaw_turn(
             "session_key": session_key,
             "message_type": payload.message_type,
             "latency_ms": latency_ms,
+            "user_profile_path": str(profile_path),
         },
     )
