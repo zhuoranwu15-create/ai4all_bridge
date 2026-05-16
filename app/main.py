@@ -1,21 +1,26 @@
 import logging
 import time
 import uuid
+from datetime import date as date_cls
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import settings
 from app.db import (
     clear_session_messages,
     get_account,
+    get_daily_usage,
     get_message_raw,
     get_profile_for_account,
     get_profile_for_session,
     get_session,
     get_duplicate_reply,
     get_or_create_session,
+    get_usage_last_7_days,
+    increment_daily_usage,
     init_db,
     insert_message,
     list_accounts,
@@ -30,6 +35,7 @@ from app.db import (
     update_profile_for_session,
 )
 from app.llm import generate_reply
+from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
 from app.user_profiles import ensure_user_profile, read_user_profile
 
@@ -252,6 +258,24 @@ def admin_get_user_profile(
     }
 
 
+@app.get("/admin/accounts/{account_id}/usage")
+def admin_account_usage(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    today = date_cls.today().isoformat()
+    return {
+        "account_id": account_id,
+        "today": {
+            "date": today,
+            "message_count": get_daily_usage(account_id=account_id, date=today),
+        },
+        "last_7_days": get_usage_last_7_days(account_id=account_id),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Admin — sessions
 # ---------------------------------------------------------------------------
@@ -356,6 +380,30 @@ def openclaw_turn(
             metadata={"account_id": account_id, "session_key": session_key},
         )
 
+    today = date_cls.today().isoformat()
+    effective_rpm = settings.rate_limit_rpm if account.get("rpm_limit") is None else account["rpm_limit"]
+    effective_daily = settings.rate_limit_daily if account.get("daily_limit") is None else account["daily_limit"]
+
+    if effective_rpm > 0 and not rate_limiter.check_rpm(account_id, effective_rpm):
+        logger.info("openclaw_turn rpm_limited account=%s", account_id)
+        return OpenClawTurnResponse(
+            status="rate_limited",
+            reply=settings.rate_limit_rpm_message,
+            metadata={"account_id": account_id, "reason": "rpm"},
+        )
+
+    if effective_daily > 0:
+        current_count = get_daily_usage(account_id=account_id, date=today)
+        if current_count >= effective_daily:
+            logger.info(
+                "openclaw_turn daily_limited account=%s count=%s", account_id, current_count
+            )
+            return OpenClawTurnResponse(
+                status="rate_limited",
+                reply=settings.rate_limit_daily_message,
+                metadata={"account_id": account_id, "reason": "daily", "count": current_count},
+            )
+
     duplicate_reply = get_duplicate_reply(
         account_id=account_id,
         reply_to_message_id=message_id,
@@ -394,6 +442,8 @@ def openclaw_turn(
             reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
             metadata={"session_key": session_key, "latency_ms": latency_ms},
         )
+
+    increment_daily_usage(account_id=account_id, date=today)
 
     generation_error = None
     if text == "#重置会话":
