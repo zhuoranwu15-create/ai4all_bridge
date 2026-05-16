@@ -1,5 +1,13 @@
 # AI4ALL Weixin Bot
 
+## Docs
+
+- [Current status](docs/current_status.md)
+- [User guide](docs/user_guide.md)
+- [Admin guide](docs/admin_guide.md)
+- [Roadmap](docs/roadmap.md)
+- [OpenClaw Bridge technical design](docs/openclaw_bridge_tech_design.md)
+
 ## Local Backend
 
 ```bash
