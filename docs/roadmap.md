@@ -1,138 +1,149 @@
-# Roadmap
+# 后续规划
 
-## Direction
+## 总方向
 
-The project should continue from a simple verified WeChat AI companion into an extensible personal AI companion and life assistant platform.
+项目要从一个已验证的微信 AI 陪伴 Demo，演进成一个可扩展的个人 AI 陪伴与生活助理服务。
 
-Near-term priority is not broad SaaS complexity. The immediate goal is to make one operated WeChat account reliably serve many private users, while keeping the architecture ready for multiple WeChat/OpenClaw instances later.
+近期重点不是完整 SaaS，也不是复杂多业务后台，而是把核心链路做稳定：
 
-## Product Principles
+```text
+一个 OpenClaw 实例
+-> 一个或多个微信入口账号
+-> 多个真实微信用户私聊
+-> 每个用户独立上下文和配置
+-> 运营人员可以管理用户与会话
+```
 
-- Private chat first.
-- Emotional companionship and life assistance first.
-- Keep psychological counseling out of early versions.
-- Keep user configuration simple and operator-controlled at first.
-- Prefer a stable small system over many partially-working features.
+其中，“一个 OpenClaw 实例同时接入多个微信入口账号”还需要专项验证。目前已经验证的是一个服务微信号入口服务多个真实微信用户。
 
-## Phase 1: Stabilize Multi-User Private Chat
+## 产品原则
 
-Goal: one WeChat account can serve multiple users reliably.
+- 私聊优先。
+- 情感陪伴和生活助理优先。
+- 早期不展开心理咨询方向。
+- 用户配置先由运营侧管理，不急于开放复杂自助配置。
+- 先稳定小系统，再扩展能力。
 
-Planned work:
+## Phase 1：稳定多人私聊服务
 
-- Harden Admin API.
-- Add simple Admin UI.
-- Improve profile editing.
-- Add contact search and filters.
-- Add session/message pagination.
-- Add message delivery/failure status.
-- Add better duplicate/retry handling around OpenClaw events.
-- Add basic usage statistics per account/contact/session.
+目标：一个服务微信号可以稳定服务多个真实微信用户。
 
-Success criteria:
+计划：
 
-- Operators can see users, sessions, and messages.
-- Operators can disable users.
-- Operators can adjust user style/prompt.
-- Each user gets isolated context.
-- Failures can be diagnosed from logs and Admin API.
+- 加固 Admin API。
+- 增加简单 Web 后台。
+- 完善用户 profile 编辑。
+- 增加用户搜索、筛选。
+- 增加会话和消息分页。
+- 增加消息投递/失败状态。
+- 增加 OpenClaw 事件重试和去重的可观测性。
+- 增加账号/用户/会话维度的基础统计。
 
-## Phase 2: Voice Support
+验收标准：
 
-Voice is still in Phase 1 product scope, but should be implemented after the text flow is stable.
+- 运营人员能看到用户、会话、消息。
+- 运营人员能禁用用户。
+- 运营人员能调整用户回复风格和 Prompt。
+- 不同用户上下文隔离。
+- 出问题时可以从日志和 Admin API 定位。
 
-Planned work:
+## Phase 2：语音支持
 
-- Understand actual media payload from `openclaw-weixin`.
-- Decide ASR path:
-  - local conversion with `ffmpeg`, then ASR
-  - or cloud ASR on media URL/binary
-- Add `message_type=voice` handling.
-- Store voice metadata.
-- Return text replies first.
-- Later consider voice replies/TTS.
+语音仍在第一阶段产品范围内，但应在文本链路稳定后实现。
 
-Success criteria:
+计划：
 
-- User can send a WeChat voice message.
-- Backend transcribes it.
-- LLM replies in text.
+- 明确 `openclaw-weixin` 实际传递的语音 payload。
+- 决定 ASR 方案：
+  - 本地 `ffmpeg` 转码后 ASR。
+  - 或后端/云服务直接处理媒体 URL 或二进制。
+- 支持 `message_type=voice`。
+- 存储语音元数据。
+- 先返回文本回复。
+- 后续再考虑语音回复/TTS。
 
-## Phase 3: Deployment
+验收标准：
 
-Goal: reproducible deployment on Aliyun.
+- 用户可以发送微信语音。
+- Backend 能转写文本。
+- LLM 基于转写文本回复。
 
-Planned work:
+## Phase 3：部署
 
-- Dockerfile for backend.
-- docker-compose for backend + persistent volume.
-- Production `.env` template.
-- Health checks.
-- Log path and retention.
-- Decide SQLite vs PostgreSQL.
-- Bridge backend URL and secret configuration for cloud.
-- OpenClaw runtime strategy:
-  - host process
-  - or Docker container with persistent state
+目标：可以在阿里云上可复现部署。
 
-Success criteria:
+计划：
 
-- Fresh server can be provisioned from docs.
-- Backend survives restart.
-- OpenClaw reconnect flow is documented.
-- Secrets are not committed.
+- Backend Dockerfile。
+- docker-compose。
+- SQLite volume 或 PostgreSQL。
+- 生产 `.env` 模板。
+- 健康检查。
+- 日志路径和保留策略。
+- Bridge 后端 URL 和 Secret 配置。
+- 明确 OpenClaw 运行方式：
+  - 宿主机进程。
+  - 或 Docker 容器并持久化状态目录。
 
-## Phase 4: Admin UI
+验收标准：
 
-Goal: operators can manage users without curl.
+- 新服务器可以按文档部署。
+- Backend 重启后数据不丢。
+- OpenClaw 重新登录/重连流程有文档。
+- 密钥不进入仓库。
 
-Minimum UI:
+## Phase 4：Web 后台
 
-- Account list.
-- Contact list.
-- Contact detail.
-- Session/message viewer.
-- Profile editor.
-- Enable/disable controls.
-- Reset session button.
+目标：运营人员不用 curl 就能管理用户。
 
-This can be a simple server-rendered HTML page first. A full frontend app is not required immediately.
+最小后台：
 
-## Phase 5: Better Conversation Quality
+- 账号列表。
+- 用户列表。
+- 用户详情。
+- 会话/消息查看。
+- Profile 编辑。
+- 启用/禁用用户。
+- 重置会话。
 
-Goal: improve companion/life assistant value.
+第一版可以是简单服务端 HTML 页面，不需要一开始做完整前端工程。
 
-Planned work:
+## Phase 5：提升对话质量
 
-- Better default prompt.
-- More structured profile fields.
-- Style presets.
-- Basic user preference extraction.
-- Summary-based session memory.
-- Safety boundaries for medical/legal/psychological topics.
-- Evaluation prompts and test conversation sets.
+目标：提升陪伴和生活助理体验。
 
-## Phase 6: Multiple WeChat Entrypoints
+计划：
 
-Goal: support multiple operated WeChat accounts/OpenClaw instances.
+- 优化默认 Prompt。
+- 增加结构化 profile 字段。
+- 增加风格预设。
+- 初步用户偏好提取。
+- 基于摘要的会话记忆。
+- 针对医疗、法律、心理咨询等高风险话题建立边界。
+- 建立测试对话集和评估方式。
 
-Planned work:
+## Phase 6：多个微信入口账号
 
-- Account-level config.
-- Per-account bridge secret.
-- Per-account prompt defaults.
-- Account health and login state tracking.
-- QR/login state reporting from Bridge if available.
-- Deployment pattern for multiple OpenClaw instances.
+目标：支持多个服务微信号/OpenClaw 入口。
 
-This is different from full self-serve SaaS. Self-serve user-owned WeChat hosting should remain a later decision.
+计划：
 
-## Not Now
+- 验证 `openclaw-weixin` 多账号能力。
+- 账号级配置。
+- 每个账号独立 Bridge Secret。
+- 每个账号独立默认 Prompt。
+- 账号健康状态和登录状态追踪。
+- 如果可行，Bridge 上报二维码/登录失效状态。
+- 多 OpenClaw 实例或单实例多账号的部署模式。
 
-- Full public SaaS onboarding.
-- Payment.
-- Group chat.
-- Image/multimodal.
-- Long-term memory productization.
-- Psychology/counseling workflows.
-- Multi-agent workflows.
+这仍然不同于完整自助 SaaS。普通用户扫码托管自己的微信号，应放在更后面的版本再决定。
+
+## 暂不做
+
+- 完整公开 SaaS onboarding。
+- 支付。
+- 群聊。
+- 图片/多模态。
+- 长期记忆产品化。
+- 心理咨询工作流。
+- 多 Agent 工作流。

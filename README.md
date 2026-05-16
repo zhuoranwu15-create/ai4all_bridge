@@ -1,12 +1,12 @@
 # AI4ALL Weixin Bot
 
-## Docs
+## 文档
 
-- [Current status](docs/current_status.md)
-- [User guide](docs/user_guide.md)
-- [Admin guide](docs/admin_guide.md)
-- [Roadmap](docs/roadmap.md)
-- [OpenClaw Bridge technical design](docs/openclaw_bridge_tech_design.md)
+- [当前状态](docs/current_status.md)
+- [用户使用说明](docs/user_guide.md)
+- [后台管理说明](docs/admin_guide.md)
+- [后续规划](docs/roadmap.md)
+- [OpenClaw Bridge 技术设计](docs/openclaw_bridge_tech_design.md)
 
 ## Local Backend
 
@@ -58,8 +58,7 @@ SQLite is used for the first version. The default database path is:
 data/ai4all.sqlite3
 ```
 
-The backend separates users by `account_id + session_key`, so one WeChat account
-can serve multiple private chat users with isolated context.
+Backend 按 `account_id + session_key` 隔离用户上下文。当前已验证的是一个服务微信号入口服务多个真实微信私聊用户；多个服务微信号入口接入仍需后续验证。
 
 ## OpenClaw Bridge
 

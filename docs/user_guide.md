@@ -1,52 +1,54 @@
-# User Guide
+# 用户使用说明
 
-This is the current lightweight user-facing guide for the first usable version.
+这是当前第一版的简单用户说明。
 
-## What This Service Is
+## 这个服务是什么
 
-AI4ALL is a WeChat-based personal AI companion and life assistant.
+AI4ALL 是一个基于微信私聊的个人 AI 陪伴与生活助理。
 
-You can chat with it in private WeChat messages. It is designed for everyday conversation, emotional companionship, and lightweight life assistance.
+用户可以像正常聊天一样，在微信里给服务微信号发送私聊消息。服务会返回 AI 回复。
 
-It is not a medical, legal, financial, or psychological counseling service.
+当前定位是日常陪伴和生活助理，不是医疗、法律、金融或心理咨询服务。
 
-## How To Use
+## 如何使用
 
-1. Add or open the AI4ALL WeChat account operated by the team.
-2. Send a private text message.
-3. Wait for the AI reply.
+1. 添加或打开团队运营的 AI4ALL 服务微信号。
+2. 发送私聊文本消息。
+3. 等待 AI 回复。
 
-Each WeChat user has an independent conversation context.
+每个微信用户都有独立的会话上下文。
 
-## Supported Today
+## 当前支持
 
-- Private text chat.
-- Basic conversational memory within the recent session context.
-- Per-user response style configured by the operator.
+- 微信私聊文本。
+- 最近会话上下文。
+- 运营人员可以为不同用户设置不同回复风格。
 
-## Useful Commands
+## 可用指令
 
-Send these in the WeChat private chat:
+在微信私聊中发送：
 
 ```text
 #状态
 ```
 
-Shows whether the current session is working.
+查看当前会话是否正常。
 
 ```text
 #重置会话
 ```
 
-Clears the current session's stored messages.
+清空当前会话已存储的消息。
 
-## Current Limitations
+## 当前限制
 
-- Voice messages are not fully supported yet.
-- Images are not supported yet.
-- Group chat is not supported yet.
-- Long-term memory is not finalized yet.
+- 语音消息还没有完整支持。
+- 图片暂不支持。
+- 群聊暂不支持。
+- 长期记忆还没有产品化。
 
-## Privacy Note
+## 隐私说明
 
-Messages are stored by the AI4ALL Backend so the service can maintain conversation context and support debugging. Production privacy and retention policy still needs a formal version before external rollout.
+为了维持会话上下文和便于排查问题，消息会被 AI4ALL Backend 存储。
+
+在对外正式开放前，需要补充正式的隐私政策、数据保留策略和用户告知机制。
