@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>账号详情 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回列表</a>
+  <div id="err" style="display:none" class="status-msg error"></div>
+  <div id="content" style="display:none">
+
+    <div class="card">
+      <h2>基本信息</h2>
+      <div class="form-row"><label>账号 ID</label><input id="f-id" disabled></div>
+      <div class="form-row"><label>渠道</label><input id="f-channel" disabled></div>
+      <div class="form-row"><label>状态</label><span id="f-status"></span></div>
+      <div class="form-row"><label>备注</label><input type="text" id="f-notes" placeholder="运营备注"></div>
+      <div class="form-row"><label>显示名称</label><input type="text" id="f-display-name" placeholder="昵称（可选）"></div>
+      <div class="form-actions">
+        <button class="primary" onclick="saveBasic()">保存</button>
+        <span id="st-basic" class="status-msg"></span>
+        <button id="btn-toggle" onclick="toggleStatus()" style="margin-left:auto"></button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>限流配置</h2>
+      <div class="form-row">
+        <label>每日上限（空 = 全局默认 100）</label>
+        <input type="number" id="f-daily-limit" min="0" placeholder="留空使用全局默认">
+      </div>
+      <div class="form-row">
+        <label>每分钟上限（空 = 全局默认 5）</label>
+        <input type="number" id="f-rpm-limit" min="0" placeholder="留空使用全局默认">
+      </div>
+      <div class="form-actions">
+        <button class="primary" onclick="saveLimits()">保存</button>
+        <span id="st-limits" class="status-msg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>AI 配置</h2>
+      <div class="form-row"><label>回复风格</label><input type="text" id="f-style" placeholder="例：简洁活泼"></div>
+      <div class="form-row">
+        <label>System Prompt（空 = 系统默认）</label>
+        <textarea id="f-system-prompt" placeholder="留空使用系统默认 Prompt"></textarea>
+      </div>
+      <div class="form-actions">
+        <button class="primary" onclick="saveProfile()">保存</button>
+        <span id="st-profile" class="status-msg"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>今日用量</h2>
+      <p id="usage-text">—</p>
+    </div>
+
+    <div class="card">
+      <h2>会话列表</h2>
+      <div id="sessions"></div>
+    </div>
+
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    var accountId = new URLSearchParams(location.search).get('id');
+    if (!accountId) {
+      showErr('缺少账号 ID 参数');
+    } else {
+      loadAll();
+    }
+
+    function showErr(msg) {
+      var el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    async function loadAll() {
+      try {
+        var results = await Promise.all([
+          apiFetch('/admin/accounts/' + encodeURIComponent(accountId)),
+          apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/usage'),
+        ]);
+        var accountData = results[0];
+        var usageData = results[1];
+        fillForm(accountData.account, accountData.profile);
+        fillSessions(accountData.sessions);
+        fillUsage(usageData);
+        document.getElementById('content').style.display = '';
+        document.title = accountId + ' – AI4ALL';
+      } catch (e) {
+        showErr(e.message);
+      }
+    }
+
+    function fillForm(account, profile) {
+      document.getElementById('f-id').value = account.id;
+      document.getElementById('f-channel').value = account.channel || '';
+      var statusEl = document.getElementById('f-status');
+      statusEl.textContent = account.status;
+      statusEl.className = 'status-' + account.status;
+      document.getElementById('f-notes').value = account.notes || '';
+      document.getElementById('f-display-name').value = account.display_name || '';
+      document.getElementById('f-daily-limit').value = account.daily_limit != null ? account.daily_limit : '';
+      document.getElementById('f-rpm-limit').value = account.rpm_limit != null ? account.rpm_limit : '';
+      document.getElementById('f-style').value = (profile && profile.style) || '';
+      document.getElementById('f-system-prompt').value = (profile && profile.system_prompt) || '';
+      var btn = document.getElementById('btn-toggle');
+      if (account.status === 'active') {
+        btn.textContent = '禁用账号';
+        btn.className = 'danger';
+      } else {
+        btn.textContent = '启用账号';
+        btn.className = 'primary';
+      }
+    }
+
+    function fillUsage(usage) {
+      document.getElementById('usage-text').textContent =
+        '今日已发 ' + usage.today.message_count + ' 条';
+    }
+
+    function fillSessions(sessions) {
+      var el = document.getElementById('sessions');
+      if (!sessions || !sessions.length) { el.textContent = '暂无会话'; return; }
+      el.innerHTML = sessions.map(function(s) {
+        return '<div class="session-row">'
+          + '<div class="session-hdr">'
+          + '<span style="font-family:monospace;font-size:.8rem">' + esc(s.session_key) + '</span>'
+          + '<span>' + (s.message_count || 0) + ' 条'
+          + (s.last_message_at ? ' · ' + s.last_message_at.slice(0, 16) : '')
+          + ' <button onclick="toggleMsgs(this,' + s.id + ')">展开</button></span>'
+          + '</div>'
+          + '<div class="session-msgs" id="sm-' + s.id + '"></div>'
+          + '</div>';
+      }).join('');
+    }
+
+    async function toggleMsgs(btn, sessionId) {
+      var container = document.getElementById('sm-' + sessionId);
+      if (container.classList.contains('open')) {
+        container.classList.remove('open');
+        btn.textContent = '展开';
+        return;
+      }
+      if (!container.dataset.loaded) {
+        btn.textContent = '加载中…';
+        try {
+          var data = await apiFetch('/admin/sessions/' + sessionId);
+          var msgs = (data.messages || []).slice(-20);
+          container.innerHTML = msgs.length
+            ? msgs.map(function(m) {
+                return '<div class="msg">'
+                  + '<span class="msg-role ' + esc(m.role) + '">' + (m.role === 'user' ? '用户' : 'AI') + '</span>'
+                  + '<span class="msg-content">' + esc(m.content || '') + '</span>'
+                  + '<span class="msg-time">' + esc((m.created_at || '').slice(0, 16)) + '</span>'
+                  + '</div>';
+              }).join('')
+            : '<div class="msg"><span class="msg-content">暂无消息</span></div>';
+          container.dataset.loaded = '1';
+        } catch (e) {
+          container.textContent = e.message;
+        }
+      }
+      container.classList.add('open');
+      btn.textContent = '收起';
+    }
+
+    async function saveBasic() {
+      var st = document.getElementById('st-basic');
+      showStatus(st, '保存中…');
+      try {
+        await apiFetch('/admin/accounts/' + encodeURIComponent(accountId), {
+          method: 'PATCH',
+          body: JSON.stringify({
+            notes: document.getElementById('f-notes').value || null,
+            display_name: document.getElementById('f-display-name').value || null,
+          }),
+        });
+        showStatus(st, '已保存 ✓');
+      } catch (e) { showStatus(st, e.message, true); }
+    }
+
+    async function saveLimits() {
+      var st = document.getElementById('st-limits');
+      showStatus(st, '保存中…');
+      var dv = document.getElementById('f-daily-limit').value;
+      var rv = document.getElementById('f-rpm-limit').value;
+      try {
+        await apiFetch('/admin/accounts/' + encodeURIComponent(accountId), {
+          method: 'PATCH',
+          body: JSON.stringify({
+            daily_limit: dv === '' ? null : parseInt(dv, 10),
+            rpm_limit: rv === '' ? null : parseInt(rv, 10),
+          }),
+        });
+        showStatus(st, '已保存 ✓');
+      } catch (e) { showStatus(st, e.message, true); }
+    }
+
+    async function saveProfile() {
+      var st = document.getElementById('st-profile');
+      showStatus(st, '保存中…');
+      try {
+        await apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/profile', {
+          method: 'PATCH',
+          body: JSON.stringify({
+            style: document.getElementById('f-style').value || null,
+            system_prompt: document.getElementById('f-system-prompt').value || null,
+          }),
+        });
+        showStatus(st, '已保存 ✓');
+      } catch (e) { showStatus(st, e.message, true); }
+    }
+
+    async function toggleStatus() {
+      var statusEl = document.getElementById('f-status');
+      var action = statusEl.textContent === 'active' ? 'disable' : 'enable';
+      try {
+        await apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/' + action, { method: 'POST' });
+        loadAll();
+      } catch (e) { alert(e.message); }
+    }
+  </script>
+</body>
+</html>
