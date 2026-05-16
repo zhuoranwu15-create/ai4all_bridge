@@ -43,6 +43,8 @@ def init_db() -> None:
                 sender_id TEXT NOT NULL,
                 sender_name TEXT,
                 chat_id TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                notes TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(account_id, sender_id),
@@ -103,6 +105,8 @@ def init_db() -> None:
             ON messages(session_id, id);
             """
         )
+        _ensure_column(conn, "contacts", "status", "TEXT NOT NULL DEFAULT 'active'")
+        _ensure_column(conn, "contacts", "notes", "TEXT")
         _ensure_column(conn, "messages", "latency_ms", "INTEGER")
         _ensure_column(conn, "messages", "error", "TEXT")
 
@@ -295,6 +299,163 @@ def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_accounts() -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.id,
+                a.channel,
+                a.display_name,
+                a.created_at,
+                a.updated_at,
+                COUNT(DISTINCT c.id) AS contact_count,
+                COUNT(DISTINCT s.id) AS session_count
+            FROM accounts a
+            LEFT JOIN contacts c ON c.account_id = a.id
+            LEFT JOIN sessions s ON s.account_id = a.id
+            GROUP BY a.id
+            ORDER BY a.updated_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_contacts(*, account_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    query = """
+        SELECT
+            c.id,
+            c.account_id,
+            c.sender_id,
+            c.sender_name,
+            c.chat_id,
+            c.status,
+            c.notes,
+            c.created_at,
+            c.updated_at,
+            p.display_name AS profile_display_name,
+            p.style,
+            COUNT(DISTINCT s.id) AS session_count,
+            COUNT(m.id) AS message_count,
+            MAX(m.created_at) AS last_message_at
+        FROM contacts c
+        LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = c.account_id
+        LEFT JOIN sessions s ON s.contact_id = c.id
+        LEFT JOIN messages m ON m.session_id = s.id
+    """
+    params: List[Any] = []
+    if account_id:
+        query += " WHERE c.account_id = ?"
+        params.append(account_id)
+    query += """
+        GROUP BY c.id
+        ORDER BY COALESCE(last_message_at, c.updated_at) DESC
+        LIMIT ?
+    """
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_contact(*, contact_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                c.*,
+                p.id AS profile_id,
+                p.display_name AS profile_display_name,
+                p.style,
+                p.preferences_json,
+                p.system_prompt
+            FROM contacts c
+            LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = c.account_id
+            WHERE c.id = ?
+            """,
+            (contact_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_contact(
+    *,
+    contact_id: int,
+    status: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    current = get_contact(contact_id=contact_id)
+    if current is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE contacts
+            SET status = ?,
+                notes = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                status if status is not None else current.get("status"),
+                notes if notes is not None else current.get("notes"),
+                contact_id,
+            ),
+        )
+    return get_contact(contact_id=contact_id)
+
+
+def set_contact_status(*, contact_id: int, status: str) -> Optional[Dict[str, Any]]:
+    return update_contact(contact_id=contact_id, status=status)
+
+
+def update_profile_for_contact(
+    *,
+    contact_id: int,
+    display_name: Optional[str] = None,
+    style: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    contact = get_contact(contact_id=contact_id)
+    if contact is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO profiles(account_id, contact_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id, contact_id) DO NOTHING
+            """,
+            (contact["account_id"], contact_id),
+        )
+    session = get_latest_session_for_contact(contact_id=contact_id)
+    if session is None:
+        return None
+    return update_profile_for_session(
+        session_id=session["id"],
+        display_name=display_name,
+        style=style,
+        system_prompt=system_prompt,
+        preferences=preferences,
+    )
+
+
+def get_latest_session_for_contact(*, contact_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM sessions
+            WHERE contact_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (contact_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str, Any]]:

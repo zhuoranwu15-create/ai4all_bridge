@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     app_env: str = "local"
     ai4all_bridge_secret: str = "dev-secret"
+    admin_token: str = "dev-admin-token"
     database_path: str = "data/ai4all.sqlite3"
 
     llm_api_key: str = ""

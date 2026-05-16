@@ -9,15 +9,21 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.db import (
     clear_session_messages,
+    get_contact,
     get_profile_for_session,
     get_session,
     get_duplicate_reply,
     get_or_create_session,
     init_db,
     insert_message,
+    list_accounts,
+    list_contacts,
     list_session_messages,
     list_sessions,
     list_recent_messages,
+    set_contact_status,
+    update_contact,
+    update_profile_for_contact,
     update_profile_for_session,
 )
 from app.llm import generate_reply
@@ -37,6 +43,11 @@ class ProfileUpdateRequest(BaseModel):
     preferences: Optional[dict] = Field(default=None)
 
 
+class ContactUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db()
@@ -48,6 +59,15 @@ def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> N
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid bridge authorization",
+        )
+
+
+def verify_admin_auth(authorization: Optional[str] = Header(default=None)) -> None:
+    expected = f"Bearer {settings.admin_token}"
+    if authorization != expected:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid admin authorization",
         )
 
 
@@ -103,6 +123,105 @@ def debug_update_profile(session_id: int, payload: ProfileUpdateRequest) -> dict
     return {"status": "ok", "profile": profile}
 
 
+@app.get("/admin/accounts")
+def admin_accounts(_: None = Depends(verify_admin_auth)) -> dict:
+    return {"accounts": list_accounts()}
+
+
+@app.get("/admin/accounts/{account_id}/contacts")
+def admin_account_contacts(
+    account_id: str,
+    limit: int = 100,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {"contacts": list_contacts(account_id=account_id, limit=limit)}
+
+
+@app.get("/admin/contacts/{contact_id}")
+def admin_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
+    contact = get_contact(contact_id=contact_id)
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return {"contact": contact}
+
+
+@app.patch("/admin/contacts/{contact_id}")
+def admin_update_contact(
+    contact_id: int,
+    payload: ContactUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if payload.status is not None and payload.status not in {"active", "disabled"}:
+        raise HTTPException(status_code=400, detail="status must be active or disabled")
+    contact = update_contact(
+        contact_id=contact_id,
+        status=payload.status,
+        notes=payload.notes,
+    )
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return {"status": "ok", "contact": contact}
+
+
+@app.post("/admin/contacts/{contact_id}/disable")
+def admin_disable_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
+    contact = set_contact_status(contact_id=contact_id, status="disabled")
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return {"status": "ok", "contact": contact}
+
+
+@app.post("/admin/contacts/{contact_id}/enable")
+def admin_enable_contact(contact_id: int, _: None = Depends(verify_admin_auth)) -> dict:
+    contact = set_contact_status(contact_id=contact_id, status="active")
+    if contact is None:
+        raise HTTPException(status_code=404, detail="contact not found")
+    return {"status": "ok", "contact": contact}
+
+
+@app.patch("/admin/contacts/{contact_id}/profile")
+def admin_update_contact_profile(
+    contact_id: int,
+    payload: ProfileUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    profile = update_profile_for_contact(
+        contact_id=contact_id,
+        display_name=payload.display_name,
+        style=payload.style,
+        system_prompt=payload.system_prompt,
+        preferences=payload.preferences,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="contact/profile not found")
+    return {"status": "ok", "profile": profile}
+
+
+@app.get("/admin/sessions")
+def admin_sessions(limit: int = 100, _: None = Depends(verify_admin_auth)) -> dict:
+    return {"sessions": list_sessions(limit=limit)}
+
+
+@app.get("/admin/sessions/{session_id}")
+def admin_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
+    session = get_session(session_id=session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {
+        "session": session,
+        "profile": get_profile_for_session(session_id=session_id),
+        "messages": list_session_messages(session_id=session_id, limit=100),
+    }
+
+
+@app.post("/admin/sessions/{session_id}/reset")
+def admin_reset_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
+    if get_session(session_id=session_id) is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    deleted = clear_session_messages(session_id=session_id)
+    return {"status": "ok", "session_id": session_id, "deleted": deleted}
+
+
 @app.post("/openclaw/turn", response_model=OpenClawTurnResponse)
 def openclaw_turn(
     payload: OpenClawTurnRequest,
@@ -136,6 +255,20 @@ def openclaw_turn(
         session_key=session_key,
     )
     session = session_state["session"]
+    contact = session_state["contact"]
+
+    if contact.get("status") == "disabled":
+        logger.info(
+            "openclaw_turn ignored disabled contact account=%s contact_id=%s session=%s",
+            account_id,
+            contact.get("id"),
+            session_key,
+        )
+        return OpenClawTurnResponse(
+            status="disabled",
+            no_reply=True,
+            metadata={"account_id": account_id, "session_key": session_key},
+        )
 
     duplicate_reply = get_duplicate_reply(
         account_id=account_id,

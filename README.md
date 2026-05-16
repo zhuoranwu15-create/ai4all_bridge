@@ -99,6 +99,40 @@ curl -X POST http://127.0.0.1:8000/debug/sessions/1/profile \
   -d '{"style":"温柔、简洁、像熟悉的朋友"}'
 ```
 
+## Admin APIs
+
+Admin endpoints require `Authorization: Bearer $ADMIN_TOKEN`.
+
+```bash
+export ADMIN_TOKEN=dev-admin-token
+
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1:8000/admin/accounts
+
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1:8000/admin/accounts/local/contacts
+
+curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+  http://127.0.0.1:8000/admin/contacts/1
+
+curl -X PATCH http://127.0.0.1:8000/admin/contacts/1/profile \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"style":"温柔、简洁、像熟悉的朋友"}'
+
+curl -X POST http://127.0.0.1:8000/admin/contacts/1/disable \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+curl -X POST http://127.0.0.1:8000/admin/contacts/1/enable \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+
+curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Disabled contacts are ignored by `/openclaw/turn` with `status=disabled` and
+`no_reply=true`.
+
 ## Troubleshooting
 
 Backend logs are printed by uvicorn.
