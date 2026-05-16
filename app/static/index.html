@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI4ALL 运营后台</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>AI4ALL 运营后台</h1>
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>账号 ID</th>
+          <th>状态</th>
+          <th>今日 / 日上限</th>
+          <th>最近活跃</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="5">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    (async function load() {
+      var tbody = document.getElementById('tbody');
+      try {
+        var data = await apiFetch('/admin/accounts');
+        var accounts = data.accounts;
+        if (!accounts.length) {
+          tbody.innerHTML = '<tr><td colspan="5">暂无账号</td></tr>';
+          return;
+        }
+        var usages = await Promise.all(accounts.map(function(a) {
+          return apiFetch('/admin/accounts/' + encodeURIComponent(a.id) + '/usage')
+            .catch(function() { return { today: { message_count: '?' } }; });
+        }));
+        tbody.innerHTML = accounts.map(function(a, i) {
+          var count = usages[i].today.message_count;
+          var limit = a.daily_limit != null ? a.daily_limit : '默认';
+          var lastActive = a.last_active_at ? a.last_active_at.slice(0, 16) : '—';
+          var toggleBtn = a.status === 'active'
+            ? '<button class="danger" onclick="toggle(\'' + esc(a.id) + '\',\'disable\')">禁用</button>'
+            : '<button class="primary" onclick="toggle(\'' + esc(a.id) + '\',\'enable\')">启用</button>';
+          return '<tr>'
+            + '<td><a href="account.html?id=' + encodeURIComponent(a.id) + '">' + esc(a.id) + '</a></td>'
+            + '<td class="status-' + esc(a.status) + '">' + esc(a.status) + '</td>'
+            + '<td>' + esc(String(count)) + ' / ' + esc(String(limit)) + '</td>'
+            + '<td>' + esc(lastActive) + '</td>'
+            + '<td>' + toggleBtn + '</td>'
+            + '</tr>';
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="5" class="status-msg error">' + esc(e.message) + '</td></tr>';
+      }
+    })();
+
+    async function toggle(id, action) {
+      try {
+        await apiFetch('/admin/accounts/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
+        location.reload();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+  </script>
+</body>
+</html>
