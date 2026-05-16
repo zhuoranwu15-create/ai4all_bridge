@@ -2,7 +2,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from app.config import settings
 
@@ -14,11 +14,20 @@ def _fallback_reply(text: str) -> str:
     return f"AI4ALL mock 已收到：{text or '空消息'}"
 
 
-def generate_reply(*, user_text: str, history: List[Dict[str, str]]) -> str:
+def generate_reply(
+    *,
+    user_text: str,
+    history: List[Dict[str, str]],
+    system_prompt: Optional[str] = None,
+    style: Optional[str] = None,
+) -> str:
     if not settings.llm_api_key:
         return _fallback_reply(user_text)
 
-    messages = [{"role": "system", "content": settings.llm_default_prompt}]
+    prompt = system_prompt or settings.llm_default_prompt
+    if style:
+        prompt = f"{prompt}\n当前用户偏好的回复风格：{style}。"
+    messages = [{"role": "system", "content": prompt}]
     messages.extend(history)
 
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"

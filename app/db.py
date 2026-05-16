@@ -2,7 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
 
@@ -62,6 +62,21 @@ def init_db() -> None:
                 FOREIGN KEY(contact_id) REFERENCES contacts(id)
             );
 
+            CREATE TABLE IF NOT EXISTS profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                contact_id INTEGER NOT NULL,
+                display_name TEXT,
+                style TEXT,
+                preferences_json TEXT NOT NULL DEFAULT '{}',
+                system_prompt TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(account_id, contact_id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(contact_id) REFERENCES contacts(id)
+            );
+
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id TEXT NOT NULL,
@@ -73,6 +88,8 @@ def init_db() -> None:
                 message_type TEXT NOT NULL DEFAULT 'text',
                 content TEXT,
                 raw_json TEXT,
+                latency_ms INTEGER,
+                error TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(session_id) REFERENCES sessions(id)
@@ -86,6 +103,14 @@ def init_db() -> None:
             ON messages(session_id, id);
             """
         )
+        _ensure_column(conn, "messages", "latency_ms", "INTEGER")
+        _ensure_column(conn, "messages", "error", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def get_or_create_session(
@@ -137,7 +162,25 @@ def get_or_create_session(
             "SELECT * FROM sessions WHERE account_id = ? AND session_key = ?",
             (account_id, session_key),
         ).fetchone()
-        return {"account": {"id": account_id, "channel": channel}, "contact": dict(contact), "session": dict(session)}
+        conn.execute(
+            """
+            INSERT INTO profiles(account_id, contact_id, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id, contact_id) DO UPDATE SET
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (account_id, contact["id"]),
+        )
+        profile = conn.execute(
+            "SELECT * FROM profiles WHERE account_id = ? AND contact_id = ?",
+            (account_id, contact["id"]),
+        ).fetchone()
+        return {
+            "account": {"id": account_id, "channel": channel},
+            "contact": dict(contact),
+            "session": dict(session),
+            "profile": dict(profile),
+        }
 
 
 def insert_message(
@@ -151,6 +194,8 @@ def insert_message(
     message_type: str,
     content: str,
     raw: Optional[Dict[str, Any]] = None,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
 ) -> Optional[int]:
     try:
         with connect() as conn:
@@ -158,9 +203,9 @@ def insert_message(
                 """
                 INSERT INTO messages(
                     account_id, session_id, message_id, reply_to_message_id,
-                    direction, role, message_type, content, raw_json
+                    direction, role, message_type, content, raw_json, latency_ms, error
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     account_id,
@@ -172,6 +217,8 @@ def insert_message(
                     message_type,
                     content,
                     json.dumps(raw or {}, ensure_ascii=False),
+                    latency_ms,
+                    error,
                 ),
             )
             return int(cursor.lastrowid)
@@ -217,3 +264,120 @@ def clear_session_messages(*, session_id: int) -> int:
     with connect() as conn:
         cursor = conn.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
         return int(cursor.rowcount)
+
+
+def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.account_id,
+                s.session_key,
+                s.status,
+                s.created_at,
+                s.updated_at,
+                c.sender_id,
+                c.sender_name,
+                c.chat_id,
+                p.style,
+                p.display_name AS profile_display_name,
+                COUNT(m.id) AS message_count,
+                MAX(m.created_at) AS last_message_at
+            FROM sessions s
+            JOIN contacts c ON c.id = s.contact_id
+            LEFT JOIN profiles p ON p.contact_id = c.id AND p.account_id = s.account_id
+            LEFT JOIN messages m ON m.session_id = s.id
+            GROUP BY s.id
+            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, message_id, reply_to_message_id, direction, role,
+                message_type, content, latency_ms, error, created_at
+            FROM messages
+            WHERE session_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, limit),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
+def get_session(*, session_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT s.*, c.sender_id, c.sender_name, c.chat_id
+            FROM sessions s
+            JOIN contacts c ON c.id = s.contact_id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_profile_for_session(*, session_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT p.*
+            FROM profiles p
+            JOIN sessions s ON s.contact_id = p.contact_id AND s.account_id = p.account_id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_profile_for_session(
+    *,
+    session_id: int,
+    display_name: Optional[str] = None,
+    style: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+    preferences: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    current = get_profile_for_session(session_id=session_id)
+    if current is None:
+        return None
+
+    next_preferences = preferences
+    if next_preferences is None:
+        try:
+            next_preferences = json.loads(current.get("preferences_json") or "{}")
+        except json.JSONDecodeError:
+            next_preferences = {}
+
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE profiles
+            SET display_name = ?,
+                style = ?,
+                system_prompt = ?,
+                preferences_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                display_name if display_name is not None else current.get("display_name"),
+                style if style is not None else current.get("style"),
+                system_prompt if system_prompt is not None else current.get("system_prompt"),
+                json.dumps(next_preferences, ensure_ascii=False),
+                current["id"],
+            ),
+        )
+    return get_profile_for_session(session_id=session_id)
