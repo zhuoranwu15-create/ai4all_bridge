@@ -140,6 +140,49 @@ def debug_message_raw(message_db_id: int) -> dict:
     return {"message": message}
 
 
+@app.get("/debug/accounts/{account_id}/prompt-preview")
+def debug_prompt_preview(account_id: str) -> dict:
+    """Show the assembled system prompt and per-block sizes for an account."""
+    from app.user_profiles import read_user_profile, read_daily_notes
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    profile = get_profile_for_account(account_id=account_id) or {}
+    file_profile = read_user_profile(account_id)
+    today = date_cls.today().isoformat()
+    soul = extract_section(file_profile, "Soul")
+    user_prefs = extract_section(file_profile, "User Preferences")
+    long_term_memory = extract_section(file_profile, "Long-term Memory")
+    daily_notes = read_daily_notes(account_id, today)
+    builder = PromptBuilder()
+    prompt = builder.build(
+        display_name=account.get("display_name"),
+        soul=soul,
+        user_prefs=user_prefs,
+        long_term_memory=long_term_memory,
+        daily_notes=daily_notes,
+        system_prompt_override=profile.get("system_prompt"),
+        style=profile.get("style"),
+        today=today,
+        model_name=settings.llm_model,
+    )
+    return {
+        "account_id": account_id,
+        "today": today,
+        "total_chars": len(prompt),
+        "blocks": {
+            "soul_chars": len(soul),
+            "user_prefs_chars": len(user_prefs),
+            "long_term_memory_chars": len(long_term_memory),
+            "daily_notes_chars": len(daily_notes),
+            "system_prompt_override": bool(profile.get("system_prompt")),
+            "style": profile.get("style"),
+            "display_name": account.get("display_name"),
+        },
+        "prompt": prompt,
+    }
+
+
 @app.get("/debug/accounts/{account_id}/user-profile")
 def debug_get_user_profile(account_id: str) -> dict:
     path = ensure_user_profile(account_id)
