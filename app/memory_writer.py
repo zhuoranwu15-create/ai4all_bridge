@@ -36,7 +36,7 @@ def _format_turns(turns: List[Dict[str, str]]) -> str:
         content = turn.get("content", "")
         if role == "user":
             lines.append(f"用户：{content}")
-        else:
+        elif role == "assistant":
             lines.append(f"AI：{content}")
     return "\n".join(lines)
 
