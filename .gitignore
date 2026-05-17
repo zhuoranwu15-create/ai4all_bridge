@@ -1,4 +1,5 @@
 .env
+dev_memo.md
 .venv/
 __pycache__/
 *.py[cod]
