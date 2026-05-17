@@ -43,20 +43,19 @@ def _format_turns(turns: List[Dict[str, str]]) -> str:
 
 def _extract_sync(turns: List[Dict[str, str]]) -> str:
     """Call LLM synchronously, return raw result string."""
-    from app.llm import generate_reply
+    from app.llm import generate_completion
 
     if not settings.llm_api_key:
         return "NOTHING"
 
     turns_text = _format_turns(turns)
     prompt = EXTRACTION_PROMPT.format(turns_text=turns_text)
-
+    messages = [
+        {"role": "system", "content": "你是记忆提炼助手，从对话中提取有价值的信息，不需要解释你的工作。"},
+        {"role": "user", "content": prompt},
+    ]
     try:
-        return generate_reply(
-            user_text=prompt,
-            history=[],
-            system_prompt="你是记忆提炼助手，从对话中提取有价值的信息，不需要解释你的工作。",
-        )
+        return generate_completion(messages)
     except Exception as exc:
         logger.warning("memory extraction LLM call failed: %s", exc)
         return "NOTHING"
