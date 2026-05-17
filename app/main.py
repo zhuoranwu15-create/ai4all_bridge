@@ -472,7 +472,7 @@ def openclaw_turn(
                 long_term_memory=long_term_memory,
                 system_prompt_override=profile.get("system_prompt"),
                 style=profile.get("style"),
-                today=date_cls.today().isoformat(),
+                today=today,
                 model_name=settings.llm_model,
             )
             reply = generate_reply(
