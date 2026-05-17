@@ -6,19 +6,21 @@
 
 第一版目标：
 
-- 多个微信用户使用同一个 OpenClaw 微信入口。
+- 一个 OpenClaw 实例连接多个个人微信账号。
 - OpenClaw 负责微信登录、消息接收、消息发送。
-- 我们的后端负责用户隔离、记忆、人设、限流、LLM、ASR。
+- 我们的后端负责账号隔离、记忆、人设、限流、LLM、ASR。
 - 能本地跑通真实 OpenClaw 到后端再回微信的完整链路。
 - 后续部署到阿里云 Docker 时只改配置，不改核心代码。
 
 ### 1.1 Phase 1 产品边界
 
-Phase 1 的“多人使用”指的是：多个微信聊天用户使用同一个由我们运营的微信入口。
+Phase 1 的“多人使用”指的是：多个个人微信账号连接到同一个 OpenClaw 实例，但每个账号拥有独立 Soul、记忆、会话和配置。
 
-它不是：多个普通用户分别扫码托管自己的微信号。
+它不是：一个公共服务微信号服务多个外部微信用户。
 
-因此 Phase 1 暂不建设完整的微信账号托管 SaaS，不要求每个管理员都能自助登录、管理自己的微信号、人设和用户。后续如果演进为“多账号托管平台”，需要新增租户、账号归属、Web 管理后台、账号登录态监控和权限隔离模型。
+官方 `openclaw-weixin` 能处理微信登录和多账号连接，但 OpenClaw 原生 `soul.md`、长期记忆和部分配置偏实例级共享。AI4ALL Bridge 的职责是把这些业务能力转移到 Backend，并按微信账号隔离。
+
+Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系；先由运营侧接入和管理账号。
 
 ## 2. 总体链路
 
@@ -109,7 +111,7 @@ Phase 1 的“多人使用”指的是：多个微信聊天用户使用同一个
 职责：
 
 - 接收 Bridge 请求。
-- 识别用户和会话。
+- 识别账号和会话。
 - 做消息去重。
 - 做限流和每日额度。
 - 处理语音 ASR。
@@ -562,23 +564,24 @@ ASR_API_KEY=...
 
 表现：
 
-- 产品从“多个聊天用户使用同一个入口”变成“多个管理员托管多个微信号”。
+- 产品从“运营侧接入多个微信账号”变成“多个管理员自助托管多个微信号”。
 
 处理：
 
 - 增加 `tenants`、`managed_accounts`、`account_admins` 数据模型。
 - 每个 OpenClaw account_id 必须绑定 owner/tenant。
-- Soul、限流、日志、用户列表都必须按 tenant/account 隔离。
+- Soul、限流、日志、会话都必须按 tenant/account 隔离。
 - 增加 Web 管理后台和登录鉴权。
 - 该能力不进入 Day 1。
 
 ## 12. 当前需要确认的问题
 
-- OpenClaw 插件开发方式和本地加载方式。
-- `before_agent_reply` 的真实 API 形态。
-- Bridge 返回 synthetic reply / silence 的具体代码写法。
+- OpenClaw 插件开发方式和本地加载方式：已通过本地插件安装验证。
+- `before_agent_reply` 的真实 API 形态：已通过真实微信消息验证。
+- Bridge 返回 synthetic reply 的具体代码写法：已通过真实微信回复验证。
 - 禁用默认 agent 或将 Bridge 设置为唯一回复来源的具体配置方式。
-- `openclaw-weixin` 传给 agent loop 的真实 context 字段。
+- `openclaw-weixin` 传给 agent loop 的真实 context 字段：已通过 raw payload 查询验证。
+- Bridge hook 中稳定的微信账号级 `account_id` 字段：已确认可从 `ctx.sessionKey` 解析，格式为 `agent:main:openclaw-weixin:<account_id>:direct:<peer_id>`。
 - 私聊 unknown sender 是否需要 pairing approval。
 - 语音消息在 OpenClaw context 中的 media 表达方式。
 - 语音媒体格式是否为 AMR/SILK/M4A，以及是否需要 ffmpeg 转码。

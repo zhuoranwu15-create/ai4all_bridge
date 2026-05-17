@@ -28,6 +28,39 @@ function buildSessionParts(sessionKey) {
   };
 }
 
+function extractAccountId(ctx, provider) {
+  if (ctx.accountId) {
+    return String(ctx.accountId);
+  }
+  if (ctx.providerAccountId) {
+    return String(ctx.providerAccountId);
+  }
+
+  const sessionKey = typeof ctx.sessionKey === "string" ? ctx.sessionKey : "";
+  const parts = sessionKey.split(":");
+  const providerIndex = parts.indexOf(provider);
+  if (provider && providerIndex >= 0 && parts.length > providerIndex + 1) {
+    const candidate = parts[providerIndex + 1];
+    if (candidate && candidate !== "direct") {
+      return candidate;
+    }
+  }
+
+  return provider || undefined;
+}
+
+function buildAccountCandidates(ctx) {
+  return {
+    messageProvider: ctx.messageProvider || undefined,
+    channelId: ctx.channelId || undefined,
+    sessionKey: ctx.sessionKey || undefined,
+    sessionId: ctx.sessionId || undefined,
+    accountId: ctx.accountId || undefined,
+    providerAccountId: ctx.providerAccountId || undefined,
+    botId: ctx.botId || undefined,
+  };
+}
+
 async function postTurn(config, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -66,11 +99,13 @@ export default definePluginEntry({
       }
 
       const session = buildSessionParts(ctx.sessionKey);
+      const accountCandidates = buildAccountCandidates(ctx);
+      const accountId = extractAccountId(ctx, provider);
       const payload = {
         event_id: ctx.runId || undefined,
         message_id: ctx.runId || undefined,
         channel: channel || config.onlyChannel,
-        account_id: provider || undefined,
+        account_id: accountId,
         sender_id: session.senderId,
         chat_id: ctx.channelId || session.chatId,
         chat_type: "private",
@@ -81,11 +116,17 @@ export default definePluginEntry({
         raw: {
           ctx,
           event,
+          ai4all_bridge: {
+            account_candidates: accountCandidates,
+            resolved_account_id: accountId,
+          },
         },
       };
 
       try {
-        api.logger.info(`ai4all bridge forwarding turn channel=${payload.channel} session=${payload.session_key}`);
+        api.logger.info(
+          `ai4all bridge forwarding turn channel=${payload.channel} session=${payload.session_key} candidates=${JSON.stringify(accountCandidates)}`
+        );
         const result = await postTurn(config, payload);
         if (result?.no_reply) {
           return { handled: true, reply: { text: "NO_REPLY" }, reason: "ai4all_no_reply" };

@@ -6,6 +6,7 @@
 - [用户使用说明](docs/user_guide.md)
 - [后台管理说明](docs/admin_guide.md)
 - [后续规划](docs/roadmap.md)
+- [下一步开发步骤](docs/next_dev_steps.md)
 - [OpenClaw Bridge 技术设计](docs/openclaw_bridge_tech_design.md)
 
 ## Local Backend
@@ -58,7 +59,7 @@ SQLite is used for the first version. The default database path is:
 data/ai4all.sqlite3
 ```
 
-Backend 按 `account_id + session_key` 隔离用户上下文。当前已验证的是一个服务微信号入口服务多个真实微信私聊用户；多个服务微信号入口接入仍需后续验证。
+Backend 按 `account_id + session_key` 隔离上下文。当前已验证一个 OpenClaw 实例同时接入两个个人微信账号，Bridge 会从 OpenClaw `sessionKey` 解析真实微信账号级 `account_id`，并为每个账号自动创建 `data/user_profiles/<account_id>/user_profile.md`。
 
 ## OpenClaw Bridge
 
@@ -89,7 +90,7 @@ before_agent_reply
 2. Install/update the Bridge plugin.
 3. Restart OpenClaw Gateway.
 4. Confirm `openclaw-weixin` is running.
-5. Send a private WeChat message to the OpenClaw-connected WeChat account.
+5. Send a private WeChat message from the OpenClaw-connected WeChat account.
 6. Confirm the WeChat reply comes from AI4ALL Backend.
 
 ## Debug APIs
@@ -99,6 +100,8 @@ These endpoints are intended for local development only.
 ```bash
 curl http://127.0.0.1:8000/debug/sessions
 curl 'http://127.0.0.1:8000/debug/messages?session_id=1'
+curl 'http://127.0.0.1:8000/debug/messages/raw?limit=5'
+curl http://127.0.0.1:8000/debug/accounts/86f866663cf9-im-bot/user-profile
 curl -X POST http://127.0.0.1:8000/debug/sessions/1/reset
 curl http://127.0.0.1:8000/debug/sessions/1/profile
 curl -X POST http://127.0.0.1:8000/debug/sessions/1/profile \
@@ -117,7 +120,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   http://127.0.0.1:8000/admin/accounts
 
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/local/contacts
+  http://127.0.0.1:8000/admin/accounts/openclaw-weixin/contacts
 
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   http://127.0.0.1:8000/admin/contacts/1
@@ -137,8 +140,9 @@ curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-Disabled contacts are ignored by `/openclaw/turn` with `status=disabled` and
-`no_reply=true`.
+The current `contacts` endpoints are compatibility APIs from the early data model.
+The target model is account-level management: each connected WeChat account has
+its own Soul, session history, memory, and configuration.
 
 ## Troubleshooting
 
