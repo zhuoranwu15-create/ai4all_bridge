@@ -116,10 +116,9 @@ class TestPromptBuilderTruncation:
         out = self.pb.build(soul=long_soul)
         # The truncated text should end with the truncation marker
         assert "...[已截断]" in out
-        # The soul block should not exceed 3000 + len("...[已截断]") chars
-        # Find the soul portion (it's sandwiched between other blocks)
-        # Just verify the marker is present and the original 3001-char string is NOT
-        assert long_soul not in out
+        # Verify the boundary precisely: exactly 3000 A's are present, not 3001
+        assert "A" * 3000 in out
+        assert "A" * 3001 not in out
 
     def test_soul_not_truncated_at_3000(self):
         exact_soul = "B" * 3000
