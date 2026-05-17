@@ -115,28 +115,54 @@ M4  工具体系               ← 架构跃迁，从"聊天机器人"到"agent"
 
 **新建文件：** `app/prompt_builder.py`
 
-**我们的 9 个区块（对应 OpenClaw 核心区块，适配微信场景）：**
+**我们的 12 个区块（对标 OpenClaw 17 块，适配微信场景）：**
 
-| # | 区块 | 来源 | 上限 |
-|---|------|------|------|
-| 1 | Execution Bias | 固定文本 | - |
-| 2 | Identity | account.display_name + 角色定义 | 500 chars |
-| 3 | Soul | user_profile.md `## Soul` 节 | 3000 chars |
-| 4 | User | user_profile.md `## User Preferences` 节 | 2000 chars |
-| 5 | Long-term Memory | user_profile.md `## Long-term Memory` 节 | 3000 chars |
-| 6 | Daily Notes | memory/今天.md + memory/昨天.md（若存在） | 2000 chars |
-| 7 | Style | profiles.style | 500 chars |
-| 8 | System Prompt Override | profiles.system_prompt（运营覆盖） | 不限 |
-| 9 | Date / Format | 当前日期 + 微信回复格式指引 | - |
+**稳定区（缓存边界之上）—— session 间几乎不变，可被 prefix cache 复用：**
+
+| # | 区块 | 来源 | 上限 | 对应 OpenClaw |
+|---|------|------|------|--------------|
+| 1 | **Tooling** | 运行时生成 tool schema | - | Block 1 |
+| 2 | **Execution Bias** | 固定文本 | - | Block 2 |
+| 3 | **Safety** | 全局固定文本（可定期更新） | 1000 chars | Block 3 |
+| 4 | **Identity** | account.display_name + 角色定义 | 500 chars | Block 9 (IDENTITY.md) |
+| 5 | **Soul** | user_profile.md `## Soul` 节 | 3000 chars | Block 9 (SOUL.md) |
+| 6 | **Skills** | 硬编码能力列表（初期），后期动态加载 | 1000 chars | Block 4 |
+
+**← 缓存边界 →**
+
+**Volatile 区（每次 session 可变）：**
+
+| # | 区块 | 来源 | 上限 | 对应 OpenClaw |
+|---|------|------|------|--------------|
+| 7 | **User** | user_profile.md `## User Preferences` 节 | 2000 chars | Block 9 (USER.md) |
+| 8 | **Long-term Memory** | user_profile.md `## Long-term Memory` 节 | 3000 chars | Block 9 (MEMORY.md) |
+| 9 | **Daily Notes** | memory/今天.md + memory/昨天.md（若存在） | 2000 chars | Block 9 (daily notes) |
+| 10 | **System Prompt Override** | profiles.system_prompt（运营覆盖，最高优先级） | 不限 | Block 16 |
+| 11 | **Output Directives** | 固定微信格式规范 + profiles.style | 500 chars | Block 12 |
+| 12 | **Runtime** | 当前日期 + 模型名 | - | Block 11 + 14 |
+
+> **Block 1 Tooling：** M4 前为空占位，M4 后注入工具 schema。格式待 M4 时确定（倾向 markdown 描述 + JSON schema 分段）。
+>
+> **Block 3 Safety：** 全局一份固定文本，存放于 `app/prompts/safety.md`（或 config 字符串），可定期更新。运营层覆盖通过 Block 10（System Prompt Override）实现，不改 Safety 本身。
+>
+> **Block 6 Skills：** 初期硬编码"我能做的事"列表（日程查询、提醒设置、天气搜索等）。预留 `skills: list[str]` 接口，后期替换为动态文件读取，接口不变。
+>
+> **缓存边界说明：** 当前 provider（DeepSeek）prefix cache 行为待确认。结构上稳定内容在前是好工程实践，cache 收益后期验证。
 
 **关键原则：**
 - 每个区块独立上限，超出截断并记 warning
 - 区块缺失时优雅降级（不崩溃）
-- 稳定内容（Soul、Memory）在前，volatile（日期）在后
+- Block 10 Override 存在时覆盖 Block 3-6（Safety 除外）的内容，Safety 不可被运营覆盖
+
+**新建文件：**
+- `app/prompt_builder.py` — PromptBuilder 类，12 个 build_block_* 方法
+- `app/prompts/safety.md` — 全局安全护栏文本
 
 **验收：**
 - 单元测试覆盖每个区块的 truncation 行为
 - `app/llm.py` 中 3 行拼接完全替换为 `PromptBuilder`
+- Block 1（Tooling）在空工具列表时输出空字符串（不注入），不崩溃
+- Block 3（Safety）内容可独立更新 `safety.md` 而无需改代码
 
 ---
 
@@ -348,6 +374,30 @@ Week 6   联调、测试、文档
 **决策：** 蒸馏使用 LLM 直接判断重要性，不实现 OpenClaw 的 frequency × relevance × diversity × recency × consolidation × richness 评分系统。
 
 **理由：** 评分系统需要大量信号积累才有效，早期用 LLM 判断足够用。后期数据量上来可以迭代。
+
+---
+
+### 2026-05-17：Safety 区块全局固定 + 运营覆盖分离
+
+**决策：** Block 3（Safety）使用全局固定文本（`app/prompts/safety.md`），可定期更新。运营针对特定账号的覆盖通过 Block 10（System Prompt Override）实现。Safety 本身不可被运营 Override 覆盖。
+
+**理由：** 安全边界应当是全局一致的，不能由单个运营人员绕过。运营层覆盖聚焦于人格/风格调整，而非安全策略。
+
+---
+
+### 2026-05-17：Skills 区块初期硬编码，预留动态升级接口
+
+**决策：** Block 6（Skills）初期使用硬编码能力列表（包含日程查询、提醒、搜索等预期能力描述）。`PromptBuilder` 接受 `skills: list[str]` 参数，初期调用方传入硬编码列表，后期替换为文件/DB 动态加载，接口不变。
+
+**理由：** 硬编码足以启动，但不能把列表内嵌进 `prompt_builder.py`，否则后期升级需改核心文件。接口隔离保证兼容性。
+
+---
+
+### 2026-05-17：Prompt 区块从 9 扩展到 12 块，对标 OpenClaw
+
+**决策：** 将初始 9 块方案升级为 12 块，新增 Tooling（Block 1）、Safety（Block 3）、Skills（Block 6），将 Output Directives 从 Style 中独立出来，Runtime 覆盖原 Date/Format。
+
+**理由：** 日程管理、提醒、搜索等业务场景需要工具体系支撑，Tooling 必须从设计阶段就预留；Safety 和 Skills 是 OpenClaw 架构中有明确用途的块，早期缺失会导致后续补入困难；Output Directives 独立有助于明确微信格式约束与人格风格的边界。
 
 ---
 
