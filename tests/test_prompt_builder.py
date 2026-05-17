@@ -2,7 +2,20 @@
 import pytest
 
 from app.prompt_builder import PromptBuilder, extract_section
-from app.user_profiles import DEFAULT_USER_PROFILE
+
+
+# Inline profile used by extract_section tests — no dependency on user_profiles module.
+_INLINE_PROFILE = """# User Profile
+
+## Soul
+你是这个微信账号的个人 AI 陪伴与生活助理。回应要自然、温和、简洁，优先提供情绪陪伴、日常建议和生活协助。
+
+## User Preferences
+- 暂无
+
+## Long-term Memory
+- 暂无
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -11,19 +24,19 @@ from app.user_profiles import DEFAULT_USER_PROFILE
 
 class TestExtractSection:
     def test_extracts_soul(self):
-        result = extract_section(DEFAULT_USER_PROFILE, "Soul")
+        result = extract_section(_INLINE_PROFILE, "Soul")
         assert "AI 陪伴与生活助理" in result
 
     def test_extracts_user_preferences(self):
-        result = extract_section(DEFAULT_USER_PROFILE, "User Preferences")
+        result = extract_section(_INLINE_PROFILE, "User Preferences")
         assert "暂无" in result
 
     def test_extracts_long_term_memory(self):
-        result = extract_section(DEFAULT_USER_PROFILE, "Long-term Memory")
+        result = extract_section(_INLINE_PROFILE, "Long-term Memory")
         assert "暂无" in result
 
     def test_missing_section_returns_empty(self):
-        result = extract_section(DEFAULT_USER_PROFILE, "NonExistent")
+        result = extract_section(_INLINE_PROFILE, "NonExistent")
         assert result == ""
 
     def test_strips_surrounding_whitespace(self):
@@ -146,9 +159,7 @@ class TestPromptBuilderSkips:
 
     def test_daily_notes_skip_when_none(self):
         out = self.pb.build(daily_notes=None)
-        # daily_notes block is only present when provided; hard to test absence
-        # without knowing the exact header. We verify the build succeeds.
-        assert isinstance(out, str)
+        assert "【今日备注】" not in out
 
     def test_daily_notes_present_when_provided(self):
         out = self.pb.build(daily_notes="今日备忘：买菜")
@@ -156,11 +167,11 @@ class TestPromptBuilderSkips:
 
     def test_tooling_skip_when_tools_none(self):
         out = self.pb.build(tools=None)
-        assert isinstance(out, str)
+        assert "【可用工具】" not in out
 
     def test_tooling_skip_when_tools_empty(self):
         out = self.pb.build(tools=[])
-        assert isinstance(out, str)
+        assert "【可用工具】" not in out
 
     def test_tooling_present_when_tools_provided(self):
         out = self.pb.build(tools=["search", "weather"])
@@ -169,11 +180,11 @@ class TestPromptBuilderSkips:
 
     def test_skills_skip_when_none(self):
         out = self.pb.build(skills=None)
-        assert isinstance(out, str)
+        assert "【技能列表】" not in out
 
     def test_skills_skip_when_empty(self):
         out = self.pb.build(skills=[])
-        assert isinstance(out, str)
+        assert "【技能列表】" not in out
 
     def test_skills_present_when_provided(self):
         out = self.pb.build(skills=["写作辅助", "代码生成"])
