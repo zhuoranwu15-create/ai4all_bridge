@@ -46,6 +46,10 @@ from app.user_profiles import ensure_user_profile, read_user_profile, read_daily
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("ai4all")
 
+_background_loop: Optional[asyncio.AbstractEventLoop] = None
+
+_SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
@@ -67,6 +71,12 @@ class AccountUpdateRequest(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+
+
+@app.on_event("startup")
+async def capture_event_loop() -> None:
+    global _background_loop
+    _background_loop = asyncio.get_running_loop()
 
 
 def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> None:
@@ -513,16 +523,15 @@ def openclaw_turn(
         error=generation_error,
     )
 
-    if not generation_error and text:
+    if not generation_error and text and text not in _SPECIAL_COMMANDS and _background_loop is not None:
         turns_for_memory = [
             {"role": "user", "content": text},
             {"role": "assistant", "content": reply},
         ]
-        try:
-            loop = asyncio.get_event_loop()
-            loop.create_task(write_memory(account_id=account_id, turns=turns_for_memory, today=today))
-        except RuntimeError:
-            pass
+        _background_loop.call_soon_threadsafe(
+            _background_loop.create_task,
+            write_memory(account_id=account_id, turns=turns_for_memory, today=today),
+        )
 
     return OpenClawTurnResponse(
         status="ok",
