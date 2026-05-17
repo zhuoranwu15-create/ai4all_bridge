@@ -35,6 +35,7 @@ from app.db import (
     update_profile_for_session,
 )
 from app.llm import generate_reply
+from app.prompt_builder import PromptBuilder, extract_section
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
 from app.user_profiles import ensure_user_profile, read_user_profile
@@ -460,12 +461,24 @@ def openclaw_turn(
             )
             profile = session_state.get("profile") or {}
             file_profile = read_user_profile(account_id)
+            soul = extract_section(file_profile, "Soul")
+            user_prefs = extract_section(file_profile, "User Preferences")
+            long_term_memory = extract_section(file_profile, "Long-term Memory")
+            builder = PromptBuilder()
+            system_prompt = builder.build(
+                display_name=account.get("display_name"),
+                soul=soul,
+                user_prefs=user_prefs,
+                long_term_memory=long_term_memory,
+                system_prompt_override=profile.get("system_prompt"),
+                style=profile.get("style"),
+                today=date_cls.today().isoformat(),
+                model_name=settings.llm_model,
+            )
             reply = generate_reply(
                 user_text=text,
                 history=history,
-                system_prompt=profile.get("system_prompt"),
-                style=profile.get("style"),
-                user_profile=file_profile,
+                system_prompt=system_prompt,
             )
         except Exception as err:
             logger.exception("reply generation failed: %s", err)

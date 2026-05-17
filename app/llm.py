@@ -19,14 +19,11 @@ def generate_reply(
     user_text: str,
     history: List[Dict[str, str]],
     system_prompt: Optional[str] = None,
-    style: Optional[str] = None,
 ) -> str:
     if not settings.llm_api_key:
         return _fallback_reply(user_text)
 
     prompt = system_prompt or settings.llm_default_prompt
-    if style:
-        prompt = f"{prompt}\n当前用户偏好的回复风格：{style}。"
     messages = [{"role": "system", "content": prompt}]
     messages.extend(history)
 
