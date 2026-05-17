@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -38,7 +39,8 @@ from app.llm import generate_reply
 from app.prompt_builder import PromptBuilder, extract_section
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
-from app.user_profiles import ensure_user_profile, read_user_profile
+from app.memory_writer import write_memory
+from app.user_profiles import ensure_user_profile, read_user_profile, read_daily_notes
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -464,12 +466,14 @@ def openclaw_turn(
             soul = extract_section(file_profile, "Soul")
             user_prefs = extract_section(file_profile, "User Preferences")
             long_term_memory = extract_section(file_profile, "Long-term Memory")
+            daily_notes = read_daily_notes(account_id, today)
             builder = PromptBuilder()
             system_prompt = builder.build(
                 display_name=account.get("display_name"),
                 soul=soul,
                 user_prefs=user_prefs,
                 long_term_memory=long_term_memory,
+                daily_notes=daily_notes,
                 system_prompt_override=profile.get("system_prompt"),
                 style=profile.get("style"),
                 today=today,
@@ -508,6 +512,17 @@ def openclaw_turn(
         latency_ms=latency_ms,
         error=generation_error,
     )
+
+    if not generation_error and text:
+        turns_for_memory = [
+            {"role": "user", "content": text},
+            {"role": "assistant", "content": reply},
+        ]
+        try:
+            loop = asyncio.get_event_loop()
+            loop.create_task(write_memory(account_id=account_id, turns=turns_for_memory, today=today))
+        except RuntimeError:
+            pass
 
     return OpenClawTurnResponse(
         status="ok",
