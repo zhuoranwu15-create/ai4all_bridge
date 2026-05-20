@@ -2,7 +2,7 @@
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 logger = logging.getLogger("ai4all.prompt_builder")
@@ -68,12 +68,30 @@ _OUTPUT_DIRECTIVES_FIXED = (
     "- 不要在回复末尾重复用户的问题"
 )
 
+_CONTEXT_BLOCK_ORDER = (
+    "AGENTS",
+    "SOUL",
+    "IDENTITY",
+    "USER",
+    "TOOLS",
+    "MEMORY",
+)
+
+_CONTEXT_BLOCK_LIMITS = {
+    "AGENTS": 2000,
+    "SOUL": 3000,
+    "IDENTITY": 1500,
+    "USER": 2000,
+    "TOOLS": 2000,
+    "MEMORY": 3000,
+}
+
 
 class PromptBuilder:
-    """Assemble a system prompt from up to 12 ordered blocks.
+    """Assemble a system prompt from ordered prompt blocks.
 
-    Blocks 1-6 are stable (suitable for prompt caching).
-    Blocks 7-12 are volatile (change per request or per user session).
+    The stable prefix comes first for prompt-cache friendliness. Per-account
+    project context and other volatile data are appended after that boundary.
     """
 
     def build(
@@ -88,6 +106,7 @@ class PromptBuilder:
         style: Optional[str] = None,
         tools: Optional[List[str]] = None,
         skills: Optional[List[str]] = None,
+        agent_context: Optional[Dict[str, str]] = None,
         model_name: str = "",
         today: Optional[str] = None,
     ) -> str:
@@ -111,51 +130,56 @@ class PromptBuilder:
             safety = _truncate(_SAFETY_TEXT, _MAX_SAFETY_CHARS, "safety")
             blocks.append(safety)
 
-        # Block 4: Identity
-        if display_name and display_name.strip():
-            blocks.append(f"你的名字是 {display_name}。")
-
-        # Block 5: Soul
-        if soul and soul.strip():
-            soul_text = _truncate(soul, 3000, "soul")
-            blocks.append(soul_text)
-
-        # Block 6: Skills
+        # Block 4: Skills
         if skills:
             skill_list = "、".join(skills)
             blocks.append(f"【技能列表】\n你擅长的领域包括：{skill_list}。")
+
+        project_context = self._build_project_context(agent_context)
+        if not project_context:
+            # Legacy profile fallback. New accounts should use AGENTS/SOUL/etc.
+            if display_name and display_name.strip():
+                blocks.append(f"你的名字是 {display_name}。")
+
+            if soul and soul.strip():
+                soul_text = _truncate(soul, 3000, "soul")
+                blocks.append(soul_text)
 
         # ------------------------------------------------------------------
         # VOLATILE BLOCKS (7-12) — change per user / per request
         # ------------------------------------------------------------------
 
-        # Block 7: User Preferences
-        if user_prefs and user_prefs.strip():
+        # Block 7: Project Context
+        if project_context:
+            blocks.append(project_context)
+
+        # Block 8: User Preferences (legacy fallback)
+        if not project_context and user_prefs and user_prefs.strip():
             user_prefs_text = _truncate(user_prefs, 2000, "user_prefs")
             blocks.append(f"【用户偏好】\n{user_prefs_text}")
 
-        # Block 8: Long-term Memory
-        if long_term_memory and long_term_memory.strip():
+        # Block 9: Long-term Memory (legacy fallback)
+        if not project_context and long_term_memory and long_term_memory.strip():
             mem_text = _truncate(long_term_memory, 3000, "long_term_memory")
             blocks.append(f"【长期记忆】\n{mem_text}")
 
-        # Block 9: Daily Notes
+        # Block 10: Daily Notes
         if daily_notes and daily_notes.strip():
             notes_text = _truncate(daily_notes, 2000, "daily_notes")
             blocks.append(f"【今日备注】\n{notes_text}")
 
-        # Block 10: System Prompt Override
+        # Block 11: System Prompt Override
         if system_prompt_override and system_prompt_override.strip():
             blocks.append(f"【最高优先级覆盖指令】\n{system_prompt_override}")
 
-        # Block 11: Output Directives
+        # Block 12: Output Directives
         directives = _OUTPUT_DIRECTIVES_FIXED
         if style and style.strip():
             style_text = _truncate(style, 500, "style")
             directives = directives + f"\n- 当前用户偏好的回复风格：{style_text}"
         blocks.append(directives)
 
-        # Block 12: Runtime
+        # Block 13: Runtime
         runtime_parts: List[str] = []
         if today:
             runtime_parts.append(f"当前日期：{today}")
@@ -165,3 +189,19 @@ class PromptBuilder:
             blocks.append("【运行时信息】\n" + "\n".join(runtime_parts))
 
         return "\n\n".join(b for b in blocks if b)
+
+    def _build_project_context(self, agent_context: Optional[Dict[str, str]]) -> str:
+        if not agent_context:
+            return ""
+
+        sections: List[str] = []
+        for key in _CONTEXT_BLOCK_ORDER:
+            text = (agent_context.get(key) or "").strip()
+            if not text:
+                continue
+            limit = _CONTEXT_BLOCK_LIMITS[key]
+            body = _truncate(text, limit, f"context_{key.lower()}")
+            sections.append(f"### {key}.md\n{body}")
+        if not sections:
+            return ""
+        return "【Project Context】\n" + "\n\n".join(sections)

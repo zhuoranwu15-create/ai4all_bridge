@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI4ALL Web Onboarding</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">返回运营后台</a>
+  <h1>AI4ALL Web Onboarding</h1>
+
+  <div class="onboarding-layout">
+    <div>
+      <div class="step-card" id="step-register">
+        <div class="step-head">
+          <span class="step-num">1</span>
+          <h2>注册用户</h2>
+        </div>
+        <div class="form-row">
+          <label>手机号</label>
+          <input type="text" id="phone" inputmode="tel" autocomplete="tel" placeholder="请输入手机号">
+        </div>
+        <div class="form-row">
+          <label>昵称</label>
+          <input type="text" id="display-name" autocomplete="name" placeholder="可选">
+        </div>
+        <div class="form-actions">
+          <button class="primary" onclick="registerUser()">注册 / 继续</button>
+          <span id="st-register" class="status-msg"></span>
+        </div>
+      </div>
+
+      <div class="step-card disabled" id="step-agent">
+        <div class="step-head">
+          <span class="step-num">2</span>
+          <h2>创建智能体</h2>
+        </div>
+        <div class="form-row">
+          <label>智能体名称</label>
+          <input type="text" id="agent-name" placeholder="例如：我的生活助理">
+        </div>
+        <div class="form-row">
+          <label>角色设定</label>
+          <textarea id="role-prompt" placeholder="例如：你是一个自然、简洁、可靠的生活助理。"></textarea>
+        </div>
+        <div class="form-row">
+          <label>套餐</label>
+          <select id="plan">
+            <option value="free">free</option>
+            <option value="trial">trial</option>
+            <option value="pro">pro</option>
+          </select>
+        </div>
+        <div class="form-actions">
+          <button class="primary" onclick="createAgent()">创建智能体</button>
+          <span id="st-agent" class="status-msg"></span>
+        </div>
+      </div>
+
+      <div class="step-card disabled" id="step-binding">
+        <div class="step-head">
+          <span class="step-num">3</span>
+          <h2>扫码绑定微信</h2>
+        </div>
+        <div class="form-actions">
+          <button class="primary" onclick="createBindingIntent()">生成二维码</button>
+          <button onclick="refreshBinding()" id="btn-refresh" disabled>刷新状态</button>
+          <span id="st-binding" class="status-msg"></span>
+        </div>
+        <div id="binding-result" class="binding-result" style="display:none">
+          <div id="qr-panel" class="qr-panel" style="display:none">
+            <img id="binding-qr" class="qr-image" alt="微信扫码绑定二维码">
+            <div class="qr-caption" id="qr-caption">请用要接入 AI4ALL 的微信扫码。</div>
+          </div>
+          <div class="binding-grid">
+            <div>
+              <label>Binding Intent ID</label>
+              <div id="binding-id" class="mono wrap">—</div>
+            </div>
+            <div>
+              <label>OpenClaw Session Key</label>
+              <div id="session-key" class="mono wrap">—</div>
+            </div>
+            <div>
+              <label>状态</label>
+              <div id="binding-status">—</div>
+            </div>
+            <div>
+              <label>过期时间</label>
+              <div id="binding-expires">—</div>
+            </div>
+          </div>
+          <div class="form-row command-block">
+            <label>调试兜底命令</label>
+            <pre id="manual-command" class="command-text"></pre>
+          </div>
+          <div id="binding-error" class="binding-error" style="display:none"></div>
+          <div id="qr-placeholder" class="qr-placeholder" style="display:none">
+            后端暂未返回二维码，请查看状态或使用调试兜底命令排查。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="summary-panel">
+      <h2>当前对象</h2>
+      <div class="summary-row">
+        <label>Platform User ID</label>
+        <div id="summary-user" class="mono wrap">—</div>
+      </div>
+      <div class="summary-row">
+        <label>Phone</label>
+        <div id="summary-phone">—</div>
+      </div>
+      <div class="summary-row">
+        <label>AI4ALL Account ID</label>
+        <div id="summary-account" class="mono wrap">—</div>
+      </div>
+      <div class="summary-row">
+        <label>Plan</label>
+        <div id="summary-plan">—</div>
+      </div>
+      <div class="summary-row">
+        <label>Binding Mode</label>
+        <div id="summary-mode">openclaw_gateway_qr</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var state = {
+      platformUser: null,
+      account: null,
+      subscription: null,
+      bindingIntent: null,
+      pollTimer: null,
+    };
+
+    var terminalBindingStatuses = {
+      completed: true,
+      failed: true,
+      already_connected: true,
+      expired: true,
+      cancelled: true,
+    };
+
+    function esc(str) {
+      return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value == null || value === '' ? '—' : String(value);
+    }
+
+    function setStatus(id, msg, isError) {
+      var el = document.getElementById(id);
+      el.textContent = msg || '';
+      el.className = 'status-msg ' + (isError ? 'error' : 'success');
+    }
+
+    function enableStep(id) {
+      document.getElementById(id).classList.remove('disabled');
+    }
+
+    async function webFetch(path, options) {
+      options = options || {};
+      var headers = {};
+      if (options.body) headers['Content-Type'] = 'application/json';
+      var res = await fetch(path, Object.assign({}, options, {
+        headers: Object.assign(headers, options.headers || {}),
+      }));
+      if (!res.ok) {
+        var body = await res.text();
+        throw new Error('API ' + res.status + ': ' + body);
+      }
+      return res.json();
+    }
+
+    function updateSummary() {
+      setText('summary-user', state.platformUser && state.platformUser.id);
+      setText('summary-phone', state.platformUser && state.platformUser.phone);
+      setText('summary-account', state.account && state.account.id);
+      setText('summary-plan', state.subscription && state.subscription.plan);
+    }
+
+    function bindingStatusText(intent) {
+      if (!intent) return '';
+      if (intent.status === 'created') return '正在发起 OpenClaw QR 登录';
+      if (intent.status === 'qr_created') return '二维码已生成，等待扫码';
+      if (intent.status === 'completed') return '绑定完成，后续消息会进入该智能体';
+      if (intent.status === 'already_connected') return '该微信已连接过当前 OpenClaw，请先解绑后重试';
+      if (intent.status === 'expired') return '二维码已过期，请重新点击「生成二维码」';
+      if (intent.status === 'failed') return intent.error || '绑定失败';
+      return intent.status || '';
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) {
+        clearInterval(state.pollTimer);
+        state.pollTimer = null;
+      }
+    }
+
+    function startPolling() {
+      stopPolling();
+      state.pollTimer = setInterval(function() {
+        if (!state.bindingIntent || terminalBindingStatuses[state.bindingIntent.status]) {
+          stopPolling();
+          return;
+        }
+        refreshBinding({ silent: true });
+      }, 3000);
+    }
+
+    async function registerUser() {
+      setStatus('st-register', '提交中…');
+      try {
+        var data = await webFetch('/web/register', {
+          method: 'POST',
+          body: JSON.stringify({
+            phone: document.getElementById('phone').value,
+            display_name: document.getElementById('display-name').value || null,
+          }),
+        });
+        state.platformUser = data.platform_user;
+        state.subscription = data.subscription;
+        enableStep('step-agent');
+        updateSummary();
+        setStatus('st-register', '已创建 / 已载入');
+      } catch (e) {
+        setStatus('st-register', e.message, true);
+      }
+    }
+
+    async function createAgent() {
+      if (!state.platformUser) {
+        setStatus('st-agent', '请先注册用户', true);
+        return;
+      }
+      setStatus('st-agent', '创建中…');
+      try {
+        var data = await webFetch('/web/agents', {
+          method: 'POST',
+          body: JSON.stringify({
+            platform_user_id: state.platformUser.id,
+            agent_name: document.getElementById('agent-name').value,
+            role_prompt: document.getElementById('role-prompt').value || null,
+            plan: document.getElementById('plan').value || 'free',
+          }),
+        });
+        state.account = data.account;
+        state.subscription = data.subscription;
+        enableStep('step-binding');
+        updateSummary();
+        setStatus('st-agent', '已创建');
+      } catch (e) {
+        setStatus('st-agent', e.message, true);
+      }
+    }
+
+    async function createBindingIntent() {
+      if (!state.platformUser || !state.account) {
+        setStatus('st-binding', '请先创建智能体', true);
+        return;
+      }
+      setStatus('st-binding', '生成中…');
+      try {
+        var data = await webFetch('/web/binding-intents', {
+          method: 'POST',
+          body: JSON.stringify({
+            platform_user_id: state.platformUser.id,
+            account_id: state.account.id,
+            channel: 'openclaw-weixin',
+          }),
+        });
+        state.bindingIntent = data.binding_intent;
+        renderBinding();
+        document.getElementById('btn-refresh').disabled = false;
+        setStatus('st-binding', bindingStatusText(state.bindingIntent), state.bindingIntent.status === 'failed');
+        if (!terminalBindingStatuses[state.bindingIntent.status]) {
+          startPolling();
+        }
+      } catch (e) {
+        setStatus('st-binding', e.message, true);
+      }
+    }
+
+    async function refreshBinding(options) {
+      options = options || {};
+      if (!state.bindingIntent) return;
+      if (!options.silent) setStatus('st-binding', '刷新中…');
+      try {
+        var data = await webFetch('/web/binding-intents/' + encodeURIComponent(state.bindingIntent.id));
+        state.bindingIntent = data.binding_intent;
+        renderBinding();
+        setStatus('st-binding', bindingStatusText(state.bindingIntent), state.bindingIntent.status === 'failed');
+        if (terminalBindingStatuses[state.bindingIntent.status]) stopPolling();
+      } catch (e) {
+        setStatus('st-binding', e.message, true);
+        stopPolling();
+      }
+    }
+
+    function renderBinding() {
+      var intent = state.bindingIntent;
+      if (!intent) return;
+      document.getElementById('binding-result').style.display = '';
+      setText('binding-id', intent.id);
+      setText('session-key', intent.openclaw_login_session_key);
+      setText('binding-status', intent.status);
+      setText('binding-expires', intent.expires_at);
+      document.getElementById('manual-command').textContent = intent.manual_login_command || '';
+
+      var qrPanel = document.getElementById('qr-panel');
+      var qrImage = document.getElementById('binding-qr');
+      var placeholder = document.getElementById('qr-placeholder');
+      if (intent.qr_data_url) {
+        qrImage.src = intent.qr_data_url;
+        qrPanel.style.display = '';
+        placeholder.style.display = 'none';
+      } else {
+        qrImage.removeAttribute('src');
+        qrPanel.style.display = 'none';
+        placeholder.style.display = '';
+      }
+
+      var errorEl = document.getElementById('binding-error');
+      if (intent.error) {
+        errorEl.textContent = intent.error;
+        errorEl.style.display = '';
+      } else {
+        errorEl.textContent = '';
+        errorEl.style.display = 'none';
+      }
+    }
+  </script>
+</body>
+</html>

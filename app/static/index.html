@@ -8,11 +8,15 @@
 </head>
 <body>
   <h1>AI4ALL 运营后台</h1>
+  <div class="form-actions" style="margin-bottom:16px">
+    <a class="button-link primary" href="onboarding.html">Web Onboarding</a>
+  </div>
   <div class="card">
     <table>
       <thead>
         <tr>
-          <th>账号 ID</th>
+          <th>AI4ALL Account ID</th>
+          <th>Channel Account</th>
           <th>状态</th>
           <th>今日 / 日上限</th>
           <th>最近活跃</th>
@@ -20,7 +24,7 @@
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="5">加载中…</td></tr>
+        <tr><td colspan="6">加载中…</td></tr>
       </tbody>
     </table>
   </div>
@@ -33,22 +37,32 @@
         var data = await apiFetch('/admin/accounts');
         var accounts = data.accounts;
         if (!accounts.length) {
-          tbody.innerHTML = '<tr><td colspan="5">暂无账号</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6">暂无账号</td></tr>';
           return;
         }
-        var usages = await Promise.all(accounts.map(function(a) {
-          return apiFetch('/admin/accounts/' + encodeURIComponent(a.id) + '/usage')
-            .catch(function() { return { today: { message_count: '?' } }; });
+        var details = await Promise.all(accounts.map(function(a) {
+          var base = '/admin/accounts/' + encodeURIComponent(a.id);
+          return Promise.all([
+            apiFetch(base + '/usage').catch(function() { return { today: { message_count: '?' } }; }),
+            apiFetch(base).catch(function() { return { channel_bindings: [] }; }),
+          ]).then(function(items) {
+            return { usage: items[0], detail: items[1] };
+          });
         }));
         tbody.innerHTML = accounts.map(function(a, i) {
-          var count = usages[i].today.message_count;
+          var count = details[i].usage.today.message_count;
+          var bindings = details[i].detail.channel_bindings || [];
+          var channelAccount = bindings.length
+            ? (bindings[0].channel_account_id || bindings[0].channel || '—')
+            : '—';
           var limit = a.daily_limit != null ? a.daily_limit : '默认';
           var lastActive = a.last_active_at ? a.last_active_at.slice(0, 16) : '—';
           var toggleBtn = a.status === 'active'
             ? '<button class="danger" onclick="toggle(\'' + esc(a.id) + '\',\'disable\')">禁用</button>'
             : '<button class="primary" onclick="toggle(\'' + esc(a.id) + '\',\'enable\')">启用</button>';
           return '<tr>'
-            + '<td><a href="account.html?id=' + encodeURIComponent(a.id) + '">' + esc(a.id) + '</a></td>'
+            + '<td><a class="mono" href="account.html?id=' + encodeURIComponent(a.id) + '">' + esc(a.id) + '</a></td>'
+            + '<td class="mono">' + esc(channelAccount) + '</td>'
             + '<td class="status-' + esc(a.status) + '">' + esc(a.status) + '</td>'
             + '<td>' + esc(String(count)) + ' / ' + esc(String(limit)) + '</td>'
             + '<td>' + esc(lastActive) + '</td>'
@@ -56,7 +70,7 @@
             + '</tr>';
         }).join('');
       } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="5" class="status-msg error">' + esc(e.message) + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="6" class="status-msg error">' + esc(e.message) + '</td></tr>';
       }
     })();
 

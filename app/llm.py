@@ -1,8 +1,9 @@
 import json
 import logging
-import urllib.error
-import urllib.request
+import time
 from typing import Dict, List, Optional
+
+import httpx
 
 from app.config import settings
 
@@ -14,6 +15,21 @@ def _fallback_reply(text: str) -> str:
     return f"AI4ALL mock 已收到：{text or '空消息'}"
 
 
+def _chat_timeout() -> httpx.Timeout:
+    return httpx.Timeout(
+        settings.llm_timeout_seconds,
+        connect=settings.llm_connect_timeout_seconds,
+    )
+
+
+def _chat_transport() -> httpx.HTTPTransport:
+    local_address = "0.0.0.0" if settings.llm_force_ipv4 else None
+    return httpx.HTTPTransport(
+        retries=max(0, int(settings.llm_max_retries)),
+        local_address=local_address,
+    )
+
+
 def _http_chat(messages: List[Dict[str, str]]) -> str:
     """Send a messages list to the LLM and return the reply content."""
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
@@ -22,25 +38,47 @@ def _http_chat(messages: List[Dict[str, str]]) -> str:
         "messages": messages,
         "temperature": 0.7,
     }
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {settings.llm_api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=settings.llm_timeout_seconds) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as err:
-        detail = err.read().decode("utf-8", errors="replace")
-        logger.error("llm http error status=%s body=%s", err.code, detail[:500])
-        raise RuntimeError(f"LLM HTTP error: {err.code}") from err
-    except Exception as err:
-        logger.error("llm request failed: %s", err)
-        raise RuntimeError("LLM request failed") from err
+    max_attempts = max(1, int(settings.llm_max_retries) + 1)
+    last_request_error: Optional[httpx.RequestError] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with httpx.Client(
+                timeout=_chat_timeout(),
+                trust_env=False,
+                transport=_chat_transport(),
+            ) as client:
+                response = client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {settings.llm_api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            break
+        except httpx.HTTPStatusError as err:
+            detail = err.response.text
+            status_code = err.response.status_code
+            logger.error("llm http error status=%s body=%s", status_code, detail[:500])
+            raise RuntimeError(f"LLM HTTP error: {status_code}") from err
+        except httpx.RequestError as err:
+            last_request_error = err
+            logger.warning(
+                "llm request failed attempt=%s/%s error=%s",
+                attempt,
+                max_attempts,
+                err,
+            )
+            if attempt >= max_attempts:
+                raise RuntimeError("LLM request failed") from err
+            time.sleep(min(0.2 * attempt, 1.0))
+        except json.JSONDecodeError as err:
+            logger.error("llm invalid json response: %s", err)
+            raise RuntimeError("LLM returned invalid JSON") from err
+    else:
+        raise RuntimeError("LLM request failed") from last_request_error
 
     content = (
         payload.get("choices", [{}])[0]

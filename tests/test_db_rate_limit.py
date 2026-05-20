@@ -56,3 +56,47 @@ def test_get_usage_last_7_days(fresh_db):
     assert len(rows) == 2
     assert rows[0]["date"] == "2026-01-03"  # ordered DESC
     assert rows[1]["message_count"] == 2
+
+
+def test_channel_binding_upsert_and_list(fresh_db):
+    from app.db import (
+        get_or_create_session,
+        list_channel_bindings_for_account,
+        upsert_channel_binding,
+    )
+
+    with patch("app.db.settings", fresh_db):
+        get_or_create_session(
+            account_id="sk-bind",
+            channel="openclaw-weixin",
+            sender_id="sender-1",
+            sender_name=None,
+            chat_id="chat-1",
+            session_key="sk-bind",
+        )
+        first = upsert_channel_binding(
+            account_id="sk-bind",
+            channel="openclaw-weixin",
+            session_key="sk-bind",
+            channel_account_id="bot-a",
+            sender_id="sender-1",
+            chat_id="chat-1",
+            raw_identity={"ai4all_account_id": "sk-bind"},
+        )
+        second = upsert_channel_binding(
+            account_id="sk-bind",
+            channel="openclaw-weixin",
+            session_key="sk-bind",
+            channel_account_id="bot-a",
+            sender_id="sender-2",
+            chat_id="chat-1",
+            raw_identity={"ai4all_account_id": "sk-bind", "sender_id": "sender-2"},
+        )
+        rows = list_channel_bindings_for_account(account_id="sk-bind")
+
+    assert first["id"] == second["id"]
+    assert len(rows) == 1
+    assert rows[0]["account_id"] == "sk-bind"
+    assert rows[0]["channel_account_id"] == "bot-a"
+    assert rows[0]["sender_id"] == "sender-2"
+    assert rows[0]["raw_identity"]["sender_id"] == "sender-2"

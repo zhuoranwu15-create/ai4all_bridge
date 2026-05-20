@@ -1,0 +1,37 @@
+diff --git a/src/channel.ts b/src/channel.ts
+--- a/src/channel.ts
++++ b/src/channel.ts
+@@
+ const MEDIA_OUTBOUND_TEMP_DIR = path.join(resolvePreferredOpenClawTmpDir(), "weixin/media/outbound-temp");
++export const WEIXIN_GATEWAY_METHODS = ["web.login.start", "web.login.wait"];
+
+ /** Resolve any local path scheme to an absolute filesystem path. */
+ function resolveLocalPath(mediaUrl: string): string {
+@@
+   capabilities: {
+     chatTypes: ["direct"],
+     media: true,
+     blockStreaming: true,
+   },
++  gatewayMethods: WEIXIN_GATEWAY_METHODS,
+   streaming: {
+     blockStreamingCoalesceDefaults: {
+       minChars: 200,
+diff --git a/dist/src/channel.js b/dist/src/channel.js
+--- a/dist/src/channel.js
++++ b/dist/src/channel.js
+@@
+ const MEDIA_OUTBOUND_TEMP_DIR = path.join(resolvePreferredOpenClawTmpDir(), "weixin/media/outbound-temp");
++export const WEIXIN_GATEWAY_METHODS = ["web.login.start", "web.login.wait"];
+ /** Resolve any local path scheme to an absolute filesystem path. */
+ function resolveLocalPath(mediaUrl) {
+@@
+     capabilities: {
+         chatTypes: ["direct"],
+         media: true,
+         blockStreaming: true,
+     },
++    gatewayMethods: WEIXIN_GATEWAY_METHODS,
+     streaming: {
+         blockStreamingCoalesceDefaults: {
+             minChars: 200,

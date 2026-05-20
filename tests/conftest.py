@@ -11,12 +11,18 @@ def test_settings(tmp_path):
     s.admin_token = "test-admin"
     s.app_env = "test"
     s.llm_api_key = ""
+    s.llm_model = "test-model"
     s.llm_context_messages = 12
     s.llm_default_prompt = "你是测试助手"
+    s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10
     s.rate_limit_daily_message = "每日上限"
     s.rate_limit_rpm_message = "每分钟上限"
+    s.openclaw_login_auto_start = False
+    s.openclaw_login_start_timeout_ms = 5000
+    s.openclaw_login_wait_timeout_ms = 5000
+    s.openclaw_gateway_call_timeout_ms = 5000
     return s
 
 

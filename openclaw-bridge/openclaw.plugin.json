@@ -22,6 +22,10 @@
       "onlyChannel": {
         "type": "string",
         "default": "openclaw-weixin"
+      },
+      "shadowTraceAccountIds": {
+        "type": "string",
+        "default": ""
       }
     }
   }

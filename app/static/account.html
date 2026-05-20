@@ -13,7 +13,7 @@
 
     <div class="card">
       <h2>基本信息</h2>
-      <div class="form-row"><label>账号 ID</label><input id="f-id" disabled></div>
+      <div class="form-row"><label>AI4ALL Account ID</label><input id="f-id" class="mono-input" disabled></div>
       <div class="form-row"><label>渠道</label><input id="f-channel" disabled></div>
       <div class="form-row"><label>状态</label><span id="f-status"></span></div>
       <div class="form-row"><label>备注</label><input type="text" id="f-notes" placeholder="运营备注"></div>
@@ -23,6 +23,11 @@
         <span id="st-basic" class="status-msg"></span>
         <button id="btn-toggle" onclick="toggleStatus()" style="margin-left:auto"></button>
       </div>
+    </div>
+
+    <div class="card">
+      <h2>通道绑定</h2>
+      <div id="bindings"></div>
     </div>
 
     <div class="card">
@@ -90,6 +95,7 @@
         var accountData = results[0];
         var usageData = results[1];
         fillForm(accountData.account, accountData.profile);
+        fillBindings(accountData.channel_bindings || []);
         fillSessions(accountData.sessions);
         fillUsage(usageData);
         document.getElementById('content').style.display = '';
@@ -97,6 +103,25 @@
       } catch (e) {
         showErr(e.message);
       }
+    }
+
+    function fillBindings(bindings) {
+      var el = document.getElementById('bindings');
+      if (!bindings.length) {
+        el.textContent = '暂无通道绑定';
+        return;
+      }
+      el.innerHTML = bindings.map(function(b) {
+        return '<div class="binding-row">'
+          + '<div class="binding-grid">'
+          + '<div><label>Channel</label><div class="mono">' + esc(b.channel || '') + '</div></div>'
+          + '<div><label>Channel Account ID</label><div class="mono">' + esc(b.channel_account_id || '') + '</div></div>'
+          + '<div><label>Session Key</label><div class="mono wrap">' + esc(b.session_key || '') + '</div></div>'
+          + '<div><label>Sender / Chat</label><div class="mono wrap">' + esc([b.sender_id, b.chat_id].filter(Boolean).join(' / ') || '—') + '</div></div>'
+          + '<div><label>Last Seen</label><div>' + esc((b.last_seen_at || '').slice(0, 16) || '—') + '</div></div>'
+          + '</div>'
+          + '</div>';
+      }).join('');
     }
 
     function fillForm(account, profile) {

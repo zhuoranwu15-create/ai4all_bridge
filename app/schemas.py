@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -15,6 +15,7 @@ class OpenClawTurnRequest(BaseModel):
     event_id: Optional[str] = None
     message_id: Optional[str] = None
     channel: Optional[str] = None
+    channel_account_id: Optional[str] = None
     account_id: Optional[str] = None
     sender_id: Optional[str] = None
     sender_name: Optional[str] = None
@@ -33,3 +34,20 @@ class OpenClawTurnResponse(BaseModel):
     reply: Optional[str] = None
     no_reply: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class OpenClawDebugTraceRequest(BaseModel):
+    trace_id: Optional[str] = None
+    channel_account_id: Optional[str] = None
+    account_id: Optional[str] = None
+    channel: Optional[str] = None
+    session_key: Optional[str] = None
+    message_id: Optional[str] = None
+    source: str = "openclaw"
+    llm_model: Optional[str] = None
+    system_prompt: Optional[str] = None
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+    reply: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    latency_ms: Optional[int] = None
+    error: Optional[str] = None

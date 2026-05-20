@@ -1,12 +1,14 @@
 import pytest
 
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
+AI4ALL_ACCOUNT_ID = "sk-test"
+CHANNEL_ACCOUNT_ID = "acc-test"
 
 
 def make_payload(msg_id: str, text: str = "hello") -> dict:
     return {
-        "account_id": "acc-test",
-        "session_key": "sk-test",
+        "account_id": CHANNEL_ACCOUNT_ID,
+        "session_key": AI4ALL_ACCOUNT_ID,
         "sender_id": "sender-test",
         "chat_type": "private",
         "message_type": "text",
@@ -27,6 +29,9 @@ def test_daily_rate_limit_blocks_after_limit(client):
     data = res.json()
     assert data["status"] == "rate_limited"
     assert data["reply"] == "每日上限"
+    assert data["metadata"]["account_id"] == AI4ALL_ACCOUNT_ID
+    assert data["metadata"]["ai4all_account_id"] == AI4ALL_ACCOUNT_ID
+    assert data["metadata"]["channel_account_id"] == CHANNEL_ACCOUNT_ID
     assert data.get("no_reply") is not True  # reply should be sent
 
 
@@ -42,7 +47,7 @@ def test_rate_limited_message_not_counted(client):
 
     # Check usage — still 3, not 8
     res = client.get(
-        "/admin/accounts/acc-test/usage",
+        f"/admin/accounts/{AI4ALL_ACCOUNT_ID}/usage",
         headers={"Authorization": "Bearer test-admin"},
     )
     assert res.status_code == 200
@@ -54,7 +59,7 @@ def test_usage_endpoint_returns_today_and_history(client):
     client.post("/openclaw/turn", json=make_payload("m0"), headers=BRIDGE_HEADERS)
 
     res = client.get(
-        "/admin/accounts/acc-test/usage",
+        f"/admin/accounts/{AI4ALL_ACCOUNT_ID}/usage",
         headers={"Authorization": "Bearer test-admin"},
     )
     assert res.status_code == 200
@@ -62,6 +67,48 @@ def test_usage_endpoint_returns_today_and_history(client):
     assert "today" in data
     assert "last_7_days" in data
     assert data["today"]["message_count"] == 1
+
+
+def test_admin_account_includes_channel_bindings(client):
+    res = client.post("/openclaw/turn", json=make_payload("m-binding"), headers=BRIDGE_HEADERS)
+    assert res.status_code == 200
+    binding_id = res.json()["metadata"]["channel_binding_id"]
+
+    res = client.get(
+        f"/admin/accounts/{AI4ALL_ACCOUNT_ID}",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+
+    assert res.status_code == 200
+    bindings = res.json()["channel_bindings"]
+    assert len(bindings) == 1
+    assert bindings[0]["id"] == binding_id
+    assert bindings[0]["account_id"] == AI4ALL_ACCOUNT_ID
+    assert bindings[0]["session_key"] == AI4ALL_ACCOUNT_ID
+    assert bindings[0]["channel_account_id"] == CHANNEL_ACCOUNT_ID
+    assert bindings[0]["raw_identity"]["ai4all_account_id"] == AI4ALL_ACCOUNT_ID
+
+
+def test_turn_prefers_channel_account_id_over_legacy_account_id(client):
+    payload = make_payload("m-channel-preferred")
+    payload["channel_account_id"] = "acc-new"
+    payload["account_id"] = "acc-legacy"
+
+    res = client.post("/openclaw/turn", json=payload, headers=BRIDGE_HEADERS)
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["metadata"]["account_id"] == AI4ALL_ACCOUNT_ID
+    assert data["metadata"]["channel_account_id"] == "acc-new"
+
+    res = client.get(
+        f"/admin/accounts/{AI4ALL_ACCOUNT_ID}",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert res.status_code == 200
+    bindings = res.json()["channel_bindings"]
+    assert len(bindings) == 1
+    assert bindings[0]["channel_account_id"] == "acc-new"
 
 
 def test_usage_endpoint_404_for_unknown_account(client):

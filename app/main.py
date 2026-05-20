@@ -12,9 +12,16 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.db import (
     clear_session_messages,
+    create_ai4all_account_for_user,
+    create_binding_intent,
+    create_or_get_platform_user_by_phone,
+    get_debug_trace,
     get_account,
+    get_binding_intent,
     get_daily_usage,
+    get_latest_subscription_for_user,
     get_message_raw,
+    get_platform_user,
     get_profile_for_account,
     get_profile_for_session,
     get_session,
@@ -23,24 +30,37 @@ from app.db import (
     get_usage_last_7_days,
     increment_daily_usage,
     init_db,
+    insert_debug_trace,
     insert_message,
     list_accounts,
+    list_debug_traces,
     list_recent_message_raw,
     list_session_messages,
     list_sessions,
     list_sessions_for_account,
     list_recent_messages,
+    resolve_account_id_for_inbound_channel_identity,
+    set_binding_intent_error,
     set_account_status,
+    update_binding_intent,
     update_account,
     update_profile_for_account,
     update_profile_for_session,
+    list_channel_bindings_for_account,
+    upsert_channel_binding,
 )
+from app.identity import resolve_openclaw_identity
 from app.llm import generate_reply
+from app.openclaw_gateway import (
+    start_weixin_qr_login,
+    wait_weixin_qr_login,
+)
 from app.prompt_builder import PromptBuilder, extract_section
 from app.rate_limiter import rate_limiter
-from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
+from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
 from app.memory_writer import write_memory
-from app.user_profiles import ensure_user_profile, read_user_profile, read_daily_notes
+from app.dreaming import run_dreaming
+from app.user_profiles import ensure_user_profile, read_user_profile, read_daily_notes, read_agent_context
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -66,6 +86,158 @@ class AccountUpdateRequest(BaseModel):
     notes: Optional[str] = None
     daily_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
+
+class WebRegisterRequest(BaseModel):
+    phone: str
+    display_name: Optional[str] = None
+
+
+class WebCreateAgentRequest(BaseModel):
+    platform_user_id: str
+    agent_name: str
+    role_prompt: Optional[str] = None
+    plan: Optional[str] = "free"
+
+
+class WebCreateBindingIntentRequest(BaseModel):
+    platform_user_id: str
+    account_id: str
+    channel: Optional[str] = "openclaw-weixin"
+
+
+def _debug_trace_account_ids() -> set[str]:
+    raw = getattr(settings, "debug_trace_account_ids", "") or ""
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
+def _is_debug_trace_account(account_id: str) -> bool:
+    return account_id in _debug_trace_account_ids()
+
+
+def _identity_response_metadata(identity, account_id: Optional[str] = None) -> dict:
+    metadata = identity.metadata()
+    if account_id and account_id != identity.account_id:
+        metadata["ai4all_account_id"] = account_id
+        metadata["account_id"] = account_id
+        metadata["openclaw_session_key_account_id"] = identity.account_id
+    return metadata
+
+
+def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict) -> None:
+    raw_channel_account_id = result.get("accountId") or result.get("channel_account_id")
+    channel_account_id = str(raw_channel_account_id).strip() if raw_channel_account_id else None
+    raw_result = {
+        **result,
+        "channel_account_id": channel_account_id,
+        "binding_intent_id": binding_intent["id"],
+    }
+    if result.get("connected") and channel_account_id:
+        update_binding_intent(
+            binding_intent_id=binding_intent["id"],
+            status="completed",
+            channel_account_id=channel_account_id,
+            raw_result=raw_result,
+            completed=True,
+            error=None,
+        )
+        upsert_channel_binding(
+            account_id=binding_intent["account_id"],
+            channel=binding_intent["channel"],
+            session_key=binding_intent["openclaw_login_session_key"],
+            channel_account_id=channel_account_id,
+            sender_id=None,
+            chat_id=None,
+            raw_identity={
+                "binding_intent_id": binding_intent["id"],
+                "platform_user_id": binding_intent["platform_user_id"],
+                "ai4all_account_id": binding_intent["account_id"],
+                "openclaw_login_session_key": binding_intent["openclaw_login_session_key"],
+                "channel_account_id": channel_account_id,
+            },
+        )
+        return
+
+    status = "already_connected" if result.get("alreadyConnected") else "failed"
+    set_binding_intent_error(
+        binding_intent_id=binding_intent["id"],
+        status=status,
+        error=str(result.get("message") or status),
+        raw_result=raw_result,
+    )
+
+
+async def _wait_for_binding_intent(binding_intent_id: str) -> None:
+    binding_intent = get_binding_intent(binding_intent_id=binding_intent_id)
+    if binding_intent is None:
+        return
+    try:
+        result = await asyncio.to_thread(
+            wait_weixin_qr_login,
+            account_id=binding_intent["openclaw_login_session_key"],
+            current_qr_data_url=binding_intent.get("qr_data_url"),
+            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+            wait_timeout_ms=settings.openclaw_login_wait_timeout_ms,
+        )
+    except Exception as err:
+        logger.exception("OpenClaw QR wait failed intent=%s", binding_intent_id)
+        set_binding_intent_error(
+            binding_intent_id=binding_intent_id,
+            status="failed",
+            error=str(err),
+        )
+        return
+    latest = get_binding_intent(binding_intent_id=binding_intent_id)
+    if latest is None:
+        return
+    _complete_binding_intent_from_wait_result(latest, result)
+
+
+def _schedule_binding_wait(binding_intent_id: str) -> None:
+    if _background_loop is None:
+        return
+    _background_loop.call_soon_threadsafe(
+        _background_loop.create_task,
+        _wait_for_binding_intent(binding_intent_id),
+    )
+
+
+def _start_openclaw_qr_for_binding(binding_intent: dict) -> dict:
+    if not settings.openclaw_login_auto_start:
+        return binding_intent
+    try:
+        start_result = start_weixin_qr_login(
+            account_id=binding_intent["openclaw_login_session_key"],
+            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+            start_timeout_ms=settings.openclaw_login_start_timeout_ms,
+            force=False,
+        )
+    except Exception as err:
+        logger.warning("OpenClaw QR start failed intent=%s error=%s", binding_intent["id"], err)
+        failed = set_binding_intent_error(
+            binding_intent_id=binding_intent["id"],
+            status="failed",
+            error=str(err),
+        )
+        return failed or binding_intent
+
+    session_key = str(start_result.get("sessionKey") or binding_intent["openclaw_login_session_key"])
+    updated = update_binding_intent(
+        binding_intent_id=binding_intent["id"],
+        status="qr_created" if start_result.get("qrDataUrl") else "failed",
+        openclaw_login_session_key=session_key,
+        qr_data_url=start_result.get("qrDataUrl"),
+        raw_result={
+            "start": start_result,
+            "binding_intent_id": binding_intent["id"],
+            "openclaw_login_session_key": session_key,
+        },
+        error=None if start_result.get("qrDataUrl") else str(start_result.get("message") or "QR not returned"),
+    )
+    updated = updated or binding_intent
+    if updated.get("qr_data_url"):
+        _schedule_binding_wait(updated["id"])
+    return updated
 
 
 @app.on_event("startup")
@@ -107,16 +279,16 @@ def health() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Debug (no auth)
+# Debug (admin auth required)
 # ---------------------------------------------------------------------------
 
 @app.get("/debug/sessions")
-def debug_sessions(limit: int = 50) -> dict:
+def debug_sessions(limit: int = 50, _: None = Depends(verify_admin_auth)) -> dict:
     return {"sessions": list_sessions(limit=limit)}
 
 
 @app.get("/debug/messages")
-def debug_messages(session_id: int, limit: int = 100) -> dict:
+def debug_messages(session_id: int, limit: int = 100, _: None = Depends(verify_admin_auth)) -> dict:
     session = get_session(session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
@@ -128,22 +300,46 @@ def debug_messages(session_id: int, limit: int = 100) -> dict:
 
 
 @app.get("/debug/messages/raw")
-def debug_recent_message_raw(limit: int = 20) -> dict:
+def debug_recent_message_raw(limit: int = 20, _: None = Depends(verify_admin_auth)) -> dict:
     return {"messages": list_recent_message_raw(limit=limit)}
 
 
 @app.get("/debug/messages/{message_db_id}/raw")
-def debug_message_raw(message_db_id: int) -> dict:
+def debug_message_raw(message_db_id: int, _: None = Depends(verify_admin_auth)) -> dict:
     message = get_message_raw(message_db_id=message_db_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
     return {"message": message}
 
 
+@app.get("/debug/traces")
+def debug_traces(
+    account_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {
+        "traces": list_debug_traces(
+            account_id=account_id,
+            session_id=session_id,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/debug/traces/{trace_id}")
+def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    trace = get_debug_trace(trace_id=trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"trace": trace}
+
+
 @app.get("/debug/accounts/{account_id}/prompt-preview")
-def debug_prompt_preview(account_id: str) -> dict:
+def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     """Show the assembled system prompt and per-block sizes for an account."""
-    from app.user_profiles import read_user_profile, read_daily_notes
+    from app.user_profiles import read_user_profile, read_daily_notes, read_agent_context
     account = get_account(account_id=account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
@@ -153,6 +349,10 @@ def debug_prompt_preview(account_id: str) -> dict:
     soul = extract_section(file_profile, "Soul")
     user_prefs = extract_section(file_profile, "User Preferences")
     long_term_memory = extract_section(file_profile, "Long-term Memory")
+    agent_context = read_agent_context(
+        account_id,
+        display_name=account.get("display_name"),
+    )
     daily_notes = read_daily_notes(account_id, today)
     builder = PromptBuilder()
     prompt = builder.build(
@@ -163,6 +363,7 @@ def debug_prompt_preview(account_id: str) -> dict:
         daily_notes=daily_notes,
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
+        agent_context=agent_context.blocks,
         today=today,
         model_name=settings.llm_model,
     )
@@ -178,23 +379,26 @@ def debug_prompt_preview(account_id: str) -> dict:
             "system_prompt_override": bool(profile.get("system_prompt")),
             "style": profile.get("style"),
             "display_name": account.get("display_name"),
+            "agent_context": agent_context.metadata(),
         },
         "prompt": prompt,
     }
 
 
 @app.get("/debug/accounts/{account_id}/user-profile")
-def debug_get_user_profile(account_id: str) -> dict:
+def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     path = ensure_user_profile(account_id)
+    context = read_agent_context(account_id)
     return {
         "account_id": account_id,
         "path": str(path),
         "content": path.read_text(encoding="utf-8"),
+        "agent_context": context.metadata(),
     }
 
 
 @app.post("/debug/sessions/{session_id}/reset")
-def debug_reset_session(session_id: int) -> dict:
+def debug_reset_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
     if get_session(session_id=session_id) is None:
         raise HTTPException(status_code=404, detail="session not found")
     deleted = clear_session_messages(session_id=session_id)
@@ -202,7 +406,7 @@ def debug_reset_session(session_id: int) -> dict:
 
 
 @app.get("/debug/sessions/{session_id}/profile")
-def debug_get_profile(session_id: int) -> dict:
+def debug_get_profile(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
     profile = get_profile_for_session(session_id=session_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
@@ -210,7 +414,7 @@ def debug_get_profile(session_id: int) -> dict:
 
 
 @app.post("/debug/sessions/{session_id}/profile")
-def debug_update_profile(session_id: int, payload: ProfileUpdateRequest) -> dict:
+def debug_update_profile(session_id: int, payload: ProfileUpdateRequest, _: None = Depends(verify_admin_auth)) -> dict:
     profile = update_profile_for_session(
         session_id=session_id,
         display_name=payload.display_name,
@@ -221,6 +425,71 @@ def debug_update_profile(session_id: int, payload: ProfileUpdateRequest) -> dict
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return {"status": "ok", "profile": profile}
+
+
+# ---------------------------------------------------------------------------
+# Web onboarding (MVP)
+# ---------------------------------------------------------------------------
+
+@app.post("/web/register")
+def web_register(payload: WebRegisterRequest) -> dict:
+    try:
+        platform_user = create_or_get_platform_user_by_phone(
+            phone=payload.phone,
+            display_name=payload.display_name,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "status": "ok",
+        "platform_user": platform_user,
+        "subscription": get_latest_subscription_for_user(
+            platform_user_id=platform_user["id"],
+        ),
+    }
+
+
+@app.post("/web/agents")
+def web_create_agent(payload: WebCreateAgentRequest) -> dict:
+    if get_platform_user(platform_user_id=payload.platform_user_id) is None:
+        raise HTTPException(status_code=404, detail="platform_user not found")
+    try:
+        result = create_ai4all_account_for_user(
+            platform_user_id=payload.platform_user_id,
+            display_name=payload.agent_name,
+            system_prompt=payload.role_prompt,
+            plan=payload.plan or "free",
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {"status": "ok", **result}
+
+
+@app.post("/web/binding-intents")
+def web_create_binding_intent(payload: WebCreateBindingIntentRequest) -> dict:
+    try:
+        binding_intent = create_binding_intent(
+            platform_user_id=payload.platform_user_id,
+            account_id=payload.account_id,
+            channel=payload.channel or "openclaw-weixin",
+        )
+        binding_intent = _start_openclaw_qr_for_binding(binding_intent)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "status": "ok",
+        "binding_intent": binding_intent,
+        "binding_mode": "openclaw_gateway_qr",
+        "next_step": "scan_qr_and_wait_for_completion",
+    }
+
+
+@app.get("/web/binding-intents/{binding_intent_id}")
+def web_get_binding_intent(binding_intent_id: str) -> dict:
+    binding_intent = get_binding_intent(binding_intent_id=binding_intent_id)
+    if binding_intent is None:
+        raise HTTPException(status_code=404, detail="binding_intent not found")
+    return {"binding_intent": binding_intent}
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +508,7 @@ def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict
         raise HTTPException(status_code=404, detail="account not found")
     return {
         "account": account,
+        "channel_bindings": list_channel_bindings_for_account(account_id=account_id),
         "profile": get_profile_for_account(account_id=account_id),
         "sessions": list_sessions_for_account(account_id=account_id),
     }
@@ -308,10 +578,12 @@ def admin_get_user_profile(
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     path = ensure_user_profile(account_id)
+    context = read_agent_context(account_id)
     return {
         "account_id": account_id,
         "path": str(path),
         "content": path.read_text(encoding="utf-8"),
+        "agent_context": context.metadata(),
     }
 
 
@@ -331,6 +603,21 @@ def admin_account_usage(
         },
         "last_7_days": get_usage_last_7_days(account_id=account_id),
     }
+
+
+@app.post("/admin/accounts/{account_id}/dreaming")
+def admin_run_account_dreaming(
+    account_id: str,
+    days: int = 7,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return run_dreaming(
+        account_id=account_id,
+        today=date_cls.today().isoformat(),
+        days=days,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -385,9 +672,101 @@ def admin_message_raw(
     return {"message": message}
 
 
+@app.get("/admin/debug/traces")
+def admin_debug_traces(
+    account_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {
+        "traces": list_debug_traces(
+            account_id=account_id,
+            session_id=session_id,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/admin/debug/traces/{trace_id}")
+def admin_debug_trace(
+    trace_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    trace = get_debug_trace(trace_id=trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return {"trace": trace}
+
+
 # ---------------------------------------------------------------------------
 # Bridge endpoint
 # ---------------------------------------------------------------------------
+
+@app.post("/openclaw/debug-traces")
+def openclaw_debug_trace_ingest(
+    payload: OpenClawDebugTraceRequest,
+    _: None = Depends(verify_bridge_auth),
+) -> dict:
+    channel_account_id = payload.channel_account_id or payload.account_id
+    fallback_session_key = (
+        payload.session_key
+        or (f"openclaw-debug:{channel_account_id}" if channel_account_id else "openclaw-debug:unknown")
+    )
+    identity = resolve_openclaw_identity(
+        channel=payload.channel or "openclaw",
+        session_key=fallback_session_key,
+        channel_account_id=channel_account_id,
+        sender_id=None,
+        chat_id=None,
+    )
+    account_id = resolve_account_id_for_inbound_channel_identity(
+        channel=identity.channel,
+        session_key=identity.session_key,
+        channel_account_id=identity.channel_account_id,
+    )
+    session_state = get_or_create_session(
+        account_id=account_id,
+        channel=identity.channel,
+        sender_id=identity.sender_id,
+        sender_name=None,
+        chat_id=identity.chat_id,
+        session_key=identity.session_key,
+    )
+    binding = upsert_channel_binding(
+        account_id=account_id,
+        channel=identity.channel,
+        session_key=identity.session_key,
+        channel_account_id=identity.channel_account_id,
+        sender_id=identity.sender_id,
+        chat_id=identity.chat_id,
+        raw_identity=_identity_response_metadata(identity, account_id),
+    )
+    session = session_state["session"]
+    trace_id = payload.trace_id or f"trace-{uuid.uuid4()}"
+    metadata = dict(payload.metadata or {})
+    metadata["identity"] = _identity_response_metadata(identity, account_id)
+    metadata["channel_binding_id"] = binding["id"]
+    inserted_id = insert_debug_trace(
+        trace_id=trace_id,
+        account_id=account_id,
+        session_id=session["id"],
+        message_id=payload.message_id,
+        source=payload.source or "openclaw",
+        llm_model=payload.llm_model,
+        system_prompt=payload.system_prompt,
+        messages=payload.messages,
+        reply=payload.reply,
+        metadata=metadata,
+        latency_ms=payload.latency_ms,
+        error=payload.error,
+    )
+    return {
+        "status": "ok" if inserted_id is not None else "duplicate",
+        "trace_id": trace_id,
+        "metadata": _identity_response_metadata(identity, account_id),
+    }
+
 
 @app.post("/openclaw/turn", response_model=OpenClawTurnResponse)
 def openclaw_turn(
@@ -408,22 +787,43 @@ def openclaw_turn(
     if payload.chat_type != "private":
         return OpenClawTurnResponse(status="ignored", no_reply=True)
 
-    account_id = payload.account_id or payload.channel or "default"
-    session_key = payload.session_key or payload.chat_id or payload.sender_id or "unknown"
-    sender_id = payload.sender_id or payload.chat_id or session_key
+    identity = resolve_openclaw_identity(
+        channel=payload.channel,
+        session_key=payload.session_key,
+        channel_account_id=payload.channel_account_id or payload.account_id,
+        sender_id=payload.sender_id,
+        chat_id=payload.chat_id,
+    )
+    session_key = identity.session_key
+    account_id = resolve_account_id_for_inbound_channel_identity(
+        channel=identity.channel,
+        session_key=identity.session_key,
+        channel_account_id=identity.channel_account_id,
+    )
+    sender_id = identity.sender_id
     message_id = payload.message_id or payload.event_id
 
     session_state = get_or_create_session(
         account_id=account_id,
-        channel=payload.channel or "unknown",
+        channel=identity.channel,
         sender_id=sender_id,
         sender_name=payload.sender_name,
-        chat_id=payload.chat_id,
+        chat_id=identity.chat_id,
         session_key=session_key,
+    )
+    binding = upsert_channel_binding(
+        account_id=account_id,
+        channel=identity.channel,
+        session_key=session_key,
+        channel_account_id=identity.channel_account_id,
+        sender_id=sender_id,
+        chat_id=identity.chat_id,
+        raw_identity=_identity_response_metadata(identity, account_id),
     )
     account = session_state["account"]
     session = session_state["session"]
     profile_path = ensure_user_profile(account_id)
+    debug_trace_enabled = _is_debug_trace_account(account_id)
 
     if account.get("status") == "disabled":
         logger.info(
@@ -434,7 +834,7 @@ def openclaw_turn(
         return OpenClawTurnResponse(
             status="disabled",
             no_reply=True,
-            metadata={"account_id": account_id, "session_key": session_key},
+            metadata=_identity_response_metadata(identity, account_id),
         )
 
     today = date_cls.today().isoformat()
@@ -446,7 +846,7 @@ def openclaw_turn(
         return OpenClawTurnResponse(
             status="rate_limited",
             reply=settings.rate_limit_rpm_message,
-            metadata={"account_id": account_id, "reason": "rpm"},
+            metadata={**_identity_response_metadata(identity, account_id), "reason": "rpm"},
         )
 
     if effective_daily > 0:
@@ -458,7 +858,11 @@ def openclaw_turn(
             return OpenClawTurnResponse(
                 status="rate_limited",
                 reply=settings.rate_limit_daily_message,
-                metadata={"account_id": account_id, "reason": "daily", "count": current_count},
+                metadata={
+                    **_identity_response_metadata(identity, account_id),
+                    "reason": "daily",
+                    "count": current_count,
+                },
             )
 
     duplicate_reply = get_duplicate_reply(
@@ -470,7 +874,7 @@ def openclaw_turn(
         return OpenClawTurnResponse(
             status="duplicate",
             reply=duplicate_reply,
-            metadata={"session_key": session_key, "latency_ms": latency_ms},
+            metadata={**_identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
     text = (payload.text or "").strip()
@@ -497,12 +901,25 @@ def openclaw_turn(
         return OpenClawTurnResponse(
             status="duplicate",
             reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
-            metadata={"session_key": session_key, "latency_ms": latency_ms},
+            metadata={**_identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
     increment_daily_usage(account_id=account_id, date=today)
 
     generation_error = None
+    system_prompt = None
+    llm_messages = []
+    debug_metadata = {
+        "trace_kind": "ai4all_turn",
+        "debug_trace_enabled": debug_trace_enabled,
+        "identity": _identity_response_metadata(identity, account_id),
+        "channel_binding_id": binding["id"],
+        "channel": identity.channel,
+        "session_key": session_key,
+        "sender_id": sender_id,
+        "message_type": payload.message_type,
+        "today": today,
+    }
     if text == "#重置会话":
         clear_session_messages(session_id=session["id"])
         reply = "已重置当前会话。"
@@ -519,7 +936,24 @@ def openclaw_turn(
             soul = extract_section(file_profile, "Soul")
             user_prefs = extract_section(file_profile, "User Preferences")
             long_term_memory = extract_section(file_profile, "Long-term Memory")
+            agent_context = read_agent_context(
+                account_id,
+                display_name=account.get("display_name"),
+            )
             daily_notes = read_daily_notes(account_id, today)
+            debug_metadata.update(
+                {
+                    "history_count": len(history),
+                    "soul_chars": len(soul),
+                    "user_prefs_chars": len(user_prefs),
+                    "long_term_memory_chars": len(long_term_memory),
+                    "daily_notes_chars": len(daily_notes),
+                    "agent_context": agent_context.metadata(),
+                    "system_prompt_override": bool(profile.get("system_prompt")),
+                    "style": profile.get("style"),
+                    "display_name": account.get("display_name"),
+                }
+            )
             builder = PromptBuilder()
             system_prompt = builder.build(
                 display_name=account.get("display_name"),
@@ -529,9 +963,12 @@ def openclaw_turn(
                 daily_notes=daily_notes,
                 system_prompt_override=profile.get("system_prompt"),
                 style=profile.get("style"),
+                agent_context=agent_context.blocks,
                 today=today,
                 model_name=settings.llm_model,
             )
+            llm_messages = [{"role": "system", "content": system_prompt}]
+            llm_messages.extend(history)
             reply = generate_reply(
                 user_text=text,
                 history=history,
@@ -552,6 +989,33 @@ def openclaw_turn(
     )
 
     reply_message_id = f"reply-{uuid.uuid4()}"
+    trace_id = None
+    if debug_trace_enabled:
+        trace_id = f"trace-{uuid.uuid4()}"
+        insert_debug_trace(
+            trace_id=trace_id,
+            account_id=account_id,
+            session_id=session["id"],
+            message_id=message_id,
+            source="ai4all",
+            llm_model=settings.llm_model,
+            system_prompt=system_prompt,
+            messages=llm_messages,
+            reply=reply,
+            metadata=debug_metadata,
+            latency_ms=latency_ms,
+            error=generation_error,
+        )
+        logger.info(
+            "debug trace recorded trace_id=%s account=%s session=%s message_id=%s messages=%s prompt_chars=%s",
+            trace_id,
+            account_id,
+            session_key,
+            message_id,
+            len(llm_messages),
+            len(system_prompt or ""),
+        )
+
     insert_message(
         account_id=account_id,
         session_id=session["id"],
@@ -580,10 +1044,11 @@ def openclaw_turn(
         status="ok",
         reply=reply,
         metadata={
-            "account_id": account_id,
-            "session_key": session_key,
+            **_identity_response_metadata(identity, account_id),
+            "channel_binding_id": binding["id"],
             "message_type": payload.message_type,
             "latency_ms": latency_ms,
             "user_profile_path": str(profile_path),
+            "debug_trace_id": trace_id,
         },
     )

@@ -106,6 +106,57 @@ class TestPromptBuilderBasicBuild:
         out = self.pb.build(display_name="X", soul="Y")
         assert "\n\n" in out
 
+    def test_project_context_injected_with_openclaw_style_files(self):
+        out = self.pb.build(
+            agent_context={
+                "AGENTS": "# AGENTS\n遵循主 agent 行为准则",
+                "SOUL": "# SOUL\n语气自然",
+                "IDENTITY": "# IDENTITY\n我是 AI4ALL 个人助手",
+                "USER": "# USER\n用户喜欢简洁",
+                "TOOLS": "# TOOLS\n无外部工具",
+                "MEMORY": "# MEMORY\n用户是工程师",
+            }
+        )
+        assert "【Project Context】" in out
+        assert "### AGENTS.md" in out
+        assert "### SOUL.md" in out
+        assert "### IDENTITY.md" in out
+        assert "### USER.md" in out
+        assert "### TOOLS.md" in out
+        assert "### MEMORY.md" in out
+        assert "AI4ALL 个人助手" in out
+
+    def test_project_context_ignores_account_level_heartbeat_even_if_passed(self):
+        out = self.pb.build(
+            agent_context={
+                "HEARTBEAT": "# HEARTBEAT\n不主动定时触达",
+                "MEMORY": "# MEMORY\n用户是工程师",
+            }
+        )
+        assert "### HEARTBEAT.md" not in out
+        assert "不主动定时触达" not in out
+        assert "### MEMORY.md" in out
+
+    def test_project_context_suppresses_legacy_profile_duplicates(self):
+        out = self.pb.build(
+            display_name="旧名字",
+            soul="旧 soul",
+            user_prefs="旧偏好",
+            long_term_memory="旧记忆",
+            agent_context={
+                "IDENTITY": "新身份",
+                "USER": "新用户信息",
+                "MEMORY": "新记忆",
+            },
+        )
+        assert "新身份" in out
+        assert "新用户信息" in out
+        assert "新记忆" in out
+        assert "旧名字" not in out
+        assert "旧 soul" not in out
+        assert "旧偏好" not in out
+        assert "旧记忆" not in out
+
 
 class TestPromptBuilderTruncation:
     def setup_method(self):
@@ -139,6 +190,11 @@ class TestPromptBuilderTruncation:
     def test_daily_notes_truncated_at_2000(self):
         long_notes = "N" * 2001
         out = self.pb.build(daily_notes=long_notes)
+        assert "...[已截断]" in out
+
+    def test_agent_context_file_truncated(self):
+        long_user = "U" * 2001
+        out = self.pb.build(agent_context={"USER": long_user})
         assert "...[已截断]" in out
 
 
