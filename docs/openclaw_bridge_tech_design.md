@@ -22,6 +22,15 @@ Phase 1 的“多人使用”指的是：多个个人微信账号连接到同一
 
 Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系；先由运营侧接入和管理账号。
 
+### 1.2 身份模型更新
+
+本文是早期 Bridge 方案文档。2026-05-18 之后，身份模型以 `docs/mid_long_term_tech_plan.md` 和 `docs/current_status.md` 为准：
+
+- AI4ALL 业务账号 ID 是 Backend 业务隔离主键；未绑定 legacy 入站可由 OpenClaw `session_key` fallback，Web onboarding 绑定完成后路由到预创建 `acct_...`。
+- OpenClaw / provider 侧账号 ID 在 Bridge payload 中显式命名为 `channel_account_id`。
+- Backend DB/API 中遗留的 `account_id` 字段暂时保留，但语义是 AI4ALL 业务账号 ID。
+- Bridge 会继续发送 legacy `account_id` 作为兼容别名；新代码应优先读写 `channel_account_id`，不要把 OpenClaw 原生 `account_id` 当业务隔离主键。
+
 ## 2. 总体链路
 
 ```text
@@ -139,6 +148,7 @@ Content-Type: application/json
   "event_id": "evt_xxx",
   "message_id": "msg_xxx",
   "channel": "openclaw-weixin",
+  "channel_account_id": "wechat_account_xxx",
   "account_id": "wechat_account_xxx",
   "sender_id": "wxid_xxx",
   "sender_name": "用户昵称",
@@ -160,6 +170,7 @@ Content-Type: application/json
   "event_id": "evt_voice_xxx",
   "message_id": "msg_voice_xxx",
   "channel": "openclaw-weixin",
+  "channel_account_id": "wechat_account_xxx",
   "account_id": "wechat_account_xxx",
   "sender_id": "wxid_xxx",
   "sender_name": "用户昵称",
@@ -179,6 +190,8 @@ Content-Type: application/json
   "raw": {}
 }
 ```
+
+`account_id` 在请求体中只是 legacy 兼容字段。Backend 解析时优先使用 `channel_account_id` 记录通道侧账号，并使用 `session_key` 解析 AI4ALL 业务账号。
 
 响应体：
 
@@ -569,7 +582,7 @@ ASR_API_KEY=...
 处理：
 
 - 增加 `tenants`、`managed_accounts`、`account_admins` 数据模型。
-- 每个 OpenClaw account_id 必须绑定 owner/tenant。
+- 每个 AI4ALL 业务账号必须绑定 owner/tenant；OpenClaw/provider 侧账号通过 `channel_account_id` 或后续 `channel_bindings` 关联。
 - Soul、限流、日志、会话都必须按 tenant/account 隔离。
 - 增加 Web 管理后台和登录鉴权。
 - 该能力不进入 Day 1。
@@ -581,7 +594,7 @@ ASR_API_KEY=...
 - Bridge 返回 synthetic reply 的具体代码写法：已通过真实微信回复验证。
 - 禁用默认 agent 或将 Bridge 设置为唯一回复来源的具体配置方式。
 - `openclaw-weixin` 传给 agent loop 的真实 context 字段：已通过 raw payload 查询验证。
-- Bridge hook 中稳定的微信账号级 `account_id` 字段：已确认可从 `ctx.sessionKey` 解析，格式为 `agent:main:openclaw-weixin:<account_id>:direct:<peer_id>`。
+- Bridge hook 中稳定的通道侧账号字段已显式命名为 `channel_account_id`；旧 `account_id` 仅作为 payload 兼容别名。未绑定 legacy 入站可 fallback 为 `ctx.sessionKey`，典型格式为 `agent:main:openclaw-weixin:<channel_account_id>:direct:<peer_id>`；绑定完成后应通过 `channel_account_id` / `openclaw_login_session_key` 路由到预创建 `acct_...`。
 - 私聊 unknown sender 是否需要 pairing approval。
 - 语音消息在 OpenClaw context 中的 media 表达方式。
 - 语音媒体格式是否为 AMR/SILK/M4A，以及是否需要 ffmpeg 转码。

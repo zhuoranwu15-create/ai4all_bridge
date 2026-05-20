@@ -35,7 +35,7 @@ AI4ALL 是一个基于微信私聊的个人 AI 陪伴与生活助理。
 - 微信私聊文本。
 - 最近会话上下文。
 - Backend 调用真实 LLM。
-- 账号级 `account_id` 隔离。
+- AI4ALL 业务账号级隔离。当前业务账号由 OpenClaw `session_key` 派生。
 - 每个账号自动拥有独立 `user_profile.md`。
 - 运营人员可以通过 Admin API 查看账号、会话和消息。
 

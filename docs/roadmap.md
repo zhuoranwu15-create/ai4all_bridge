@@ -1,5 +1,7 @@
 # 后续规划
 
+> 本文描述产品和工程阶段路线。Demo 验证后的中长期架构边界、身份模型和技术分层以 `docs/mid_long_term_tech_plan.md` 为准。
+
 ## 总方向
 
 项目要从一个已验证的微信 AI 陪伴 Demo，演进成一个可扩展的个人 AI 陪伴与生活助理服务。
@@ -34,10 +36,10 @@ OpenClaw 和 `openclaw-weixin` 只作为微信登录、收消息、发消息的�
 
 - 已验证 `openclaw-weixin` 多账号同时在线能力。
 - 已配置 OpenClaw session 隔离策略：`session.dmScope=per-account-channel-peer`。
-- 已确认微信账号级 `account_id` 可从 OpenClaw `sessionKey` 解析。
-- 已修正 Bridge payload，传入真实账号 ID，而不是仅传 `openclaw-weixin` provider。
-- Backend 已按 `account_id` 隔离会话、消息、Profile 和 Prompt。
-- 已支持 `data/user_profiles/<account_id>/user_profile.md` 作为账号级 Soul 和简化长期记忆。
+- 已确认 AI4ALL 业务账号 ID 当前可从 OpenClaw `sessionKey` 派生。
+- 已修正 Bridge payload，避免仅传 `openclaw-weixin` provider。
+- Backend 已按 AI4ALL 业务账号隔离会话、消息、Profile 和 Prompt。
+- 已支持 `data/user_profiles/<account_id>/user_profile.md` 作为账号级 Soul 和简化长期记忆；这里的 `<account_id>` 是当前代码历史命名，语义上对应 AI4ALL 业务账号 ID。
 - 将账号级配置作为核心管理对象。
 - 保留现有 `contacts` API 作为临时兼容，后续重命名或弱化。
 - 已增加 raw payload 查看能力，便于排查多账号字段。
@@ -46,7 +48,7 @@ OpenClaw 和 `openclaw-weixin` 只作为微信登录、收消息、发消息的�
 
 - 同一个 OpenClaw 实例中至少两个微信账号同时在线。
 - 两个微信账号都能收到 AI4ALL Backend 生成的回复。
-- 两个微信账号返回不同的真实 `account_id`。
+- 两个微信账号返回不同的 AI4ALL 业务账号 ID。
 - 不同微信账号之间上下文不串线。
 - 不同微信账号可以使用不同 `user_profile.md`。
 - 重启 Backend 后账号、会话和消息记录不丢。

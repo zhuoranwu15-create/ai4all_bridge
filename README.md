@@ -6,6 +6,7 @@
 - [用户使用说明](docs/user_guide.md)
 - [后台管理说明](docs/admin_guide.md)
 - [后续规划](docs/roadmap.md)
+- [中长期技术规划](docs/mid_long_term_tech_plan.md)
 - [下一步开发步骤](docs/next_dev_steps.md)
 - [OpenClaw Bridge 技术设计](docs/openclaw_bridge_tech_design.md)
 
@@ -59,7 +60,7 @@ SQLite is used for the first version. The default database path is:
 data/ai4all.sqlite3
 ```
 
-Backend 按 `account_id + session_key` 隔离上下文。当前已验证一个 OpenClaw 实例同时接入两个个人微信账号，Bridge 会从 OpenClaw `sessionKey` 解析真实微信账号级 `account_id`，并为每个账号自动创建 `data/user_profiles/<account_id>/user_profile.md`。
+Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `acct_...`。不要把它等同于 OpenClaw payload 原生 `account_id`。中长期身份模型见 [中长期技术规划](docs/mid_long_term_tech_plan.md)。
 
 ## OpenClaw Bridge
 
@@ -67,6 +68,15 @@ Install or update the local Bridge plugin:
 
 ```bash
 openclaw plugins install ./openclaw-bridge --force
+openclaw gateway restart
+```
+
+Make sure the Bridge backend URL matches the FastAPI port you are using. The
+default docs use `8000`; the 2026-05-20 Web onboarding verification ran on
+`8012`:
+
+```bash
+openclaw config set plugins.entries.ai4all-openclaw-bridge.config.backendUrl http://127.0.0.1:8012
 openclaw gateway restart
 ```
 
@@ -84,9 +94,37 @@ Typed hooks:
 before_agent_reply
 ```
 
+For local orchestration comparison, enable shadow trace only for test accounts.
+Those accounts will let OpenClaw run its native agent, rewrite the outbound
+content back to AI4ALL's reply, and store the OpenClaw prompt trace in the
+backend:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "ai4all-openclaw-bridge": {
+        hooks: {
+          allowConversationAccess: true
+        },
+        config: {
+          shadowTraceAccountIds: "acct_example"
+        }
+      }
+    }
+  }
+}
+```
+
+Set the backend side too:
+
+```bash
+DEBUG_TRACE_ACCOUNT_IDS=acct_example
+```
+
 ## WeChat E2E Check
 
-1. Start the backend on `127.0.0.1:8000`.
+1. Start the backend on the same port configured in the Bridge (`8000` by default; `8012` in the current Web onboarding verification).
 2. Install/update the Bridge plugin.
 3. Restart OpenClaw Gateway.
 4. Confirm `openclaw-weixin` is running.
@@ -101,7 +139,8 @@ These endpoints are intended for local development only.
 curl http://127.0.0.1:8000/debug/sessions
 curl 'http://127.0.0.1:8000/debug/messages?session_id=1'
 curl 'http://127.0.0.1:8000/debug/messages/raw?limit=5'
-curl http://127.0.0.1:8000/debug/accounts/86f866663cf9-im-bot/user-profile
+curl 'http://127.0.0.1:8000/debug/traces?account_id=acct_example'
+curl http://127.0.0.1:8000/debug/accounts/acct_example/user-profile
 curl -X POST http://127.0.0.1:8000/debug/sessions/1/reset
 curl http://127.0.0.1:8000/debug/sessions/1/profile
 curl -X POST http://127.0.0.1:8000/debug/sessions/1/profile \

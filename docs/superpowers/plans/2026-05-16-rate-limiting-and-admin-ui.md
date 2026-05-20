@@ -430,13 +430,13 @@ sleep 2
 curl -s -X PATCH -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/json" \
   -d '{"daily_limit": 50}' \
-  http://127.0.0.1:8000/admin/accounts/86f866663cf9-im-bot | python3 -m json.tool | grep daily_limit
+  http://127.0.0.1:8000/admin/accounts/acct_example | python3 -m json.tool | grep daily_limit
 
 # Clear it back to null
 curl -s -X PATCH -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/json" \
   -d '{"daily_limit": null}' \
-  http://127.0.0.1:8000/admin/accounts/86f866663cf9-im-bot | python3 -m json.tool | grep daily_limit
+  http://127.0.0.1:8000/admin/accounts/acct_example | python3 -m json.tool | grep daily_limit
 ```
 Expected: First response `"daily_limit": 50`, second response `"daily_limit": null`.
 

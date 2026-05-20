@@ -1,118 +1,134 @@
-# 下一步开发步骤：账号级 Profile 验收与管理
+# 下一步开发步骤：Web Onboarding 绑定收口
 
-更新时间：2026-05-16
+更新时间：2026-05-20
 
 ## 当前已完成
 
-已经走通：
+已经走通并验收：
 
 ```text
-一个 OpenClaw 实例
--> 两个个人微信账号同时在线
--> Bridge 从 sessionKey 解析真实微信账号级 account_id
--> Backend 按 account_id 隔离 Soul、会话、记忆和配置
--> 每个 account_id 自动创建 user_profile.md
+Web 输入手机号
+-> 创建或复用 platform_user
+-> 创建 AI4ALL Account: acct_...
+-> 创建 binding_intent: bind_...
+-> Backend 调 OpenClaw Gateway web.login.start
+-> Web 展示二维码并轮询 binding_intent
+-> Backend 调 web.login.wait
+-> 微信扫码完成
+-> Backend 写入 completed binding_intent + channel_bindings
+-> 微信发送真实消息
+-> /openclaw/turn 通过 channel_account_id alias lookup 路由到预创建 acct_...
+-> Backend 生成回复并回到微信
 ```
 
-已验证账号：
+OpenClaw QR wait 返回的通道账号可能是 raw 形式，例如 `example@im.bot`；Bridge 入站上下文可能使用 normalized 形式，例如 `example-im-bot`。Backend 已兼容这两种形式。
+
+本地运行时要点：
+
+- Backend 默认开发端口可以是 `8000`。
+- 本轮 Web onboarding 验证使用 `8012`。
+- Bridge 的 Backend URL 必须和 FastAPI 实际端口一致。
+- `openclaw-weixin` 当前需要 `gatewayMethods: ["web.login.start", "web.login.wait"]` 补丁；维护说明见 `docs/openclaw-weixin-gateway-qr-patch.md`。
+
+## Step 1：重复绑定策略
+
+需要先定义产品行为，再实现代码：
+
+- 同一个 `channel_account_id` 已绑定到同一个 `ai4all_account_id`：前端展示已绑定，避免重复创建绑定记录。
+- 同一个 `channel_account_id` 已绑定到另一个 `ai4all_account_id`：建议默认拒绝，并要求先解绑。
+- OpenClaw 返回 `already_connected` / `binded_redirect`：不要静默绑定到新账号，除非能确认这是用户主动迁移。
+- 同一个产品用户是否允许多个 AI bot：需要和套餐/订阅策略一起定义。
+
+## Step 2：正式解绑能力
+
+解绑要分两层：
 
 ```text
-86f866663cf9-im-bot
-53de8b76fd98-im-bot
+AI4ALL 业务解绑
+= 停用或关闭 platform_user / ai4all_account_id / channel_account_id 的绑定关系
+
+OpenClaw 运行时解绑
+= 让 OpenClaw 不再持有某个微信通道账号登录态
 ```
 
-## Step 1：确认 OpenClaw 多账号状态
+不要把删除 `openclaw-weixin` 插件作为解绑方式。插件删除会影响运行时和本地补丁，不是准确的账号解绑动作。
 
-确认 session 隔离配置：
+建议新增：
 
-```bash
-openclaw config get session.dmScope
-```
+- 产品侧解绑 API：校验产品用户登录态后停用 `account_owner_bindings` / `channel_bindings`。
+- Admin 解绑 API：用于内测和客服处理误绑。
+- OpenClaw 运行时解绑入口：封装账号退出/移除能力，避免手工清理运行时文件。
+- 解绑审计：记录操作者、时间、`ai4all_account_id`、`channel_account_id` 和原因。
 
-期望：
+## Step 3：Binding Intent 异常状态
+
+当前主路径已跑通，下一步补齐异常状态：
+
+- `expired`：二维码过期或用户长时间未扫码。
+- `cancelled`：用户在 Web 端取消绑定。
+- `wait_failed`：OpenClaw Gateway 调用失败或超时。
+- `already_connected`：扫码账号已在当前 OpenClaw 运行时登录。
+- `replaced`：用户放弃旧 intent，重新生成二维码。
+
+这些状态需要同时体现在：
+
+- `binding_intents.status`
+- Web 轮询响应
+- 前端提示文案
+- Admin 排障视图
+
+## Step 4：运营后台视图
+
+最小可用视图应能串起这几张表：
+
+- `platform_users`
+- `subscriptions`
+- `accounts`
+- `account_owner_bindings`
+- `binding_intents`
+- `channel_bindings`
+
+重点展示：
+
+- 一个产品用户拥有哪些 AI4ALL Accounts。
+- 每个 AI4ALL Account 当前绑定了哪个微信通道账号。
+- 最近一次 `binding_intent` 的状态、错误、过期时间和原始返回。
+- 入站消息当前解析出的 `ai4all_account_id`、`openclaw_session_key_account_id`、`channel_account_id`。
+
+## Step 5：权益和配置生效
+
+绑定链路稳定后，再把运行权益接入请求链路：
 
 ```text
-per-account-channel-peer
+/openclaw/turn
+-> ai4all_account_id
+-> account_owner_bindings
+-> platform_user
+-> subscriptions
+-> effective config
 ```
 
-确认微信账号在线：
+effective config 应覆盖：
 
-```bash
-openclaw channels status --probe
-cat ~/.openclaw/openclaw-weixin/accounts.json
-```
+- daily limit / rpm
+- model tier
+- skills 开关
+- debug trace 白名单
+- memory quota
 
-## Step 2：查看 raw payload
+## Step 6：补丁产品化
 
-```bash
-curl 'http://127.0.0.1:8000/debug/messages/raw?limit=5'
-curl http://127.0.0.1:8000/debug/messages/<message_db_id>/raw
-```
+当前 `openclaw-weixin` 的 `gatewayMethods` 是本地补丁。后续需要选择一种正式方案：
 
-Admin 版本：
-
-```bash
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  'http://127.0.0.1:8000/admin/messages/raw?limit=5'
-
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/messages/<message_db_id>/raw
-```
-
-raw 中会包含：
-
-- `ctx.sessionKey`
-- `ai4all_bridge.account_candidates`
-- `ai4all_bridge.resolved_account_id`
-
-## Step 3：查看账号级 user_profile.md
-
-```bash
-curl http://127.0.0.1:8000/debug/accounts/<account_id>/user-profile
-```
-
-Admin 版本：
-
-```bash
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/<account_id>/user-profile
-```
-
-文件位置：
-
-```text
-data/user_profiles/<account_id>/user_profile.md
-```
-
-## Step 4：端到端验收
-
-至少准备两个微信账号 A/B：
-
-- A 发起 5 轮连续文本对话。
-- B 发起 5 轮连续文本对话。
-- A/B 对话上下文不能串线。
-- A/B 分别修改 `user_profile.md` 后，回复风格能明显区分。
-- Backend 重启后历史消息仍可查询。
-- Backend 重启后 `user_profile.md` 仍被读取。
-
-建议验证方式：
-
-1. 在账号 A 的 `user_profile.md` 中写入“称呼我为 A，回复非常简洁”。
-2. 在账号 B 的 `user_profile.md` 中写入“称呼我为 B，回复更活泼”。
-3. 两个账号分别发送“你记得我是谁吗？”
-4. 确认回复不串 profile。
-
-## Step 5：下一轮开发重点
-
-- 增加账号级 profile 编辑 API。
-- 增加账号启用/禁用能力。
-- 增加账号列表中 profile 路径和最近活跃时间。
-- 将现有 `contacts` 兼容 API 逐步迁移为账号级 API。
+- 给上游提交 PR。
+- 固定已验证插件版本并在安装后自动校验。
+- 在启动前检查 provider discovery 是否能发现 `web.login.start` / `web.login.wait`。
+- 升级 OpenClaw 或插件后重新跑 QR start/wait 验收。
 
 ## 暂缓事项
 
-- Web 后台。
+- 小程序/H5 微信官方登录。
+- 支付、自动续费和套餐后台。
+- 多 bot 账号管理。
 - 语音 ASR。
-- 长期记忆产品化。
-- 公开 SaaS onboarding。
-- 群聊 bot。
+- 图片/多模态。

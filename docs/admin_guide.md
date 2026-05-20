@@ -1,8 +1,12 @@
 # 后台管理说明
 
-当前还没有 Web 后台页面。
+当前已有一个轻量 Web 后台，也保留 Admin API。两者都通过 `ADMIN_TOKEN` 鉴权。
 
-目前的后台管理能力是 Admin API，通过 `ADMIN_TOKEN` 鉴权后用 HTTP API 操作。
+Web 后台入口：
+
+```text
+http://127.0.0.1:8000/ui/
+```
 
 ## Admin 鉴权
 
@@ -20,16 +24,18 @@ ADMIN_TOKEN=replace-with-a-strong-token
 
 ## 当前管理模型
 
-新的目标模型以接入微信账号为核心：
+新的目标模型以 AI4ALL 业务账号为核心：
 
 ```text
-account = 一个接入 OpenClaw 的个人微信账号
-session = 该账号下的会话
+AI4ALL Account = 业务隔离账号，未绑定 legacy 入站可由 OpenClaw session_key fallback，绑定后使用预创建 acct_...
+Channel Account = OpenClaw / 微信通道侧账号或机器人账号
+Channel Binding = AI4ALL Account 与 Channel Account / session_key 的绑定
+session = AI4ALL Account 下的会话
 profile = 该账号或会话对应的 Soul / 风格 / Prompt 配置
 message = 收发消息记录
 ```
 
-现有 API 里仍有 `contacts` 命名，这是早期“服务微信号服务多个用户”模型留下的兼容命名。后续会把管理能力收敛到账号级配置上。
+现有 DB/API 里仍有 `account_id` 旧命名。当前语义上应理解为 AI4ALL Account ID，不等同于 OpenClaw payload 原生 `account_id`。
 
 ## 查看账号
 
@@ -38,9 +44,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
   http://127.0.0.1:8000/admin/accounts
 ```
 
-这里的账号指接入 OpenClaw 的微信账号。
-
-当前已经验证一个 OpenClaw 实例同时接入两个微信账号，Bridge 会把真实微信账号级 `account_id` 传给 Backend。
+这里返回的是 AI4ALL Account。账号详情接口会包含 `channel_bindings`，用于查看对应的 Channel Account ID、session key、sender/chat 等通道身份。
 
 ## 查看兼容用户记录
 
@@ -157,7 +161,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/86f866663cf9-im-bot/user-profile
+  http://127.0.0.1:8000/admin/accounts/acct_example/user-profile
 ```
 
 文件路径：
@@ -165,6 +169,8 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 ```text
 data/user_profiles/<account_id>/user_profile.md
 ```
+
+这里的 `<account_id>` 是当前代码历史命名，语义上是 AI4ALL Account ID。
 
 ## 常用排查命令
 

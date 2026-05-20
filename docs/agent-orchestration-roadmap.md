@@ -3,7 +3,7 @@
 > 本文档持续维护，记录 AI4ALL 对标 OpenClaw 编排能力的演进计划、关键设计决策和讨论结论。
 >
 > 创建于：2026-05-17
-> 最后更新：2026-05-17
+> 最后更新：2026-05-18
 
 ---
 
@@ -98,18 +98,38 @@ Agent 可调用工具（部分）：
 
 ```
 M1  结构化 Prompt 装配     ← 地基，改变所有后续工作的基础
-M2  记忆自动化             ← 最大体验提升（分 2A 基础层 + 2B 深化层）
-M3  Context 智能压缩       ← 支撑长对话的基础设施
-M4  工具体系               ← 架构跃迁，从"聊天机器人"到"agent"
+M2  记忆自动化             ← 已有基础机制，暂不继续深化
+M3  Context 智能压缩       ← 暂缓，等真实长对话压力出现后再做
+M4  工具体系               ← 暂缓，等产品侧工具清单和行为边界明确后再做
 ```
 
 依赖关系：M1 → M2 → M3，M4 设计可与 M2/M3 并行但实现在 M1 之后。
+
+### 当前阶段优先级调整（2026-05-18）
+
+Dreaming、Context 智能压缩、工具体系都已经有清晰架构方向，但当前验证成本高，且产品侧边界还没有完全确定。现阶段先不继续深挖 M2B/M3/M4，避免提前建设难以验证、后续又可能返工的能力。
+
+短期优先做更容易闭环的事情：
+
+- 完善 AI4ALL 与 OpenClaw 的 prompt/context 对比能力
+- 梳理 `AGENTS / SOUL / IDENTITY / USER / TOOLS / HEARTBEAT / MEMORY` 文件的实际内容规范
+- 用测试账号持续观察回复差异，沉淀可解释的 prompt 调整结论
+- 和产品侧一起定义工具体系的真实需求、权限边界和失败体验
+
+已实现的 Dreaming 基础版保留为手动实验能力，不接入自动调度；M3/M4 暂停实现。
+
+当前 checkpoint：
+
+- Context files 的基础运行融合和 `HEARTBEAT.md` 拆分已经完成。
+- 后续继续 context files 时，优先做“显式修正与更新机制”：`IDENTITY.md` / `USER.md` 显式修正后更新并回显当前记录，`SOUL.md` 只做内部精简更新、不回显全文。
+- 暂时不要继续推进 Dreaming 自动化、Context 智能压缩、工具体系实现，除非产品侧重新确认验证路径和边界。
+- `HEARTBEAT.md` 当前只作为全局系统策略占位，不注入普通聊天 prompt；用户主动触达/提醒任务后续单独建模。
 
 ---
 
 ### Milestone 1：结构化 Prompt 装配
 
-**状态：** 📋 待开始
+**状态：** ✅ 已完成（2026-05-18）
 
 **目标：** 把 3 行拼接改为有明确区块、有顺序、有大小控制的 prompt builder。
 
@@ -166,9 +186,222 @@ M4  工具体系               ← 架构跃迁，从"聊天机器人"到"agent"
 
 ---
 
+### Milestone 1.5：编排 Debug Trace 与 OpenClaw 对比
+
+**状态：** ✅ 已完成 Path B（2026-05-18）；后续只剩对比视图增强
+
+**目标：** 对测试账号记录完整编排输入，支持逐轮对比 AI4ALL 与 OpenClaw 的 prompt/history/tools/runtime 差异。
+
+**测试账号配置：**
+
+通过环境变量配置多个账号：
+
+```bash
+DEBUG_TRACE_ACCOUNT_IDS=acct_example,another-test-account
+```
+
+只对白名单账号记录完整 prompt 和 LLM messages，普通账号不写入 debug trace。
+
+#### Phase 1：AI4ALL 侧 Trace（已完成）
+
+**实现内容：**
+
+- 新增 `debug_traces` 表，独立保存 trace，不污染 `messages.raw_json`
+- `app/main.py` 在测试账号对话时记录：
+  - `system_prompt`
+  - 实际传给 LLM 的 `messages`
+  - `llm_model`
+  - `reply`
+  - prompt block 元数据（history_count、各 profile section 长度、override/style 等）
+  - latency/error
+- 响应 metadata 返回 `debug_trace_id`
+- 新增查询接口：
+  - `GET /debug/traces`
+  - `GET /debug/traces/{trace_id}`
+  - `GET /admin/debug/traces`
+  - `GET /admin/debug/traces/{trace_id}`
+
+**验收：**
+
+- 配置多个测试账号后，每个账号都会写 trace
+- 非测试账号不写 trace
+- trace 里的第一条 message 是完整 system prompt
+- trace 可按 account/session 查询
+
+#### Phase 2：OpenClaw Shadow Trace（路径 B 已实现）
+
+**核心原则：**
+
+OpenClaw 侧只做影子采样，不向微信真实发送第二条回复。用户仍只看到 AI4ALL 后端回复。
+
+**候选方案 A：插件优先，最少改 OpenClaw**
+
+新增或扩展一个 OpenClaw debug 插件：
+
+- 在 `before_agent_run` 记录 final prompt + session messages
+- 在 `llm_input` 记录 provider input（system prompt、history、工具 schema）
+- 在 `agent_end` 记录最终回复、工具调用摘要、耗时和错误
+- 将 trace POST 到 AI4ALL 后端，例如 `POST /openclaw/debug-traces`
+- 使用 account/session/message/runId 作为 correlation key，与 AI4ALL trace 对齐
+
+问题：当前 `ai4all-openclaw-bridge` 使用 `before_agent_reply` 短路默认 agent，OpenClaw 原生 agent run 可能不会继续执行，因此 `before_agent_run` / `llm_input` 不一定触发。
+
+**当前实现：方案 B，测试账号放行 OpenClaw native run，但最终发送 AI4ALL 回复**
+
+对测试账号修改 bridge 行为：
+
+- AI4ALL 仍同步处理并返回真实回复
+- bridge 不在 `before_agent_reply` 短路 OpenClaw native run
+- OpenClaw 正常构建 prompt、调用模型、触发 `llm_input` / `agent_end`
+- 在 `message_sending` 中把 OpenClaw 原生回复改写为 AI4ALL 回复，因此微信只收到一条 AI4ALL 回复
+- 同时把 OpenClaw 原生 prompt/messages/native reply 回传到 `POST /openclaw/debug-traces`
+
+优点：能拿到最真实的 OpenClaw 编排链路。
+
+风险：
+
+- 需要确认目标 channel 的最终回复都会经过 `message_sending`
+- 会产生额外模型调用成本
+- 对 hook 优先级和 channel delivery path 依赖较强。当前 bridge 使用 `message_sending` priority 1000，优先改写第一条 native delivery；额外 native delivery 会被 cancel
+
+**启用要求：**
+
+- AI4ALL 后端：`DEBUG_TRACE_ACCOUNT_IDS=acct_example,another-test-account`
+- OpenClaw bridge 插件：`shadowTraceAccountIds` 配置同一批测试账号
+- 非内置插件读取 raw conversation hook 必须开启：
+
+```json5
+{
+  plugins: {
+    entries: {
+      "ai4all-openclaw-bridge": {
+        hooks: {
+          allowConversationAccess: true
+        },
+        config: {
+          shadowTraceAccountIds: "acct_example"
+        }
+      }
+    }
+  }
+}
+```
+
+**候选方案 C：本地 OpenClaw 增加 shadow-run/dry-run 能力（推荐长期方案）**
+
+对本地 OpenClaw 做小改动，新增受控入口：
+
+```text
+runShadowAgentTurn({
+  sessionKey,
+  message,
+  channel,
+  accountId,
+  noDispatch: true,
+  traceSink: "http://127.0.0.1:8000/openclaw/debug-traces"
+})
+```
+
+要求：
+
+- 复用 OpenClaw 正常 prompt builder/context engine/tool schema 装配
+- 可选择是否实际调用模型
+  - `build_only`: 只记录 prompt/provider input，成本最低
+  - `full`: 调模型并记录 OpenClaw reply/tool calls
+- 强制 `noDispatch=true`，从架构上避免微信双回复
+- 输出结构化 trace，不依赖解析普通日志
+
+这是最稳的最终形态；如果插件 hook 不能完整覆盖或无法安全 suppress delivery，就走本地 OpenClaw 修改。
+
+**AI4ALL 后端配合：**
+
+- 新增 `POST /openclaw/debug-traces` 接收 OpenClaw trace
+- `debug_traces.source` 使用 `openclaw`
+- metadata 中保存 `openclaw_run_id`、hook 名、provider、tool schema 摘要等
+- 查询接口按 correlation key 展示 AI4ALL/OpenClaw 两侧 trace
+
+**建议落地顺序：**
+
+1. 用 OpenClaw 插件验证短路后哪些 hooks 会触发
+2. 若 hook 不触发，先试方案 B 在测试账号 suppress delivery
+3. 如果 suppress 路径不稳定，改本地 OpenClaw 实现方案 C
+4. 最后做对比视图：同一 message_id 下展示 `ai4all` vs `openclaw` prompt/messages/reply 差异
+
+---
+
+### Milestone 1.6：OpenClaw Context File Alignment
+
+**状态：** ✅ 已完成基础版（2026-05-18）
+
+**目标：** 将 AI4ALL 的 per-account prompt context 对齐到 OpenClaw 的 workspace 文件思想。账号级文件保留 `AGENTS / SOUL / IDENTITY / USER / TOOLS / MEMORY`；`HEARTBEAT.md` 改为全局系统策略文件，不进入普通用户聊天 prompt。
+
+**机制文档：** `docs/agent-context-files.md`
+
+**落地方案：** `docs/agent-context-files-tech-plan.md`
+
+**核心原则：**
+
+- 对齐结构，不复制 OpenClaw 身份。
+- AI4ALL 对外仍是微信里的个人 AI 陪伴与生活助理，不声称自己运行在 OpenClaw 内部。
+- 每个账号独立 context 文件，严格账号隔离。
+- `TOOLS.md` 只描述 AI4ALL 当前真实可用能力，不注入 OpenClaw 工具清单。
+- `HEARTBEAT.md` 后续作为全局系统策略，不放账号目录；用户定时任务和主动触达设置另行建模。
+
+**文件结构：**
+
+```text
+data/user_profiles/<account_id>/
+├── AGENTS.md
+├── SOUL.md
+├── IDENTITY.md
+├── USER.md
+├── TOOLS.md
+├── MEMORY.md
+├── user_profile.md              ← 旧格式兼容，暂保留
+└── memory/
+    └── YYYY-MM-DD.md
+```
+
+**实现内容：**
+
+- `app/user_profiles.py`
+  - 新增 `read_agent_context`
+  - 新增 `ensure_agent_context_files`
+  - 缺失 context 文件时从旧 `user_profile.md` 平滑生成默认内容
+  - 已存在文件永不覆盖
+- `app/prompt_builder.py`
+  - 新增 `agent_context` 参数
+  - 注入 `【Project Context】`，只包含账号级 `AGENTS.md / SOUL.md / IDENTITY.md / USER.md / TOOLS.md / MEMORY.md`
+  - 即使调用方误传 `HEARTBEAT`，普通聊天 prompt 也不注入 `### HEARTBEAT.md`
+  - 有 context files 时不重复注入旧 `Soul / User Preferences / Long-term Memory`
+- `app/main.py`
+  - 主对话链路读取 per-account context files
+  - `/debug/accounts/{account_id}/prompt-preview` 展示 Project Context
+  - debug trace metadata 记录每个 context 文件的 path、chars、exists、created
+
+**验收：**
+
+- 新账号第一次对话会自动生成账号级 context files
+- 新账号不再生成账号级 `HEARTBEAT.md`
+- 已有账号从旧 `user_profile.md` 迁移默认内容，但不覆盖手工编辑过的 context 文件
+- trace 的 `system_prompt` 中可看到 `### AGENTS.md` 等同名块
+- trace metadata 可看到每个账号级 context 文件大小，方便对齐 OpenClaw prompt
+- 普通聊天 prompt、prompt-preview、debug trace metadata 都不包含账号级 `HEARTBEAT.md`
+
+**下一步：**
+
+- 做“显式修正与更新机制”：先建立 `context_updates.py` 纯函数/模块边界和测试
+- 按 `docs/agent-context-files.md` 逐个完善账号级 context files 默认模板
+- 增加 Admin UI 或 debug endpoint，方便查看和编辑 context files
+- 将 Dreaming 改为生成 `MEMORY.md` 候选 diff，而不是直接覆盖正式文件
+
+注意：Dreaming、M3 Context 智能压缩、M4 工具体系当前仍保持 hold，不要和 context files 显式修正工作混在同一阶段推进。
+
+---
+
 ### Milestone 2A：基础记忆自动化
 
-**状态：** 📋 待开始（依赖 M1）
+**状态：** ✅ 基础版已实现（2026-05-18）；待增强提炼质量与触发策略
 
 **目标：** 每次对话结束后，自动提炼并追写当日记忆文件。
 
@@ -185,6 +418,12 @@ data/user_profiles/<account_id>/
 **实现位置：** `app/memory_writer.py`（新建，异步调用）
 
 **触发时机：** `openclaw_turn` 写入 outbound 消息后，后台 `asyncio.create_task`
+
+**当前实现：**
+
+- `app/memory_writer.py` 已实现对话片段提炼与 `memory/YYYY-MM-DD.md` 追加写入。
+- `app/main.py` 已在成功生成回复后异步触发记忆写入。
+- `app/user_profiles.py:read_daily_notes` 已读取今天和昨天的 daily notes 并注入 prompt。
 
 **提炼 Prompt（草稿）：**
 
@@ -210,13 +449,26 @@ data/user_profiles/<account_id>/
 
 ### Milestone 2B：Dreaming（记忆蒸馏）
 
-**状态：** 📋 待开始（依赖 2A）
+**状态：** ⏸️ 基础版已实现（2026-05-18），暂停继续深化；暂不接入自动调度
 
 **目标：** 每日定时对 daily notes 做蒸馏，晋升重要条目到 Long-term Memory。
 
-**实现位置：** `app/dreaming.py`（新建）
+**实现位置：** `app/dreaming.py`
 
 **触发方式：** APScheduler 或系统 cron（每日凌晨 3:00）
+
+**当前实现：**
+
+- `app/dreaming.py` 可读取最近 N 天 `memory/YYYY-MM-DD.md`，默认 7 天。
+- 蒸馏结果写入 per-account `MEMORY.md`，与 M1.6 的 Project Context 对齐。
+- `POST /admin/accounts/{account_id}/dreaming?days=7` 可手动触发单账号 Dreaming。
+- 当前没有自动定时调度，短期也不接入自动调度；仅保留为人工实验入口。
+
+**暂停原因：**
+
+- 蒸馏质量需要真实对话数据和人工评估，不适合只靠单元测试判断。
+- 自动写入长期记忆一旦质量不稳定，会直接污染后续 prompt。
+- 先积累 debug trace 和 daily notes，再决定是否开启定时 Dreaming。
 
 **蒸馏逻辑（简化版，保留 OpenClaw 的核心机制）：**
 
@@ -235,16 +487,22 @@ Prompt 草稿：
 ```
 
 **验收：**
-- 手动触发蒸馏后，user_profile.md 的 Long-term Memory 节被更新
+- 手动触发蒸馏后，`MEMORY.md` 被更新
 - 蒸馏有日志，可追查
 
 ---
 
 ### Milestone 3：Context 智能压缩
 
-**状态：** 📋 待开始（依赖 M2A）
+**状态：** ⏸️ 暂缓（依赖真实长对话压力和可观测指标）
 
 **目标：** 把硬截断（取最近 N 条）替换为智能压缩。
+
+**暂缓原因：**
+
+- 当前微信私聊场景还没有稳定出现 context window 压力。
+- 压缩摘要质量不好会造成上下文误导，比硬截断更难排查。
+- 需要先补齐 trace 中的 token 估算、history 长度和失败样本，再决定触发阈值。
 
 **触发条件（任一满足）：**
 - 对话轮次 > 30 轮
@@ -276,9 +534,15 @@ ALTER TABLE sessions ADD COLUMN compacted_upto_message_id INTEGER;
 
 ### Milestone 4：工具体系
 
-**状态：** 📋 待开始（依赖 M1，设计可并行）
+**状态：** ⏸️ 暂缓（等待产品侧工具清单、权限边界和交互策略）
 
 **目标：** 给 LLM 赋予调用工具的能力，从"文字生成"到"有行动力的 agent"。
+
+**暂缓原因：**
+
+- 工具体系不是纯技术问题，需要明确产品要开放哪些真实动作。
+- 每个工具都要定义权限、确认机制、失败兜底、审计日志和用户可见性。
+- 在工具清单没有产品共识前，先在 `TOOLS.md` 中只描述当前真实能力，避免模型承诺不可执行的动作。
 
 **首批工具（最小可用集）：**
 
@@ -319,32 +583,31 @@ app/
 
 ---
 
-## 预期完成后的能力评估
+## 能力评估
 
 | 能力维度 | OpenClaw | AI4ALL 完成后 | 备注 |
 |---------|---------|--------------|------|
 | Prompt 结构化装配 | ██████████ 100% | ████████ 85% | 缺 cache boundary 精细控制 |
 | 长期记忆（自动） | ██████████ 100% | ████████ 80% | 缺向量检索，无 wiki 层 |
 | 短期记忆（daily notes） | ██████████ 100% | ████████ 80% | 缺 REM/Light 加权 |
-| Dreaming 蒸馏 | ██████████ 100% | ██████ 70% | 有机制，无评分权重系统 |
-| Context 压缩 | ██████████ 100% | ████████ 80% | 缺 provider 插件化 |
-| 工具体系（基础） | ██████████ 100% | ██████ 60% | 首批 4 个工具 |
+| Dreaming 蒸馏 | ██████████ 100% | ████ 40% | 有手动实验入口，暂停自动化 |
+| Context 压缩 | ██████████ 100% | ░░ 0% | 暂缓，等待真实长对话压力 |
+| 工具体系（基础） | ██████████ 100% | ░░ 0% | 暂缓，等待产品定义工具边界 |
 | Skills 系统 | ██████████ 100% | ██ 20% | 暂不做 |
 | 多 agent 编排 | ██████████ 100% | ░░ 0% | 阶段外 |
 
-**综合估算：80% 区间，完全满足当前阶段产品目标。**
+**当前结论：** 不再追求短期达到完整 80% OpenClaw 能力，而是先把 prompt/context/trace 的可解释性做扎实。M3/M4 的实现时机由产品验证和真实数据压力决定。
 
 ---
 
 ## 大致时间线
 
 ```
-Week 1   M1（Prompt 装配）
-Week 2   M2A（基础记忆自动化）
-Week 3   M3（Context 压缩）+ M4 工具设计
-Week 4   M4 前两个工具（memory_get / memory_search）
-Week 5   M2B（Dreaming）+ M4 其余工具
-Week 6   联调、测试、文档
+Week 1   M1 / M1.5 / M1.6（Prompt 装配、Trace 对比、Context File Alignment）
+Week 2   M2A 基础记忆 + M2B 手动 Dreaming 实验入口
+Next     暂停 M3/M4，实现 prompt/context 对比视图和内容规范
+Later    产品侧工具体系梳理完成后，再恢复 M4
+Later    出现真实长对话压力后，再恢复 M3
 ```
 
 ---
@@ -410,6 +673,9 @@ Week 6   联调、测试、文档
 - [ ] **工具调用是否对用户透明：** 当 AI 调用工具时，用户能看到"正在查找记忆…"之类的提示吗？
 - [ ] **Dreaming 的调度方式：** APScheduler 内嵌进程，还是独立 cron job？
 - [ ] **Daily notes 的存储格式：** 纯 markdown 追加，还是有结构（YAML front-matter + 内容）？
+- [ ] **工具体系产品定义：** 第一批真实工具是什么？哪些动作必须用户二次确认？失败时如何回复？
+- [ ] **Context 压缩触发标准：** 用轮次、token 估算、还是 LLM 请求失败作为触发信号？
+- [ ] **Dreaming 人工评估：** MEMORY.md 更新前是否需要 review/approval？哪些账号允许自动写入？
 
 ---
 
