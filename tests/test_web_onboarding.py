@@ -4,10 +4,23 @@ from unittest.mock import patch
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 
 
+def _get_verified_token(phone: str) -> str:
+    from app.db import (
+        create_phone_verification,
+        get_latest_active_verification,
+        set_verification_verified,
+    )
+    create_phone_verification(phone=phone, code="999999", expires_minutes=10)
+    v = get_latest_active_verification(phone)
+    result = set_verification_verified(v["id"], token_expires_minutes=10)
+    return result["verified_token"]
+
+
 def test_web_register_creates_and_reuses_platform_user(client):
     first = client.post(
         "/web/register",
-        json={"phone": "13800000000", "display_name": "Alice"},
+        json={"phone": "13800000000", "display_name": "Alice",
+              "otp_token": _get_verified_token("13800000000")},
     )
     assert first.status_code == 200
     first_user = first.json()["platform_user"]
@@ -17,7 +30,8 @@ def test_web_register_creates_and_reuses_platform_user(client):
 
     second = client.post(
         "/web/register",
-        json={"phone": "13800000000", "display_name": "Alice Updated"},
+        json={"phone": "13800000000", "display_name": "Alice Updated",
+              "otp_token": _get_verified_token("13800000000")},
     )
     assert second.status_code == 200
     second_user = second.json()["platform_user"]
@@ -26,7 +40,7 @@ def test_web_register_creates_and_reuses_platform_user(client):
 
 
 def test_web_register_rejects_invalid_phone(client):
-    res = client.post("/web/register", json={"phone": "123"})
+    res = client.post("/web/register", json={"phone": "123", "otp_token": "fake-token"})
 
     assert res.status_code == 400
     assert "phone" in res.json()["detail"]
@@ -35,13 +49,16 @@ def test_web_register_rejects_invalid_phone(client):
 def test_web_register_normalizes_phone(client):
     res1 = client.post(
         "/web/register",
-        json={"phone": "135-8888-8888", "display_name": "Phone Test"},
+        json={"phone": "135-8888-8888", "display_name": "Phone Test",
+              "otp_token": _get_verified_token("13588888888")},
     )
     assert res1.status_code == 200
     assert res1.json()["platform_user"]["phone"] == "13588888888"
 
     # Same number with spaces deduplicates to same user
-    res2 = client.post("/web/register", json={"phone": "135 8888 8888"})
+    res2 = client.post("/web/register",
+                       json={"phone": "135 8888 8888",
+                             "otp_token": _get_verified_token("13588888888")})
     assert res2.status_code == 200
     assert res2.json()["platform_user"]["id"] == res1.json()["platform_user"]["id"]
 
@@ -49,7 +66,8 @@ def test_web_register_normalizes_phone(client):
 def test_web_create_agent_creates_account_profile_owner_and_subscription(client):
     user = client.post(
         "/web/register",
-        json={"phone": "13800000001", "display_name": "Bob"},
+        json={"phone": "13800000001", "display_name": "Bob",
+              "otp_token": _get_verified_token("13800000001")},
     ).json()["platform_user"]
 
     res = client.post(
@@ -78,7 +96,8 @@ def test_web_create_agent_creates_account_profile_owner_and_subscription(client)
 def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     user = client.post(
         "/web/register",
-        json={"phone": "13800000002"},
+        json={"phone": "13800000002",
+              "otp_token": _get_verified_token("13800000002")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -131,7 +150,8 @@ def test_binding_wait_completion_binds_channel_account_to_precreated_account(cli
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800000005"},
+        json={"phone": "13800000005",
+              "otp_token": _get_verified_token("13800000005")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -183,7 +203,8 @@ def test_bound_channel_account_routes_turn_to_precreated_account(client):
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800000006"},
+        json={"phone": "13800000006",
+              "otp_token": _get_verified_token("13800000006")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -245,7 +266,8 @@ def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(cl
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800000008"},
+        json={"phone": "13800000008",
+              "otp_token": _get_verified_token("13800000008")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -306,7 +328,8 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800000007"},
+        json={"phone": "13800000007",
+              "otp_token": _get_verified_token("13800000007")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -360,11 +383,13 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
 def test_binding_intent_requires_account_owned_by_platform_user(client):
     owner = client.post(
         "/web/register",
-        json={"phone": "13800000003"},
+        json={"phone": "13800000003",
+              "otp_token": _get_verified_token("13800000003")},
     ).json()["platform_user"]
     other = client.post(
         "/web/register",
-        json={"phone": "13800000004"},
+        json={"phone": "13800000004",
+              "otp_token": _get_verified_token("13800000004")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -386,12 +411,11 @@ def test_binding_intent_requires_account_owned_by_platform_user(client):
     assert "not owned" in res.json()["detail"]
 
 
-
-
 def test_web_create_agent_enforces_per_user_limit(client):
     user = client.post(
         "/web/register",
-        json={"phone": "13800009999"},
+        json={"phone": "13800009999",
+              "otp_token": _get_verified_token("13800009999")},
     ).json()["platform_user"]
     for i in range(10):
         res = client.post(
@@ -413,7 +437,8 @@ def test_get_binding_intent_auto_expires_stale_qr(client):
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800007777"},
+        json={"phone": "13800007777",
+              "otp_token": _get_verified_token("13800007777")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",
@@ -456,7 +481,8 @@ def test_channel_binding_deduplicates_by_channel_account_id(client):
 
     user = client.post(
         "/web/register",
-        json={"phone": "13800006666"},
+        json={"phone": "13800006666",
+              "otp_token": _get_verified_token("13800006666")},
     ).json()["platform_user"]
     account = client.post(
         "/web/agents",

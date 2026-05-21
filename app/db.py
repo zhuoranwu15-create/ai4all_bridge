@@ -1694,6 +1694,7 @@ def get_latest_active_verification(phone: str) -> Optional[Dict[str, Any]]:
             """
             SELECT * FROM phone_verifications
             WHERE phone = ?
+              AND verified_at IS NULL
               AND expires_at > datetime('now')
             ORDER BY created_at DESC
             LIMIT 1

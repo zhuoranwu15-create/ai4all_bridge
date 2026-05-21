@@ -10,15 +10,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.captcha import verify_captcha
+from app.sms import generate_otp, send_otp
 from app.db import (
     clear_session_messages,
+    consume_verification_token,
+    count_verifications_last_hour,
     create_ai4all_account_for_user,
     create_binding_intent,
     create_or_get_platform_user_by_phone,
+    create_phone_verification,
     get_debug_trace,
     get_account,
     get_binding_intent,
     get_daily_usage,
+    get_latest_active_verification,
     get_latest_subscription_for_user,
     get_message_raw,
     get_platform_user,
@@ -28,10 +34,13 @@ from app.db import (
     get_duplicate_reply,
     get_or_create_session,
     get_usage_last_7_days,
+    get_valid_verification_by_token,
     increment_daily_usage,
+    increment_verify_attempts,
     init_db,
     insert_debug_trace,
     insert_message,
+    invalidate_verifications_for_phone,
     list_accounts,
     list_debug_traces,
     list_recent_message_raw,
@@ -39,9 +48,11 @@ from app.db import (
     list_sessions,
     list_sessions_for_account,
     list_recent_messages,
+    normalize_phone,
     resolve_account_id_for_inbound_channel_identity,
     set_binding_intent_error,
     set_account_status,
+    set_verification_verified,
     update_binding_intent,
     update_account,
     update_profile_for_account,
@@ -91,6 +102,17 @@ class AccountUpdateRequest(BaseModel):
 class WebRegisterRequest(BaseModel):
     phone: str
     display_name: Optional[str] = None
+    otp_token: str
+
+
+class SendOtpRequest(BaseModel):
+    phone: str
+    captcha_verify_param: str
+
+
+class VerifyOtpRequest(BaseModel):
+    phone: str
+    code: str
 
 
 class WebCreateAgentRequest(BaseModel):
@@ -431,11 +453,72 @@ def debug_update_profile(session_id: int, payload: ProfileUpdateRequest, _: None
 # Web onboarding (MVP)
 # ---------------------------------------------------------------------------
 
+@app.post("/web/sms/send-otp")
+def web_send_otp(payload: SendOtpRequest) -> dict:
+    try:
+        phone = normalize_phone(payload.phone)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    if not verify_captcha(payload.captcha_verify_param):
+        raise HTTPException(status_code=400, detail="验证码校验未通过")
+
+    count = count_verifications_last_hour(phone)
+    if count >= settings.aliyun_sms_max_per_phone_per_hour:
+        raise HTTPException(status_code=429, detail="发送频率过高，请稍后重试")
+
+    invalidate_verifications_for_phone(phone)
+    code = generate_otp()
+    create_phone_verification(phone=phone, code=code, expires_minutes=settings.otp_expires_minutes)
+    send_otp(phone=phone, code=code)
+
+    return {"status": "ok"}
+
+
+@app.post("/web/sms/verify-otp")
+def web_verify_otp(payload: VerifyOtpRequest) -> dict:
+    try:
+        phone = normalize_phone(payload.phone)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    verification = get_latest_active_verification(phone)
+    if verification is None:
+        raise HTTPException(status_code=400, detail="验证码不存在或已过期，请重新获取")
+
+    if verification["verify_attempts"] >= 5:
+        raise HTTPException(status_code=400, detail="尝试次数过多，请重新获取验证码")
+
+    if verification["code"] != payload.code:
+        increment_verify_attempts(verification["id"])
+        raise HTTPException(status_code=400, detail="验证码错误")
+
+    result = set_verification_verified(
+        verification["id"],
+        token_expires_minutes=settings.otp_token_expires_minutes,
+    )
+    return {"status": "ok", "verified_token": result["verified_token"]}
+
+
 @app.post("/web/register")
 def web_register(payload: WebRegisterRequest) -> dict:
     try:
+        phone = normalize_phone(payload.phone)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    verification = get_valid_verification_by_token(
+        verified_token=payload.otp_token,
+        phone=phone,
+    )
+    if verification is None:
+        raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
+
+    consume_verification_token(verification["id"])
+
+    try:
         platform_user = create_or_get_platform_user_by_phone(
-            phone=payload.phone,
+            phone=phone,
             display_name=payload.display_name,
         )
     except ValueError as err:
