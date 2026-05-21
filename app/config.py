@@ -33,6 +33,21 @@ class Settings(BaseSettings):
     openclaw_login_wait_timeout_ms: int = 480000
     openclaw_gateway_call_timeout_ms: int = 60000
 
+    # Aliyun SMS
+    aliyun_access_key_id: str = ""
+    aliyun_access_key_secret: str = ""
+    aliyun_sms_sign_name: str = ""
+    aliyun_sms_template_code: str = ""
+    aliyun_sms_max_per_phone_per_hour: int = 5
+
+    # Aliyun Captcha 2.0
+    aliyun_captcha_scene_id: str = ""
+    aliyun_captcha_prefix: str = ""  # frontend only, documented here for reference
+
+    # OTP TTL (minutes)
+    otp_expires_minutes: int = 10
+    otp_token_expires_minutes: int = 10
+
     class Config:
         env_file = ".env"
         extra = "ignore"

@@ -23,6 +23,15 @@ def test_settings(tmp_path):
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
     s.openclaw_gateway_call_timeout_ms = 5000
+    s.aliyun_access_key_id = ""
+    s.aliyun_access_key_secret = ""
+    s.aliyun_sms_sign_name = ""
+    s.aliyun_sms_template_code = ""
+    s.aliyun_sms_max_per_phone_per_hour = 3
+    s.aliyun_captcha_scene_id = ""
+    s.aliyun_captcha_prefix = ""
+    s.otp_expires_minutes = 10
+    s.otp_token_expires_minutes = 10
     return s
 
 
