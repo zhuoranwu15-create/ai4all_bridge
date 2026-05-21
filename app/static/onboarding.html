@@ -5,13 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI4ALL Web Onboarding</title>
   <link rel="stylesheet" href="style.css">
-  <!-- Aliyun Captcha 2.0 — fill in prefix from console overview page -->
-  <script>
-    window.AliyunCaptchaConfig = {
-      region: "cn",
-      prefix: "FILL_IN_PREFIX",
-    };
-  </script>
   <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
 </head>
 <body>
@@ -253,7 +246,8 @@
 
     window.addEventListener('load', function() {
       window.initAliyunCaptcha({
-        SceneId: 'FILL_IN_SCENE_ID',   // 控制台场景列表中获取
+        SceneId: '6ez3x2ne',
+        prefix: '18if8u',
         mode: 'popup',
         element: '#captcha-element',
         button: '#btn-send-otp',
