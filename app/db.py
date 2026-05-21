@@ -373,6 +373,22 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_debug_traces_session_created
             ON debug_traces(session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS phone_verifications (
+                id TEXT PRIMARY KEY,
+                phone TEXT NOT NULL,
+                code TEXT NOT NULL,
+                verify_attempts INTEGER NOT NULL DEFAULT 0,
+                verified_at TEXT,
+                verified_token TEXT,
+                token_expires_at TEXT,
+                token_consumed_at TEXT,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
+            ON phone_verifications(phone, created_at);
             """
         )
         # Ensure new columns exist on accounts (for DBs created before this change)
@@ -1638,3 +1654,164 @@ def update_profile_for_session(
         system_prompt=system_prompt,
         preferences=preferences,
     )
+
+
+# ---------------------------------------------------------------------------
+# Phone verification
+# ---------------------------------------------------------------------------
+
+def normalize_phone(phone: str) -> str:
+    return _normalize_phone(phone)
+
+
+def create_phone_verification(
+    *,
+    phone: str,
+    code: str,
+    expires_minutes: int,
+) -> Dict[str, Any]:
+    normalized = _normalize_phone(phone)
+    verification_id = _new_id("phv")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO phone_verifications(id, phone, code, expires_at)
+            VALUES (?, ?, ?, datetime('now', ? || ' minutes'))
+            """,
+            (verification_id, normalized, code, f"+{expires_minutes}"),
+        )
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE id = ?",
+            (verification_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def get_latest_active_verification(phone: str) -> Optional[Dict[str, Any]]:
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM phone_verifications
+            WHERE phone = ?
+              AND expires_at > datetime('now')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def count_verifications_last_hour(phone: str) -> int:
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) FROM phone_verifications
+            WHERE phone = ?
+              AND created_at > datetime('now', '-1 hour')
+            """,
+            (normalized,),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def invalidate_verifications_for_phone(phone: str) -> None:
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET expires_at = datetime('now', '-1 second')
+            WHERE phone = ?
+              AND expires_at > datetime('now')
+            """,
+            (normalized,),
+        )
+
+
+def increment_verify_attempts(verification_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET verify_attempts = verify_attempts + 1
+            WHERE id = ?
+            """,
+            (verification_id,),
+        )
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE id = ?",
+            (verification_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def set_verification_verified(
+    verification_id: str,
+    *,
+    token_expires_minutes: int,
+) -> Optional[Dict[str, Any]]:
+    token = str(uuid.uuid4())
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET verified_at = datetime('now'),
+                verified_token = ?,
+                token_expires_at = datetime('now', ? || ' minutes')
+            WHERE id = ?
+            """,
+            (token, f"+{token_expires_minutes}", verification_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE id = ?",
+            (verification_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_verification_by_token(verified_token: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE verified_token = ?",
+            (verified_token,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def consume_verification_token(verification_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET token_consumed_at = datetime('now')
+            WHERE id = ?
+            """,
+            (verification_id,),
+        )
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE id = ?",
+            (verification_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_valid_verification_by_token(
+    verified_token: str,
+    phone: str,
+) -> Optional[Dict[str, Any]]:
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM phone_verifications
+            WHERE verified_token = ?
+              AND phone = ?
+              AND token_consumed_at IS NULL
+              AND token_expires_at > datetime('now')
+            """,
+            (verified_token, normalized),
+        ).fetchone()
+    return dict(row) if row else None
