@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI4ALL Web Onboarding</title>
   <link rel="stylesheet" href="style.css">
+  <!-- Aliyun Captcha 2.0 — fill in prefix from console overview page -->
+  <script>
+    window.AliyunCaptchaConfig = {
+      region: "cn",
+      prefix: "FILL_IN_PREFIX",
+    };
+  </script>
+  <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
 </head>
 <body>
   <a class="back-link" href="index.html">返回运营后台</a>
@@ -17,17 +25,44 @@
           <span class="step-num">1</span>
           <h2>注册用户</h2>
         </div>
-        <div class="form-row">
-          <label>手机号</label>
-          <input type="text" id="phone" inputmode="tel" autocomplete="tel" placeholder="请输入手机号">
+
+        <!-- 段 A: 手机号 + 获取验证码 -->
+        <div id="reg-a">
+          <div class="form-row">
+            <label>手机号</label>
+            <input type="text" id="phone" inputmode="tel" autocomplete="tel" placeholder="请输入手机号">
+          </div>
+          <!-- 验证码 SDK 渲染容器（SDK 自动填充，保持空） -->
+          <div id="captcha-element"></div>
+          <div class="form-actions">
+            <button class="primary" id="btn-send-otp">获取验证码</button>
+            <span id="st-send-otp" class="status-msg"></span>
+          </div>
         </div>
-        <div class="form-row">
-          <label>昵称</label>
-          <input type="text" id="display-name" autocomplete="name" placeholder="可选">
+
+        <!-- 段 B: 输入 OTP（发送成功后展开） -->
+        <div id="reg-b" style="display:none">
+          <div class="form-row">
+            <label>验证码</label>
+            <input type="text" id="otp-code" inputmode="numeric" maxlength="6" placeholder="请输入6位验证码">
+          </div>
+          <div class="form-actions">
+            <button class="primary" onclick="verifyOtp()">验证</button>
+            <button id="btn-resend" onclick="resendOtp()" disabled>重新发送 (<span id="resend-countdown">60</span>s)</button>
+            <span id="st-verify-otp" class="status-msg"></span>
+          </div>
         </div>
-        <div class="form-actions">
-          <button class="primary" onclick="registerUser()">注册 / 继续</button>
-          <span id="st-register" class="status-msg"></span>
+
+        <!-- 段 C: 昵称 + 注册（OTP 验证通过后展开） -->
+        <div id="reg-c" style="display:none">
+          <div class="form-row">
+            <label>昵称</label>
+            <input type="text" id="display-name" autocomplete="name" placeholder="可选">
+          </div>
+          <div class="form-actions">
+            <button class="primary" onclick="registerUser()">注册 / 继续</button>
+            <span id="st-register" class="status-msg"></span>
+          </div>
         </div>
       </div>
 
@@ -135,37 +170,33 @@
       subscription: null,
       bindingIntent: null,
       pollTimer: null,
+      verifiedToken: null,
+      resendTimer: null,
     };
 
     var terminalBindingStatuses = {
-      completed: true,
-      failed: true,
-      already_connected: true,
-      expired: true,
-      cancelled: true,
+      completed: true, failed: true, already_connected: true,
+      expired: true, cancelled: true,
     };
 
     function esc(str) {
       return String(str == null ? '' : str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
-
     function setText(id, value) {
       document.getElementById(id).textContent = value == null || value === '' ? '—' : String(value);
     }
-
     function setStatus(id, msg, isError) {
       var el = document.getElementById(id);
       el.textContent = msg || '';
       el.className = 'status-msg ' + (isError ? 'error' : 'success');
     }
-
     function enableStep(id) {
       document.getElementById(id).classList.remove('disabled');
     }
+    function show(id) { document.getElementById(id).style.display = ''; }
+    function hide(id) { document.getElementById(id).style.display = 'none'; }
 
     async function webFetch(path, options) {
       options = options || {};
@@ -188,36 +219,104 @@
       setText('summary-plan', state.subscription && state.subscription.plan);
     }
 
-    function bindingStatusText(intent) {
-      if (!intent) return '';
-      if (intent.status === 'created') return '正在发起 OpenClaw QR 登录';
-      if (intent.status === 'qr_created') return '二维码已生成，等待扫码';
-      if (intent.status === 'completed') return '绑定完成，后续消息会进入该智能体';
-      if (intent.status === 'already_connected') return '该微信已连接过当前 OpenClaw，请先解绑后重试';
-      if (intent.status === 'expired') return '二维码已过期，请重新点击「生成二维码」';
-      if (intent.status === 'failed') return intent.error || '绑定失败';
-      return intent.status || '';
-    }
+    // ---------------------------------------------------------------------------
+    // Aliyun Captcha 2.0 — 初始化（页面加载后执行一次）
+    // ---------------------------------------------------------------------------
+    var captchaInstance;
 
-    function stopPolling() {
-      if (state.pollTimer) {
-        clearInterval(state.pollTimer);
-        state.pollTimer = null;
+    // captchaVerifyCallback: SDK 验证通过后自动调用，触发发送短信
+    async function captchaVerifyCallback(captchaVerifyParam) {
+      setStatus('st-send-otp', '发送中…');
+      try {
+        await webFetch('/web/sms/send-otp', {
+          method: 'POST',
+          body: JSON.stringify({
+            phone: document.getElementById('phone').value,
+            captcha_verify_param: captchaVerifyParam,
+          }),
+        });
+        return { captchaResult: true, bizResult: true };
+      } catch (e) {
+        setStatus('st-send-otp', e.message, true);
+        return { captchaResult: true, bizResult: false };
       }
     }
 
-    function startPolling() {
-      stopPolling();
-      state.pollTimer = setInterval(function() {
-        if (!state.bindingIntent || terminalBindingStatuses[state.bindingIntent.status]) {
-          stopPolling();
-          return;
-        }
-        refreshBinding({ silent: true });
-      }, 3000);
+    // onBizResultCallback: bizResult=true 时展开 OTP 输入段
+    function onBizResultCallback(bizResult) {
+      if (bizResult) {
+        setStatus('st-send-otp', '验证码已发送');
+        show('reg-b');
+        startResendCountdown();
+      }
     }
 
+    window.addEventListener('load', function() {
+      window.initAliyunCaptcha({
+        SceneId: 'FILL_IN_SCENE_ID',   // 控制台场景列表中获取
+        mode: 'popup',
+        element: '#captcha-element',
+        button: '#btn-send-otp',
+        captchaVerifyCallback: captchaVerifyCallback,
+        onBizResultCallback: onBizResultCallback,
+        getInstance: function(inst) { captchaInstance = inst; },
+        slideStyle: { width: 300, height: 40 },
+        language: 'cn',
+      });
+    });
+
+    // ---------------------------------------------------------------------------
+    // OTP 倒计时 + 重发
+    // ---------------------------------------------------------------------------
+    function startResendCountdown() {
+      var secs = 60;
+      document.getElementById('resend-countdown').textContent = secs;
+      document.getElementById('btn-resend').disabled = true;
+      state.resendTimer = setInterval(function() {
+        secs--;
+        document.getElementById('resend-countdown').textContent = secs;
+        if (secs <= 0) {
+          clearInterval(state.resendTimer);
+          document.getElementById('btn-resend').disabled = false;
+        }
+      }, 1000);
+    }
+
+    function resendOtp() {
+      clearInterval(state.resendTimer);
+      if (captchaInstance) captchaInstance.show();
+    }
+
+    // ---------------------------------------------------------------------------
+    // 验证 OTP
+    // ---------------------------------------------------------------------------
+    async function verifyOtp() {
+      setStatus('st-verify-otp', '验证中…');
+      try {
+        var data = await webFetch('/web/sms/verify-otp', {
+          method: 'POST',
+          body: JSON.stringify({
+            phone: document.getElementById('phone').value,
+            code: document.getElementById('otp-code').value,
+          }),
+        });
+        state.verifiedToken = data.verified_token;
+        hide('reg-b');
+        show('reg-c');
+        setStatus('st-verify-otp', '');
+      } catch (e) {
+        setStatus('st-verify-otp', e.message, true);
+      }
+    }
+
+    // ---------------------------------------------------------------------------
+    // 注册
+    // ---------------------------------------------------------------------------
     async function registerUser() {
+      if (!state.verifiedToken) {
+        setStatus('st-register', '请先完成手机号验证', true);
+        return;
+      }
       setStatus('st-register', '提交中…');
       try {
         var data = await webFetch('/web/register', {
@@ -225,6 +324,7 @@
           body: JSON.stringify({
             phone: document.getElementById('phone').value,
             display_name: document.getElementById('display-name').value || null,
+            otp_token: state.verifiedToken,
           }),
         });
         state.platformUser = data.platform_user;
@@ -237,11 +337,11 @@
       }
     }
 
+    // ---------------------------------------------------------------------------
+    // 创建智能体
+    // ---------------------------------------------------------------------------
     async function createAgent() {
-      if (!state.platformUser) {
-        setStatus('st-agent', '请先注册用户', true);
-        return;
-      }
+      if (!state.platformUser) { setStatus('st-agent', '请先注册用户', true); return; }
       setStatus('st-agent', '创建中…');
       try {
         var data = await webFetch('/web/agents', {
@@ -263,10 +363,37 @@
       }
     }
 
+    // ---------------------------------------------------------------------------
+    // 绑定微信
+    // ---------------------------------------------------------------------------
+    function bindingStatusText(intent) {
+      if (!intent) return '';
+      if (intent.status === 'created') return '正在发起 OpenClaw QR 登录';
+      if (intent.status === 'qr_created') return '二维码已生成，等待扫码';
+      if (intent.status === 'completed') return '绑定完成，后续消息会进入该智能体';
+      if (intent.status === 'already_connected') return '该微信已连接过当前 OpenClaw，请先解绑后重试';
+      if (intent.status === 'expired') return '二维码已过期，请重新点击「生成二维码」';
+      if (intent.status === 'failed') return intent.error || '绑定失败';
+      return intent.status || '';
+    }
+
+    function stopPolling() {
+      if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; }
+    }
+
+    function startPolling() {
+      stopPolling();
+      state.pollTimer = setInterval(function() {
+        if (!state.bindingIntent || terminalBindingStatuses[state.bindingIntent.status]) {
+          stopPolling(); return;
+        }
+        refreshBinding({ silent: true });
+      }, 3000);
+    }
+
     async function createBindingIntent() {
       if (!state.platformUser || !state.account) {
-        setStatus('st-binding', '请先创建智能体', true);
-        return;
+        setStatus('st-binding', '请先创建智能体', true); return;
       }
       setStatus('st-binding', '生成中…');
       try {
@@ -282,9 +409,7 @@
         renderBinding();
         document.getElementById('btn-refresh').disabled = false;
         setStatus('st-binding', bindingStatusText(state.bindingIntent), state.bindingIntent.status === 'failed');
-        if (!terminalBindingStatuses[state.bindingIntent.status]) {
-          startPolling();
-        }
+        if (!terminalBindingStatuses[state.bindingIntent.status]) startPolling();
       } catch (e) {
         setStatus('st-binding', e.message, true);
       }
