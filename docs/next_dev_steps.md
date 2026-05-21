@@ -1,6 +1,6 @@
 # 下一步开发步骤：Web Onboarding 绑定收口
 
-更新时间：2026-05-20
+更新时间：2026-05-21
 
 ## 当前已完成
 
@@ -8,6 +8,8 @@
 
 ```text
 Web 输入手机号
+-> 阿里云验证码 + 短信 OTP
+-> 一次性 otp_token 注册
 -> 创建或复用 platform_user
 -> 创建 AI4ALL Account: acct_...
 -> 创建 binding_intent: bind_...
@@ -29,6 +31,19 @@ OpenClaw QR wait 返回的通道账号可能是 raw 形式，例如 `example@im.
 - 本轮 Web onboarding 验证使用 `8012`。
 - Bridge 的 Backend URL 必须和 FastAPI 实际端口一致。
 - `openclaw-weixin` 当前需要 `gatewayMethods: ["web.login.start", "web.login.wait"]` 补丁；维护说明见 `docs/openclaw-weixin-gateway-qr-patch.md`。
+- Aliyun SMS/Captcha 在 local/test 可 mock；非 local/test 缺少凭据会失败关闭。
+- 当前 `onboarding.html` 的 Aliyun Captcha `SceneId` / `prefix` 仍需手工和控制台保持一致。
+
+## Step 0：前端验证码配置收口
+
+当前 backend 配置已经放在 `.env` / `app.config`，但静态 `onboarding.html` 不能直接读取后端配置，因此 `SceneId` / `prefix` 仍存在多环境漂移风险。
+
+建议新增一个只返回公开前端配置的接口或构建期注入：
+
+- `GET /web/config` 返回 `captcha_scene_id`、`captcha_prefix` 等非敏感配置。
+- `onboarding.html` 初始化验证码前先读取配置。
+- 确认阿里云 Captcha SDK 使用的接入模式和官方文档一致。
+- 禁止把 AccessKey、短信模板密钥等服务端敏感配置暴露给前端。
 
 ## Step 1：重复绑定策略
 

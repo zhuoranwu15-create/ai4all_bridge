@@ -1,10 +1,14 @@
 # Phone OTP + Aliyun Captcha Registration Implementation Plan
 
+> **状态：已完成（2026-05-21）**
+> 本文件是原始实现计划，代码已落地并经过后续安全加固：`secrets.randbelow` 替换 `random.randint`；手机号格式正则 `^1[3-9]\d{9}$`；生产环境缺少凭据时直接抛 `RuntimeError`；SMS 发送失败时自动清理验证记录；`/web/register` 改用原子 `consume_valid_verification_token`。前端静态 `onboarding.html` 的 Aliyun Captcha `SceneId` / `prefix` 仍需后续运行时配置收口。
+> 当前实现请以代码为准，设计说明请见 `docs/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add Aliyun Captcha 2.0 + SMS OTP verification to web registration so users must prove phone ownership before creating an account.
 
-**Architecture:** Three backend changes: two new endpoints (`POST /web/sms/send-otp`, `POST /web/sms/verify-otp`) plus a modified `POST /web/register` that now requires a single-use `otp_token`. OTP lifecycle is tracked in a new `phone_verifications` SQLite table. Two thin modules (`app/captcha.py`, `app/sms.py`) isolate Aliyun SDK calls and auto-mock when credentials are absent. Frontend `onboarding.html` gains a captcha + OTP sub-flow before the register call.
+**Architecture:** Three backend changes: two new endpoints (`POST /web/sms/send-otp`, `POST /web/sms/verify-otp`) plus a modified `POST /web/register` that now requires a single-use `otp_token`. OTP lifecycle is tracked in a new `phone_verifications` SQLite table. Two thin modules (`app/captcha.py`, `app/sms.py`) isolate Aliyun SDK calls; they mock only in local/test when credentials are absent and fail closed outside local/test. Frontend `onboarding.html` gains a captcha + OTP sub-flow before the register call.
 
 **Tech Stack:** FastAPI, SQLite (existing), `alibabacloud_captcha20230305`, `alibabacloud_dysmsapi20170525`, `alibabacloud_tea_openapi`, vanilla JS + Aliyun Captcha CDN JS
 

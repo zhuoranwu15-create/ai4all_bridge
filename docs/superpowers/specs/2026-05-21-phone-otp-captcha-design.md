@@ -2,7 +2,7 @@
 
 **日期：** 2026-05-21  
 **范围：** Web 注册流程（面向用户）  
-**状态：** 待实现
+**状态：** 后端已完成并安全加固（2026-05-21）；前端验证码配置仍需运行时配置收口
 
 ---
 
@@ -52,9 +52,10 @@
 1. 校验手机号格式（复用 `_normalize_phone`）
 2. 调用阿里云验证码 `VerifyIntelligentCaptcha`，`verify_result` 为 false 则返回 400
 3. 查询该手机号过去 1 小时内已发送条数，超过 `ALIYUN_SMS_MAX_PER_PHONE_PER_HOUR`（默认 5）则返回 429
-4. 将该手机号现有未验证、未过期的 OTP 全部作废（`UPDATE ... SET expires_at = datetime('now')`）
+4. 将该手机号现有未过期的 OTP 记录作废（`expires_at` 设为过去时间）
 5. 生成 6 位随机数字 OTP，写入 `phone_verifications` 表（10 分钟有效期）
 6. 调用阿里云短信 `SendSms` 发送 OTP
+7. 若短信发送失败，立即作废该手机号当前 OTP 记录，并返回 500
 
 **Response（成功）：**
 ```json
@@ -65,6 +66,7 @@
 ```json
 { "detail": "验证码校验未通过" }          // 400
 { "detail": "发送频率过高，请稍后重试" }   // 429
+{ "detail": "短信发送失败，请稍后重试" }   // 500
 ```
 
 ---
@@ -82,7 +84,7 @@
 **处理逻辑：**
 1. 查找该手机号最新一条未验证、未过期的记录
 2. 若不存在 → 400（"验证码不存在或已过期"）
-3. 错误尝试次数 `verify_attempts >= 5` → 400（"尝试次数过多，请重新获取验证码"）
+3. 错误尝试次数 `verify_attempts >= 5` → 400（"尝试次数过多，请重新获取验证码"），当前 OTP 不再允许继续验证
 4. `code` 不匹配 → `verify_attempts + 1`，返回 400（"验证码错误"）
 5. 匹配 → 设置 `verified_at`，生成 UUID 写入 `verified_token`，`token_expires_at = now + 10min`
 
@@ -109,10 +111,10 @@
 ```
 
 **新增校验逻辑（在原有逻辑之前）：**
-1. 查找 `phone_verifications` 中 `verified_token = otp_token`
-2. 校验：`phone` 匹配、`token_consumed_at IS NULL`、`token_expires_at > now`
-3. 任一校验失败 → 400（"注册凭证无效或已过期"）
-4. 校验通过 → 设置 `token_consumed_at = now`，继续原有注册逻辑
+1. 调用 `consume_valid_verification_token(otp_token, phone)`
+2. 单条 SQL 原子更新：`verified_token` 匹配、`phone` 匹配、`token_consumed_at IS NULL`、`token_expires_at > now`
+3. `UPDATE` 影响行数为 0 → 400（"注册凭证无效或已过期"）
+4. 消耗成功后继续原有注册逻辑，创建或复用 platform user
 
 ---
 
@@ -125,20 +127,17 @@ CREATE TABLE IF NOT EXISTS phone_verifications (
     id TEXT PRIMARY KEY,
     phone TEXT NOT NULL,
     code TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    expires_at TEXT NOT NULL,
+    verify_attempts INTEGER NOT NULL DEFAULT 0,
     verified_at TEXT,
     verified_token TEXT,
     token_expires_at TEXT,
     token_consumed_at TEXT,
-    verify_attempts INTEGER NOT NULL DEFAULT 0
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_phone_verifications_phone
-    ON phone_verifications (phone);
-
-CREATE INDEX IF NOT EXISTS idx_phone_verifications_token
-    ON phone_verifications (verified_token);
+CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
+    ON phone_verifications(phone, created_at);
 ```
 
 ### 字段说明
@@ -164,14 +163,17 @@ CREATE INDEX IF NOT EXISTS idx_phone_verifications_token
 封装阿里云短信发送，暴露 `send_otp(phone, code)` 函数：
 - 单例 Client（`alibabacloud_dysmsapi20170525`）
 - `template_param = json.dumps({"code": code})`
-- 本地 mock：`APP_ENV=local` 且 `ALIYUN_ACCESS_KEY_ID` 为空时，仅打印 log，不实际发送
+- 使用 `secrets.randbelow(1_000_000)` 生成密码学安全 OTP
+- mock 模式：`APP_ENV in ("local", "test")` 且 `ALIYUN_ACCESS_KEY_ID` 为空时，仅打印 log，不实际发送
+- 生产保护：非 local/test 环境下缺少凭据，直接抛 `RuntimeError`
 
 ### `app/captcha.py`
 
 封装阿里云验证码校验，暴露 `verify_captcha(captcha_verify_param) -> bool` 函数：
 - 单例 Client（`alibabacloud_captcha20230305`）
 - 调用 `VerifyIntelligentCaptcha`，返回 `response.body.result.verify_result`
-- 本地 mock：`APP_ENV=local` 且 `ALIYUN_CAPTCHA_SCENE_ID` 为空时，直接返回 `True`
+- mock 模式：`APP_ENV in ("local", "test")` 且 `ALIYUN_CAPTCHA_SCENE_ID` 为空时，直接返回 `True`
+- 生产保护：非 local/test 环境下缺少 scene_id，直接抛 `RuntimeError`
 
 ---
 
@@ -203,6 +205,8 @@ OTP_TOKEN_EXPIRES_MINUTES=10
 控制台创建场景时选择**「一点即过」**。用户点击「获取验证码」按钮后，阿里云在后台完成环境评估，低风险直接通过，高风险才降级为二次挑战。前端代码和后端接口与其他形态完全相同，无需特殊处理。
 
 ### 引入阿里云验证码 JS（在 `<head>` 中）
+
+目标接入方式应把公开的 `prefix` 放在 SDK 加载前的 `window.AliyunCaptchaConfig` 中，`SceneId` 放在 `initAliyunCaptcha` 调用中。当前仓库里的静态 `onboarding.html` 已能串起 OTP 子流程，但 `SceneId` / `prefix` 仍是手工写入页面，后续需要改为后端公开配置接口或构建期注入。
 
 ```html
 <script>
@@ -291,10 +295,14 @@ function onBizResultCallback(bizResult) {
 |------|------|
 | 自动化脚本批量发短信 | 阿里云验证码拦截在前 |
 | 单号短信轰炸 | 每小时限额（默认 5 条） |
-| OTP 暴力枚举 | 错误 5 次作废，重新发送 |
-| verified_token 重放 | 一次性消耗（`token_consumed_at`） |
+| OTP 暴力枚举 | 错误 5 次后锁定当前 OTP 校验，需重新发送 |
+| OTP 可预测 | `secrets.randbelow(1_000_000)` 密码学安全随机 |
+| verified_token 重放 | `consume_valid_verification_token` 单条件原子 UPDATE，消耗即作废 |
 | verified_token 盗用 | 10 分钟 TTL + phone 绑定校验 |
-| 本地开发卡壳 | `local` 环境 mock，OTP 固定 `123456` |
+| 手机号格式注入 | `^1[3-9]\d{9}$` 正则验证，拒绝非大陆手机号 |
+| SMS 发送失败残留记录 | 发送失败立即调 `invalidate_verifications_for_phone` 清理，返回 500 |
+| 生产环境缺失凭据 | 非 local/test 环境下缺少 Aliyun 凭据直接抛 `RuntimeError` |
+| 本地开发 | `APP_ENV=local` 且凭据为空时自动 mock，OTP 打印到服务日志 |
 
 ---
 
@@ -314,3 +322,5 @@ alibabacloud_tea_openapi
 - 已注册用户的手机号变更
 - 短信送达回执处理
 - 多语言短信模板
+- 前端验证码 `SceneId` / `prefix` 的多环境运行时配置注入
+- OTP 明文存储改为 HMAC/哈希存储

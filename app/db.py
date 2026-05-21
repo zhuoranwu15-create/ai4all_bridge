@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -47,13 +48,16 @@ def _channel_account_id_aliases(value: str) -> List[str]:
     return list(dict.fromkeys(aliases))
 
 
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+
+
 def _normalize_phone(phone: str) -> str:
     normalized = str(phone or "")
     for ch in (" ", "-", "(", ")", "."):
         normalized = normalized.replace(ch, "")
     normalized = normalized.strip()
-    if len(normalized) < 6 or len(normalized) > 32:
-        raise ValueError("phone must be 6-32 characters after stripping spaces and hyphens")
+    if not _PHONE_RE.match(normalized):
+        raise ValueError("phone must be a valid Chinese mobile number (1[3-9]XXXXXXXXX)")
     return normalized
 
 
@@ -1813,6 +1817,33 @@ def get_valid_verification_by_token(
               AND token_consumed_at IS NULL
               AND token_expires_at > datetime('now')
             """,
+            (verified_token, normalized),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def consume_valid_verification_token(
+    verified_token: str,
+    phone: str,
+) -> Optional[Dict[str, Any]]:
+    """Atomically consume a verified token. Returns the row if it was valid and not yet consumed, None otherwise."""
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET token_consumed_at = datetime('now')
+            WHERE verified_token = ?
+              AND phone = ?
+              AND token_consumed_at IS NULL
+              AND token_expires_at > datetime('now')
+            """,
+            (verified_token, normalized),
+        )
+        if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            return None
+        row = conn.execute(
+            "SELECT * FROM phone_verifications WHERE verified_token = ? AND phone = ?",
             (verified_token, normalized),
         ).fetchone()
     return dict(row) if row else None

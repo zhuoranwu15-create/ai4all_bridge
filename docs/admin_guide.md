@@ -8,6 +8,12 @@ Web 后台入口：
 http://127.0.0.1:8000/ui/
 ```
 
+Web onboarding 入口：
+
+```text
+http://127.0.0.1:8000/ui/onboarding.html
+```
+
 ## Admin 鉴权
 
 所有 `/admin/*` 接口都需要请求头：
@@ -36,6 +42,32 @@ message = 收发消息记录
 ```
 
 现有 DB/API 里仍有 `account_id` 旧命名。当前语义上应理解为 AI4ALL Account ID，不等同于 OpenClaw payload 原生 `account_id`。
+
+## 注册与验证码配置
+
+Web onboarding 的注册链路现在要求：
+
+```text
+阿里云图形验证码 -> 短信 OTP -> 一次性 otp_token -> /web/register
+```
+
+本地开发时，`APP_ENV=local` 且 Aliyun SMS/Captcha 配置为空会进入 mock 模式，OTP 会输出到 backend 日志。非 local/test 环境缺少 Aliyun 凭据会直接失败，不会静默跳过验证码或短信发送。
+
+需要在 `.env` 中配置：
+
+```bash
+ALIYUN_ACCESS_KEY_ID=
+ALIYUN_ACCESS_KEY_SECRET=
+ALIYUN_SMS_SIGN_NAME=
+ALIYUN_SMS_TEMPLATE_CODE=
+ALIYUN_SMS_MAX_PER_PHONE_PER_HOUR=5
+ALIYUN_CAPTCHA_SCENE_ID=
+ALIYUN_CAPTCHA_PREFIX=
+OTP_EXPIRES_MINUTES=10
+OTP_TOKEN_EXPIRES_MINUTES=10
+```
+
+当前静态 `onboarding.html` 中也存在 Aliyun Captcha 的 `SceneId` / `prefix`，上线或切换环境时需要与控制台配置保持一致；后续应改为由后端或构建流程注入。
 
 ## 查看账号
 

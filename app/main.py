@@ -14,7 +14,7 @@ from app.captcha import verify_captcha
 from app.sms import generate_otp, send_otp
 from app.db import (
     clear_session_messages,
-    consume_verification_token,
+    consume_valid_verification_token,
     count_verifications_last_hour,
     create_ai4all_account_for_user,
     create_binding_intent,
@@ -34,7 +34,6 @@ from app.db import (
     get_duplicate_reply,
     get_or_create_session,
     get_usage_last_7_days,
-    get_valid_verification_by_token,
     increment_daily_usage,
     increment_verify_attempts,
     init_db,
@@ -469,8 +468,13 @@ def web_send_otp(payload: SendOtpRequest) -> dict:
 
     invalidate_verifications_for_phone(phone)
     code = generate_otp()
-    create_phone_verification(phone=phone, code=code, expires_minutes=settings.otp_expires_minutes)
-    send_otp(phone=phone, code=code)
+    verification = create_phone_verification(phone=phone, code=code, expires_minutes=settings.otp_expires_minutes)
+    try:
+        send_otp(phone=phone, code=code)
+    except Exception:
+        invalidate_verifications_for_phone(phone)
+        logger.exception("sms: send failed for phone=%s", phone)
+        raise HTTPException(status_code=500, detail="短信发送失败，请稍后重试")
 
     return {"status": "ok"}
 
@@ -507,14 +511,12 @@ def web_register(payload: WebRegisterRequest) -> dict:
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
 
-    verification = get_valid_verification_by_token(
+    verification = consume_valid_verification_token(
         verified_token=payload.otp_token,
         phone=phone,
     )
     if verification is None:
         raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
-
-    consume_verification_token(verification["id"])
 
     try:
         platform_user = create_or_get_platform_user_by_phone(

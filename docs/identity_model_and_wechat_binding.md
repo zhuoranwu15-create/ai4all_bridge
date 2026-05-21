@@ -215,7 +215,7 @@ channel_bindings
 
 ### 6.1 已实现的自动二维码绑定
 
-当前 Web 端入口是 `/ui/onboarding.html`。用户在 Web 页面输入手机号、创建智能体后，Backend 自动调用 OpenClaw Gateway 的 QR 登录能力，前端直接展示二维码。用户扫码后，Backend 等待 OpenClaw 返回登录结果并完成绑定，不需要用户手动输入绑定码。
+当前 Web 端入口是 `/ui/onboarding.html`。用户在 Web 页面输入大陆手机号，完成阿里云图形验证码和短信 OTP 后，Backend 才允许创建或复用 `platform_user`。用户随后创建智能体，Backend 自动调用 OpenClaw Gateway 的 QR 登录能力，前端直接展示二维码。用户扫码后，Backend 等待 OpenClaw 返回登录结果并完成绑定，不需要用户手动输入绑定码。
 
 这里最关键的设计点是：
 
@@ -294,7 +294,9 @@ if result.connected:
 
 当前代码入口：
 
-- `POST /web/register`：创建或复用 `platform_user`。
+- `POST /web/sms/send-otp`：校验阿里云图形验证码并发送短信 OTP。
+- `POST /web/sms/verify-otp`：校验 OTP 并返回一次性 `verified_token`。
+- `POST /web/register`：携带 `otp_token` 后创建或复用 `platform_user`。
 - `POST /web/agents`：创建预生成的 AI4ALL Account、profile、owner binding 和订阅。
 - `POST /web/binding-intents`：创建 `binding_intent`，自动调用 OpenClaw Gateway `web.login.start`，保存 `qr_data_url`，调度后台等待任务。
 - `GET /web/binding-intents/{id}`：前端轮询绑定状态。
@@ -308,7 +310,7 @@ if result.connected:
 - OpenClaw Gateway RPC `health` 可访问。
 - `web.login.start` / `web.login.wait` 在 OpenClaw 源码中对应 `loginWithQrStart` / `loginWithQrWait`，返回 `qrDataUrl/sessionKey` 和 `connected/accountId`。
 - AI4ALL 自动化测试已经覆盖二维码生成状态、等待完成绑定、以及后续入站消息路由到预创建 AI4ALL Account。
-- 2026-05-20 已完成一次真实 Web 扫码绑定：手机号注册的 `platform_user`、预创建 `acct_...`、`binding_intent`、OpenClaw QR wait 返回的微信通道账号和 `channel_bindings` 均已对齐。
+- 2026-05-20 已完成一次真实 Web 扫码绑定；2026-05-21 已补齐手机号 OTP + 阿里云图形验证码注册：验证后的 `platform_user`、预创建 `acct_...`、`binding_intent`、OpenClaw QR wait 返回的微信通道账号和 `channel_bindings` 均已对齐。
 - OpenClaw QR wait 返回的微信 bot id 可能是 raw 形式（例如 `example@im.bot`），而 Bridge 入站上下文可能使用 normalized 形式（例如 `example-im-bot`）。Backend 绑定 lookup 已兼容这两种形式。
 - 2026-05-20 已验收扫码后的真实微信消息：微信发送 `你好` 后，normalized `channel_account_id` 成功路由到预创建 `acct_...`，并由 Backend 生成回复。
 

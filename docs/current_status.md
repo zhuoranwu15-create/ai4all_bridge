@@ -1,6 +1,6 @@
 # AI4ALL Bridge 当前状态
 
-更新时间：2026-05-20
+更新时间：2026-05-21
 
 ## 项目定位
 
@@ -35,13 +35,47 @@ OpenClaw account_id / provider account id
 
 当前代码通过 `app.identity.resolve_openclaw_identity()` 统一解析 OpenClaw 入站身份。DB 字段仍保留 `account_id` 旧命名，但其语义是 AI4ALL 业务账号 ID；OpenClaw 原生账号字段作为 `channel_account_id` 写入 metadata，并记录到 `channel_bindings` 表，用于排查通道和后续账号迁移。Bridge payload 已显式发送 `channel_account_id`，同时保留 legacy `account_id` 兼容旧后端。
 
+## 2026-05-21 手机号 OTP + 阿里云验证码注册
+
+Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
+
+```text
+[1] 用户输入手机号 → 点击「获取验证码」→ 触发阿里云验证码弹窗（一点即过）
+[2] captchaVerifyCallback 透传 captcha_verify_param → POST /web/sms/send-otp
+[3] 后端校验验证码 + 手机号频率限额（默认每小时 5 条）→ 发送 6 位 OTP 短信
+[4] 用户输入 OTP → POST /web/sms/verify-otp → 返回一次性 verified_token（10 分钟有效）
+[5] 用户填写昵称 → POST /web/register（携带 otp_token）→ 原子消耗 token → 创建或复用平台用户
+```
+
+已实现并验收的安全机制：
+
+- 阿里云验证码 2.0（一点即过 popup 模式）拦截自动化脚本
+- 手机号格式正则校验（`^1[3-9]\d{9}$`，仅接受大陆手机号）
+- 每小时每号限额（默认 5 条）
+- 错误 5 次后锁定当前 OTP 校验，需重新发送
+- `secrets.randbelow` 密码学安全随机 OTP
+- `consume_valid_verification_token` 原子 UPDATE，防止 token 并发重放
+- SMS 发送失败立即清理验证记录
+- 非 local/test 环境下缺少 Aliyun 凭据直接抛 `RuntimeError`（不允许生产环境静默跳过）
+- local/test 环境无凭据时自动 mock，OTP 打印到服务日志
+
+新增模块：`app/sms.py`、`app/captcha.py`
+新增数据表：`phone_verifications`
+新增配置：见 `.env.example` 中 `ALIYUN_*` 和 `OTP_*` 块
+
+当前前端仍是静态 `onboarding.html`，Aliyun Captcha `SceneId` / `prefix` 需要和控制台配置手工保持一致；后续应改为运行时配置注入，避免多环境漂移。
+
+详见设计文档：`docs/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`
+
 ## 2026-05-20 Web Onboarding 进展
 
 已新增并真实验证最小 Web 注册和扫码绑定链路：
 
 ```text
 /ui/onboarding.html
--> POST /web/register
+-> 阿里云验证码 + POST /web/sms/send-otp
+-> POST /web/sms/verify-otp
+-> POST /web/register（携带 otp_token）
 -> POST /web/agents
 -> POST /web/binding-intents
 -> Backend 调 OpenClaw Gateway web.login.start
@@ -227,17 +261,19 @@ AI4ALL 业务账号 ID + session_key
 - 重新启用后恢复回复。
 - Web onboarding 可以用手机号创建 `platform_user`、创建 AI4ALL Account、生成 OpenClaw 登录二维码，并在真实微信扫码后把通道账号绑定到预创建的 `acct_...`。
 - 扫码后的真实微信消息可以通过 `channel_account_id` alias lookup 路由到预创建 `acct_...` 并回复微信。
+- Web 注册要求完整 OTP 验证：阿里云验证码（一点即过）→ 短信 OTP → 一次性 verified_token → 注册；已在真实手机号上完整验收。
 
 ## 当前限制
 
 - 已验证主路径是两个微信账号的私聊文本。
-- Web onboarding 的注册、扫码绑定和首条真实消息路由已完成本机验收。
+- Web onboarding 的注册（含 OTP 验证）、扫码绑定和首条真实消息路由已完成本机验收。
 - 语音仍属于 Phase 1 范围，但 ASR 尚未实现。
 - 当前微信插件约束下不支持群聊 bot 模型。
 - 暂不支持图片/多模态。
 - 暂无 Web 管理后台，只有 Admin API。
 - 暂无正式登录系统，Admin API 使用共享 token。
 - 当前使用 SQLite，本地和早期测试够用；生产建议评估 PostgreSQL。
+- 手机号格式仅支持大陆 11 位手机号（`1[3-9]XXXXXXXXX`），不支持其他地区格式。
 
 ## 当前运行假设
 

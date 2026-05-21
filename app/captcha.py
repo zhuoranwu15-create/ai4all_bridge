@@ -30,6 +30,8 @@ def verify_captcha(captcha_verify_param: str) -> bool:
     captcha_verify_param must be passed through from the client unmodified.
     """
     if not settings.aliyun_captcha_scene_id:
+        if settings.app_env not in ("local", "test"):
+            raise RuntimeError("Captcha credentials not configured in production environment")
         logger.info("captcha: mock mode (no scene_id), auto-pass")
         return True
 

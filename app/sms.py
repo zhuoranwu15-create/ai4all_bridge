@@ -1,6 +1,6 @@
 import json
 import logging
-import random
+import secrets
 
 from app.config import settings
 
@@ -25,7 +25,7 @@ def _get_client():
 
 
 def generate_otp() -> str:
-    return f"{random.randint(0, 999999):06d}"
+    return f"{secrets.randbelow(1_000_000):06d}"
 
 
 def send_otp(phone: str, code: str) -> None:
@@ -35,6 +35,8 @@ def send_otp(phone: str, code: str) -> None:
     Raises RuntimeError if the Aliyun API returns a non-OK response code.
     """
     if not settings.aliyun_access_key_id:
+        if settings.app_env not in ("local", "test"):
+            raise RuntimeError("SMS credentials not configured in production environment")
         logger.info("sms: mock mode (no credentials), otp=%s phone=%s", code, phone)
         return
 

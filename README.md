@@ -26,6 +26,23 @@ Health check:
 curl http://127.0.0.1:8000/health
 ```
 
+Web onboarding:
+
+```text
+http://127.0.0.1:8000/ui/onboarding.html
+```
+
+Registration now requires a mainland China mobile number, Aliyun Captcha, SMS
+OTP verification, and a one-time `otp_token` before `/web/register` will create
+or reuse a platform user. In `APP_ENV=local` or `APP_ENV=test`, empty Aliyun
+SMS/Captcha credentials enable mock mode; in non-local environments, missing
+Aliyun credentials fail closed.
+
+For real SMS/Captcha, fill the `ALIYUN_*` block in `.env`. The current static
+`onboarding.html` also contains the Aliyun Captcha `SceneId` and `prefix`; keep
+those values aligned with the Aliyun console until frontend runtime config
+injection is added.
+
 Mock OpenClaw turn:
 
 ```bash
