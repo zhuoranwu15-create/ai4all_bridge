@@ -198,17 +198,43 @@ OTP_TOKEN_EXPIRES_MINUTES=10
 
 ## 7. 前端 `onboarding.html` 改动
 
+### 验证码形态：一点即过
+
+控制台创建场景时选择**「一点即过」**。用户点击「获取验证码」按钮后，阿里云在后台完成环境评估，低风险直接通过，高风险才降级为二次挑战。前端代码和后端接口与其他形态完全相同，无需特殊处理。
+
 ### 引入阿里云验证码 JS（在 `<head>` 中）
 
 ```html
 <script>
   window.AliyunCaptchaConfig = {
     region: "cn",
-    prefix: "XXXXXX",   <!-- 控制台身份标，需填写 -->
+    prefix: "XXXXXX",   // 控制台概览页「实例基本信息」中获取
   };
 </script>
+<!-- 必须动态加载，禁止本地部署 -->
 <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
 ```
+
+### `initAliyunCaptcha` 初始化（页面加载后调用一次）
+
+```javascript
+var captchaInstance;
+
+window.initAliyunCaptcha({
+  SceneId: "XXXXXXXX",       // 控制台场景列表中获取
+  mode: "popup",             // 弹出式，一点即过使用 popup
+  element: "#captcha-element",
+  button: "#btn-send-otp",   // 「获取验证码」按钮，点击后触发验证
+  captchaVerifyCallback: captchaVerifyCallback,
+  onBizResultCallback: onBizResultCallback,
+  getInstance: function(instance) { captchaInstance = instance; },
+  slideStyle: { width: 300, height: 40 },  // 一点即过按钮框体尺寸
+  language: "cn",
+});
+```
+
+> **注意**：`initAliyunCaptcha` 只调用一次，整个页面共享同一实例。
+> 验证码 JS 加载完成到触发验证请求之间需间隔 **大于 2 秒**。
 
 ### Step 1 子流程
 
@@ -216,12 +242,13 @@ Step 1 card 内顺序展开三段 UI：
 
 **段 A — 手机号 + 获取验证码按钮**
 - 输入框：手机号
-- 按钮「获取验证码」：点击 → 触发验证码 popup（`captcha.show()`）
+- 按钮 `#btn-send-otp`「获取验证码」：点击 → 触发阿里云验证码 popup
+- 验证码容器 `#captcha-element`（隐藏，由 SDK 渲染）
 
-**段 B — OTP 输入（发送成功后展开）**
+**段 B — OTP 输入（`onBizResultCallback` 成功后展开）**
 - 输入框：6 位验证码
 - 按钮「验证」：调 `POST /web/sms/verify-otp`
-- 倒计时文案（60s 后可重发）
+- 倒计时文案（60s 后可重发，重发再次触发 `captchaInstance.show()`）
 
 **段 C — 昵称输入（OTP 验证通过后展开）**
 - 输入框：昵称（可选）
@@ -230,24 +257,28 @@ Step 1 card 内顺序展开三段 UI：
 ### 阿里云验证码回调
 
 ```javascript
+// SDK 完成验证后调用，captchaVerifyParam 直接透传给后端，禁止修改
 async function captchaVerifyCallback(captchaVerifyParam) {
-  const result = await webFetch('/web/sms/send-otp', {
-    method: 'POST',
-    body: JSON.stringify({
-      phone: document.getElementById('phone').value,
-      captcha_verify_param: captchaVerifyParam,
-    }),
-  });
-  return {
-    captchaResult: result.status === 'ok',
-    bizResult: result.status === 'ok',
-  };
+  try {
+    const result = await webFetch('/web/sms/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({
+        phone: document.getElementById('phone').value,
+        captcha_verify_param: captchaVerifyParam,
+      }),
+    });
+    return { captchaResult: true, bizResult: true };
+  } catch (e) {
+    return { captchaResult: true, bizResult: false };  // 验证码通过，但业务失败
+  }
 }
 
+// 业务结果回调：captchaResult && bizResult 均 true 时触发
 function onBizResultCallback(bizResult) {
   if (bizResult) {
-    // 展开 OTP 输入段
-    showOtpInput();
+    showOtpInput();  // 展开段 B
+  } else {
+    setStatus('st-register', '发送失败，请稍后重试', true);
   }
 }
 ```
