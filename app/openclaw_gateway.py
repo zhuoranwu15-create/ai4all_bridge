@@ -3,12 +3,16 @@ import io
 import json
 import subprocess
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 import qrcode
 
 
 class OpenClawGatewayError(RuntimeError):
     pass
+
+
+DEFAULT_WEIXIN_CHANNEL = "openclaw-weixin"
 
 
 def _run_gateway_call(
@@ -114,4 +118,46 @@ def wait_weixin_qr_login(
         method="web.login.wait",
         params=params,
         timeout_ms=max(gateway_timeout_ms, wait_timeout_ms + 5000),
+    )
+
+
+def send_weixin_text(
+    *,
+    to_user_id: str,
+    text: str,
+    gateway_timeout_ms: int,
+    account_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    session_key: Optional[str] = None,
+    channel: str = DEFAULT_WEIXIN_CHANNEL,
+) -> Dict[str, Any]:
+    """Send proactive Weixin text through OpenClaw Gateway's generic send RPC."""
+    target = to_user_id.strip()
+    message = text.strip()
+    if not target:
+        raise ValueError("to_user_id is required")
+    if not message:
+        raise ValueError("text is required")
+    resolved_channel = channel.strip() if channel else ""
+    if not resolved_channel:
+        resolved_channel = DEFAULT_WEIXIN_CHANNEL
+    resolved_idempotency_key = idempotency_key.strip() if idempotency_key else ""
+    if not resolved_idempotency_key:
+        resolved_idempotency_key = f"ai4all-send-{uuid4()}"
+
+    params: Dict[str, Any] = {
+        "channel": resolved_channel,
+        "to": target,
+        "message": message,
+        "idempotencyKey": resolved_idempotency_key,
+    }
+    if account_id and account_id.strip():
+        params["accountId"] = account_id.strip()
+    if session_key and session_key.strip():
+        params["sessionKey"] = session_key.strip()
+
+    return _run_gateway_call(
+        method="send",
+        params=params,
+        timeout_ms=gateway_timeout_ms,
     )

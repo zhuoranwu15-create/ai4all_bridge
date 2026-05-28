@@ -60,3 +60,15 @@ def resolve_openclaw_identity(
         sender_id=resolved_sender_id,
         chat_id=_clean(chat_id),
     )
+
+
+def identity_response_metadata(
+    identity: ResolvedIdentity,
+    account_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    metadata = identity.metadata()
+    if account_id and account_id != identity.account_id:
+        metadata["ai4all_account_id"] = account_id
+        metadata["account_id"] = account_id
+        metadata["openclaw_session_key_account_id"] = identity.account_id
+    return metadata
