@@ -1,9 +1,7 @@
 """Tests for memory_writer module and read_daily_notes in user_profiles."""
 import asyncio
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,76 +41,66 @@ class TestMemoryFilePath:
 
 
 # ---------------------------------------------------------------------------
-# test_nothing_response_does_not_write_file
+# test_raw_daily_notes_written
 # ---------------------------------------------------------------------------
 
-class TestWriteMemoryNothingResponse:
-    def test_nothing_response_does_not_write_file(self, tmp_path):
+class TestWriteMemoryRawArchive:
+    def test_raw_turn_content_is_written_without_llm_extraction(self, tmp_path):
         s = _make_settings(tmp_path)
+        s.llm_api_key = ""
         with (
             patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value="NOTHING"),
+            patch("app.llm.generate_completion") as mock_generate_completion,
         ):
             from app.memory_writer import write_memory, memory_file_path
-            asyncio.run(write_memory("user1", TURNS, TODAY))
+            asyncio.run(
+                write_memory(
+                    "user1",
+                    TURNS,
+                    TODAY,
+                    session_id=42,
+                    user_message_id="msg-user-1",
+                    assistant_message_id="msg-ai-1",
+                    sent_at="2026-05-17T10:00:00+08:00",
+                    modality="text",
+                )
+            )
             p = memory_file_path("user1", TODAY)
-        assert not p.exists()
 
-    def test_nothing_case_insensitive(self, tmp_path):
-        s = _make_settings(tmp_path)
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value="nothing"),
-        ):
-            from app.memory_writer import write_memory, memory_file_path
-            asyncio.run(write_memory("user1", TURNS, TODAY))
-            p = memory_file_path("user1", TODAY)
-        assert not p.exists()
-
-    def test_nothing_with_whitespace(self, tmp_path):
-        s = _make_settings(tmp_path)
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value="  NOTHING  "),
-        ):
-            from app.memory_writer import write_memory, memory_file_path
-            asyncio.run(write_memory("user1", TURNS, TODAY))
-            p = memory_file_path("user1", TODAY)
-        assert not p.exists()
-
-
-# ---------------------------------------------------------------------------
-# test_extracted_content_is_written
-# ---------------------------------------------------------------------------
-
-class TestWriteMemoryContentWritten:
-    def test_extracted_content_is_written(self, tmp_path):
-        s = _make_settings(tmp_path)
-        extracted = "- 用户喜欢简洁\n- 用户是工程师"
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value=extracted),
-        ):
-            from app.memory_writer import write_memory, memory_file_path
-            asyncio.run(write_memory("user1", TURNS, TODAY))
-            p = memory_file_path("user1", TODAY)
+        mock_generate_completion.assert_not_called()
         assert p.exists()
         content = p.read_text(encoding="utf-8")
-        assert "用户喜欢简洁" in content
-        assert "用户是工程师" in content
+        assert f"# {TODAY}" in content
+        assert "## turn msg-ai-1" in content
+        assert "- session_id: 42" in content
+        assert "- user_message_id: msg-user-1" in content
+        assert "- assistant_message_id: msg-ai-1" in content
+        assert "- modality: text" in content
+        assert "User:\n我是一名工程师" in content
+        assert "AI:\n明白，我会记住的" in content
 
+
+# ---------------------------------------------------------------------------
+# test_new_file_has_date_header
+# ---------------------------------------------------------------------------
+
+class TestWriteMemoryHeader:
     def test_new_file_has_date_header(self, tmp_path):
         s = _make_settings(tmp_path)
-        extracted = "- 用户喜欢简洁"
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value=extracted),
-        ):
+        with patch("app.memory_writer.settings", s):
             from app.memory_writer import write_memory, memory_file_path
-            asyncio.run(write_memory("user2", TURNS, TODAY))
+            asyncio.run(
+                write_memory(
+                    "user2",
+                    TURNS,
+                    TODAY,
+                    user_message_id="msg-user-2",
+                    sent_at="2026-05-17T10:01:00+08:00",
+                )
+            )
             p = memory_file_path("user2", TODAY)
         content = p.read_text(encoding="utf-8")
-        assert TODAY in content
+        assert content.startswith(f"# {TODAY}\n\n## turn msg-user-2")
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +111,6 @@ class TestWriteMemoryAppend:
     def test_append_to_existing_file(self, tmp_path):
         s = _make_settings(tmp_path)
         existing_content = f"# {TODAY}\n\n- 旧条目\n"
-        new_lines = "- 新条目一\n- 新条目二"
 
         with patch("app.memory_writer.settings", s):
             from app.memory_writer import memory_file_path
@@ -131,19 +118,24 @@ class TestWriteMemoryAppend:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(existing_content, encoding="utf-8")
 
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", return_value=new_lines),
-        ):
+        with patch("app.memory_writer.settings", s):
             from app.memory_writer import write_memory
-            asyncio.run(write_memory("user3", TURNS, TODAY))
+            asyncio.run(
+                write_memory(
+                    "user3",
+                    TURNS,
+                    TODAY,
+                    assistant_message_id="reply-3",
+                    sent_at="2026-05-17T10:02:00+08:00",
+                )
+            )
 
         content = p.read_text(encoding="utf-8")
         # Old content preserved
         assert "旧条目" in content
         # New content appended
-        assert "新条目一" in content
-        assert "新条目二" in content
+        assert "## turn reply-3" in content
+        assert "我是一名工程师" in content
 
 
 # ---------------------------------------------------------------------------
@@ -153,38 +145,45 @@ class TestWriteMemoryAppend:
 class TestWriteMemoryEmptyTurns:
     def test_empty_turns_no_write(self, tmp_path):
         s = _make_settings(tmp_path)
-        call_count = {"n": 0}
-
-        def fake_extract(turns):
-            call_count["n"] += 1
-            return "- something"
-
-        with (
-            patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", side_effect=fake_extract),
-        ):
+        with patch("app.memory_writer.settings", s):
             from app.memory_writer import write_memory, memory_file_path
             asyncio.run(write_memory("user4", [], TODAY))
             p = memory_file_path("user4", TODAY)
 
-        assert call_count["n"] == 0
+        assert not p.exists()
+
+    def test_blank_visible_turns_no_write(self, tmp_path):
+        s = _make_settings(tmp_path)
+        with patch("app.memory_writer.settings", s):
+            from app.memory_writer import write_memory, memory_file_path
+            asyncio.run(
+                write_memory(
+                    "user4",
+                    [
+                        {"role": "system", "content": "hidden"},
+                        {"role": "user", "content": "   "},
+                    ],
+                    TODAY,
+                )
+            )
+            p = memory_file_path("user4", TODAY)
+
         assert not p.exists()
 
 
 # ---------------------------------------------------------------------------
-# test_llm_error_does_not_crash
+# test_write_error_does_not_crash
 # ---------------------------------------------------------------------------
 
-class TestWriteMemoryLLMError:
-    def test_llm_error_does_not_crash(self, tmp_path):
+class TestWriteMemoryWriteError:
+    def test_write_error_does_not_crash(self, tmp_path):
         s = _make_settings(tmp_path)
-
-        def raise_error(turns):
-            raise RuntimeError("LLM exploded")
-
         with (
             patch("app.memory_writer.settings", s),
-            patch("app.memory_writer._extract_sync", side_effect=raise_error),
+            patch(
+                "app.memory_writer._append_to_memory",
+                side_effect=RuntimeError("disk full"),
+            ),
         ):
             from app.memory_writer import write_memory
             # Should NOT raise

@@ -102,6 +102,7 @@ class PromptBuilder:
         user_prefs: Optional[str] = None,
         long_term_memory: Optional[str] = None,
         daily_notes: Optional[str] = None,
+        carryover_summary: Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         style: Optional[str] = None,
         tools: Optional[List[str]] = None,
@@ -163,23 +164,28 @@ class PromptBuilder:
             mem_text = _truncate(long_term_memory, 3000, "long_term_memory")
             blocks.append(f"【长期记忆】\n{mem_text}")
 
-        # Block 10: Daily Notes
+        # Block 10: Session Carryover
+        if carryover_summary and carryover_summary.strip():
+            carryover_text = _truncate(carryover_summary, 2000, "carryover_summary")
+            blocks.append(f"【会话延续摘要】\n{carryover_text}")
+
+        # Block 11: Daily Notes
         if daily_notes and daily_notes.strip():
             notes_text = _truncate(daily_notes, 2000, "daily_notes")
             blocks.append(f"【今日备注】\n{notes_text}")
 
-        # Block 11: System Prompt Override
+        # Block 12: System Prompt Override
         if system_prompt_override and system_prompt_override.strip():
             blocks.append(f"【最高优先级覆盖指令】\n{system_prompt_override}")
 
-        # Block 12: Output Directives
+        # Block 13: Output Directives
         directives = _OUTPUT_DIRECTIVES_FIXED
         if style and style.strip():
             style_text = _truncate(style, 500, "style")
             directives = directives + f"\n- 当前用户偏好的回复风格：{style_text}"
         blocks.append(directives)
 
-        # Block 13: Runtime
+        # Block 14: Runtime
         runtime_parts: List[str] = []
         if today:
             runtime_parts.append(f"当前日期：{today}")

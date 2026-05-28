@@ -74,6 +74,7 @@ class TestPromptBuilderBasicBuild:
             user_prefs="喜欢简短回复",
             long_term_memory="用户叫张三",
             daily_notes="今天天气晴朗",
+            carryover_summary="上一段会话说到项目启动",
             system_prompt_override="紧急覆盖指令",
             style="活泼",
             tools=["search", "calendar"],
@@ -91,6 +92,8 @@ class TestPromptBuilderBasicBuild:
         assert "张三" in out
         # Daily notes
         assert "天气晴朗" in out
+        # Session carryover
+        assert "项目启动" in out
         # Override
         assert "紧急覆盖指令" in out
         # Style
@@ -192,6 +195,11 @@ class TestPromptBuilderTruncation:
         out = self.pb.build(daily_notes=long_notes)
         assert "...[已截断]" in out
 
+    def test_carryover_summary_truncated_at_2000(self):
+        long_carryover = "C" * 2001
+        out = self.pb.build(carryover_summary=long_carryover)
+        assert "...[已截断]" in out
+
     def test_agent_context_file_truncated(self):
         long_user = "U" * 2001
         out = self.pb.build(agent_context={"USER": long_user})
@@ -219,6 +227,11 @@ class TestPromptBuilderSkips:
     def test_daily_notes_present_when_provided(self):
         out = self.pb.build(daily_notes="今日备忘：买菜")
         assert "买菜" in out
+
+    def test_carryover_summary_present_when_provided(self):
+        out = self.pb.build(carryover_summary="上一段说到签证材料")
+        assert "【会话延续摘要】" in out
+        assert "签证材料" in out
 
     def test_tooling_skip_when_tools_none(self):
         out = self.pb.build(tools=None)
