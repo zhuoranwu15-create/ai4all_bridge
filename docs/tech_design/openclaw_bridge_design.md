@@ -1,4 +1,4 @@
-# OpenClaw Bridge 技术方案
+# OpenClaw Bridge 设计
 
 ## 1. 目标
 
@@ -24,7 +24,7 @@ Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系�
 
 ### 1.2 身份模型更新
 
-本文是早期 Bridge 方案文档。2026-05-18 之后，身份模型以 `docs/mid_long_term_tech_plan.md` 和 `docs/current_status.md` 为准：
+本文是早期 Bridge 方案文档。当前身份模型以 `docs/architecture_overview.md`、`docs/phase1_technical_design.md`、`docs/tech_design/identity_model_and_wechat_binding.md` 和 `docs/current_status.md` 为准：
 
 - AI4ALL 业务账号 ID 是 Backend 业务隔离主键；未绑定 legacy 入站可由 OpenClaw `session_key` fallback，Web onboarding 绑定完成后路由到预创建 `acct_...`。
 - OpenClaw / provider 侧账号 ID 在 Bridge payload 中显式命名为 `channel_account_id`。

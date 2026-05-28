@@ -1,18 +1,29 @@
-# AI4ALL Bridge 当前状态
+# AI4ALL 微信个人 AI 陪伴服务当前状态
 
-更新时间：2026-05-21
+更新时间：2026-05-23
 
 ## 项目定位
 
-AI4ALL Bridge 是一个面向微信私聊场景的个人 AI 陪伴与生活助理服务。
+AI4ALL 微信个人 AI 陪伴服务面向普通用户，提供手机号验证后一键扫码接入微信 OpenClawBot 通道的个人 AI 体验。用户不需要部署 OpenClaw、不需要配置模型或服务器，即可在微信私聊里使用由 AI4ALL Backend 驱动的个人 AI bot。
 
-当前阶段不是通用办公效率助手，也不是心理咨询产品。重点是：
+当前阶段不是通用办公效率助手，也不是心理咨询产品。产品第一定位是聊天陪伴，其次兼顾轻量个人助理。重点是：
 
 - 日常聊天中的情感陪伴。
-- 轻量生活助理能力。
-- 通过 OpenClaw 类架构，让更多普通用户以较低成本使用个人 AI。
-- 让一个 OpenClaw 实例可以承载多个个人微信账号接入。
-- 每个接入账号拥有独立的 Soul、会话上下文、记忆和配置。
+- 自然、温和、有持续感的微信私聊体验。
+- 轻量生活助理能力，例如明确时间的一次性提醒、信息搜索、每日新闻或搞笑内容等垂类推送。
+- 通过类 OpenClaw 架构，让更多普通用户以较低成本使用个人 AI。
+- OpenClaw / `openclaw-weixin` 只承担微信通道和运行时 hook；AI4ALL Backend 承担产品体验和业务状态。
+- 每个用户对应独立 AI4ALL Account，拥有独立 Soul、会话上下文、记忆、配置和用量。
+
+简化目标链路：
+
+```text
+普通用户
+-> Web/H5 手机号验证
+-> 扫码接入微信 OpenClawBot 通道
+-> AI4ALL Backend 创建或复用 acct_...
+-> 用户在微信私聊中获得陪伴式对话和轻量助理能力
+```
 
 ## 2026-05-18 身份模型修正
 
@@ -31,7 +42,7 @@ OpenClaw account_id / provider account id
 = 不作为 AI4ALL 用户隔离主键
 ```
 
-详细说明见 `docs/mid_long_term_tech_plan.md` 和 `docs/identity_model_and_wechat_binding.md`。
+详细说明见 `docs/architecture_overview.md`、`docs/phase1_technical_design.md` 和 `docs/tech_design/identity_model_and_wechat_binding.md`。
 
 当前代码通过 `app.identity.resolve_openclaw_identity()` 统一解析 OpenClaw 入站身份。DB 字段仍保留 `account_id` 旧命名，但其语义是 AI4ALL 业务账号 ID；OpenClaw 原生账号字段作为 `channel_account_id` 写入 metadata，并记录到 `channel_bindings` 表，用于排查通道和后续账号迁移。Bridge payload 已显式发送 `channel_account_id`，同时保留 legacy `account_id` 兼容旧后端。
 
@@ -44,7 +55,7 @@ Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
 [2] captchaVerifyCallback 透传 captcha_verify_param → POST /web/sms/send-otp
 [3] 后端校验验证码 + 手机号频率限额（默认每小时 5 条）→ 发送 6 位 OTP 短信
 [4] 用户输入 OTP → POST /web/sms/verify-otp → 返回一次性 verified_token（10 分钟有效）
-[5] 用户填写昵称 → POST /web/register（携带 otp_token）→ 原子消耗 token → 创建或复用平台用户
+[5] 前端调用 POST /web/register-and-binding-intent（携带 otp_token）→ 原子消耗 token → 创建或复用平台用户和默认 AI4ALL Account → 生成微信登录二维码
 ```
 
 已实现并验收的安全机制：
@@ -55,6 +66,7 @@ Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
 - 错误 5 次后锁定当前 OTP 校验，需重新发送
 - `secrets.randbelow` 密码学安全随机 OTP
 - `consume_valid_verification_token` 原子 UPDATE，防止 token 并发重放
+- 默认 AI4ALL Account 幂等复用，避免重复注册时反复创建账号
 - SMS 发送失败立即清理验证记录
 - 非 local/test 环境下缺少 Aliyun 凭据直接抛 `RuntimeError`（不允许生产环境静默跳过）
 - local/test 环境无凭据时自动 mock，OTP 打印到服务日志
@@ -65,7 +77,7 @@ Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
 
 当前前端仍是静态 `onboarding.html`，Aliyun Captcha `SceneId` / `prefix` 需要和控制台配置手工保持一致；后续应改为运行时配置注入，避免多环境漂移。
 
-详见设计文档：`docs/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`
+详见设计文档：`docs/archive/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`
 
 ## 2026-05-20 Web Onboarding 进展
 
@@ -75,9 +87,8 @@ Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
 /ui/onboarding.html
 -> 阿里云验证码 + POST /web/sms/send-otp
 -> POST /web/sms/verify-otp
--> POST /web/register（携带 otp_token）
--> POST /web/agents
--> POST /web/binding-intents
+-> POST /web/register-and-binding-intent（携带 otp_token）
+-> Backend 创建或复用 platform_user + 默认 AI4ALL Account + binding_intent
 -> Backend 调 OpenClaw Gateway web.login.start
 -> 前端展示 qr_data_url 并轮询状态
 -> Backend 后台调 web.login.wait
@@ -87,7 +98,7 @@ Web 注册流程现在要求通过完整的 OTP 验证后才能创建账号。
 
 当前本机 OpenClaw CLI/Gateway 设备已经批准 `operator.pairing` 和 `operator.admin` scope。权限批准后发现官方 `@tencent-weixin/openclaw-weixin@2.4.3` 虽然实现了 `loginWithQrStart` / `loginWithQrWait`，但没有声明 OpenClaw host 用于发现 provider 的 `gatewayMethods`，导致 `web.login.start` 返回 `web login provider is not available`。
 
-已在官方插件源码工作区和本机运行时安装包补充 `gatewayMethods: ["web.login.start", "web.login.wait"]`，并重启 Gateway。现在 `openclaw gateway call web.login.start` 已可返回 `qrDataUrl`、`message`、`sessionKey`。补丁维护说明见 `docs/openclaw-weixin-gateway-qr-patch.md`。
+已在官方插件源码工作区和本机运行时安装包补充 `gatewayMethods: ["web.login.start", "web.login.wait"]`，并重启 Gateway。现在 `openclaw gateway call web.login.start` 已可返回 `qrDataUrl`、`message`、`sessionKey`。补丁维护说明见 `docs/tech_design/openclaw_weixin_gateway_qr_patch.md`。
 
 真实扫码绑定已完成一次本机验证。为避免长期文档沉淀本机临时账号标识，这里只保留结构化结果：
 
@@ -122,15 +133,16 @@ platform_user(phone=用户输入手机号)
 目标链路是：
 
 ```text
-一个 OpenClaw 实例
--> 多个个人微信账号
--> 每个微信账号对应一个用户自己的 AI bot 会话
--> AI4ALL Backend 按微信账号隔离 Soul、记忆、会话和配置
+普通用户注册 / 手机号验证
+-> 扫码接入微信 OpenClawBot 通道
+-> Backend 创建或复用 AI4ALL Account
+-> 每个 AI4ALL Account 拥有自己的 AI bot 会话
+-> AI4ALL Backend 按账号隔离 Soul、记忆、会话、配置和用量
 ```
 
 当前不采用“一个服务微信号服务多个外部微信用户”的客服号模型。
 
-在当前微信插件约束下，用户在微信里看到的是自己的 bot 会话。这个 bot 不作为群聊机器人使用，也不作为一个公共服务号同时和多个外部用户聊天。
+在当前微信插件约束下，用户在微信里看到的是自己的 bot 会话。这个 bot 不作为群聊机器人使用，也不作为一个公共客服号同时和多个外部用户聊天。OpenClaw 是通道基础设施，不是用户侧产品身份。
 
 ### 已验证能力
 
@@ -267,6 +279,8 @@ AI4ALL 业务账号 ID + session_key
 
 - 已验证主路径是两个微信账号的私聊文本。
 - Web onboarding 的注册（含 OTP 验证）、扫码绑定和首条真实消息路由已完成本机验收。
+- 主动消息/提醒的最新推进基准见 `docs/tech_design/proactive_messaging_design.md`；当前机制代码已经基本闭环，包含 Gateway `send` 文本封装、真实微信主动发送 smoke test、`outbound_messages` ledger、主动发送每日上限、quiet hours、`reminders` 表、due reminder dispatcher、高确定性显式提醒识别、系统级 proactive scheduler、`proactive_account_state`、heartbeat draft/promote/send、hidden commitment 抽取和 due commitment dispatch。代码边界已整理：`/openclaw/turn` 业务逻辑在 `app.turn_service`，proactive 域代码在 `app/proactive/` package，旧顶层 proactive 兼容模块已删除。尚未完成真实微信端到端联调、架构梳理后的边界确认、周期性提醒、自然语言取消/更新提醒、用户级 timezone 或多实例 worker lease。
+- 主动消息功能暂停继续扩展；下一阶段先整体梳理 AI4ALL 后端架构，再统一联调和调参。
 - 语音仍属于 Phase 1 范围，但 ASR 尚未实现。
 - 当前微信插件约束下不支持群聊 bot 模型。
 - 暂不支持图片/多模态。
@@ -278,8 +292,8 @@ AI4ALL 业务账号 ID + session_key
 ## 当前运行假设
 
 - OpenClaw 本地运行。
-- AI4ALL Backend 本地默认可运行在 `http://127.0.0.1:8000`；本轮 Web onboarding 验证实际使用 `http://127.0.0.1:8012`。
-- Bridge 插件必须指向实际 Backend 地址；如果端口从 `8000` 改为 `8012`，Bridge 运行时配置也必须同步更新。
+- AI4ALL Backend 本地默认可运行在 `http://127.0.0.1:8000`；当前 OpenClaw bridge 配置已指向 `8000`。
+- Bridge 插件必须指向实际 Backend 地址；如果端口变化，Bridge 运行时配置也必须同步更新，否则会走“卡住了”的兜底回复。
 - DeepSeek 通过 `.env` 配置。
 - 本地数据库路径为 `data/ai4all.sqlite3`。
 - 账号级 profile 路径为 `data/user_profiles/<account_id>/user_profile.md`，其中 `<account_id>` 为当前代码历史命名下的 AI4ALL 业务账号 ID。

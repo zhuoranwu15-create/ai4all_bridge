@@ -1,20 +1,23 @@
 # 身份模型与微信绑定
 
 > 本文是 AI4ALL 账号身份、微信通道绑定和 Web onboarding 绑定流程的主参考文档。
-> 2026-05-20 之后，账号标识和绑定口径以本文、`docs/current_status.md` 和 `docs/mid_long_term_tech_plan.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
+> 2026-05-20 之后，账号标识和绑定口径以本文、`docs/current_status.md`、`docs/architecture_overview.md` 和 `docs/phase1_technical_design.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
 
 ## 1. 当前结论
 
 当前已落地的核心结论：
 
+- Phase 1 外部用户唯一入口标识是手机号；用户通过手机号 OTP 建立或复用 `platform_user`。
 - AI4ALL 的业务隔离账号是 `ai4all_account_id`。
 - 代码和 DB 里遗留的 `account_id` 字段暂时保留，语义上等同于 `ai4all_account_id`。
+- Phase 1 普通入口下，一个手机号对应一个 `platform_user`，一个 `platform_user` 对应一个默认 AI4ALL Account；换手机号后如何与原 AI4ALL Account 重新绑定先搁置。
 - 未绑定的 OpenClaw 入站消息仍 fallback 为 `ai4all_account_id = payload.session_key`，这是兼容路径。
 - Web onboarding 绑定完成后，`ai4all_account_id` 是 Backend 预创建的 `acct_...`；入站消息通过 `channel_account_id` 或 `openclaw_login_session_key` 路由回这个预创建账号。
 - OpenClaw / provider 侧账号 ID 不再叫业务 `account_id`，统一称为 `channel_account_id`。
 - Bridge payload 会显式发送 `channel_account_id`，同时保留 legacy `account_id` 兼容旧接口。
 - `binding_intent_id` 是一次性绑定流程 ID，不是用户身份、账号身份或长期通道身份。
 - `channel_bindings` 只记录 AI4ALL Account 与通道身份的关系，不代表产品用户、订阅用户或 owner。
+- 对话 session 的核心边界是 AI4ALL Account，不是 OpenClaw `session_key`；`session_key` 只作为通道路由、兼容和排障字段。
 
 最需要避免的误解：
 
@@ -32,7 +35,7 @@ OpenClaw payload account_id
 | --- | --- | --- |
 | `ai4all_account_id` | AI4ALL 业务隔离账号 ID | Soul、记忆、会话、限流、用量、配置隔离 |
 | `account_id` | 代码/DB 历史字段 | 暂时作为 `ai4all_account_id` 的兼容别名 |
-| `session_key` | OpenClaw 入站会话键 | 未绑定 fallback、会话排障、绑定路由辅助 |
+| `session_key` | OpenClaw 入站会话键 | 未绑定 fallback、会话排障、绑定路由辅助；不作为业务 session 核心边界 |
 | `channel_account_id` | OpenClaw / 微信通道侧账号或机器人账号 | 排障、通道绑定、未来账号迁移 |
 | `binding_intent_id` | Backend 生成的一次性绑定流程 ID | 串联一次 QR 登录流程，完成后不作为长期身份 |
 | `openclaw_login_session_key` | 本次 OpenClaw QR 登录的 session key | 调 OpenClaw wait、绑定后兜底路由 |
@@ -215,7 +218,7 @@ channel_bindings
 
 ### 6.1 已实现的自动二维码绑定
 
-当前 Web 端入口是 `/ui/onboarding.html`。用户在 Web 页面输入大陆手机号，完成阿里云图形验证码和短信 OTP 后，Backend 才允许创建或复用 `platform_user`。用户随后创建智能体，Backend 自动调用 OpenClaw Gateway 的 QR 登录能力，前端直接展示二维码。用户扫码后，Backend 等待 OpenClaw 返回登录结果并完成绑定，不需要用户手动输入绑定码。
+当前 Web 端入口是 `/ui/onboarding.html`。用户在 Web 页面输入大陆手机号，完成阿里云图形验证码和短信 OTP 后，前端调用 `/web/register-and-binding-intent`。Backend 会创建或复用 `platform_user`、创建或复用默认 AI4ALL Account，并自动调用 OpenClaw Gateway 的 QR 登录能力，前端直接展示二维码。用户扫码后，Backend 等待 OpenClaw 返回登录结果并完成绑定，不需要用户手动输入绑定码。
 
 这里最关键的设计点是：
 
@@ -234,9 +237,7 @@ openclaw_login_session_key
 用户打开小程序 / H5
 -> 用户注册 / 登录
 -> Backend 创建 platform_user
--> 用户选择套餐 / 创建订阅
--> 用户创建智能体
--> Backend 创建 ai4all_account_id
+-> Backend 创建或复用默认 ai4all_account_id
 -> Backend 创建 binding_intent_id，例如 bind_001
 -> Backend 调 OpenClaw Gateway web.login.start(accountId=bind_001)
 -> OpenClaw 返回 qrDataUrl + sessionKey
@@ -258,8 +259,7 @@ openclaw_login_session_key
 -> Backend 获得 openid / unionid
 -> 创建 platform_user
 -> 用户选择套餐 / 完成订阅
--> 用户创建智能体
--> Backend 创建 ai4all_account_id
+-> Backend 创建或复用 ai4all_account_id
 -> Backend 创建 binding_intent_id，例如 bind_001
 -> 继续执行同一套 QR 绑定流程
 ```
@@ -297,7 +297,8 @@ if result.connected:
 - `POST /web/sms/send-otp`：校验阿里云图形验证码并发送短信 OTP。
 - `POST /web/sms/verify-otp`：校验 OTP 并返回一次性 `verified_token`。
 - `POST /web/register`：携带 `otp_token` 后创建或复用 `platform_user`。
-- `POST /web/agents`：创建预生成的 AI4ALL Account、profile、owner binding 和订阅。
+- `POST /web/register-and-binding-intent`：携带 `otp_token` 后创建或复用 `platform_user`、默认 AI4ALL Account，并生成绑定二维码。
+- `POST /web/agents`：兼容保留；可显式创建预生成的 AI4ALL Account、profile、owner binding 和订阅。
 - `POST /web/binding-intents`：创建 `binding_intent`，自动调用 OpenClaw Gateway `web.login.start`，保存 `qr_data_url`，调度后台等待任务。
 - `GET /web/binding-intents/{id}`：前端轮询绑定状态。
 - `/openclaw/turn`：入站消息优先用已完成的 `binding_intent.channel_account_id` 或 `openclaw_login_session_key` 路由到预创建的 AI4ALL Account。
@@ -317,7 +318,7 @@ if result.connected:
 真实运行前置条件和仍需验证：
 
 - 当前本机 OpenClaw CLI/Gateway 设备已经批准 `operator.pairing` 和 `operator.admin` scope。权限批准后发现官方 `@tencent-weixin/openclaw-weixin@2.4.3` 缺少 `gatewayMethods` provider discovery 声明，导致 `web.login.start` 返回 `web login provider is not available`。
-- 已在插件源码工作区和本机运行时安装包补充 `gatewayMethods: ["web.login.start", "web.login.wait"]`，重启 Gateway 后，`web.login.start` 已能返回 `qrDataUrl`、`message`、`sessionKey`。补丁维护说明见 `docs/openclaw-weixin-gateway-qr-patch.md`。
+- 已在插件源码工作区和本机运行时安装包补充 `gatewayMethods: ["web.login.start", "web.login.wait"]`，重启 Gateway 后，`web.login.start` 已能返回 `qrDataUrl`、`message`、`sessionKey`。补丁维护说明见 `docs/tech_design/openclaw_weixin_gateway_qr_patch.md`。
 - OpenClaw Gateway 重启、QR 过期、用户取消、重复扫码时，`binding_intents` 状态如何恢复。
 
 这个目标方案的优点：
@@ -325,8 +326,8 @@ if result.connected:
 - 不依赖小程序 `session_key` 和 OpenClaw `session_key` 相等。
 - 不要求用户在聊天里手动输入绑定码。
 - `binding_intent_id` 由 Backend 生成并保存，可以串联 `platform_user_id`、`ai4all_account_id` 和 OpenClaw QR 登录 session。
-- 扫码成功后拿到真实 `channel_account_id`，再把通道身份绑定到 AI4ALL 智能体。
-- 用户注册、套餐订阅、智能体配置、通道登录可以形成同一个后台审计链路。
+- 扫码成功后拿到真实 `channel_account_id`，再把通道身份绑定到 AI4ALL Account。
+- 用户注册、套餐订阅、账号配置、通道登录可以形成同一个后台审计链路。
 
 ### 6.2 兜底流程：一次性绑定码
 

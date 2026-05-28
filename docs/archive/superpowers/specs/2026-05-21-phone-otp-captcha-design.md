@@ -30,8 +30,8 @@
 [5] 后端校验验证码 + 手机号频率 → 发送 6 位 OTP 短信
 [6] 用户输入收到的验证码 → POST /web/sms/verify-otp
 [7] 后端验证 OTP → 返回一次性 verified_token
-[8] 用户输入昵称（可选）→ POST /web/register（携带 otp_token）
-[9] 后端校验 token → 创建用户 → 解锁后续步骤
+[8] 前端调用 POST /web/register-and-binding-intent（携带 otp_token）
+[9] 后端校验 token → 创建或复用 platform_user 和默认 AI4ALL Account → 生成微信登录二维码
 ```
 
 ---
@@ -115,6 +115,28 @@
 2. 单条 SQL 原子更新：`verified_token` 匹配、`phone` 匹配、`token_consumed_at IS NULL`、`token_expires_at > now`
 3. `UPDATE` 影响行数为 0 → 400（"注册凭证无效或已过期"）
 4. 消耗成功后继续原有注册逻辑，创建或复用 platform user
+
+---
+
+### 3.4 `POST /web/register-and-binding-intent`（新增）
+
+面向当前简化版 onboarding 页面。OTP 验证后，前端直接调用该接口完成注册、默认 AI4ALL Account 准备和二维码生成，不再展示“创建智能体”步骤。
+
+**Request：**
+```json
+{
+  "phone": "13800000000",
+  "otp_token": "550e8400-e29b-41d4-a716-446655440000",
+  "channel": "openclaw-weixin"
+}
+```
+
+**处理逻辑：**
+1. 原子消耗 `otp_token` 并创建或复用 `platform_user`
+2. 调用 `get_or_create_default_ai4all_account_for_user`，复用已有 active owner binding；没有账号时创建默认 `AI4ALL 助手`
+3. 创建 `binding_intent`
+4. 调用 OpenClaw Gateway `web.login.start` 获取 `qr_data_url`
+5. 返回 `platform_user`、`account`、`subscription` 和 `binding_intent`
 
 ---
 
@@ -242,7 +264,7 @@ window.initAliyunCaptcha({
 
 ### Step 1 子流程
 
-Step 1 card 内顺序展开三段 UI：
+Step 1 card 内顺序展开两段 UI；OTP 验证通过后直接注册并生成二维码。
 
 **段 A — 手机号 + 获取验证码按钮**
 - 输入框：手机号
@@ -251,12 +273,8 @@ Step 1 card 内顺序展开三段 UI：
 
 **段 B — OTP 输入（`onBizResultCallback` 成功后展开）**
 - 输入框：6 位验证码
-- 按钮「验证」：调 `POST /web/sms/verify-otp`
+- 按钮「验证并注册」：先调 `POST /web/sms/verify-otp`，成功后调 `POST /web/register-and-binding-intent`
 - 倒计时文案（60s 后可重发，重发再次触发 `captchaInstance.show()`）
-
-**段 C — 昵称输入（OTP 验证通过后展开）**
-- 输入框：昵称（可选）
-- 按钮「注册/继续」：调 `POST /web/register`（携带 `otp_token`）
 
 ### 阿里云验证码回调
 
@@ -282,7 +300,7 @@ function onBizResultCallback(bizResult) {
   if (bizResult) {
     showOtpInput();  // 展开段 B
   } else {
-    setStatus('st-register', '发送失败，请稍后重试', true);
+    setStatus('st-send-otp', '发送失败，请稍后重试', true);
   }
 }
 ```

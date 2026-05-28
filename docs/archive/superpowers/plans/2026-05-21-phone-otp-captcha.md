@@ -2,7 +2,7 @@
 
 > **状态：已完成（2026-05-21）**
 > 本文件是原始实现计划，代码已落地并经过后续安全加固：`secrets.randbelow` 替换 `random.randint`；手机号格式正则 `^1[3-9]\d{9}$`；生产环境缺少凭据时直接抛 `RuntimeError`；SMS 发送失败时自动清理验证记录；`/web/register` 改用原子 `consume_valid_verification_token`。前端静态 `onboarding.html` 的 Aliyun Captcha `SceneId` / `prefix` 仍需后续运行时配置收口。
-> 当前实现请以代码为准，设计说明请见 `docs/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`。
+> 当前实现请以代码为准，设计说明请见 `docs/archive/superpowers/specs/2026-05-21-phone-otp-captcha-design.md`。
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

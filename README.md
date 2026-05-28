@@ -1,14 +1,25 @@
 # AI4ALL Weixin Bot
 
+AI4ALL Weixin Bot 面向普通用户提供微信里的个人 AI 陪伴与轻量助理服务。用户通过手机号验证和微信扫码接入微信 OpenClawBot 通道，后续在微信私聊中使用由 AI4ALL Backend 驱动的个人 AI bot。
+
+产品第一定位是聊天陪伴，同时逐步补齐明确提醒、信息搜索、每日新闻、搞笑内容等轻量个人助理能力。OpenClaw / `openclaw-weixin` 在这里是微信通道基础设施，AI4ALL Backend 承担用户注册、账号隔离、Soul、记忆、提醒、模型调用和运营管理。
+
 ## 文档
 
+- [文档导航](docs/README.md)
+- [项目启动文档](start.md)
+- [产品需求文档](docs/prd.md)
+- [产品专题 PRD](docs/product/README.md)
 - [当前状态](docs/current_status.md)
-- [用户使用说明](docs/user_guide.md)
-- [后台管理说明](docs/admin_guide.md)
+- [用户使用说明](docs/guides/user_guide.md)
+- [后台管理说明](docs/guides/admin_guide.md)
 - [后续规划](docs/roadmap.md)
-- [中长期技术规划](docs/mid_long_term_tech_plan.md)
+- [总体架构 / 框架设计](docs/architecture_overview.md)
+- [Phase 1 详细技术设计](docs/phase1_technical_design.md)
+- [Phase 1 需求追踪矩阵](docs/phase1_traceability_matrix.md)
 - [下一步开发步骤](docs/next_dev_steps.md)
-- [OpenClaw Bridge 技术设计](docs/openclaw_bridge_tech_design.md)
+- [OpenClaw Bridge 技术设计](docs/tech_design/openclaw_bridge_design.md)
+- [主动消息与提醒设计](docs/tech_design/proactive_messaging_design.md)
 
 ## Local Backend
 
@@ -33,8 +44,10 @@ http://127.0.0.1:8000/ui/onboarding.html
 ```
 
 Registration now requires a mainland China mobile number, Aliyun Captcha, SMS
-OTP verification, and a one-time `otp_token` before `/web/register` will create
-or reuse a platform user. In `APP_ENV=local` or `APP_ENV=test`, empty Aliyun
+OTP verification, and a one-time `otp_token`. The current onboarding page calls
+`/web/register-and-binding-intent` after OTP verification, so the backend creates
+or reuses the platform user and default AI4ALL Account, then returns the WeChat
+QR login intent directly. In `APP_ENV=local` or `APP_ENV=test`, empty Aliyun
 SMS/Captcha credentials enable mock mode; in non-local environments, missing
 Aliyun credentials fail closed.
 
@@ -77,7 +90,7 @@ SQLite is used for the first version. The default database path is:
 data/ai4all.sqlite3
 ```
 
-Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `acct_...`。不要把它等同于 OpenClaw payload 原生 `account_id`。中长期身份模型见 [中长期技术规划](docs/mid_long_term_tech_plan.md)。
+Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `acct_...`。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture_overview.md)、[Phase 1 详细技术设计](docs/phase1_technical_design.md) 和 [身份模型与微信绑定](docs/tech_design/identity_model_and_wechat_binding.md)。
 
 ## OpenClaw Bridge
 
