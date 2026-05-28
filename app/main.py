@@ -1,9 +1,8 @@
 import asyncio
 import logging
-import time
 import uuid
-from datetime import date as date_cls
-from typing import Optional
+from datetime import date as date_cls, datetime
+from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +13,7 @@ from app.captcha import verify_captcha
 from app.sms import generate_otp, send_otp
 from app.db import (
     clear_session_messages,
+    cancel_proactive_commitment,
     consume_valid_verification_token,
     count_verifications_last_hour,
     create_ai4all_account_for_user,
@@ -21,32 +21,36 @@ from app.db import (
     create_or_get_platform_user_by_phone,
     create_phone_verification,
     get_debug_trace,
+    get_dreaming_memory_item,
+    get_dreaming_run,
     get_account,
     get_binding_intent,
     get_daily_usage,
     get_latest_active_verification,
     get_latest_subscription_for_user,
     get_message_raw,
+    get_or_create_default_ai4all_account_for_user,
     get_platform_user,
     get_profile_for_account,
     get_profile_for_session,
+    get_proactive_commitment,
     get_session,
-    get_duplicate_reply,
     get_or_create_session,
     get_usage_last_7_days,
-    increment_daily_usage,
     increment_verify_attempts,
     init_db,
     insert_debug_trace,
-    insert_message,
     invalidate_verifications_for_phone,
     list_accounts,
+    list_proactive_commitments_for_account,
     list_debug_traces,
+    list_dreaming_memory_items,
+    list_dreaming_runs,
+    list_memory_events,
     list_recent_message_raw,
     list_session_messages,
     list_sessions,
     list_sessions_for_account,
-    list_recent_messages,
     normalize_phone,
     resolve_account_id_for_inbound_channel_identity,
     set_binding_intent_error,
@@ -56,29 +60,51 @@ from app.db import (
     update_account,
     update_profile_for_account,
     update_profile_for_session,
+    get_proactive_account_state,
     list_channel_bindings_for_account,
+    upsert_proactive_account_state,
     upsert_channel_binding,
 )
-from app.identity import resolve_openclaw_identity
-from app.llm import generate_reply
+from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.openclaw_gateway import (
     start_weixin_qr_login,
     wait_weixin_qr_login,
 )
+from app.dreaming_scheduler import (
+    get_dreaming_scheduler,
+    run_dreaming_scheduler_once,
+    start_dreaming_scheduler,
+    stop_dreaming_scheduler,
+)
 from app.prompt_builder import PromptBuilder, extract_section
-from app.rate_limiter import rate_limiter
+from app.proactive.scheduler import (
+    get_proactive_scheduler,
+    run_proactive_scheduler_once,
+    start_proactive_scheduler,
+    stop_proactive_scheduler,
+)
+from app.proactive.heartbeat import (
+    clear_heartbeat_candidate_draft,
+    generate_heartbeat_candidate_draft,
+    promote_heartbeat_candidate_draft,
+)
+from app.proactive.state import format_state_time
 from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
-from app.memory_writer import write_memory
-from app.dreaming import run_dreaming
-from app.user_profiles import ensure_user_profile, read_user_profile, read_daily_notes, read_agent_context
+from app.dreaming import (
+    rollback_memory_item,
+    run_dreaming,
+    summarize_dreaming_run_for_debug,
+    summarize_memory_item_for_debug,
+)
+from app.session_lifecycle import run_daily_dreaming_scan
+from app.turn_service import handle_openclaw_turn
+from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("ai4all")
 
 _background_loop: Optional[asyncio.AbstractEventLoop] = None
-
-_SPECIAL_COMMANDS = {"#重置会话", "#状态"}
 
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
@@ -98,10 +124,24 @@ class AccountUpdateRequest(BaseModel):
     rpm_limit: Optional[int] = None
 
 
+class ProactiveAccountStateUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    next_scan_at: Optional[str] = None
+    cooldown_until: Optional[str] = None
+    metadata: Optional[dict[str, Any]] = Field(default=None)
+
+
 class WebRegisterRequest(BaseModel):
     phone: str
     display_name: Optional[str] = None
     otp_token: str
+
+
+class WebRegisterAndBindingIntentRequest(BaseModel):
+    phone: str
+    display_name: Optional[str] = None
+    otp_token: str
+    channel: Optional[str] = "openclaw-weixin"
 
 
 class SendOtpRequest(BaseModel):
@@ -134,15 +174,6 @@ def _debug_trace_account_ids() -> set[str]:
 
 def _is_debug_trace_account(account_id: str) -> bool:
     return account_id in _debug_trace_account_ids()
-
-
-def _identity_response_metadata(identity, account_id: Optional[str] = None) -> dict:
-    metadata = identity.metadata()
-    if account_id and account_id != identity.account_id:
-        metadata["ai4all_account_id"] = account_id
-        metadata["account_id"] = account_id
-        metadata["openclaw_session_key_account_id"] = identity.account_id
-    return metadata
 
 
 def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict) -> None:
@@ -272,6 +303,40 @@ async def capture_event_loop() -> None:
     _background_loop = asyncio.get_running_loop()
 
 
+@app.on_event("startup")
+async def startup_proactive_scheduler() -> None:
+    if not getattr(settings, "proactive_scheduler_enabled", False):
+        return
+    scheduler = start_proactive_scheduler(
+        interval_seconds=settings.proactive_scheduler_interval_seconds,
+        batch_size=settings.proactive_scheduler_batch_size,
+        bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
+        account_scan_interval_seconds=settings.proactive_account_scan_interval_seconds,
+    )
+    logger.info("proactive scheduler started: %s", scheduler.status())
+
+
+@app.on_event("startup")
+async def startup_dreaming_scheduler() -> None:
+    if not getattr(settings, "dreaming_scheduler_enabled", False):
+        return
+    scheduler = start_dreaming_scheduler(
+        interval_seconds=settings.dreaming_scheduler_interval_seconds,
+        batch_size=settings.dreaming_scheduler_batch_size,
+    )
+    logger.info("dreaming scheduler started: %s", scheduler.status())
+
+
+@app.on_event("shutdown")
+async def shutdown_proactive_scheduler() -> None:
+    await stop_proactive_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_dreaming_scheduler() -> None:
+    await stop_dreaming_scheduler()
+
+
 def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> None:
     expected = f"Bearer {settings.ai4all_bridge_secret}"
     if authorization != expected:
@@ -288,6 +353,23 @@ def verify_admin_auth(authorization: Optional[str] = Header(default=None)) -> No
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid admin authorization",
         )
+
+
+def _normalize_optional_state_datetime(value: Optional[str], *, field_name: str) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    normalized = text.replace("T", " ")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must be an ISO datetime or YYYY-MM-DD HH:MM:SS",
+        )
+    return format_state_time(parsed)
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +442,7 @@ def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
 @app.get("/debug/accounts/{account_id}/prompt-preview")
 def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     """Show the assembled system prompt and per-block sizes for an account."""
-    from app.user_profiles import read_user_profile, read_daily_notes, read_agent_context
+    from app.user_profiles import read_user_profile, read_agent_context
     account = get_account(account_id=account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
@@ -374,14 +456,13 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         account_id,
         display_name=account.get("display_name"),
     )
-    daily_notes = read_daily_notes(account_id, today)
     builder = PromptBuilder()
     prompt = builder.build(
         display_name=account.get("display_name"),
         soul=soul,
         user_prefs=user_prefs,
         long_term_memory=long_term_memory,
-        daily_notes=daily_notes,
+        daily_notes=None,
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
         agent_context=agent_context.blocks,
@@ -396,7 +477,8 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
             "soul_chars": len(soul),
             "user_prefs_chars": len(user_prefs),
             "long_term_memory_chars": len(long_term_memory),
-            "daily_notes_chars": len(daily_notes),
+            "daily_notes_loaded": False,
+            "daily_notes_chars": 0,
             "system_prompt_override": bool(profile.get("system_prompt")),
             "style": profile.get("style"),
             "display_name": account.get("display_name"),
@@ -504,33 +586,82 @@ def web_verify_otp(payload: VerifyOtpRequest) -> dict:
     return {"status": "ok", "verified_token": result["verified_token"]}
 
 
-@app.post("/web/register")
-def web_register(payload: WebRegisterRequest) -> dict:
+def _register_platform_user_with_otp(
+    *,
+    phone: str,
+    display_name: Optional[str],
+    otp_token: str,
+) -> dict:
     try:
-        phone = normalize_phone(payload.phone)
+        normalized_phone = normalize_phone(phone)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
 
     verification = consume_valid_verification_token(
-        verified_token=payload.otp_token,
-        phone=phone,
+        verified_token=otp_token,
+        phone=normalized_phone,
     )
     if verification is None:
         raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
 
     try:
-        platform_user = create_or_get_platform_user_by_phone(
-            phone=phone,
-            display_name=payload.display_name,
+        return create_or_get_platform_user_by_phone(
+            phone=normalized_phone,
+            display_name=display_name,
         )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
+
+
+@app.post("/web/register")
+def web_register(payload: WebRegisterRequest) -> dict:
+    platform_user = _register_platform_user_with_otp(
+        phone=payload.phone,
+        display_name=payload.display_name,
+        otp_token=payload.otp_token,
+    )
     return {
         "status": "ok",
         "platform_user": platform_user,
         "subscription": get_latest_subscription_for_user(
             platform_user_id=platform_user["id"],
         ),
+    }
+
+
+@app.post("/web/register-and-binding-intent")
+def web_register_and_binding_intent(
+    payload: WebRegisterAndBindingIntentRequest,
+) -> dict:
+    platform_user = _register_platform_user_with_otp(
+        phone=payload.phone,
+        display_name=payload.display_name,
+        otp_token=payload.otp_token,
+    )
+    try:
+        account_result = get_or_create_default_ai4all_account_for_user(
+            platform_user_id=platform_user["id"],
+            display_name=payload.display_name or "AI4ALL 助手",
+            plan="free",
+        )
+        binding_intent = create_binding_intent(
+            platform_user_id=platform_user["id"],
+            account_id=account_result["account"]["id"],
+            channel=payload.channel or "openclaw-weixin",
+        )
+        binding_intent = _start_openclaw_qr_for_binding(binding_intent)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "status": "ok",
+        "platform_user": platform_user,
+        "account": account_result["account"],
+        "profile": account_result["profile"],
+        "owner_binding": account_result["owner_binding"],
+        "subscription": account_result["subscription"],
+        "binding_intent": binding_intent,
+        "binding_mode": "openclaw_gateway_qr",
+        "next_step": "scan_qr_and_wait_for_completion",
     }
 
 
@@ -690,6 +821,119 @@ def admin_account_usage(
     }
 
 
+@app.get("/admin/accounts/{account_id}/proactive-state")
+def admin_get_proactive_account_state(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {
+        "account_id": account_id,
+        "proactive_state": get_proactive_account_state(account_id=account_id),
+    }
+
+
+@app.patch("/admin/accounts/{account_id}/proactive-state")
+def admin_update_proactive_account_state(
+    account_id: str,
+    payload: ProactiveAccountStateUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    if "next_scan_at" in updates:
+        updates["next_scan_at"] = _normalize_optional_state_datetime(
+            updates["next_scan_at"],
+            field_name="next_scan_at",
+        )
+    if "cooldown_until" in updates:
+        updates["cooldown_until"] = _normalize_optional_state_datetime(
+            updates["cooldown_until"],
+            field_name="cooldown_until",
+        )
+    state = upsert_proactive_account_state(
+        account_id=account_id,
+        **updates,
+    )
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "proactive_state": state,
+    }
+
+
+@app.post("/admin/accounts/{account_id}/heartbeat-candidate-draft")
+def admin_generate_heartbeat_candidate_draft(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    result = generate_heartbeat_candidate_draft(account_id=account_id)
+    return {"status": "ok", "result": result}
+
+
+@app.post("/admin/accounts/{account_id}/heartbeat-candidate-draft/promote")
+def admin_promote_heartbeat_candidate_draft(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    result = promote_heartbeat_candidate_draft(account_id=account_id)
+    return {"status": "ok", "result": result}
+
+
+@app.delete("/admin/accounts/{account_id}/heartbeat-candidate-draft")
+def admin_clear_heartbeat_candidate_draft(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    result = clear_heartbeat_candidate_draft(account_id=account_id)
+    return {"status": "ok", "result": result}
+
+
+@app.get("/admin/accounts/{account_id}/commitments")
+def admin_list_account_commitments(
+    account_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    return {
+        "account_id": account_id,
+        "commitments": list_proactive_commitments_for_account(
+            account_id=account_id,
+            status=status,
+            limit=limit,
+        ),
+    }
+
+
+@app.post("/admin/commitments/{commitment_id}/cancel")
+def admin_cancel_commitment(
+    commitment_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    commitment = get_proactive_commitment(commitment_id=commitment_id)
+    if commitment is None:
+        raise HTTPException(status_code=404, detail="commitment not found")
+    cancelled = cancel_proactive_commitment(
+        commitment_id=commitment_id,
+        error="admin_cancelled",
+    )
+    return {"status": "ok", "commitment": cancelled}
+
+
 @app.post("/admin/accounts/{account_id}/dreaming")
 def admin_run_account_dreaming(
     account_id: str,
@@ -702,7 +946,171 @@ def admin_run_account_dreaming(
         account_id=account_id,
         today=date_cls.today().isoformat(),
         days=days,
+        source_type="manual_admin",
+        actor_type="admin",
+        actor_id="admin_api",
     )
+
+
+@app.get("/admin/accounts/{account_id}/dreaming")
+def admin_list_account_dreaming(
+    account_id: str,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    runs = list_dreaming_runs(account_id=account_id, limit=limit)
+    items = list_dreaming_memory_items(account_id=account_id, limit=limit)
+    return {
+        "account_id": account_id,
+        "runs": [summarize_dreaming_run_for_debug(run) for run in runs],
+        "items": [summarize_memory_item_for_debug(item) for item in items],
+        "redacted": True,
+    }
+
+
+@app.get("/admin/dreaming/runs/{run_id}")
+def admin_get_dreaming_run(
+    run_id: int,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    run = get_dreaming_run(run_id=run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="dreaming run not found")
+    items = list_dreaming_memory_items(dreaming_run_id=run_id, limit=200)
+    return {
+        "run": summarize_dreaming_run_for_debug(run),
+        "items": [summarize_memory_item_for_debug(item) for item in items],
+        "redacted": True,
+    }
+
+
+@app.get("/admin/dreaming/items")
+def admin_list_dreaming_items(
+    account_id: Optional[str] = None,
+    apply_status: Optional[str] = None,
+    limit: int = 100,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {
+        "items": [
+            summarize_memory_item_for_debug(item)
+            for item in list_dreaming_memory_items(
+                account_id=account_id,
+                apply_status=apply_status,
+                limit=limit,
+            )
+        ],
+        "redacted": True,
+    }
+
+
+@app.get("/admin/dreaming/items/{item_id}/events")
+def admin_list_memory_item_events(
+    item_id: int,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_dreaming_memory_item(item_id=item_id) is None:
+        raise HTTPException(status_code=404, detail="memory item not found")
+    events = list_memory_events(memory_item_id=item_id, limit=50)
+    return {
+        "item_id": item_id,
+        "events": [
+            {
+                "id": event["id"],
+                "account_id": event["account_id"],
+                "memory_item_id": event.get("memory_item_id"),
+                "event_type": event["event_type"],
+                "actor_type": event["actor_type"],
+                "actor_id": event.get("actor_id"),
+                "diff_chars": len(event.get("diff_text") or ""),
+                "created_at": event.get("created_at"),
+            }
+            for event in events
+        ],
+        "redacted": True,
+    }
+
+
+@app.post("/admin/dreaming/items/{item_id}/rollback")
+def admin_rollback_memory_item(
+    item_id: int,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    result = rollback_memory_item(
+        item_id=item_id,
+        actor_type="admin",
+        actor_id="admin_api",
+    )
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail="memory item not found")
+    if result.get("item"):
+        result["item"] = summarize_memory_item_for_debug(result["item"])
+        result["redacted"] = True
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Admin — proactive scheduler
+# ---------------------------------------------------------------------------
+
+@app.get("/admin/proactive/scheduler")
+def admin_proactive_scheduler_status(_: None = Depends(verify_admin_auth)) -> dict:
+    scheduler = get_proactive_scheduler()
+    return {
+        "enabled": bool(getattr(settings, "proactive_scheduler_enabled", False)),
+        "configured": {
+            "interval_seconds": settings.proactive_scheduler_interval_seconds,
+            "batch_size": settings.proactive_scheduler_batch_size,
+            "bypass_quiet_hours": settings.proactive_scheduler_bypass_quiet_hours,
+            "account_scan_interval_seconds": settings.proactive_account_scan_interval_seconds,
+        },
+        "scheduler": scheduler.status() if scheduler else None,
+    }
+
+
+@app.post("/admin/proactive/scheduler/run-once")
+async def admin_proactive_scheduler_run_once(
+    limit: int = 20,
+    bypass_quiet_hours: bool = False,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    result = await run_proactive_scheduler_once(
+        batch_size=limit,
+        bypass_quiet_hours=bypass_quiet_hours,
+        account_scan_interval_seconds=settings.proactive_account_scan_interval_seconds,
+    )
+    dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
+    result["daily_dreaming"] = dreaming
+    return {"status": "ok", "run": result}
+
+
+@app.get("/admin/dreaming/scheduler")
+def admin_dreaming_scheduler_status(_: None = Depends(verify_admin_auth)) -> dict:
+    scheduler = get_dreaming_scheduler()
+    return {
+        "enabled": bool(getattr(settings, "dreaming_scheduler_enabled", False)),
+        "configured": {
+            "interval_seconds": settings.dreaming_scheduler_interval_seconds,
+            "batch_size": settings.dreaming_scheduler_batch_size,
+            "business_day_start_hour": settings.conversation_session_business_day_start_hour,
+        },
+        "scheduler": scheduler.status() if scheduler else None,
+    }
+
+
+@app.post("/admin/dreaming/scheduler/run-once")
+async def admin_dreaming_scheduler_run_once(
+    limit: int = 100,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    result = await run_dreaming_scheduler_once(batch_size=limit)
+    return {"status": "ok", "run": result}
 
 
 # ---------------------------------------------------------------------------
@@ -825,12 +1233,12 @@ def openclaw_debug_trace_ingest(
         channel_account_id=identity.channel_account_id,
         sender_id=identity.sender_id,
         chat_id=identity.chat_id,
-        raw_identity=_identity_response_metadata(identity, account_id),
+        raw_identity=identity_response_metadata(identity, account_id),
     )
     session = session_state["session"]
     trace_id = payload.trace_id or f"trace-{uuid.uuid4()}"
     metadata = dict(payload.metadata or {})
-    metadata["identity"] = _identity_response_metadata(identity, account_id)
+    metadata["identity"] = identity_response_metadata(identity, account_id)
     metadata["channel_binding_id"] = binding["id"]
     inserted_id = insert_debug_trace(
         trace_id=trace_id,
@@ -849,7 +1257,7 @@ def openclaw_debug_trace_ingest(
     return {
         "status": "ok" if inserted_id is not None else "duplicate",
         "trace_id": trace_id,
-        "metadata": _identity_response_metadata(identity, account_id),
+        "metadata": identity_response_metadata(identity, account_id),
     }
 
 
@@ -858,282 +1266,4 @@ def openclaw_turn(
     payload: OpenClawTurnRequest,
     _: None = Depends(verify_bridge_auth),
 ) -> OpenClawTurnResponse:
-    started_at = time.monotonic()
-    logger.info(
-        "openclaw_turn received channel=%s session=%s sender=%s type=%s text=%r raw_keys=%s",
-        payload.channel,
-        payload.session_key,
-        payload.sender_id,
-        payload.message_type,
-        payload.text,
-        sorted(payload.raw.keys()),
-    )
-
-    if payload.chat_type != "private":
-        return OpenClawTurnResponse(status="ignored", no_reply=True)
-
-    identity = resolve_openclaw_identity(
-        channel=payload.channel,
-        session_key=payload.session_key,
-        channel_account_id=payload.channel_account_id or payload.account_id,
-        sender_id=payload.sender_id,
-        chat_id=payload.chat_id,
-    )
-    session_key = identity.session_key
-    account_id = resolve_account_id_for_inbound_channel_identity(
-        channel=identity.channel,
-        session_key=identity.session_key,
-        channel_account_id=identity.channel_account_id,
-    )
-    sender_id = identity.sender_id
-    message_id = payload.message_id or payload.event_id
-
-    session_state = get_or_create_session(
-        account_id=account_id,
-        channel=identity.channel,
-        sender_id=sender_id,
-        sender_name=payload.sender_name,
-        chat_id=identity.chat_id,
-        session_key=session_key,
-    )
-    binding = upsert_channel_binding(
-        account_id=account_id,
-        channel=identity.channel,
-        session_key=session_key,
-        channel_account_id=identity.channel_account_id,
-        sender_id=sender_id,
-        chat_id=identity.chat_id,
-        raw_identity=_identity_response_metadata(identity, account_id),
-    )
-    account = session_state["account"]
-    session = session_state["session"]
-    profile_path = ensure_user_profile(account_id)
-    debug_trace_enabled = _is_debug_trace_account(account_id)
-
-    if account.get("status") == "disabled":
-        logger.info(
-            "openclaw_turn ignored disabled account account=%s session=%s",
-            account_id,
-            session_key,
-        )
-        return OpenClawTurnResponse(
-            status="disabled",
-            no_reply=True,
-            metadata=_identity_response_metadata(identity, account_id),
-        )
-
-    today = date_cls.today().isoformat()
-    effective_rpm = settings.rate_limit_rpm if account.get("rpm_limit") is None else account["rpm_limit"]
-    effective_daily = settings.rate_limit_daily if account.get("daily_limit") is None else account["daily_limit"]
-
-    if effective_rpm > 0 and not rate_limiter.check_rpm(account_id, effective_rpm):
-        logger.info("openclaw_turn rpm_limited account=%s", account_id)
-        return OpenClawTurnResponse(
-            status="rate_limited",
-            reply=settings.rate_limit_rpm_message,
-            metadata={**_identity_response_metadata(identity, account_id), "reason": "rpm"},
-        )
-
-    if effective_daily > 0:
-        current_count = get_daily_usage(account_id=account_id, date=today)
-        if current_count >= effective_daily:
-            logger.info(
-                "openclaw_turn daily_limited account=%s count=%s", account_id, current_count
-            )
-            return OpenClawTurnResponse(
-                status="rate_limited",
-                reply=settings.rate_limit_daily_message,
-                metadata={
-                    **_identity_response_metadata(identity, account_id),
-                    "reason": "daily",
-                    "count": current_count,
-                },
-            )
-
-    duplicate_reply = get_duplicate_reply(
-        account_id=account_id,
-        reply_to_message_id=message_id,
-    )
-    if duplicate_reply:
-        latency_ms = int((time.monotonic() - started_at) * 1000)
-        return OpenClawTurnResponse(
-            status="duplicate",
-            reply=duplicate_reply,
-            metadata={**_identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
-        )
-
-    text = (payload.text or "").strip()
-    if not text and payload.message_type == "voice":
-        text = "[voice message]"
-
-    inserted_id = insert_message(
-        account_id=account_id,
-        session_id=session["id"],
-        message_id=message_id,
-        reply_to_message_id=None,
-        direction="inbound",
-        role="user",
-        message_type=payload.message_type,
-        content=text,
-        raw=payload.raw,
-    )
-    if inserted_id is None:
-        duplicate_reply = get_duplicate_reply(
-            account_id=account_id,
-            reply_to_message_id=message_id,
-        )
-        latency_ms = int((time.monotonic() - started_at) * 1000)
-        return OpenClawTurnResponse(
-            status="duplicate",
-            reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
-            metadata={**_identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
-        )
-
-    increment_daily_usage(account_id=account_id, date=today)
-
-    generation_error = None
-    system_prompt = None
-    llm_messages = []
-    debug_metadata = {
-        "trace_kind": "ai4all_turn",
-        "debug_trace_enabled": debug_trace_enabled,
-        "identity": _identity_response_metadata(identity, account_id),
-        "channel_binding_id": binding["id"],
-        "channel": identity.channel,
-        "session_key": session_key,
-        "sender_id": sender_id,
-        "message_type": payload.message_type,
-        "today": today,
-    }
-    if text == "#重置会话":
-        clear_session_messages(session_id=session["id"])
-        reply = "已重置当前会话。"
-    elif text == "#状态":
-        reply = f"当前会话正常。account_id={account_id}, session_key={session_key}"
-    else:
-        try:
-            history = list_recent_messages(
-                session_id=session["id"],
-                limit=settings.llm_context_messages,
-            )
-            profile = session_state.get("profile") or {}
-            file_profile = read_user_profile(account_id)
-            soul = extract_section(file_profile, "Soul")
-            user_prefs = extract_section(file_profile, "User Preferences")
-            long_term_memory = extract_section(file_profile, "Long-term Memory")
-            agent_context = read_agent_context(
-                account_id,
-                display_name=account.get("display_name"),
-            )
-            daily_notes = read_daily_notes(account_id, today)
-            debug_metadata.update(
-                {
-                    "history_count": len(history),
-                    "soul_chars": len(soul),
-                    "user_prefs_chars": len(user_prefs),
-                    "long_term_memory_chars": len(long_term_memory),
-                    "daily_notes_chars": len(daily_notes),
-                    "agent_context": agent_context.metadata(),
-                    "system_prompt_override": bool(profile.get("system_prompt")),
-                    "style": profile.get("style"),
-                    "display_name": account.get("display_name"),
-                }
-            )
-            builder = PromptBuilder()
-            system_prompt = builder.build(
-                display_name=account.get("display_name"),
-                soul=soul,
-                user_prefs=user_prefs,
-                long_term_memory=long_term_memory,
-                daily_notes=daily_notes,
-                system_prompt_override=profile.get("system_prompt"),
-                style=profile.get("style"),
-                agent_context=agent_context.blocks,
-                today=today,
-                model_name=settings.llm_model,
-            )
-            llm_messages = [{"role": "system", "content": system_prompt}]
-            llm_messages.extend(history)
-            reply = generate_reply(
-                user_text=text,
-                history=history,
-                system_prompt=system_prompt,
-            )
-        except Exception as err:
-            logger.exception("reply generation failed: %s", err)
-            generation_error = str(err)
-            reply = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
-
-    latency_ms = int((time.monotonic() - started_at) * 1000)
-    logger.info(
-        "openclaw_turn completed account=%s session=%s status=ok latency_ms=%s error=%s",
-        account_id,
-        session_key,
-        latency_ms,
-        generation_error,
-    )
-
-    reply_message_id = f"reply-{uuid.uuid4()}"
-    trace_id = None
-    if debug_trace_enabled:
-        trace_id = f"trace-{uuid.uuid4()}"
-        insert_debug_trace(
-            trace_id=trace_id,
-            account_id=account_id,
-            session_id=session["id"],
-            message_id=message_id,
-            source="ai4all",
-            llm_model=settings.llm_model,
-            system_prompt=system_prompt,
-            messages=llm_messages,
-            reply=reply,
-            metadata=debug_metadata,
-            latency_ms=latency_ms,
-            error=generation_error,
-        )
-        logger.info(
-            "debug trace recorded trace_id=%s account=%s session=%s message_id=%s messages=%s prompt_chars=%s",
-            trace_id,
-            account_id,
-            session_key,
-            message_id,
-            len(llm_messages),
-            len(system_prompt or ""),
-        )
-
-    insert_message(
-        account_id=account_id,
-        session_id=session["id"],
-        message_id=reply_message_id,
-        reply_to_message_id=message_id,
-        direction="outbound",
-        role="assistant",
-        message_type="text",
-        content=reply,
-        raw={"source": "ai4all"},
-        latency_ms=latency_ms,
-        error=generation_error,
-    )
-
-    if not generation_error and text and text not in _SPECIAL_COMMANDS and _background_loop is not None:
-        turns_for_memory = [
-            {"role": "user", "content": text},
-            {"role": "assistant", "content": reply},
-        ]
-        _background_loop.call_soon_threadsafe(
-            _background_loop.create_task,
-            write_memory(account_id=account_id, turns=turns_for_memory, today=today),
-        )
-
-    return OpenClawTurnResponse(
-        status="ok",
-        reply=reply,
-        metadata={
-            **_identity_response_metadata(identity, account_id),
-            "channel_binding_id": binding["id"],
-            "message_type": payload.message_type,
-            "latency_ms": latency_ms,
-            "user_profile_path": str(profile_path),
-            "debug_trace_id": trace_id,
-        },
-    )
+    return handle_openclaw_turn(payload, background_loop=_background_loop)

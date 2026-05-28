@@ -144,6 +144,77 @@ def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     assert fetched.json()["binding_intent"]["qr_data_url"] == "data:image/png;base64,ZmFrZQ=="
 
 
+def test_register_and_binding_intent_creates_default_account_and_qr(client):
+    token = _get_verified_token("13800000009")
+
+    with patch("app.main._schedule_binding_wait") as mock_schedule, patch(
+        "app.main.start_weixin_qr_login",
+        return_value={
+            "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
+            "sessionKey": "bind-combined",
+            "message": "scan",
+        },
+    ) as mock_start, patch("app.main.settings.openclaw_login_auto_start", True):
+        res = client.post(
+            "/web/register-and-binding-intent",
+            json={"phone": "13800000009", "otp_token": token},
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["platform_user"]["phone"] == "13800000009"
+    assert data["account"]["id"].startswith("acct_")
+    assert data["account"]["display_name"] == "AI4ALL 助手"
+    assert data["owner_binding"]["platform_user_id"] == data["platform_user"]["id"]
+    assert data["owner_binding"]["account_id"] == data["account"]["id"]
+    assert data["subscription"]["plan"] == "free"
+    assert data["binding_intent"]["status"] == "qr_created"
+    assert data["binding_intent"]["qr_data_url"] == "data:image/png;base64,ZmFrZQ=="
+    assert data["binding_intent"]["account_id"] == data["account"]["id"]
+    mock_start.assert_called_once()
+    mock_schedule.assert_called_once_with(data["binding_intent"]["id"])
+
+
+def test_register_and_binding_intent_reuses_existing_default_account(client):
+    from app.db import connect
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.main.start_weixin_qr_login",
+        return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-first"},
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        first = client.post(
+            "/web/register-and-binding-intent",
+            json={
+                "phone": "13800000019",
+                "otp_token": _get_verified_token("13800000019"),
+            },
+        ).json()
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.main.start_weixin_qr_login",
+        return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-second"},
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        second = client.post(
+            "/web/register-and-binding-intent",
+            json={
+                "phone": "13800000019",
+                "otp_token": _get_verified_token("13800000019"),
+            },
+        ).json()
+
+    assert second["account"]["id"] == first["account"]["id"]
+    assert second["binding_intent"]["id"] != first["binding_intent"]["id"]
+    with connect() as conn:
+        active_account_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM account_owner_bindings
+            WHERE platform_user_id = ? AND status = 'active'
+            """,
+            (first["platform_user"]["id"],),
+        ).fetchone()[0]
+    assert active_account_count == 1
+
+
 def test_binding_wait_completion_binds_channel_account_to_precreated_account(client):
     from app.db import get_binding_intent, list_channel_bindings_for_account
     from app.main import _complete_binding_intent_from_wait_result
