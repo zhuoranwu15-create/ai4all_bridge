@@ -13,6 +13,7 @@ logger = logging.getLogger("ai4all.db")
 
 _UNSET = object()
 _NON_CONTEXT_ASSISTANT_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
 
 
 def _new_id(prefix: str) -> str:
@@ -282,6 +283,15 @@ def init_db() -> None:
                 chat_id TEXT,
                 sender_name TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
+                ended_at TEXT,
+                close_reason TEXT,
+                turn_count INTEGER NOT NULL DEFAULT 0,
+                business_day TEXT,
+                session_summary TEXT,
+                carryover_summary TEXT,
+                summary_model TEXT,
+                summary_prompt_version TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(account_id, session_key),
@@ -353,6 +363,196 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_channel_bindings_account_seen
             ON channel_bindings(account_id, last_seen_at);
 
+            CREATE TABLE IF NOT EXISTS outbound_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                channel_account_id TEXT,
+                to_user_id TEXT NOT NULL,
+                session_key TEXT,
+                source TEXT NOT NULL,
+                text TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                gateway_message_id TEXT,
+                quota_date TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                sent_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_outbound_messages_account_date
+            ON outbound_messages(account_id, quota_date, status);
+
+            CREATE INDEX IF NOT EXISTS ix_outbound_messages_status_created
+            ON outbound_messages(status, created_at);
+
+            CREATE TABLE IF NOT EXISTS reminders (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                channel_account_id TEXT,
+                to_user_id TEXT NOT NULL,
+                session_key TEXT,
+                text TEXT NOT NULL,
+                due_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                outbound_message_id INTEGER,
+                error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                claimed_at TEXT,
+                sent_at TEXT,
+                cancelled_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_reminders_status_due
+            ON reminders(status, due_at);
+
+            CREATE INDEX IF NOT EXISTS ix_reminders_account_due
+            ON reminders(account_id, due_at);
+
+            CREATE TABLE IF NOT EXISTS proactive_commitments (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                session_id INTEGER,
+                source_message_id TEXT,
+                source_reply_message_id TEXT,
+                dedupe_key TEXT NOT NULL UNIQUE,
+                text TEXT NOT NULL,
+                due_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                confidence REAL,
+                reason TEXT,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                outbound_message_id INTEGER,
+                error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                claimed_at TEXT,
+                sent_at TEXT,
+                cancelled_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id),
+                FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_proactive_commitments_status_due
+            ON proactive_commitments(status, due_at);
+
+            CREATE INDEX IF NOT EXISTS ix_proactive_commitments_account_due
+            ON proactive_commitments(account_id, due_at);
+
+            CREATE TABLE IF NOT EXISTS proactive_account_state (
+                account_id TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                next_scan_at TEXT,
+                last_scan_at TEXT,
+                last_proactive_sent_at TEXT,
+                cooldown_until TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
+            ON proactive_account_state(enabled, next_scan_at, cooldown_until);
+
+            CREATE TABLE IF NOT EXISTS dreaming_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_session_id INTEGER,
+                source_business_day TEXT,
+                status TEXT NOT NULL DEFAULT 'queued',
+                prompt_version TEXT NOT NULL,
+                llm_model TEXT,
+                input_hash TEXT,
+                output_json TEXT NOT NULL DEFAULT '{}',
+                error TEXT,
+                token_input INTEGER,
+                token_output INTEGER,
+                actor_type TEXT NOT NULL DEFAULT 'system',
+                actor_id TEXT,
+                started_at TEXT,
+                completed_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_dreaming_runs_account_created
+            ON dreaming_runs(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_dreaming_runs_source_session
+            ON dreaming_runs(source_session_id);
+
+            CREATE TABLE IF NOT EXISTS dreaming_memory_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                dreaming_run_id INTEGER NOT NULL,
+                source_type TEXT NOT NULL,
+                source_session_id INTEGER,
+                source_daily_note_date TEXT,
+                operation TEXT NOT NULL DEFAULT 'add',
+                target_file TEXT NOT NULL DEFAULT 'MEMORY.md',
+                category TEXT NOT NULL DEFAULT 'other',
+                memory_text TEXT NOT NULL,
+                base_text_hash TEXT,
+                diff_json TEXT NOT NULL DEFAULT '{}',
+                importance TEXT NOT NULL DEFAULT 'medium',
+                confidence REAL NOT NULL DEFAULT 0,
+                sensitivity TEXT NOT NULL DEFAULT 'normal',
+                apply_status TEXT NOT NULL DEFAULT 'generated',
+                skip_reason TEXT,
+                reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                applied_at TEXT,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(dreaming_run_id) REFERENCES dreaming_runs(id),
+                FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_dreaming_memory_items_run
+            ON dreaming_memory_items(dreaming_run_id, id);
+
+            CREATE INDEX IF NOT EXISTS ix_dreaming_memory_items_account_status
+            ON dreaming_memory_items(account_id, apply_status, created_at);
+
+            CREATE TABLE IF NOT EXISTS memory_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                memory_item_id INTEGER,
+                event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL DEFAULT 'system',
+                actor_id TEXT,
+                before_text TEXT,
+                after_text TEXT,
+                diff_text TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(memory_item_id) REFERENCES dreaming_memory_items(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_memory_events_account_created
+            ON memory_events(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_memory_events_item
+            ON memory_events(memory_item_id, created_at);
+
             CREATE TABLE IF NOT EXISTS debug_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trace_id TEXT NOT NULL UNIQUE,
@@ -400,6 +600,15 @@ def init_db() -> None:
         _ensure_column(conn, "accounts", "notes", "TEXT")
         _ensure_column(conn, "accounts", "daily_limit", "INTEGER")
         _ensure_column(conn, "accounts", "rpm_limit", "INTEGER")
+        _ensure_column(conn, "sessions", "ended_at", "TEXT")
+        _ensure_column(conn, "sessions", "close_reason", "TEXT")
+        _ensure_column(conn, "sessions", "turn_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "sessions", "business_day", "TEXT")
+        _ensure_column(conn, "sessions", "session_summary", "TEXT")
+        _ensure_column(conn, "sessions", "carryover_summary", "TEXT")
+        _ensure_column(conn, "sessions", "summary_model", "TEXT")
+        _ensure_column(conn, "sessions", "summary_prompt_version", "TEXT")
+        _ensure_column(conn, "sessions", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
         _ensure_column(conn, "messages", "latency_ms", "INTEGER")
         _ensure_column(conn, "messages", "error", "TEXT")
         _ensure_column(conn, "binding_intents", "qr_data_url", "TEXT")
@@ -517,6 +726,549 @@ def get_debug_trace(*, trace_id: str) -> Optional[Dict[str, Any]]:
         item["metadata"] = {}
         item["metadata_decode_error"] = True
     return item
+
+
+# ---------------------------------------------------------------------------
+# Dreaming runs / memory items / memory events
+# ---------------------------------------------------------------------------
+
+def _decode_json_field(
+    item: Dict[str, Any],
+    *,
+    source_field: str,
+    target_field: str,
+    default: Any,
+) -> Dict[str, Any]:
+    raw_json = item.pop(source_field, None)
+    try:
+        item[target_field] = json.loads(raw_json or json.dumps(default))
+    except json.JSONDecodeError:
+        item[target_field] = default
+        item[f"{target_field}_decode_error"] = True
+    return item
+
+
+def create_dreaming_run(
+    *,
+    account_id: str,
+    source_type: str,
+    source_session_id: Optional[int] = None,
+    source_business_day: Optional[str] = None,
+    status: str = "running",
+    prompt_version: str,
+    llm_model: Optional[str] = None,
+    input_hash: Optional[str] = None,
+    actor_type: str = "system",
+    actor_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO accounts(id, updated_at)
+            VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            """,
+            (account_id,),
+        )
+        cursor = conn.execute(
+            """
+            INSERT INTO dreaming_runs(
+                account_id, source_type, source_session_id, source_business_day,
+                status, prompt_version, llm_model, input_hash, actor_type, actor_id,
+                started_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """,
+            (
+                account_id,
+                source_type,
+                source_session_id,
+                source_business_day,
+                status,
+                prompt_version,
+                llm_model,
+                input_hash,
+                actor_type,
+                actor_id,
+            ),
+        )
+        run_id = int(cursor.lastrowid)
+    run = get_dreaming_run(run_id=run_id)
+    if run is None:
+        raise RuntimeError("dreaming_run was not created")
+    return run
+
+
+def update_dreaming_run(
+    *,
+    run_id: int,
+    status: Optional[str] = None,
+    output: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+    token_input: Optional[int] = None,
+    token_output: Optional[int] = None,
+    completed: bool = False,
+) -> Optional[Dict[str, Any]]:
+    current = get_dreaming_run(run_id=run_id)
+    if current is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE dreaming_runs
+            SET status = COALESCE(?, status),
+                output_json = COALESCE(?, output_json),
+                error = ?,
+                token_input = COALESCE(?, token_input),
+                token_output = COALESCE(?, token_output),
+                completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                status,
+                json.dumps(output, ensure_ascii=False) if output is not None else None,
+                error,
+                token_input,
+                token_output,
+                1 if completed else 0,
+                run_id,
+            ),
+        )
+    return get_dreaming_run(run_id=run_id)
+
+
+def get_dreaming_run(*, run_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                id, account_id, source_type, source_session_id, source_business_day,
+                status, prompt_version, llm_model, input_hash, output_json,
+                error, token_input, token_output, actor_type, actor_id,
+                started_at, completed_at, created_at, updated_at
+            FROM dreaming_runs
+            WHERE id = ?
+            """,
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return _decode_json_field(
+        dict(row),
+        source_field="output_json",
+        target_field="output",
+        default={},
+    )
+
+
+def list_dreaming_runs(
+    *,
+    account_id: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(int(limit), 200)))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                id, account_id, source_type, source_session_id, source_business_day,
+                status, prompt_version, llm_model, input_hash, output_json,
+                error, token_input, token_output, actor_type, actor_id,
+                started_at, completed_at, created_at, updated_at
+            FROM dreaming_runs
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [
+        _decode_json_field(
+            dict(row),
+            source_field="output_json",
+            target_field="output",
+            default={},
+        )
+        for row in rows
+    ]
+
+
+def insert_dreaming_memory_item(
+    *,
+    account_id: str,
+    dreaming_run_id: int,
+    source_type: str,
+    source_session_id: Optional[int],
+    source_daily_note_date: Optional[str],
+    operation: str,
+    target_file: str,
+    category: str,
+    memory_text: str,
+    base_text_hash: Optional[str] = None,
+    diff: Optional[Dict[str, Any]] = None,
+    importance: str = "medium",
+    confidence: float = 0.0,
+    sensitivity: str = "normal",
+    apply_status: str = "generated",
+    skip_reason: Optional[str] = None,
+    reason: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO dreaming_memory_items(
+                account_id, dreaming_run_id, source_type, source_session_id,
+                source_daily_note_date, operation, target_file, category, memory_text,
+                base_text_hash, diff_json, importance, confidence, sensitivity,
+                apply_status, skip_reason, reason, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                dreaming_run_id,
+                source_type,
+                source_session_id,
+                source_daily_note_date,
+                operation,
+                target_file,
+                category,
+                memory_text,
+                base_text_hash,
+                json.dumps(diff or {}, ensure_ascii=False),
+                importance,
+                float(confidence),
+                sensitivity,
+                apply_status,
+                skip_reason,
+                reason,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        item_id = int(cursor.lastrowid)
+    item = get_dreaming_memory_item(item_id=item_id)
+    if item is None:
+        raise RuntimeError("dreaming_memory_item was not created")
+    return item
+
+
+def update_dreaming_memory_item_status(
+    *,
+    item_id: int,
+    apply_status: str,
+    skip_reason: Optional[str] = None,
+    diff: Optional[Dict[str, Any]] = None,
+    base_text_hash: Optional[str] = None,
+    applied: bool = False,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE dreaming_memory_items
+            SET apply_status = ?,
+                skip_reason = ?,
+                diff_json = COALESCE(?, diff_json),
+                base_text_hash = COALESCE(?, base_text_hash),
+                applied_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE applied_at END
+            WHERE id = ?
+            """,
+            (
+                apply_status,
+                skip_reason,
+                json.dumps(diff, ensure_ascii=False) if diff is not None else None,
+                base_text_hash,
+                1 if applied else 0,
+                item_id,
+            ),
+        )
+    return get_dreaming_memory_item(item_id=item_id)
+
+
+def get_dreaming_memory_item(*, item_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                id, account_id, dreaming_run_id, source_type, source_session_id,
+                source_daily_note_date, operation, target_file, category, memory_text,
+                base_text_hash, diff_json, importance, confidence, sensitivity,
+                apply_status, skip_reason, reason, metadata_json, created_at, applied_at
+            FROM dreaming_memory_items
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    item = _decode_json_field(
+        dict(row),
+        source_field="diff_json",
+        target_field="diff",
+        default={},
+    )
+    return _decode_json_field(
+        item,
+        source_field="metadata_json",
+        target_field="metadata",
+        default={},
+    )
+
+
+def list_dreaming_memory_items(
+    *,
+    account_id: Optional[str] = None,
+    dreaming_run_id: Optional[int] = None,
+    apply_status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if dreaming_run_id is not None:
+        clauses.append("dreaming_run_id = ?")
+        params.append(dreaming_run_id)
+    if apply_status:
+        clauses.append("apply_status = ?")
+        params.append(apply_status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(int(limit), 500)))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                id, account_id, dreaming_run_id, source_type, source_session_id,
+                source_daily_note_date, operation, target_file, category, memory_text,
+                base_text_hash, diff_json, importance, confidence, sensitivity,
+                apply_status, skip_reason, reason, metadata_json, created_at, applied_at
+            FROM dreaming_memory_items
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = _decode_json_field(
+            dict(row),
+            source_field="diff_json",
+            target_field="diff",
+            default={},
+        )
+        items.append(
+            _decode_json_field(
+                item,
+                source_field="metadata_json",
+                target_field="metadata",
+                default={},
+            )
+        )
+    return items
+
+
+def insert_memory_event(
+    *,
+    account_id: str,
+    memory_item_id: Optional[int],
+    event_type: str,
+    actor_type: str = "system",
+    actor_id: Optional[str] = None,
+    before_text: Optional[str] = None,
+    after_text: Optional[str] = None,
+    diff_text: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO memory_events(
+                account_id, memory_item_id, event_type, actor_type, actor_id,
+                before_text, after_text, diff_text, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                account_id,
+                memory_item_id,
+                event_type,
+                actor_type,
+                actor_id,
+                before_text,
+                after_text,
+                diff_text,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        event_id = int(cursor.lastrowid)
+        row = conn.execute(
+            """
+            SELECT
+                id, account_id, memory_item_id, event_type, actor_type, actor_id,
+                before_text, after_text, diff_text, metadata_json, created_at
+            FROM memory_events
+            WHERE id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+    event = _decode_json_field(
+        dict(row),
+        source_field="metadata_json",
+        target_field="metadata",
+        default={},
+    )
+    return event
+
+
+def list_memory_events(
+    *,
+    account_id: Optional[str] = None,
+    memory_item_id: Optional[int] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if memory_item_id is not None:
+        clauses.append("memory_item_id = ?")
+        params.append(memory_item_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(max(1, min(int(limit), 500)))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                id, account_id, memory_item_id, event_type, actor_type, actor_id,
+                before_text, after_text, diff_text, metadata_json, created_at
+            FROM memory_events
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [
+        _decode_json_field(
+            dict(row),
+            source_field="metadata_json",
+            target_field="metadata",
+            default={},
+        )
+        for row in rows
+    ]
+
+
+def update_session_summary(
+    *,
+    session_id: int,
+    session_summary: Optional[str],
+    carryover_summary: Optional[str],
+    summary_model: Optional[str],
+    summary_prompt_version: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sessions
+            SET session_summary = COALESCE(?, session_summary),
+                carryover_summary = COALESCE(?, carryover_summary),
+                summary_model = COALESCE(?, summary_model),
+                summary_prompt_version = COALESCE(?, summary_prompt_version),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                session_summary,
+                carryover_summary,
+                summary_model,
+                summary_prompt_version,
+                session_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def close_session(
+    *,
+    session_id: int,
+    close_reason: str,
+    archived_session_key: Optional[str] = None,
+    session_summary: Optional[str] = None,
+    carryover_summary: Optional[str] = None,
+    summary_model: Optional[str] = None,
+    summary_prompt_version: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sessions
+            SET session_key = COALESCE(?, session_key),
+                status = 'closed',
+                ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+                close_reason = COALESCE(close_reason, ?),
+                session_summary = COALESCE(?, session_summary),
+                carryover_summary = COALESCE(?, carryover_summary),
+                summary_model = COALESCE(?, summary_model),
+                summary_prompt_version = COALESCE(?, summary_prompt_version),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                archived_session_key,
+                close_reason,
+                session_summary,
+                carryover_summary,
+                summary_model,
+                summary_prompt_version,
+                session_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_active_sessions_for_business_day_before(
+    *,
+    business_day: str,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM sessions
+            WHERE session_key = ?
+              AND status = 'active'
+              AND business_day IS NOT NULL
+              AND business_day != ''
+              AND business_day < ?
+            ORDER BY updated_at ASC, id ASC
+            LIMIT ?
+            """,
+            (
+                ACCOUNT_ACTIVE_SESSION_KEY,
+                business_day,
+                max(1, min(int(limit), 500)),
+            ),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +1551,56 @@ def create_ai4all_account_for_user(
         "owner_binding": get_account_owner_binding(owner_binding_id=owner_binding_id),
         "subscription": subscription,
     }
+
+
+def get_first_active_account_for_user(
+    *,
+    platform_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT b.id, b.account_id
+            FROM account_owner_bindings b
+            JOIN accounts a ON a.id = b.account_id
+            WHERE b.platform_user_id = ?
+              AND b.status = 'active'
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+            """,
+            (platform_user_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    account = get_account(account_id=row["account_id"])
+    if account is None:
+        return None
+    return {
+        "account": account,
+        "profile": get_profile_for_account(account_id=row["account_id"]),
+        "owner_binding": get_account_owner_binding(owner_binding_id=int(row["id"])),
+        "subscription": get_latest_subscription_for_user(
+            platform_user_id=platform_user_id,
+        ),
+    }
+
+
+def get_or_create_default_ai4all_account_for_user(
+    *,
+    platform_user_id: str,
+    display_name: Optional[str] = None,
+    plan: str = "free",
+) -> Dict[str, Any]:
+    existing = get_first_active_account_for_user(platform_user_id=platform_user_id)
+    if existing is not None:
+        return existing
+    cleaned_display_name = _clean_text(display_name) or "AI4ALL 助手"
+    return create_ai4all_account_for_user(
+        platform_user_id=platform_user_id,
+        display_name=cleaned_display_name,
+        system_prompt=None,
+        plan=plan,
+    )
 
 
 def get_account_owner_binding(
@@ -1126,7 +1928,11 @@ def get_or_create_session(
     sender_name: Optional[str],
     chat_id: Optional[str],
     session_key: str,
+    business_day: Optional[str] = None,
+    carryover_summary: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
     with connect() as conn:
         conn.execute(
             """
@@ -1144,15 +1950,29 @@ def get_or_create_session(
 
         conn.execute(
             """
-            INSERT INTO sessions(account_id, session_key, sender_id, chat_id, sender_name, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO sessions(
+                account_id, session_key, sender_id, chat_id, sender_name,
+                business_day, carryover_summary, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(account_id, session_key) DO UPDATE SET
                 sender_id = COALESCE(excluded.sender_id, sessions.sender_id),
                 chat_id = COALESCE(excluded.chat_id, sessions.chat_id),
                 sender_name = COALESCE(excluded.sender_name, sessions.sender_name),
+                business_day = COALESCE(sessions.business_day, excluded.business_day),
+                carryover_summary = COALESCE(sessions.carryover_summary, excluded.carryover_summary),
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (account_id, session_key, sender_id, chat_id, sender_name),
+            (
+                account_id,
+                session_key,
+                sender_id,
+                chat_id,
+                sender_name,
+                business_day,
+                carryover_summary,
+                metadata_json,
+            ),
         )
         session = conn.execute(
             "SELECT * FROM sessions WHERE account_id = ? AND session_key = ?",
@@ -1178,6 +1998,238 @@ def get_or_create_session(
             "session": dict(session),
             "profile": dict(profile),
         }
+
+
+def get_or_create_account_active_session(
+    *,
+    account_id: str,
+    channel: str,
+    sender_id: str,
+    sender_name: Optional[str],
+    chat_id: Optional[str],
+    business_day: Optional[str] = None,
+    max_turns: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Return the account-level active session used for main conversation context.
+
+    OpenClaw's session_key is a channel routing/debug field. P0 keeps the
+    existing sessions schema and rotates the stable compatibility key when
+    the account's active session crosses a lifecycle boundary.
+    """
+    max_turns = int(max_turns or 0)
+    if max_turns <= 0:
+        max_turns = 0
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO accounts(id, channel, updated_at)
+            VALUES (?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                channel = excluded.channel,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (account_id, channel),
+        )
+        account = conn.execute(
+            "SELECT * FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+
+        conn.execute(
+            """
+            INSERT INTO profiles(account_id, updated_at)
+            VALUES (?, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id) DO UPDATE SET
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (account_id,),
+        )
+
+        session = conn.execute(
+            """
+            SELECT * FROM sessions
+            WHERE account_id = ? AND session_key = ?
+            """,
+            (account_id, ACCOUNT_ACTIVE_SESSION_KEY),
+        ).fetchone()
+
+        carryover_summary = None
+        created_reason = "account_created"
+        if session is not None:
+            rotation_reason = _active_session_rotation_reason(
+                dict(session),
+                business_day=business_day,
+                max_turns=max_turns,
+            )
+            if rotation_reason:
+                carryover_summary = _build_session_carryover_summary(
+                    conn,
+                    session_id=int(session["id"]),
+                )
+                archived_session_key = f"{ACCOUNT_ACTIVE_SESSION_KEY}:{session['id']}"
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET session_key = ?,
+                        status = 'closed',
+                        ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+                        close_reason = COALESCE(close_reason, ?),
+                        carryover_summary = COALESCE(NULLIF(carryover_summary, ''), ?),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        archived_session_key,
+                        rotation_reason,
+                        carryover_summary,
+                        int(session["id"]),
+                    ),
+                )
+                session = None
+                created_reason = rotation_reason
+            else:
+                conn.execute(
+                    """
+                    UPDATE sessions
+                    SET sender_id = COALESCE(?, sender_id),
+                        chat_id = COALESCE(?, chat_id),
+                        sender_name = COALESCE(?, sender_name),
+                        business_day = COALESCE(business_day, ?),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        sender_id,
+                        chat_id,
+                        sender_name,
+                        business_day,
+                        int(session["id"]),
+                    ),
+                )
+
+        if session is None:
+            conn.execute(
+                """
+                INSERT INTO sessions(
+                    account_id, session_key, sender_id, chat_id, sender_name,
+                    business_day, carryover_summary, metadata_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    account_id,
+                    ACCOUNT_ACTIVE_SESSION_KEY,
+                    sender_id,
+                    chat_id,
+                    sender_name,
+                    business_day,
+                    carryover_summary,
+                    json.dumps(
+                        {"created_reason": created_reason},
+                        ensure_ascii=False,
+                    ),
+                ),
+            )
+
+        session = conn.execute(
+            """
+            SELECT * FROM sessions
+            WHERE account_id = ? AND session_key = ?
+            """,
+            (account_id, ACCOUNT_ACTIVE_SESSION_KEY),
+        ).fetchone()
+        profile = conn.execute(
+            "SELECT * FROM profiles WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+
+        return {
+            "account": dict(account),
+            "session": dict(session),
+            "profile": dict(profile),
+        }
+
+
+def _active_session_rotation_reason(
+    session: Dict[str, Any],
+    *,
+    business_day: Optional[str],
+    max_turns: int,
+) -> Optional[str]:
+    if session.get("status") != "active":
+        return "replaced"
+    session_business_day = _clean_text(session.get("business_day"))
+    if business_day and session_business_day and session_business_day != business_day:
+        return "daily_dreaming"
+    turn_count = int(session.get("turn_count") or 0)
+    if max_turns > 0 and turn_count >= max_turns:
+        return "max_turns"
+    return None
+
+
+def _build_session_carryover_summary(
+    conn: sqlite3.Connection,
+    *,
+    session_id: int,
+    limit: int = 8,
+) -> Optional[str]:
+    rows = conn.execute(
+        """
+        SELECT role, content FROM messages
+        WHERE session_id = ?
+          AND content IS NOT NULL
+          AND content != ''
+          AND NOT (
+            role = 'assistant'
+            AND error IS NOT NULL
+            AND error != ''
+          )
+          AND NOT (
+            role = 'assistant'
+            AND content = ?
+          )
+        ORDER BY id DESC
+        LIMIT ?
+        """,
+        (session_id, _NON_CONTEXT_ASSISTANT_REPLY, limit),
+    ).fetchall()
+    if not rows:
+        return None
+
+    lines = ["Recent carryover from previous session:"]
+    for row in reversed(rows):
+        role = "User" if row["role"] == "user" else "AI"
+        content = _clean_text(row["content"]) or ""
+        if len(content) > 400:
+            content = content[:400] + "...[truncated]"
+        lines.append(f"{role}: {content}")
+    summary = "\n".join(lines)
+    if len(summary) > 2400:
+        summary = summary[:2400] + "...[truncated]"
+    return summary
+
+
+def increment_session_turn_count(
+    *,
+    session_id: int,
+    count: int = 1,
+) -> Optional[Dict[str, Any]]:
+    count = max(1, int(count))
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sessions
+            SET turn_count = COALESCE(turn_count, 0) + ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (count, session_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
 
 
 # ---------------------------------------------------------------------------
@@ -1371,6 +2423,15 @@ def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
                 s.chat_id,
                 s.sender_name,
                 s.status,
+                s.ended_at,
+                s.close_reason,
+                s.turn_count,
+                s.business_day,
+                s.session_summary,
+                s.carryover_summary,
+                s.summary_model,
+                s.summary_prompt_version,
+                s.metadata_json,
                 s.created_at,
                 s.updated_at,
                 p.style,
@@ -1410,6 +2471,15 @@ def list_sessions_for_account(*, account_id: str, limit: int = 50) -> List[Dict[
                 s.chat_id,
                 s.sender_name,
                 s.status,
+                s.ended_at,
+                s.close_reason,
+                s.turn_count,
+                s.business_day,
+                s.session_summary,
+                s.carryover_summary,
+                s.summary_model,
+                s.summary_prompt_version,
+                s.metadata_json,
                 s.created_at,
                 s.updated_at,
                 COUNT(m.id) AS message_count,
@@ -1570,6 +2640,923 @@ def get_usage_last_7_days(*, account_id: str) -> List[Dict[str, Any]]:
             (account_id,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Proactive outbound messages
+# ---------------------------------------------------------------------------
+
+OUTBOUND_QUOTA_STATUSES = ("pending", "sending", "sent", "failed")
+
+
+def _decode_outbound_message(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def create_outbound_message(
+    *,
+    account_id: str,
+    channel: str,
+    channel_account_id: Optional[str],
+    to_user_id: str,
+    session_key: Optional[str],
+    source: str,
+    text: str,
+    idempotency_key: Optional[str] = None,
+    quota_date: str,
+    status: str = "pending",
+    error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_channel = _clean_text(channel)
+    cleaned_to_user_id = _clean_text(to_user_id)
+    cleaned_source = _clean_text(source)
+    cleaned_text = _clean_text(text)
+    cleaned_quota_date = _clean_text(quota_date)
+    cleaned_status = _clean_text(status) or "pending"
+    cleaned_idempotency_key = _clean_text(idempotency_key) or _new_id("out")
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_channel:
+        raise ValueError("channel is required")
+    if not cleaned_to_user_id:
+        raise ValueError("to_user_id is required")
+    if not cleaned_source:
+        raise ValueError("source is required")
+    if not cleaned_text:
+        raise ValueError("text is required")
+    if not cleaned_quota_date:
+        raise ValueError("quota_date is required")
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO outbound_messages(
+                account_id, channel, channel_account_id, to_user_id, session_key,
+                source, text, idempotency_key, status, error, quota_date,
+                metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                cleaned_account_id,
+                cleaned_channel,
+                _clean_text(channel_account_id),
+                cleaned_to_user_id,
+                _clean_text(session_key),
+                cleaned_source,
+                cleaned_text,
+                cleaned_idempotency_key,
+                cleaned_status,
+                error,
+                cleaned_quota_date,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM outbound_messages
+            WHERE idempotency_key = ?
+            """,
+            (cleaned_idempotency_key,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("outbound_message was not created")
+    return _decode_outbound_message(row)
+
+
+def get_outbound_message(*, outbound_message_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM outbound_messages WHERE id = ?",
+            (outbound_message_id,),
+        ).fetchone()
+    return _decode_outbound_message(row) if row else None
+
+
+def list_outbound_messages(
+    *,
+    account_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM outbound_messages
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_outbound_message(row) for row in rows]
+
+
+def get_outbound_daily_usage(*, account_id: str, quota_date: str) -> int:
+    placeholders = ", ".join("?" for _ in OUTBOUND_QUOTA_STATUSES)
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND quota_date = ?
+              AND status IN ({placeholders})
+            """,
+            (account_id, quota_date, *OUTBOUND_QUOTA_STATUSES),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def claim_pending_outbound_message(
+    *,
+    outbound_message_id: int,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'sending',
+                attempts = attempts + 1,
+                error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'pending'
+            """,
+            (outbound_message_id,),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM outbound_messages WHERE id = ?",
+            (outbound_message_id,),
+        ).fetchone()
+    return _decode_outbound_message(row) if row else None
+
+
+def mark_outbound_message_sent(
+    *,
+    outbound_message_id: int,
+    gateway_message_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'sent',
+                gateway_message_id = ?,
+                error = NULL,
+                sent_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (gateway_message_id, outbound_message_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM outbound_messages WHERE id = ?",
+            (outbound_message_id,),
+        ).fetchone()
+    return _decode_outbound_message(row) if row else None
+
+
+def mark_outbound_message_failed(
+    *,
+    outbound_message_id: int,
+    error: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'failed',
+                error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (error, outbound_message_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM outbound_messages WHERE id = ?",
+            (outbound_message_id,),
+        ).fetchone()
+    return _decode_outbound_message(row) if row else None
+
+
+def cancel_outbound_message(
+    *,
+    outbound_message_id: int,
+    error: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET status = 'cancelled',
+                error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (error, outbound_message_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM outbound_messages WHERE id = ?",
+            (outbound_message_id,),
+        ).fetchone()
+    return _decode_outbound_message(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Reminders
+# ---------------------------------------------------------------------------
+
+def _decode_reminder(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def create_reminder(
+    *,
+    account_id: str,
+    channel: str,
+    channel_account_id: Optional[str],
+    to_user_id: str,
+    session_key: Optional[str],
+    text: str,
+    due_at: str,
+    reminder_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_channel = _clean_text(channel)
+    cleaned_to_user_id = _clean_text(to_user_id)
+    cleaned_text = _clean_text(text)
+    cleaned_due_at = _clean_text(due_at)
+    cleaned_reminder_id = _clean_text(reminder_id) or _new_id("rem")
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_channel:
+        raise ValueError("channel is required")
+    if not cleaned_to_user_id:
+        raise ValueError("to_user_id is required")
+    if not cleaned_text:
+        raise ValueError("text is required")
+    if not cleaned_due_at:
+        raise ValueError("due_at is required")
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO reminders(
+                id, account_id, channel, channel_account_id, to_user_id,
+                session_key, text, due_at, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                cleaned_reminder_id,
+                cleaned_account_id,
+                cleaned_channel,
+                _clean_text(channel_account_id),
+                cleaned_to_user_id,
+                _clean_text(session_key),
+                cleaned_text,
+                cleaned_due_at,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (cleaned_reminder_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("reminder was not created")
+    return _decode_reminder(row)
+
+
+def get_reminder(*, reminder_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def list_due_reminders(*, now: str, limit: int = 20) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM reminders
+            WHERE status = 'pending'
+              AND due_at <= ?
+            ORDER BY due_at ASC, created_at ASC
+            LIMIT ?
+            """,
+            (now, limit),
+        ).fetchall()
+    return [_decode_reminder(row) for row in rows]
+
+
+def list_reminders_for_account(
+    *,
+    account_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM reminders
+            WHERE account_id = ?
+            ORDER BY due_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (account_id, limit),
+        ).fetchall()
+    return [_decode_reminder(row) for row in rows]
+
+
+def claim_due_reminder(*, reminder_id: str, now: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'sending',
+                attempts = attempts + 1,
+                claimed_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'pending'
+              AND due_at <= ?
+            """,
+            (reminder_id, now),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def mark_reminder_sent(
+    *,
+    reminder_id: str,
+    outbound_message_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'sent',
+                outbound_message_id = ?,
+                error = NULL,
+                sent_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, reminder_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def mark_reminder_failed(
+    *,
+    reminder_id: str,
+    outbound_message_id: Optional[int] = None,
+    error: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'failed',
+                outbound_message_id = COALESCE(?, outbound_message_id),
+                error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, error, reminder_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def cancel_reminder(
+    *,
+    reminder_id: str,
+    outbound_message_id: Optional[int] = None,
+    error: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'cancelled',
+                outbound_message_id = COALESCE(?, outbound_message_id),
+                error = ?,
+                cancelled_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, error, reminder_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Proactive commitments
+# ---------------------------------------------------------------------------
+
+def _decode_proactive_commitment(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def create_proactive_commitment(
+    *,
+    account_id: str,
+    text: str,
+    due_at: str,
+    session_id: Optional[int] = None,
+    source_message_id: Optional[str] = None,
+    source_reply_message_id: Optional[str] = None,
+    confidence: Optional[float] = None,
+    reason: Optional[str] = None,
+    commitment_id: Optional[str] = None,
+    dedupe_key: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_text = _clean_text(text)
+    cleaned_due_at = _clean_text(due_at)
+    cleaned_commitment_id = _clean_text(commitment_id) or _new_id("com")
+    cleaned_dedupe_key = _clean_text(dedupe_key) or cleaned_commitment_id
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_text:
+        raise ValueError("text is required")
+    if not cleaned_due_at:
+        raise ValueError("due_at is required")
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO proactive_commitments(
+                id, account_id, session_id, source_message_id, source_reply_message_id,
+                dedupe_key, text, due_at, confidence, reason, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                cleaned_commitment_id,
+                cleaned_account_id,
+                session_id,
+                _clean_text(source_message_id),
+                _clean_text(source_reply_message_id),
+                cleaned_dedupe_key,
+                cleaned_text,
+                cleaned_due_at,
+                confidence,
+                _clean_text(reason),
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE dedupe_key = ?",
+            (cleaned_dedupe_key,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("proactive_commitment was not created")
+    return _decode_proactive_commitment(row)
+
+
+def get_proactive_commitment(*, commitment_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE id = ?",
+            (commitment_id,),
+        ).fetchone()
+    return _decode_proactive_commitment(row) if row else None
+
+
+def list_proactive_commitments_for_account(
+    *,
+    account_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = ["account_id = ?"]
+    params: List[Any] = [account_id]
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM proactive_commitments
+            WHERE {' AND '.join(clauses)}
+            ORDER BY due_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_proactive_commitment(row) for row in rows]
+
+
+def list_due_proactive_commitments(
+    *,
+    now: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.*
+            FROM proactive_commitments c
+            JOIN accounts a ON a.id = c.account_id
+            JOIN proactive_account_state s ON s.account_id = c.account_id
+            WHERE c.status = 'pending'
+              AND c.due_at <= ?
+              AND a.status = 'active'
+              AND s.enabled = 1
+              AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
+            ORDER BY c.due_at ASC, c.created_at ASC
+            LIMIT ?
+            """,
+            (now, now, limit),
+        ).fetchall()
+    return [_decode_proactive_commitment(row) for row in rows]
+
+
+def claim_due_proactive_commitment(
+    *,
+    commitment_id: str,
+    now: str,
+) -> Optional[Dict[str, Any]]:
+    cleaned_commitment_id = _clean_text(commitment_id)
+    cleaned_now = _clean_text(now)
+    if not cleaned_commitment_id:
+        raise ValueError("commitment_id is required")
+    if not cleaned_now:
+        raise ValueError("now is required")
+
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE proactive_commitments
+            SET status = 'sending',
+                attempts = attempts + 1,
+                claimed_at = CURRENT_TIMESTAMP,
+                error = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'pending'
+              AND due_at <= ?
+              AND EXISTS (
+                  SELECT 1 FROM accounts
+                  WHERE accounts.id = proactive_commitments.account_id
+                    AND accounts.status = 'active'
+              )
+              AND EXISTS (
+                  SELECT 1 FROM proactive_account_state
+                  WHERE proactive_account_state.account_id = proactive_commitments.account_id
+                    AND proactive_account_state.enabled = 1
+                    AND (
+                        proactive_account_state.cooldown_until IS NULL
+                        OR proactive_account_state.cooldown_until <= ?
+                    )
+              )
+            """,
+            (cleaned_commitment_id, cleaned_now, cleaned_now),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE id = ?",
+            (cleaned_commitment_id,),
+        ).fetchone()
+    return _decode_proactive_commitment(row) if row else None
+
+
+def mark_proactive_commitment_sent(
+    *,
+    commitment_id: str,
+    outbound_message_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE proactive_commitments
+            SET status = 'sent',
+                outbound_message_id = ?,
+                error = NULL,
+                sent_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, commitment_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE id = ?",
+            (commitment_id,),
+        ).fetchone()
+    return _decode_proactive_commitment(row) if row else None
+
+
+def mark_proactive_commitment_failed(
+    *,
+    commitment_id: str,
+    outbound_message_id: Optional[int] = None,
+    error: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE proactive_commitments
+            SET status = 'failed',
+                outbound_message_id = COALESCE(?, outbound_message_id),
+                error = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, error, commitment_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE id = ?",
+            (commitment_id,),
+        ).fetchone()
+    return _decode_proactive_commitment(row) if row else None
+
+
+def cancel_proactive_commitment(
+    *,
+    commitment_id: str,
+    outbound_message_id: Optional[int] = None,
+    error: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE proactive_commitments
+            SET status = 'cancelled',
+                outbound_message_id = COALESCE(?, outbound_message_id),
+                error = ?,
+                cancelled_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, error, commitment_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM proactive_commitments WHERE id = ?",
+            (commitment_id,),
+        ).fetchone()
+    return _decode_proactive_commitment(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Proactive account state
+# ---------------------------------------------------------------------------
+
+def _decode_proactive_account_state(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    item["enabled"] = bool(item.get("enabled"))
+    return item
+
+
+def get_proactive_account_state(*, account_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM proactive_account_state WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    return _decode_proactive_account_state(row) if row else None
+
+
+def upsert_proactive_account_state(
+    *,
+    account_id: str,
+    enabled=_UNSET,
+    next_scan_at=_UNSET,
+    last_scan_at=_UNSET,
+    last_proactive_sent_at=_UNSET,
+    cooldown_until=_UNSET,
+    metadata=_UNSET,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+
+    current = get_proactive_account_state(account_id=cleaned_account_id)
+    if current is None:
+        enabled_value = 1 if enabled is _UNSET else int(bool(enabled))
+        next_scan_at_value = None if next_scan_at is _UNSET else _clean_text(next_scan_at)
+        last_scan_at_value = None if last_scan_at is _UNSET else _clean_text(last_scan_at)
+        last_proactive_sent_at_value = (
+            None
+            if last_proactive_sent_at is _UNSET
+            else _clean_text(last_proactive_sent_at)
+        )
+        cooldown_until_value = (
+            None if cooldown_until is _UNSET else _clean_text(cooldown_until)
+        )
+        metadata_value = {} if metadata is _UNSET else (metadata or {})
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO proactive_account_state(
+                    account_id, enabled, next_scan_at, last_scan_at,
+                    last_proactive_sent_at, cooldown_until, metadata_json,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    cleaned_account_id,
+                    enabled_value,
+                    next_scan_at_value,
+                    last_scan_at_value,
+                    last_proactive_sent_at_value,
+                    cooldown_until_value,
+                    json.dumps(metadata_value, ensure_ascii=False),
+                ),
+            )
+    else:
+        next_metadata = current.get("metadata") or {}
+        if metadata is not _UNSET:
+            next_metadata = metadata or {}
+        with connect() as conn:
+            conn.execute(
+                """
+                UPDATE proactive_account_state
+                SET enabled = ?,
+                    next_scan_at = ?,
+                    last_scan_at = ?,
+                    last_proactive_sent_at = ?,
+                    cooldown_until = ?,
+                    metadata_json = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE account_id = ?
+                """,
+                (
+                    int(current["enabled"] if enabled is _UNSET else bool(enabled)),
+                    current.get("next_scan_at")
+                    if next_scan_at is _UNSET
+                    else _clean_text(next_scan_at),
+                    current.get("last_scan_at")
+                    if last_scan_at is _UNSET
+                    else _clean_text(last_scan_at),
+                    current.get("last_proactive_sent_at")
+                    if last_proactive_sent_at is _UNSET
+                    else _clean_text(last_proactive_sent_at),
+                    current.get("cooldown_until")
+                    if cooldown_until is _UNSET
+                    else _clean_text(cooldown_until),
+                    json.dumps(next_metadata, ensure_ascii=False),
+                    cleaned_account_id,
+                ),
+            )
+
+    item = get_proactive_account_state(account_id=cleaned_account_id)
+    if item is None:
+        raise RuntimeError("proactive_account_state was not created")
+    return item
+
+
+def list_due_proactive_account_states(
+    *,
+    now: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.*, a.status AS account_status
+            FROM proactive_account_state s
+            JOIN accounts a ON a.id = s.account_id
+            WHERE s.enabled = 1
+              AND a.status = 'active'
+              AND (s.next_scan_at IS NULL OR s.next_scan_at <= ?)
+              AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
+            ORDER BY COALESCE(s.next_scan_at, '0000-01-01 00:00:00') ASC,
+                     s.updated_at ASC
+            LIMIT ?
+            """,
+            (now, now, limit),
+        ).fetchall()
+    return [_decode_proactive_account_state(row) for row in rows]
+
+
+def claim_due_proactive_account_state(
+    *,
+    account_id: str,
+    now: str,
+    next_scan_at: str,
+) -> Optional[Dict[str, Any]]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_now = _clean_text(now)
+    cleaned_next_scan_at = _clean_text(next_scan_at)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_now:
+        raise ValueError("now is required")
+    if not cleaned_next_scan_at:
+        raise ValueError("next_scan_at is required")
+
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE proactive_account_state
+            SET last_scan_at = ?,
+                next_scan_at = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ?
+              AND enabled = 1
+              AND (next_scan_at IS NULL OR next_scan_at <= ?)
+              AND (cooldown_until IS NULL OR cooldown_until <= ?)
+              AND EXISTS (
+                  SELECT 1
+                  FROM accounts
+                  WHERE accounts.id = proactive_account_state.account_id
+                    AND accounts.status = 'active'
+              )
+            """,
+            (
+                cleaned_now,
+                cleaned_next_scan_at,
+                cleaned_account_id,
+                cleaned_now,
+                cleaned_now,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            """
+            SELECT s.*, a.status AS account_status
+            FROM proactive_account_state s
+            JOIN accounts a ON a.id = s.account_id
+            WHERE s.account_id = ?
+            """,
+            (cleaned_account_id,),
+        ).fetchone()
+    return _decode_proactive_account_state(row) if row else None
 
 
 # ---------------------------------------------------------------------------

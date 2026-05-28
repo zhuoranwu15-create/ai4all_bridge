@@ -19,10 +19,30 @@ def test_settings(tmp_path):
     s.rate_limit_rpm = 10
     s.rate_limit_daily_message = "每日上限"
     s.rate_limit_rpm_message = "每分钟上限"
+    s.conversation_session_max_turns = 500
+    s.conversation_session_business_day_start_hour = 4
+    s.dreaming_scheduler_enabled = False
+    s.dreaming_scheduler_interval_seconds = 300.0
+    s.dreaming_scheduler_batch_size = 100
     s.openclaw_login_auto_start = False
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
     s.openclaw_gateway_call_timeout_ms = 5000
+    s.proactive_outbound_enabled = True
+    s.proactive_outbound_daily_limit = 3
+    s.proactive_quiet_hours_start = "22:00"
+    s.proactive_quiet_hours_end = "08:00"
+    s.proactive_scheduler_enabled = False
+    s.proactive_scheduler_interval_seconds = 30.0
+    s.proactive_scheduler_batch_size = 20
+    s.proactive_scheduler_bypass_quiet_hours = False
+    s.proactive_account_scan_interval_seconds = 3600
+    s.proactive_heartbeat_candidate_context_messages = 12
+    s.proactive_heartbeat_candidate_min_confidence = 0.85
+    s.proactive_commitment_extraction_enabled = True
+    s.proactive_commitment_context_messages = 8
+    s.proactive_commitment_min_confidence = 0.9
+    s.proactive_commitment_max_days = 14
     s.aliyun_access_key_id = ""
     s.aliyun_access_key_secret = ""
     s.aliyun_sms_sign_name = ""
@@ -37,11 +57,22 @@ def test_settings(tmp_path):
 
 @pytest.fixture
 def fresh_db(test_settings):
-    """Patch app.db.settings to use a temp SQLite file."""
-    with patch("app.db.settings", test_settings):
+    """Patch settings modules to use a temp SQLite/profile workspace."""
+    patches = [
+        patch("app.db.settings", test_settings),
+        patch("app.user_profiles.settings", test_settings),
+        patch("app.dreaming.settings", test_settings),
+        patch("app.session_lifecycle.settings", test_settings),
+    ]
+    for p in patches:
+        p.start()
+    try:
         from app.db import init_db
         init_db()
         yield test_settings
+    finally:
+        for p in reversed(patches):
+            p.stop()
 
 
 @pytest.fixture
@@ -53,9 +84,12 @@ def client(fresh_db):
 
     patches = [
         patch("app.main.settings", fresh_db),
+        patch("app.turn_service.settings", fresh_db),
+        patch("app.dreaming.settings", fresh_db),
+        patch("app.session_lifecycle.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
-        patch("app.main.rate_limiter", RateLimiter()),
-        patch("app.main.generate_reply", return_value="mock reply"),
+        patch("app.turn_service.rate_limiter", RateLimiter()),
+        patch("app.turn_service.generate_reply", return_value="mock reply"),
     ]
     for p in patches:
         p.start()
