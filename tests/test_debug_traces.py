@@ -43,16 +43,27 @@ def test_debug_trace_records_only_configured_accounts(client, fresh_db):
     assert trace["account_id"] == "sk-acc-debug-a"
     assert trace["source"] == "ai4all"
     assert trace["llm_model"] == "test-model"
-    assert trace["reply"] == "debug reply"
-    assert trace["messages"][0]["role"] == "system"
-    assert trace["messages"][0]["content"] == trace["system_prompt"]
+    assert trace["reply_redacted"] is True
+    assert trace["reply_chars"] == len("debug reply")
+    assert trace["messages_redacted"] is True
+    assert trace["system_prompt_redacted"] is True
     assert trace["metadata"]["history_count"] >= 1
     assert trace["metadata"]["identity"]["ai4all_account_id"] == "sk-acc-debug-a"
     assert trace["metadata"]["identity"]["channel_account_id"] == "acc-debug-a"
     assert trace["metadata"]["agent_context"]["files"]["AGENTS.md"]["exists"] is True
     assert "HEARTBEAT.md" not in trace["metadata"]["agent_context"]["files"]
-    assert "### AGENTS.md" in trace["system_prompt"]
-    assert "### HEARTBEAT.md" not in trace["system_prompt"]
+    assert "system_prompt" not in trace
+    assert "messages" not in trace
+    assert "reply" not in trace
+
+    res = client.get(f"/admin/plaintext/debug-traces/{trace_id}", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    plaintext_trace = res.json()["trace"]
+    assert plaintext_trace["reply"] == "debug reply"
+    assert plaintext_trace["messages"][0]["role"] == "system"
+    assert plaintext_trace["messages"][0]["content"] == plaintext_trace["system_prompt"]
+    assert "### AGENTS.md" in plaintext_trace["system_prompt"]
+    assert "### HEARTBEAT.md" not in plaintext_trace["system_prompt"]
 
     res = client.post(
         "/openclaw/turn",
@@ -118,12 +129,19 @@ def test_openclaw_debug_trace_ingest(client):
     assert trace["account_id"] == "sk-acc-debug-a"
     assert trace["source"] == "openclaw"
     assert trace["llm_model"] == "openclaw-model"
-    assert trace["system_prompt"] == "openclaw system"
-    assert trace["reply"] == "native openclaw reply"
-    assert trace["messages"][0]["content"] == "hello from openclaw"
+    assert trace["system_prompt_redacted"] is True
+    assert trace["reply_redacted"] is True
+    assert trace["messages_redacted"] is True
     assert trace["metadata"]["mode"] == "path_b_native_run_suppressed"
     assert trace["metadata"]["identity"]["ai4all_account_id"] == "sk-acc-debug-a"
     assert trace["metadata"]["identity"]["channel_account_id"] == "acc-debug-a"
+
+    res = client.get("/admin/plaintext/debug-traces/openclaw-run-1", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    plaintext_trace = res.json()["trace"]
+    assert plaintext_trace["system_prompt"] == "openclaw system"
+    assert plaintext_trace["reply"] == "native openclaw reply"
+    assert plaintext_trace["messages"][0]["content"] == "hello from openclaw"
 
 
 def test_openclaw_debug_trace_ingest_accepts_channel_account_id_without_legacy_account_id(client):
@@ -205,7 +223,8 @@ def test_prompt_preview_includes_agent_context(client):
     assert res.status_code == 200
     data = res.json()
     assert data["blocks"]["agent_context"]["files"]["IDENTITY.md"]["exists"] is True
-    assert "【Project Context】" in data["prompt"]
-    assert "### TOOLS.md" in data["prompt"]
-    assert "### HEARTBEAT.md" not in data["prompt"]
+    assert data["redacted"] is True
+    assert data["prompt_redacted"] is True
+    assert data["prompt_chars"] > 0
+    assert "prompt" not in data
     assert "HEARTBEAT.md" not in data["blocks"]["agent_context"]["files"]

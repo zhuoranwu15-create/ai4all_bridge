@@ -10,6 +10,7 @@ from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     create_reminder,
+    get_account_onboarding_state,
     get_daily_usage,
     get_duplicate_reply,
     increment_session_turn_count,
@@ -18,6 +19,7 @@ from app.db import (
     insert_message,
     list_recent_messages,
     resolve_account_id_for_inbound_channel_identity,
+    set_account_onboarding_state,
     upsert_channel_binding,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
@@ -29,6 +31,20 @@ from app.rate_limiter import rate_limiter
 from app.reminder_parser import looks_like_reminder_request, parse_explicit_reminder
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
+from app.onboarding import (
+    apply_extracted_onboarding_info,
+    build_onboarding_prompt_context,
+    extract_onboarding_info_async,
+    is_onboarding_active,
+    next_onboarding_state,
+    ONBOARDING_COMPLETE,
+    ONBOARDING_PENDING,
+    ONBOARDING_STEP1_SENT,
+    ONBOARDING_STEP2_SENT,
+    ONBOARDING_STEP3_SENT,
+    ONBOARDING_WELCOME_TEXT,
+)
+from app.openclaw_gateway import send_weixin_text
 from app.user_profiles import (
     ensure_user_profile,
     read_agent_context,
@@ -39,6 +55,66 @@ from app.user_profiles import (
 logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+
+
+def _extract_ai_name_from_context(blocks: dict) -> Optional[str]:
+    import re
+    identity = blocks.get("IDENTITY", "")
+    m = re.search(r"AI 名字[:：]\s*(.+)", identity)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _extract_user_name_from_context(blocks: dict) -> Optional[str]:
+    import re
+    user = blocks.get("USER", "")
+    m = re.search(r"用户称呼[:：]\s*(.+)", user)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _count_user_name_asks(turn_count: int, state: str) -> int:
+    """Approximate how many times we've asked the user's name so far."""
+    if state in {ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT, ONBOARDING_COMPLETE}:
+        return 1
+    return 0
+
+
+async def _advance_onboarding_state_async(
+    *,
+    account_id: str,
+    user_text: str,
+    current_state: str,
+) -> None:
+    """Background task: extract onboarding info from user reply and advance state."""
+    try:
+        extracted = await extract_onboarding_info_async(
+            user_text=user_text,
+            current_state=current_state,
+        )
+        apply_extracted_onboarding_info(
+            account_id=account_id,
+            extracted=extracted,
+            current_state=current_state,
+        )
+        new_state = next_onboarding_state(
+            current_state=current_state,
+            extracted=extracted,
+            user_name_ask_count=0,
+            persona_ask_count=0,
+        )
+        if new_state != current_state:
+            set_account_onboarding_state(account_id=account_id, state=new_state)
+            logger.info(
+                "onboarding state advanced account=%s %s -> %s",
+                account_id,
+                current_state,
+                new_state,
+            )
+    except Exception as err:
+        logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
 
 
 def _turn_message_raw(
@@ -143,6 +219,47 @@ def handle_openclaw_turn(
     session = session_state["session"]
     profile_path = ensure_user_profile(account_id)
     debug_trace_enabled = _is_debug_trace_account(account_id)
+
+    onboarding_state = get_account_onboarding_state(account_id=account_id)
+    onboarding_active = is_onboarding_active(onboarding_state)
+
+    # When the user's first inbound message arrives and onboarding hasn't started yet,
+    # send the welcome proactively and absorb this message (no AI reply). The 5-second
+    # timer at binding time always fails because sender_id isn't known until now.
+    if onboarding_state == ONBOARDING_PENDING and sender_id:
+        try:
+            send_weixin_text(
+                to_user_id=sender_id,
+                text=ONBOARDING_WELCOME_TEXT,
+                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                account_id=identity.channel_account_id,
+                session_key=openclaw_session_key,
+                channel=identity.channel,
+            )
+            set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
+            logger.info(
+                "onboarding welcome sent on first inbound message account=%s sender=%s",
+                account_id, sender_id,
+            )
+            latency_ms = int((time.monotonic() - started_at) * 1000)
+            return OpenClawTurnResponse(
+                status="ok",
+                no_reply=True,
+                metadata={
+                    **identity_response_metadata(identity, account_id),
+                    "latency_ms": latency_ms,
+                    "onboarding_action": "welcome_sent_on_first_message",
+                },
+            )
+        except Exception as err:
+            logger.warning(
+                "onboarding welcome failed on first inbound message account=%s error=%s; "
+                "falling through to normal turn",
+                account_id, err,
+            )
+            onboarding_state = ONBOARDING_STEP1_SENT
+            onboarding_active = True
+            set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
 
     if account.get("status") == "disabled":
         logger.info(
@@ -348,6 +465,16 @@ def handle_openclaw_turn(
                         "display_name": account.get("display_name"),
                     }
                 )
+                onboarding_ctx = ""
+                if onboarding_active:
+                    onboarding_ctx = build_onboarding_prompt_context(
+                        state=onboarding_state,
+                        user_name=_extract_user_name_from_context(agent_context.blocks),
+                        ai_name=_extract_ai_name_from_context(agent_context.blocks),
+                        persona=None,
+                        user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
+                        persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
+                    )
                 builder = PromptBuilder()
                 system_prompt = builder.build(
                     display_name=account.get("display_name"),
@@ -359,6 +486,7 @@ def handle_openclaw_turn(
                     system_prompt_override=profile.get("system_prompt"),
                     style=profile.get("style"),
                     agent_context=agent_context.blocks,
+                    onboarding_context=onboarding_ctx,
                     today=today,
                     model_name=settings.llm_model,
                 )
@@ -438,6 +566,15 @@ def handle_openclaw_turn(
     if not generation_error and text and text not in _SPECIAL_COMMANDS:
         increment_session_turn_count(session_id=int(session["id"]))
 
+    # Advance onboarding state synchronously after reply (pending->step1_sent needs no extraction)
+    if not generation_error and normal_reply_generated and onboarding_active:
+        if onboarding_state == "pending":
+            try:
+                set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
+                logger.info("onboarding state advanced account=%s pending -> step1_sent", account_id)
+            except Exception as err:
+                logger.error("onboarding state set failed account=%s error=%s", account_id, err)
+
     if not generation_error and text and text not in _SPECIAL_COMMANDS and background_loop is not None:
         turns_for_memory = [
             {"role": "user", "content": text},
@@ -472,6 +609,17 @@ def handle_openclaw_turn(
                     assistant_text=reply,
                     source_message_id=message_id,
                     source_reply_message_id=reply_message_id,
+                ),
+            )
+
+        if onboarding_active and normal_reply_generated and onboarding_state != "pending":
+            # steps 1-3: extract info and advance state in background
+            background_loop.call_soon_threadsafe(
+                background_loop.create_task,
+                _advance_onboarding_state_async(
+                    account_id=account_id,
+                    user_text=text,
+                    current_state=onboarding_state,
                 ),
             )
 

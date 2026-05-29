@@ -108,6 +108,7 @@ class PromptBuilder:
         tools: Optional[List[str]] = None,
         skills: Optional[List[str]] = None,
         agent_context: Optional[Dict[str, str]] = None,
+        onboarding_context: Optional[str] = None,
         model_name: str = "",
         today: Optional[str] = None,
     ) -> str:
@@ -154,38 +155,42 @@ class PromptBuilder:
         if project_context:
             blocks.append(project_context)
 
-        # Block 8: User Preferences (legacy fallback)
+        # Block 8: Onboarding context (injected only during first-chat onboarding)
+        if onboarding_context and onboarding_context.strip():
+            blocks.append(onboarding_context.strip())
+
+        # Block 9: User Preferences (legacy fallback)
         if not project_context and user_prefs and user_prefs.strip():
             user_prefs_text = _truncate(user_prefs, 2000, "user_prefs")
             blocks.append(f"【用户偏好】\n{user_prefs_text}")
 
-        # Block 9: Long-term Memory (legacy fallback)
+        # Block 10: Long-term Memory (legacy fallback)
         if not project_context and long_term_memory and long_term_memory.strip():
             mem_text = _truncate(long_term_memory, 3000, "long_term_memory")
             blocks.append(f"【长期记忆】\n{mem_text}")
 
-        # Block 10: Session Carryover
+        # Block 11: Session Carryover
         if carryover_summary and carryover_summary.strip():
             carryover_text = _truncate(carryover_summary, 2000, "carryover_summary")
             blocks.append(f"【会话延续摘要】\n{carryover_text}")
 
-        # Block 11: Daily Notes
+        # Block 12: Daily Notes
         if daily_notes and daily_notes.strip():
             notes_text = _truncate(daily_notes, 2000, "daily_notes")
             blocks.append(f"【今日备注】\n{notes_text}")
 
-        # Block 12: System Prompt Override
+        # Block 13: System Prompt Override
         if system_prompt_override and system_prompt_override.strip():
             blocks.append(f"【最高优先级覆盖指令】\n{system_prompt_override}")
 
-        # Block 13: Output Directives
+        # Block 14: Output Directives
         directives = _OUTPUT_DIRECTIVES_FIXED
         if style and style.strip():
             style_text = _truncate(style, 500, "style")
             directives = directives + f"\n- 当前用户偏好的回复风格：{style_text}"
         blocks.append(directives)
 
-        # Block 14: Runtime
+        # Block 15: Runtime
         runtime_parts: List[str] = []
         if today:
             runtime_parts.append(f"当前日期：{today}")

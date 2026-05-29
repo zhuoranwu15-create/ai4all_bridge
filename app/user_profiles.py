@@ -5,6 +5,24 @@ from typing import Dict, Optional
 
 from app.config import settings
 
+# ---------------------------------------------------------------------------
+# SOUL.md preset templates
+# ---------------------------------------------------------------------------
+
+_SOUL_TEMPLATES_DIR = Path(__file__).parent / "soul_templates"
+
+
+def _load_soul_templates() -> dict:
+    presets = ("blank", "chaochao", "xixi", "ju")
+    templates = {}
+    for name in presets:
+        path = _SOUL_TEMPLATES_DIR / f"{name}.md"
+        templates[name] = path.read_text(encoding="utf-8")
+    return templates
+
+
+_SOUL_TEMPLATES = _load_soul_templates()
+
 
 DEFAULT_USER_PROFILE = """# User Profile
 
@@ -102,7 +120,11 @@ def _default_context_templates(
     )
     user = _extract_legacy_section(legacy_profile, "User Preferences") or "- 暂无"
     memory = _extract_legacy_section(legacy_profile, "Long-term Memory") or "- 暂无"
-    assistant_name = (display_name or "").strip() or "AI4ALL 个人助手"
+    assistant_name = (display_name or "").strip()
+    if assistant_name:
+        identity_name_line = f"- 你的名字是 {assistant_name}，用它自称。"
+    else:
+        identity_name_line = "- 你还没有名字。以「我」或「你的微信好友」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
     return {
         "AGENTS.md": """# AGENTS
 
@@ -117,7 +139,7 @@ def _default_context_templates(
 """,
         "IDENTITY.md": f"""# IDENTITY
 
-- 你的对外身份是 {assistant_name}。
+{identity_name_line}
 - 你是用户在微信里的个人 AI 陪伴与生活助理。
 - 除非产品身份明确调整，不要把自己称为 OpenClaw，也不要声称自己运行在 OpenClaw 内部。
 """,
@@ -186,6 +208,90 @@ def read_agent_context(account_id: str, display_name: Optional[str] = None) -> A
         blocks=blocks,
         files=files,
     )
+
+
+def _render_soul_template(template: str, ai_name: Optional[str], user_name: Optional[str]) -> str:
+    name_clause = ai_name.strip() if ai_name and ai_name.strip() else "我"
+    user_clause = f"{user_name.strip()}的" if user_name and user_name.strip() else "这个用户的"
+    return template.format(name_clause=name_clause, user_clause=user_clause)
+
+
+def apply_soul_preset(
+    account_id: str,
+    preset_name: str,
+    *,
+    custom_description: Optional[str] = None,
+) -> Path:
+    """Write the selected SOUL.md preset template for the account.
+
+    For 'blank' and named presets, writes the canonical template.
+    For 'custom', appends the user's description to the blank template.
+    Always overwrites the existing SOUL.md.
+    """
+    template = _SOUL_TEMPLATES.get(preset_name, _SOUL_TEMPLATES["blank"])
+    identity_path = context_file_path(account_id, "IDENTITY.md")
+    ai_name: Optional[str] = None
+    if identity_path.exists():
+        identity_text = identity_path.read_text(encoding="utf-8")
+        m = re.search(r"AI 名字[:：]\s*(.+)", identity_text)
+        if not m:
+            m = re.search(r"你的对外身份是\s*(.+?)[\s。\n]", identity_text)
+        if m:
+            ai_name = m.group(1).strip()
+
+    user_path = context_file_path(account_id, "USER.md")
+    user_name: Optional[str] = None
+    if user_path.exists():
+        user_text = user_path.read_text(encoding="utf-8")
+        m = re.search(r"用户称呼[:：]\s*(.+)", user_text)
+        if m:
+            user_name = m.group(1).strip()
+
+    content = _render_soul_template(template, ai_name, user_name)
+
+    if custom_description and custom_description.strip():
+        content = content.rstrip("\n") + f"\n\n用户对你的期待描述：{custom_description.strip()}\n"
+
+    soul_path = context_file_path(account_id, "SOUL.md")
+    soul_path.parent.mkdir(parents=True, exist_ok=True)
+    soul_path.write_text(content, encoding="utf-8")
+    return soul_path
+
+
+def write_ai_name_to_identity(account_id: str, name: str) -> Path:
+    """Write the AI name into IDENTITY.md, replacing the existing file."""
+    name = name.strip()
+    content = f"""# IDENTITY
+
+- AI 名字：{name}
+- 你是用户在微信里的专属 AI 陪伴。
+- 用"{name}"自称，不要把自己称为 OpenClaw 或声称运行在 OpenClaw 内部。
+"""
+    identity_path = context_file_path(account_id, "IDENTITY.md")
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    identity_path.write_text(content, encoding="utf-8")
+    return identity_path
+
+
+def write_user_name(account_id: str, name: str) -> Path:
+    """Update or create USER.md with the user's preferred name."""
+    name = name.strip()
+    user_path = context_file_path(account_id, "USER.md")
+    user_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if user_path.exists():
+        existing = user_path.read_text(encoding="utf-8")
+        if re.search(r"用户称呼[:：]", existing):
+            updated = re.sub(r"(?m)^(用户称呼[:：]\s*).*$", f"用户称呼：{name}", existing)
+            user_path.write_text(updated, encoding="utf-8")
+            return user_path
+
+    content = f"""# USER
+
+用户称呼：{name}
+"""
+    user_path.write_text(content, encoding="utf-8")
+    return user_path
 
 
 def read_daily_notes(account_id: str, today: str) -> str:

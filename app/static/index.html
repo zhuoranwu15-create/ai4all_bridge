@@ -10,6 +10,7 @@
   <h1>AI4ALL 运营后台</h1>
   <div class="form-actions" style="margin-bottom:16px">
     <a class="button-link primary" href="onboarding.html">Web Onboarding</a>
+    <span id="admin-user" class="pill">—</span>
   </div>
   <div class="card">
     <table>
@@ -29,9 +30,20 @@
     </table>
   </div>
 
+  <div class="card">
+    <h2>明文授权申请</h2>
+    <div id="grants">加载中…</div>
+  </div>
+
+  <div class="card">
+    <h2>明文访问记录</h2>
+    <div id="access-events">加载中…</div>
+  </div>
+
   <script src="admin.js"></script>
   <script>
     (async function load() {
+      await loadAdminMe();
       var tbody = document.getElementById('tbody');
       try {
         var data = await apiFetch('/admin/accounts');
@@ -72,6 +84,8 @@
       } catch (e) {
         tbody.innerHTML = '<tr><td colspan="6" class="status-msg error">' + esc(e.message) + '</td></tr>';
       }
+      loadGrants();
+      loadAccessEvents();
     })();
 
     async function toggle(id, action) {
@@ -81,6 +95,87 @@
       } catch (e) {
         alert(e.message);
       }
+    }
+
+    async function loadGrants() {
+      var el = document.getElementById('grants');
+      try {
+        var data = await apiFetch('/admin/plaintext-grants?limit=20');
+        var grants = data.grants || [];
+        if (!grants.length) {
+          el.textContent = '暂无授权申请';
+          return;
+        }
+        el.innerHTML = '<table><thead><tr>'
+          + '<th>ID</th><th>申请人</th><th>状态</th><th>账号范围</th><th>资源范围</th><th>过期</th><th>操作</th>'
+          + '</tr></thead><tbody>'
+          + grants.map(function(g) {
+            var canAct = window.currentAdminUser && window.currentAdminUser.role === 'admin' && (g.status === 'pending' || g.status === 'approved');
+            var actions = '';
+            if (canAct && g.status === 'pending') {
+              actions += '<button class="primary" onclick="approveGrant(' + g.id + ')">批准</button> ';
+              actions += '<button onclick="rejectGrant(' + g.id + ')">拒绝</button>';
+            }
+            if (canAct && g.status === 'approved') {
+              actions += '<button class="danger" onclick="revokeGrant(' + g.id + ')">撤销</button>';
+            }
+            return '<tr>'
+              + '<td class="mono">' + esc(g.id) + '</td>'
+              + '<td>' + esc(g.requester_admin_user_id || '') + '</td>'
+              + '<td>' + esc(g.status || '') + '</td>'
+              + '<td class="mono wrap">' + esc((g.account_scope || []).join(', ')) + '</td>'
+              + '<td class="mono wrap">' + esc((g.resource_scope || []).join(', ')) + '</td>'
+              + '<td>' + esc(formatDateTime(g.expires_at)) + '</td>'
+              + '<td>' + actions + '</td>'
+              + '</tr>';
+          }).join('')
+          + '</tbody></table>';
+      } catch (e) {
+        el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function loadAccessEvents() {
+      var el = document.getElementById('access-events');
+      try {
+        var data = await apiFetch('/admin/access-events?plaintext=true&limit=20');
+        var events = data.events || [];
+        if (!events.length) {
+          el.textContent = '暂无明文访问记录';
+          return;
+        }
+        el.innerHTML = '<table><thead><tr>'
+          + '<th>时间</th><th>用户</th><th>动作</th><th>资源</th><th>账号</th><th>原因</th>'
+          + '</tr></thead><tbody>'
+          + events.map(function(e) {
+            return '<tr>'
+              + '<td>' + esc(formatDateTime(e.created_at)) + '</td>'
+              + '<td>' + esc(e.admin_user_id || '') + '</td>'
+              + '<td>' + esc(e.action || '') + '</td>'
+              + '<td class="mono">' + esc((e.resource_type || '') + ':' + (e.resource_id || '')) + '</td>'
+              + '<td class="mono">' + esc(e.account_id || '') + '</td>'
+              + '<td>' + esc(e.reason || '') + '</td>'
+              + '</tr>';
+          }).join('')
+          + '</tbody></table>';
+      } catch (e) {
+        el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function approveGrant(id) {
+      await apiFetch('/admin/plaintext-grants/' + id + '/approve', { method: 'POST' });
+      loadGrants();
+    }
+
+    async function rejectGrant(id) {
+      await apiFetch('/admin/plaintext-grants/' + id + '/reject', { method: 'POST' });
+      loadGrants();
+    }
+
+    async function revokeGrant(id) {
+      await apiFetch('/admin/plaintext-grants/' + id + '/revoke', { method: 'POST' });
+      loadGrants();
     }
   </script>
 </body>

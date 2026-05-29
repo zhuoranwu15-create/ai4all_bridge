@@ -16,6 +16,17 @@ def _get_verified_token(phone: str) -> str:
     return result["verified_token"]
 
 
+def _get_login_data(phone: str, client):
+    """Login via OTP flow; return (session_headers, login_response_data)."""
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.main.start_weixin_qr_login",
+        return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "login-init-key"},
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        res = client.post("/web/login", json={"phone": phone, "verified_token": _get_verified_token(phone)})
+    assert res.status_code == 200, f"login failed: {res.text}"
+    return {"Authorization": f"Bearer {res.json()['session_token']}"}, res.json()
+
+
 def test_web_register_creates_and_reuses_platform_user(client):
     first = client.post(
         "/web/register",
@@ -94,18 +105,9 @@ def test_web_create_agent_creates_account_profile_owner_and_subscription(client)
 
 
 def test_web_create_binding_intent_starts_openclaw_qr_login(client):
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000002",
-              "otp_token": _get_verified_token("13800000002")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Binding Bot",
-        },
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800000002", client)
+    user = login_data["platform_user"]
+    account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait") as mock_schedule, patch(
         "app.main.start_weixin_qr_login",
@@ -118,10 +120,8 @@ def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     ) as mock_start, patch("app.main.settings.openclaw_login_auto_start", True):
         res = client.post(
             "/web/binding-intents",
-            json={
-                "platform_user_id": user["id"],
-                "account_id": account["id"],
-            },
+            json={},
+            headers=session_headers,
         )
 
     assert res.status_code == 200
@@ -219,18 +219,10 @@ def test_binding_wait_completion_binds_channel_account_to_precreated_account(cli
     from app.db import get_binding_intent, list_channel_bindings_for_account
     from app.main import _complete_binding_intent_from_wait_result
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000005",
-              "otp_token": _get_verified_token("13800000005")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Completed Binding Bot",
-        },
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800000005", client)
+    user = login_data["platform_user"]
+    account = login_data["account"]
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={
@@ -241,10 +233,8 @@ def test_binding_wait_completion_binds_channel_account_to_precreated_account(cli
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={
-                "platform_user_id": user["id"],
-                "account_id": account["id"],
-            },
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
 
     _complete_binding_intent_from_wait_result(
@@ -262,28 +252,19 @@ def test_binding_wait_completion_binds_channel_account_to_precreated_account(cli
     assert completed["raw_result"]["channel_account_id"] == "real-weixin-bot"
 
     bindings = list_channel_bindings_for_account(account_id=account["id"])
-    assert len(bindings) == 1
-    assert bindings[0]["session_key"] == "bind-wait-session"
-    assert bindings[0]["channel_account_id"] == "real-weixin-bot"
-    assert bindings[0]["raw_identity"]["platform_user_id"] == user["id"]
+    bound = [b for b in bindings if b["session_key"] == "bind-wait-session"]
+    assert len(bound) == 1
+    assert bound[0]["channel_account_id"] == "real-weixin-bot"
+    assert bound[0]["raw_identity"]["platform_user_id"] == user["id"]
 
 
 def test_bound_channel_account_routes_turn_to_precreated_account(client):
     from app.db import get_binding_intent
     from app.main import _complete_binding_intent_from_wait_result
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000006",
-              "otp_token": _get_verified_token("13800000006")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Routed Binding Bot",
-        },
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800000006", client)
+    account = login_data["account"]
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={
@@ -294,11 +275,10 @@ def test_bound_channel_account_routes_turn_to_precreated_account(client):
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={
-                "platform_user_id": user["id"],
-                "account_id": account["id"],
-            },
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
+
     _complete_binding_intent_from_wait_result(
         get_binding_intent(binding_intent_id=intent["id"]),
         {"connected": True, "accountId": "real-route-bot"},
@@ -335,18 +315,9 @@ def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(cl
     from app.db import get_binding_intent
     from app.main import _complete_binding_intent_from_wait_result
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000008",
-              "otp_token": _get_verified_token("13800000008")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Normalized Weixin Bot",
-        },
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800000008", client)
+    account = login_data["account"]
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={
@@ -357,11 +328,10 @@ def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(cl
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={
-                "platform_user_id": user["id"],
-                "account_id": account["id"],
-            },
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
+
     _complete_binding_intent_from_wait_result(
         get_binding_intent(binding_intent_id=intent["id"]),
         {"connected": True, "accountId": "raw-bot@im.bot"},
@@ -397,18 +367,9 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
     from app.db import get_binding_intent
     from app.main import _complete_binding_intent_from_wait_result
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000007",
-              "otp_token": _get_verified_token("13800000007")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Session Routed Bot",
-        },
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800000007", client)
+    account = login_data["account"]
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={
@@ -419,11 +380,10 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={
-                "platform_user_id": user["id"],
-                "account_id": account["id"],
-            },
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
+
     _complete_binding_intent_from_wait_result(
         get_binding_intent(binding_intent_id=intent["id"]),
         {"connected": True, "accountId": "real-session-route-bot"},
@@ -451,35 +411,9 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
     assert data["metadata"]["openclaw_session_key_account_id"] == "bind-session-route"
 
 
-def test_binding_intent_requires_account_owned_by_platform_user(client):
-    owner = client.post(
-        "/web/register",
-        json={"phone": "13800000003",
-              "otp_token": _get_verified_token("13800000003")},
-    ).json()["platform_user"]
-    other = client.post(
-        "/web/register",
-        json={"phone": "13800000004",
-              "otp_token": _get_verified_token("13800000004")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={
-            "platform_user_id": owner["id"],
-            "agent_name": "Owner Bot",
-        },
-    ).json()["account"]
-
-    res = client.post(
-        "/web/binding-intents",
-        json={
-            "platform_user_id": other["id"],
-            "account_id": account["id"],
-        },
-    )
-
-    assert res.status_code == 400
-    assert "not owned" in res.json()["detail"]
+def test_binding_intent_requires_session_auth(client):
+    res = client.post("/web/binding-intents", json={})
+    assert res.status_code == 401
 
 
 def test_web_create_agent_enforces_per_user_limit(client):
@@ -506,22 +440,16 @@ def test_get_binding_intent_auto_expires_stale_qr(client):
     import app.db as db_module
     from app.db import get_binding_intent
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800007777",
-              "otp_token": _get_verified_token("13800007777")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={"platform_user_id": user["id"], "agent_name": "Expiry Bot"},
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800007777", client)
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "exp-session"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={"platform_user_id": user["id"], "account_id": account["id"]},
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
 
     assert intent["status"] == "qr_created"
@@ -550,30 +478,29 @@ def test_channel_binding_deduplicates_by_channel_account_id(client):
     )
     from app.main import _complete_binding_intent_from_wait_result
 
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800006666",
-              "otp_token": _get_verified_token("13800006666")},
-    ).json()["platform_user"]
-    account = client.post(
-        "/web/agents",
-        json={"platform_user_id": user["id"], "agent_name": "Dedup Bot"},
-    ).json()["account"]
+    session_headers, login_data = _get_login_data("13800006666", client)
+    account = login_data["account"]
+
     with patch("app.main._schedule_binding_wait"), patch(
         "app.main.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-dedup-session"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
             "/web/binding-intents",
-            json={"platform_user_id": user["id"], "account_id": account["id"]},
+            json={},
+            headers=session_headers,
         ).json()["binding_intent"]
+
     _complete_binding_intent_from_wait_result(
         get_binding_intent(binding_intent_id=intent["id"]),
         {"connected": True, "accountId": "dedup-bot"},
     )
 
     # At this point one binding row exists with session_key="bind-dedup-session"
-    bindings_after_qr = list_channel_bindings_for_account(account_id=account["id"])
+    bindings_after_qr = [
+        b for b in list_channel_bindings_for_account(account_id=account["id"])
+        if b["channel_account_id"] == "dedup-bot"
+    ]
     assert len(bindings_after_qr) == 1
 
     # Simulate first inbound message: different session_key, same channel_account_id
@@ -586,7 +513,10 @@ def test_channel_binding_deduplicates_by_channel_account_id(client):
         chat_id="chat-dedup",
     )
 
-    bindings = list_channel_bindings_for_account(account_id=account["id"])
+    bindings = [
+        b for b in list_channel_bindings_for_account(account_id=account["id"])
+        if b["channel_account_id"] == "dedup-bot"
+    ]
     assert len(bindings) == 1, f"Expected 1 binding, got {len(bindings)}"
     assert bindings[0]["channel_account_id"] == "dedup-bot"
     assert bindings[0]["session_key"] == "agent:main:openclaw-weixin:dedup-bot:direct:peer"

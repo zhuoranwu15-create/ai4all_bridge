@@ -5,13 +5,14 @@ class Settings(BaseSettings):
     app_env: str = "local"
     ai4all_bridge_secret: str = "dev-secret"
     admin_token: str = "dev-admin-token"
+    admin_staff_token: str = ""
     database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
-    llm_timeout_seconds: float = 20.0
+    llm_timeout_seconds: float = 40.0
     llm_connect_timeout_seconds: float = 5.0
     llm_max_retries: int = 1
     llm_force_ipv4: bool = True

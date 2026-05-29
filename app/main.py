@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import uuid
-from datetime import date as date_cls, datetime
+from datetime import date as date_cls, datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -13,17 +14,23 @@ from app.captcha import verify_captcha
 from app.sms import generate_otp, send_otp
 from app.db import (
     clear_session_messages,
+    clear_all_messages_for_account,
     cancel_proactive_commitment,
     consume_valid_verification_token,
     count_verifications_last_hour,
     create_ai4all_account_for_user,
+    create_admin_plaintext_grant,
     create_binding_intent,
     create_or_get_platform_user_by_phone,
     create_phone_verification,
+    find_active_admin_plaintext_grant,
+    get_admin_plaintext_grant,
     get_debug_trace,
     get_dreaming_memory_item,
     get_dreaming_run,
     get_account,
+    get_account_onboarding_state,
+    get_admin_user as get_admin_user_record,
     get_binding_intent,
     get_daily_usage,
     get_latest_active_verification,
@@ -39,9 +46,13 @@ from app.db import (
     get_usage_last_7_days,
     increment_verify_attempts,
     init_db,
+    insert_admin_access_event,
     insert_debug_trace,
     invalidate_verifications_for_phone,
     list_accounts,
+    list_admin_access_events,
+    list_admin_plaintext_grants,
+    list_admin_users,
     list_proactive_commitments_for_account,
     list_debug_traces,
     list_dreaming_memory_items,
@@ -51,11 +62,15 @@ from app.db import (
     list_session_messages,
     list_sessions,
     list_sessions_for_account,
+    create_platform_user_session,
+    get_platform_user_by_session_token,
     normalize_phone,
     resolve_account_id_for_inbound_channel_identity,
+    set_account_onboarding_state,
     set_binding_intent_error,
     set_account_status,
     set_verification_verified,
+    update_admin_plaintext_grant_status,
     update_binding_intent,
     update_account,
     update_profile_for_account,
@@ -64,9 +79,12 @@ from app.db import (
     list_channel_bindings_for_account,
     upsert_proactive_account_state,
     upsert_channel_binding,
+    upsert_admin_user,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
+from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.openclaw_gateway import (
+    send_weixin_text,
     start_weixin_qr_login,
     wait_weixin_qr_login,
 )
@@ -107,6 +125,18 @@ logger = logging.getLogger("ai4all")
 _background_loop: Optional[asyncio.AbstractEventLoop] = None
 
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
+
+
+@app.middleware("http")
+async def _gate_debug_ui(request: Request, call_next):
+    if (
+        request.url.path == "/ui/onboarding_debug.html"
+        and settings.app_env not in ("local", "development")
+    ):
+        return JSONResponse({"detail": "Not available"}, status_code=403)
+    return await call_next(request)
+
+
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 
 
@@ -129,6 +159,14 @@ class ProactiveAccountStateUpdateRequest(BaseModel):
     next_scan_at: Optional[str] = None
     cooldown_until: Optional[str] = None
     metadata: Optional[dict[str, Any]] = Field(default=None)
+
+
+class PlaintextGrantRequest(BaseModel):
+    reason: str
+    account_scope: list[str] = Field(default_factory=list)
+    resource_scope: list[str] = Field(default_factory=list)
+    time_scope_start: Optional[str] = None
+    time_scope_end: Optional[str] = None
 
 
 class WebRegisterRequest(BaseModel):
@@ -162,8 +200,6 @@ class WebCreateAgentRequest(BaseModel):
 
 
 class WebCreateBindingIntentRequest(BaseModel):
-    platform_user_id: str
-    account_id: str
     channel: Optional[str] = "openclaw-weixin"
 
 
@@ -193,6 +229,9 @@ def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict
             completed=True,
             error=None,
         )
+        # sender_id (WeChat OpenID) is not available at binding time — it only
+        # arrives with the user's first inbound message. Proactive welcome is
+        # skipped until then (see _send_onboarding_proactive_welcome).
         upsert_channel_binding(
             account_id=binding_intent["account_id"],
             channel=binding_intent["channel"],
@@ -243,6 +282,94 @@ async def _wait_for_binding_intent(binding_intent_id: str) -> None:
     if latest is None:
         return
     _complete_binding_intent_from_wait_result(latest, result)
+
+    # After successful binding, schedule a 5-second proactive onboarding welcome.
+    latest_after = get_binding_intent(binding_intent_id=binding_intent_id)
+    if latest_after and latest_after.get("status") == "completed":
+        account_id = latest_after["account_id"]
+        channel = latest_after["channel"]
+        channel_account_id = latest_after.get("channel_account_id")
+        session_key = latest_after.get("openclaw_login_session_key")
+        loop = asyncio.get_event_loop()
+        loop.call_later(
+            5.0,
+            lambda: loop.create_task(
+                _send_onboarding_welcome_if_pending(
+                    account_id=account_id,
+                    channel=channel,
+                    channel_account_id=channel_account_id,
+                    session_key=session_key,
+                )
+            ),
+        )
+
+
+_ONBOARDING_WELCOME_TEXT = ONBOARDING_WELCOME_TEXT
+
+
+async def _send_onboarding_welcome_if_pending(
+    *,
+    account_id: str,
+    channel: str,
+    channel_account_id: Optional[str],
+    session_key: Optional[str],
+) -> None:
+    """Send the onboarding welcome message if the user hasn't sent their first message yet.
+
+    Best-effort: requires a sender_id from channel_bindings. If not available,
+    the user will trigger onboarding with their first inbound message instead.
+    """
+    try:
+        state = await asyncio.to_thread(
+            get_account_onboarding_state, account_id=account_id
+        )
+        if state != "pending":
+            logger.info(
+                "onboarding proactive skipped account=%s state=%s (already advanced)",
+                account_id, state,
+            )
+            return
+
+        # Look up sender_id from channel bindings (populated when user first messages)
+        bindings = await asyncio.to_thread(
+            list_channel_bindings_for_account, account_id=account_id
+        )
+        to_user_id = None
+        resolved_session_key = session_key
+        for b in bindings:
+            if b.get("sender_id"):
+                to_user_id = b["sender_id"]
+                resolved_session_key = b.get("session_key") or session_key
+                break
+
+        if not to_user_id:
+            logger.info(
+                "onboarding proactive skipped account=%s reason=no_sender_id_yet "
+                "(user will trigger onboarding with first inbound message)",
+                account_id,
+            )
+            return
+
+        await asyncio.to_thread(
+            send_weixin_text,
+            to_user_id=to_user_id,
+            text=_ONBOARDING_WELCOME_TEXT,
+            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+            account_id=channel_account_id,
+            session_key=resolved_session_key,
+            channel=channel,
+        )
+        await asyncio.to_thread(
+            set_account_onboarding_state, account_id=account_id, state=ONBOARDING_STEP1_SENT
+        )
+        logger.info(
+            "onboarding proactive welcome sent account=%s to=%s state->step1_sent",
+            account_id, to_user_id,
+        )
+    except Exception as err:
+        logger.exception(
+            "onboarding proactive welcome failed account=%s error=%s", account_id, err
+        )
 
 
 def _schedule_binding_wait(binding_intent_id: str) -> None:
@@ -346,13 +473,42 @@ def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> N
         )
 
 
-def verify_admin_auth(authorization: Optional[str] = Header(default=None)) -> None:
-    expected = f"Bearer {settings.admin_token}"
-    if authorization != expected:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid admin authorization",
+def get_admin_user(authorization: Optional[str] = Header(default=None)) -> dict:
+    admin_expected = f"Bearer {settings.admin_token}"
+    if authorization == admin_expected:
+        user = upsert_admin_user(
+            admin_user_id="admin",
+            role="admin",
+            display_name="Admin",
         )
+        return user
+
+    staff_token = str(getattr(settings, "admin_staff_token", "") or "").strip()
+    if staff_token and authorization == f"Bearer {staff_token}":
+        user = upsert_admin_user(
+            admin_user_id="staff",
+            role="staff",
+            display_name="Staff",
+        )
+        return user
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid admin authorization",
+    )
+
+
+def verify_admin_auth(admin_user: dict = Depends(get_admin_user)) -> None:
+    return None
+
+
+def require_admin_user(admin_user: dict = Depends(get_admin_user)) -> dict:
+    if admin_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin role required",
+        )
+    return admin_user
 
 
 def _normalize_optional_state_datetime(value: Optional[str], *, field_name: str) -> Optional[str]:
@@ -372,6 +528,190 @@ def _normalize_optional_state_datetime(value: Optional[str], *, field_name: str)
     return format_state_time(parsed)
 
 
+_REDACTED_TEXT_FIELDS = {
+    "content",
+    "text",
+    "reply",
+    "system_prompt",
+    "prompt",
+    "messages",
+    "raw_payload",
+    "message",
+    "description",
+    "caption",
+}
+_METADATA_TEXT_FIELDS = {
+    "source",
+    "channel",
+    "channel_account_id",
+    "openclaw_session_key",
+    "account_active_session_key",
+    "sender_id",
+    "chat_id",
+    "message_id",
+    "message_type",
+    "reply_to_message_id",
+    "trace_kind",
+    "mode",
+    "identity",
+    "ai4all_bridge",
+    "raw_keys",
+}
+
+
+def _content_meta(value: Any) -> dict:
+    text = "" if value is None else str(value)
+    return {
+        "redacted": True,
+        "chars": len(text),
+        "preview": None,
+    }
+
+
+def _redact_raw_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = key_text.lower()
+            if (
+                normalized in _REDACTED_TEXT_FIELDS
+                or normalized.endswith(("_content", "_text", "_prompt", "_reply"))
+                or normalized.startswith(("content_", "text_", "prompt_", "reply_"))
+            ):
+                redacted[key_text] = _content_meta(item)
+            elif isinstance(item, (dict, list)):
+                redacted[key_text] = _redact_raw_payload(item)
+            else:
+                redacted[key_text] = item
+        return redacted
+    if isinstance(value, list):
+        return [_redact_raw_payload(item) for item in value]
+    return value
+
+
+def _redact_message(message: dict) -> dict:
+    item = dict(message)
+    content = item.pop("content", None)
+    item["content_redacted"] = True
+    item["content_chars"] = len(content or "")
+    item["content_preview"] = None
+    if "raw" in item:
+        item["raw_redacted"] = True
+        item["raw"] = _redact_raw_payload(item.get("raw") or {})
+    return item
+
+
+def _redact_trace(trace: dict) -> dict:
+    item = dict(trace)
+    system_prompt = item.pop("system_prompt", None)
+    messages = item.pop("messages", None)
+    reply = item.pop("reply", None)
+    item["system_prompt_redacted"] = True
+    item["system_prompt_chars"] = len(system_prompt or "")
+    item["messages_redacted"] = True
+    item["messages_count"] = len(messages or []) if isinstance(messages, list) else 0
+    item["messages_chars"] = sum(
+        len(str(message.get("content") or ""))
+        for message in messages or []
+        if isinstance(message, dict)
+    )
+    item["reply_redacted"] = True
+    item["reply_chars"] = len(reply or "")
+    if "metadata" in item:
+        item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
+    return item
+
+
+def _redact_profile(profile: dict) -> dict:
+    item = dict(profile or {})
+    if "system_prompt" in item:
+        system_prompt = item.pop("system_prompt")
+        item["system_prompt_redacted"] = True
+        item["system_prompt_chars"] = len(system_prompt or "")
+    if "preferences_json" in item:
+        prefs = item.pop("preferences_json")
+        item["preferences_redacted"] = True
+        item["preferences_chars"] = len(prefs or "")
+    return item
+
+
+def _redact_session(session: dict) -> dict:
+    item = dict(session or {})
+    for field in ("session_summary", "carryover_summary"):
+        if field in item:
+            value = item.pop(field)
+            item[f"{field}_redacted"] = True
+            item[f"{field}_chars"] = len(value or "")
+    return item
+
+
+def _audit_plaintext_access(
+    *,
+    admin_user: dict,
+    action: str,
+    resource_type: str,
+    resource_id: Optional[str],
+    account_id: Optional[str],
+    request_path: str,
+    reason: Optional[str] = None,
+    grant_id: Optional[int] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    insert_admin_access_event(
+        admin_user_id=admin_user.get("id"),
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        account_id=account_id,
+        plaintext=True,
+        grant_id=grant_id,
+        reason=reason or "admin_plaintext_access",
+        request_path=request_path,
+        metadata=metadata,
+    )
+
+
+def _now_db_time() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _require_plaintext_access(
+    *,
+    admin_user: dict,
+    account_id: str,
+    resource_type: str,
+) -> Optional[dict]:
+    if admin_user.get("role") == "admin":
+        return None
+    grant = find_active_admin_plaintext_grant(
+        requester_admin_user_id=str(admin_user.get("id")),
+        account_id=account_id,
+        resource_type=resource_type,
+        now=_now_db_time(),
+    )
+    if grant is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="plaintext grant required",
+        )
+    return grant
+
+
+def _clean_scope_list(values: list[str], *, field_name: str) -> list[str]:
+    result = []
+    for value in values or []:
+        text = str(value or "").strip()
+        if text:
+            result.append(text)
+    if not result:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must include at least one value",
+        )
+    return list(dict.fromkeys(result))
+
+
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
@@ -379,6 +719,11 @@ def _normalize_optional_state_datetime(value: Optional[str], *, field_name: str)
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok", "env": settings.app_env}
+
+
+@app.get("/admin/me")
+def admin_me(admin_user: dict = Depends(get_admin_user)) -> dict:
+    return {"admin_user": admin_user}
 
 
 # ---------------------------------------------------------------------------
@@ -396,15 +741,25 @@ def debug_messages(session_id: int, limit: int = 100, _: None = Depends(verify_a
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return {
-        "session": session,
-        "profile": get_profile_for_session(session_id=session_id),
-        "messages": list_session_messages(session_id=session_id, limit=limit),
+        "session": _redact_session(session),
+        "profile": _redact_profile(get_profile_for_session(session_id=session_id) or {}),
+        "messages": [
+            _redact_message(message)
+            for message in list_session_messages(session_id=session_id, limit=limit)
+        ],
+        "redacted": True,
     }
 
 
 @app.get("/debug/messages/raw")
 def debug_recent_message_raw(limit: int = 20, _: None = Depends(verify_admin_auth)) -> dict:
-    return {"messages": list_recent_message_raw(limit=limit)}
+    return {
+        "messages": [
+            _redact_message(message)
+            for message in list_recent_message_raw(limit=limit)
+        ],
+        "redacted": True,
+    }
 
 
 @app.get("/debug/messages/{message_db_id}/raw")
@@ -412,7 +767,7 @@ def debug_message_raw(message_db_id: int, _: None = Depends(verify_admin_auth)) 
     message = get_message_raw(message_db_id=message_db_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return {"message": message}
+    return {"message": _redact_message(message), "redacted": True}
 
 
 @app.get("/debug/traces")
@@ -423,11 +778,13 @@ def debug_traces(
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     return {
-        "traces": list_debug_traces(
-            account_id=account_id,
-            session_id=session_id,
-            limit=limit,
-        )
+        "traces": [
+            _redact_trace(t) for t in list_debug_traces(
+                account_id=account_id,
+                session_id=session_id,
+                limit=limit,
+            )
+        ]
     }
 
 
@@ -436,7 +793,7 @@ def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     trace = get_debug_trace(trace_id=trace_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
-    return {"trace": trace}
+    return {"trace": _redact_trace(trace), "redacted": True}
 
 
 @app.get("/debug/accounts/{account_id}/prompt-preview")
@@ -484,7 +841,9 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
             "display_name": account.get("display_name"),
             "agent_context": agent_context.metadata(),
         },
-        "prompt": prompt,
+        "prompt_redacted": True,
+        "prompt_chars": len(prompt),
+        "redacted": True,
     }
 
 
@@ -492,11 +851,14 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
 def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
+    content = path.read_text(encoding="utf-8")
     return {
         "account_id": account_id,
         "path": str(path),
-        "content": path.read_text(encoding="utf-8"),
+        "content_redacted": True,
+        "content_chars": len(content),
         "agent_context": context.metadata(),
+        "redacted": True,
     }
 
 
@@ -514,6 +876,137 @@ def debug_get_profile(session_id: int, _: None = Depends(verify_admin_auth)) -> 
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return {"profile": profile}
+
+
+@app.get("/debug/accounts/{account_id}/onboarding")
+def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    """Return onboarding state and collected context file contents for an account."""
+    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
+    from app.user_profiles import read_agent_context, context_file_path, CONTEXT_FILE_ORDER
+    import re
+
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    state = get_account_onboarding_state(account_id=account_id)
+    agent_ctx = read_agent_context(account_id)
+
+    identity_text = agent_ctx.blocks.get("IDENTITY", "")
+    user_text = agent_ctx.blocks.get("USER", "")
+    soul_text = agent_ctx.blocks.get("SOUL", "")
+
+    ai_name: Optional[str] = None
+    m = re.search(r"AI 名字[:：]\s*(.+)", identity_text)
+    if m:
+        ai_name = m.group(1).strip()
+
+    user_name: Optional[str] = None
+    m = re.search(r"用户称呼[:：]\s*(.+)", user_text)
+    if m:
+        user_name = m.group(1).strip()
+
+    prompt_ctx = build_onboarding_prompt_context(
+        state=state,
+        user_name=user_name,
+        ai_name=ai_name,
+        persona=None,
+        user_name_ask_count=0,
+        persona_ask_count=0,
+    )
+
+    return {
+        "account_id": account_id,
+        "onboarding_state": state,
+        "onboarding_active": is_onboarding_active(state),
+        "collected": {
+            "user_name": user_name,
+            "ai_name": ai_name,
+            "soul_chars": len(soul_text),
+            "soul_preview": soul_text[:200] if soul_text else None,
+        },
+        "context_files": {
+            filename: {
+                "exists": (context_file_path(account_id, filename)).exists(),
+                "chars": agent_ctx.files.get(filename, {}).get("chars", 0),
+            }
+            for filename in CONTEXT_FILE_ORDER
+        },
+        "prompt_context_preview": prompt_ctx[:500] if prompt_ctx else None,
+    }
+
+
+class OnboardingStateUpdateRequest(BaseModel):
+    state: str
+
+
+@app.patch("/debug/accounts/{account_id}/onboarding/state")
+def debug_set_onboarding_state(
+    account_id: str,
+    payload: OnboardingStateUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """Manually set onboarding state — useful for testing specific steps."""
+    from app.onboarding import ONBOARDING_COMPLETE, ONBOARDING_TIMED_OUT
+    valid_states = {"pending", "step1_sent", "step2_sent", "step3_sent", "complete", "timed_out"}
+    if payload.state not in valid_states:
+        raise HTTPException(status_code=400, detail=f"invalid state, must be one of: {sorted(valid_states)}")
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    set_account_onboarding_state(account_id=account_id, state=payload.state)
+    return {"status": "ok", "account_id": account_id, "onboarding_state": payload.state}
+
+
+class OnboardingResetRequest(BaseModel):
+    clear_context_files: bool = True
+
+
+@app.post("/debug/accounts/{account_id}/onboarding/reset")
+def debug_reset_onboarding(
+    account_id: str,
+    payload: OnboardingResetRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """Reset onboarding to pending. Optionally wipe SOUL.md / IDENTITY.md / USER.md.
+
+    Safe to call multiple times. Useful for re-testing the full onboarding flow
+    without needing to re-bind a WeChat account.
+    """
+    import shutil
+    from app.user_profiles import account_profile_dir, context_file_path, ensure_agent_context_files
+
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+
+    set_account_onboarding_state(account_id=account_id, state="pending")
+
+    # Clear all session messages so LLM starts fresh without prior conversation history
+    cleared_messages = clear_all_messages_for_account(account_id=account_id)
+
+    cleared = []
+    if payload.clear_context_files:
+        for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
+            path = context_file_path(account_id, filename)
+            if path.exists():
+                path.unlink()
+                cleared.append(filename)
+        # Clear daily memory notes (memory/YYYY-MM-DD.md files)
+        memory_dir = account_profile_dir(account_id) / "memory"
+        if memory_dir.exists():
+            shutil.rmtree(memory_dir)
+            cleared.append("memory/")
+        # Re-create defaults
+        ensure_agent_context_files(account_id, display_name=account.get("display_name"))
+
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "onboarding_state": "pending",
+        "cleared_files": cleared,
+        "cleared_messages": cleared_messages,
+    }
 
 
 @app.post("/debug/sessions/{session_id}/profile")
@@ -652,8 +1145,10 @@ def web_register_and_binding_intent(
         binding_intent = _start_openclaw_qr_for_binding(binding_intent)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
+    session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
     return {
         "status": "ok",
+        "session_token": session["token"],
         "platform_user": platform_user,
         "account": account_result["account"],
         "profile": account_result["profile"],
@@ -681,12 +1176,30 @@ def web_create_agent(payload: WebCreateAgentRequest) -> dict:
     return {"status": "ok", **result}
 
 
+def _require_session(authorization: Optional[str] = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="未登录")
+    token = authorization.removeprefix("Bearer ").strip()
+    platform_user = get_platform_user_by_session_token(token=token)
+    if platform_user is None:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
+    return platform_user
+
+
 @app.post("/web/binding-intents")
-def web_create_binding_intent(payload: WebCreateBindingIntentRequest) -> dict:
+def web_create_binding_intent(
+    payload: WebCreateBindingIntentRequest,
+    platform_user=Depends(_require_session),
+) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name="AI4ALL 助手",
+        plan="free",
+    )
     try:
         binding_intent = create_binding_intent(
-            platform_user_id=payload.platform_user_id,
-            account_id=payload.account_id,
+            platform_user_id=platform_user["id"],
+            account_id=account_result["account"]["id"],
             channel=payload.channel or "openclaw-weixin",
         )
         binding_intent = _start_openclaw_qr_for_binding(binding_intent)
@@ -708,6 +1221,101 @@ def web_get_binding_intent(binding_intent_id: str) -> dict:
     return {"binding_intent": binding_intent}
 
 
+class WebLoginRequest(BaseModel):
+    verified_token: str
+    phone: str
+
+
+@app.post("/web/login")
+def web_login(payload: WebLoginRequest) -> dict:
+    """Exchange a verified OTP token for a session token.
+
+    Handles both new and returning users in one call:
+    - Creates or finds platform_user and default account.
+    - Creates a 7-day session token.
+    - If no active WeChat binding exists, also starts a new binding intent (QR).
+    - Returns has_active_binding so the frontend can decide to show QR or go to dashboard.
+    """
+    try:
+        normalized_phone = normalize_phone(payload.phone)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+
+    verification = consume_valid_verification_token(
+        verified_token=payload.verified_token,
+        phone=normalized_phone,
+    )
+    if verification is None:
+        raise HTTPException(status_code=400, detail="验证凭证无效或已过期")
+
+    platform_user = create_or_get_platform_user_by_phone(
+        phone=normalized_phone,
+        display_name=None,
+    )
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name="AI4ALL 助手",
+        plan="free",
+    )
+    session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
+    bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])
+    has_active_binding = len(bindings) > 0
+
+    # If no binding yet, proactively create a binding intent so the frontend can show QR immediately
+    binding_intent = None
+    if not has_active_binding:
+        try:
+            binding_intent = create_binding_intent(
+                platform_user_id=platform_user["id"],
+                account_id=account_result["account"]["id"],
+                channel="openclaw-weixin",
+            )
+            binding_intent = _start_openclaw_qr_for_binding(binding_intent)
+        except Exception as err:
+            logger.warning("web_login: failed to create binding intent: %s", err)
+
+    return {
+        "status": "ok",
+        "session_token": session["token"],
+        "platform_user": platform_user,
+        "account": account_result["account"],
+        "subscription": account_result["subscription"],
+        "has_active_binding": has_active_binding,
+        "binding_intent": binding_intent,
+        "binding_mode": "openclaw_gateway_qr",
+    }
+
+
+@app.get("/web/me")
+def web_me(platform_user=Depends(_require_session)) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name="AI4ALL 助手",
+        plan="free",
+    )
+    return {
+        "status": "ok",
+        "platform_user": platform_user,
+        "account": account_result["account"],
+        "subscription": account_result["subscription"],
+    }
+
+
+@app.get("/web/me/bindings")
+def web_me_bindings(platform_user=Depends(_require_session)) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name="AI4ALL 助手",
+        plan="free",
+    )
+    bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])
+    return {
+        "status": "ok",
+        "account_id": account_result["account"]["id"],
+        "bindings": bindings,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Admin — accounts
 # ---------------------------------------------------------------------------
@@ -725,7 +1333,7 @@ def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict
     return {
         "account": account,
         "channel_bindings": list_channel_bindings_for_account(account_id=account_id),
-        "profile": get_profile_for_account(account_id=account_id),
+        "profile": _redact_profile(get_profile_for_account(account_id=account_id) or {}),
         "sessions": list_sessions_for_account(account_id=account_id),
     }
 
@@ -795,11 +1403,14 @@ def admin_get_user_profile(
 ) -> dict:
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
+    content = path.read_text(encoding="utf-8")
     return {
         "account_id": account_id,
         "path": str(path),
-        "content": path.read_text(encoding="utf-8"),
+        "content_redacted": True,
+        "content_chars": len(content),
         "agent_context": context.metadata(),
+        "redacted": True,
     }
 
 
@@ -1128,9 +1739,13 @@ def admin_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return {
-        "session": session,
-        "profile": get_profile_for_session(session_id=session_id),
-        "messages": list_session_messages(session_id=session_id, limit=100),
+        "session": _redact_session(session),
+        "profile": _redact_profile(get_profile_for_session(session_id=session_id) or {}),
+        "messages": [
+            _redact_message(message)
+            for message in list_session_messages(session_id=session_id, limit=100)
+        ],
+        "redacted": True,
     }
 
 
@@ -1151,7 +1766,13 @@ def admin_recent_message_raw(
     limit: int = 20,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    return {"messages": list_recent_message_raw(limit=limit)}
+    return {
+        "messages": [
+            _redact_message(message)
+            for message in list_recent_message_raw(limit=limit)
+        ],
+        "redacted": True,
+    }
 
 
 @app.get("/admin/messages/{message_db_id}/raw")
@@ -1162,7 +1783,7 @@ def admin_message_raw(
     message = get_message_raw(message_db_id=message_db_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return {"message": message}
+    return {"message": _redact_message(message), "redacted": True}
 
 
 @app.get("/admin/debug/traces")
@@ -1173,11 +1794,13 @@ def admin_debug_traces(
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     return {
-        "traces": list_debug_traces(
-            account_id=account_id,
-            session_id=session_id,
-            limit=limit,
-        )
+        "traces": [
+            _redact_trace(t) for t in list_debug_traces(
+                account_id=account_id,
+                session_id=session_id,
+                limit=limit,
+            )
+        ]
     }
 
 
@@ -1189,7 +1812,267 @@ def admin_debug_trace(
     trace = get_debug_trace(trace_id=trace_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
-    return {"trace": trace}
+    return {"trace": _redact_trace(trace), "redacted": True}
+
+
+@app.get("/admin/plaintext/messages/{message_db_id}/raw")
+def admin_plaintext_message_raw(
+    message_db_id: int,
+    reason: Optional[str] = None,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    message = get_message_raw(message_db_id=message_db_id)
+    if message is None:
+        raise HTTPException(status_code=404, detail="message not found")
+    grant = _require_plaintext_access(
+        admin_user=admin_user,
+        account_id=str(message.get("account_id")),
+        resource_type="message",
+    )
+    _audit_plaintext_access(
+        admin_user=admin_user,
+        action="view_message_raw",
+        resource_type="message",
+        resource_id=str(message_db_id),
+        account_id=message.get("account_id"),
+        request_path=f"/admin/plaintext/messages/{message_db_id}/raw",
+        reason=reason,
+        grant_id=int(grant["id"]) if grant else None,
+    )
+    return {"message": message, "plaintext": True}
+
+
+@app.get("/admin/plaintext/debug-traces/{trace_id}")
+def admin_plaintext_debug_trace(
+    trace_id: str,
+    reason: Optional[str] = None,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    trace = get_debug_trace(trace_id=trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    grant = _require_plaintext_access(
+        admin_user=admin_user,
+        account_id=str(trace.get("account_id")),
+        resource_type="debug_trace",
+    )
+    _audit_plaintext_access(
+        admin_user=admin_user,
+        action="view_debug_trace",
+        resource_type="debug_trace",
+        resource_id=trace_id,
+        account_id=trace.get("account_id"),
+        request_path=f"/admin/plaintext/debug-traces/{trace_id}",
+        reason=reason,
+        grant_id=int(grant["id"]) if grant else None,
+    )
+    return {"trace": trace, "plaintext": True}
+
+
+@app.get("/admin/plaintext/accounts/{account_id}/user-profile")
+def admin_plaintext_user_profile(
+    account_id: str,
+    reason: Optional[str] = None,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    grant = _require_plaintext_access(
+        admin_user=admin_user,
+        account_id=account_id,
+        resource_type="user_profile",
+    )
+    path = ensure_user_profile(account_id)
+    context = read_agent_context(account_id)
+    _audit_plaintext_access(
+        admin_user=admin_user,
+        action="view_user_profile",
+        resource_type="user_profile",
+        resource_id=account_id,
+        account_id=account_id,
+        request_path=f"/admin/plaintext/accounts/{account_id}/user-profile",
+        reason=reason,
+        grant_id=int(grant["id"]) if grant else None,
+    )
+    return {
+        "account_id": account_id,
+        "path": str(path),
+        "content": path.read_text(encoding="utf-8"),
+        "agent_context": context.metadata(),
+        "plaintext": True,
+    }
+
+
+@app.get("/admin/access-events")
+def admin_access_events(
+    account_id: Optional[str] = None,
+    plaintext: Optional[bool] = None,
+    limit: int = 100,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return {
+        "events": list_admin_access_events(
+            account_id=account_id,
+            plaintext=plaintext,
+            limit=limit,
+        )
+    }
+
+
+@app.get("/admin/users")
+def admin_users(
+    limit: int = 100,
+    _: dict = Depends(require_admin_user),
+) -> dict:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    return {"admin_users": list_admin_users(limit=limit)}
+
+
+@app.post("/admin/plaintext-grants")
+def admin_create_plaintext_grant(
+    payload: PlaintextGrantRequest,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    reason = str(payload.reason or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="reason is required")
+    account_scope = _clean_scope_list(payload.account_scope, field_name="account_scope")
+    resource_scope = _clean_scope_list(payload.resource_scope, field_name="resource_scope")
+    grant = create_admin_plaintext_grant(
+        requester_admin_user_id=str(admin_user["id"]),
+        reason=reason,
+        account_scope=account_scope,
+        resource_scope=resource_scope,
+        time_scope_start=_normalize_optional_state_datetime(
+            payload.time_scope_start,
+            field_name="time_scope_start",
+        ),
+        time_scope_end=_normalize_optional_state_datetime(
+            payload.time_scope_end,
+            field_name="time_scope_end",
+        ),
+    )
+    insert_admin_access_event(
+        admin_user_id=admin_user["id"],
+        action="request_plaintext_grant",
+        resource_type="plaintext_grant",
+        resource_id=str(grant["id"]),
+        account_id=account_scope[0] if len(account_scope) == 1 else None,
+        plaintext=False,
+        reason=reason,
+        request_path="/admin/plaintext-grants",
+        metadata={"account_scope": account_scope, "resource_scope": resource_scope},
+    )
+    return {"status": "ok", "grant": grant}
+
+
+@app.get("/admin/plaintext-grants")
+def admin_list_plaintext_grants(
+    requester_admin_user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    requester = requester_admin_user_id
+    if admin_user.get("role") != "admin":
+        requester = str(admin_user["id"])
+    return {
+        "grants": list_admin_plaintext_grants(
+            requester_admin_user_id=requester,
+            status=status,
+            limit=limit,
+        )
+    }
+
+
+@app.post("/admin/plaintext-grants/{grant_id}/approve")
+def admin_approve_plaintext_grant(
+    grant_id: int,
+    admin_user: dict = Depends(require_admin_user),
+) -> dict:
+    grant = get_admin_plaintext_grant(grant_id=grant_id)
+    if grant is None:
+        raise HTTPException(status_code=404, detail="plaintext grant not found")
+    if grant["status"] != "pending":
+        raise HTTPException(status_code=400, detail="only pending grants can be approved")
+    now = datetime.now()
+    approved_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    expires_at = (now + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    updated = update_admin_plaintext_grant_status(
+        grant_id=grant_id,
+        status="approved",
+        approver_admin_user_id=str(admin_user["id"]),
+        approved_at=approved_at,
+        expires_at=expires_at,
+    )
+    insert_admin_access_event(
+        admin_user_id=admin_user["id"],
+        action="approve_plaintext_grant",
+        resource_type="plaintext_grant",
+        resource_id=str(grant_id),
+        account_id=updated["account_scope"][0] if updated and len(updated.get("account_scope") or []) == 1 else None,
+        plaintext=False,
+        request_path=f"/admin/plaintext-grants/{grant_id}/approve",
+    )
+    return {"status": "ok", "grant": updated}
+
+
+@app.post("/admin/plaintext-grants/{grant_id}/reject")
+def admin_reject_plaintext_grant(
+    grant_id: int,
+    admin_user: dict = Depends(require_admin_user),
+) -> dict:
+    grant = get_admin_plaintext_grant(grant_id=grant_id)
+    if grant is None:
+        raise HTTPException(status_code=404, detail="plaintext grant not found")
+    if grant["status"] != "pending":
+        raise HTTPException(status_code=400, detail="only pending grants can be rejected")
+    updated = update_admin_plaintext_grant_status(
+        grant_id=grant_id,
+        status="rejected",
+        approver_admin_user_id=str(admin_user["id"]),
+    )
+    insert_admin_access_event(
+        admin_user_id=admin_user["id"],
+        action="reject_plaintext_grant",
+        resource_type="plaintext_grant",
+        resource_id=str(grant_id),
+        plaintext=False,
+        request_path=f"/admin/plaintext-grants/{grant_id}/reject",
+    )
+    return {"status": "ok", "grant": updated}
+
+
+@app.post("/admin/plaintext-grants/{grant_id}/revoke")
+def admin_revoke_plaintext_grant(
+    grant_id: int,
+    admin_user: dict = Depends(require_admin_user),
+) -> dict:
+    grant = get_admin_plaintext_grant(grant_id=grant_id)
+    if grant is None:
+        raise HTTPException(status_code=404, detail="plaintext grant not found")
+    if grant["status"] not in {"pending", "approved"}:
+        raise HTTPException(status_code=400, detail="only pending or approved grants can be revoked")
+    updated = update_admin_plaintext_grant_status(
+        grant_id=grant_id,
+        status="revoked",
+        approver_admin_user_id=str(admin_user["id"]),
+        revoked_at=_now_db_time(),
+    )
+    insert_admin_access_event(
+        admin_user_id=admin_user["id"],
+        action="revoke_plaintext_grant",
+        resource_type="plaintext_grant",
+        resource_id=str(grant_id),
+        plaintext=False,
+        request_path=f"/admin/plaintext-grants/{grant_id}/revoke",
+    )
+    return {"status": "ok", "grant": updated}
 
 
 # ---------------------------------------------------------------------------

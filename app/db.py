@@ -206,6 +206,8 @@ def init_db() -> None:
                 display_name TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
                 notes TEXT,
+                onboarding_state TEXT NOT NULL DEFAULT 'pending',
+                onboarding_updated_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
@@ -578,6 +580,63 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_debug_traces_session_created
             ON debug_traces(session_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id TEXT PRIMARY KEY,
+                email TEXT,
+                display_name TEXT,
+                role TEXT NOT NULL DEFAULT 'staff',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_admin_users_role_status
+            ON admin_users(role, status);
+
+            CREATE TABLE IF NOT EXISTS admin_access_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_user_id TEXT,
+                action TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_id TEXT,
+                account_id TEXT,
+                plaintext INTEGER NOT NULL DEFAULT 0,
+                grant_id INTEGER,
+                reason TEXT,
+                request_path TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_admin_access_events_account_created
+            ON admin_access_events(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_admin_access_events_plaintext_created
+            ON admin_access_events(plaintext, created_at);
+
+            CREATE TABLE IF NOT EXISTS admin_plaintext_grants (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                requester_admin_user_id TEXT NOT NULL,
+                approver_admin_user_id TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reason TEXT,
+                account_scope_json TEXT NOT NULL DEFAULT '[]',
+                resource_scope_json TEXT NOT NULL DEFAULT '[]',
+                time_scope_start TEXT,
+                time_scope_end TEXT,
+                approved_at TEXT,
+                expires_at TEXT,
+                revoked_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_requester_status
+            ON admin_plaintext_grants(requester_admin_user_id, status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_status_created
+            ON admin_plaintext_grants(status, created_at);
+
             CREATE TABLE IF NOT EXISTS phone_verifications (
                 id TEXT PRIMARY KEY,
                 phone TEXT NOT NULL,
@@ -615,6 +674,26 @@ def init_db() -> None:
         _ensure_column(conn, "binding_intents", "manual_login_command", "TEXT")
         _ensure_column(conn, "binding_intents", "error", "TEXT")
         _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
+        _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
+        _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS platform_user_sessions (
+                id TEXT PRIMARY KEY,
+                platform_user_id TEXT NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_platform_user_sessions_token
+            ON platform_user_sessions(token)
+            """
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -746,6 +825,304 @@ def _decode_json_field(
         item[target_field] = default
         item[f"{target_field}_decode_error"] = True
     return item
+
+
+# ---------------------------------------------------------------------------
+# Admin access events
+# ---------------------------------------------------------------------------
+
+def upsert_admin_user(
+    *,
+    admin_user_id: str,
+    role: str,
+    display_name: Optional[str] = None,
+    email: Optional[str] = None,
+    status: str = "active",
+) -> Dict[str, Any]:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO admin_users(id, email, display_name, role, status, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                email = COALESCE(excluded.email, admin_users.email),
+                display_name = COALESCE(excluded.display_name, admin_users.display_name),
+                role = excluded.role,
+                status = excluded.status,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (admin_user_id, email, display_name, role, status),
+        )
+        row = conn.execute(
+            "SELECT * FROM admin_users WHERE id = ?",
+            (admin_user_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("admin_user was not created")
+    return dict(row)
+
+
+def get_admin_user(*, admin_user_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM admin_users WHERE id = ?",
+            (admin_user_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_admin_users(*, limit: int = 100) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM admin_users
+            ORDER BY role ASC, id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _decode_admin_plaintext_grant(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    for source_field, target_field in (
+        ("account_scope_json", "account_scope"),
+        ("resource_scope_json", "resource_scope"),
+    ):
+        raw_json = item.pop(source_field, None)
+        try:
+            value = json.loads(raw_json or "[]")
+        except json.JSONDecodeError:
+            value = []
+            item[f"{target_field}_decode_error"] = True
+        item[target_field] = value if isinstance(value, list) else []
+    return item
+
+
+def create_admin_plaintext_grant(
+    *,
+    requester_admin_user_id: str,
+    reason: str,
+    account_scope: Optional[List[str]] = None,
+    resource_scope: Optional[List[str]] = None,
+    time_scope_start: Optional[str] = None,
+    time_scope_end: Optional[str] = None,
+) -> Dict[str, Any]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO admin_plaintext_grants(
+                requester_admin_user_id, reason, account_scope_json,
+                resource_scope_json, time_scope_start, time_scope_end
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                requester_admin_user_id,
+                reason,
+                json.dumps(account_scope or [], ensure_ascii=False),
+                json.dumps(resource_scope or [], ensure_ascii=False),
+                time_scope_start,
+                time_scope_end,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM admin_plaintext_grants WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("admin_plaintext_grant was not created")
+    return _decode_admin_plaintext_grant(row)
+
+
+def get_admin_plaintext_grant(*, grant_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM admin_plaintext_grants WHERE id = ?",
+            (grant_id,),
+        ).fetchone()
+    return _decode_admin_plaintext_grant(row) if row else None
+
+
+def list_admin_plaintext_grants(
+    *,
+    requester_admin_user_id: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if requester_admin_user_id:
+        clauses.append("requester_admin_user_id = ?")
+        params.append(requester_admin_user_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM admin_plaintext_grants
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_admin_plaintext_grant(row) for row in rows]
+
+
+def update_admin_plaintext_grant_status(
+    *,
+    grant_id: int,
+    status: str,
+    approver_admin_user_id: Optional[str] = None,
+    approved_at: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    revoked_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE admin_plaintext_grants
+            SET status = ?,
+                approver_admin_user_id = COALESCE(?, approver_admin_user_id),
+                approved_at = COALESCE(?, approved_at),
+                expires_at = COALESCE(?, expires_at),
+                revoked_at = COALESCE(?, revoked_at),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                status,
+                approver_admin_user_id,
+                approved_at,
+                expires_at,
+                revoked_at,
+                grant_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM admin_plaintext_grants WHERE id = ?",
+            (grant_id,),
+        ).fetchone()
+    return _decode_admin_plaintext_grant(row) if row else None
+
+
+def find_active_admin_plaintext_grant(
+    *,
+    requester_admin_user_id: str,
+    account_id: str,
+    resource_type: str,
+    now: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM admin_plaintext_grants
+            WHERE requester_admin_user_id = ?
+              AND status = 'approved'
+              AND expires_at IS NOT NULL
+              AND expires_at > ?
+            ORDER BY expires_at DESC, id DESC
+            """,
+            (requester_admin_user_id, now),
+        ).fetchall()
+    for row in rows:
+        grant = _decode_admin_plaintext_grant(row)
+        account_scope = [str(item) for item in grant.get("account_scope") or []]
+        resource_scope = [str(item) for item in grant.get("resource_scope") or []]
+        if account_scope and account_id not in account_scope:
+            continue
+        if resource_scope and resource_type not in resource_scope:
+            continue
+        return grant
+    return None
+
+
+def insert_admin_access_event(
+    *,
+    admin_user_id: Optional[str],
+    action: str,
+    resource_type: str,
+    resource_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+    plaintext: bool = False,
+    grant_id: Optional[int] = None,
+    reason: Optional[str] = None,
+    request_path: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> int:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO admin_access_events(
+                admin_user_id, action, resource_type, resource_id, account_id,
+                plaintext, grant_id, reason, request_path, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                admin_user_id,
+                action,
+                resource_type,
+                resource_id,
+                account_id,
+                1 if plaintext else 0,
+                grant_id,
+                reason,
+                request_path,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def list_admin_access_events(
+    *,
+    account_id: Optional[str] = None,
+    plaintext: Optional[bool] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if plaintext is not None:
+        clauses.append("plaintext = ?")
+        params.append(1 if plaintext else 0)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                id, admin_user_id, action, resource_type, resource_id,
+                account_id, plaintext, grant_id, reason, request_path,
+                metadata_json, created_at
+            FROM admin_access_events
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    events = []
+    for row in rows:
+        item = dict(row)
+        item["plaintext"] = bool(item.get("plaintext"))
+        events.append(
+            _decode_json_field(
+                item,
+                source_field="metadata_json",
+                target_field="metadata",
+                default={},
+            )
+        )
+    return events
 
 
 def create_dreaming_run(
@@ -2328,6 +2705,15 @@ def clear_session_messages(*, session_id: int) -> int:
         return int(cursor.rowcount)
 
 
+def clear_all_messages_for_account(*, account_id: str) -> int:
+    with connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE account_id = ?)",
+            (account_id,),
+        )
+        return int(cursor.rowcount)
+
+
 def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -2598,6 +2984,25 @@ def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, An
             (status, account_id),
         )
     return get_account(account_id=account_id)
+
+
+def get_account_onboarding_state(*, account_id: str) -> str:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT onboarding_state FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+    if row is None:
+        return "pending"
+    return row["onboarding_state"] or "pending"
+
+
+def set_account_onboarding_state(*, account_id: str, state: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (state, account_id),
+        )
 
 
 def get_daily_usage(*, account_id: str, date: str) -> int:
@@ -3805,6 +4210,49 @@ def get_valid_verification_by_token(
               AND token_expires_at > datetime('now')
             """,
             (verified_token, normalized),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Platform user sessions
+# ---------------------------------------------------------------------------
+
+def create_platform_user_session(
+    *,
+    platform_user_id: str,
+    days: int = 7,
+) -> Dict[str, Any]:
+    import secrets
+    token = secrets.token_urlsafe(32)
+    session_id = f"sess_{uuid.uuid4().hex}"
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO platform_user_sessions(id, platform_user_id, token, expires_at)
+            VALUES (?, ?, ?, datetime('now', ? || ' days'))
+            """,
+            (session_id, platform_user_id, token, f"+{days}"),
+        )
+        row = conn.execute(
+            "SELECT * FROM platform_user_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def get_platform_user_by_session_token(*, token: str) -> Optional[Dict[str, Any]]:
+    """Return platform_user row if session token is valid and not expired."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT pu.*
+            FROM platform_users pu
+            JOIN platform_user_sessions s ON s.platform_user_id = pu.id
+            WHERE s.token = ?
+              AND s.expires_at > datetime('now')
+            """,
+            (token,),
         ).fetchone()
     return dict(row) if row else None
 

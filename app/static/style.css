@@ -22,6 +22,7 @@ button.danger:hover { background: #fef2f2; }
 .status-msg { font-size: .82rem; margin-left: 10px; }
 .status-msg.success { color: #16a34a; }
 .status-msg.error { color: #dc2626; }
+.pill { display: inline-flex; align-items: center; min-height: 26px; padding: 3px 9px; border: 1px solid #d1d5db; border-radius: 999px; background: #fff; color: #4b5563; font-size: .8rem; }
 label { display: block; font-size: .82rem; color: #6b7280; margin-bottom: 4px; }
 input[type=text], input[type=number], textarea, select { width: 100%; padding: 7px 10px; border: 1px solid #d1d5db; border-radius: 5px; font-size: .9rem; background: #fff; }
 .mono-input { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .8rem; }
@@ -40,6 +41,7 @@ textarea { min-height: 90px; resize: vertical; font-family: inherit; }
 .msg-role.user { color: #374151; }
 .msg-role.assistant { color: #3b82f6; }
 .msg-content { flex: 1; white-space: pre-wrap; word-break: break-word; }
+.msg-content.redacted { color: #6b7280; font-style: italic; }
 .msg-time { font-size: .75rem; color: #9ca3af; white-space: nowrap; }
 .binding-row { border: 1px solid #e5e7eb; border-radius: 6px; padding: 12px; margin-bottom: 8px; background: #fcfcfc; }
 .binding-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

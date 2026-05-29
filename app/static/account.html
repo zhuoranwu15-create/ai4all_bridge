@@ -8,6 +8,7 @@
 </head>
 <body>
   <a class="back-link" href="index.html">← 返回列表</a>
+  <span id="admin-user" class="pill">—</span>
   <div id="err" style="display:none" class="status-msg error"></div>
   <div id="content" style="display:none">
 
@@ -88,6 +89,7 @@
 
     async function loadAll() {
       try {
+        await loadAdminMe();
         var results = await Promise.all([
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId)),
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/usage'),
@@ -183,8 +185,10 @@
             ? msgs.map(function(m) {
                 return '<div class="msg">'
                   + '<span class="msg-role ' + esc(m.role) + '">' + (m.role === 'user' ? '用户' : 'AI') + '</span>'
-                  + '<span class="msg-content">' + esc(m.content || '') + '</span>'
-                  + '<span class="msg-time">' + esc((m.created_at || '').slice(0, 16)) + '</span>'
+                  + '<span class="msg-content redacted">' + esc(contentLabel(m)) + '</span>'
+                  + '<span class="msg-time">' + esc(formatDateTime(m.created_at)) + '</span>'
+                  + '<button onclick="requestPlaintext(' + m.id + ', event)">申请</button>'
+                  + '<button onclick="viewPlaintext(' + m.id + ', event)">明文</button>'
                   + '</div>';
               }).join('')
             : '<div class="msg"><span class="msg-content">暂无消息</span></div>';
@@ -195,6 +199,37 @@
       }
       container.classList.add('open');
       btn.textContent = '收起';
+    }
+
+    async function requestPlaintext(messageId, ev) {
+      if (ev) ev.stopPropagation();
+      var reason = prompt('申请明文访问原因：');
+      if (!reason) return;
+      try {
+        await apiFetch('/admin/plaintext-grants', {
+          method: 'POST',
+          body: JSON.stringify({
+            reason: reason,
+            account_scope: [accountId],
+            resource_scope: ['message'],
+          }),
+        });
+        alert('已提交明文访问申请');
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function viewPlaintext(messageId, ev) {
+      if (ev) ev.stopPropagation();
+      var reason = prompt('查看明文原因：', '必要排查');
+      if (!reason) return;
+      try {
+        var data = await apiFetch('/admin/plaintext/messages/' + messageId + '/raw?reason=' + encodeURIComponent(reason));
+        alert(data.message.content || '(空内容)');
+      } catch (e) {
+        alert(e.message);
+      }
     }
 
     async function saveBasic() {

@@ -9,6 +9,7 @@ def test_settings(tmp_path):
     s.user_profiles_dir = str(tmp_path / "profiles")
     s.ai4all_bridge_secret = "test-secret"
     s.admin_token = "test-admin"
+    s.admin_staff_token = "test-staff"
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_model = "test-model"
