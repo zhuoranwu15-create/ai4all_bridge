@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户中心 — 朝夕相伴</title>
+  <link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<!-- 顶栏 -->
+<nav class="site-nav">
+  <a class="brand-logo" href="home.html">
+    <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
+  </a>
+  <div class="nav-actions">
+    <span id="nav-phone" style="font-size:.85rem;color:var(--text-sub)"></span>
+    <button class="btn btn-ghost btn-sm" onclick="logout()">退出登录</button>
+  </div>
+</nav>
+
+<!-- 主体 -->
+<main class="dashboard-wrap">
+
+  <!-- 加载中 -->
+  <div id="loading" style="text-align:center;padding:60px;color:var(--text-hint)">
+    加载中…
+  </div>
+
+  <!-- 内容区（加载后展示） -->
+  <div id="content" style="display:none">
+
+    <!-- 第一行：账号 + 贝壳 -->
+    <div class="dashboard-grid">
+
+      <!-- 账号信息 -->
+      <div class="card">
+        <div class="card-header">
+          <h3>我的账号</h3>
+        </div>
+        <div class="card-row">
+          <div class="card-label">手机号</div>
+          <div class="card-value" id="d-phone">—</div>
+        </div>
+        <div class="card-row">
+          <div class="card-label">Account ID</div>
+          <div class="card-value mono" id="d-account-id">—</div>
+        </div>
+        <div class="card-row">
+          <div class="card-label">套餐</div>
+          <div class="card-value" id="d-plan">—</div>
+        </div>
+        <div class="card-row">
+          <div class="card-label">注册时间</div>
+          <div class="card-value" id="d-created">—</div>
+        </div>
+      </div>
+
+      <!-- 贝壳余额 -->
+      <div class="card">
+        <div class="card-header">
+          <h3>贝壳余额</h3>
+        </div>
+        <div>
+          <span class="wallet-amount">0</span>
+          <span class="wallet-unit">贝壳</span>
+        </div>
+        <div class="wallet-note" style="margin-top:12px">
+          内测期间赠送贝壳，充值套餐即将上线
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:16px" disabled>
+          充值（敬请期待）
+        </button>
+      </div>
+
+    </div>
+
+    <!-- 第二行：微信绑定 -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3>微信绑定</h3>
+        <button class="btn btn-secondary btn-sm" id="btn-rebind" onclick="startRebind()">
+          重新绑定
+        </button>
+      </div>
+
+      <!-- 已绑定状态 -->
+      <div id="binding-info">
+        <div class="card-row">
+          <div class="card-label">绑定状态</div>
+          <div class="card-value" id="d-binding-status">检查中…</div>
+        </div>
+        <div class="card-row" id="row-channel-account" style="display:none">
+          <div class="card-label">微信账号标识</div>
+          <div class="card-value mono" id="d-channel-account">—</div>
+        </div>
+        <div class="card-row" id="row-last-seen" style="display:none">
+          <div class="card-label">最近活跃</div>
+          <div class="card-value" id="d-last-seen">—</div>
+        </div>
+      </div>
+
+      <!-- 重新绑定二维码区 -->
+      <div id="rebind-qr-area" style="display:none;border-top:1px solid var(--border);padding-top:20px;margin-top:4px">
+        <div class="qr-wrap">
+          <img id="rebind-qr-img" src="" alt="扫码重新绑定" style="width:180px;height:180px">
+          <div class="qr-caption">请用要接入的微信号扫描</div>
+          <div class="qr-status" id="rebind-qr-status">等待扫码中…</div>
+        </div>
+        <div id="msg-rebind" class="msg" style="margin-top:8px"></div>
+      </div>
+    </div>
+
+    <!-- 提示 -->
+    <div style="text-align:center;font-size:.83rem;color:var(--text-hint);padding-bottom:32px">
+      更多功能（邀请好友、历史记录、通知设置）即将上线
+    </div>
+
+  </div><!-- /content -->
+
+</main>
+
+<footer class="site-footer">
+  © 2026 朝夕相伴 · <a href="mailto:support@ai4company.top" style="color:inherit">support@ai4company.top</a>
+</footer>
+
+<script>
+var S = {
+  sessionToken: null,
+  platformUser: null,
+  account: null,
+  rebindIntent: null,
+  pollTimer: null,
+};
+
+var TERMINAL = { completed:1, failed:1, already_connected:1, expired:1, cancelled:1 };
+
+function show(id)  { document.getElementById(id).style.display = ''; }
+function hide(id)  { document.getElementById(id).style.display = 'none'; }
+
+function showMsg(id, text, type) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg show ' + (type || 'info');
+}
+
+async function apiFetch(path, opts) {
+  opts = opts || {};
+  var headers = {};
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  if (S.sessionToken) headers['Authorization'] = 'Bearer ' + S.sessionToken;
+  var res = await fetch(path, Object.assign({}, opts, {
+    headers: Object.assign(headers, opts.headers || {}),
+  }));
+  if (!res.ok) {
+    var body = await res.json().catch(function() { return { detail: res.statusText }; });
+    throw new Error(body.detail || ('请求失败 ' + res.status));
+  }
+  return res.json();
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return iso.slice(0, 16).replace('T', ' ');
+}
+
+// ── 启动时鉴权 ────────────────────────────────
+window.addEventListener('load', function() {
+  S.sessionToken = localStorage.getItem('chaochao_session');
+  if (!S.sessionToken) {
+    window.location.href = 'home.html';
+    return;
+  }
+  loadDashboard();
+});
+
+async function loadDashboard() {
+  try {
+    var data = await apiFetch('/web/me');
+    S.platformUser = data.platform_user;
+    S.account = data.account;
+
+    // 填充账号信息
+    document.getElementById('d-phone').textContent = S.platformUser.phone || '—';
+    document.getElementById('d-account-id').textContent = S.account.id || '—';
+    document.getElementById('d-plan').textContent =
+      (data.subscription && data.subscription.plan) || 'free';
+    document.getElementById('d-created').textContent = formatDate(S.platformUser.created_at);
+    document.getElementById('nav-phone').textContent = S.platformUser.phone || '';
+
+    hide('loading');
+    show('content');
+
+    // 加载绑定信息
+    loadBindings();
+  } catch(e) {
+    if (e.message.indexOf('401') !== -1 || e.message.indexOf('登录') !== -1) {
+      localStorage.removeItem('chaochao_session');
+      window.location.href = 'home.html';
+    } else {
+      document.getElementById('loading').textContent = '加载失败：' + e.message;
+    }
+  }
+}
+
+async function loadBindings() {
+  try {
+    var data = await apiFetch('/web/me/bindings');
+    var bindings = data.bindings || [];
+    var statusEl = document.getElementById('d-binding-status');
+
+    if (bindings.length > 0) {
+      var b = bindings[0];
+      statusEl.innerHTML =
+        '<span class="binding-status-badge bound">✓ 已绑定</span>';
+      document.getElementById('d-channel-account').textContent = b.channel_account_id || b.session_key || '—';
+      document.getElementById('d-last-seen').textContent = formatDate(b.last_seen_at);
+      show('row-channel-account');
+      show('row-last-seen');
+    } else {
+      statusEl.innerHTML =
+        '<span class="binding-status-badge unbound">未绑定</span>';
+    }
+  } catch(e) {
+    document.getElementById('d-binding-status').textContent = '获取失败';
+  }
+}
+
+// ── 重新绑定 ──────────────────────────────────
+async function startRebind() {
+  document.getElementById('btn-rebind').disabled = true;
+  show('rebind-qr-area');
+  showMsg('msg-rebind', '正在生成二维码…', 'info');
+  try {
+    var data = await apiFetch('/web/binding-intents', {
+      method: 'POST',
+      body: JSON.stringify({ channel: 'openclaw-weixin' }),
+    });
+    S.rebindIntent = data.binding_intent;
+    renderRebindQr();
+    clearRebindMsg();
+    startRebindPolling();
+  } catch(e) {
+    showMsg('msg-rebind', e.message, 'err');
+    document.getElementById('btn-rebind').disabled = false;
+  }
+}
+
+function clearRebindMsg() {
+  var el = document.getElementById('msg-rebind');
+  el.textContent = '';
+  el.className = 'msg';
+}
+
+function renderRebindQr() {
+  var intent = S.rebindIntent;
+  if (!intent) return;
+  if (intent.qr_data_url) {
+    document.getElementById('rebind-qr-img').src = intent.qr_data_url;
+  }
+  updateRebindStatus(intent.status);
+}
+
+function updateRebindStatus(status) {
+  var el = document.getElementById('rebind-qr-status');
+  var labels = {
+    created: '正在生成二维码…',
+    qr_created: '等待扫码中…',
+    completed: '绑定成功 ✓',
+    already_connected: '微信已连接',
+    failed: '绑定失败，请重试',
+    expired: '二维码已过期',
+  };
+  el.textContent = labels[status] || status;
+  el.className = 'qr-status' +
+    (status === 'completed' || status === 'already_connected' ? ' done' : '') +
+    (status === 'failed' || status === 'expired' ? ' fail' : '');
+}
+
+function stopRebindPolling() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+}
+
+function startRebindPolling() {
+  stopRebindPolling();
+  S.pollTimer = setInterval(function() {
+    if (!S.rebindIntent || TERMINAL[S.rebindIntent.status]) {
+      stopRebindPolling(); return;
+    }
+    pollRebind();
+  }, 3000);
+}
+
+async function pollRebind() {
+  try {
+    var data = await apiFetch('/web/binding-intents/' + encodeURIComponent(S.rebindIntent.id));
+    S.rebindIntent = data.binding_intent;
+    renderRebindQr();
+    if (TERMINAL[S.rebindIntent.status]) {
+      stopRebindPolling();
+      document.getElementById('btn-rebind').disabled = false;
+      if (S.rebindIntent.status === 'completed' || S.rebindIntent.status === 'already_connected') {
+        loadBindings();
+        showMsg('msg-rebind',
+          '绑定成功！请在微信中向 AI 发一条消息（比如"你好"），AI 会主动回复并开始初始化。',
+          'info');
+        setTimeout(function() { hide('rebind-qr-area'); }, 8000);
+      }
+    }
+  } catch(e) {
+    stopRebindPolling();
+    showMsg('msg-rebind', e.message, 'err');
+  }
+}
+
+// ── 退出登录 ──────────────────────────────────
+function logout() {
+  localStorage.removeItem('chaochao_session');
+  window.location.href = 'home.html';
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>朝夕相伴 — 你的微信专属 AI 陪伴</title>
+  <link rel="stylesheet" href="site.css">
+  <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
+</head>
+<body>
+
+<!-- 顶栏 -->
+<nav class="site-nav">
+  <a class="brand-logo" href="home.html">
+    <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
+  </a>
+  <div class="nav-actions">
+    <a class="btn btn-ghost btn-sm" href="dashboard.html">用户中心</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-text">
+    <h1 class="hero-title">
+      <span class="cx">朝夕</span><span class="xb">相伴</span>
+    </h1>
+    <p class="hero-tagline">你的微信专属 AI 陪伴<br>陪聊、提醒、记录生活点滴</p>
+    <p class="hero-sub">
+      手机号验证 · 微信扫码接入 · 开箱即用<br>
+      每个用户独立 AI，完全属于你自己
+    </p>
+  </div>
+  <div class="hero-visual">
+    <img src="brand.png" alt="朝夕相伴" style="width:100%;height:100%;object-fit:contain;border-radius:16px;">
+  </div>
+</section>
+
+<!-- 注册 / 登录 卡片 -->
+<section class="register-section">
+  <div class="card">
+    <p class="card-title" id="card-title">手机号注册 / 登录</p>
+
+    <!-- 步骤指示器 -->
+    <div class="step-indicator" id="step-indicator">
+      <div class="step-dot active" id="dot-1">1</div>
+      <div class="step-line" id="line-1"></div>
+      <div class="step-dot" id="dot-2">2</div>
+    </div>
+
+    <!-- ── 步骤 1：手机号 + 验证码 ── -->
+    <div id="step-phone">
+      <div class="form-field">
+        <label>手机号</label>
+        <div class="phone-row">
+          <span class="phone-prefix">+86</span>
+          <input class="input" type="tel" id="phone" inputmode="tel"
+                 autocomplete="tel" placeholder="请输入手机号">
+        </div>
+      </div>
+      <!-- 阿里云验证码 SDK 容器 -->
+      <div id="captcha-element"></div>
+      <div id="msg-send" class="msg"></div>
+      <button class="btn btn-primary btn-full" id="btn-send-otp" style="margin-top:14px">
+        获取验证码
+      </button>
+    </div>
+
+    <!-- ── 步骤 1b：OTP 输入（发送后展开）── -->
+    <div id="step-otp" style="display:none">
+      <div class="form-field">
+        <label>验证码</label>
+        <div class="otp-row">
+          <input class="input" type="text" id="otp-code"
+                 inputmode="numeric" maxlength="6" placeholder="6 位验证码">
+          <button class="btn btn-ghost btn-sm" id="btn-resend"
+                  onclick="resendOtp()" disabled>
+            重发 (<span id="resend-cd">60</span>s)
+          </button>
+        </div>
+      </div>
+      <div id="msg-otp" class="msg"></div>
+      <button class="btn btn-primary btn-full" onclick="verifyOtp()" style="margin-top:4px">
+        验证并继续
+      </button>
+    </div>
+
+    <!-- ── 步骤 2：微信扫码 ── -->
+    <div id="step-qr" style="display:none">
+      <div class="qr-wrap">
+        <img id="qr-img" src="" alt="微信扫码二维码">
+        <div class="qr-caption">请用要接入的微信号扫描二维码</div>
+        <div class="qr-status" id="qr-status">等待扫码中…</div>
+      </div>
+      <div id="msg-qr" class="msg"></div>
+    </div>
+
+    <!-- ── 已有绑定：直接进入用户中心 ── -->
+    <div id="step-done" style="display:none; text-align:center; padding:16px 0">
+      <div style="font-size:2rem;margin-bottom:12px">✅</div>
+      <p style="color:var(--text-sub);margin-bottom:20px">登录成功，正在跳转…</p>
+      <a class="btn btn-primary" href="dashboard.html" id="btn-to-dashboard">进入用户中心</a>
+    </div>
+
+  </div>
+</section>
+
+<!-- 页脚 -->
+<footer class="site-footer">
+  © 2026 朝夕相伴 · <a href="mailto:support@ai4company.top" style="color:inherit">support@ai4company.top</a>
+</footer>
+
+<script>
+var S = {
+  phone: '',
+  verifiedToken: null,
+  sessionToken: null,
+  bindingIntent: null,
+  pollTimer: null,
+  resendTimer: null,
+};
+
+var TERMINAL = { completed:1, failed:1, already_connected:1, expired:1, cancelled:1 };
+
+// ── 工具 ──────────────────────────────────────
+function show(id)  { document.getElementById(id).style.display = ''; }
+function hide(id)  { document.getElementById(id).style.display = 'none'; }
+
+function showMsg(id, text, type) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg show ' + (type || 'info');
+}
+function clearMsg(id) {
+  var el = document.getElementById(id);
+  el.textContent = '';
+  el.className = 'msg';
+}
+
+async function apiFetch(path, opts) {
+  opts = opts || {};
+  var headers = {};
+  if (opts.body) headers['Content-Type'] = 'application/json';
+  if (S.sessionToken) headers['Authorization'] = 'Bearer ' + S.sessionToken;
+  var res = await fetch(path, Object.assign({}, opts, {
+    headers: Object.assign(headers, opts.headers || {}),
+  }));
+  if (!res.ok) {
+    var body = await res.json().catch(function() { return { detail: res.statusText }; });
+    throw new Error(body.detail || ('请求失败 ' + res.status));
+  }
+  return res.json();
+}
+
+function saveSession(token) {
+  S.sessionToken = token;
+  localStorage.setItem('chaochao_session', token);
+}
+
+// ── 启动时检查已有 session ────────────────────
+window.addEventListener('load', function() {
+  var token = localStorage.getItem('chaochao_session');
+  if (token) {
+    S.sessionToken = token;
+    apiFetch('/web/me').then(function(data) {
+      if (data && data.platform_user) {
+        window.location.href = 'dashboard.html';
+      }
+    }).catch(function() {
+      localStorage.removeItem('chaochao_session');
+      S.sessionToken = null;
+    });
+  }
+
+  // 初始化阿里云验证码
+  window.initAliyunCaptcha({
+    SceneId: '6ez3x2ne',
+    prefix: '18if8u',
+    mode: 'popup',
+    element: '#captcha-element',
+    button: '#btn-send-otp',
+    captchaVerifyCallback: captchaVerifyCallback,
+    onBizResultCallback: onBizResultCallback,
+    getInstance: function(inst) { window._captchaInst = inst; },
+    slideStyle: { width: 300, height: 40 },
+    language: 'cn',
+  });
+});
+
+// ── 验证码 SDK 回调 ──────────────────────────
+async function captchaVerifyCallback(captchaVerifyParam) {
+  S.phone = document.getElementById('phone').value.trim();
+  clearMsg('msg-send');
+  try {
+    await apiFetch('/web/sms/send-otp', {
+      method: 'POST',
+      body: JSON.stringify({ phone: S.phone, captcha_verify_param: captchaVerifyParam }),
+    });
+    return { captchaResult: true, bizResult: true };
+  } catch(e) {
+    showMsg('msg-send', e.message, 'err');
+    return { captchaResult: true, bizResult: false };
+  }
+}
+
+function onBizResultCallback(bizResult) {
+  if (bizResult) {
+    showMsg('msg-send', '验证码已发送到 ' + S.phone, 'ok');
+    show('step-otp');
+    startCountdown();
+    // 步骤高亮
+    document.getElementById('dot-1').className = 'step-dot done';
+    document.getElementById('line-1').className = 'step-line done';
+    document.getElementById('dot-2').className = 'step-dot active';
+  }
+}
+
+// ── 倒计时 ────────────────────────────────────
+function startCountdown() {
+  var secs = 60;
+  var el = document.getElementById('resend-cd');
+  var btn = document.getElementById('btn-resend');
+  btn.disabled = true;
+  el.textContent = secs;
+  S.resendTimer = setInterval(function() {
+    secs--;
+    el.textContent = secs;
+    if (secs <= 0) {
+      clearInterval(S.resendTimer);
+      btn.disabled = false;
+    }
+  }, 1000);
+}
+
+function resendOtp() {
+  clearInterval(S.resendTimer);
+  if (window._captchaInst) window._captchaInst.show();
+}
+
+// ── 验证 OTP ──────────────────────────────────
+async function verifyOtp() {
+  clearMsg('msg-otp');
+  var code = document.getElementById('otp-code').value.trim();
+  if (!code) { showMsg('msg-otp', '请输入验证码', 'err'); return; }
+  showMsg('msg-otp', '验证中…', 'info');
+  try {
+    var data = await apiFetch('/web/sms/verify-otp', {
+      method: 'POST',
+      body: JSON.stringify({ phone: S.phone, code: code }),
+    });
+    S.verifiedToken = data.verified_token;
+    clearMsg('msg-otp');
+    await doLogin();
+  } catch(e) {
+    showMsg('msg-otp', e.message, 'err');
+  }
+}
+
+// ── 登录（含自动扫码逻辑）──────────────────────
+async function doLogin() {
+  showMsg('msg-otp', '登录中…', 'info');
+  try {
+    var data = await apiFetch('/web/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: S.phone, verified_token: S.verifiedToken }),
+    });
+    saveSession(data.session_token);
+    clearMsg('msg-otp');
+
+    if (data.has_active_binding) {
+      // 已绑定 → 直接跳转
+      hide('step-phone');
+      hide('step-otp');
+      show('step-done');
+      setTimeout(function() { window.location.href = 'dashboard.html'; }, 1200);
+    } else {
+      // 未绑定 → 展示二维码
+      S.bindingIntent = data.binding_intent;
+      hide('step-phone');
+      hide('step-otp');
+      show('step-qr');
+      document.getElementById('card-title').textContent = '扫码绑定微信';
+      if (S.bindingIntent) renderQr();
+      startPolling();
+    }
+  } catch(e) {
+    showMsg('msg-otp', e.message, 'err');
+  }
+}
+
+// ── 二维码渲染与轮询 ──────────────────────────
+function renderQr() {
+  var intent = S.bindingIntent;
+  if (!intent) return;
+  if (intent.qr_data_url) {
+    document.getElementById('qr-img').src = intent.qr_data_url;
+  }
+  updateQrStatus(intent.status);
+}
+
+function updateQrStatus(status) {
+  var el = document.getElementById('qr-status');
+  var labels = {
+    created: '正在生成二维码…',
+    qr_created: '等待扫码中…',
+    completed: '绑定成功 ✓',
+    already_connected: '该微信已连接，请直接使用',
+    failed: '绑定失败，请刷新重试',
+    expired: '二维码已过期，请重新验证',
+  };
+  el.textContent = labels[status] || status;
+  el.className = 'qr-status' +
+    (status === 'completed' || status === 'already_connected' ? ' done' : '') +
+    (status === 'failed' || status === 'expired' ? ' fail' : '');
+}
+
+function stopPolling() {
+  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
+}
+
+function startPolling() {
+  stopPolling();
+  S.pollTimer = setInterval(function() {
+    if (!S.bindingIntent || TERMINAL[S.bindingIntent.status]) {
+      stopPolling(); return;
+    }
+    pollBinding();
+  }, 3000);
+}
+
+async function pollBinding() {
+  if (!S.bindingIntent) return;
+  try {
+    var data = await apiFetch('/web/binding-intents/' + encodeURIComponent(S.bindingIntent.id));
+    S.bindingIntent = data.binding_intent;
+    renderQr();
+    if (TERMINAL[S.bindingIntent.status]) {
+      stopPolling();
+      if (S.bindingIntent.status === 'completed' || S.bindingIntent.status === 'already_connected') {
+        setTimeout(function() { window.location.href = 'dashboard.html'; }, 1500);
+      }
+    }
+  } catch(e) {
+    showMsg('msg-qr', e.message, 'err');
+    stopPolling();
+  }
+}
+</script>
+</body>
+</html>
