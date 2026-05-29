@@ -164,7 +164,8 @@ def test_register_and_binding_intent_creates_default_account_and_qr(client):
     data = res.json()
     assert data["platform_user"]["phone"] == "13800000009"
     assert data["account"]["id"].startswith("acct_")
-    assert data["account"]["display_name"] == "AI4ALL 助手"
+    assert data["account"]["display_name"] is None
+    assert data["profile"]["display_name"] is None
     assert data["owner_binding"]["platform_user_id"] == data["platform_user"]["id"]
     assert data["owner_binding"]["account_id"] == data["account"]["id"]
     assert data["subscription"]["plan"] == "free"
@@ -173,6 +174,38 @@ def test_register_and_binding_intent_creates_default_account_and_qr(client):
     assert data["binding_intent"]["account_id"] == data["account"]["id"]
     mock_start.assert_called_once()
     mock_schedule.assert_called_once_with(data["binding_intent"]["id"])
+
+
+def test_default_account_context_has_no_ai4all_name(client):
+    from app.user_profiles import read_agent_context
+
+    session_headers, login_data = _get_login_data("13800000109", client)
+
+    assert session_headers["Authorization"].startswith("Bearer ")
+    assert login_data["account"]["display_name"] is None
+    context = read_agent_context(
+        login_data["account"]["id"],
+        display_name=login_data["account"]["display_name"],
+    )
+
+    assert "AI4ALL 助手" not in context.blocks["IDENTITY"]
+    assert "你还没有名字" in context.blocks["IDENTITY"]
+
+
+def test_default_account_ignores_legacy_ai4all_display_name(fresh_db):
+    from app.db import (
+        create_or_get_platform_user_by_phone,
+        get_or_create_default_ai4all_account_for_user,
+    )
+
+    user = create_or_get_platform_user_by_phone(phone="13800000119")
+    result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=user["id"],
+        display_name="AI4ALL 助手",
+    )
+
+    assert result["account"]["display_name"] is None
+    assert result["profile"]["display_name"] is None
 
 
 def test_register_and_binding_intent_reuses_existing_default_account(client):

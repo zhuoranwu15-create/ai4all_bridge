@@ -60,6 +60,20 @@ PERSONA_PRESET_NAMES_ZH = {
     "ju": "橘",
 }
 
+PERSONA_OPTION_LINES_WITH_PRESET_NAMES = [
+    "1. 先空着留白，在我们相处中慢慢养成",
+    "2. 朝朝 —— 爱自由、有好奇心，说话直但不失风趣洒脱",
+    "3. 夕夕 —— 平和有生活味，喜欢用经历和故事开解人",
+    "4. 橘 —— 慵懒傲娇，格难以捉摸的小猫仙",
+]
+
+PERSONA_OPTION_LINES_WITHOUT_PRESET_NAMES = [
+    "1. 先空着留白，在我们相处中慢慢养成",
+    "2. 爱自由、有好奇心，说话直但不失风趣洒脱",
+    "3. 平和有生活味，喜欢用经历和故事开解人",
+    "4. 慵懒傲娇，格难以捉摸的小猫仙",
+]
+
 ONBOARDING_TIMEOUT_MINUTES = 15
 
 # Question ask limits
@@ -136,10 +150,11 @@ def build_onboarding_prompt_context(
             lines.append("（人设询问已达上限或已获取，本轮不再追问。）")
         else:
             lines.append("请在回复末尾自然列出以下性格选项：")
-            lines.append("1. 先空着留白，在我们相处中慢慢养成")
-            lines.append("2. 朝朝 —— 爱自由、有好奇心，说话直但不失风趣洒脱")
-            lines.append("3. 夕夕 —— 平和有生活味，喜欢用经历和故事开解人")
-            lines.append("4. 橘 —— 慵懒傲娇，格难以捉摸的小猫仙")
+            if ai_name:
+                lines.append(f'用户已经把 AI 称呼设为"{ai_name}"，选项里不要再展示朝朝、夕夕、橘等预设名字，避免让用户误以为 AI 改名。')
+                lines.extend(PERSONA_OPTION_LINES_WITHOUT_PRESET_NAMES)
+            else:
+                lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
             lines.append("（也可以让用户自己描述想要的风格。）")
 
     elif state == ONBOARDING_STEP3_SENT:
@@ -236,6 +251,8 @@ async def extract_onboarding_info_async(
             result["persona"] = extracted["persona"]
             result["persona_custom"] = extracted.get("persona_custom")
         result["skip"] = bool(extracted.get("skip"))
+        if result["skip"] and extract_ai_name:
+            result["ai_name"] = None
         return result
     except Exception as err:
         logger.warning("onboarding info extraction failed state=%s error=%s", current_state, err)

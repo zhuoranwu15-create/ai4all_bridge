@@ -330,21 +330,22 @@ async def _send_onboarding_welcome_if_pending(
             )
             return
 
-        # Look up sender_id from channel bindings (populated when user first messages)
+        # Look up the sendable peer from channel bindings (populated when user first messages)
         bindings = await asyncio.to_thread(
             list_channel_bindings_for_account, account_id=account_id
         )
         to_user_id = None
         resolved_session_key = session_key
         for b in bindings:
-            if b.get("sender_id"):
-                to_user_id = b["sender_id"]
+            peer = b.get("chat_id") or b.get("sender_id")
+            if peer:
+                to_user_id = peer
                 resolved_session_key = b.get("session_key") or session_key
                 break
 
         if not to_user_id:
             logger.info(
-                "onboarding proactive skipped account=%s reason=no_sender_id_yet "
+                "onboarding proactive skipped account=%s reason=no_weixin_peer_yet "
                 "(user will trigger onboarding with first inbound message)",
                 account_id,
             )
@@ -1134,7 +1135,7 @@ def web_register_and_binding_intent(
     try:
         account_result = get_or_create_default_ai4all_account_for_user(
             platform_user_id=platform_user["id"],
-            display_name=payload.display_name or "AI4ALL 助手",
+            display_name=None,
             plan="free",
         )
         binding_intent = create_binding_intent(
@@ -1193,7 +1194,7 @@ def web_create_binding_intent(
 ) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
-        display_name="AI4ALL 助手",
+        display_name=None,
         plan="free",
     )
     try:
@@ -1254,7 +1255,7 @@ def web_login(payload: WebLoginRequest) -> dict:
     )
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
-        display_name="AI4ALL 助手",
+        display_name=None,
         plan="free",
     )
     session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
@@ -1290,7 +1291,7 @@ def web_login(payload: WebLoginRequest) -> dict:
 def web_me(platform_user=Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
-        display_name="AI4ALL 助手",
+        display_name=None,
         plan="free",
     )
     return {
@@ -1305,7 +1306,7 @@ def web_me(platform_user=Depends(_require_session)) -> dict:
 def web_me_bindings(platform_user=Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
-        display_name="AI4ALL 助手",
+        display_name=None,
         plan="free",
     )
     bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])

@@ -66,6 +66,31 @@ def test_agent_context_does_not_overwrite_existing_files(tmp_path):
         assert context.files["AGENTS.md"]["created"] is True
 
 
+def test_agent_context_repairs_legacy_ai4all_default_identity(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import read_agent_context, user_profile_path
+
+        profile_path = user_profile_path("acc-legacy-ai4all")
+        profile_path.parent.mkdir(parents=True, exist_ok=True)
+        profile_path.write_text("# User Profile\n", encoding="utf-8")
+        (profile_path.parent / "AGENTS.md").write_text(
+            "# AGENTS\n\n- 你是 AI4ALL 微信个人 AI 助手的主 agent。\n",
+            encoding="utf-8",
+        )
+        (profile_path.parent / "IDENTITY.md").write_text(
+            "# IDENTITY\n\n- 你的名字是 AI4ALL 助手，用它自称。\n",
+            encoding="utf-8",
+        )
+
+        context = read_agent_context("acc-legacy-ai4all")
+
+        assert "AI4ALL 助手" not in context.blocks["IDENTITY"]
+        assert "你还没有名字" in context.blocks["IDENTITY"]
+        assert "AI4ALL 微信个人 AI 助手" not in context.blocks["AGENTS"]
+        assert "个人 AI 陪伴与生活助理" in context.blocks["AGENTS"]
+
+
 def test_existing_account_heartbeat_file_is_preserved_but_not_returned(tmp_path):
     s = _settings(tmp_path)
     with patch("app.user_profiles.settings", s):

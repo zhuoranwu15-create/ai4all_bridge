@@ -121,6 +121,26 @@ def test_prompt_context_step2_includes_persona_options():
     assert "橘" in ctx
 
 
+def test_prompt_context_step2_hides_preset_names_when_ai_name_known():
+    from app.onboarding import build_onboarding_prompt_context
+
+    ctx = build_onboarding_prompt_context(
+        state="step2_sent",
+        user_name="小晨",
+        ai_name="CC",
+        persona=None,
+        user_name_ask_count=1,
+        persona_ask_count=0,
+    )
+
+    assert "2. 爱自由、有好奇心，说话直但不失风趣洒脱" in ctx
+    assert "3. 平和有生活味，喜欢用经历和故事开解人" in ctx
+    assert "4. 慵懒傲娇，格难以捉摸的小猫仙" in ctx
+    assert "2. 朝朝" not in ctx
+    assert "3. 夕夕" not in ctx
+    assert "4. 橘" not in ctx
+
+
 def test_prompt_context_step3_is_wrapup():
     # step3_sent = user just replied to persona question; LLM should wrap up
     from app.onboarding import build_onboarding_prompt_context
@@ -147,6 +167,43 @@ def test_prompt_context_empty_when_complete():
         persona_ask_count=1,
     )
     assert ctx == ""
+
+
+# ---------------------------------------------------------------------------
+# Extraction helpers
+# ---------------------------------------------------------------------------
+
+def test_extract_ai_name_uses_llm_result():
+    import asyncio
+    from app.onboarding import extract_onboarding_info_async
+
+    with patch(
+        "app.llm.generate_completion",
+        return_value='{"user_name": null, "ai_name": "小A", "persona": null, "persona_custom": null, "skip": false}',
+    ):
+        result = asyncio.run(
+            extract_onboarding_info_async(
+                user_text="小A",
+                current_state="step2_sent",
+            )
+        )
+
+    assert result["ai_name"] == "小A"
+
+
+def test_extract_ai_name_does_not_guess_when_llm_fails():
+    import asyncio
+    from app.onboarding import extract_onboarding_info_async
+
+    with patch("app.llm.generate_completion", side_effect=RuntimeError("llm unavailable")):
+        result = asyncio.run(
+            extract_onboarding_info_async(
+                user_text="小A",
+                current_state="step2_sent",
+            )
+        )
+
+    assert result["ai_name"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -251,6 +308,28 @@ def test_apply_soul_preset_with_ai_name(tmp_path, fresh_db):
     assert "星星" in content
 
 
+def test_persona_preset_preserves_existing_ai_name(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app.user_profiles import context_file_path, write_ai_name_to_identity
+
+    account_id = "test-persona-keeps-ai-name"
+    write_ai_name_to_identity(account_id, "小A")
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"persona": "ju", "skip": False},
+        current_state="step3_sent",
+    )
+
+    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
+    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    assert written["persona"] == "ju"
+    assert "AI 名字：小A" in identity
+    assert "AI 名字：橘" not in identity
+    assert "小A" in soul
+    assert "慵懒" in soul
+
+
 # ---------------------------------------------------------------------------
 # Onboarding turn integration (via test client)
 # ---------------------------------------------------------------------------
@@ -260,6 +339,8 @@ BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 
 def _turn_payload(account_id: str, session_key: str, text: str, message_id: str = "msg-1") -> dict:
     return {
+        "channel": "openclaw-weixin",
+        "channel_account_id": account_id,
         "account_id": account_id,
         "session_key": session_key,
         "sender_id": f"sender-{account_id}",
@@ -293,6 +374,103 @@ def test_first_turn_enters_onboarding_mode(client, fresh_db):
     # The resolver returns session_key as account_id when no binding intent exists
     state = get_account_onboarding_state(account_id=session_key)
     assert state == "step1_sent"
+
+
+def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_db):
+    """The real Weixin bridge puts the sendable peer in chat_id, not sender_id."""
+    from unittest.mock import patch
+
+    session_key = "agent:main:openclaw-weixin:bot-a:direct:peer-a@im.wechat"
+    payload = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "bot-a",
+        "account_id": "bot-a",
+        "session_key": session_key,
+        "sender_id": session_key,
+        "chat_id": "peer-a@im.wechat",
+        "chat_type": "private",
+        "message_type": "text",
+        "message_id": "welcome-target-msg-1",
+        "text": "你好",
+        "raw": {"event_type": "message", "content": "你好"},
+    }
+
+    with patch(
+        "app.turn_service.send_weixin_text",
+        return_value={"messageId": "welcome-1"},
+    ) as mock_send:
+        res = client.post(
+            "/openclaw/turn",
+            json=payload,
+            headers=BRIDGE_HEADERS,
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "ok"
+    assert data["no_reply"] is True
+    assert data["metadata"]["onboarding_welcome_to_user_id"] == "peer-a@im.wechat"
+    mock_send.assert_called_once()
+    assert mock_send.call_args.kwargs["to_user_id"] == "peer-a@im.wechat"
+
+
+def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db):
+    from app.db import get_account_onboarding_state
+
+    session_key = "onboard-welcome-fallback"
+
+    with patch("app.turn_service.send_weixin_text", side_effect=RuntimeError("send failed")), \
+         patch("app.turn_service.generate_reply", return_value="你好呀！很高兴认识你。"):
+        res = client.post(
+            "/openclaw/turn",
+            json=_turn_payload(session_key, session_key, "你好"),
+            headers=BRIDGE_HEADERS,
+        )
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["reply"].endswith("你希望我怎么称呼你？")
+    assert get_account_onboarding_state(account_id=session_key) == "step1_sent"
+
+
+def test_ai_name_is_written_before_persona_prompt_and_hides_preset_names(client, fresh_db):
+    from app.db import set_account_onboarding_state
+    from app.user_profiles import context_file_path
+
+    session_key = "onboard-ai-name-before-persona"
+
+    with patch("app.turn_service.send_weixin_text", return_value={"messageId": "welcome"}):
+        client.post(
+            "/openclaw/turn",
+            json=_turn_payload(session_key, session_key, "你好", "msg-init"),
+            headers=BRIDGE_HEADERS,
+        )
+
+    set_account_onboarding_state(account_id=session_key, state="step2_sent")
+    captured = {}
+
+    def fake_generate_reply(*, user_text, history, system_prompt):
+        captured["system_prompt"] = system_prompt
+        return "好的，CC。你希望我是什么样的性格？"
+
+    with patch(
+        "app.llm.generate_completion",
+        return_value='{"user_name": null, "ai_name": "CC", "persona": null, "persona_custom": null, "skip": false}',
+    ), patch("app.turn_service.generate_reply", side_effect=fake_generate_reply):
+        res = client.post(
+            "/openclaw/turn",
+            json=_turn_payload(session_key, session_key, "CC", "msg-ai-name"),
+            headers=BRIDGE_HEADERS,
+        )
+
+    assert res.status_code == 200
+    identity = context_file_path(session_key, "IDENTITY.md").read_text(encoding="utf-8")
+    assert "AI 名字：CC" in identity
+    assert "2. 爱自由、有好奇心，说话直但不失风趣洒脱" in captured["system_prompt"]
+    assert "4. 慵懒傲娇，格难以捉摸的小猫仙" in captured["system_prompt"]
+    assert "2. 朝朝" not in captured["system_prompt"]
+    assert "3. 夕夕" not in captured["system_prompt"]
+    assert "4. 橘" not in captured["system_prompt"]
 
 
 def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
