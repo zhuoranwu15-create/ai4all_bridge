@@ -215,3 +215,63 @@ def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
         session_key="session-acc-send",
         channel="openclaw-weixin",
     )
+
+
+def test_user_reminder_bypasses_quiet_hours(fresh_db):
+    from app.proactive.messaging import enqueue_proactive_text
+    from unittest.mock import patch
+
+    with patch("app.proactive.messaging.settings", fresh_db):
+        with patch("app.db.settings", fresh_db):
+            from app.db import get_or_create_session
+            get_or_create_session(
+                account_id="acc-cat",
+                channel="openclaw-weixin",
+                sender_id="s",
+                sender_name=None,
+                chat_id="c",
+                session_key="sk-cat",
+            )
+        # 22:30 is inside quiet hours (22:00–08:00)
+        result = enqueue_proactive_text(
+            account_id="acc-cat",
+            channel="openclaw-weixin",
+            channel_account_id="bot",
+            to_user_id="user",
+            session_key="sk-cat",
+            source="reminder",
+            text="时间到了",
+            now=__import__("datetime").datetime(2026, 5, 30, 22, 30),
+            product_category="user_reminder",
+        )
+        assert result["status"] == "pending", f"Expected pending, got {result['status']}: {result.get('error')}"
+
+
+def test_companion_followup_blocked_by_quiet_hours(fresh_db):
+    from app.proactive.messaging import enqueue_proactive_text
+    from unittest.mock import patch
+
+    with patch("app.proactive.messaging.settings", fresh_db):
+        with patch("app.db.settings", fresh_db):
+            from app.db import get_or_create_session
+            get_or_create_session(
+                account_id="acc-comp",
+                channel="openclaw-weixin",
+                sender_id="s",
+                sender_name=None,
+                chat_id="c",
+                session_key="sk-comp",
+            )
+        result = enqueue_proactive_text(
+            account_id="acc-comp",
+            channel="openclaw-weixin",
+            channel_account_id="bot",
+            to_user_id="user",
+            session_key="sk-comp",
+            source="commitment",
+            text="跟进一下",
+            now=__import__("datetime").datetime(2026, 5, 30, 22, 30),
+            product_category="companion_followup",
+        )
+        assert result["status"] == "cancelled"
+        assert result["error"] == "quiet_hours"

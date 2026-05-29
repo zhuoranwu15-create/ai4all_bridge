@@ -38,6 +38,10 @@ def is_quiet_hours(
     return current >= start_time or current < end_time
 
 
+_BYPASS_QUIET_HOURS_CATEGORIES = {"user_reminder", "task_result"}
+_UNLIMITED_CATEGORIES = {"user_reminder", "task_result"}
+
+
 def enqueue_proactive_text(
     *,
     account_id: str,
@@ -50,6 +54,7 @@ def enqueue_proactive_text(
     idempotency_key: Optional[str] = None,
     now: Optional[datetime] = None,
     bypass_quiet_hours: bool = False,
+    product_category: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     current = now or datetime.now()
@@ -60,18 +65,26 @@ def enqueue_proactive_text(
         **(metadata or {}),
         "policy_checked_at": current.isoformat(timespec="seconds"),
     }
+    if product_category:
+        merged_metadata["product_category"] = product_category
+
+    effective_bypass = bypass_quiet_hours or (product_category in _BYPASS_QUIET_HOURS_CATEGORIES)
+    skip_daily_limit = product_category in _UNLIMITED_CATEGORIES
 
     if not getattr(settings, "proactive_outbound_enabled", True):
-        status = "cancelled"
-        error = "proactive_outbound_disabled"
-    elif not bypass_quiet_hours and is_quiet_hours(
+        if product_category != "user_reminder":
+            status = "cancelled"
+            error = "proactive_outbound_disabled"
+
+    if status == "pending" and not effective_bypass and is_quiet_hours(
         now=current,
         start=getattr(settings, "proactive_quiet_hours_start", "22:00"),
         end=getattr(settings, "proactive_quiet_hours_end", "08:00"),
     ):
         status = "cancelled"
         error = "quiet_hours"
-    else:
+
+    if status == "pending" and not skip_daily_limit:
         max_per_day = int(getattr(settings, "proactive_outbound_daily_limit", 0) or 0)
         if max_per_day > 0:
             current_count = get_outbound_daily_usage(
@@ -115,6 +128,7 @@ def send_proactive_text(
     idempotency_key: Optional[str] = None,
     now: Optional[datetime] = None,
     bypass_quiet_hours: bool = False,
+    product_category: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     outbound = enqueue_proactive_text(
@@ -128,6 +142,7 @@ def send_proactive_text(
         idempotency_key=idempotency_key,
         now=now,
         bypass_quiet_hours=bypass_quiet_hours,
+        product_category=product_category,
         metadata=metadata,
     )
     if outbound["status"] != "pending":
