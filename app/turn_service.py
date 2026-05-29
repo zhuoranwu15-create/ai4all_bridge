@@ -9,7 +9,6 @@ from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
-    create_reminder,
     get_account_onboarding_state,
     get_daily_usage,
     get_duplicate_reply,
@@ -23,13 +22,14 @@ from app.db import (
     upsert_channel_binding,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
-from app.llm import generate_reply
+from app.llm import generate_reply, generate_reply_with_tools
 from app.memory_writer import write_memory
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.rate_limiter import rate_limiter
-from app.reminder_parser import looks_like_reminder_request, parse_explicit_reminder
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
+from app.tools import get_reminder_tools
+from app.turn_context import TurnContext
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
 from app.onboarding import (
     apply_extracted_onboarding_info,
@@ -55,6 +55,24 @@ from app.user_profiles import (
 logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+
+
+def _ensure_pending_onboarding_question(reply: str) -> str:
+    cleaned = (reply or "").strip()
+    if "称呼你" in cleaned or "叫你" in cleaned or "喊你" in cleaned:
+        return cleaned
+    if not cleaned:
+        return ONBOARDING_WELCOME_TEXT
+    return f"{cleaned}\n\n{ONBOARDING_WELCOME_TEXT}"
+
+
+def _extract_onboarding_info_sync(*, user_text: str, current_state: str) -> dict:
+    return asyncio.run(
+        extract_onboarding_info_async(
+            user_text=user_text,
+            current_state=current_state,
+        )
+    )
 
 
 def _extract_ai_name_from_context(blocks: dict) -> Optional[str]:
@@ -221,15 +239,17 @@ def handle_openclaw_turn(
     debug_trace_enabled = _is_debug_trace_account(account_id)
 
     onboarding_state = get_account_onboarding_state(account_id=account_id)
-    onboarding_active = is_onboarding_active(onboarding_state)
+    onboarding_channel_enabled = identity.channel == "openclaw-weixin"
+    onboarding_active = onboarding_channel_enabled and is_onboarding_active(onboarding_state)
 
     # When the user's first inbound message arrives and onboarding hasn't started yet,
     # send the welcome proactively and absorb this message (no AI reply). The 5-second
-    # timer at binding time always fails because sender_id isn't known until now.
-    if onboarding_state == ONBOARDING_PENDING and sender_id:
+    # timer at binding time always fails because the user peer isn't known until now.
+    welcome_to_user_id = identity.chat_id or sender_id
+    if onboarding_channel_enabled and onboarding_state == ONBOARDING_PENDING and welcome_to_user_id:
         try:
             send_weixin_text(
-                to_user_id=sender_id,
+                to_user_id=welcome_to_user_id,
                 text=ONBOARDING_WELCOME_TEXT,
                 gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
                 account_id=identity.channel_account_id,
@@ -238,8 +258,8 @@ def handle_openclaw_turn(
             )
             set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
             logger.info(
-                "onboarding welcome sent on first inbound message account=%s sender=%s",
-                account_id, sender_id,
+                "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",
+                account_id, welcome_to_user_id, sender_id, identity.chat_id,
             )
             latency_ms = int((time.monotonic() - started_at) * 1000)
             return OpenClawTurnResponse(
@@ -249,17 +269,15 @@ def handle_openclaw_turn(
                     **identity_response_metadata(identity, account_id),
                     "latency_ms": latency_ms,
                     "onboarding_action": "welcome_sent_on_first_message",
+                    "onboarding_welcome_to_user_id": welcome_to_user_id,
                 },
             )
         except Exception as err:
             logger.warning(
-                "onboarding welcome failed on first inbound message account=%s error=%s; "
+                "onboarding welcome failed on first inbound message account=%s target=%s error=%s; "
                 "falling through to normal turn",
-                account_id, err,
+                account_id, welcome_to_user_id, err,
             )
-            onboarding_state = ONBOARDING_STEP1_SENT
-            onboarding_active = True
-            set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
 
     if account.get("status") == "disabled":
         logger.info(
@@ -353,6 +371,7 @@ def handle_openclaw_turn(
 
     generation_error = None
     normal_reply_generated = False
+    onboarding_pre_extracted = None
     system_prompt = None
     llm_messages = []
     debug_metadata = {
@@ -382,126 +401,130 @@ def handle_openclaw_turn(
             f"openclaw_session_key={openclaw_session_key}"
         )
     else:
-        parsed_reminder = (
-            parse_explicit_reminder(text)
-            if payload.message_type == "text"
-            else None
-        )
-        reminder_intent = (
-            looks_like_reminder_request(text)
-            if payload.message_type == "text"
-            else False
-        )
-        if parsed_reminder is not None:
-            to_user_id = binding.get("chat_id") or identity.chat_id
-            if not to_user_id:
-                generation_error = "reminder_route_missing"
-                reply = "我理解你想设置提醒，但现在缺少可主动发送的微信会话目标。你可以再发我一条消息后重试。"
-            elif not identity.channel_account_id:
-                generation_error = "reminder_channel_account_missing"
-                reply = "我理解你想设置提醒，但现在缺少微信通道账号信息，暂时还没法保证到点发出。"
-            else:
-                try:
-                    reminder = create_reminder(
+        try:
+            history = list_recent_messages(
+                session_id=session["id"],
+                limit=settings.llm_context_messages,
+            )
+            profile = session_state.get("profile") or {}
+            file_profile = read_user_profile(account_id)
+            soul = extract_section(file_profile, "Soul")
+            user_prefs = extract_section(file_profile, "User Preferences")
+            long_term_memory = extract_section(file_profile, "Long-term Memory")
+            agent_context = read_agent_context(
+                account_id,
+                display_name=account.get("display_name"),
+            )
+            onboarding_pre_written = {}
+            if onboarding_active and onboarding_state == ONBOARDING_STEP2_SENT:
+                onboarding_pre_extracted = _extract_onboarding_info_sync(
+                    user_text=text,
+                    current_state=onboarding_state,
+                )
+                if onboarding_pre_extracted.get("ai_name"):
+                    onboarding_pre_written = apply_extracted_onboarding_info(
                         account_id=account_id,
-                        channel=identity.channel,
-                        channel_account_id=identity.channel_account_id,
-                        to_user_id=to_user_id,
-                        session_key=openclaw_session_key,
-                        text=parsed_reminder.text,
-                        due_at=parsed_reminder.due_at_db,
-                        metadata={
-                            "source": "openclaw_turn",
-                            "source_message_id": message_id,
-                            "parser": "explicit_rule_v1",
-                            "matched_time_text": parsed_reminder.matched_time_text,
-                            "raw_text": text,
-                        },
+                        extracted=onboarding_pre_extracted,
+                        current_state=onboarding_state,
                     )
-                    debug_metadata.update(
-                        {
-                            "reminder_id": reminder["id"],
-                            "reminder_due_at": reminder["due_at"],
-                            "reminder_text": reminder["text"],
-                            "reminder_parser": "explicit_rule_v1",
-                        }
+                    if onboarding_pre_written:
+                        agent_context = read_agent_context(
+                            account_id,
+                            display_name=account.get("display_name"),
+                        )
+            debug_metadata.update(
+                {
+                    "history_count": len(history),
+                    "soul_chars": len(soul),
+                    "user_prefs_chars": len(user_prefs),
+                    "long_term_memory_chars": len(long_term_memory),
+                    "daily_notes_loaded": False,
+                    "daily_notes_chars": 0,
+                    "agent_context": agent_context.metadata(),
+                    "system_prompt_override": bool(profile.get("system_prompt")),
+                    "style": profile.get("style"),
+                    "display_name": account.get("display_name"),
+                    "onboarding_pre_written": onboarding_pre_written,
+                }
+            )
+            onboarding_ctx = ""
+            if onboarding_active:
+                onboarding_ctx = build_onboarding_prompt_context(
+                    state=onboarding_state,
+                    user_name=_extract_user_name_from_context(agent_context.blocks),
+                    ai_name=_extract_ai_name_from_context(agent_context.blocks),
+                    persona=None,
+                    user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
+                    persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
+                )
+            builder = PromptBuilder()
+            system_prompt = builder.build(
+                display_name=account.get("display_name"),
+                soul=soul,
+                user_prefs=user_prefs,
+                long_term_memory=long_term_memory,
+                daily_notes=None,
+                carryover_summary=session.get("carryover_summary"),
+                system_prompt_override=profile.get("system_prompt"),
+                style=profile.get("style"),
+                agent_context=agent_context.blocks,
+                onboarding_context=onboarding_ctx,
+                today=today,
+                model_name=settings.llm_model,
+                tool_instructions=(
+                    None if onboarding_active else (
+                        "## 提醒工具使用规则\n\n"
+                        "- 用户明确要求在未来某个时间收到提醒时，调用 create_reminder。\n"
+                        "- 时间不明确时，不要猜测，告知用户需要补充具体日期和时间。\n"
+                        "- 取消或修改提醒前，先调用 list_reminders 确认提醒存在再操作。\n"
+                        "- 多个提醒且用户描述不精确时，列出让用户选择，不要盲目操作。\n"
+                        "- 不要承诺任何工具之外的功能（如网络搜索、发图片等）。"
                     )
-                    reply = (
-                        f"好的，我会在 {parsed_reminder.due_at_display} "
-                        f"提醒你：{parsed_reminder.text}"
-                    )
-                except Exception as err:
-                    logger.exception("create reminder failed: %s", err)
-                    generation_error = str(err)
-                    reply = "我理解你想设置提醒，但这次保存失败了。你可以稍后再试一次。"
-        elif reminder_intent:
-            reply = "可以，我现在支持明确时间的一次性提醒。请补充具体日期和时间，比如：今天下午3点提醒我去趟派出所。"
-        else:
-            try:
-                history = list_recent_messages(
-                    session_id=session["id"],
-                    limit=settings.llm_context_messages,
-                )
-                profile = session_state.get("profile") or {}
-                file_profile = read_user_profile(account_id)
-                soul = extract_section(file_profile, "Soul")
-                user_prefs = extract_section(file_profile, "User Preferences")
-                long_term_memory = extract_section(file_profile, "Long-term Memory")
-                agent_context = read_agent_context(
-                    account_id,
-                    display_name=account.get("display_name"),
-                )
-                debug_metadata.update(
-                    {
-                        "history_count": len(history),
-                        "soul_chars": len(soul),
-                        "user_prefs_chars": len(user_prefs),
-                        "long_term_memory_chars": len(long_term_memory),
-                        "daily_notes_loaded": False,
-                        "daily_notes_chars": 0,
-                        "agent_context": agent_context.metadata(),
-                        "system_prompt_override": bool(profile.get("system_prompt")),
-                        "style": profile.get("style"),
-                        "display_name": account.get("display_name"),
-                    }
-                )
-                onboarding_ctx = ""
-                if onboarding_active:
-                    onboarding_ctx = build_onboarding_prompt_context(
-                        state=onboarding_state,
-                        user_name=_extract_user_name_from_context(agent_context.blocks),
-                        ai_name=_extract_ai_name_from_context(agent_context.blocks),
-                        persona=None,
-                        user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
-                        persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
-                    )
-                builder = PromptBuilder()
-                system_prompt = builder.build(
-                    display_name=account.get("display_name"),
-                    soul=soul,
-                    user_prefs=user_prefs,
-                    long_term_memory=long_term_memory,
-                    daily_notes=None,
-                    carryover_summary=session.get("carryover_summary"),
-                    system_prompt_override=profile.get("system_prompt"),
-                    style=profile.get("style"),
-                    agent_context=agent_context.blocks,
-                    onboarding_context=onboarding_ctx,
-                    today=today,
-                    model_name=settings.llm_model,
-                )
-                llm_messages = [{"role": "system", "content": system_prompt}]
-                llm_messages.extend(history)
+                ),
+            )
+            llm_messages = [{"role": "system", "content": system_prompt}]
+            llm_messages.extend(history)
+
+            ctx = TurnContext(
+                account_id=account_id,
+                account=account,
+                session=session,
+                identity=identity,
+                binding=binding,
+                message_id=message_id,
+                text=text,
+                today=today,
+                business_day=business_day,
+                profile_path=profile_path,
+                debug_trace_enabled=debug_trace_enabled,
+                onboarding_state=onboarding_state,
+                onboarding_active=onboarding_active,
+                recent_messages=history,
+                background_loop=background_loop,
+            )
+
+            if onboarding_active:
                 reply = generate_reply(
                     user_text=text,
                     history=history,
                     system_prompt=system_prompt,
                 )
-                normal_reply_generated = True
-            except Exception as err:
-                logger.exception("reply generation failed: %s", err)
-                generation_error = str(err)
-                reply = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+                if onboarding_state == ONBOARDING_PENDING:
+                    reply = _ensure_pending_onboarding_question(reply)
+            else:
+                tools = get_reminder_tools()
+                reply, generation_error = generate_reply_with_tools(
+                    user_text=text,
+                    history=history,
+                    system_prompt=system_prompt,
+                    tools=tools,
+                    ctx=ctx,
+                )
+            normal_reply_generated = True
+        except Exception as err:
+            logger.exception("reply generation failed: %s", err)
+            generation_error = str(err)
+            reply = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 
     latency_ms = int((time.monotonic() - started_at) * 1000)
     logger.info(
@@ -613,15 +636,34 @@ def handle_openclaw_turn(
             )
 
         if onboarding_active and normal_reply_generated and onboarding_state != "pending":
-            # steps 1-3: extract info and advance state in background
-            background_loop.call_soon_threadsafe(
-                background_loop.create_task,
-                _advance_onboarding_state_async(
-                    account_id=account_id,
-                    user_text=text,
-                    current_state=onboarding_state,
-                ),
-            )
+            if onboarding_pre_extracted is not None:
+                try:
+                    new_state = next_onboarding_state(
+                        current_state=onboarding_state,
+                        extracted=onboarding_pre_extracted,
+                        user_name_ask_count=0,
+                        persona_ask_count=0,
+                    )
+                    if new_state != onboarding_state:
+                        set_account_onboarding_state(account_id=account_id, state=new_state)
+                        logger.info(
+                            "onboarding state advanced account=%s %s -> %s",
+                            account_id,
+                            onboarding_state,
+                            new_state,
+                        )
+                except Exception as err:
+                    logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
+            else:
+                # steps 1 and 3: extract info and advance state in background
+                background_loop.call_soon_threadsafe(
+                    background_loop.create_task,
+                    _advance_onboarding_state_async(
+                        account_id=account_id,
+                        user_text=text,
+                        current_state=onboarding_state,
+                    ),
+                )
 
     return OpenClawTurnResponse(
         status="ok",

@@ -24,7 +24,7 @@ def make_payload(account_id: str, msg_id: str, text: str = "hello") -> dict:
 def test_debug_trace_records_only_configured_accounts(client, fresh_db):
     fresh_db.debug_trace_account_ids = "sk-acc-debug-a, sk-acc-debug-b"
 
-    with patch("app.turn_service.generate_reply", return_value="debug reply") as mock_generate:
+    with patch("app.turn_service.generate_reply_with_tools", return_value=("debug reply", None)) as mock_generate:
         res = client.post(
             "/openclaw/turn",
             json=make_payload("acc-debug-a", "m-debug-a"),
@@ -172,7 +172,7 @@ def test_openclaw_debug_trace_ingest_accepts_channel_account_id_without_legacy_a
 
 
 def test_failed_assistant_replies_are_excluded_from_llm_history(client):
-    with patch("app.turn_service.generate_reply", return_value="healthy reply") as mock_generate:
+    with patch("app.turn_service.generate_reply_with_tools", return_value=("healthy reply", None)):
         res = client.post(
             "/openclaw/turn",
             json=make_payload("acc-history", "m1", "first"),
@@ -198,7 +198,7 @@ def test_failed_assistant_replies_are_excluded_from_llm_history(client):
         error="LLM request failed",
     )
 
-    with patch("app.turn_service.generate_reply", return_value="healthy reply") as mock_generate:
+    with patch("app.turn_service.generate_reply_with_tools", return_value=("healthy reply", None)) as mock_generate:
         res = client.post(
             "/openclaw/turn",
             json=make_payload("acc-history", "m2", "second"),

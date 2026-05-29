@@ -111,6 +111,7 @@ class PromptBuilder:
         onboarding_context: Optional[str] = None,
         model_name: str = "",
         today: Optional[str] = None,
+        tool_instructions: Optional[str] = None,
     ) -> str:
         """Build and return the assembled system prompt string."""
         blocks: List[str] = []
@@ -198,6 +199,10 @@ class PromptBuilder:
             runtime_parts.append(f"当前模型：{model_name}")
         if runtime_parts:
             blocks.append("【运行时信息】\n" + "\n".join(runtime_parts))
+
+        # Block 16: Tool instructions (injected only for non-onboarding turns)
+        if tool_instructions and tool_instructions.strip():
+            blocks.append(tool_instructions.strip())
 
         return "\n\n".join(b for b in blocks if b)
 

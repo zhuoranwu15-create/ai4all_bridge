@@ -91,6 +91,7 @@ def client(fresh_db):
         patch("app.user_profiles.settings", fresh_db),
         patch("app.turn_service.rate_limiter", RateLimiter()),
         patch("app.turn_service.generate_reply", return_value="mock reply"),
+        patch("app.turn_service.generate_reply_with_tools", return_value=("mock reply", None)),
     ]
     for p in patches:
         p.start()
