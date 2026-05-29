@@ -74,10 +74,9 @@ Phase 1 至少需要做到：
 
 当前主要差距：
 
-- `app/dreaming.py` 当前直接覆盖 `MEMORY.md`，需要按 [Dreaming 记忆压缩与长期记忆技术设计](dreaming_memory_design.md) 改为 LLM 压缩、memory item、自动应用/跳过、source message、审计和回滚。
+- Dreaming 核心代码基线已经落地：`app/dreaming.py` 已支持 LLM 压缩、memory item、自动应用/跳过、source metadata、审计事件和 rollback；`app/session_lifecycle.py` 已在业务日和最大轮次切换时接入 LLM carryover/fallback；`app/dreaming_scheduler.py` 已提供独立 scan/scheduler。
+- 当前缺少足够真实聊天样本，Dreaming 线暂缓继续扩展；不启动检索式记忆、更激进自动化或复杂 prompt 调优，直到有样本可做质量评估。
 - `read_daily_notes()` 仍保留读取今天和昨天的能力；普通聊天 P0 不调用它注入 prompt。后续若需要使用 daily notes，必须改为按场景、预算和隐私策略动态装载，不应默认全量注入。
-- 每日 4 点 session 切换目前是下一次入站时懒执行；还缺少独立调度器在 4 点主动扫描并触发 Dreaming。
-- 超过 500 轮 session 目前生成确定性 carryover excerpt；还缺少 LLM 压缩摘要和更保守的 memory item 自动应用/跳过链路。
 - 缺少用户显式纠正后的 context/memory 更新链路。
 - Admin/Debug 现有正文查看能力需要按隐私红线重构为默认脱敏。
 
@@ -236,6 +235,8 @@ MEMORY.md
 
 Dreaming 是独立复杂机制，详细设计见 [Dreaming 记忆压缩与长期记忆技术设计](dreaming_memory_design.md)。本文件只保留与 Context Files 的边界。
 
+当前状态：Dreaming 核心代码基线已达到可联调状态，但真实用户聊天样本不足，暂缓继续扩展。本阶段只保留 bugfix、真实样本质量评估和用户显式纠错链路；不继续推进检索式记忆、复杂自动调度策略或更激进的长期记忆自动化。
+
 核心口径：
 
 - Dreaming 不是简单地把 daily notes 复制进 `MEMORY.md`，而是 LLM 压缩、记忆片段生成、自动应用/跳过和事后回滚过程。
@@ -325,11 +326,10 @@ current turn intent
 1. 已完成：Daily notes writer 重构，替换提取式 `memory_writer.py`，按业务日写入原始文字化聊天材料。
 2. 已完成 P0：Prompt 装载调整，普通聊天不再默认全量注入 raw daily notes；后续只保留场景化、预算化动态装载。
 3. 已完成 P0：Session 生命周期字段、业务日懒切换、最大轮次懒切换、`close_reason` 和 deterministic carryover。
-4. Dreaming memory item：把 `app/dreaming.py` 从直接覆盖 `MEMORY.md` 改为生成 memory item、diff 和 source metadata。
-5. Auto apply / skip / rollback：新增 memory events、自动应用/跳过状态、skip reason 和事后回滚能力。
+4. 已完成基线：Dreaming memory item、diff/source metadata、Auto apply / skip / rollback、memory events、4 点 scan/scheduler 和 Admin 脱敏摘要。
+5. 暂缓：在真实聊天样本不足前，不继续扩展检索式记忆、复杂 Dreaming prompt 调优或更激进的自动长期记忆。
 6. 用户纠正链路：支持称呼、AI 名字、风格偏好和错误记忆删除/降权。
 7. Admin 脱敏：默认只展示 metadata、摘要和 diff 摘要，正文查看走管理员最高权限或 2 小时临时明文权限。
-8. 可选检索式记忆：基于 daily notes 建索引，按需动态装载。
 
 ## 13. 验收点
 

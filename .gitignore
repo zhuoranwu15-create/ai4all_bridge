@@ -5,3 +5,5 @@ __pycache__/
 *.py[cod]
 .DS_Store
 data/
+ai4all.db
+*.swp

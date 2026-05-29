@@ -9,6 +9,7 @@
 | 专题 PRD | 对应能力 | 对应技术文档 |
 | --- | --- | --- |
 | [注册与扫码接入](onboarding_prd.md) | 手机号 OTP、扫码绑定、重复绑定、解绑、找回 | [身份模型与微信绑定](../tech_design/identity_model_and_wechat_binding.md) |
+| [首次聊天 Onboarding](first_chat_onboarding_prd.md) | 绑定后主动引导、用户称呼、AI 称呼、人设预设、跳过容错 | [Conversation Orchestrator](../tech_design/conversation_orchestrator_design.md)、[Agent Context Files](../tech_design/agent_context_files.md) |
 | [陪伴式聊天](companion_chat_prd.md) | 微信私聊、陪伴体验、默认 Soul、安全边界 | [Conversation Orchestrator 主对话场景技术设计](../tech_design/conversation_orchestrator_design.md) |
 | [记忆与上下文](memory_prd.md) | short-term context、daily notes、Dreaming、记忆管理 | [Agent Context Files](../tech_design/agent_context_files.md) |
 | [主动消息与提醒](proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | [主动消息与提醒设计](../tech_design/proactive_messaging_design.md) |
