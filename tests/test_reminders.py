@@ -219,3 +219,30 @@ def test_dispatch_due_reminder_marks_gateway_failure(fresh_db):
     assert reminder["outbound_message_id"] == outbound[0]["id"]
     assert outbound[0]["status"] == "failed"
     assert outbound[0]["attempts"] == 1
+
+
+def test_reminder_recur_columns_exist(fresh_db):
+    from app.db import create_reminder, get_reminder
+    with patch("app.db.settings", fresh_db):
+        from app.db import get_or_create_session
+        get_or_create_session(
+            account_id="acc-recur",
+            channel="openclaw-weixin",
+            sender_id="s",
+            sender_name=None,
+            chat_id="c",
+            session_key="sk-recur",
+        )
+        r = create_reminder(
+            account_id="acc-recur",
+            channel="openclaw-weixin",
+            channel_account_id="bot",
+            to_user_id="user",
+            session_key="sk-recur",
+            text="每周提醒",
+            due_at="2026-06-07 09:00:00",
+            recur_rule="weekly:5",
+        )
+        assert r["recur_rule"] == "weekly:5"
+        assert r["sent_count"] == 0
+        assert r["last_sent_at"] is None

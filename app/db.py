@@ -14,6 +14,7 @@ logger = logging.getLogger("ai4all.db")
 _UNSET = object()
 _NON_CONTEXT_ASSISTANT_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
+_LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
 
 
 def _new_id(prefix: str) -> str:
@@ -25,6 +26,13 @@ def _clean_text(value: Optional[str]) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _clean_default_account_display_name(value: Optional[str]) -> Optional[str]:
+    cleaned = _clean_text(value)
+    if cleaned in _LEGACY_DEFAULT_ASSISTANT_NAMES:
+        return None
+    return cleaned
 
 
 def _channel_account_id_aliases(value: str) -> List[str]:
@@ -676,6 +684,17 @@ def init_db() -> None:
         _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
         _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
+        _ensure_column(conn, "reminders", "recur_rule", "TEXT")
+        _ensure_column(conn, "reminders", "sent_count", "INTEGER NOT NULL DEFAULT 0")
+        _ensure_column(conn, "reminders", "last_sent_at", "TEXT")
+        conn.execute(
+            "UPDATE accounts SET display_name = NULL WHERE display_name = ?",
+            ("AI4ALL 助手",),
+        )
+        conn.execute(
+            "UPDATE profiles SET display_name = NULL WHERE display_name = ?",
+            ("AI4ALL 助手",),
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS platform_user_sessions (
@@ -1867,12 +1886,13 @@ def get_latest_subscription_for_user(
 def create_ai4all_account_for_user(
     *,
     platform_user_id: str,
-    display_name: str,
+    display_name: Optional[str],
     system_prompt: Optional[str] = None,
     plan: str = "free",
+    require_display_name: bool = True,
 ) -> Dict[str, Any]:
     cleaned_display_name = _clean_text(display_name)
-    if not cleaned_display_name:
+    if require_display_name and not cleaned_display_name:
         raise ValueError("display_name is required")
 
     account_id = _new_id("acct")
@@ -1971,12 +1991,12 @@ def get_or_create_default_ai4all_account_for_user(
     existing = get_first_active_account_for_user(platform_user_id=platform_user_id)
     if existing is not None:
         return existing
-    cleaned_display_name = _clean_text(display_name) or "AI4ALL 助手"
     return create_ai4all_account_for_user(
         platform_user_id=platform_user_id,
-        display_name=cleaned_display_name,
+        display_name=_clean_default_account_display_name(display_name),
         system_prompt=None,
         plan=plan,
+        require_display_name=False,
     )
 
 
@@ -3316,6 +3336,7 @@ def create_reminder(
     text: str,
     due_at: str,
     reminder_id: Optional[str] = None,
+    recur_rule: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cleaned_account_id = _clean_text(account_id)
@@ -3340,9 +3361,9 @@ def create_reminder(
             """
             INSERT INTO reminders(
                 id, account_id, channel, channel_account_id, to_user_id,
-                session_key, text, due_at, metadata_json, updated_at
+                session_key, text, due_at, recur_rule, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 cleaned_reminder_id,
@@ -3353,6 +3374,7 @@ def create_reminder(
                 _clean_text(session_key),
                 cleaned_text,
                 cleaned_due_at,
+                _clean_text(recur_rule) if recur_rule else None,
                 json.dumps(metadata or {}, ensure_ascii=False),
             ),
         )
@@ -3393,19 +3415,32 @@ def list_due_reminders(*, now: str, limit: int = 20) -> List[Dict[str, Any]]:
 def list_reminders_for_account(
     *,
     account_id: str,
+    status: Optional[str] = None,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM reminders
-            WHERE account_id = ?
-            ORDER BY due_at DESC, created_at DESC
-            LIMIT ?
-            """,
-            (account_id, limit),
-        ).fetchall()
+        if status:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM reminders
+                WHERE account_id = ? AND status = ?
+                ORDER BY due_at ASC, created_at ASC
+                LIMIT ?
+                """,
+                (account_id, status, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM reminders
+                WHERE account_id = ?
+                ORDER BY due_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                (account_id, limit),
+            ).fetchall()
     return [_decode_reminder(row) for row in rows]
 
 
@@ -3437,21 +3472,40 @@ def claim_due_reminder(*, reminder_id: str, now: str) -> Optional[Dict[str, Any]
 def mark_reminder_sent(
     *,
     reminder_id: str,
-    outbound_message_id: Optional[int],
+    outbound_message_id: Optional[int] = None,
+    next_due_at: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     with connect() as conn:
-        conn.execute(
-            """
-            UPDATE reminders
-            SET status = 'sent',
-                outbound_message_id = ?,
-                error = NULL,
-                sent_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (outbound_message_id, reminder_id),
-        )
+        if next_due_at:
+            conn.execute(
+                """
+                UPDATE reminders
+                SET status = 'pending',
+                    due_at = ?,
+                    sent_count = sent_count + 1,
+                    last_sent_at = CURRENT_TIMESTAMP,
+                    claimed_at = NULL,
+                    outbound_message_id = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (next_due_at, outbound_message_id, reminder_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE reminders
+                SET status = 'sent',
+                    sent_count = sent_count + 1,
+                    last_sent_at = CURRENT_TIMESTAMP,
+                    outbound_message_id = ?,
+                    error = NULL,
+                    sent_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (outbound_message_id, reminder_id),
+            )
         row = conn.execute(
             "SELECT * FROM reminders WHERE id = ?",
             (reminder_id,),
@@ -3506,6 +3560,42 @@ def cancel_reminder(
         row = conn.execute(
             "SELECT * FROM reminders WHERE id = ?",
             (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def update_reminder(
+    *,
+    reminder_id: str,
+    text: Optional[str] = None,
+    due_at: Optional[str] = None,
+    recur_rule: Optional[str] = None,
+    clear_recur_rule: bool = False,
+) -> Optional[Dict[str, Any]]:
+    fields: List[str] = []
+    values: List = []
+    if text is not None:
+        fields.append("text = ?")
+        values.append(_clean_text(text))
+    if due_at is not None:
+        fields.append("due_at = ?")
+        values.append(_clean_text(due_at))
+    if recur_rule is not None:
+        fields.append("recur_rule = ?")
+        values.append(_clean_text(recur_rule))
+    elif clear_recur_rule:
+        fields.append("recur_rule = NULL")
+    if not fields:
+        return get_reminder(reminder_id=reminder_id)
+    fields.append("updated_at = CURRENT_TIMESTAMP")
+    values.append(reminder_id)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE reminders SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?", (reminder_id,)
         ).fetchone()
     return _decode_reminder(row) if row else None
 
