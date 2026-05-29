@@ -9,6 +9,7 @@ from app.db import (
     mark_reminder_sent,
 )
 from app.proactive.messaging import send_proactive_text
+from app.reminder_utils import compute_next_due_at
 
 
 def format_scheduler_time(value: datetime) -> str:
@@ -45,6 +46,7 @@ def dispatch_reminder(
             idempotency_key=f"reminder-{claimed['id']}",
             now=current,
             bypass_quiet_hours=bypass_quiet_hours,
+            product_category="user_reminder",
             metadata={
                 "reminder_id": claimed["id"],
                 "reminder_due_at": claimed["due_at"],
@@ -64,9 +66,16 @@ def dispatch_reminder(
     outbound_id = int(outbound["id"]) if outbound.get("id") is not None else None
     outbound_status = outbound.get("status")
     if outbound_status == "sent":
+        recur_rule = claimed.get("recur_rule")
+        next_due_at = None
+        if recur_rule:
+            last_due = datetime.strptime(claimed["due_at"], "%Y-%m-%d %H:%M:%S")
+            next_dt = compute_next_due_at(recur_rule, last_due)
+            next_due_at = next_dt.strftime("%Y-%m-%d %H:%M:%S")
         reminder = mark_reminder_sent(
             reminder_id=claimed["id"],
             outbound_message_id=outbound_id,
+            next_due_at=next_due_at,
         )
         return {
             "status": "sent",

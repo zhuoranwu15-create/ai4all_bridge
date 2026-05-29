@@ -147,15 +147,19 @@ def test_dispatch_due_reminders_skips_not_due(fresh_db):
     mock_send.assert_not_called()
 
 
-def test_dispatch_due_reminder_cancelled_by_quiet_hours(fresh_db):
-    from app.db import create_reminder, get_outbound_daily_usage, get_reminder, list_outbound_messages
+def test_dispatch_due_reminder_bypasses_quiet_hours(fresh_db):
+    """user_reminder product_category bypasses quiet hours so the reminder is sent."""
+    from app.db import create_reminder, get_reminder, list_outbound_messages
     from app.proactive.reminders import dispatch_due_reminders
 
     now = datetime(2026, 5, 22, 23, 0)
     with (
         patch("app.db.settings", fresh_db),
         patch("app.proactive.messaging.settings", fresh_db),
-        patch("app.proactive.messaging.send_weixin_text") as mock_send,
+        patch(
+            "app.proactive.messaging.send_weixin_text",
+            return_value={"messageId": "openclaw-weixin:rem-quiet"},
+        ) as mock_send,
     ):
         _create_account("acc-quiet-rem")
         create_reminder(
@@ -171,18 +175,11 @@ def test_dispatch_due_reminder_cancelled_by_quiet_hours(fresh_db):
         results = dispatch_due_reminders(now=now)
         reminder = get_reminder(reminder_id="rem-quiet")
         outbound = list_outbound_messages(account_id="acc-quiet-rem")
-        usage = get_outbound_daily_usage(
-            account_id="acc-quiet-rem",
-            quota_date="2026-05-22",
-        )
 
-    assert results[0]["status"] == "cancelled"
-    assert reminder["status"] == "cancelled"
-    assert reminder["error"] == "quiet_hours"
-    assert outbound[0]["status"] == "cancelled"
-    assert outbound[0]["error"] == "quiet_hours"
-    assert usage == 0
-    mock_send.assert_not_called()
+    assert results[0]["status"] == "sent"
+    assert reminder["status"] == "sent"
+    assert outbound[0]["status"] == "sent"
+    mock_send.assert_called_once()
 
 
 def test_dispatch_due_reminder_marks_gateway_failure(fresh_db):
@@ -246,3 +243,39 @@ def test_reminder_recur_columns_exist(fresh_db):
         assert r["recur_rule"] == "weekly:5"
         assert r["sent_count"] == 0
         assert r["last_sent_at"] is None
+
+
+def test_recurring_reminder_resets_after_dispatch(fresh_db):
+    from unittest.mock import patch, MagicMock
+    from app.db import create_reminder, get_reminder
+
+    with patch("app.db.settings", fresh_db):
+        _create_account("acc-recur-dispatch")
+        create_reminder(
+            reminder_id="rem-recur-1",
+            account_id="acc-recur-dispatch",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@wechat",
+            session_key="sk-rd",
+            text="每周提醒",
+            due_at="2026-05-30 09:00:00",
+            recur_rule="weekly:5",  # 每周六
+        )
+
+    mock_send = MagicMock(return_value={"id": None, "status": "sent"})
+    with patch("app.db.settings", fresh_db), \
+         patch("app.proactive.reminders.send_proactive_text", mock_send):
+        from app.proactive.reminders import dispatch_reminder
+        result = dispatch_reminder(
+            reminder_id="rem-recur-1",
+            now=datetime(2026, 5, 30, 9, 0, 0),
+        )
+
+    assert result["status"] == "sent"
+    with patch("app.db.settings", fresh_db):
+        updated = get_reminder(reminder_id="rem-recur-1")
+    # Should have reset to pending with next Saturday's date
+    assert updated["status"] == "pending"
+    assert updated["sent_count"] == 1
+    assert updated["due_at"] == "2026-06-06 09:00:00"
