@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from typing import Dict, List, Optional
 
@@ -9,6 +10,27 @@ from app.config import settings
 
 
 logger = logging.getLogger("ai4all.llm")
+
+# DeepSeek sometimes emits tool calls as DSML text (finish_reason="stop") instead of
+# the standard tool_calls JSON field.  These patterns parse that fallback format.
+_DSML_INVOKE_RE = re.compile(
+    r'<[｜|]{2}DSML[｜|]{2}invoke\s+name=["\']([^"\']+)["\']>',
+    re.IGNORECASE,
+)
+_DSML_PARAM_RE = re.compile(
+    r'<[｜|]{2}DSML[｜|]{2}parameter\s+name=["\']([^"\']+)["\'][^>]*>(.*?)</[｜|]{2}DSML[｜|]{2}parameter>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_dsml_tool_call(content: str):
+    """Return (tool_name, args_dict) if content contains a DSML tool call, else None."""
+    m = _DSML_INVOKE_RE.search(content)
+    if not m:
+        return None
+    tool_name = m.group(1)
+    args = {pm.group(1): pm.group(2).strip() for pm in _DSML_PARAM_RE.finditer(content)}
+    return tool_name, args
 
 
 def _fallback_reply(text: str) -> str:
@@ -182,6 +204,30 @@ def generate_reply_with_tools(
         content = (message.get("content") or "").strip()
         if not content:
             return "", "llm_empty_response"
+
+        # DeepSeek fallback: tool call encoded as DSML text instead of tool_calls field.
+        dsml = _parse_dsml_tool_call(content)
+        if dsml:
+            tool_name, tool_args = dsml
+            logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
+            from app.tools.executor import execute_tool_call
+            tool_result = execute_tool_call(tool_name, tool_args, ctx)
+            tool_result_str = json.dumps(tool_result, ensure_ascii=False)
+            fake_tool_call = {
+                "id": "call_dsml_0",
+                "type": "function",
+                "function": {"name": tool_name, "arguments": json.dumps(tool_args, ensure_ascii=False)},
+            }
+            messages2 = messages + [
+                {"role": "assistant", "tool_calls": [fake_tool_call]},
+                {"role": "tool", "tool_call_id": "call_dsml_0", "content": tool_result_str},
+            ]
+            try:
+                final_text = _http_chat(messages2)
+            except RuntimeError as err:
+                return "", str(err)
+            return final_text, None
+
         return content, None
 
     if finish_reason == "tool_calls":

@@ -17,9 +17,10 @@ logger = logging.getLogger("ai4all.tools.reminder_handlers")
 
 
 def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
-    text = str(args.get("text", "")).strip()
-    due_at_raw = str(args.get("due_at", "")).strip()
-    recur_rule_raw = args.get("recur_rule")
+    # Accept DSML alias names alongside the canonical parameter names.
+    text = str(args.get("text") or args.get("title") or args.get("content") or "").strip()
+    due_at_raw = str(args.get("due_at") or args.get("time") or args.get("datetime") or "").strip()
+    recur_rule_raw = args.get("recur_rule") or args.get("repeat") or args.get("recurrence")
 
     if not text:
         return {"error": "提醒内容不能为空"}
