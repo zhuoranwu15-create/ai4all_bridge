@@ -90,6 +90,12 @@
     .toast { position: fixed; bottom: 20px; right: 20px; background: #333; color: #fff; padding: 10px 16px; border-radius: 8px; font-size: 13px; z-index: 999; display: none; }
     .toast.show { display: block; animation: fadeInOut 3s forwards; }
     @keyframes fadeInOut { 0%{opacity:0} 10%{opacity:1} 80%{opacity:1} 100%{opacity:0} }
+
+    .token-bar { background: #fff8e1; border-bottom: 1px solid #ffe082; padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .token-bar .token-bar-label { font-size: 12px; font-weight: 600; color: #f57f17; white-space: nowrap; }
+    .token-bar .token-inputs { display: flex; gap: 8px; flex: 1; flex-wrap: wrap; }
+    .token-bar input { border: 1px solid #ffe082; border-radius: 6px; padding: 5px 10px; font-size: 12px; font-family: monospace; width: 220px; background: #fffde7; }
+    .token-bar input:focus { outline: none; border-color: #ffa000; }
   </style>
 </head>
 <body>
@@ -98,6 +104,15 @@
   <h1>Reminder Debug Panel</h1>
   <span class="badge">DEV ONLY</span>
 </header>
+
+<div id="tokenBar" class="token-bar" style="display:none">
+  <span class="token-bar-label">⚠️ 设置 Token</span>
+  <div class="token-inputs">
+    <input type="text" id="inputAdmin"  placeholder="Admin token (dev-admin-token)" />
+    <input type="text" id="inputBridge" placeholder="Bridge token (dev-secret)" />
+  </div>
+  <button class="btn btn-primary btn-sm" onclick="saveTokens()">保存并刷新</button>
+</div>
 
 <div class="layout">
 
@@ -139,20 +154,20 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// Tokens are stored in localStorage.
-// To set them, paste in the browser DevTools console:
-//   localStorage.setItem("rdb_admin_token", "dev-admin-token");
-//   localStorage.setItem("rdb_bridge_token", "dev-secret");
-//   location.reload();
 const ADMIN_TOKEN  = localStorage.getItem('rdb_admin_token')  || '';
 const BRIDGE_TOKEN = localStorage.getItem('rdb_bridge_token') || '';
+
+function saveTokens() {
+  const a = document.getElementById('inputAdmin').value.trim();
+  const b = document.getElementById('inputBridge').value.trim();
+  if (!a || !b) { showToast('请填写两个 token'); return; }
+  localStorage.setItem('rdb_admin_token', a);
+  localStorage.setItem('rdb_bridge_token', b);
+  location.reload();
+}
+
 if (!ADMIN_TOKEN || !BRIDGE_TOKEN) {
-  console.warn(
-    '[reminder_debug] tokens not set.\n' +
-    'localStorage.setItem("rdb_admin_token", "dev-admin-token");\n' +
-    'localStorage.setItem("rdb_bridge_token", "dev-secret");\n' +
-    'location.reload();'
-  );
+  document.getElementById('tokenBar').style.display = 'flex';
 }
 
 let currentAccountId = null;
