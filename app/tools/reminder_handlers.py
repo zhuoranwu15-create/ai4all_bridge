@@ -31,8 +31,14 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
 
     recur_rule = None
     if recur_rule_raw:
+        # Normalize bare "weekly"/"monthly" (no day/date suffix) using the due_at anchor.
+        normalized_raw = str(recur_rule_raw).strip().lower()
+        if normalized_raw == "weekly":
+            normalized_raw = f"weekly:{due_dt.weekday()}"  # 0=Mon, 5=Sat, 6=Sun
+        elif normalized_raw == "monthly":
+            normalized_raw = f"monthly:{due_dt.day}"
         try:
-            recur_rule = validate_recur_rule(str(recur_rule_raw))
+            recur_rule = validate_recur_rule(normalized_raw)
         except ValueError as e:
             return {"error": f"周期规则无效：{e}"}
 
