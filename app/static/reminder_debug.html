@@ -202,6 +202,7 @@ async function sendTurn(accountId, text) {
       account_id: accountId,
       session_key: accountId,
       sender_id: 'debug-sender',
+      chat_id: accountId,
       chat_type: 'private',
       message_type: 'text',
       message_id: `debug-${Date.now()}-${++msgCounter}`,
