@@ -80,6 +80,10 @@ from app.db import (
     upsert_proactive_account_state,
     upsert_channel_binding,
     upsert_admin_user,
+    cancel_reminder,
+    get_reminder,
+    list_reminders_for_account,
+    update_reminder,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
@@ -1022,6 +1026,55 @@ def debug_update_profile(session_id: int, payload: ProfileUpdateRequest, _: None
     if profile is None:
         raise HTTPException(status_code=404, detail="profile not found")
     return {"status": "ok", "profile": profile}
+
+
+# ---------------------------------------------------------------------------
+# Reminder debug routes
+# ---------------------------------------------------------------------------
+
+class ReminderDebugUpdateRequest(BaseModel):
+    text: Optional[str] = None
+    due_at: Optional[str] = None
+    recur_rule: Optional[str] = None
+    clear_recur_rule: bool = False
+
+
+@app.get("/debug/reminders/{account_id}")
+def debug_get_reminders(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    reminders = list_reminders_for_account(account_id=account_id, limit=100)
+    return {"account_id": account_id, "reminders": reminders}
+
+
+@app.patch("/debug/reminders/{reminder_id}")
+def debug_patch_reminder(
+    reminder_id: str,
+    payload: ReminderDebugUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    reminder = get_reminder(reminder_id=reminder_id)
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="reminder not found")
+    if reminder["status"] != "pending":
+        raise HTTPException(status_code=400, detail="only pending reminders can be edited")
+    updated = update_reminder(
+        reminder_id=reminder_id,
+        text=payload.text,
+        due_at=payload.due_at,
+        recur_rule=payload.recur_rule,
+        clear_recur_rule=payload.clear_recur_rule,
+    )
+    return {"status": "ok", "reminder": updated}
+
+
+@app.delete("/debug/reminders/{reminder_id}")
+def debug_delete_reminder(reminder_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    reminder = get_reminder(reminder_id=reminder_id)
+    if reminder is None:
+        raise HTTPException(status_code=404, detail="reminder not found")
+    if reminder["status"] != "pending":
+        raise HTTPException(status_code=400, detail="only pending reminders can be cancelled")
+    cancelled = cancel_reminder(reminder_id=reminder_id)
+    return {"status": "ok", "reminder": cancelled}
 
 
 # ---------------------------------------------------------------------------
