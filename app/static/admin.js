@@ -62,5 +62,15 @@ function contentLabel(item) {
 }
 
 function formatDateTime(value) {
-  return value ? String(value).slice(0, 16) : '—';
+  if (!value) return '—';
+  var s = String(value).replace(' ', 'T');
+  if (!s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return String(value).slice(0, 16);
+  var y = d.getFullYear();
+  var mo = String(d.getMonth() + 1).padStart(2, '0');
+  var dy = String(d.getDate()).padStart(2, '0');
+  var h = String(d.getHours()).padStart(2, '0');
+  var mi = String(d.getMinutes()).padStart(2, '0');
+  return y + '-' + mo + '-' + dy + ' ' + h + ':' + mi;
 }

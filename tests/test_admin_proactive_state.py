@@ -285,3 +285,84 @@ def test_admin_lists_and_cancels_commitments(client):
     assert cancelled.json()["commitment"]["status"] == "cancelled"
     assert commitment["status"] == "cancelled"
     assert commitment["error"] == "admin_cancelled"
+
+
+def test_admin_proactive_overview_redacts_task_text(client):
+    from app.db import (
+        create_outbound_message,
+        create_proactive_commitment,
+        create_reminder,
+        upsert_proactive_account_state,
+    )
+
+    secret_reminder = "提醒我去医院取报告"
+    secret_commitment = "明天跟进用户提到的后续 B"
+    secret_outbound = "主动消息正文"
+
+    _create_account("acc-admin-overview")
+    upsert_proactive_account_state(
+        account_id="acc-admin-overview",
+        enabled=True,
+        next_scan_at="2026-05-31 09:00:00",
+        metadata={
+            "heartbeat_candidate": {
+                "id": "candidate-1",
+                "text": "候选正文也要脱敏",
+            }
+        },
+    )
+    create_reminder(
+        reminder_id="rem-admin-overview",
+        account_id="acc-admin-overview",
+        channel="openclaw-weixin",
+        channel_account_id="bot-1",
+        to_user_id="user@im.wechat",
+        session_key="session-acc-admin-overview",
+        text=secret_reminder,
+        due_at="2026-06-01 10:00:00",
+        metadata={"text": "metadata 里的正文也要脱敏"},
+    )
+    create_proactive_commitment(
+        commitment_id="com-admin-overview",
+        account_id="acc-admin-overview",
+        text=secret_commitment,
+        due_at="2026-06-01 11:00:00",
+        confidence=0.95,
+        reason="admin overview",
+    )
+    create_outbound_message(
+        account_id="acc-admin-overview",
+        channel="openclaw-weixin",
+        channel_account_id="bot-1",
+        to_user_id="user@im.wechat",
+        session_key="session-acc-admin-overview",
+        source="reminder",
+        text=secret_outbound,
+        idempotency_key="admin-overview-outbound",
+        quota_date="2026-05-31",
+        status="failed",
+        error="gateway timeout",
+        metadata={"message": "metadata outbound text"},
+    )
+
+    res = client.get(
+        "/admin/accounts/acc-admin-overview/proactive-overview",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["redacted"] is True
+    assert body["proactive_state"]["metadata"]["heartbeat_candidate"]["text"]["redacted"] is True
+    assert body["reminders"][0]["text_redacted"] is True
+    assert body["reminders"][0]["text_chars"] == len(secret_reminder)
+    assert body["reminders"][0]["metadata"]["text"]["redacted"] is True
+    assert body["commitments"][0]["text_redacted"] is True
+    assert body["commitments"][0]["text_chars"] == len(secret_commitment)
+    assert body["commitments"][0]["reason_redacted"] is True
+    assert body["outbound_messages"][0]["text_redacted"] is True
+    assert body["outbound_messages"][0]["text_chars"] == len(secret_outbound)
+    dumped = str(body)
+    assert secret_reminder not in dumped
+    assert secret_commitment not in dumped
+    assert secret_outbound not in dumped

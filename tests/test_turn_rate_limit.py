@@ -87,6 +87,40 @@ def test_admin_account_includes_channel_bindings(client):
     assert bindings[0]["session_key"] == AI4ALL_ACCOUNT_ID
     assert bindings[0]["channel_account_id"] == CHANNEL_ACCOUNT_ID
     assert bindings[0]["raw_identity"]["ai4all_account_id"] == AI4ALL_ACCOUNT_ID
+    data = res.json()
+    assert data["owner_bindings"] == []
+    assert data["platform_user"] is None
+    assert data["binding_intents"] == []
+    assert data["recent_traces"] == []
+
+
+def test_admin_session_messages_include_trace_id_metadata(client, fresh_db):
+    fresh_db.debug_trace_account_ids = AI4ALL_ACCOUNT_ID
+    res = client.post("/openclaw/turn", json=make_payload("m-trace-meta"), headers=BRIDGE_HEADERS)
+    assert res.status_code == 200
+    trace_id = res.json()["metadata"]["debug_trace_id"]
+    assert trace_id
+
+    from app.db import list_sessions_for_account
+
+    session = list_sessions_for_account(account_id=AI4ALL_ACCOUNT_ID)[0]
+    res = client.get(
+        f"/admin/sessions/{session['id']}",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+
+    assert res.status_code == 200
+    messages = res.json()["messages"]
+    user_message = next(message for message in messages if message["message_id"] == "m-trace-meta")
+    assert user_message["trace_id"] == trace_id
+
+    res = client.get(
+        f"/admin/accounts/{AI4ALL_ACCOUNT_ID}",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert res.status_code == 200
+    traces = res.json()["recent_traces"]
+    assert traces[0]["trace_id"] == trace_id
 
 
 def test_turn_prefers_channel_account_id_over_legacy_account_id(client):

@@ -3,16 +3,94 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI4ALL 运营后台</title>
+  <title>AI4ALL 后台入口</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>AI4ALL 运营后台</h1>
-  <div class="form-actions" style="margin-bottom:16px">
-    <a class="button-link primary" href="onboarding.html">Web Onboarding</a>
+  <header class="admin-header">
+    <div>
+      <h1>AI4ALL 后台入口</h1>
+      <p class="page-subtitle">运营后台和技术 Debug 的统一入口。默认视图只展示状态、元数据和审计信息。</p>
+    </div>
     <span id="admin-user" class="pill">—</span>
-  </div>
-  <div class="card">
+  </header>
+
+  <section class="entry-grid" aria-label="后台入口">
+    <div class="entry-panel">
+      <div class="entry-panel-head">
+        <h2>运营后台</h2>
+        <span class="section-tag">Admin</span>
+      </div>
+      <div class="entry-list">
+        <a class="entry-link" href="#accounts">
+          <strong>账号列表</strong>
+          <span>查看账号状态、绑定、用量和最近活跃。</span>
+        </a>
+        <a class="entry-link" href="#plaintext-grants">
+          <strong>明文授权</strong>
+          <span>审批临时明文权限，跟踪授权状态。</span>
+        </a>
+        <a class="entry-link" href="#access-events-card">
+          <strong>访问审计</strong>
+          <span>查看最近明文访问和高风险操作记录。</span>
+        </a>
+        <a class="entry-link" href="onboarding.html">
+          <strong>Web Onboarding</strong>
+          <span>打开用户注册、登录和扫码绑定入口。</span>
+        </a>
+      </div>
+    </div>
+
+    <div class="entry-panel">
+      <div class="entry-panel-head">
+        <h2>技术 Debug</h2>
+        <span class="section-tag debug">Debug</span>
+      </div>
+      <div class="entry-list">
+        <a class="entry-link" href="onboarding_debug.html">
+          <strong>Onboarding Debug</strong>
+          <span>创建测试用户、跳 onboarding 状态、reset 上下文。</span>
+        </a>
+        <a class="entry-link" href="reminder_debug.html">
+          <strong>Reminder Debug</strong>
+          <span>模拟聊天创建提醒，查看、编辑、取消测试提醒。</span>
+        </a>
+        <a class="entry-link" href="/docs">
+          <strong>Swagger API</strong>
+          <span>直接调用 Admin 和 Debug API。</span>
+        </a>
+        <div class="entry-link muted">
+          <strong>调试指南</strong>
+          <span class="mono">docs/debugging.md</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="metric-grid" aria-label="运行概览">
+    <div class="metric-tile">
+      <span class="metric-label">账号总数</span>
+      <strong id="metric-total-accounts">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">Active</span>
+      <strong id="metric-active-accounts">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">Disabled</span>
+      <strong id="metric-disabled-accounts">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">待审批明文</span>
+      <strong id="metric-pending-grants">—</strong>
+    </div>
+  </section>
+
+  <div class="card" id="accounts">
+    <div class="card-title-row">
+      <h2>账号列表</h2>
+      <span class="card-note">点击 Account ID 进入单账号详情。</span>
+    </div>
     <table>
       <thead>
         <tr>
@@ -30,12 +108,12 @@
     </table>
   </div>
 
-  <div class="card">
+  <div class="card" id="plaintext-grants">
     <h2>明文授权申请</h2>
     <div id="grants">加载中…</div>
   </div>
 
-  <div class="card">
+  <div class="card" id="access-events-card">
     <h2>明文访问记录</h2>
     <div id="access-events">加载中…</div>
   </div>
@@ -47,40 +125,41 @@
       var tbody = document.getElementById('tbody');
       try {
         var data = await apiFetch('/admin/accounts');
-        var accounts = data.accounts;
+        var accounts = data.accounts || [];
+        updateAccountMetrics(accounts);
         if (!accounts.length) {
           tbody.innerHTML = '<tr><td colspan="6">暂无账号</td></tr>';
-          return;
+        } else {
+          var details = await Promise.all(accounts.map(function(a) {
+            var base = '/admin/accounts/' + encodeURIComponent(a.id);
+            return Promise.all([
+              apiFetch(base + '/usage').catch(function() { return { today: { message_count: '?' } }; }),
+              apiFetch(base).catch(function() { return { channel_bindings: [] }; }),
+            ]).then(function(items) {
+              return { usage: items[0], detail: items[1] };
+            });
+          }));
+          tbody.innerHTML = accounts.map(function(a, i) {
+            var count = details[i].usage.today.message_count;
+            var bindings = details[i].detail.channel_bindings || [];
+            var channelAccount = bindings.length
+              ? (bindings[0].channel_account_id || bindings[0].channel || '—')
+              : '—';
+            var limit = a.daily_limit != null ? a.daily_limit : '默认';
+            var lastActive = a.last_active_at ? a.last_active_at.slice(0, 16) : '—';
+            var toggleBtn = a.status === 'active'
+              ? '<button class="danger" onclick="toggle(\'' + esc(a.id) + '\',\'disable\')">禁用</button>'
+              : '<button class="primary" onclick="toggle(\'' + esc(a.id) + '\',\'enable\')">启用</button>';
+            return '<tr>'
+              + '<td><a class="mono" href="account.html?id=' + encodeURIComponent(a.id) + '">' + esc(a.id) + '</a></td>'
+              + '<td class="mono">' + esc(channelAccount) + '</td>'
+              + '<td class="status-' + esc(a.status) + '">' + esc(a.status) + '</td>'
+              + '<td>' + esc(String(count)) + ' / ' + esc(String(limit)) + '</td>'
+              + '<td>' + esc(lastActive) + '</td>'
+              + '<td>' + toggleBtn + '</td>'
+              + '</tr>';
+          }).join('');
         }
-        var details = await Promise.all(accounts.map(function(a) {
-          var base = '/admin/accounts/' + encodeURIComponent(a.id);
-          return Promise.all([
-            apiFetch(base + '/usage').catch(function() { return { today: { message_count: '?' } }; }),
-            apiFetch(base).catch(function() { return { channel_bindings: [] }; }),
-          ]).then(function(items) {
-            return { usage: items[0], detail: items[1] };
-          });
-        }));
-        tbody.innerHTML = accounts.map(function(a, i) {
-          var count = details[i].usage.today.message_count;
-          var bindings = details[i].detail.channel_bindings || [];
-          var channelAccount = bindings.length
-            ? (bindings[0].channel_account_id || bindings[0].channel || '—')
-            : '—';
-          var limit = a.daily_limit != null ? a.daily_limit : '默认';
-          var lastActive = a.last_active_at ? a.last_active_at.slice(0, 16) : '—';
-          var toggleBtn = a.status === 'active'
-            ? '<button class="danger" onclick="toggle(\'' + esc(a.id) + '\',\'disable\')">禁用</button>'
-            : '<button class="primary" onclick="toggle(\'' + esc(a.id) + '\',\'enable\')">启用</button>';
-          return '<tr>'
-            + '<td><a class="mono" href="account.html?id=' + encodeURIComponent(a.id) + '">' + esc(a.id) + '</a></td>'
-            + '<td class="mono">' + esc(channelAccount) + '</td>'
-            + '<td class="status-' + esc(a.status) + '">' + esc(a.status) + '</td>'
-            + '<td>' + esc(String(count)) + ' / ' + esc(String(limit)) + '</td>'
-            + '<td>' + esc(lastActive) + '</td>'
-            + '<td>' + toggleBtn + '</td>'
-            + '</tr>';
-        }).join('');
       } catch (e) {
         tbody.innerHTML = '<tr><td colspan="6" class="status-msg error">' + esc(e.message) + '</td></tr>';
       }
@@ -97,11 +176,21 @@
       }
     }
 
+    function updateAccountMetrics(accounts) {
+      var active = accounts.filter(function(a) { return a.status === 'active'; }).length;
+      var disabled = accounts.filter(function(a) { return a.status === 'disabled'; }).length;
+      document.getElementById('metric-total-accounts').textContent = accounts.length;
+      document.getElementById('metric-active-accounts').textContent = active;
+      document.getElementById('metric-disabled-accounts').textContent = disabled;
+    }
+
     async function loadGrants() {
       var el = document.getElementById('grants');
       try {
         var data = await apiFetch('/admin/plaintext-grants?limit=20');
         var grants = data.grants || [];
+        var pending = grants.filter(function(g) { return g.status === 'pending'; }).length;
+        document.getElementById('metric-pending-grants').textContent = pending;
         if (!grants.length) {
           el.textContent = '暂无授权申请';
           return;
@@ -131,6 +220,7 @@
           }).join('')
           + '</tbody></table>';
       } catch (e) {
+        document.getElementById('metric-pending-grants').textContent = '!';
         el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
       }
     }

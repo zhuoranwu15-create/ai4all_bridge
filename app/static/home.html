@@ -295,17 +295,18 @@ function renderQr() {
   if (intent.qr_data_url) {
     document.getElementById('qr-img').src = intent.qr_data_url;
   }
-  updateQrStatus(intent.status);
+  updateQrStatus(intent);
 }
 
-function updateQrStatus(status) {
+function updateQrStatus(intent) {
+  var status = typeof intent === 'string' ? intent : intent.status;
   var el = document.getElementById('qr-status');
   var labels = {
     created: '正在生成二维码…',
     qr_created: '等待扫码中…',
     completed: '绑定成功 ✓',
     already_connected: '该微信已连接，请直接使用',
-    failed: '绑定失败，请刷新重试',
+    failed: (intent && intent.error) || '绑定失败，请刷新重试',
     expired: '二维码已过期，请重新验证',
   };
   el.textContent = labels[status] || status;

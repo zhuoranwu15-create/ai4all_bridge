@@ -10,6 +10,12 @@ class _Completed:
     stderr = ""
 
 
+class _LogoutCompleted:
+    returncode = 0
+    stdout = "logged out"
+    stderr = ""
+
+
 def _params_from_call(mock_run):
     cmd = mock_run.call_args.args[0]
     return json.loads(cmd[cmd.index("--params") + 1])
@@ -74,3 +80,36 @@ def test_send_weixin_text_rejects_missing_required_fields(to_user_id, text, mess
             text=text,
             gateway_timeout_ms=1234,
         )
+
+
+def test_logout_weixin_account_calls_openclaw_channels_logout():
+    from app.openclaw_gateway import logout_weixin_account
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=_LogoutCompleted()) as mock_run:
+        result = logout_weixin_account(account_id="bot-im-bot", timeout_ms=1234)
+
+    assert result["accountId"] == "bot-im-bot"
+    assert result["channel"] == "openclaw-weixin"
+    cmd = mock_run.call_args.args[0]
+    assert cmd == [
+        "openclaw",
+        "channels",
+        "logout",
+        "--channel",
+        "openclaw-weixin",
+        "--account",
+        "bot-im-bot",
+    ]
+
+
+def test_logout_weixin_account_raises_gateway_error_on_cli_failure():
+    from app.openclaw_gateway import OpenClawGatewayError, logout_weixin_account
+
+    class Failed:
+        returncode = 1
+        stdout = ""
+        stderr = 'Channel logout failed: Error: Channel "openclaw-weixin" does not support logout.'
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=Failed()):
+        with pytest.raises(OpenClawGatewayError, match="does not support logout"):
+            logout_weixin_account(account_id="bot-im-bot", timeout_ms=1234)

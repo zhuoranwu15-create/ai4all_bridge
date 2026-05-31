@@ -44,6 +44,7 @@ from app.db import (
     get_session,
     get_or_create_session,
     get_usage_last_7_days,
+    get_wallet_summary,
     increment_verify_attempts,
     init_db,
     insert_admin_access_event,
@@ -53,6 +54,9 @@ from app.db import (
     list_admin_access_events,
     list_admin_plaintext_grants,
     list_admin_users,
+    list_account_owner_bindings_for_account,
+    list_binding_intents_for_account,
+    list_outbound_messages,
     list_proactive_commitments_for_account,
     list_debug_traces,
     list_dreaming_memory_items,
@@ -83,11 +87,16 @@ from app.db import (
     cancel_reminder,
     get_reminder,
     list_reminders_for_account,
+    list_wallet_ledger,
     update_reminder,
+    unbind_account_channel,
+    wipe_account_data,
+    reenable_proactive_after_rebind,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.openclaw_gateway import (
+    logout_weixin_account,
     send_weixin_text,
     start_weixin_qr_login,
     wait_weixin_qr_login,
@@ -120,7 +129,9 @@ from app.dreaming import (
 )
 from app.session_lifecycle import run_daily_dreaming_scan
 from app.turn_service import handle_openclaw_turn
-from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context
+import shutil
+
+from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context, account_profile_dir
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -207,6 +218,10 @@ class WebCreateBindingIntentRequest(BaseModel):
     channel: Optional[str] = "openclaw-weixin"
 
 
+class WebUnbindRequest(BaseModel):
+    keep_memories: bool
+
+
 def _debug_trace_account_ids() -> set[str]:
     raw = getattr(settings, "debug_trace_account_ids", "") or ""
     return {item.strip() for item in raw.split(",") if item.strip()}
@@ -214,6 +229,96 @@ def _debug_trace_account_ids() -> set[str]:
 
 def _is_debug_trace_account(account_id: str) -> bool:
     return account_id in _debug_trace_account_ids()
+
+
+def _normalize_openclaw_weixin_account_id(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if "openclaw-weixin:" in text:
+        text = text.split("openclaw-weixin:", 1)[1].split(":", 1)[0].strip()
+    if text.endswith("@im.bot"):
+        return f"{text[:-7]}-im-bot"
+    if text.endswith("-im-bot"):
+        return text
+    if text.endswith("@im.wechat"):
+        return f"{text[:-10]}-im-wechat"
+    if text.endswith("-im-wechat"):
+        return text
+    return None
+
+
+def _collect_openclaw_weixin_logout_targets(bindings: list[dict]) -> list[str]:
+    targets = []
+    seen = set()
+    for binding in bindings:
+        if binding.get("channel") != "openclaw-weixin":
+            continue
+        raw_identity = binding.get("raw_identity") or {}
+        candidates = [
+            binding.get("channel_account_id"),
+            binding.get("session_key"),
+            raw_identity.get("channel_account_id"),
+            raw_identity.get("accountId"),
+            raw_identity.get("account_id"),
+            raw_identity.get("session_key"),
+            raw_identity.get("openclaw_session_key_account_id"),
+        ]
+        for candidate in candidates:
+            target = _normalize_openclaw_weixin_account_id(candidate)
+            if target and target not in seen:
+                targets.append(target)
+                seen.add(target)
+    return targets
+
+
+def _cleanup_openclaw_weixin_accounts(bindings: list[dict]) -> dict:
+    targets = _collect_openclaw_weixin_logout_targets(bindings)
+    if not targets:
+        return {
+            "status": "skipped",
+            "reason": "no_openclaw_weixin_binding",
+            "attempts": [],
+        }
+
+    attempts = []
+    for target in targets:
+        try:
+            result = logout_weixin_account(
+                account_id=target,
+                channel="openclaw-weixin",
+                timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+            )
+            attempts.append(
+                {
+                    "channel": "openclaw-weixin",
+                    "account_id": target,
+                    "status": "ok",
+                    "result": result,
+                }
+            )
+        except Exception as err:
+            error = str(err)
+            status = "unsupported" if "does not support logout" in error else "failed"
+            logger.warning("OpenClaw Weixin logout failed account=%s error=%s", target, error)
+            attempts.append(
+                {
+                    "channel": "openclaw-weixin",
+                    "account_id": target,
+                    "status": status,
+                    "error": error,
+                }
+            )
+
+    if all(item["status"] == "ok" for item in attempts):
+        status = "ok"
+    elif all(item["status"] == "unsupported" for item in attempts):
+        status = "unsupported"
+    elif any(item["status"] == "ok" for item in attempts):
+        status = "partial_failed"
+    else:
+        status = "failed"
+    return {"status": status, "attempts": attempts}
 
 
 def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict) -> None:
@@ -251,6 +356,35 @@ def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict
                 "channel_account_id": channel_account_id,
             },
         )
+        reenable_proactive_after_rebind(account_id=binding_intent["account_id"])
+        return
+
+    if result.get("alreadyConnected") and channel_account_id:
+        update_binding_intent(
+            binding_intent_id=binding_intent["id"],
+            status="completed",
+            channel_account_id=channel_account_id,
+            raw_result=raw_result,
+            completed=True,
+            error=None,
+        )
+        upsert_channel_binding(
+            account_id=binding_intent["account_id"],
+            channel=binding_intent["channel"],
+            session_key=binding_intent["openclaw_login_session_key"],
+            channel_account_id=channel_account_id,
+            sender_id=None,
+            chat_id=None,
+            raw_identity={
+                "binding_intent_id": binding_intent["id"],
+                "platform_user_id": binding_intent["platform_user_id"],
+                "ai4all_account_id": binding_intent["account_id"],
+                "openclaw_login_session_key": binding_intent["openclaw_login_session_key"],
+                "channel_account_id": channel_account_id,
+                "already_connected": True,
+            },
+        )
+        reenable_proactive_after_rebind(account_id=binding_intent["account_id"])
         return
 
     status = "already_connected" if result.get("alreadyConnected") else "failed"
@@ -651,6 +785,153 @@ def _redact_session(session: dict) -> dict:
     return item
 
 
+def _redact_text_field(item: dict, field: str = "text") -> dict:
+    redacted = dict(item or {})
+    value = redacted.pop(field, None)
+    redacted[f"{field}_redacted"] = True
+    redacted[f"{field}_chars"] = len(value or "")
+    redacted[f"{field}_preview"] = None
+    if "metadata" in redacted:
+        redacted["metadata"] = _redact_raw_payload(redacted.get("metadata") or {})
+    return redacted
+
+
+def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
+    if state is None:
+        return None
+    item = dict(state)
+    if "metadata" in item:
+        item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
+    return item
+
+
+def _redact_phone(phone: Optional[str]) -> Optional[str]:
+    text = str(phone or "").strip()
+    if not text:
+        return None
+    if len(text) <= 4:
+        return "*" * len(text)
+    return "*" * max(0, len(text) - 4) + text[-4:]
+
+
+def _redact_platform_user(user: Optional[dict]) -> Optional[dict]:
+    if user is None:
+        return None
+    item = dict(user)
+    item["phone_redacted"] = True
+    item["phone_last4"] = str(item.get("phone") or "")[-4:] if item.get("phone") else None
+    item["phone"] = _redact_phone(item.get("phone"))
+    return item
+
+
+def _binding_intent_for_view(intent: dict, *, account_id: Optional[str]) -> dict:
+    item = dict(intent or {})
+    if _can_bypass_redaction_for_account(account_id):
+        item["plaintext_debug"] = True
+        return item
+    qr_data_url = item.pop("qr_data_url", None)
+    manual_login_command = item.pop("manual_login_command", None)
+    raw_result = item.pop("raw_result", None)
+    item["qr_data_url_redacted"] = bool(qr_data_url)
+    item["manual_login_command_redacted"] = bool(manual_login_command)
+    item["raw_result_redacted"] = bool(raw_result)
+    if isinstance(raw_result, dict):
+        item["raw_result_keys"] = sorted(str(key) for key in raw_result.keys())
+    return item
+
+
+def _debug_plaintext_account_allowlist() -> set[str]:
+    raw = getattr(settings, "admin_debug_plaintext_account_allowlist", "") or ""
+    return {value.strip() for value in raw.split(",") if value.strip()}
+
+
+def _is_non_production_env() -> bool:
+    return str(getattr(settings, "app_env", "") or "").lower() in {"local", "development", "test"}
+
+
+def _can_bypass_redaction_for_account(account_id: Optional[str]) -> bool:
+    if not account_id:
+        return False
+    if account_id in _debug_plaintext_account_allowlist():
+        return True
+    if bool(getattr(settings, "admin_debug_plaintext_enabled", False)):
+        return _is_non_production_env()
+    return False
+
+
+def _message_plaintext(message: dict) -> dict:
+    item = dict(message)
+    item["plaintext_debug"] = True
+    return item
+
+
+def _trace_plaintext(trace: dict) -> dict:
+    item = dict(trace)
+    item["plaintext_debug"] = True
+    return item
+
+
+def _profile_plaintext(profile: dict) -> dict:
+    item = dict(profile or {})
+    item["plaintext_debug"] = True
+    return item
+
+
+def _session_plaintext(session: dict) -> dict:
+    item = dict(session or {})
+    item["plaintext_debug"] = True
+    return item
+
+
+def _debug_redaction_payload(*, account_id: Optional[str] = None, source: str = "admin_debug") -> dict:
+    return {
+        "redacted": False,
+        "plaintext_debug": True,
+        "plaintext_debug_source": source,
+        "plaintext_debug_account_id": account_id,
+    }
+
+
+def _session_for_view(session: dict) -> dict:
+    account_id = session.get("account_id") if session else None
+    if _can_bypass_redaction_for_account(account_id):
+        return _session_plaintext(session)
+    return _redact_session(session)
+
+
+def _profile_for_view(profile: dict, *, account_id: Optional[str]) -> dict:
+    if _can_bypass_redaction_for_account(account_id):
+        return _profile_plaintext(profile)
+    return _redact_profile(profile)
+
+
+def _platform_user_for_view(user: Optional[dict], *, account_id: Optional[str]) -> Optional[dict]:
+    if user is None:
+        return None
+    if _can_bypass_redaction_for_account(account_id):
+        item = dict(user)
+        item["plaintext_debug"] = True
+        return item
+    return _redact_platform_user(user)
+
+
+def _message_for_view(message: dict, *, account_id: Optional[str] = None) -> dict:
+    target_account_id = account_id or message.get("account_id")
+    if _can_bypass_redaction_for_account(target_account_id):
+        return _message_plaintext(message)
+    return _redact_message(message)
+
+
+def _trace_for_view(trace: dict) -> dict:
+    if _can_bypass_redaction_for_account(trace.get("account_id")):
+        return _trace_plaintext(trace)
+    return _redact_trace(trace)
+
+
+def _redacted_flag_for_account(account_id: Optional[str]) -> bool:
+    return not _can_bypass_redaction_for_account(account_id)
+
+
 def _audit_plaintext_access(
     *,
     admin_user: dict,
@@ -745,25 +1026,31 @@ def debug_messages(session_id: int, limit: int = 100, _: None = Depends(verify_a
     session = get_session(session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    account_id = session.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
     return {
-        "session": _redact_session(session),
-        "profile": _redact_profile(get_profile_for_session(session_id=session_id) or {}),
+        "session": _session_for_view(session),
+        "profile": _profile_for_view(
+            get_profile_for_session(session_id=session_id) or {},
+            account_id=account_id,
+        ),
         "messages": [
-            _redact_message(message)
+            _message_for_view(message, account_id=account_id)
             for message in list_session_messages(session_id=session_id, limit=limit)
         ],
-        "redacted": True,
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
     }
 
 
 @app.get("/debug/messages/raw")
 def debug_recent_message_raw(limit: int = 20, _: None = Depends(verify_admin_auth)) -> dict:
+    messages = list_recent_message_raw(limit=limit)
     return {
         "messages": [
-            _redact_message(message)
-            for message in list_recent_message_raw(limit=limit)
+            _message_for_view(message)
+            for message in messages
         ],
-        "redacted": True,
+        "redacted": not any(_can_bypass_redaction_for_account(message.get("account_id")) for message in messages),
     }
 
 
@@ -772,7 +1059,12 @@ def debug_message_raw(message_db_id: int, _: None = Depends(verify_admin_auth)) 
     message = get_message_raw(message_db_id=message_db_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return {"message": _redact_message(message), "redacted": True}
+    account_id = message.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
+    return {
+        "message": _message_for_view(message),
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
+    }
 
 
 @app.get("/debug/traces")
@@ -784,7 +1076,7 @@ def debug_traces(
 ) -> dict:
     return {
         "traces": [
-            _redact_trace(t) for t in list_debug_traces(
+            _trace_for_view(t) for t in list_debug_traces(
                 account_id=account_id,
                 session_id=session_id,
                 limit=limit,
@@ -798,7 +1090,12 @@ def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     trace = get_debug_trace(trace_id=trace_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
-    return {"trace": _redact_trace(trace), "redacted": True}
+    account_id = trace.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
+    return {
+        "trace": _trace_for_view(trace),
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
+    }
 
 
 @app.get("/debug/accounts/{account_id}/prompt-preview")
@@ -831,6 +1128,25 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         today=today,
         model_name=settings.llm_model,
     )
+    if _can_bypass_redaction_for_account(account_id):
+        return {
+            "account_id": account_id,
+            "today": today,
+            "total_chars": len(prompt),
+            "blocks": {
+                "soul_chars": len(soul),
+                "user_prefs_chars": len(user_prefs),
+                "long_term_memory_chars": len(long_term_memory),
+                "daily_notes_loaded": False,
+                "daily_notes_chars": 0,
+                "system_prompt_override": bool(profile.get("system_prompt")),
+                "style": profile.get("style"),
+                "display_name": account.get("display_name"),
+                "agent_context": agent_context.metadata(),
+            },
+            "prompt": prompt,
+            **_debug_redaction_payload(account_id=account_id),
+        }
     return {
         "account_id": account_id,
         "today": today,
@@ -857,6 +1173,14 @@ def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
     content = path.read_text(encoding="utf-8")
+    if _can_bypass_redaction_for_account(account_id):
+        return {
+            "account_id": account_id,
+            "path": str(path),
+            "content": content,
+            "agent_context": context.metadata(),
+            **_debug_redaction_payload(account_id=account_id),
+        }
     return {
         "account_id": account_id,
         "path": str(path),
@@ -1191,6 +1515,10 @@ def web_register_and_binding_intent(
             display_name=None,
             plan="free",
         )
+        wallet = get_wallet_summary(
+            account_id=account_result["account"]["id"],
+            ensure_grant=True,
+        )
         binding_intent = create_binding_intent(
             platform_user_id=platform_user["id"],
             account_id=account_result["account"]["id"],
@@ -1208,6 +1536,7 @@ def web_register_and_binding_intent(
         "profile": account_result["profile"],
         "owner_binding": account_result["owner_binding"],
         "subscription": account_result["subscription"],
+        "wallet": wallet,
         "binding_intent": binding_intent,
         "binding_mode": "openclaw_gateway_qr",
         "next_step": "scan_qr_and_wait_for_completion",
@@ -1311,6 +1640,10 @@ def web_login(payload: WebLoginRequest) -> dict:
         display_name=None,
         plan="free",
     )
+    wallet = get_wallet_summary(
+        account_id=account_result["account"]["id"],
+        ensure_grant=True,
+    )
     session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
     bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])
     has_active_binding = len(bindings) > 0
@@ -1334,6 +1667,7 @@ def web_login(payload: WebLoginRequest) -> dict:
         "platform_user": platform_user,
         "account": account_result["account"],
         "subscription": account_result["subscription"],
+        "wallet": wallet,
         "has_active_binding": has_active_binding,
         "binding_intent": binding_intent,
         "binding_mode": "openclaw_gateway_qr",
@@ -1347,11 +1681,37 @@ def web_me(platform_user=Depends(_require_session)) -> dict:
         display_name=None,
         plan="free",
     )
+    wallet = get_wallet_summary(
+        account_id=account_result["account"]["id"],
+        ensure_grant=True,
+    )
     return {
         "status": "ok",
         "platform_user": platform_user,
         "account": account_result["account"],
         "subscription": account_result["subscription"],
+        "wallet": wallet,
+    }
+
+
+@app.get("/web/me/wallet")
+def web_me_wallet(platform_user=Depends(_require_session)) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name=None,
+        plan="free",
+    )
+    wallet = get_wallet_summary(
+        account_id=account_result["account"]["id"],
+        ensure_grant=True,
+    )
+    if wallet is None:
+        raise HTTPException(status_code=404, detail="wallet not found")
+    return {
+        "status": "ok",
+        "account_id": account_result["account"]["id"],
+        "wallet": wallet,
+        "ledger": list_wallet_ledger(account_id=account_result["account"]["id"], limit=20),
     }
 
 
@@ -1370,6 +1730,38 @@ def web_me_bindings(platform_user=Depends(_require_session)) -> dict:
     }
 
 
+@app.post("/web/me/unbind")
+def web_me_unbind(
+    payload: WebUnbindRequest,
+    platform_user=Depends(_require_session),
+) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name=None,
+        plan="free",
+    )
+    account_id = account_result["account"]["id"]
+
+    bindings_before_unbind = list_channel_bindings_for_account(account_id=account_id)
+    openclaw_cleanup = _cleanup_openclaw_weixin_accounts(bindings_before_unbind)
+    stats = unbind_account_channel(account_id=account_id)
+
+    if not payload.keep_memories:
+        wipe_stats = wipe_account_data(account_id=account_id)
+        stats.update(wipe_stats)
+        profile_dir = account_profile_dir(account_id)
+        if profile_dir.exists():
+            shutil.rmtree(profile_dir)
+
+    return {
+        "status": "ok",
+        "keep_memories": payload.keep_memories,
+        "account_id": account_id,
+        "openclaw_cleanup": openclaw_cleanup,
+        "stats": stats,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Admin — accounts
 # ---------------------------------------------------------------------------
@@ -1384,11 +1776,34 @@ def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict
     account = get_account(account_id=account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
+    owner_bindings = list_account_owner_bindings_for_account(account_id=account_id)
+    active_owner = next((binding for binding in owner_bindings if binding.get("status") == "active"), None)
+    platform_user = (
+        get_platform_user(platform_user_id=str(active_owner["platform_user_id"]))
+        if active_owner else None
+    )
+    binding_intents = [
+        _binding_intent_for_view(intent, account_id=account_id)
+        for intent in list_binding_intents_for_account(account_id=account_id)
+    ]
+    recent_traces = list_debug_traces(account_id=account_id, limit=10)
     return {
         "account": account,
+        "platform_user": _platform_user_for_view(platform_user, account_id=account_id),
+        "owner_bindings": owner_bindings,
+        "binding_intents": binding_intents,
         "channel_bindings": list_channel_bindings_for_account(account_id=account_id),
-        "profile": _redact_profile(get_profile_for_account(account_id=account_id) or {}),
+        "profile": _profile_for_view(
+            get_profile_for_account(account_id=account_id) or {},
+            account_id=account_id,
+        ),
         "sessions": list_sessions_for_account(account_id=account_id),
+        "recent_traces": [_trace_for_view(trace) for trace in recent_traces],
+        **(
+            _debug_redaction_payload(account_id=account_id)
+            if _can_bypass_redaction_for_account(account_id)
+            else {"redacted": True}
+        ),
     }
 
 
@@ -1458,6 +1873,14 @@ def admin_get_user_profile(
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
     content = path.read_text(encoding="utf-8")
+    if _can_bypass_redaction_for_account(account_id):
+        return {
+            "account_id": account_id,
+            "path": str(path),
+            "content": content,
+            "agent_context": context.metadata(),
+            **_debug_redaction_payload(account_id=account_id),
+        }
     return {
         "account_id": account_id,
         "path": str(path),
@@ -1483,6 +1906,63 @@ def admin_account_usage(
             "message_count": get_daily_usage(account_id=account_id, date=today),
         },
         "last_7_days": get_usage_last_7_days(account_id=account_id),
+    }
+
+
+@app.get("/admin/accounts/{account_id}/wallet")
+def admin_account_wallet(
+    account_id: str,
+    limit: int = 20,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    wallet = get_wallet_summary(
+        account_id=account_id,
+        ensure_grant=False,
+        create_if_missing=False,
+    )
+    return {
+        "account_id": account_id,
+        "wallet": wallet,
+        "ledger": list_wallet_ledger(account_id=account_id, limit=limit) if wallet else [],
+        "redacted": True,
+    }
+
+
+@app.get("/admin/accounts/{account_id}/proactive-overview")
+def admin_account_proactive_overview(
+    account_id: str,
+    limit: int = 20,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    return {
+        "account_id": account_id,
+        "proactive_state": _proactive_state_for_overview(
+            get_proactive_account_state(account_id=account_id)
+        ),
+        "reminders": [
+            _redact_text_field(reminder)
+            for reminder in list_reminders_for_account(account_id=account_id, limit=limit)
+        ],
+        "commitments": [
+            _redact_text_field(_redact_text_field(commitment), field="reason")
+            for commitment in list_proactive_commitments_for_account(
+                account_id=account_id,
+                limit=limit,
+            )
+        ],
+        "outbound_messages": [
+            _redact_text_field(message)
+            for message in list_outbound_messages(account_id=account_id, limit=limit)
+        ],
+        "redacted": True,
     }
 
 
@@ -1792,14 +2272,19 @@ def admin_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict
     session = get_session(session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    account_id = session.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
     return {
-        "session": _redact_session(session),
-        "profile": _redact_profile(get_profile_for_session(session_id=session_id) or {}),
+        "session": _session_for_view(session),
+        "profile": _profile_for_view(
+            get_profile_for_session(session_id=session_id) or {},
+            account_id=account_id,
+        ),
         "messages": [
-            _redact_message(message)
+            _message_for_view(message, account_id=account_id)
             for message in list_session_messages(session_id=session_id, limit=100)
         ],
-        "redacted": True,
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
     }
 
 
@@ -1820,12 +2305,13 @@ def admin_recent_message_raw(
     limit: int = 20,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
+    messages = list_recent_message_raw(limit=limit)
     return {
         "messages": [
-            _redact_message(message)
-            for message in list_recent_message_raw(limit=limit)
+            _message_for_view(message)
+            for message in messages
         ],
-        "redacted": True,
+        "redacted": not any(_can_bypass_redaction_for_account(message.get("account_id")) for message in messages),
     }
 
 
@@ -1837,7 +2323,12 @@ def admin_message_raw(
     message = get_message_raw(message_db_id=message_db_id)
     if message is None:
         raise HTTPException(status_code=404, detail="message not found")
-    return {"message": _redact_message(message), "redacted": True}
+    account_id = message.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
+    return {
+        "message": _message_for_view(message),
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
+    }
 
 
 @app.get("/admin/debug/traces")
@@ -1849,7 +2340,7 @@ def admin_debug_traces(
 ) -> dict:
     return {
         "traces": [
-            _redact_trace(t) for t in list_debug_traces(
+            _trace_for_view(t) for t in list_debug_traces(
                 account_id=account_id,
                 session_id=session_id,
                 limit=limit,
@@ -1866,7 +2357,12 @@ def admin_debug_trace(
     trace = get_debug_trace(trace_id=trace_id)
     if trace is None:
         raise HTTPException(status_code=404, detail="trace not found")
-    return {"trace": _redact_trace(trace), "redacted": True}
+    account_id = trace.get("account_id")
+    redacted = _redacted_flag_for_account(account_id)
+    return {
+        "trace": _trace_for_view(trace),
+        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
+    }
 
 
 @app.get("/admin/plaintext/messages/{message_db_id}/raw")

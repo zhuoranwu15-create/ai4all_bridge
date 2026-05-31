@@ -62,7 +62,7 @@
           <h3>贝壳余额</h3>
         </div>
         <div>
-          <span class="wallet-amount">0</span>
+          <span class="wallet-amount" id="d-wallet-balance">0</span>
           <span class="wallet-unit">贝壳</span>
         </div>
         <div class="wallet-note" style="margin-top:12px">
@@ -79,9 +79,10 @@
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
         <h3>微信绑定</h3>
-        <button class="btn btn-secondary btn-sm" id="btn-rebind" onclick="startRebind()">
-          重新绑定
-        </button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-secondary btn-sm" id="btn-rebind" onclick="startRebind()">重新绑定</button>
+          <button class="btn btn-ghost btn-sm" id="btn-unbind" onclick="openUnbindModal()" style="color:var(--text-hint)">解绑</button>
+        </div>
       </div>
 
       <!-- 已绑定状态 -->
@@ -111,6 +112,43 @@
       </div>
     </div>
 
+    <!-- 解绑弹窗 -->
+    <div id="unbind-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:none;align-items:center;justify-content:center">
+      <div style="background:#fff;border-radius:14px;padding:28px 28px 24px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+
+        <!-- Step 1 -->
+        <div id="unbind-step1">
+          <h3 style="font-size:1rem;margin-bottom:10px">解绑微信</h3>
+          <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px">
+            解绑后，AI 将停止回复微信消息。<br>请选择是否保留你的记忆和对话记录：
+          </p>
+          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+            <button class="btn btn-secondary" onclick="goUnbindStep2(true)" style="text-align:left;padding:12px 16px">
+              <strong>保留记忆</strong>
+              <div style="font-size:.8rem;color:var(--text-hint);margin-top:3px">AI 暂停服务，重新绑定后可完整恢复</div>
+            </button>
+            <button class="btn btn-ghost" onclick="goUnbindStep2(false)" style="text-align:left;padding:12px 16px;border:1px solid var(--border)">
+              <strong>清除全部</strong>
+              <div style="font-size:.8rem;color:var(--text-hint);margin-top:3px">记忆、对话记录将被永久删除</div>
+            </button>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="closeUnbindModal()" style="width:100%">取消</button>
+        </div>
+
+        <!-- Step 2 -->
+        <div id="unbind-step2" style="display:none">
+          <h3 style="font-size:1rem;margin-bottom:10px" id="unbind-step2-title"></h3>
+          <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px" id="unbind-step2-desc"></p>
+          <div id="unbind-err" style="display:none;color:#c0392b;font-size:.85rem;margin-bottom:12px"></div>
+          <div style="display:flex;gap:10px">
+            <button class="btn btn-secondary btn-sm" onclick="goUnbindStep1()">返回</button>
+            <button class="btn btn-sm" id="unbind-confirm-btn" onclick="confirmUnbind()" style="flex:1"></button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- 提示 -->
     <div style="text-align:center;font-size:.83rem;color:var(--text-hint);padding-bottom:32px">
       更多功能（邀请好友、历史记录、通知设置）即将上线
@@ -131,6 +169,7 @@ var S = {
   account: null,
   rebindIntent: null,
   pollTimer: null,
+  walletTimer: null,
 };
 
 var TERMINAL = { completed:1, failed:1, already_connected:1, expired:1, cancelled:1 };
@@ -161,7 +200,27 @@ async function apiFetch(path, opts) {
 
 function formatDate(iso) {
   if (!iso) return '—';
-  return iso.slice(0, 16).replace('T', ' ');
+  // SQLite timestamps are UTC but have no 'Z' suffix — append it so Date parses correctly.
+  var s = iso.replace(' ', 'T');
+  if (!s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
+  var d = new Date(s);
+  if (isNaN(d.getTime())) return iso.slice(0, 16).replace('T', ' ');
+  var y = d.getFullYear();
+  var mo = String(d.getMonth() + 1).padStart(2, '0');
+  var dy = String(d.getDate()).padStart(2, '0');
+  var h = String(d.getHours()).padStart(2, '0');
+  var mi = String(d.getMinutes()).padStart(2, '0');
+  return y + '-' + mo + '-' + dy + ' ' + h + ':' + mi;
+}
+
+function renderWallet(wallet) {
+  var amount = '0';
+  if (wallet && wallet.display && wallet.display.balance) {
+    amount = wallet.display.balance;
+  } else if (wallet && wallet.wallet && wallet.wallet.balance_shells) {
+    amount = wallet.wallet.balance_shells;
+  }
+  document.getElementById('d-wallet-balance').textContent = amount;
 }
 
 // ── 启动时鉴权 ────────────────────────────────
@@ -187,12 +246,15 @@ async function loadDashboard() {
       (data.subscription && data.subscription.plan) || 'free';
     document.getElementById('d-created').textContent = formatDate(S.platformUser.created_at);
     document.getElementById('nav-phone').textContent = S.platformUser.phone || '';
+    renderWallet(data.wallet);
 
     hide('loading');
     show('content');
 
     // 加载绑定信息
     loadBindings();
+    if (S.walletTimer) clearInterval(S.walletTimer);
+    S.walletTimer = setInterval(refreshWallet, 15000);
   } catch(e) {
     if (e.message.indexOf('401') !== -1 || e.message.indexOf('登录') !== -1) {
       localStorage.removeItem('chaochao_session');
@@ -223,6 +285,15 @@ async function loadBindings() {
     }
   } catch(e) {
     document.getElementById('d-binding-status').textContent = '获取失败';
+  }
+}
+
+async function refreshWallet() {
+  try {
+    var data = await apiFetch('/web/me/wallet');
+    renderWallet(data.wallet);
+  } catch(e) {
+    // Keep the last rendered balance; wallet refresh should not disrupt the dashboard.
   }
 }
 
@@ -258,17 +329,18 @@ function renderRebindQr() {
   if (intent.qr_data_url) {
     document.getElementById('rebind-qr-img').src = intent.qr_data_url;
   }
-  updateRebindStatus(intent.status);
+  updateRebindStatus(intent);
 }
 
-function updateRebindStatus(status) {
+function updateRebindStatus(intent) {
+  var status = typeof intent === 'string' ? intent : intent.status;
   var el = document.getElementById('rebind-qr-status');
   var labels = {
     created: '正在生成二维码…',
     qr_created: '等待扫码中…',
     completed: '绑定成功 ✓',
     already_connected: '微信已连接',
-    failed: '绑定失败，请重试',
+    failed: (intent && intent.error) || '绑定失败，请重试',
     expired: '二维码已过期',
   };
   el.textContent = labels[status] || status;
@@ -315,9 +387,91 @@ async function pollRebind() {
 
 // ── 退出登录 ──────────────────────────────────
 function logout() {
+  if (S.walletTimer) { clearInterval(S.walletTimer); S.walletTimer = null; }
   localStorage.removeItem('chaochao_session');
   window.location.href = 'home.html';
 }
+
+// ── 解绑 ──────────────────────────────────────
+var _unbindKeepMemories = null;
+
+function openUnbindModal() {
+  goUnbindStep1();
+  document.getElementById('unbind-modal').style.display = 'flex';
+}
+
+function closeUnbindModal() {
+  document.getElementById('unbind-modal').style.display = 'none';
+}
+
+function goUnbindStep1() {
+  document.getElementById('unbind-step1').style.display = '';
+  document.getElementById('unbind-step2').style.display = 'none';
+  document.getElementById('unbind-err').style.display = 'none';
+}
+
+function goUnbindStep2(keepMemories) {
+  _unbindKeepMemories = keepMemories;
+  var title = document.getElementById('unbind-step2-title');
+  var desc  = document.getElementById('unbind-step2-desc');
+  var btn   = document.getElementById('unbind-confirm-btn');
+  if (keepMemories) {
+    title.textContent = '确认解绑（保留记忆）';
+    desc.textContent  = 'AI 服务将暂停，提醒和任务会取消。你的对话记忆和历史完整保留，重新绑定微信后可立即恢复。';
+    btn.textContent   = '确认解绑';
+    btn.style.background = 'var(--color-primary, #4a90e2)';
+    btn.style.color = '#fff';
+  } else {
+    title.textContent = '确认清除全部数据';
+    desc.textContent  = '记忆、对话记录和 AI 设置将被永久删除，无法恢复。下次绑定将重新开始。';
+    btn.textContent   = '确认清除并解绑';
+    btn.style.background = '#c0392b';
+    btn.style.color = '#fff';
+  }
+  document.getElementById('unbind-err').style.display = 'none';
+  document.getElementById('unbind-step1').style.display = 'none';
+  document.getElementById('unbind-step2').style.display = '';
+}
+
+async function confirmUnbind() {
+  var btn = document.getElementById('unbind-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  document.getElementById('unbind-err').style.display = 'none';
+  try {
+    var result = await apiFetch('/web/me/unbind', {
+      method: 'POST',
+      body: JSON.stringify({ keep_memories: _unbindKeepMemories }),
+    });
+    closeUnbindModal();
+    loadBindings();
+    if (result.openclaw_cleanup &&
+        result.openclaw_cleanup.status &&
+        result.openclaw_cleanup.status !== 'ok' &&
+        result.openclaw_cleanup.status !== 'skipped') {
+      showMsg(
+        'msg-rebind',
+        '本地已解绑；OpenClaw 微信会话未完全退出，请稍后重新扫码或手动清理 OpenClaw 连接。',
+        'info'
+      );
+    }
+    if (!_unbindKeepMemories) {
+      // account is deactivated — log out
+      logout();
+    }
+  } catch(e) {
+    var errEl = document.getElementById('unbind-err');
+    errEl.textContent = e.message;
+    errEl.style.display = '';
+    btn.disabled = false;
+    btn.textContent = _unbindKeepMemories ? '确认解绑' : '确认清除并解绑';
+  }
+}
+
+// 点击遮罩关闭弹窗
+document.getElementById('unbind-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeUnbindModal();
+});
 </script>
 </body>
 </html>

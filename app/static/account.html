@@ -32,6 +32,11 @@
     </div>
 
     <div class="card">
+      <h2>绑定排障链路</h2>
+      <div id="binding-trace">加载中…</div>
+    </div>
+
+    <div class="card">
       <h2>限流配置</h2>
       <div class="form-row">
         <label>每日上限（空 = 全局默认 100）</label>
@@ -66,8 +71,23 @@
     </div>
 
     <div class="card">
+      <h2>权益与贝壳</h2>
+      <div id="wallet-panel">加载中…</div>
+    </div>
+
+    <div class="card">
+      <h2>提醒与主动消息</h2>
+      <div id="proactive-panel">加载中…</div>
+    </div>
+
+    <div class="card">
       <h2>会话列表</h2>
       <div id="sessions"></div>
+    </div>
+
+    <div class="card">
+      <h2>最近 Debug Traces</h2>
+      <div id="recent-traces">加载中…</div>
     </div>
 
   </div>
@@ -93,13 +113,21 @@
         var results = await Promise.all([
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId)),
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/usage'),
+          apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/wallet').catch(function(e) { return { error: e.message }; }),
+          apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/proactive-overview').catch(function(e) { return { error: e.message }; }),
         ]);
         var accountData = results[0];
         var usageData = results[1];
+        var walletData = results[2];
+        var proactiveData = results[3];
         fillForm(accountData.account, accountData.profile);
         fillBindings(accountData.channel_bindings || []);
+        fillBindingTrace(accountData);
         fillSessions(accountData.sessions);
+        fillRecentTraces(accountData.recent_traces || []);
         fillUsage(usageData);
+        fillWallet(walletData);
+        fillProactiveOverview(proactiveData);
         document.getElementById('content').style.display = '';
         document.title = accountId + ' – AI4ALL';
       } catch (e) {
@@ -124,6 +152,107 @@
           + '</div>'
           + '</div>';
       }).join('');
+    }
+
+    function fillBindingTrace(data) {
+      var el = document.getElementById('binding-trace');
+      var user = data.platform_user;
+      var owners = data.owner_bindings || [];
+      var intents = data.binding_intents || [];
+      var bindings = data.channel_bindings || [];
+      var activeOwner = owners.find(function(b) { return b.status === 'active'; }) || owners[0];
+      var latestIntent = intents[0];
+      var latestBinding = bindings[0];
+
+      var rows = [
+        {
+          label: 'Platform User',
+          status: user ? user.status : 'missing',
+          main: user ? (user.phone || user.id) : '—',
+          meta: user ? ('id: ' + user.id + ' · created: ' + formatDateTime(user.created_at)) : '未找到 owner 绑定对应用户',
+        },
+        {
+          label: 'Owner Binding',
+          status: activeOwner ? activeOwner.status : 'missing',
+          main: activeOwner ? ('#' + activeOwner.id + ' · ' + activeOwner.binding_method) : '—',
+          meta: activeOwner ? ('platform_user: ' + activeOwner.platform_user_id + ' · verified: ' + formatDateTime(activeOwner.verified_at)) : '没有 active owner binding',
+        },
+        {
+          label: 'Binding Intent',
+          status: latestIntent ? latestIntent.status : 'missing',
+          main: latestIntent ? latestIntent.id : '—',
+          meta: latestIntent ? [
+            'channel: ' + (latestIntent.channel || '—'),
+            'channel_account: ' + (latestIntent.channel_account_id || '—'),
+            'expires: ' + formatDateTime(latestIntent.expires_at),
+            latestIntent.error ? 'error: ' + latestIntent.error : '',
+          ].filter(Boolean).join(' · ') : '没有最近绑定意图',
+        },
+        {
+          label: 'Channel Binding',
+          status: latestBinding ? 'active' : 'missing',
+          main: latestBinding ? (latestBinding.channel_account_id || latestBinding.session_key || latestBinding.channel) : '—',
+          meta: latestBinding ? [
+            'session_key: ' + (latestBinding.session_key || '—'),
+            'sender/chat: ' + ([latestBinding.sender_id, latestBinding.chat_id].filter(Boolean).join(' / ') || '—'),
+            'last_seen: ' + formatDateTime(latestBinding.last_seen_at),
+          ].join(' · ') : '没有可用通道绑定',
+        },
+      ];
+
+      var intentRows = intents.length
+        ? '<div class="compact-table"><table><thead><tr><th>Intent</th><th>状态</th><th>通道账号</th><th>过期/完成</th><th>错误</th></tr></thead><tbody>'
+          + intents.slice(0, 5).map(function(intent) {
+            return '<tr>'
+              + '<td class="mono">' + esc(intent.id) + '</td>'
+              + '<td>' + statusPill(intent.status) + '</td>'
+              + '<td class="mono wrap">' + esc(intent.channel_account_id || '—') + '</td>'
+              + '<td>' + esc(formatDateTime(intent.completed_at || intent.expires_at)) + '</td>'
+              + '<td class="wrap">' + esc(intent.error || '—') + '</td>'
+              + '</tr>';
+          }).join('')
+          + '</tbody></table></div>'
+        : '<div class="empty-note">暂无 binding intent</div>';
+
+      el.innerHTML = '<div class="trace-chain">'
+        + rows.map(function(row, i) {
+          return '<div class="trace-step">'
+            + '<div class="trace-step-head">'
+            + '<span class="trace-index">' + (i + 1) + '</span>'
+            + '<strong>' + esc(row.label) + '</strong>'
+            + statusPill(row.status)
+            + '</div>'
+            + '<div class="trace-main mono wrap">' + esc(row.main) + '</div>'
+            + '<div class="trace-meta wrap">' + esc(row.meta) + '</div>'
+            + '</div>';
+        }).join('')
+        + '</div>'
+        + '<h3 class="subhead">最近绑定意图</h3>'
+        + intentRows;
+    }
+
+    function fillRecentTraces(traces) {
+      var el = document.getElementById('recent-traces');
+      if (!traces.length) {
+        el.innerHTML = '<div class="empty-note">暂无 debug trace。需要在 .env 中配置 DEBUG_TRACE_ACCOUNT_IDS 后才会记录。</div>';
+        return;
+      }
+      el.innerHTML = '<div class="compact-table"><table><thead><tr>'
+        + '<th>Trace ID</th><th>Message ID</th><th>Source</th><th>Model</th><th>耗时</th><th>错误</th><th>时间</th><th>操作</th>'
+        + '</tr></thead><tbody>'
+        + traces.map(function(t) {
+          return '<tr>'
+            + '<td class="mono wrap">' + esc(t.trace_id || '') + '</td>'
+            + '<td class="mono wrap">' + esc(t.message_id || '—') + '</td>'
+            + '<td>' + esc(t.source || '—') + '</td>'
+            + '<td>' + esc(t.llm_model || '—') + '</td>'
+            + '<td>' + esc(t.latency_ms != null ? String(t.latency_ms) + 'ms' : '—') + '</td>'
+            + '<td class="wrap">' + esc(t.error || '—') + '</td>'
+            + '<td>' + esc(formatDateTime(t.created_at)) + '</td>'
+            + '<td><button onclick="viewTrace(\'' + attrJs(t.trace_id || '') + '\')">查看</button></td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table></div>';
     }
 
     function fillForm(account, profile) {
@@ -153,6 +282,112 @@
         '今日已发 ' + usage.today.message_count + ' 条';
     }
 
+    function fillWallet(data) {
+      var el = document.getElementById('wallet-panel');
+      if (data && data.error) {
+        el.innerHTML = '<div class="status-msg error">' + esc(data.error) + '</div>';
+        return;
+      }
+      if (!data || !data.wallet) {
+        el.innerHTML = '<div class="empty-note">暂无 wallet。账号需要 owner binding 后才会生成权益钱包。</div>';
+        return;
+      }
+      var summary = data.wallet;
+      var ledger = data.ledger || [];
+      el.innerHTML = '<div class="metric-grid compact">'
+        + '<div class="metric-tile"><span class="metric-label">余额</span><strong>' + esc(summary.display.balance) + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">单位</span><strong>' + esc(summary.display.unit) + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Wallet</span><strong class="mono small">' + esc(summary.wallet.id) + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">状态</span><strong>' + esc(summary.wallet.status) + '</strong></div>'
+        + '</div>'
+        + '<h3 class="subhead">最近流水</h3>'
+        + renderLedgerTable(ledger);
+    }
+
+    function renderLedgerTable(ledger) {
+      if (!ledger.length) return '<div class="empty-note">暂无流水</div>';
+      return '<div class="compact-table"><table><thead><tr>'
+        + '<th>时间</th><th>类型</th><th>来源</th><th>变动</th><th>余额</th><th>Source ID</th>'
+        + '</tr></thead><tbody>'
+        + ledger.map(function(item) {
+          return '<tr>'
+            + '<td>' + esc(formatDateTime(item.created_at)) + '</td>'
+            + '<td>' + statusPill(item.entry_type) + '</td>'
+            + '<td>' + esc(item.source_type || '—') + '</td>'
+            + '<td class="mono">' + esc(item.amount_shells || '—') + '</td>'
+            + '<td class="mono">' + esc(item.balance_after_shells || '—') + '</td>'
+            + '<td class="mono wrap">' + esc(item.source_id || '—') + '</td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table></div>';
+    }
+
+    function fillProactiveOverview(data) {
+      var el = document.getElementById('proactive-panel');
+      if (data && data.error) {
+        el.innerHTML = '<div class="status-msg error">' + esc(data.error) + '</div>';
+        return;
+      }
+      data = data || {};
+      var state = data.proactive_state;
+      var reminders = data.reminders || [];
+      var commitments = data.commitments || [];
+      var outbound = data.outbound_messages || [];
+      el.innerHTML = '<div class="metric-grid compact">'
+        + '<div class="metric-tile"><span class="metric-label">Proactive</span><strong>' + esc(state ? (state.enabled ? 'enabled' : 'disabled') : 'none') + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Next Scan</span><strong class="small">' + esc(state ? formatDateTime(state.next_scan_at) : '—') + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Reminders</span><strong>' + reminders.length + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Outbound</span><strong>' + outbound.length + '</strong></div>'
+        + '</div>'
+        + '<h3 class="subhead">Reminders</h3>' + renderTaskTable(reminders, 'reminder')
+        + '<h3 class="subhead">Commitments</h3>' + renderTaskTable(commitments, 'commitment')
+        + '<h3 class="subhead">Outbound Messages</h3>' + renderOutboundTable(outbound);
+    }
+
+    function renderTaskTable(items, kind) {
+      if (!items.length) return '<div class="empty-note">暂无 ' + esc(kind) + '</div>';
+      return '<div class="compact-table"><table><thead><tr>'
+        + '<th>ID</th><th>状态</th><th>Due</th><th>Attempts</th><th>正文</th><th>Outbound</th><th>错误</th>'
+        + '</tr></thead><tbody>'
+        + items.map(function(item) {
+          return '<tr>'
+            + '<td class="mono wrap">' + esc(item.id || '—') + '</td>'
+            + '<td>' + statusPill(item.status) + '</td>'
+            + '<td>' + esc(formatDateTime(item.due_at)) + '</td>'
+            + '<td>' + esc(item.attempts != null ? item.attempts : '—') + '</td>'
+            + '<td>' + esc(redactedTextLabel(item, 'text')) + '</td>'
+            + '<td class="mono">' + esc(item.outbound_message_id || '—') + '</td>'
+            + '<td class="wrap">' + esc(item.error || '—') + '</td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table></div>';
+    }
+
+    function renderOutboundTable(items) {
+      if (!items.length) return '<div class="empty-note">暂无 outbound message</div>';
+      return '<div class="compact-table"><table><thead><tr>'
+        + '<th>ID</th><th>来源</th><th>状态</th><th>发送对象</th><th>Attempts</th><th>正文</th><th>错误</th><th>时间</th>'
+        + '</tr></thead><tbody>'
+        + items.map(function(item) {
+          return '<tr>'
+            + '<td class="mono">' + esc(item.id || '—') + '</td>'
+            + '<td>' + esc(item.source || '—') + '</td>'
+            + '<td>' + statusPill(item.status) + '</td>'
+            + '<td class="mono wrap">' + esc(item.to_user_id || item.session_key || '—') + '</td>'
+            + '<td>' + esc(item.attempts != null ? item.attempts : '—') + '</td>'
+            + '<td>' + esc(redactedTextLabel(item, 'text')) + '</td>'
+            + '<td class="wrap">' + esc(item.error || '—') + '</td>'
+            + '<td>' + esc(formatDateTime(item.sent_at || item.created_at)) + '</td>'
+            + '</tr>';
+        }).join('')
+        + '</tbody></table></div>';
+    }
+
+    function redactedTextLabel(item, field) {
+      var chars = item && item[field + '_redacted'] ? item[field + '_chars'] : null;
+      return chars != null ? ('已脱敏 · ' + chars + ' 字') : '—';
+    }
+
     function fillSessions(sessions) {
       var el = document.getElementById('sessions');
       if (!sessions || !sessions.length) { el.textContent = '暂无会话'; return; }
@@ -180,15 +415,26 @@
         btn.textContent = '加载中…';
         try {
           var data = await apiFetch('/admin/sessions/' + sessionId);
+          var plaintextDebug = data && data.plaintext_debug;
           var msgs = (data.messages || []).slice(-20);
           container.innerHTML = msgs.length
             ? msgs.map(function(m) {
+                var traceBtn = m.trace_id
+                  ? '<button onclick="viewTrace(\'' + attrJs(m.trace_id) + '\', event)">Trace</button>'
+                  : '';
+                var rawBtn = m.id
+                  ? '<button onclick="viewRawMetadata(' + m.id + ', event)">Raw</button>'
+                  : '';
+                var contentClass = plaintextDebug || m.plaintext_debug ? 'msg-content' : 'msg-content redacted';
                 return '<div class="msg">'
                   + '<span class="msg-role ' + esc(m.role) + '">' + (m.role === 'user' ? '用户' : 'AI') + '</span>'
-                  + '<span class="msg-content redacted">' + esc(contentLabel(m)) + '</span>'
+                  + '<span class="' + contentClass + '">' + esc(messageContentLabel(m)) + '</span>'
+                  + '<span class="msg-meta mono">' + esc(messageMetaLabel(m)) + '</span>'
                   + '<span class="msg-time">' + esc(formatDateTime(m.created_at)) + '</span>'
                   + '<button onclick="requestPlaintext(' + m.id + ', event)">申请</button>'
                   + '<button onclick="viewPlaintext(' + m.id + ', event)">明文</button>'
+                  + rawBtn
+                  + traceBtn
                   + '</div>';
               }).join('')
             : '<div class="msg"><span class="msg-content">暂无消息</span></div>';
@@ -218,6 +464,66 @@
       } catch (e) {
         alert(e.message);
       }
+    }
+
+    function messageContentLabel(m) {
+      if (m && (m.plaintext_debug || m.content_redacted === false) && m.content != null) {
+        return m.content || '(空内容)';
+      }
+      if (m && m.content != null && !m.content_redacted) {
+        return m.content || '(空内容)';
+      }
+      return contentLabel(m);
+    }
+
+    function messageMetaLabel(m) {
+      var parts = [];
+      if (m.message_id) parts.push('msg ' + m.message_id);
+      if (m.message_type) parts.push(m.message_type);
+      if (m.direction) parts.push(m.direction);
+      if (m.latency_ms != null) parts.push(m.latency_ms + 'ms');
+      if (m.error) parts.push('err ' + m.error);
+      if (m.trace_id) parts.push('trace ' + m.trace_id);
+      return parts.join(' · ') || '—';
+    }
+
+    async function viewRawMetadata(messageId, ev) {
+      if (ev) ev.stopPropagation();
+      try {
+        var data = await apiFetch('/admin/messages/' + messageId + '/raw');
+        alert(JSON.stringify(data.message, null, 2));
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function viewTrace(traceId, ev) {
+      if (ev) ev.stopPropagation();
+      if (!traceId) return;
+      try {
+        var data = await apiFetch('/admin/debug/traces/' + encodeURIComponent(traceId));
+        alert(JSON.stringify(data.trace, null, 2));
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function statusPill(status) {
+      var text = status || 'unknown';
+      var cls = 'status-pill status-pill-' + String(text).replace(/[^a-zA-Z0-9_-]/g, '-');
+      return '<span class="' + cls + '">' + esc(text) + '</span>';
+    }
+
+    function escJs(str) {
+      return String(str == null ? '' : str)
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\\'")
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r');
+    }
+
+    function attrJs(str) {
+      return esc(escJs(str));
     }
 
     async function viewPlaintext(messageId, ev) {

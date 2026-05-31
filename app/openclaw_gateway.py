@@ -121,6 +121,52 @@ def wait_weixin_qr_login(
     )
 
 
+def logout_weixin_account(
+    *,
+    account_id: str,
+    channel: str = DEFAULT_WEIXIN_CHANNEL,
+    timeout_ms: int,
+) -> Dict[str, Any]:
+    resolved_account_id = account_id.strip() if account_id else ""
+    resolved_channel = channel.strip() if channel else DEFAULT_WEIXIN_CHANNEL
+    if not resolved_account_id:
+        raise ValueError("account_id is required")
+    if not resolved_channel:
+        resolved_channel = DEFAULT_WEIXIN_CHANNEL
+
+    cmd = [
+        "openclaw",
+        "channels",
+        "logout",
+        "--channel",
+        resolved_channel,
+        "--account",
+        resolved_account_id,
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_ms / 1000 + 5, 10),
+        )
+    except subprocess.TimeoutExpired as err:
+        raise OpenClawGatewayError(
+            f"OpenClaw channel logout timed out: {resolved_channel}/{resolved_account_id}"
+        ) from err
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise OpenClawGatewayError(
+            detail or f"OpenClaw channel logout failed: {resolved_channel}/{resolved_account_id}"
+        )
+    return {
+        "channel": resolved_channel,
+        "accountId": resolved_account_id,
+        "stdout": (completed.stdout or "").strip(),
+    }
+
+
 def send_weixin_text(
     *,
     to_user_id: str,
