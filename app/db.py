@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import sqlite3
 import uuid
@@ -15,6 +16,10 @@ _UNSET = object()
 _NON_CONTEXT_ASSISTANT_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
+SHELL_MICROS_PER_SHELL = 1_000_000
+SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
+NEW_USER_GRANT_SHELLS = 1000
+NEW_USER_GRANT_SHELL_MICROS = NEW_USER_GRANT_SHELLS * SHELL_MICROS_PER_SHELL
 
 
 def _new_id(prefix: str) -> str:
@@ -33,6 +38,16 @@ def _clean_default_account_display_name(value: Optional[str]) -> Optional[str]:
     if cleaned in _LEGACY_DEFAULT_ASSISTANT_NAMES:
         return None
     return cleaned
+
+
+def _format_shell_amount(amount_shell_micros: int) -> str:
+    sign = "-" if amount_shell_micros < 0 else ""
+    amount = abs(int(amount_shell_micros))
+    whole = amount // SHELL_MICROS_PER_SHELL
+    fraction = amount % SHELL_MICROS_PER_SHELL
+    if fraction == 0:
+        return f"{sign}{whole}"
+    return f"{sign}{whole}.{fraction:06d}".rstrip("0")
 
 
 def _channel_account_id_aliases(value: str) -> List[str]:
@@ -241,6 +256,77 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_subscriptions_user
             ON subscriptions(platform_user_id, updated_at);
+
+            CREATE TABLE IF NOT EXISTS entitlement_wallets (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL UNIQUE,
+                platform_user_id TEXT NOT NULL,
+                balance_shell_micros INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_entitlement_wallets_user
+            ON entitlement_wallets(platform_user_id, status);
+
+            CREATE TABLE IF NOT EXISTS entitlement_ledger (
+                id TEXT PRIMARY KEY,
+                wallet_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                platform_user_id TEXT NOT NULL,
+                entry_type TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                source_id TEXT,
+                amount_shell_micros INTEGER NOT NULL,
+                balance_after_shell_micros INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_wallet_created
+            ON entitlement_ledger(wallet_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_account_created
+            ON entitlement_ledger(account_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS cost_events (
+                id TEXT PRIMARY KEY,
+                wallet_id TEXT,
+                account_id TEXT NOT NULL,
+                platform_user_id TEXT,
+                cost_type TEXT NOT NULL,
+                cost_owner TEXT NOT NULL DEFAULT 'user',
+                billable_to_user INTEGER NOT NULL DEFAULT 1,
+                model TEXT,
+                input_tokens INTEGER,
+                output_tokens INTEGER,
+                billable_tokens INTEGER,
+                model_price_multiplier_micros INTEGER NOT NULL DEFAULT 1000000,
+                computed_shell_micros INTEGER NOT NULL DEFAULT 0,
+                entitlement_ledger_id TEXT,
+                source_type TEXT,
+                source_id TEXT,
+                idempotency_key TEXT NOT NULL UNIQUE,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+                FOREIGN KEY(entitlement_ledger_id) REFERENCES entitlement_ledger(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_cost_events_account_created
+            ON cost_events(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_cost_events_wallet_created
+            ON cost_events(wallet_id, created_at);
 
             CREATE TABLE IF NOT EXISTS account_owner_bindings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1883,6 +1969,528 @@ def get_latest_subscription_for_user(
     return dict(row) if row else None
 
 
+def _decode_wallet_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    balance_shell_micros = int(item["balance_shell_micros"])
+    item["balance_shell_micros"] = balance_shell_micros
+    item["balance_shells"] = _format_shell_amount(balance_shell_micros)
+    return item
+
+
+def _decode_ledger_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    amount_shell_micros = int(item["amount_shell_micros"])
+    balance_after_shell_micros = int(item["balance_after_shell_micros"])
+    item["amount_shell_micros"] = amount_shell_micros
+    item["amount_shells"] = _format_shell_amount(amount_shell_micros)
+    item["balance_after_shell_micros"] = balance_after_shell_micros
+    item["balance_after_shells"] = _format_shell_amount(balance_after_shell_micros)
+    try:
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _decode_cost_event_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    item["billable_to_user"] = bool(item["billable_to_user"])
+    item["computed_shell_micros"] = int(item["computed_shell_micros"] or 0)
+    item["computed_shells"] = _format_shell_amount(item["computed_shell_micros"])
+    item["model_price_multiplier"] = (
+        int(item["model_price_multiplier_micros"] or 0) / 1_000_000
+    )
+    try:
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _ensure_wallet_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    platform_user_id: str,
+) -> sqlite3.Row:
+    account = conn.execute(
+        "SELECT id FROM accounts WHERE id = ?",
+        (account_id,),
+    ).fetchone()
+    if account is None:
+        raise ValueError("account not found")
+    user = conn.execute(
+        "SELECT id FROM platform_users WHERE id = ?",
+        (platform_user_id,),
+    ).fetchone()
+    if user is None:
+        raise ValueError("platform_user not found")
+    conn.execute(
+        """
+        INSERT INTO entitlement_wallets(
+            id, account_id, platform_user_id, balance_shell_micros, status, updated_at
+        )
+        VALUES (?, ?, ?, 0, 'active', CURRENT_TIMESTAMP)
+        ON CONFLICT(account_id) DO NOTHING
+        """,
+        (_new_id("wallet"), account_id, platform_user_id),
+    )
+    row = conn.execute(
+        """
+        SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+               created_at, updated_at
+        FROM entitlement_wallets
+        WHERE account_id = ?
+        """,
+        (account_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("entitlement_wallet was not created")
+    if row["platform_user_id"] != platform_user_id:
+        logger.warning(
+            "wallet platform_user_id mismatch account=%s wallet_owner=%s caller=%s — using existing wallet",
+            account_id,
+            row["platform_user_id"],
+            platform_user_id,
+        )
+    return row
+
+
+def ensure_wallet(
+    *,
+    account_id: str,
+    platform_user_id: str,
+) -> Dict[str, Any]:
+    with connect() as conn:
+        row = _ensure_wallet_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+        )
+    return _decode_wallet_row(row)
+
+
+def _apply_wallet_ledger_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    account_id: str,
+    platform_user_id: str,
+    amount_shell_micros: int,
+    entry_type: str,
+    source_type: str,
+    source_id: Optional[str],
+    idempotency_key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> sqlite3.Row:
+    if amount_shell_micros == 0:
+        raise ValueError("amount_shell_micros must not be zero")
+    cleaned_entry_type = _clean_text(entry_type)
+    cleaned_source_type = _clean_text(source_type)
+    cleaned_idempotency_key = _clean_text(idempotency_key)
+    if cleaned_entry_type not in {"credit", "debit"}:
+        raise ValueError("entry_type must be credit or debit")
+    if not cleaned_source_type:
+        raise ValueError("source_type is required")
+    if not cleaned_idempotency_key:
+        raise ValueError("idempotency_key is required")
+
+    existing = conn.execute(
+        """
+        SELECT *
+        FROM entitlement_ledger
+        WHERE idempotency_key = ?
+        """,
+        (cleaned_idempotency_key,),
+    ).fetchone()
+    if existing is not None:
+        return existing
+
+    wallet = _ensure_wallet_in_conn(
+        conn,
+        account_id=account_id,
+        platform_user_id=platform_user_id,
+    )
+    ledger_id = _new_id("ledger")
+    # Atomic increment: avoids TOCTOU race where two concurrent transactions
+    # both read the same balance and overwrite each other's update.
+    conn.execute(
+        """
+        UPDATE entitlement_wallets
+        SET balance_shell_micros = balance_shell_micros + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (int(amount_shell_micros), wallet["id"]),
+    )
+    balance_row = conn.execute(
+        "SELECT balance_shell_micros FROM entitlement_wallets WHERE id = ?",
+        (wallet["id"],),
+    ).fetchone()
+    balance_after = int(balance_row["balance_shell_micros"])
+    conn.execute(
+        """
+        INSERT INTO entitlement_ledger(
+            id, wallet_id, account_id, platform_user_id, entry_type,
+            source_type, source_id, amount_shell_micros,
+            balance_after_shell_micros, idempotency_key, metadata_json
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ledger_id,
+            wallet["id"],
+            account_id,
+            platform_user_id,
+            cleaned_entry_type,
+            cleaned_source_type,
+            _clean_text(source_id),
+            int(amount_shell_micros),
+            balance_after,
+            cleaned_idempotency_key,
+            json.dumps(metadata or {}, ensure_ascii=False),
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM entitlement_ledger WHERE id = ?",
+        (ledger_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("entitlement_ledger was not created")
+    return row
+
+
+def grant_shells(
+    *,
+    account_id: str,
+    platform_user_id: str,
+    amount_shell_micros: int,
+    source_type: str,
+    source_id: Optional[str],
+    idempotency_key: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if amount_shell_micros <= 0:
+        raise ValueError("amount_shell_micros must be positive")
+    with connect() as conn:
+        row = _apply_wallet_ledger_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            amount_shell_micros=int(amount_shell_micros),
+            entry_type="credit",
+            source_type=source_type,
+            source_id=source_id,
+            idempotency_key=idempotency_key,
+            metadata=metadata,
+        )
+    return _decode_ledger_row(row)
+
+
+def grant_new_user_shells(
+    *,
+    account_id: str,
+    platform_user_id: str,
+) -> Dict[str, Any]:
+    return grant_shells(
+        account_id=account_id,
+        platform_user_id=platform_user_id,
+        amount_shell_micros=NEW_USER_GRANT_SHELL_MICROS,
+        source_type="new_user_grant",
+        source_id=account_id,
+        idempotency_key=f"new-user-grant-{account_id}",
+        metadata={"grant_shells": NEW_USER_GRANT_SHELLS},
+    )
+
+
+def _estimate_tokens_from_text(text: Optional[str]) -> int:
+    cleaned = text or ""
+    if not cleaned:
+        return 0
+    # Conservative mixed Chinese/English approximation until provider usage is wired.
+    return max(1, math.ceil(len(cleaned) / 2))
+
+
+def _estimate_tokens_from_messages(messages: List[Dict[str, Any]]) -> int:
+    total = 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            total += _estimate_tokens_from_text(content)
+        elif isinstance(content, list):
+            total += _estimate_tokens_from_text(json.dumps(content, ensure_ascii=False))
+    return total
+
+
+def _shell_micros_for_tokens(
+    *,
+    billable_tokens: int,
+    model_price_multiplier_micros: int = 1_000_000,
+) -> int:
+    if billable_tokens <= 0:
+        return 0
+    return math.ceil(
+        int(billable_tokens)
+        * int(model_price_multiplier_micros)
+        * SHELL_MICROS_PER_SHELL
+        / (SHELL_BILLABLE_TOKENS_PER_SHELL * 1_000_000)
+    )
+
+
+def get_platform_user_id_for_account(*, account_id: str) -> Optional[str]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT platform_user_id
+            FROM account_owner_bindings
+            WHERE account_id = ?
+              AND status = 'active'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+    return str(row["platform_user_id"]) if row else None
+
+
+def record_chat_usage_charge(
+    *,
+    account_id: str,
+    model: str,
+    messages: List[Dict[str, Any]],
+    reply: str,
+    source_type: str,
+    source_id: Optional[str],
+    idempotency_key: str,
+    input_tokens: Optional[int] = None,
+    output_tokens: Optional[int] = None,
+    model_price_multiplier_micros: int = 1_000_000,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    cleaned_idempotency_key = _clean_text(idempotency_key)
+    if not cleaned_idempotency_key:
+        raise ValueError("idempotency_key is required")
+
+    estimated = input_tokens is None or output_tokens is None
+    resolved_input_tokens = (
+        int(input_tokens)
+        if input_tokens is not None
+        else _estimate_tokens_from_messages(messages)
+    )
+    resolved_output_tokens = (
+        int(output_tokens)
+        if output_tokens is not None
+        else _estimate_tokens_from_text(reply)
+    )
+    billable_tokens = max(0, resolved_input_tokens) + max(0, resolved_output_tokens)
+    computed_shell_micros = _shell_micros_for_tokens(
+        billable_tokens=billable_tokens,
+        model_price_multiplier_micros=model_price_multiplier_micros,
+    )
+    if computed_shell_micros <= 0:
+        return None
+
+    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
+    if platform_user_id is None:
+        return None
+
+    with connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT ce.*, l.id AS ledger_exists
+            FROM cost_events ce
+            LEFT JOIN entitlement_ledger l ON l.id = ce.entitlement_ledger_id
+            WHERE ce.idempotency_key = ?
+            """,
+            (cleaned_idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            event = _decode_cost_event_row(existing)
+            ledger = None
+            if event.get("entitlement_ledger_id"):
+                ledger_row = conn.execute(
+                    "SELECT * FROM entitlement_ledger WHERE id = ?",
+                    (event["entitlement_ledger_id"],),
+                ).fetchone()
+                ledger = _decode_ledger_row(ledger_row) if ledger_row else None
+            wallet_row = conn.execute(
+                """
+                SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                       created_at, updated_at
+                FROM entitlement_wallets
+                WHERE account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            return {
+                "cost_event": event,
+                "ledger": ledger,
+                "wallet": _decode_wallet_row(wallet_row) if wallet_row else None,
+            }
+
+        wallet = _ensure_wallet_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+        )
+        event_id = _new_id("cost")
+        ledger_idempotency_key = f"usage-charge-{cleaned_idempotency_key}"
+        charge_metadata = {
+            "estimated": estimated,
+            "input_tokens": resolved_input_tokens,
+            "output_tokens": resolved_output_tokens,
+            "billable_tokens": billable_tokens,
+            "model": model,
+            **(metadata or {}),
+        }
+        ledger_row = _apply_wallet_ledger_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            amount_shell_micros=-computed_shell_micros,
+            entry_type="debit",
+            source_type="usage_charge",
+            source_id=source_id,
+            idempotency_key=ledger_idempotency_key,
+            metadata=charge_metadata,
+        )
+        conn.execute(
+            """
+            INSERT INTO cost_events(
+                id, wallet_id, account_id, platform_user_id, cost_type,
+                cost_owner, billable_to_user, model, input_tokens, output_tokens,
+                billable_tokens, model_price_multiplier_micros, computed_shell_micros,
+                entitlement_ledger_id, source_type, source_id, idempotency_key,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, 'llm_tokens', 'user', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                wallet["id"],
+                account_id,
+                platform_user_id,
+                _clean_text(model),
+                resolved_input_tokens,
+                resolved_output_tokens,
+                billable_tokens,
+                int(model_price_multiplier_micros),
+                computed_shell_micros,
+                ledger_row["id"],
+                _clean_text(source_type),
+                _clean_text(source_id),
+                cleaned_idempotency_key,
+                json.dumps(charge_metadata, ensure_ascii=False),
+            ),
+        )
+        event_row = conn.execute(
+            "SELECT * FROM cost_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        wallet_row = conn.execute(
+            """
+            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                   created_at, updated_at
+            FROM entitlement_wallets
+            WHERE id = ?
+            """,
+            (wallet["id"],),
+        ).fetchone()
+
+    if event_row is None:
+        raise RuntimeError("cost_event was not created")
+    return {
+        "cost_event": _decode_cost_event_row(event_row),
+        "ledger": _decode_ledger_row(ledger_row),
+        "wallet": _decode_wallet_row(wallet_row),
+    }
+
+
+def get_wallet_summary(
+    *,
+    account_id: str,
+    ensure_grant: bool = False,
+    create_if_missing: bool = True,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        owner = conn.execute(
+            """
+            SELECT b.platform_user_id
+            FROM account_owner_bindings b
+            JOIN accounts a ON a.id = b.account_id
+            WHERE b.account_id = ?
+              AND b.status = 'active'
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if owner is None:
+            return None
+        platform_user_id = owner["platform_user_id"]
+
+    if ensure_grant:
+        grant_new_user_shells(
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+        )
+    elif create_if_missing:
+        ensure_wallet(account_id=account_id, platform_user_id=platform_user_id)
+
+    with connect() as conn:
+        wallet_row = conn.execute(
+            """
+            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                   created_at, updated_at
+            FROM entitlement_wallets
+            WHERE account_id = ?
+            """,
+            (account_id,),
+        ).fetchone()
+        if wallet_row is None:
+            return None
+        latest_ledger_row = conn.execute(
+            """
+            SELECT *
+            FROM entitlement_ledger
+            WHERE wallet_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (wallet_row["id"],),
+        ).fetchone()
+    wallet = _decode_wallet_row(wallet_row)
+    latest_ledger = _decode_ledger_row(latest_ledger_row) if latest_ledger_row else None
+    return {
+        "wallet": wallet,
+        "latest_ledger": latest_ledger,
+        "display": {
+            "balance": wallet["balance_shells"],
+            "unit": "贝壳",
+        },
+    }
+
+
+def list_wallet_ledger(
+    *,
+    account_id: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clean_limit = max(1, min(int(limit), 200))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM entitlement_ledger
+            WHERE account_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (account_id, clean_limit),
+        ).fetchall()
+    return [_decode_ledger_row(row) for row in rows]
+
+
 def create_ai4all_account_for_user(
     *,
     platform_user_id: str,
@@ -1942,6 +2550,10 @@ def create_ai4all_account_for_user(
         platform_user_id=platform_user_id,
         plan=plan,
     )
+    grant_new_user_shells(
+        account_id=account_id,
+        platform_user_id=platform_user_id,
+    )
     return {
         "account": get_account(account_id=account_id),
         "profile": get_profile_for_account(account_id=account_id),
@@ -1972,6 +2584,10 @@ def get_first_active_account_for_user(
     account = get_account(account_id=row["account_id"])
     if account is None:
         return None
+    grant_new_user_shells(
+        account_id=row["account_id"],
+        platform_user_id=platform_user_id,
+    )
     return {
         "account": account,
         "profile": get_profile_for_account(account_id=row["account_id"]),
@@ -2016,6 +2632,27 @@ def get_account_owner_binding(
             (owner_binding_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_account_owner_bindings_for_account(
+    *,
+    account_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, platform_user_id, account_id, binding_method, status,
+                verified_at, created_at, updated_at
+            FROM account_owner_bindings
+            WHERE account_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (account_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_binding_intent(
@@ -2201,6 +2838,37 @@ def get_binding_intent(
             except json.JSONDecodeError:
                 item["raw_result"] = {}
     return item
+
+
+def list_binding_intents_for_account(
+    *,
+    account_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id, platform_user_id, account_id, openclaw_login_session_key,
+                channel, status, channel_account_id, qr_data_url, manual_login_command,
+                raw_result_json, expires_at, completed_at, error, created_at, updated_at
+            FROM binding_intents
+            WHERE account_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (account_id, limit),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["raw_result"] = json.loads(item.pop("raw_result_json") or "{}")
+        except json.JSONDecodeError:
+            item["raw_result"] = {}
+            item["raw_result_decode_error"] = True
+        result.append(item)
+    return result
 
 
 def get_active_binding_intent_for_channel_account(
@@ -2740,7 +3408,15 @@ def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str
             """
             SELECT
                 id, message_id, reply_to_message_id, direction, role,
-                message_type, content, latency_ms, error, created_at
+                message_type, content, latency_ms, error, created_at,
+                (
+                    SELECT dt.trace_id
+                    FROM debug_traces dt
+                    WHERE dt.session_id = messages.session_id
+                      AND dt.message_id = messages.message_id
+                    ORDER BY dt.id DESC
+                    LIMIT 1
+                ) AS trace_id
             FROM messages
             WHERE session_id = ?
             ORDER BY id DESC
@@ -4372,3 +5048,179 @@ def consume_valid_verification_token(
             (verified_token, normalized),
         ).fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# Account unbind / wipe
+# ---------------------------------------------------------------------------
+
+def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
+    """Path A: disconnect WeChat channel, cancel reminders & proactive.
+
+    Removes channel routing rows so incoming messages can no longer reach this
+    account.  All conversation history and context files are preserved.
+    Returns counts of affected rows for audit logging.
+    """
+    with connect() as conn:
+        cb = conn.execute(
+            "DELETE FROM channel_bindings WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        bi = conn.execute(
+            """
+            UPDATE binding_intents
+            SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ? AND status = 'completed'
+            """,
+            (account_id,),
+        ).rowcount
+        rem = conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'cancelled',
+                cancelled_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ? AND status = 'pending'
+            """,
+            (account_id,),
+        ).rowcount
+        pc = conn.execute(
+            """
+            DELETE FROM proactive_commitments
+            WHERE account_id = ? AND status IN ('pending', 'scheduled')
+            """,
+            (account_id,),
+        ).rowcount
+        conn.execute(
+            """
+            UPDATE proactive_account_state
+            SET enabled = 0, updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ?
+            """,
+            (account_id,),
+        )
+    return {
+        "channel_bindings_deleted": cb,
+        "binding_intents_revoked": bi,
+        "reminders_cancelled": rem,
+        "proactive_commitments_deleted": pc,
+    }
+
+
+def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
+    """Path B: hard-delete all account data after unbind_account_channel().
+
+    Removes sessions, messages, dreaming data, profile row, and the
+    account_owner_binding.  Sets account status to 'deactivated'.
+    Does NOT touch the filesystem — caller must remove user_profiles dir.
+    """
+    with connect() as conn:
+        memory_events = conn.execute(
+            "DELETE FROM memory_events WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        dmi = conn.execute(
+            """
+            DELETE FROM dreaming_memory_items
+            WHERE dreaming_run_id IN (SELECT id FROM dreaming_runs WHERE account_id = ?)
+               OR account_id = ?
+            """,
+            (account_id, account_id),
+        ).rowcount
+        dr = conn.execute(
+            "DELETE FROM dreaming_runs WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        reminders = conn.execute(
+            "DELETE FROM reminders WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        proactive_commitments = conn.execute(
+            "DELETE FROM proactive_commitments WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        outbound = conn.execute(
+            "DELETE FROM outbound_messages WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        cost_events = conn.execute(
+            "DELETE FROM cost_events WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        ledger = conn.execute(
+            "DELETE FROM entitlement_ledger WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        wallets = conn.execute(
+            "DELETE FROM entitlement_wallets WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        daily_usage = conn.execute(
+            "DELETE FROM daily_usage WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        debug_traces = conn.execute(
+            "DELETE FROM debug_traces WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        conn.execute(
+            "DELETE FROM proactive_account_state WHERE account_id = ?",
+            (account_id,),
+        )
+        msgs = conn.execute(
+            "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE account_id = ?)",
+            (account_id,),
+        ).rowcount
+        sess = conn.execute(
+            "DELETE FROM sessions WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        binding_intents = conn.execute(
+            "DELETE FROM binding_intents WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        conn.execute(
+            "DELETE FROM profiles WHERE account_id = ?",
+            (account_id,),
+        )
+        conn.execute(
+            "DELETE FROM account_owner_bindings WHERE account_id = ?",
+            (account_id,),
+        )
+        conn.execute(
+            """
+            UPDATE accounts
+            SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (account_id,),
+        )
+    return {
+        "messages_deleted": msgs,
+        "sessions_deleted": sess,
+        "dreaming_memory_items_deleted": dmi,
+        "dreaming_runs_deleted": dr,
+        "memory_events_deleted": memory_events,
+        "reminders_deleted": reminders,
+        "proactive_commitments_deleted": proactive_commitments,
+        "cost_events_deleted": cost_events,
+        "entitlement_ledger_deleted": ledger,
+        "entitlement_wallets_deleted": wallets,
+        "outbound_messages_deleted": outbound,
+        "daily_usage_deleted": daily_usage,
+        "debug_traces_deleted": debug_traces,
+        "binding_intents_deleted": binding_intents,
+    }
+
+
+def reenable_proactive_after_rebind(*, account_id: str) -> None:
+    """Re-enable proactive state when user successfully re-binds WeChat."""
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE proactive_account_state
+            SET enabled = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ?
+            """,
+            (account_id,),
+        )

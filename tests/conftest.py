@@ -10,6 +10,8 @@ def test_settings(tmp_path):
     s.ai4all_bridge_secret = "test-secret"
     s.admin_token = "test-admin"
     s.admin_staff_token = "test-staff"
+    s.admin_debug_plaintext_enabled = False
+    s.admin_debug_plaintext_account_allowlist = ""
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_model = "test-model"
