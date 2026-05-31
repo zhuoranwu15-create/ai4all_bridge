@@ -1,6 +1,6 @@
 # 后台管理说明
 
-当前已有一个轻量 Web 后台，也保留 Admin API。两者都通过 `ADMIN_TOKEN` 鉴权。
+当前已有一个轻量 Web 后台，也保留 Admin API。Admin 最高权限使用 `ADMIN_TOKEN`，普通后台用户使用 `ADMIN_STAFF_TOKEN`。
 
 Web 后台入口：
 
@@ -16,7 +16,7 @@ http://127.0.0.1:8000/ui/onboarding.html
 
 ## Admin 鉴权
 
-所有 `/admin/*` 接口都需要请求头：
+所有 `/admin/*` 和 `/debug/*` 接口都需要请求头：
 
 ```http
 Authorization: Bearer <ADMIN_TOKEN>
@@ -26,7 +26,17 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 ```bash
 ADMIN_TOKEN=replace-with-a-strong-token
+ADMIN_STAFF_TOKEN=replace-with-a-staff-token
 ```
+
+默认开发值见仓库根目录 `.env.example`：
+
+```bash
+ADMIN_TOKEN=dev-admin-token
+ADMIN_STAFF_TOKEN=
+```
+
+`ADMIN_TOKEN` 映射为 `role=admin`，可审批临时明文授权并直接调用明文接口；`ADMIN_STAFF_TOKEN` 映射为 `role=staff`，默认只能看脱敏视图，需要申请并获批临时明文授权后才可查看指定账号、指定资源的明文。
 
 ## 当前管理模型
 
@@ -292,7 +302,7 @@ heartbeat 发送成功后，系统会写入 `last_proactive_sent_at`，并把 ac
 
 ## 本地 Debug API
 
-`/debug/*` 接口仍保留给本地开发使用。它们当前不使用 `ADMIN_TOKEN`，不应该暴露到公网。
+`/debug/*` 接口仍保留给本地开发使用。它们同样需要 Admin/Staff Token，不应该暴露到公网。Debug 页面和 API 约定见 [调试指南](../debugging.md)。
 
 ## 查看 raw payload
 

@@ -96,13 +96,18 @@
 - 注册时间
 
 #### 贝壳余额卡
-- 余额展示（当前硬编码 0，待 wallet 模块接入）
+- 余额展示：读取 `GET /web/me` / `GET /web/me/wallet` 返回的 wallet
+- 页面每 15 秒刷新余额
 - 「充值」按钮（disabled，标注「敬请期待」）
 
 #### 微信绑定卡
 - 已绑定状态：绿色徽章 + 微信账号标识 + 最近活跃时间
 - 未绑定状态：橙色徽章提示
 - 「重新绑定」按钮：调用 `POST /web/binding-intents` → 展示新 QR → 轮询
+- 「解绑」按钮：
+  - `keep_memories=true`：删除本地微信路由，取消提醒/proactive，保留记忆和历史
+  - `keep_memories=false`：在上述基础上清除记忆、对话、钱包流水，并 deactive 旧 account，前端退出登录
+  - 后端会 best-effort 调用 OpenClaw logout；若插件不支持，接口仍完成本地解绑，并返回 `openclaw_cleanup.status=unsupported`
 
 #### 退出登录
 - 清除 `localStorage.chaochao_session` → 跳转 home.html
@@ -133,7 +138,25 @@
 - 鉴权同上
 - 返回该 account 下所有 channel_bindings
 
-### 5.4 修改 POST /web/register-and-binding-intent
+### 5.4 GET /web/me/wallet
+
+- 鉴权同上
+- 返回当前 account 的 wallet 摘要和近期 ledger
+
+### 5.5 POST /web/me/unbind
+
+- 鉴权同上
+- 输入：`{keep_memories: boolean}`
+- 行为：
+  - 先根据 `channel_bindings` 提取 OpenClaw 微信账号 ID，best-effort 调用 `openclaw channels logout --channel openclaw-weixin --account <id>`
+  - 删除本地 `channel_bindings` 并撤销 completed `binding_intents`
+  - 取消 pending reminders、pending/scheduled proactive commitments，并关闭 proactive state
+  - `keep_memories=false` 时，额外清除 sessions/messages/profile/dreaming/wallet/cost/debug 等 account 数据，并将旧 account 置为 deactivated
+- 返回：`{status, keep_memories, account_id, openclaw_cleanup, stats}`
+
+> 当前限制：`openclaw-weixin` 插件只暴露 `send` / `broadcast`，不支持标准 logout/disable/delete。此时 `openclaw_cleanup.status` 会是 `unsupported`，本地解绑已完成，但 OpenClaw 微信 Web 会话可能仍在；重新扫码可能遇到“已连接过此 OpenClaw”。
+
+### 5.6 修改 POST /web/register-and-binding-intent
 
 - 新增返回字段：`session_token`（7 天有效）
 - 原有字段不变，向后兼容
@@ -164,7 +187,8 @@ CREATE TABLE IF NOT EXISTS platform_user_sessions (
 - 微信扫码绑定（含重新绑定）
 - Session 持久化（7 天）
 - 账号信息展示
-- 贝壳余额展示（固定为 0）
+- 贝壳余额展示和自动刷新
+- 解绑：保留记忆 / 清除全部
 
 **不包含（后续版本）**
 - 贝壳充值 / 支付
@@ -172,7 +196,7 @@ CREATE TABLE IF NOT EXISTS platform_user_sessions (
 - 通知偏好设置
 - 历史消息查看
 - 多微信账号绑定管理
-- 解绑功能
+- OpenClaw 微信插件原生 logout/disable/delete 能力
 
 ---
 

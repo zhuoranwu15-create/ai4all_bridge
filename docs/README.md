@@ -32,6 +32,7 @@
 | [语音输入](product/voice_prd.md) | 微信语音、ASR、转写后文本回复 |
 | [权益、增长与可选支付](product/entitlement_growth_prd.md) | 贝壳、扣减、拉新、可选购买 |
 | [运营与后台](product/admin_ops_prd.md) | Admin、客服支撑、观测、风控、审计 |
+| [运营后台页面规划](product/admin_ops_views.md) | 运营视角下的后台页面、字段、动作、隐私边界和推进顺序 |
 
 ## 技术设计
 
@@ -57,6 +58,7 @@
 | --- | --- |
 | [用户使用说明](guides/user_guide.md) | 当前用户视角的使用方式和限制 |
 | [后台管理说明](guides/admin_guide.md) | Admin API / UI、排查和主动消息管理 |
+| [调试指南](debugging.md) | 技术 Debug 页面、Debug API、开发期明文策略和常用排障命令 |
 
 ## 历史归档
 

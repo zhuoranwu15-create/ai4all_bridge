@@ -16,7 +16,7 @@
 | [搜索与异步任务](search_and_async_tasks_prd.md) | Web Search、高耗时任务、先确认后补发 | [搜索与异步任务技术设计](../tech_design/search_async_tasks_design.md) |
 | [语音输入](voice_prd.md) | 微信语音、ASR、转写后文本回复 | [语音输入技术设计](../tech_design/voice_input_design.md) |
 | [权益、增长与可选支付](entitlement_growth_prd.md) | 贝壳、扣减、拉新、可选购买 | [贝壳、增长与可选支付技术设计](../tech_design/entitlement_growth_design.md) |
-| [运营与后台](admin_ops_prd.md) | Admin、客服支撑、观测、风控、审计 | [隐私与后台访问控制](../tech_design/privacy_admin_access_control_design.md) |
+| [运营与后台](admin_ops_prd.md) / [后台页面规划](admin_ops_views.md) | Admin、客服支撑、观测、风控、审计、页面优先级 | [隐私与后台访问控制](../tech_design/privacy_admin_access_control_design.md) |
 
 ## 维护规则
 

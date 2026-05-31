@@ -6,8 +6,11 @@ class Settings(BaseSettings):
     ai4all_bridge_secret: str = "dev-secret"
     admin_token: str = "dev-admin-token"
     admin_staff_token: str = ""
+    admin_debug_plaintext_enabled: bool = False
+    admin_debug_plaintext_account_allowlist: str = ""
     database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
+    system_dir: str = "data/system"
 
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
