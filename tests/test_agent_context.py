@@ -4,14 +4,16 @@ from unittest.mock import MagicMock, patch
 def _settings(tmp_path):
     s = MagicMock()
     s.user_profiles_dir = str(tmp_path / "profiles")
+    s.system_dir = str(tmp_path / "system")
     return s
 
 
-def test_agent_context_files_created_from_legacy_profile(tmp_path):
+def test_agent_context_user_files_created_from_legacy_profile(tmp_path):
     s = _settings(tmp_path)
     with patch("app.user_profiles.settings", s):
         from app.user_profiles import (
-            CONTEXT_FILE_ORDER,
+            USER_CONTEXT_FILE_ORDER,
+            SYSTEM_CONTEXT_FILES,
             read_agent_context,
             user_profile_path,
         )
@@ -35,21 +37,28 @@ def test_agent_context_files_created_from_legacy_profile(tmp_path):
 
         context = read_agent_context("acc-context", display_name="测试助手")
 
-        for filename in CONTEXT_FILE_ORDER:
+        # User-level files live in account directory
+        for filename in USER_CONTEXT_FILE_ORDER:
             assert (profile_path.parent / filename).exists()
             assert context.files[filename]["created"] is True
 
-        assert "HEARTBEAT.md" not in CONTEXT_FILE_ORDER
-        assert not (profile_path.parent / "HEARTBEAT.md").exists()
+        # System-level files live in system directory, not account directory
+        for filename in SYSTEM_CONTEXT_FILES:
+            assert not (profile_path.parent / filename).exists()
+            assert (tmp_path / "system" / filename).exists()
+
         assert "HEARTBEAT.md" not in context.files
         assert "HEARTBEAT" not in context.blocks
         assert "旧 soul 内容" in context.blocks["SOUL"]
         assert "喜欢简洁" in context.blocks["USER"]
         assert "用户是工程师" in context.blocks["MEMORY"]
         assert "测试助手" in context.blocks["IDENTITY"]
+        # System blocks are populated from data/system/
+        assert context.blocks["AGENTS"] != ""
+        assert context.blocks["TOOLS"] != ""
 
 
-def test_agent_context_does_not_overwrite_existing_files(tmp_path):
+def test_agent_context_does_not_overwrite_existing_user_files(tmp_path):
     s = _settings(tmp_path)
     with patch("app.user_profiles.settings", s):
         from app.user_profiles import read_agent_context, user_profile_path
@@ -63,32 +72,7 @@ def test_agent_context_does_not_overwrite_existing_files(tmp_path):
 
         assert context.blocks["SOUL"] == "custom soul"
         assert context.files["SOUL.md"]["created"] is False
-        assert context.files["AGENTS.md"]["created"] is True
-
-
-def test_agent_context_repairs_legacy_ai4all_default_identity(tmp_path):
-    s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context, user_profile_path
-
-        profile_path = user_profile_path("acc-legacy-ai4all")
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        profile_path.write_text("# User Profile\n", encoding="utf-8")
-        (profile_path.parent / "AGENTS.md").write_text(
-            "# AGENTS\n\n- 你是 AI4ALL 微信个人 AI 助手的主 agent。\n",
-            encoding="utf-8",
-        )
-        (profile_path.parent / "IDENTITY.md").write_text(
-            "# IDENTITY\n\n- 你的名字是 AI4ALL 助手，用它自称。\n",
-            encoding="utf-8",
-        )
-
-        context = read_agent_context("acc-legacy-ai4all")
-
-        assert "AI4ALL 助手" not in context.blocks["IDENTITY"]
-        assert "你还没有名字" in context.blocks["IDENTITY"]
-        assert "AI4ALL 微信个人 AI 助手" not in context.blocks["AGENTS"]
-        assert "个人 AI 陪伴与生活助理" in context.blocks["AGENTS"]
+        assert context.files["IDENTITY.md"]["created"] is True
 
 
 def test_existing_account_heartbeat_file_is_preserved_but_not_returned(tmp_path):
@@ -108,6 +92,27 @@ def test_existing_account_heartbeat_file_is_preserved_but_not_returned(tmp_path)
         assert heartbeat_path.read_text(encoding="utf-8") == "# HEARTBEAT\n旧账号备注"
         assert "HEARTBEAT.md" not in context.files
         assert "HEARTBEAT" not in context.blocks
+
+
+def test_context_file_path_routes_system_files_to_system_dir(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import context_file_path
+
+        agents_path = context_file_path("any-account", "AGENTS.md")
+        tools_path = context_file_path("any-account", "TOOLS.md")
+        assert str(tmp_path / "system") in str(agents_path)
+        assert str(tmp_path / "system") in str(tools_path)
+
+
+def test_context_file_path_routes_user_files_to_account_dir(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import context_file_path
+
+        soul_path = context_file_path("my-account", "SOUL.md")
+        assert "my-account" in str(soul_path)
+        assert str(tmp_path / "system") not in str(soul_path)
 
 
 def test_context_file_path_rejects_unknown_file(tmp_path):

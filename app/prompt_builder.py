@@ -70,10 +70,10 @@ _OUTPUT_DIRECTIVES_FIXED = (
 
 _CONTEXT_BLOCK_ORDER = (
     "AGENTS",
+    "TOOLS",
     "SOUL",
     "IDENTITY",
     "USER",
-    "TOOLS",
     "MEMORY",
 )
 
