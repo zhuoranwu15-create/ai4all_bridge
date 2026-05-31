@@ -1,6 +1,6 @@
 # 语音输入技术设计
 
-更新时间：2026-05-28
+更新时间：2026-05-31
 
 本文承接 [语音输入 PRD](../product/voice_prd.md)，定义 Phase 1 微信语音输入、豆包 ASR、60 秒限制和转写后进入统一对话链路的技术设计。
 
@@ -213,7 +213,7 @@ status = pending | charged | waived | failed
 - 不保存长期原始语音。
 - 明文转写文本按正文类敏感信息处理。
 
-## 11. 与搜索异步任务的共用底座
+## 11. 与 Web Search 兜底任务的共用底座
 
 可复用：
 
@@ -226,7 +226,7 @@ status = pending | charged | waived | failed
 不合并：
 
 - 语音强调媒体解析、60 秒限制、ASR provider 和 transcript。
-- 搜索强调 query、provider 回退、引用和事实性。
+- Web Search 默认同步 tool use；其异步兜底任务强调 query、provider 回退、引用和事实性。
 
 ## 12. 开发切分
 

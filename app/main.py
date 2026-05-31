@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import date as date_cls, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
@@ -13,6 +14,7 @@ from app.config import settings
 from app.captcha import verify_captcha
 from app.sms import generate_otp, send_otp
 from app.db import (
+    ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     clear_all_messages_for_account,
     cancel_proactive_commitment,
@@ -21,6 +23,8 @@ from app.db import (
     create_ai4all_account_for_user,
     create_admin_plaintext_grant,
     create_binding_intent,
+    create_search_provider_run,
+    create_tool_invocation,
     create_or_get_platform_user_by_phone,
     create_phone_verification,
     find_active_admin_plaintext_grant,
@@ -87,8 +91,12 @@ from app.db import (
     cancel_reminder,
     get_reminder,
     list_reminders_for_account,
+    get_tool_invocation,
     list_wallet_ledger,
+    list_search_provider_runs,
+    list_tool_invocations,
     update_reminder,
+    update_tool_invocation,
     unbind_account_channel,
     wipe_account_data,
     reenable_proactive_after_rebind,
@@ -129,6 +137,8 @@ from app.dreaming import (
 )
 from app.session_lifecycle import run_daily_dreaming_scan
 from app.turn_service import handle_openclaw_turn
+from app.tools import get_web_search_tools
+from app.tools.web_search_handlers import handle_web_search, override_provider_order
 import shutil
 
 from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context, account_profile_dir
@@ -141,12 +151,19 @@ _background_loop: Optional[asyncio.AbstractEventLoop] = None
 
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 
+_LOCAL_DEBUG_UI_ENVS = {"local", "development", "test"}
+_LOCAL_ONLY_DEBUG_UI_PATHS = {
+    "/ui/onboarding_debug.html",
+    "/ui/web_search_debug.html",
+}
+_WEB_SEARCH_DEBUG_PROVIDERS = {"aliyun", "baidu", "bing", "duckduckgo"}
+
 
 @app.middleware("http")
 async def _gate_debug_ui(request: Request, call_next):
     if (
-        request.url.path == "/ui/onboarding_debug.html"
-        and settings.app_env not in ("local", "development")
+        request.url.path in _LOCAL_ONLY_DEBUG_UI_PATHS
+        and str(settings.app_env or "").lower() not in _LOCAL_DEBUG_UI_ENVS
     ):
         return JSONResponse({"detail": "Not available"}, status_code=403)
     return await call_next(request)
@@ -1399,6 +1416,364 @@ def debug_delete_reminder(reminder_id: str, _: None = Depends(verify_admin_auth)
         raise HTTPException(status_code=400, detail="only pending reminders can be cancelled")
     cancelled = cancel_reminder(reminder_id=reminder_id)
     return {"status": "ok", "reminder": cancelled}
+
+
+# ---------------------------------------------------------------------------
+# Web Search debug routes
+# ---------------------------------------------------------------------------
+
+class WebSearchDebugSimulationRequest(BaseModel):
+    query: str
+    provider: Optional[str] = None
+    status: str = "succeeded"
+    count: int = Field(default=3, ge=1, le=10)
+    latency_ms: Optional[int] = Field(default=None, ge=0)
+    error: Optional[str] = None
+
+
+class WebSearchDebugChatRequest(BaseModel):
+    text: str
+    force_web_search_enabled: bool = True
+    provider: Optional[str] = None
+
+
+class WebSearchDebugRunRequest(BaseModel):
+    query: str
+    provider: Optional[str] = None
+    count: int = Field(default=3, ge=1, le=10)
+    language: Optional[str] = None
+    country: Optional[str] = None
+    freshness: Optional[str] = None
+    date_after: Optional[str] = None
+    date_before: Optional[str] = None
+
+
+def _web_search_debug_capabilities() -> dict:
+    default_provider = getattr(settings, "web_search_default_provider", "duckduckgo")
+    provider_order = [
+        item.strip()
+        for item in str(getattr(settings, "web_search_provider_order", "") or default_provider).split(",")
+        if item.strip()
+    ]
+    configured_providers = {
+        "aliyun": bool(
+            getattr(settings, "aliyun_web_search_enabled", False)
+            and (
+                getattr(settings, "aliyun_web_search_api_key", "")
+                or getattr(settings, "dashscope_api_key", "")
+            )
+        ),
+        "baidu": bool(getattr(settings, "baidu_ai_search_enabled", False) and getattr(settings, "baidu_ai_search_api_key", "")),
+        "bing": True,
+        "duckduckgo": True,
+    }
+    return {
+        "tool_schema_defined": True,
+        "model_exposure_configured": bool(getattr(settings, "web_search_enabled", False)),
+        "currently_in_turn_tools": bool(getattr(settings, "web_search_enabled", False)),
+        "debug_chat_forces_tool_exposure": True,
+        "provider_adapter_ready": any(configured_providers.get(provider, False) for provider in provider_order),
+        "default_provider": default_provider,
+        "provider_order": provider_order,
+        "provider_failover": bool(getattr(settings, "web_search_provider_failover", True)),
+        "configured_providers": configured_providers,
+        "sync_timeout_seconds": getattr(settings, "web_search_sync_timeout_seconds", 8.0),
+        "max_results": getattr(settings, "web_search_max_results", 5),
+    }
+
+
+def _web_search_debug_conversation(account_id: str, *, limit: int = 100) -> dict:
+    sessions = list_sessions_for_account(account_id=account_id, limit=20)
+    active_session = next(
+        (session for session in sessions if session.get("session_key") == ACCOUNT_ACTIVE_SESSION_KEY),
+        None,
+    )
+    messages = []
+    if active_session is not None:
+        messages = list_session_messages(session_id=int(active_session["id"]), limit=limit)
+    return {
+        "session": active_session,
+        "messages": messages,
+    }
+
+
+def _fake_web_search_results(*, query: str, count: int) -> list[dict]:
+    return [
+        {
+            "title": f"Debug result {idx + 1}: {query}",
+            "url": f"https://example.com/search-debug/{idx + 1}",
+            "snippet": "This is a synthetic web_search debug result. No external provider was called.",
+            "site_name": "example.com",
+            "retrieved_at": datetime.now().isoformat(timespec="seconds"),
+            "score": round(1.0 - idx * 0.08, 2),
+        }
+        for idx in range(count)
+    ]
+
+
+def _debug_provider_override(provider: Optional[str]) -> Optional[list[str]]:
+    cleaned = str(provider or "").strip().lower()
+    if cleaned and cleaned not in _WEB_SEARCH_DEBUG_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"unsupported web_search provider: {cleaned}")
+    return [cleaned] if cleaned else None
+
+
+@app.get("/debug/web-search/{account_id}")
+def debug_get_web_search(
+    account_id: str,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    return {
+        "account_id": account_id,
+        "capabilities": _web_search_debug_capabilities(),
+        "tool_schema": get_web_search_tools()[0],
+        "tool_invocations": list_tool_invocations(
+            account_id=account_id,
+            tool_name="web_search",
+            limit=limit,
+        ),
+        "provider_runs": list_search_provider_runs(
+            account_id=account_id,
+            limit=limit,
+        ),
+        "conversation": _web_search_debug_conversation(account_id),
+    }
+
+
+@app.get("/debug/web-search/invocations/{tool_invocation_id}")
+def debug_get_web_search_invocation(
+    tool_invocation_id: int,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    invocation = get_tool_invocation(tool_invocation_id=tool_invocation_id)
+    if invocation is None:
+        raise HTTPException(status_code=404, detail="tool invocation not found")
+    return {
+        "tool_invocation": invocation,
+        "provider_runs": list_search_provider_runs(
+            tool_invocation_id=tool_invocation_id,
+            limit=50,
+        ),
+    }
+
+
+@app.post("/debug/web-search/{account_id}/chat")
+def debug_chat_web_search(
+    account_id: str,
+    payload: WebSearchDebugChatRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    text = str(payload.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+
+    turn_payload = OpenClawTurnRequest(
+        message_id=f"debug-web-search-chat-{uuid.uuid4().hex[:12]}",
+        channel="debug-web-search",
+        channel_account_id=account_id,
+        account_id=account_id,
+        sender_id="web-search-debug",
+        sender_name="Web Search Debug",
+        chat_id=account_id,
+        chat_type="private",
+        session_key=account_id,
+        message_type="text",
+        text=text,
+        raw={
+            "source": "web_search_debug",
+            "web_search_provider_override": str(payload.provider or "").strip() or None,
+        },
+    )
+    with override_provider_order(_debug_provider_override(payload.provider)):
+        turn = handle_openclaw_turn(
+            turn_payload,
+            background_loop=_background_loop,
+            force_web_search_enabled=bool(payload.force_web_search_enabled),
+        )
+    return {
+        "status": "ok",
+        "provider_override": str(payload.provider or "").strip() or None,
+        "turn": turn.model_dump(),
+        "conversation": _web_search_debug_conversation(account_id),
+        "tool_invocations": list_tool_invocations(
+            account_id=account_id,
+            tool_name="web_search",
+            limit=50,
+        ),
+        "provider_runs": list_search_provider_runs(
+            account_id=account_id,
+            limit=50,
+        ),
+    }
+
+
+@app.post("/debug/web-search/{account_id}/run")
+def debug_run_web_search(
+    account_id: str,
+    payload: WebSearchDebugRunRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    query = str(payload.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+
+    provider_override = _debug_provider_override(payload.provider)
+    provider_override_name = str(payload.provider or "").strip() or None
+
+    session_bundle = get_or_create_session(
+        account_id=account_id,
+        channel="debug",
+        sender_id="web-search-debug",
+        sender_name="Web Search Debug",
+        chat_id=account_id,
+        session_key=f"debug-web-search-{account_id}",
+    )
+    session = session_bundle["session"]
+    tool_call_id = f"call_debug_web_search_run_{uuid.uuid4().hex[:12]}"
+    args = {
+        "query": query,
+        "count": payload.count,
+        "language": payload.language,
+        "country": payload.country,
+        "freshness": payload.freshness,
+        "date_after": payload.date_after,
+        "date_before": payload.date_before,
+    }
+    invocation = create_tool_invocation(
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id=f"debug-web-search-run-{uuid.uuid4().hex[:12]}",
+        tool_call_id=tool_call_id,
+        tool_name="web_search",
+        args={**args, "provider_override": provider_override_name},
+        status="running",
+    )
+    ctx = SimpleNamespace(
+        account_id=account_id,
+        session=session,
+        message_id=f"debug-web-search-run-{uuid.uuid4().hex[:12]}",
+    )
+    started = datetime.now()
+    with override_provider_order(provider_override):
+        result = handle_web_search(
+            args,
+            ctx,
+            tool_call_id=tool_call_id,
+            tool_invocation_id=int(invocation["id"]),
+        )
+    latency_ms = int((datetime.now() - started).total_seconds() * 1000)
+    status_value = "failed" if result.get("status") == "failed" or result.get("error") else "succeeded"
+    updated_invocation = update_tool_invocation(
+        tool_invocation_id=int(invocation["id"]),
+        status=status_value,
+        result=result,
+        latency_ms=latency_ms,
+        error=result.get("error") if status_value == "failed" else None,
+        finished=True,
+    )
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "provider_override": provider_override_name,
+        "result": result,
+        "tool_invocation": updated_invocation,
+        "provider_runs": list_search_provider_runs(
+            tool_invocation_id=int(invocation["id"]),
+            limit=50,
+        ),
+    }
+
+
+@app.post("/debug/web-search/{account_id}/simulate")
+def debug_simulate_web_search(
+    account_id: str,
+    payload: WebSearchDebugSimulationRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    query = str(payload.query or "").strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="query is required")
+    status_value = str(payload.status or "succeeded").strip().lower()
+    if status_value not in {"running", "queued", "succeeded", "failed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="status must be one of: running, queued, succeeded, failed",
+        )
+
+    session_bundle = get_or_create_session(
+        account_id=account_id,
+        channel="debug",
+        sender_id="web-search-debug",
+        sender_name="Web Search Debug",
+        chat_id=account_id,
+        session_key=f"debug-web-search-{account_id}",
+    )
+    session_id = int(session_bundle["session"]["id"])
+    provider = (
+        str(payload.provider or "").strip()
+        or getattr(settings, "web_search_default_provider", "duckduckgo")
+    )
+    args = {"query": query, "count": payload.count}
+    finished = status_value in {"queued", "succeeded", "failed"}
+    if status_value == "queued":
+        result = {
+            "status": "queued",
+            "task_id": f"debug-task-{uuid.uuid4().hex[:12]}",
+            "query": query,
+        }
+    elif status_value == "failed":
+        result = {
+            "status": "failed",
+            "query": query,
+            "error": payload.error or "debug simulated provider failure",
+        }
+    elif status_value == "running":
+        result = {"status": "running", "query": query}
+    else:
+        result = {
+            "status": "succeeded",
+            "query": query,
+            "provider": provider,
+            "results": _fake_web_search_results(query=query, count=payload.count),
+        }
+
+    invocation = create_tool_invocation(
+        account_id=account_id,
+        session_id=session_id,
+        message_id=f"debug-web-search-{uuid.uuid4().hex[:12]}",
+        tool_call_id=f"call_debug_web_search_{uuid.uuid4().hex[:12]}",
+        tool_name="web_search",
+        args=args,
+        status=status_value,
+        result=result,
+        latency_ms=payload.latency_ms,
+        error=payload.error if status_value == "failed" else None,
+        finished=finished,
+    )
+
+    provider_run = None
+    if status_value != "queued":
+        provider_status = "failed" if status_value == "failed" else status_value
+        provider_run = create_search_provider_run(
+            account_id=account_id,
+            tool_invocation_id=int(invocation["id"]),
+            provider=provider,
+            attempt=1,
+            status=provider_status,
+            request=args,
+            response=result if status_value == "succeeded" else {},
+            latency_ms=payload.latency_ms,
+            error=payload.error if status_value == "failed" else None,
+            finished=status_value in {"succeeded", "failed"},
+        )
+
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "tool_invocation": invocation,
+        "provider_run": provider_run,
+    }
 
 
 # ---------------------------------------------------------------------------

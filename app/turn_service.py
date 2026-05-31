@@ -29,7 +29,7 @@ from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
-from app.tools import get_reminder_tools
+from app.tools import get_default_tools
 from app.turn_context import TurnContext
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
 from app.onboarding import (
@@ -99,6 +99,31 @@ def _count_user_name_asks(turn_count: int, state: str) -> int:
     if state in {ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT, ONBOARDING_COMPLETE}:
         return 1
     return 0
+
+
+def _tool_instructions(*, web_search_enabled: bool) -> str:
+    instructions = [
+        "## 提醒工具使用规则",
+        "",
+        "- 用户明确要求在未来某个时间收到提醒时，调用 create_reminder。",
+        "- 时间不明确时，不要猜测，告知用户需要补充具体日期和时间。",
+        "- 取消或修改提醒前，先调用 list_reminders 确认提醒存在再操作。",
+        "- 多个提醒且用户描述不精确时，列出让用户选择，不要盲目操作。",
+    ]
+    if web_search_enabled:
+        instructions.extend(
+            [
+                "",
+                "## 网络搜索工具使用规则",
+                "",
+                "- 用户询问最新、实时、外部世界事实，或明确要求搜索/查找时，调用 web_search。",
+                "- 搜索后基于结果回答，并在回答里保留关键来源链接。",
+                "- 搜索失败时，说明未能完成实时搜索，不要编造搜索结果。",
+            ]
+        )
+    else:
+        instructions.append("- 不要承诺任何工具之外的功能（如网络搜索、发图片等）。")
+    return "\n".join(instructions)
 
 
 async def _advance_onboarding_state_async(
@@ -176,6 +201,7 @@ def handle_openclaw_turn(
     payload: OpenClawTurnRequest,
     *,
     background_loop: Optional[asyncio.AbstractEventLoop] = None,
+    force_web_search_enabled: Optional[bool] = None,
 ) -> OpenClawTurnResponse:
     started_at = time.monotonic()
     logger.info(
@@ -375,9 +401,16 @@ def handle_openclaw_turn(
     onboarding_pre_extracted = None
     system_prompt = None
     llm_messages = []
+    web_search_enabled_for_turn = (
+        bool(force_web_search_enabled)
+        if force_web_search_enabled is not None
+        else bool(getattr(settings, "web_search_enabled", False))
+    )
     debug_metadata = {
         "trace_kind": "ai4all_turn",
         "debug_trace_enabled": debug_trace_enabled,
+        "web_search_enabled": web_search_enabled_for_turn,
+        "web_search_forced": force_web_search_enabled is not None,
         "identity": identity_response_metadata(identity, account_id),
         "channel_binding_id": binding["id"],
         "channel": identity.channel,
@@ -476,13 +509,8 @@ def handle_openclaw_turn(
                 today=today,
                 model_name=settings.llm_model,
                 tool_instructions=(
-                    None if onboarding_active else (
-                        "## 提醒工具使用规则\n\n"
-                        "- 用户明确要求在未来某个时间收到提醒时，调用 create_reminder。\n"
-                        "- 时间不明确时，不要猜测，告知用户需要补充具体日期和时间。\n"
-                        "- 取消或修改提醒前，先调用 list_reminders 确认提醒存在再操作。\n"
-                        "- 多个提醒且用户描述不精确时，列出让用户选择，不要盲目操作。\n"
-                        "- 不要承诺任何工具之外的功能（如网络搜索、发图片等）。"
+                    None if onboarding_active else _tool_instructions(
+                        web_search_enabled=web_search_enabled_for_turn
                     )
                 ),
             )
@@ -505,6 +533,7 @@ def handle_openclaw_turn(
                 onboarding_active=onboarding_active,
                 recent_messages=history,
                 background_loop=background_loop,
+                web_search_enabled=web_search_enabled_for_turn,
             )
 
             if onboarding_active:
@@ -532,7 +561,7 @@ def handle_openclaw_turn(
                         except Exception as _fe:
                             logger.error("onboarding ai_name fallback write failed account=%s error=%s", account_id, _fe)
             else:
-                tools = get_reminder_tools()
+                tools = get_default_tools(web_search_enabled=web_search_enabled_for_turn)
                 reply, generation_error = generate_reply_with_tools(
                     user_text=text,
                     history=history,

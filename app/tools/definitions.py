@@ -101,3 +101,62 @@ def get_reminder_tools() -> list:
             },
         },
     ]
+
+
+def get_web_search_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": (
+                    "搜索互联网获取当前或外部信息。用于最新消息、实时状态、官网资料、"
+                    "需要来源的问题。普通搜索应同步返回；长耗时或深度整理可以排队后台处理。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "搜索关键词或问题",
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": "返回结果数量，1-10",
+                            "minimum": 1,
+                            "maximum": 10,
+                        },
+                        "freshness": {
+                            "type": "string",
+                            "description": "可选时间过滤：day/week/month/year",
+                            "enum": ["day", "week", "month", "year"],
+                        },
+                        "date_after": {
+                            "type": "string",
+                            "description": "可选，发布日期晚于 YYYY-MM-DD",
+                        },
+                        "date_before": {
+                            "type": "string",
+                            "description": "可选，发布日期早于 YYYY-MM-DD",
+                        },
+                        "language": {
+                            "type": "string",
+                            "description": "可选，ISO 639-1 语言代码",
+                        },
+                        "country": {
+                            "type": "string",
+                            "description": "可选，2 位国家/地区代码",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+
+
+def get_default_tools(*, web_search_enabled: bool = False) -> list:
+    tools = list(get_reminder_tools())
+    if web_search_enabled:
+        tools.extend(get_web_search_tools())
+    return tools

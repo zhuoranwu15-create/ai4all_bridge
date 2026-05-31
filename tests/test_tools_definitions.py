@@ -1,4 +1,4 @@
-from app.tools import get_reminder_tools
+from app.tools import get_default_tools, get_reminder_tools, get_web_search_tools
 
 
 def test_get_reminder_tools_returns_four_tools():
@@ -29,3 +29,20 @@ def test_cancel_reminder_requires_reminder_id():
     tools = get_reminder_tools()
     cancel = next(t for t in tools if t["function"]["name"] == "cancel_reminder")
     assert "reminder_id" in cancel["function"]["parameters"]["required"]
+
+
+def test_get_web_search_tools_returns_schema():
+    tools = get_web_search_tools()
+    assert len(tools) == 1
+    fn = tools[0]["function"]
+    assert fn["name"] == "web_search"
+    assert "query" in fn["parameters"]["required"]
+    assert "count" in fn["parameters"]["properties"]
+
+
+def test_get_default_tools_gates_web_search():
+    disabled = {t["function"]["name"] for t in get_default_tools(web_search_enabled=False)}
+    enabled = {t["function"]["name"] for t in get_default_tools(web_search_enabled=True)}
+    assert "web_search" not in disabled
+    assert "web_search" in enabled
+    assert {"create_reminder", "list_reminders", "cancel_reminder", "update_reminder"} <= enabled

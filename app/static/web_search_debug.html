@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>Web Search Debug</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f6f8; color: #202124; font-size: 14px; }
+    header { height: 46px; background: #183047; color: #fff; display: flex; align-items: center; gap: 10px; padding: 0 20px; }
+    header h1 { font-size: 16px; font-weight: 650; }
+    header .badge { font-size: 11px; padding: 2px 7px; border-radius: 10px; background: #b3261e; color: #fff; }
+    .token-bar { background: #fff7d6; border-bottom: 1px solid #ecd88b; padding: 10px 20px; display: flex; gap: 10px; align-items: center; }
+    .token-bar label { margin: 0; color: #7a5b00; }
+    .token-bar input { width: 280px; border: 1px solid #ddc870; border-radius: 6px; padding: 7px 10px; font-family: monospace; background: #fffdf1; }
+    .layout { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 46px); min-height: 620px; overflow: hidden; }
+    .left { background: #fff; border-right: 1px solid #dde1e6; display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+    .right { display: grid; grid-template-rows: auto 1fr; min-width: 0; overflow: hidden; }
+    .section { padding: 14px; border-bottom: 1px solid #edf0f2; }
+    label { display: block; font-size: 12px; font-weight: 650; color: #58606b; margin-bottom: 6px; }
+    select, input, textarea { width: 100%; border: 1px solid #cfd6dd; border-radius: 6px; padding: 8px 10px; font: inherit; background: #fff; }
+    textarea { resize: none; line-height: 1.45; }
+    select:focus, input:focus, textarea:focus { outline: none; border-color: #2f6fbb; box-shadow: 0 0 0 2px rgba(47,111,187,.12); }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row > * { flex: 1; }
+    .btn { border: 1px solid #cfd6dd; background: #fff; color: #202124; border-radius: 6px; padding: 8px 11px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .btn:hover { background: #f1f4f7; }
+    .btn:disabled { opacity: .55; cursor: wait; }
+    .btn-primary { background: #2f6fbb; border-color: #2f6fbb; color: #fff; }
+    .btn-primary:hover { background: #255d9f; }
+    .btn-sm { padding: 6px 9px; font-size: 12px; }
+    .stack { display: flex; flex-direction: column; gap: 12px; }
+    .chat-body { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: #fbfcfd; }
+    .chat-empty { color: #89919c; font-size: 13px; text-align: center; padding: 24px 0; }
+    .msg { max-width: 88%; display: flex; flex-direction: column; gap: 4px; }
+    .msg.user { align-self: flex-end; }
+    .msg.assistant, .msg.ai { align-self: flex-start; }
+    .msg.system { align-self: center; max-width: 96%; }
+    .msg .bubble { padding: 9px 12px; border-radius: 14px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; border: 1px solid transparent; }
+    .msg.user .bubble { background: #2f6fbb; color: #fff; border-bottom-right-radius: 4px; }
+    .msg.assistant .bubble, .msg.ai .bubble { background: #fff; border-color: #dde1e6; border-bottom-left-radius: 4px; }
+    .msg.system .bubble { background: #f7f9fb; border-color: #dde1e6; color: #68717d; border-radius: 10px; font-size: 12px; }
+    .chat-input { border-top: 1px solid #dde1e6; padding: 12px 14px; background: #fff; display: flex; gap: 8px; align-items: flex-end; }
+    .chat-input textarea { min-height: 58px; max-height: 130px; }
+    .typing { align-self: flex-start; color: #68717d; background: #fff; border: 1px solid #dde1e6; border-radius: 14px; border-bottom-left-radius: 4px; padding: 9px 12px; font-size: 13px; }
+    .main-header { background: #fff; border-bottom: 1px solid #dde1e6; padding: 14px 18px; display: flex; justify-content: space-between; gap: 16px; align-items: center; }
+    .main-header h2 { font-size: 15px; }
+    .main-header .sub { color: #68717d; font-size: 12px; margin-top: 2px; }
+    .content { overflow: auto; padding: 16px 18px; display: grid; grid-template-columns: minmax(340px, 1fr) minmax(340px, 1fr); gap: 14px; align-content: start; }
+    .panel { background: #fff; border: 1px solid #dde1e6; border-radius: 8px; overflow: hidden; }
+    .panel.wide { grid-column: 1 / -1; }
+    .panel h3 { font-size: 13px; padding: 11px 13px; border-bottom: 1px solid #edf0f2; background: #fafbfc; }
+    .panel-body { padding: 13px; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .metric { border: 1px solid #edf0f2; border-radius: 8px; padding: 10px; background: #fbfcfd; min-width: 0; }
+    .metric span { display: block; color: #68717d; font-size: 11px; margin-bottom: 4px; }
+    .metric strong { font-size: 14px; word-break: break-word; }
+    .item { border: 1px solid #edf0f2; border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+    .item:last-child { margin-bottom: 0; }
+    .item-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; align-items: flex-start; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    .muted { color: #68717d; }
+    .status { border-radius: 10px; padding: 2px 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .status-running { background: #e8f0fe; color: #174ea6; }
+    .status-queued { background: #fef7e0; color: #b06000; }
+    .status-succeeded { background: #e6f4ea; color: #137333; }
+    .status-failed { background: #fce8e6; color: #a50e0e; }
+    .result-card { border: 1px solid #edf0f2; border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fff; }
+    .result-card:last-child { margin-bottom: 0; }
+    .result-card a { color: #1a5fb4; font-weight: 650; text-decoration: none; line-height: 1.35; }
+    .result-card a:hover { text-decoration: underline; }
+    .result-card .url { color: #137333; font-size: 12px; margin: 4px 0; word-break: break-all; }
+    .result-card .snippet { color: #3c4043; font-size: 13px; line-height: 1.45; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f7f9fb; border: 1px solid #edf0f2; border-radius: 8px; padding: 10px; max-height: 360px; overflow: auto; font-size: 12px; }
+    .empty { color: #89919c; font-size: 13px; padding: 18px 0; text-align: center; }
+    .toast { position: fixed; right: 18px; bottom: 18px; background: #202124; color: #fff; border-radius: 8px; padding: 10px 14px; display: none; max-width: 360px; z-index: 10; }
+    .toast.show { display: block; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; grid-template-rows: minmax(420px, 48vh) 1fr; height: auto; overflow: visible; }
+      .left { border-right: none; border-bottom: 1px solid #dde1e6; min-height: 420px; }
+      .content { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Web Search Debug Panel</h1>
+  <span class="badge">DEV ONLY</span>
+</header>
+
+<div id="tokenBar" class="token-bar" style="display:none">
+  <label>Admin token</label>
+  <input id="inputAdmin" type="text" placeholder="dev-admin-token">
+  <button class="btn btn-primary btn-sm" onclick="saveToken()">保存</button>
+</div>
+
+<div class="layout">
+  <aside class="left">
+    <div class="section stack">
+      <div>
+        <label>账号</label>
+        <div class="row">
+          <select id="accountSelect" onchange="onAccountChange()">
+            <option value="">选择账号</option>
+          </select>
+          <button class="btn btn-sm" onclick="loadAccounts()">刷新</button>
+        </div>
+      </div>
+      <div>
+        <label>聊天搜索 Provider</label>
+        <select id="chatProviderInput">
+          <option value="">默认顺序</option>
+          <option value="aliyun">aliyun</option>
+          <option value="baidu">baidu</option>
+          <option value="bing">bing</option>
+          <option value="duckduckgo">duckduckgo</option>
+        </select>
+      </div>
+    </div>
+    <div class="chat-body" id="chatBody">
+      <div class="chat-empty">请选择账号</div>
+    </div>
+    <div class="chat-input">
+      <textarea id="chatInput" rows="2" placeholder="输入搜索问题" onkeydown="handleChatKey(event)"></textarea>
+      <button id="sendBtn" class="btn btn-primary btn-sm" onclick="sendChat()">发送</button>
+    </div>
+  </aside>
+
+  <main class="right">
+    <div class="main-header">
+      <div>
+        <h2 id="title">Web Search Trace</h2>
+        <div class="sub" id="subtitle">请选择账号</div>
+      </div>
+      <button class="btn btn-sm" onclick="refreshDebug()">刷新</button>
+    </div>
+    <div class="content">
+      <section class="panel">
+        <h3>Capability</h3>
+        <div class="panel-body">
+          <div id="capability"></div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>Search Results</h3>
+        <div class="panel-body" id="resultList">
+          <div class="empty">暂无搜索结果</div>
+        </div>
+      </section>
+
+	      <section class="panel">
+	        <h3>Manual Trace</h3>
+	        <div class="panel-body stack">
+          <div>
+            <label>Query</label>
+            <textarea id="queryInput" rows="3" placeholder="输入 query"></textarea>
+          </div>
+	          <div class="row">
+	            <div>
+	              <label>Provider</label>
+	              <select id="providerInput">
+	                <option value="">默认顺序</option>
+	                <option value="aliyun">aliyun</option>
+	                <option value="baidu">baidu</option>
+	                <option value="bing">bing</option>
+	                <option value="duckduckgo">duckduckgo</option>
+	              </select>
+	            </div>
+            <div>
+              <label>Status</label>
+              <select id="statusInput">
+                <option value="succeeded">succeeded</option>
+                <option value="failed">failed</option>
+                <option value="queued">queued</option>
+                <option value="running">running</option>
+              </select>
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Count</label>
+              <input id="countInput" type="number" min="1" max="10" value="3">
+            </div>
+            <div>
+              <label>Latency ms</label>
+              <input id="latencyInput" type="number" min="0" placeholder="可选">
+            </div>
+          </div>
+          <div>
+            <label>Error</label>
+            <input id="errorInput" type="text" placeholder="失败状态可填">
+          </div>
+          <div class="row">
+            <button class="btn btn-primary" onclick="runProviderSearch()">真实执行搜索</button>
+            <button class="btn" onclick="simulateSearch()">写入模拟 trace</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3>Tool Schema</h3>
+        <div class="panel-body">
+          <pre id="schemaBox">请选择账号</pre>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <h3>Tool Invocations</h3>
+        <div class="panel-body" id="invocationList">
+          <div class="empty">暂无数据</div>
+        </div>
+      </section>
+
+      <section class="panel wide">
+        <h3>Provider Runs</h3>
+        <div class="panel-body" id="providerList">
+          <div class="empty">暂无数据</div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const ADMIN_TOKEN = localStorage.getItem('wsd_admin_token') || '';
+let currentAccountId = null;
+let isSending = false;
+
+if (!ADMIN_TOKEN) {
+  document.getElementById('tokenBar').style.display = 'flex';
+}
+
+function saveToken() {
+  const token = document.getElementById('inputAdmin').value.trim();
+  if (!token) return showToast('请填写 admin token');
+  localStorage.setItem('wsd_admin_token', token);
+  location.reload();
+}
+
+async function api(method, path, body) {
+  const res = await fetch(path, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${ADMIN_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({detail: res.statusText}));
+    throw new Error(err.detail || res.statusText);
+  }
+  return res.json();
+}
+
+async function loadAccounts() {
+  try {
+    const data = await api('GET', '/admin/accounts');
+    const accounts = data.accounts || [];
+    const select = document.getElementById('accountSelect');
+    const prev = select.value;
+    select.innerHTML = '<option value="">选择账号</option>' + accounts.map((a) => {
+      const label = a.display_name || a.id;
+      const selected = a.id === prev ? ' selected' : '';
+      return `<option value="${esc(a.id)}"${selected}>${esc(label)}</option>`;
+    }).join('');
+  } catch (err) {
+    showToast(`加载账号失败: ${err.message}`);
+  }
+}
+
+function onAccountChange() {
+  currentAccountId = document.getElementById('accountSelect').value || null;
+  document.getElementById('subtitle').textContent = currentAccountId || '请选择账号';
+  if (!currentAccountId) {
+    renderConversation([]);
+    return;
+  }
+  refreshDebug();
+}
+
+async function refreshDebug() {
+  if (!currentAccountId) return;
+  try {
+    const data = await api('GET', `/debug/web-search/${encodeURIComponent(currentAccountId)}`);
+    applyDebugData(data);
+  } catch (err) {
+    showToast(`刷新失败: ${err.message}`);
+  }
+}
+
+function applyDebugData(data) {
+  renderCapability(data.capabilities || {});
+  document.getElementById('schemaBox').textContent = JSON.stringify(data.tool_schema || {}, null, 2);
+  renderConversation((data.conversation || {}).messages || []);
+  renderLatestResults(data.provider_runs || [], data.tool_invocations || []);
+  renderInvocations(data.tool_invocations || []);
+  renderProviderRuns(data.provider_runs || []);
+}
+
+function handleChatKey(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    sendChat();
+  }
+}
+
+async function sendChat() {
+  if (!currentAccountId) return showToast('请先选择账号');
+  if (isSending) return;
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return showToast('请输入消息');
+
+  input.value = '';
+  appendChatMessage('user', text);
+  const typing = appendTyping();
+  isSending = true;
+  document.getElementById('sendBtn').disabled = true;
+
+  try {
+    const provider = document.getElementById('chatProviderInput').value;
+    const data = await api(
+      'POST',
+      `/debug/web-search/${encodeURIComponent(currentAccountId)}/chat`,
+      {text, force_web_search_enabled: true, provider: provider || null}
+    );
+    removeTyping(typing);
+    const turn = data.turn || {};
+    if (turn.no_reply) {
+      appendChatMessage('system', '本轮没有回复');
+    } else {
+      appendChatMessage('assistant', turn.reply || '（无回复）');
+    }
+    await refreshDebug();
+  } catch (err) {
+    removeTyping(typing);
+    appendChatMessage('system', err.message);
+  } finally {
+    isSending = false;
+    document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+async function runProviderSearch() {
+  if (!currentAccountId) return showToast('请先选择账号');
+  const query = document.getElementById('queryInput').value.trim();
+  if (!query) return showToast('请输入 query');
+  const body = {
+    query,
+    provider: document.getElementById('providerInput').value || null,
+    count: Number(document.getElementById('countInput').value || 3),
+  };
+  try {
+    const data = await api('POST', `/debug/web-search/${encodeURIComponent(currentAccountId)}/run`, body);
+    const provider = (data.result || {}).provider || data.provider_override || 'default';
+    showToast(`真实搜索完成: ${provider}`);
+    await refreshDebug();
+  } catch (err) {
+    showToast(`真实搜索失败: ${err.message}`);
+    await refreshDebug();
+  }
+}
+
+async function simulateSearch() {
+  if (!currentAccountId) return showToast('请先选择账号');
+  const query = document.getElementById('queryInput').value.trim();
+  if (!query) return showToast('请输入 query');
+  const body = {
+    query,
+    provider: document.getElementById('providerInput').value || null,
+    status: document.getElementById('statusInput').value,
+    count: Number(document.getElementById('countInput').value || 3),
+  };
+  const latency = document.getElementById('latencyInput').value.trim();
+  const error = document.getElementById('errorInput').value.trim();
+  if (latency) body.latency_ms = Number(latency);
+  if (error) body.error = error;
+  try {
+    await api('POST', `/debug/web-search/${encodeURIComponent(currentAccountId)}/simulate`, body);
+    showToast('已写入模拟 trace');
+    await refreshDebug();
+  } catch (err) {
+    showToast(`写入失败: ${err.message}`);
+  }
+}
+
+function renderConversation(messages) {
+  const body = document.getElementById('chatBody');
+  if (!messages.length) {
+    body.innerHTML = '<div class="chat-empty">暂无聊天</div>';
+    return;
+  }
+  body.innerHTML = messages.map((message) => {
+    const role = message.role === 'assistant' ? 'assistant' : (message.role === 'user' ? 'user' : 'system');
+    return `<div class="msg ${role}"><div class="bubble">${esc(message.content || '')}</div></div>`;
+  }).join('');
+  body.scrollTop = body.scrollHeight;
+}
+
+function appendChatMessage(role, text) {
+  const body = document.getElementById('chatBody');
+  const empty = body.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `<div class="bubble">${esc(text)}</div>`;
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+}
+
+function appendTyping() {
+  const body = document.getElementById('chatBody');
+  const empty = body.querySelector('.chat-empty');
+  if (empty) empty.remove();
+  const div = document.createElement('div');
+  div.className = 'typing';
+  div.textContent = '处理中...';
+  body.appendChild(div);
+  body.scrollTop = body.scrollHeight;
+  return div;
+}
+
+function removeTyping(el) {
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function renderCapability(cap) {
+  const entries = [
+    ['tool_schema_defined', cap.tool_schema_defined],
+    ['model_exposure_configured', cap.model_exposure_configured],
+    ['currently_in_turn_tools', cap.currently_in_turn_tools],
+    ['debug_chat_forces_tool_exposure', cap.debug_chat_forces_tool_exposure],
+    ['provider_adapter_ready', cap.provider_adapter_ready],
+    ['default_provider', cap.default_provider],
+    ['provider_order', (cap.provider_order || []).join(', ')],
+    ['provider_failover', cap.provider_failover],
+    ['sync_timeout_seconds', cap.sync_timeout_seconds],
+    ['max_results', cap.max_results],
+  ];
+  document.getElementById('capability').innerHTML =
+    '<div class="metric-grid">' + entries.map(([k, v]) =>
+      `<div class="metric"><span>${esc(k)}</span><strong>${esc(v)}</strong></div>`
+    ).join('') + '</div>';
+}
+
+function renderLatestResults(providerRuns, invocations) {
+  const providerResult = (providerRuns || [])
+    .map((run) => run.response || {})
+    .find((response) => Array.isArray(response.results) && response.results.length);
+  const invocationResult = (invocations || [])
+    .map((item) => item.result || {})
+    .find((result) => Array.isArray(result.results) && result.results.length);
+  const response = providerResult || invocationResult || {};
+  const results = response.results || [];
+  const el = document.getElementById('resultList');
+  if (!results.length) {
+    el.innerHTML = '<div class="empty">暂无搜索结果</div>';
+    return;
+  }
+  el.innerHTML = results.map((item) => `
+    <div class="result-card">
+      <a href="${escAttr(item.url || '#')}" target="_blank" rel="noreferrer">${esc(item.title || item.url || 'Untitled')}</a>
+      <div class="url">${esc(item.url || '')}</div>
+      <div class="snippet">${esc(item.snippet || '')}</div>
+    </div>
+  `).join('');
+}
+
+function renderInvocations(items) {
+  const el = document.getElementById('invocationList');
+  if (!items.length) {
+    el.innerHTML = '<div class="empty">暂无 tool invocation</div>';
+    return;
+  }
+  el.innerHTML = items.map((item) => `
+    <div class="item">
+      <div class="item-head">
+        <div>
+          <div class="mono">#${esc(item.id)} ${esc(item.tool_call_id || '')}</div>
+          <div class="muted">${esc(item.created_at || '')}</div>
+        </div>
+        <span class="status status-${esc(item.status)}">${esc(item.status)}</span>
+      </div>
+      <pre>${esc(JSON.stringify({args: item.args, result: item.result, error: item.error}, null, 2))}</pre>
+    </div>
+  `).join('');
+}
+
+function renderProviderRuns(items) {
+  const el = document.getElementById('providerList');
+  if (!items.length) {
+    el.innerHTML = '<div class="empty">暂无 provider run</div>';
+    return;
+  }
+  el.innerHTML = items.map((item) => `
+    <div class="item">
+      <div class="item-head">
+        <div>
+          <div class="mono">#${esc(item.id)} ${esc(item.provider)} attempt ${esc(item.attempt)}</div>
+          <div class="muted">tool_invocation_id: ${esc(item.tool_invocation_id || '-')}</div>
+        </div>
+        <span class="status status-${esc(item.status)}">${esc(item.status)}</span>
+      </div>
+      <pre>${esc(JSON.stringify({request: item.request, response: item.response, latency_ms: item.latency_ms, error: item.error}, null, 2))}</pre>
+    </div>
+  `).join('');
+}
+
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function escAttr(value) {
+  return esc(value).replace(/'/g, '&#39;');
+}
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  toast.textContent = message;
+  toast.className = 'toast show';
+  setTimeout(() => { toast.className = 'toast'; }, 3000);
+}
+
+loadAccounts();
+</script>
+</body>
+</html>

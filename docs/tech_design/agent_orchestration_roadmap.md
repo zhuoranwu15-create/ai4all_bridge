@@ -1,6 +1,6 @@
 # Agent 编排、工具与异步任务设计
 
-更新时间：2026-05-24
+更新时间：2026-05-31
 
 ## 1. 文档定位
 
@@ -22,7 +22,7 @@ Phase 1 编排目标：
 
 - 让微信私聊普通 turn 足够短、稳定、可观测。
 - 将陪伴式聊天作为默认路径，将提醒、搜索、ASR、长内容整理等能力清晰分流。
-- 对 Web Search 等高耗时任务先快速回复，再后台执行并补发完整结果。
+- Web Search 对齐 OpenClaw 风格的 LLM tool use：普通搜索同步执行，长耗时搜索或复杂整理才快速确认并异步补发。
 - 将 OpenClaw 的 prompt/context 分层、Dreaming、tool schema、heartbeat、trace 思想转化为 AI4ALL 一对多服务架构。
 - 每个用户以 `ai4all_account_id` 为业务隔离主键，不把 OpenClaw 原生 workspace 或 channel account 当作业务状态中心。
 - 为内测阶段的成本、权益扣减、Admin 排障和客服支持预留 trace 与审计。
@@ -51,7 +51,7 @@ Phase 1 编排目标：
 仍需补齐：
 
 - 统一 Message Orchestrator 边界，进一步减少 HTTP route、DB、LLM、工具判断混杂。
-- 统一 `tasks` / `task_runs`，支撑 Web Search、ASR、长内容整理和失败补发。
+- 统一 `tasks` / `task_runs`，支撑 Web Search 异步兜底、ASR、长内容整理和失败补发。
 - Search Provider、ASR Provider、内容源 Provider 的 provider adapter 和成本记录。
 - tool registry / task registry，区分“模型可见能力说明”和“后端真实可执行工具”。
 - token usage、provider request id、成本、权益扣减和 trace 的统一记录。
@@ -91,7 +91,7 @@ Inbound WeChat Message
 -> intent gate
    -> explicit reminder: rule-based create reminder + confirmation
    -> long task: quick acknowledgement + create task
-   -> normal chat: context assembly + LLM reply
+   -> normal chat: context assembly + enabled tool schema + LLM tool use/reply
 -> persist reply / usage / trace
 -> Bridge synthetic reply -> WeChat
 -> after-turn: daily notes / hidden commitment extraction / metrics
@@ -99,14 +99,14 @@ Inbound WeChat Message
 
 核心原则：
 
-- 同步路径只做低延迟工作。
+- 同步路径只做低延迟工作；普通 Web Search 属于低延迟工具调用，长耗时搜索不在当前 turn 硬等。
 - 高耗时任务进入异步任务，并通过 Gateway send 补发结果。
 - after-turn 动作失败不影响用户已收到的回复。
 - 所有步骤必须带 `ai4all_account_id`。
 
 ## 6. Intent Gate
 
-Intent Gate 位于限流和去重之后、LLM 主回复之前。
+Intent Gate 位于限流和去重之后、LLM 主回复之前。它负责 pending state、提醒、显式后台任务等会直接改变后端状态的场景；搜索的主触发机制是 LLM 看到 `web_search` tool schema 后自然调用工具。
 
 ### 6.1 显式提醒
 
@@ -128,7 +128,7 @@ Intent Gate 位于限流和去重之后、LLM 主回复之前。
 
 典型任务：
 
-- Web Search。
+- 长耗时 Web Search 或深度资料整理。
 - 复杂资料整理。
 - 长内容生成。
 - 长语音 ASR。
@@ -151,7 +151,7 @@ Intent Gate 位于限流和去重之后、LLM 主回复之前。
 
 - 读取最近消息。
 - 读取账号 Context Files。
-- 读取 daily notes / MEMORY。
+- 读取 `MEMORY.md`；P0 不读取 daily notes 注入 prompt。
 - 构建 prompt。
 - 调 LLM。
 - 保存回复、usage、trace。
@@ -197,7 +197,7 @@ AI4ALL 需要区分三层：
 
 - `TOOLS.md` 不能让模型声称可以调用未接入工具。
 - tool schema 只在后端确实可执行、权限和失败体验明确时注入。
-- 高耗时工具默认转成 async task，不在同步 turn 内等待。
+- 普通低延迟工具可以在同步 turn 内执行；长耗时工具调用、深度整理或 provider 超时才转成 async task。
 - 每个工具必须有权限边界、成本计量、失败结果和 trace。
 - 用户可见结果必须来自后端执行结果，不能由模型编造“我已经搜索到了”。
 
@@ -208,7 +208,7 @@ Phase 1 首批能力建议：
 | LLM 回复 | 同步主链路 | 已有 |
 | 当前日期时间 | 同步 runtime 注入或简单工具 | 待整理 |
 | 明确一次性提醒 | 规则链路，非 LLM tool | 已有基础 |
-| Web Search | 异步 task + provider + 补发 | 待实现 |
+| Web Search | LLM tool use，同步默认；长耗时场景转 async task + provider + 补发 | 待实现 |
 | ASR | 短语音可同步，长语音走 task | 待实现 |
 | 内容推送生成 | 后台候选 + proactive policy | 待实现 |
 | memory search/get | 后续工具，Phase 1 可先不开放给模型 | 待定 |
@@ -338,7 +338,7 @@ OpenClaw shadow trace 只用于测试账号：
 
 ### P1：工具、任务和记忆产品化
 
-- Web Search async task：先确认、后台执行、补发结果。
+- Web Search tool use：普通搜索同步返回；长耗时搜索或复杂整理先确认、后台执行、补发结果。
 - ASR 入站闭环：语音转写后进入文本链路。
 - Dreaming candidate diff + review。
 - 用户显式纠错后的 memory/context update candidate。
@@ -375,14 +375,15 @@ OpenClaw shadow trace 只用于测试账号：
 - 2026-05-17：Safety 区块全局固定，运营覆盖分离。安全边界不能由单账号覆盖绕过。
 - 2026-05-18：账号级 `HEARTBEAT.md` 从 Context Files 移出。用户主动触达和提醒单独建模。
 - 2026-05-24：Phase 1 目标调整为正式内测版本，P0/P1/P1.5 纳入同一 Phase；支付购买可选，不阻塞内测。
-- 2026-05-24：Web Search 等高耗时任务必须先快速确认，再异步补发完整结果。
+- 2026-05-24：长耗时任务必须先快速确认，再异步补发完整结果。
 - 2026-05-24：记忆机制必须学习 OpenClaw Dreaming，但写入要账号隔离、可追溯、可回滚。
+- 2026-05-31：Web Search 与 OpenClaw 对齐为 LLM tool use；普通搜索同步完成，异步任务只作为超时、深度整理、用户明确后台整理等场景的兜底；不采用纯字符串匹配作为主触发机制。
 
 ## 16. 验收标准
 
 - 普通文本 turn 可以完成身份解析、去重、限流、context assembly、LLM 回复和 trace。
 - 明确提醒请求不会进入长工具链，能创建 one-shot reminder 并回复确认。
-- Web Search 触发后，用户先收到确认回复；任务完成后收到完整结果，失败时收到失败说明。
+- Web Search 由模型通过 tool use 自然触发，普通搜索在当前 turn 同步返回带来源边界的回答；长耗时搜索进入异步兜底后，用户先收到确认回复，任务完成后收到完整结果，失败时收到失败说明。
 - 同一任务不会重复补发，补发写入 outbound ledger。
 - Prompt trace 能展示 Project Context、daily notes、runtime、override 和模型输入。
 - 记忆写入、hidden commitment 和 heartbeat 不阻塞同步聊天回复。
@@ -392,8 +393,9 @@ OpenClaw shadow trace 只用于测试账号：
 
 - Search Provider、搜索引用格式和失败话术。
 - ASR Provider、语音最大时长和媒体保留策略。
+- 普通 Web Search 的同步时间预算。
 - 哪些任务允许同步执行，哪些必须异步。
-- tool schema 是否采用 OpenAI-compatible tool calling，还是先用后端 intent gate。
+- tool schema 是否完全采用 OpenAI-compatible tool calling，以及多轮 tool call 的最小实现范围。
 - `tasks` / `task_runs` 的最小落地版本是否先用 SQLite 兼容模型。
 - memory search 是否进入 Phase 1。
 - Dreaming 自动调度频率和审批边界。

@@ -1,6 +1,6 @@
 # 贝壳、增长与可选支付技术设计
 
-更新时间：2026-05-28
+更新时间：2026-05-31
 
 本文承接 [贝壳、增长与可选支付 PRD](../product/entitlement_growth_prd.md)，定义 Phase 1 内测所需的贝壳 wallet/ledger、用量计量、邀请奖励、客服补发和可选支付技术设计。
 
@@ -14,7 +14,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 邀请新用户注册绑定并发送 3 条有意义消息后，给邀请人暂定发放 1000 个贝壳。
 - 聊天按输入 token + 输出 token 计量，默认 `1000 deepseek v4-flash token = 1 贝壳`。
 - 其他模型按相对 `deepseek v4-flash` 的价格倍率折算。
-- 搜索、ASR 等任务先记录成本事件，再映射到贝壳扣减。
+- 搜索、ASR 等工具调用或任务先记录成本事件，再映射到贝壳扣减。
 - 主动触达首条消息不扣用户贝壳，但要记录平台成本事件；用户回复后的后续链路正常扣减。
 - 支付和用户购买是可选线，不阻塞内测发布。
 
@@ -24,7 +24,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 
 - wallet / ledger 数据模型。
 - 注册赠送、运营发放、补偿发放、邀请奖励。
-- LLM token、ASR、Search、outbound platform cost 的成本事件。
+- LLM token、ASR、Search tool/provider、outbound platform cost 的成本事件。
 - 成本事件到贝壳扣减流水的映射。
 - 邀请码、邀请关系、3 条有意义消息验收。
 - 客服/运营补发和误扣排查。
@@ -181,7 +181,7 @@ cost_events
 - id
 - ai4all_account_id
 - wallet_id
-- source_type: message | task | outbound | admin_operation
+- source_type: message | tool_call | task | outbound | admin_operation
 - source_id
 - cost_type: llm_tokens | asr | search_provider | provider_call | outbound_delivery
 - cost_owner: user | platform
@@ -202,7 +202,7 @@ cost_events
 
 说明：
 
-- 用户聊天、用户触发搜索、用户语音 ASR 默认 `cost_owner=user`。
+- 用户聊天、用户触发搜索工具调用或搜索任务、用户语音 ASR 默认 `cost_owner=user`。
 - 主动触达首条消息默认 `cost_owner=platform`、`billable_to_user=false`。
 - 异步任务结果补发本身不额外作为主动触达扣费；任务执行过程产生的 cost event 仍可按任务规则扣用户贝壳。
 - `computed_shell_micros` 是技术计算值，是否实际扣减由 `billable_to_user` 和扣减策略决定。
@@ -413,21 +413,21 @@ Phase 1 推荐先采用简单策略：
 
 ### 7.3 搜索扣减
 
-搜索默认异步，成本来自多段事件：
+搜索默认采用同步 `web_search` tool use，长耗时搜索或复杂整理才转为异步任务。成本来自多段事件：
 
 ```text
-intent / query rewrite cost
+tool decision / query rewrite cost
 -> search provider cost
 -> result summarize cost
 -> final answer cost
--> task delivery cost
+-> optional async task delivery cost
 ```
 
 技术要求：
 
 - 每段写 `cost_events`。
 - provider 失败、回退和重试都要单独记录。
-- 任务成功后按策略汇总为一个或多个 `usage_charge` ledger。
+- 同步工具调用成功后按策略汇总为一个或多个 `usage_charge` ledger；异步兜底任务成功后按任务策略汇总。
 - 搜索失败是否扣费由后续产品细则确认；技术上必须区分“未实际消耗 provider/LLM”和“已消耗但结果失败”。
 
 ### 7.4 ASR 扣减
@@ -576,7 +576,7 @@ Admin 权限：
 ## 9. 与其他技术文档的关系
 
 - 对话主链路负责产出 LLM usage 和 message/debug trace。
-- 搜索技术设计负责产出 task、task_runs 和搜索 cost events。
+- 搜索技术设计负责产出 tool invocation trace、provider runs、异步兜底 task/task_runs 和搜索 cost events。
 - 语音技术设计负责产出 ASR cost events。
 - 主动消息技术设计负责区分用户提醒、陪伴跟进、内容推送和异步结果补发，并标记首条主动触达的平台成本。
 - 隐私与后台访问控制负责后台查看正文、debug trace 和操作日志的权限边界。

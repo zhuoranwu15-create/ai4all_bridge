@@ -1,6 +1,6 @@
 # AI4ALL 微信个人 AI 陪伴服务 Phase 1 技术设计总平面
 
-更新时间：2026-05-28
+更新时间：2026-05-31
 
 ## 1. 文档定位
 
@@ -36,8 +36,8 @@ Phase 1 不是技术 POC，而是可正式发布给内测用户的微信个人 A
 
 - 接入闭环：手机号 OTP、扫码绑定、微信私聊、解绑和异常恢复可运营。
 - 账号隔离：所有 Soul、上下文、记忆、消息、任务、权益和配置都绑定 `ai4all_account_id`。
-- 对话优先：普通聊天是最短同步路径，提醒、搜索、语音、长内容整理进入明确分流。
-- 异步可靠：Web Search、ASR、主动触达和结果补发都有任务状态、幂等、重试和 outbound ledger。
+- 对话优先：普通聊天是最短同步路径；提醒、`web_search` 工具、语音和长内容整理各自进入清晰编排边界。
+- 异步可靠：长耗时 Web Search 兜底、ASR、主动触达和结果补发都有任务状态、幂等、重试和 outbound ledger。
 - 隐私先行：Admin/Debug 默认脱敏，明文查看是例外能力并必须有权限和日志。
 - 成本可追踪：LLM、ASR、Search、主动触达首条平台成本和用户扣减都有 cost event。
 - 可演进部署：当前可用 SQLite、本地文件和单 worker，目标可迁移到 PostgreSQL、Redis、独立 worker 和对象/共享文件存储。
@@ -73,9 +73,9 @@ Storage & Infrastructure
 | --- | --- | --- | --- |
 | Channel & Bridge | 微信登录、入站消息、Bridge hook、同步回复、Gateway send、raw payload 保存 | OpenClaw 只持有通道运行态；业务状态不在 OpenClaw | [OpenClaw Bridge](tech_design/openclaw_bridge_design.md)、[QR 补丁](tech_design/openclaw_weixin_gateway_qr_patch.md) |
 | Identity & Account | `platform_user`、默认 `ai4all_account`、owner binding、binding intent、channel binding、入站身份解析 | AI4ALL Backend DB | [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md) |
-| Conversation Orchestrator | `/openclaw/turn`、去重、限流、Intent Gate、prompt/context assembly、LLM 回复、after-turn | AI4ALL Backend DB + Context Files | [Conversation Orchestrator](tech_design/conversation_orchestrator_design.md) |
+| Conversation Orchestrator | `/openclaw/turn`、去重、限流、Intent Gate、Tool Use、prompt/context assembly、LLM 回复、after-turn | AI4ALL Backend DB + Context Files | [Conversation Orchestrator](tech_design/conversation_orchestrator_design.md) |
 | Context & Memory | 账号级 Context Files、active session、daily notes、Dreaming、`MEMORY.md`、记忆纠错 | 目标为结构化状态；Markdown 是可读视图和 prompt 输入 | [Agent Context Files](tech_design/agent_context_files.md) |
-| Task, Worker & Provider | `tasks`、`task_runs`、Web Search、ASR、长任务、provider adapter、provider trace | AI4ALL Backend DB；worker 只 claim 和执行 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[语音输入](tech_design/voice_input_design.md) |
+| Task, Worker & Provider | `tasks`、`task_runs`、Web Search provider 与异步兜底、ASR、长任务、provider adapter、provider trace | AI4ALL Backend DB；worker 只 claim 和执行 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[语音输入](tech_design/voice_input_design.md) |
 | Outbound Delivery & Proactive Policy | `outbound_messages`、提醒发送、陪伴跟进、内容推送、异步结果补发、频控、避让、冷却 | AI4ALL Backend DB；Gateway 只发送 | [主动消息与提醒](tech_design/proactive_messaging_design.md) |
 | Entitlement, Growth & Support | 贝壳 wallet/ledger、cost events、注册赠送、邀请奖励、客服补偿、可选支付 | AI4ALL Backend DB；未来可拆 billing/growth/support | [贝壳、增长与可选支付](tech_design/entitlement_growth_design.md) |
 | Privacy, Admin & Observability | Admin/Debug 脱敏、角色、临时明文授权、明文访问日志、trace、告警 | AI4ALL Backend DB + 日志平台 | [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md) |
@@ -98,7 +98,7 @@ Storage & Infrastructure
 
 ### 4.2 拆清“异步任务”和“主动消息”
 
-Web Search、ASR 和长内容整理的结果补发会复用 `outbound_messages` 和 Gateway send，但它们不是产品意义上的无触发主动推送。
+长耗时 Web Search、ASR 和长内容整理的结果补发会复用 `outbound_messages` 和 Gateway send，但它们不是产品意义上的无触发主动推送。
 
 因此总架构采用两个相邻但不同的边界：
 
@@ -119,11 +119,13 @@ identity resolve
    -> explicit reminder
    -> long task
    -> normal chat
+-> prompt/context + enabled tool schema
+-> LLM tool use / reply
 -> persist reply / usage / trace
 -> after-turn actions
 ```
 
-同步路径只做低延迟工作。Web Search、较慢 ASR、复杂资料整理和多步骤 provider 调用都创建 task 并补发结果。落点见 [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md)。
+同步路径只做低延迟工作。普通 Web Search 作为模型可见的 `web_search` 工具同步执行；较慢 ASR、长耗时搜索、复杂资料整理和多步骤 provider 调用创建 task 并补发结果。落点见 [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md)。
 
 ### 4.4 记忆从“直接写长期记忆”调整为“原始材料 + 自动应用链路”
 
@@ -173,7 +175,7 @@ Phase 1 建议继续在当前仓库形成最小闭环，因为用户链路、任
 
 - `channel`：OpenClaw 和未来渠道适配。
 - `identity`：注册、owner binding、channel binding。
-- `orchestrator`：turn 编排、Intent Gate、prompt、after-turn。
+- `orchestrator`：turn 编排、Intent Gate、Tool Use、prompt、after-turn。
 - `worker`：tasks、provider adapter、Dreaming、内容推送。
 - `billing`：wallet、ledger、cost event、可选支付。
 - `growth`：邀请码、邀请关系、奖励规则和反作弊。
@@ -190,7 +192,7 @@ Phase 1 建议继续在当前仓库形成最小闭环，因为用户链路、任
 | 会话与消息 | `sessions`、`messages`、`debug_traces` | AI4ALL Backend | 当前 DB 字段 `account_id` 语义上等同 `ai4all_account_id` |
 | Context Files | `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、`USER.md`、`TOOLS.md`、`MEMORY.md` | AI4ALL Backend | Markdown 是 prompt 输入和可读视图，长期应配合结构化审计状态 |
 | 记忆材料与晋升 | `daily notes`、`dreaming_runs`、`dreaming_memory_items`、`memory_events` | AI4ALL Backend | daily notes 是原始文字材料，长期记忆由 Dreaming 自动应用或跳过，需 source、diff、debug metadata 和回滚 |
-| 异步任务 | `tasks`、`task_runs` | AI4ALL Backend | worker 原子 claim；Search、ASR 和长任务共用底座 |
+| 异步任务 | `tasks`、`task_runs` | AI4ALL Backend | worker 原子 claim；Search 异步兜底、ASR 和长任务共用底座 |
 | 主动与补发 | `outbound_messages`、`reminders`、`proactive_commitments`、`content_push_preferences` | AI4ALL Backend | 所有发送都写 ledger；不同 category 执行不同策略 |
 | 权益与成本 | `entitlement_wallets`、`entitlement_ledger`、`cost_events`、`model_price_rules` | AI4ALL Backend | cost event 记录消耗，ledger 改变余额 |
 | 增长与客服 | `referral_codes`、`referral_relationships`、`support_tickets` | AI4ALL Backend | Phase 1 可先最小闭环，未来可拆 growth/support |
@@ -239,8 +241,8 @@ Web/H5
 -> identity resolver
 -> account policy / dedupe / entitlement precheck
 -> intent gate
--> context + memory + prompt
--> LLM
+-> context + memory + prompt + enabled tool schema
+-> LLM tool use / reply
 -> persist messages / usage / trace
 -> Bridge synthetic reply
 -> after-turn: daily notes / commitment extraction / metrics
@@ -255,8 +257,16 @@ Intent Gate 的 Phase 1 默认策略是高置信规则和状态机优先，不�
 ### 6.3 搜索、语音和长任务
 
 ```text
-用户触发 search / ASR / long task
--> 同步确认
+普通 Web Search
+-> prompt + web_search tool schema
+-> LLM decides tool_call
+-> search provider call / fallback
+-> tool result back to LLM
+-> sync answer with source boundaries
+-> cost event / trace
+
+long search fallback / ASR / long task
+-> quick acknowledgement
 -> create task
 -> worker claim
 -> provider call / fallback / summarize
@@ -265,7 +275,7 @@ Intent Gate 的 Phase 1 默认策略是高置信规则和状态机优先，不�
 -> Gateway send final result
 ```
 
-Search 默认异步。语音输入优先完成 60 秒内微信语音到文本回复闭环；短语音可同步 ASR，较慢或排队时转成 task。结果补发属于用户请求结果投递，不等同无触发主动推送。
+Web Search 默认采用 OpenClaw 风格的同步 LLM tool use，不通过纯字符串 intent gate 作为主触发机制。长耗时搜索、复杂整理、provider 超时或用户明确要求后台整理时才转为异步兜底。语音输入优先完成 60 秒内微信语音到文本回复闭环；短语音可同步 ASR，较慢或排队时转成 task。结果补发属于用户请求结果投递，不等同无触发主动推送。
 
 细节见 [搜索与异步任务技术设计](tech_design/search_async_tasks_design.md) 和 [语音输入技术设计](tech_design/voice_input_design.md)。
 
@@ -349,10 +359,10 @@ Admin / Support / Debug
 | WP0 隐私与后台访问控制 | 内测前避免后台形成错误明文能力 | Admin/Debug 默认脱敏、`admin/staff` 或过渡角色、临时明文授权、明文访问日志 | 无，建议最先做 | [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md) |
 | WP1 注册、扫码与通道绑定硬化 | 普通用户能稳定接入并可运营恢复 | `/web/config`、重复绑定拒绝、正式解绑、Binding Intent 异常状态、OpenClaw Gateway 版本/补丁校验、绑定视图 | WP0 部分红线 | [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md)、[OpenClaw Bridge](tech_design/openclaw_bridge_design.md) |
 | WP2 对话主链路与 Conversation Orchestrator | 聊天体验稳定，后续能力有清晰分流点 | Orchestrator 边界、Intent Gate、首次聊天 onboarding、prompt 优先级、安全围栏、token/provider usage、陪伴质量回归集 | WP1 | [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md)、[陪伴式聊天 PRD](product/companion_chat_prd.md) |
-| WP3 共享任务、发送和成本底座 | 为 Search、ASR、Proactive、Billing 提供共同基础 | `tasks`/`task_runs`、worker claim、`outbound_messages` category、idempotency、`cost_events` 初版 | WP2 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[主动消息与提醒](tech_design/proactive_messaging_design.md)、[贝壳设计](tech_design/entitlement_growth_design.md) |
+| WP3 共享任务、发送和成本底座 | 为 Web Search 兜底、ASR、Proactive、Billing 提供共同基础 | `tasks`/`task_runs`、worker claim、`outbound_messages` category、idempotency、`cost_events` 初版 | WP2 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[主动消息与提醒](tech_design/proactive_messaging_design.md)、[贝壳设计](tech_design/entitlement_growth_design.md) |
 | WP4 记忆与上下文产品化 | 陪伴持续性可用且可审计 | daily notes 改为原始材料、4 点 session 结束、500 轮 LLM 压缩、LLM carryover、Dreaming memory item、自动应用/跳过、diff、debug 调优和 rollback、记忆管理入口 | WP2、WP0 | [Agent Context Files](tech_design/agent_context_files.md)、[Dreaming](tech_design/dreaming_memory_design.md) |
 | WP5 主动消息与提醒闭环 | 用户提醒、陪伴跟进和内容推送低风险可控 | 类型化 policy engine、一次性提醒修正、周期提醒、自然语言取消/更新确认、6 小时避让、内容推送和拒绝冷却、真实微信联调 | WP3 | [主动消息与提醒设计](tech_design/proactive_messaging_design.md) |
-| WP6 搜索与语音输入 | 轻量助理能力进入内测可用 | DuckDuckGo/Tavily/Kimi Search adapter、搜索结果引用、Doubao ASR adapter、语音媒体处理、60 秒限制、失败体验、任务结果补发 | WP3 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[语音输入](tech_design/voice_input_design.md) |
+| WP6 搜索与语音输入 | 轻量助理能力进入内测可用 | `web_search` tool schema、DuckDuckGo/Bing RSS/Aliyun IQS/Baidu AI Search adapter、搜索结果引用、同步工具调用 trace、异步兜底、Doubao ASR adapter、语音媒体处理、60 秒限制、失败体验、任务结果补发 | WP3 | [搜索与异步任务](tech_design/search_async_tasks_design.md)、[语音输入](tech_design/voice_input_design.md) |
 | WP7 贝壳、增长与客服 | 内测权益可信闭环 | wallet/ledger、注册赠送、LLM/ASR/Search 扣减、模型倍率、邀请奖励、客服补偿、可选订单边界 | WP3，部分依赖 WP6 | [贝壳、增长与可选支付](tech_design/entitlement_growth_design.md) |
 | WP8 内测部署与观测 | 从本地验证进入可运行内测环境 | Docker Compose、PostgreSQL 迁移、Redis 限流/锁/队列、独立 worker、结构化日志、trace id、告警、端到端验收 | WP1-WP7 持续接入 | [总体架构](architecture_overview.md)、[下一步开发步骤](next_dev_steps.md) |
 

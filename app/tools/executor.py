@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from app.turn_context import TurnContext
@@ -7,7 +7,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger("ai4all.tools.executor")
 
 
-def execute_tool_call(name: str, args: dict, ctx: "TurnContext") -> dict:
+def execute_tool_call(
+    name: str,
+    args: dict,
+    ctx: "TurnContext",
+    *,
+    tool_call_id: Optional[str] = None,
+    tool_invocation_id: Optional[int] = None,
+) -> dict:
     """Dispatch a tool call to the appropriate handler. Never raises — returns error dict on failure."""
     from app.tools.reminder_handlers import (
         handle_cancel_reminder,
@@ -15,13 +22,29 @@ def execute_tool_call(name: str, args: dict, ctx: "TurnContext") -> dict:
         handle_list_reminders,
         handle_update_reminder,
     )
-
     handlers = {
         "create_reminder": handle_create_reminder,
         "list_reminders": handle_list_reminders,
         "cancel_reminder": handle_cancel_reminder,
         "update_reminder": handle_update_reminder,
     }
+    if name == "web_search":
+        if not bool(getattr(ctx, "web_search_enabled", False)):
+            logger.warning("web_search tool called while disabled account=%s", getattr(ctx, "account_id", None))
+            return {"status": "failed", "error": "web_search is disabled"}
+        from app.tools.web_search_handlers import handle_web_search
+
+        try:
+            return handle_web_search(
+                args,
+                ctx,
+                tool_call_id=tool_call_id,
+                tool_invocation_id=tool_invocation_id,
+            )
+        except Exception as err:
+            logger.exception("tool handler failed tool=%s error=%s", name, err)
+            return {"error": str(err)}
+
     handler = handlers.get(name)
     if handler is None:
         logger.warning("execute_tool_call unknown tool: %s", name)

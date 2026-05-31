@@ -1,7 +1,9 @@
+import re
 from unittest.mock import patch
 
 
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
+ACCOUNT_ID_RE = re.compile(r"^aid_[1-9]\d{8}$")
 
 
 def _get_verified_token(phone: str) -> str:
@@ -93,7 +95,7 @@ def test_web_create_agent_creates_account_profile_owner_and_subscription(client)
 
     assert res.status_code == 200
     data = res.json()
-    assert data["account"]["id"].startswith("acct_")
+    assert ACCOUNT_ID_RE.match(data["account"]["id"])
     assert data["account"]["display_name"] == "Bob Bot"
     assert data["account"]["channel"] == "openclaw-weixin"
     assert data["profile"]["account_id"] == data["account"]["id"]
@@ -163,7 +165,7 @@ def test_register_and_binding_intent_creates_default_account_and_qr(client):
     assert res.status_code == 200
     data = res.json()
     assert data["platform_user"]["phone"] == "13800000009"
-    assert data["account"]["id"].startswith("acct_")
+    assert ACCOUNT_ID_RE.match(data["account"]["id"])
     assert data["account"]["display_name"] is None
     assert data["profile"]["display_name"] is None
     assert data["owner_binding"]["platform_user_id"] == data["platform_user"]["id"]

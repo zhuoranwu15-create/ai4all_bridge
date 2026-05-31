@@ -71,6 +71,7 @@ def test_generate_reply_with_tools_direct_response():
     settings_mock.llm_timeout_seconds = 30
     settings_mock.llm_connect_timeout_seconds = 5
     settings_mock.llm_max_retries = 0
+    settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_force_ipv4 = False
     settings_mock.llm_default_prompt = "你是助手"
 
@@ -99,6 +100,7 @@ def test_generate_reply_with_tools_tool_call():
     settings_mock.llm_timeout_seconds = 30
     settings_mock.llm_connect_timeout_seconds = 5
     settings_mock.llm_max_retries = 0
+    settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_force_ipv4 = False
     settings_mock.llm_default_prompt = "你是助手"
 
@@ -107,16 +109,18 @@ def test_generate_reply_with_tools_tool_call():
     final_text = "好的，我会在6月1日上午10点提醒你开会。"
 
     with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=tool_resp):
-            with patch("app.llm._http_chat", return_value=final_text):
-                with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
-                    reply, err = generate_reply_with_tools(
-                        user_text="明天上午10点提醒我开会",
-                        history=[],
-                        system_prompt="你是助手",
-                        tools=[{"type": "function", "function": {"name": "create_reminder"}}],
-                        ctx=_make_ctx(),
-                    )
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp, _direct_text_response(final_text)],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
+                reply, err = generate_reply_with_tools(
+                    user_text="明天上午10点提醒我开会",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                )
 
     assert err is None
     assert reply == final_text

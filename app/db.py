@@ -20,10 +20,17 @@ SHELL_MICROS_PER_SHELL = 1_000_000
 SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
 NEW_USER_GRANT_SHELLS = 1000
 NEW_USER_GRANT_SHELL_MICROS = NEW_USER_GRANT_SHELLS * SHELL_MICROS_PER_SHELL
+_ACCOUNT_ID_RANDOM_MIN = 100_000_000
+_ACCOUNT_ID_RANDOM_SPACE = 900_000_000
+_ACCOUNT_ID_GENERATION_RETRIES = 20
 
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _new_account_id() -> str:
+    return f"aid_{_ACCOUNT_ID_RANDOM_MIN + uuid.uuid4().int % _ACCOUNT_ID_RANDOM_SPACE}"
 
 
 def _clean_text(value: Optional[str]) -> Optional[str]:
@@ -674,6 +681,57 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_debug_traces_session_created
             ON debug_traces(session_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS tool_invocations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                session_id INTEGER,
+                message_id TEXT,
+                tool_call_id TEXT,
+                tool_name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'running',
+                args_json TEXT NOT NULL DEFAULT '{}',
+                result_json TEXT NOT NULL DEFAULT '{}',
+                latency_ms INTEGER,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                finished_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(session_id) REFERENCES sessions(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_tool_invocations_account_created
+            ON tool_invocations(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_tool_invocations_tool_status
+            ON tool_invocations(tool_name, status, created_at);
+
+            CREATE TABLE IF NOT EXISTS search_provider_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_invocation_id INTEGER,
+                task_id TEXT,
+                account_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                attempt INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'running',
+                request_json TEXT NOT NULL DEFAULT '{}',
+                response_json TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                finished_at TEXT,
+                latency_ms INTEGER,
+                error TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_search_provider_runs_account_created
+            ON search_provider_runs(account_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_search_provider_runs_invocation
+            ON search_provider_runs(tool_invocation_id, id);
+
             CREATE TABLE IF NOT EXISTS admin_users (
                 id TEXT PRIMARY KEY,
                 email TEXT,
@@ -910,6 +968,271 @@ def get_debug_trace(*, trace_id: str) -> Optional[Dict[str, Any]]:
         item["metadata"] = {}
         item["metadata_decode_error"] = True
     return item
+
+
+# ---------------------------------------------------------------------------
+# Tool invocations / search provider runs
+# ---------------------------------------------------------------------------
+
+def _decode_tool_invocation(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    for source_field, target_field, default in (
+        ("args_json", "args", {}),
+        ("result_json", "result", {}),
+    ):
+        raw_json = item.pop(source_field, None)
+        try:
+            value = json.loads(raw_json or json.dumps(default))
+        except json.JSONDecodeError:
+            value = default
+            item[f"{target_field}_decode_error"] = True
+        item[target_field] = value
+    return item
+
+
+def _decode_search_provider_run(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    for source_field, target_field, default in (
+        ("request_json", "request", {}),
+        ("response_json", "response", {}),
+    ):
+        raw_json = item.pop(source_field, None)
+        try:
+            value = json.loads(raw_json or json.dumps(default))
+        except json.JSONDecodeError:
+            value = default
+            item[f"{target_field}_decode_error"] = True
+        item[target_field] = value
+    return item
+
+
+def create_tool_invocation(
+    *,
+    account_id: str,
+    tool_name: str,
+    args: Optional[Dict[str, Any]] = None,
+    session_id: Optional[int] = None,
+    message_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    status: str = "running",
+    result: Optional[Dict[str, Any]] = None,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
+    finished: bool = False,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_tool_name = _clean_text(tool_name)
+    cleaned_status = _clean_text(status) or "running"
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_tool_name:
+        raise ValueError("tool_name is required")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO tool_invocations(
+                account_id, session_id, message_id, tool_call_id, tool_name,
+                status, args_json, result_json, latency_ms, error, finished_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    CURRENT_TIMESTAMP)
+            """,
+            (
+                cleaned_account_id,
+                session_id,
+                _clean_text(message_id),
+                _clean_text(tool_call_id),
+                cleaned_tool_name,
+                cleaned_status,
+                json.dumps(args or {}, ensure_ascii=False),
+                json.dumps(result or {}, ensure_ascii=False),
+                latency_ms,
+                _clean_text(error),
+                1 if finished else 0,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM tool_invocations WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("tool_invocation was not created")
+    return _decode_tool_invocation(row)
+
+
+def get_tool_invocation(*, tool_invocation_id: int) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM tool_invocations WHERE id = ?",
+            (tool_invocation_id,),
+        ).fetchone()
+    return _decode_tool_invocation(row) if row else None
+
+
+def list_tool_invocations(
+    *,
+    account_id: Optional[str] = None,
+    tool_name: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if tool_name:
+        clauses.append("tool_name = ?")
+        params.append(tool_name)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM tool_invocations
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_tool_invocation(row) for row in rows]
+
+
+def update_tool_invocation(
+    *,
+    tool_invocation_id: int,
+    status: Optional[str] = None,
+    result: Optional[Dict[str, Any]] = None,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
+    finished: bool = False,
+) -> Optional[Dict[str, Any]]:
+    current = get_tool_invocation(tool_invocation_id=tool_invocation_id)
+    if current is None:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE tool_invocations
+            SET status = COALESCE(?, status),
+                result_json = COALESCE(?, result_json),
+                latency_ms = COALESCE(?, latency_ms),
+                error = ?,
+                finished_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE finished_at END,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                _clean_text(status),
+                json.dumps(result, ensure_ascii=False) if result is not None else None,
+                latency_ms,
+                _clean_text(error),
+                1 if finished else 0,
+                tool_invocation_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM tool_invocations WHERE id = ?",
+            (tool_invocation_id,),
+        ).fetchone()
+    return _decode_tool_invocation(row) if row else None
+
+
+def create_search_provider_run(
+    *,
+    account_id: str,
+    provider: str,
+    request: Optional[Dict[str, Any]] = None,
+    tool_invocation_id: Optional[int] = None,
+    task_id: Optional[str] = None,
+    attempt: int = 1,
+    status: str = "running",
+    response: Optional[Dict[str, Any]] = None,
+    latency_ms: Optional[int] = None,
+    error: Optional[str] = None,
+    finished: bool = False,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_provider = _clean_text(provider)
+    cleaned_status = _clean_text(status) or "running"
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_provider:
+        raise ValueError("provider is required")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO search_provider_runs(
+                tool_invocation_id, task_id, account_id, provider, attempt,
+                status, request_json, response_json, finished_at, latency_ms,
+                error, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?,
+                    CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
+                    ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                tool_invocation_id,
+                _clean_text(task_id),
+                cleaned_account_id,
+                cleaned_provider,
+                max(1, int(attempt or 1)),
+                cleaned_status,
+                json.dumps(request or {}, ensure_ascii=False),
+                json.dumps(response or {}, ensure_ascii=False),
+                1 if finished else 0,
+                latency_ms,
+                _clean_text(error),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM search_provider_runs WHERE id = ?",
+            (int(cursor.lastrowid),),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("search_provider_run was not created")
+    return _decode_search_provider_run(row)
+
+
+def list_search_provider_runs(
+    *,
+    account_id: Optional[str] = None,
+    tool_invocation_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = []
+    params: List[Any] = []
+    if account_id:
+        clauses.append("account_id = ?")
+        params.append(account_id)
+    if tool_invocation_id is not None:
+        clauses.append("tool_invocation_id = ?")
+        params.append(tool_invocation_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM search_provider_runs
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_search_provider_run(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -2503,7 +2826,6 @@ def create_ai4all_account_for_user(
     if require_display_name and not cleaned_display_name:
         raise ValueError("display_name is required")
 
-    account_id = _new_id("acct")
     cleaned_prompt = _clean_text(system_prompt)
     with connect() as conn:
         user = conn.execute(
@@ -2521,13 +2843,24 @@ def create_ai4all_account_for_user(
         ).fetchone()[0]
         if existing_count >= 10:
             raise ValueError("platform_user has reached the maximum number of agents (10)")
-        conn.execute(
-            """
-            INSERT INTO accounts(id, channel, display_name, updated_at)
-            VALUES (?, 'openclaw-weixin', ?, CURRENT_TIMESTAMP)
-            """,
-            (account_id, cleaned_display_name),
-        )
+        last_integrity_error = None
+        for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
+            account_id = _new_account_id()
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO accounts(id, channel, display_name, updated_at)
+                    VALUES (?, 'openclaw-weixin', ?, CURRENT_TIMESTAMP)
+                    """,
+                    (account_id, cleaned_display_name),
+                )
+                break
+            except sqlite3.IntegrityError as err:
+                if "accounts.id" not in str(err):
+                    raise
+                last_integrity_error = err
+        else:
+            raise RuntimeError("failed to generate a unique account_id") from last_integrity_error
         conn.execute(
             """
             INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)

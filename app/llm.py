@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -175,6 +175,121 @@ def _http_chat_with_tools(messages: List[Dict], tools: List[Dict]) -> Dict:
     raise RuntimeError("LLM request failed") from last_request_error
 
 
+def _tool_result_status(result: Any) -> str:
+    if not isinstance(result, dict):
+        return "succeeded"
+    status = str(result.get("status") or "").strip().lower()
+    if status in {"queued", "running", "failed"}:
+        return status
+    if result.get("error"):
+        return "failed"
+    return "succeeded"
+
+
+def _record_tool_invocation_start(
+    *,
+    ctx,
+    tool_call_id: Optional[str],
+    tool_name: str,
+    tool_args: Dict[str, Any],
+) -> Optional[int]:
+    try:
+        from app.db import create_tool_invocation
+
+        invocation = create_tool_invocation(
+            account_id=ctx.account_id,
+            session_id=int(ctx.session["id"]) if ctx.session.get("id") is not None else None,
+            message_id=ctx.message_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            args=tool_args,
+            status="running",
+        )
+        return int(invocation["id"])
+    except Exception as err:
+        logger.warning("failed to record tool invocation start tool=%s error=%s", tool_name, err)
+        return None
+
+
+def _record_tool_invocation_finish(
+    *,
+    tool_invocation_id: Optional[int],
+    status: str,
+    result: Dict[str, Any],
+    latency_ms: int,
+    error: Optional[str],
+) -> None:
+    if tool_invocation_id is None:
+        return
+    try:
+        from app.db import update_tool_invocation
+
+        update_tool_invocation(
+            tool_invocation_id=tool_invocation_id,
+            status=status,
+            result=result,
+            latency_ms=latency_ms,
+            error=error,
+            finished=status in {"queued", "succeeded", "failed"},
+        )
+    except Exception as err:
+        logger.warning(
+            "failed to record tool invocation finish id=%s error=%s",
+            tool_invocation_id,
+            err,
+        )
+
+
+def _execute_and_record_tool_call(tool_call: Dict[str, Any], ctx) -> Dict[str, Any]:
+    function = tool_call.get("function") or {}
+    tool_name = function.get("name") or ""
+    try:
+        tool_args = json.loads(function.get("arguments") or "{}")
+        if not isinstance(tool_args, dict):
+            tool_args = {}
+    except (json.JSONDecodeError, TypeError):
+        tool_args = {}
+    tool_call_id = tool_call.get("id") or "call_0"
+    invocation_id = _record_tool_invocation_start(
+        ctx=ctx,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        tool_args=tool_args,
+    )
+    started = time.monotonic()
+    from app.tools.executor import execute_tool_call
+
+    tool_result = execute_tool_call(
+        tool_name,
+        tool_args,
+        ctx,
+        tool_call_id=tool_call_id,
+        tool_invocation_id=invocation_id,
+    )
+    latency_ms = int((time.monotonic() - started) * 1000)
+    status = _tool_result_status(tool_result)
+    error = str(tool_result.get("error")) if isinstance(tool_result, dict) and tool_result.get("error") else None
+    _record_tool_invocation_finish(
+        tool_invocation_id=invocation_id,
+        status=status,
+        result=tool_result if isinstance(tool_result, dict) else {"result": tool_result},
+        latency_ms=latency_ms,
+        error=error,
+    )
+    return tool_result if isinstance(tool_result, dict) else {"result": tool_result}
+
+
+def _fake_dsml_tool_call(tool_name: str, tool_args: Dict[str, Any], index: int) -> Dict[str, Any]:
+    return {
+        "id": f"call_dsml_{index}",
+        "type": "function",
+        "function": {
+            "name": tool_name,
+            "arguments": json.dumps(tool_args, ensure_ascii=False),
+        },
+    }
+
+
 def generate_reply_with_tools(
     *,
     user_text: str,
@@ -190,73 +305,71 @@ def generate_reply_with_tools(
     prompt = system_prompt or settings.llm_default_prompt
     messages: List[Dict] = [{"role": "system", "content": prompt}]
     messages.extend(history)
+    max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
+    max_tool_rounds = max(1, min(max_tool_rounds, 8))
 
-    try:
-        response = _http_chat_with_tools(messages, tools)
-    except RuntimeError as err:
-        return "", str(err)
-
-    choice = response.get("choices", [{}])[0]
-    finish_reason = choice.get("finish_reason", "")
-    message = choice.get("message", {})
-
-    if finish_reason in ("stop", "end_turn"):
-        content = (message.get("content") or "").strip()
-        if not content:
-            return "", "llm_empty_response"
-
-        # DeepSeek fallback: tool call encoded as DSML text instead of tool_calls field.
-        dsml = _parse_dsml_tool_call(content)
-        if dsml:
-            tool_name, tool_args = dsml
-            logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
-            from app.tools.executor import execute_tool_call
-            tool_result = execute_tool_call(tool_name, tool_args, ctx)
-            tool_result_str = json.dumps(tool_result, ensure_ascii=False)
-            fake_tool_call = {
-                "id": "call_dsml_0",
-                "type": "function",
-                "function": {"name": tool_name, "arguments": json.dumps(tool_args, ensure_ascii=False)},
-            }
-            messages2 = messages + [
-                {"role": "assistant", "tool_calls": [fake_tool_call]},
-                {"role": "tool", "tool_call_id": "call_dsml_0", "content": tool_result_str},
-            ]
-            try:
-                final_text = _http_chat(messages2)
-            except RuntimeError as err:
-                return "", str(err)
-            return final_text, None
-
-        return content, None
-
-    if finish_reason == "tool_calls":
-        tool_calls = message.get("tool_calls") or []
-        if not tool_calls:
-            return "", "tool_calls_missing"
-        tool_call = tool_calls[0]
-        tool_name = tool_call["function"]["name"]
+    for round_index in range(max_tool_rounds + 1):
         try:
-            tool_args = json.loads(tool_call["function"]["arguments"])
-        except (json.JSONDecodeError, KeyError):
-            tool_args = {}
-
-        from app.tools.executor import execute_tool_call
-        tool_result = execute_tool_call(tool_name, tool_args, ctx)
-        tool_result_str = json.dumps(tool_result, ensure_ascii=False)
-
-        messages2 = messages + [
-            {"role": "assistant", "tool_calls": [tool_call]},
-            {
-                "role": "tool",
-                "tool_call_id": tool_call.get("id", "call_0"),
-                "content": tool_result_str,
-            },
-        ]
-        try:
-            final_text = _http_chat(messages2)
+            response = _http_chat_with_tools(messages, tools)
         except RuntimeError as err:
             return "", str(err)
-        return final_text, None
 
-    return "", f"unexpected_finish_reason:{finish_reason}"
+        choice = response.get("choices", [{}])[0]
+        finish_reason = choice.get("finish_reason", "")
+        message = choice.get("message", {})
+
+        if finish_reason in ("stop", "end_turn"):
+            content = (message.get("content") or "").strip()
+            if not content:
+                return "", "llm_empty_response"
+
+            # DeepSeek fallback: tool call encoded as DSML text instead of the standard field.
+            dsml = _parse_dsml_tool_call(content)
+            if dsml:
+                if round_index >= max_tool_rounds:
+                    return "", "tool_round_limit_exceeded"
+                tool_name, tool_args = dsml
+                logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
+                fake_tool_call = _fake_dsml_tool_call(tool_name, tool_args, round_index)
+                tool_result = _execute_and_record_tool_call(fake_tool_call, ctx)
+                messages.extend(
+                    [
+                        {"role": "assistant", "tool_calls": [fake_tool_call]},
+                        {
+                            "role": "tool",
+                            "tool_call_id": fake_tool_call["id"],
+                            "content": json.dumps(tool_result, ensure_ascii=False),
+                        },
+                    ]
+                )
+                continue
+
+            return content, None
+
+        if finish_reason == "tool_calls":
+            if round_index >= max_tool_rounds:
+                return "", "tool_round_limit_exceeded"
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                return "", "tool_calls_missing"
+            assistant_message = {
+                "role": "assistant",
+                "tool_calls": tool_calls,
+            }
+            if message.get("content") is not None:
+                assistant_message["content"] = message.get("content")
+            messages.append(assistant_message)
+            for tool_call in tool_calls:
+                tool_result = _execute_and_record_tool_call(tool_call, ctx)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id", "call_0"),
+                        "content": json.dumps(tool_result, ensure_ascii=False),
+                    }
+                )
+            continue
+
+        return "", f"unexpected_finish_reason:{finish_reason}"
+
+    return "", "tool_round_limit_exceeded"

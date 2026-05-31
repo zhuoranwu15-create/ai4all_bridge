@@ -1,6 +1,6 @@
 # AI4ALL 文档导航
 
-更新时间：2026-05-28
+更新时间：2026-05-31
 
 ## 当前权威文档
 
@@ -25,10 +25,11 @@
 | --- | --- |
 | [产品专题 PRD 导航](product/README.md) | Phase 1 产品专题索引和维护规则 |
 | [注册与扫码接入](product/onboarding_prd.md) | 手机号 OTP、扫码绑定、重复绑定、解绑、找回 |
+| [首次聊天 Onboarding](product/first_chat_onboarding_prd.md) | 绑定后首次微信对话引导、称呼、人设预设和跳过容错 |
 | [陪伴式聊天](product/companion_chat_prd.md) | 微信私聊、陪伴体验、默认 Soul、安全边界 |
 | [记忆与上下文](product/memory_prd.md) | short-term context、daily notes、Dreaming、记忆管理 |
 | [主动消息与提醒](product/proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 |
-| [搜索与异步任务](product/search_and_async_tasks_prd.md) | Web Search、高耗时任务、先确认后补发 |
+| [搜索与异步任务](product/search_and_async_tasks_prd.md) | Web Search 同步工具调用、高耗时任务异步兜底 |
 | [语音输入](product/voice_prd.md) | 微信语音、ASR、转写后文本回复 |
 | [权益、增长与可选支付](product/entitlement_growth_prd.md) | 贝壳、扣减、拉新、可选购买 |
 | [运营与后台](product/admin_ops_prd.md) | Admin、客服支撑、观测、风控、审计 |
@@ -36,7 +37,7 @@
 
 ## 技术设计
 
-技术专题文档承载单一领域的详细设计。若与上面的权威文档冲突，以权威文档为准，并回到专题文档修正。
+技术专题文档承载单一领域的详细设计。`tech_design/` 是当前唯一技术专题入口；不要再新增或引用旧的 `topics/` 目录。若技术专题与上面的权威文档冲突，以权威文档为准，并回到专题文档修正。
 
 | 文档 | 作用 |
 | --- | --- |
@@ -44,13 +45,19 @@
 | [主动消息与提醒设计](tech_design/proactive_messaging_design.md) | outbound ledger、用户提醒、陪伴跟进、内容推送和 scheduler |
 | [Agent Context Files 与记忆机制](tech_design/agent_context_files.md) | AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY、daily notes 和记忆边界 |
 | [Dreaming 记忆压缩与长期记忆](tech_design/dreaming_memory_design.md) | LLM session 压缩、carryover、memory items、自动应用/跳过、debug 调优和回滚 |
-| [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md) | 主对话 turn、Session/Messages、Intent Gate、Prompt、同步回复和异步任务衔接 |
+| [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md) | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和异步任务衔接 |
 | [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md) | Admin/Debug 默认脱敏、角色分级、2 小时临时明文权限和操作日志 |
-| [搜索与异步任务技术设计](tech_design/search_async_tasks_design.md) | Web Search、provider 回退、异步任务、结果补发和成本事件 |
+| [搜索与异步任务技术设计](tech_design/search_async_tasks_design.md) | Web Search 同步工具调用、provider 回退、异步兜底、结果补发和成本事件 |
 | [语音输入技术设计](tech_design/voice_input_design.md) | 微信语音、豆包 ASR、60 秒限制、转写文本和失败体验 |
 | [贝壳、增长与可选支付技术设计](tech_design/entitlement_growth_design.md) | wallet/ledger、成本事件、邀请奖励、客服补发和可选支付 |
 | [OpenClaw Bridge 设计](tech_design/openclaw_bridge_design.md) | Bridge hook、payload、接口和失败策略 |
 | [OpenClaw 微信 QR 补丁](tech_design/openclaw_weixin_gateway_qr_patch.md) | `openclaw-weixin` Gateway QR login provider discovery 补丁说明 |
+
+## 流程设计
+
+| 文档 | 作用 |
+| --- | --- |
+| [解绑流程设计](design/unbind-flow.md) | 用户解绑、保留/清除记忆、OpenClaw 微信登录态清理和重新绑定后的状态口径 |
 
 ## 操作指南
 
@@ -75,7 +82,7 @@
 - 新增长期有效的产品或技术结论，优先更新 PRD、总体架构或 Phase 1 详细技术设计。
 - 需求、技术、代码和验收状态的映射更新到 `phase1_traceability_matrix.md`。
 - 新增单一产品能力的详细需求，放入 `product/`。
-- 新增单一技术领域的深入设计，放入 `tech_design/`。
+- 新增单一技术领域的深入设计，放入 `tech_design/`；`tech_design/` 是唯一技术专题入口，不再新增 `topics/`。
 - 操作步骤、排障、Admin 使用说明，放入 `guides/`。
 - 一次性计划、已完成的执行清单、历史草案，放入 `archive/`。
 - 移动文档时同步更新 README、本文档和所有文档内链接。

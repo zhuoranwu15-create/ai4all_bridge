@@ -21,3 +21,4 @@ class TurnContext:
     onboarding_active: bool
     recent_messages: List[dict] = field(default_factory=list)
     background_loop: Optional[asyncio.AbstractEventLoop] = None
+    web_search_enabled: bool = False

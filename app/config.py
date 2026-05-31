@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 40.0
     llm_connect_timeout_seconds: float = 5.0
     llm_max_retries: int = 1
+    llm_max_tool_rounds: int = 3
     llm_force_ipv4: bool = True
     llm_context_messages: int = 12
     llm_default_prompt: str = (
@@ -57,6 +58,31 @@ class Settings(BaseSettings):
     proactive_commitment_context_messages: int = 8
     proactive_commitment_min_confidence: float = 0.9
     proactive_commitment_max_days: int = 14
+
+    web_search_enabled: bool = False
+    web_search_default_provider: str = "duckduckgo"
+    web_search_provider_order: str = "duckduckgo,bing"
+    web_search_provider_failover: bool = True
+    web_search_sync_timeout_seconds: float = 8.0
+    web_search_max_results: int = 5
+    web_search_trace_raw_response: bool = False
+
+    dashscope_api_key: str = ""
+    aliyun_web_search_api_key: str = ""
+    aliyun_web_search_enabled: bool = False
+    aliyun_web_search_base_url: str = "https://cloud-iqs.aliyuncs.com/search/unified"
+    aliyun_web_search_engine_type: str = "LiteAdvanced"
+    aliyun_web_search_model: str = "qwen-plus"
+    aliyun_web_search_forced: bool = True
+    aliyun_web_search_enable_source: bool = True
+    aliyun_web_search_strategy: str = ""
+
+    baidu_ai_search_enabled: bool = False
+    baidu_ai_search_api_key: str = ""
+    baidu_ai_search_base_url: str = "https://qianfan.baidubce.com"
+    baidu_ai_search_endpoint: str = "/v2/ai_search/web_search"
+    baidu_ai_search_source: str = "baidu_search_v2"
+    baidu_ai_search_top_k: int = 5
 
     # Aliyun SMS
     aliyun_access_key_id: str = ""

@@ -22,3 +22,4 @@ def test_turn_context_fields():
     assert ctx.account_id == "acc-1"
     assert ctx.binding["chat_id"] == "chat-1"
     assert ctx.recent_messages == []
+    assert ctx.web_search_enabled is False

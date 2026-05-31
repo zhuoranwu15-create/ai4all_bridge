@@ -15,7 +15,7 @@
 
 ### 页面和 API 约定
 
-- Debug 页面统一放在 `/ui/*_debug.html`，例如 `/ui/onboarding_debug.html`、`/ui/reminder_debug.html`。
+- Debug 页面统一放在 `/ui/*_debug.html`，例如 `/ui/onboarding_debug.html`、`/ui/reminder_debug.html`、`/ui/web_search_debug.html`。
 - Debug API 统一放在 `/debug/*`，全部需要 Admin 鉴权，不能暴露到公网。
 - Debug 页面可以提供 reset、跳状态、模拟消息、编辑测试数据等强操作，但页面要标明 DEV ONLY。
 - 新增 Debug 能力时，优先补充本文件，不单独新增 PRD。
@@ -40,6 +40,7 @@ ADMIN_STAFF_TOKEN=
 | --- | --- | --- |
 | Onboarding Debug | 测试 onboarding 状态、reset、跳步骤、prompt preview | `/ui/onboarding_debug.html` |
 | Reminder Debug | 通过模拟聊天创建提醒，查看/编辑/取消测试提醒 | `/ui/reminder_debug.html` |
+| Web Search Debug | 查看 `web_search` schema、模拟 tool invocation 和 provider run trace | `/ui/web_search_debug.html` |
 | Swagger UI | 直接调用 Admin/Debug API | `/docs` |
 
 ### 开发期明文策略

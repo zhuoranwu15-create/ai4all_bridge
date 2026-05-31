@@ -89,6 +89,7 @@ def test_prompt_context_pending_includes_step1_guidance():
     assert "Onboarding" in ctx
     assert "pending" in ctx
     assert "称呼你" in ctx
+    assert "不要说自己没有这些能力" in ctx
 
 
 def test_prompt_context_step2_includes_user_name():

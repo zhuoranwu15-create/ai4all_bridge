@@ -1,10 +1,10 @@
 # Conversation Orchestrator 主对话场景技术设计
 
-更新时间：2026-05-28
+更新时间：2026-05-31
 
 ## 1. 文档定位
 
-本文是 AI4ALL Phase 1 主对话场景的主技术设计，定义一条微信私聊入站消息如何被 Conversation Orchestrator 处理：身份解析、active session、messages、Intent Gate、Prompt/Context、LLM 回复、同步返回、after-turn 动作，以及与异步任务和主动消息的接口。
+本文是 AI4ALL Phase 1 主对话场景的主技术设计，定义一条微信私聊入站消息如何被 Conversation Orchestrator 处理：身份解析、active session、messages、Intent Gate、Prompt/Context、Tool Use、LLM 回复、同步返回、after-turn 动作，以及与异步任务和主动消息的接口。
 
 本文不作为临时 roadmap，而是主场景实现口径。它学习 OpenClaw 的 agent loop、prompt block、tool schema、Dreaming、heartbeat 和 trace 思路，但落地边界以 AI4ALL 一对多后端服务为准。
 
@@ -18,7 +18,7 @@
 
 Context Files、active session 生命周期、daily notes、Dreaming 和 Memory 细节见 [Agent Context Files 与记忆机制设计](agent_context_files.md)。主动消息、reminder、commitment、heartbeat、outbound policy 和 outbound 写入 `messages` 的细节见 [主动消息与提醒设计](proactive_messaging_design.md)。
 
-Web Search 的 provider、异步任务、结果补发和成本事件细节见 [搜索与异步任务技术设计](search_async_tasks_design.md)。微信语音、豆包 ASR、60 秒限制和转写链路细节见 [语音输入技术设计](voice_input_design.md)。贝壳 wallet/ledger、成本事件映射、邀请奖励和可选支付见 [贝壳、增长与可选支付技术设计](entitlement_growth_design.md)。
+Web Search 的 tool schema、provider、同步/异步边界、结果补发和成本事件细节见 [搜索与异步任务技术设计](search_async_tasks_design.md)。微信语音、豆包 ASR、60 秒限制和转写链路细节见 [语音输入技术设计](voice_input_design.md)。贝壳 wallet/ledger、成本事件映射、邀请奖励和可选支付见 [贝壳、增长与可选支付技术设计](entitlement_growth_design.md)。
 
 ## 2. 设计目标
 
@@ -26,7 +26,7 @@ Phase 1 编排目标：
 
 - 让微信私聊普通 turn 足够短、稳定、可观测。
 - 将陪伴式聊天作为默认路径，将提醒、搜索、ASR、长内容整理等能力清晰分流。
-- 对 Web Search 等高耗时任务先快速回复，再后台执行并补发完整结果。
+- Web Search 对齐 OpenClaw 风格的 LLM tool use：普通搜索同步执行，长耗时搜索或复杂整理才快速确认并异步补发。
 - 将 OpenClaw 的 prompt/context 分层、Dreaming、tool schema、heartbeat、trace 思想转化为 AI4ALL 一对多服务架构。
 - 每个用户以 `ai4all_account_id` 为业务隔离主键，不把 OpenClaw 原生 workspace 或 channel account 当作业务状态中心。
 - 为内测阶段的成本、权益扣减、Admin 排障和客服支持预留 trace 与审计。
@@ -55,7 +55,7 @@ Phase 1 编排目标：
 仍需补齐：
 
 - 固化 Conversation Orchestrator 边界，进一步减少 HTTP route、DB、LLM、工具判断混杂。
-- 统一 `tasks` / `task_runs`，支撑 Web Search、ASR、长内容整理和失败补发。
+- 统一 `tasks` / `task_runs`，支撑 Web Search 异步兜底、ASR、长内容整理和失败补发。
 - Search Provider、ASR Provider、内容源 Provider 的 provider adapter 和成本记录。
 - tool registry / task registry，区分“模型可见能力说明”和“后端真实可执行工具”。
 - token usage、provider request id、成本、权益扣减和 trace 的统一记录。
@@ -74,7 +74,7 @@ P0 必须交付：
 - 获取或创建当前账号 active session。
 - 入站用户消息写入 `messages`，并带账号、session、channel binding、message id 和 raw metadata。
 - 消息去重、账号状态检查和基础限流。
-- Intent Gate v0：pending state 优先、高置信一次性提醒、明确长任务/搜索意图的快速确认或能力占位，其余走普通聊天。
+- Intent Gate v0：pending state 优先、高置信一次性提醒、明确后台/长任务请求的快速确认或能力占位，其余进入普通聊天与可用工具链路。
 - Prompt assembly：读取 active session 最近消息、账号 Context Files、`MEMORY.md` 和必要 runtime metadata；P0 明确不读取 daily notes 注入 prompt。
 - 调用 LLM，保存 assistant reply、usage/trace metadata，并通过 Bridge synthetic reply 同步返回微信。
 - after-turn 异步写 daily notes raw material 作为静态事实归档；不做 LLM memory extraction，长期记忆晋升交给 Dreaming 机制；hidden commitment extraction 可以保留为后置异步动作，失败不影响用户回复。
@@ -122,10 +122,10 @@ P0 不对每条消息额外调用一次 LLM 做总分类。
 
 1. Pending-state gate：如果账号存在待确认的提醒取消/更新、任务确认等状态，优先处理。
 2. Explicit reminder gate：高置信时间 + 事项才创建提醒；歧义场景追问。
-3. Long-task/search gate：明确“查一下/搜一下/最新/网上有没有”等检索意图先快速确认；真实 provider 未接入前只能进入占位或 stub，不让模型假装已搜索。
-4. Normal chat：其余消息走普通聊天 LLM 回复。
+3. Long-task gate：明确“慢慢整理”“做一份报告”“整理好再发我”等后台或长耗时请求，先快速确认；真实 worker 未接入前只能进入占位或 stub。
+4. Normal chat + tool use：其余消息走普通聊天 LLM 回复；`web_search` 只有在真实 provider、失败体验和成本记录接入后才作为 tool schema 暴露给模型。
 
-后续可以增加轻量 LLM classifier 提升召回，但它只能产出 intent candidate，不能绕过代码级校验、幂等、权限、成本和用户确认。
+搜索不采用纯字符串匹配或独立正则 intent gate 作为主路径。后续可以增加轻量 LLM classifier 提升提醒、任务等状态型能力的召回，但它只能产出 intent candidate，不能绕过代码级校验、幂等、权限、成本和用户确认。
 
 ### 4.4 P0 最小测试清单
 
@@ -134,7 +134,7 @@ P0 不对每条消息额外调用一次 LLM 做总分类。
 - 入站 user message 和同步 assistant reply 都写入 `messages`。
 - after-turn raw daily notes 写入只归档已经写入 `messages` 的用户消息和已发送 assistant 消息，不额外改写 session 对话事实。
 - 高置信一次性提醒在 LLM 主回复前被 Intent Gate 分流，并返回确定性确认。
-- 普通聊天不会执行 Search、ASR 或长工具链。
+- P0 provider 未接入时，普通聊天不会声称已执行 Search、ASR 或长工具链。
 - 已发送 outbound assistant message 写入 active session `messages`，用户后续回复能在最近上下文中看到它。
 - after-turn daily notes 写入失败不影响用户已收到的回复。
 
@@ -172,7 +172,7 @@ Inbound WeChat Message
 -> intent gate
    -> explicit reminder: rule-based create reminder + confirmation
    -> long task: quick acknowledgement + create task
-   -> normal chat: context assembly + LLM reply
+   -> normal chat: context assembly + enabled tool schema + LLM tool use/reply
 -> persist reply / usage / trace
 -> Bridge synthetic reply -> WeChat
 -> after-turn: daily notes / hidden commitment extraction / metrics
@@ -180,7 +180,7 @@ Inbound WeChat Message
 
 核心原则：
 
-- 同步路径只做低延迟工作。
+- 同步路径只做低延迟工作；普通 Web Search 属于低延迟工具调用，长耗时搜索不在当前 turn 硬等。
 - 高耗时任务进入异步任务，并通过 Gateway send 补发结果。
 - after-turn 动作失败不影响用户已收到的回复。
 - 所有步骤必须带 `ai4all_account_id`。
@@ -189,14 +189,14 @@ Inbound WeChat Message
 
 Intent Gate 位于限流和去重之后、LLM 主回复之前。
 
-Phase 1 不采用“每条消息都先额外调用一次 LLM 做总分类”的默认方案，也不只依赖简单正则。推荐实现是分层 gate：
+Phase 1 不采用“每条消息都先额外调用一次 LLM 做总分类”的默认方案，也不只依赖简单正则。Intent Gate 负责 pending state、提醒、显式后台任务等会直接改变后端状态的场景；搜索的主触发机制是 LLM 看到 `web_search` tool schema 后自然调用工具。
 
-1. Cheap deterministic gate：先用状态机、结构化规则、关键词、时间解析器和高置信 parser 处理明确场景。
+1. Cheap deterministic gate：先用状态机、结构化规则、时间解析器和高置信 parser 处理明确提醒、取消/更新、后台整理等场景。
 2. Pending-state gate：如果账号有待确认的提醒取消/更新、任务确认或其他 pending interaction，优先处理该状态，不进入普通聊天。
 3. Optional LLM classifier：只在规则无法判断、且该能力值得额外延迟和成本时调用轻量 LLM 分类器；分类器只产出结构化 intent candidate，不直接写业务状态。
 4. Validation and confirmation：任何会创建 DB 状态、发起任务、取消提醒或触发外部动作的 intent，都必须经过代码级结构化校验；低置信或有歧义时向用户追问确认。
 
-因此，P0/P1 的默认落地顺序是“高置信规则优先，LLM 辅助后置”。LLM classifier 可以提升召回，但不能替代幂等、权限、成本、风险和字段校验。
+因此，P0/P1 的默认落地顺序是“高置信规则优先，LLM 辅助后置”。LLM classifier 可以提升召回，但不能替代幂等、权限、成本、风险和字段校验。`web_search` 不走纯字符串 intent gate；Backend 只有在真实 provider 和失败体验接入后才把工具暴露给模型。
 
 ### 7.1 显式提醒
 
@@ -218,7 +218,7 @@ Phase 1 不采用“每条消息都先额外调用一次 LLM 做总分类”的�
 
 典型任务：
 
-- Web Search。
+- 长耗时 Web Search 或深度资料整理。
 - 复杂资料整理。
 - 长内容生成。
 - 长语音 ASR。
@@ -235,7 +235,7 @@ Phase 1 不采用“每条消息都先额外调用一次 LLM 做总分类”的�
 
 这类补发是“用户请求结果投递”，不等同无触发主动推送，但仍必须有状态、幂等和发送记录。
 
-Search intent 的初版也应走 cheap deterministic gate：例如“查一下”“搜一下”“最近/最新”“网上有没有”等明确检索表达，或问题明显依赖实时外部信息时，先同步确认并创建 task。模糊场景可以继续按普通聊天回答，或由后续 LLM classifier 给出 `web_search` 候选后再进入确认/任务链路。
+普通 Web Search 不在这里用字符串规则硬触发。模型在普通聊天链路中看到 `web_search` schema 后决定是否调用；工具 handler 根据同步预算、provider 状态和用户是否要求后台整理，决定同步返回结果或创建异步兜底任务。
 
 ### 7.3 普通聊天
 
@@ -289,7 +289,7 @@ AI4ALL 需要区分三层：
 
 - `TOOLS.md` 不能让模型声称可以调用未接入工具。
 - tool schema 只在后端确实可执行、权限和失败体验明确时注入。
-- 高耗时工具默认转成 async task，不在同步 turn 内等待。
+- 普通低延迟工具可以在同步 turn 内执行；长耗时工具调用、深度整理或 provider 超时才转成 async task。
 - 每个工具必须有权限边界、成本计量、失败结果和 trace。
 - 用户可见结果必须来自后端执行结果，不能由模型编造“我已经搜索到了”。
 
@@ -300,7 +300,7 @@ Phase 1 首批能力建议：
 | LLM 回复 | 同步主链路 | 已有 |
 | 当前日期时间 | 同步 runtime 注入或简单工具 | 待整理 |
 | 明确一次性提醒 | 规则链路，非 LLM tool | 已有基础 |
-| Web Search | 异步 task + provider + 补发 | 待实现 |
+| Web Search | LLM tool use，同步默认；长耗时场景转 async task + provider + 补发 | 待实现 |
 | ASR | 短语音可同步，长语音走 task | 待实现 |
 | 内容推送生成 | 后台候选 + proactive policy | 待实现 |
 | memory search/get | 后续工具，Phase 1 可先不开放给模型 | 待定 |
@@ -430,7 +430,7 @@ OpenClaw shadow trace 只用于测试账号：
 
 ### P1：工具、任务和记忆产品化
 
-- Web Search async task：先确认、后台执行、补发结果。
+- Web Search tool use：普通搜索同步返回；长耗时搜索或复杂整理先确认、后台执行、补发结果。
 - ASR 入站闭环：语音转写后进入文本链路。
 - Dreaming candidate diff + review。
 - 用户显式纠错后的 memory/context update candidate。
@@ -467,14 +467,15 @@ OpenClaw shadow trace 只用于测试账号：
 - 2026-05-17：Safety 区块全局固定，运营覆盖分离。安全边界不能由单账号覆盖绕过。
 - 2026-05-18：账号级 `HEARTBEAT.md` 从 Context Files 移出。用户主动触达和提醒单独建模。
 - 2026-05-24：Phase 1 目标调整为正式内测版本，P0/P1/P1.5 纳入同一 Phase；支付购买可选，不阻塞内测。
-- 2026-05-24：Web Search 等高耗时任务必须先快速确认，再异步补发完整结果。
+- 2026-05-24：长耗时任务必须先快速确认，再异步补发完整结果。
 - 2026-05-24：记忆机制必须学习 OpenClaw Dreaming，但写入要账号隔离、可追溯、可回滚。
+- 2026-05-31：Web Search 与 OpenClaw 对齐为 LLM tool use；普通搜索同步完成，异步任务只作为超时、深度整理、用户明确后台整理等场景的兜底；不采用纯字符串匹配作为主触发机制。
 
 ## 17. 验收标准
 
 - 普通文本 turn 可以完成身份解析、去重、限流、context assembly、LLM 回复和 trace。
 - 明确提醒请求不会进入长工具链，能创建 one-shot reminder 并回复确认。
-- Web Search 触发后，用户先收到确认回复；任务完成后收到完整结果，失败时收到失败说明。
+- Web Search 由模型通过 tool use 自然触发，普通搜索在当前 turn 同步返回带来源边界的回答；长耗时搜索进入异步兜底后，用户先收到确认回复，任务完成后收到完整结果，失败时收到失败说明。
 - 同一任务不会重复补发，补发写入 outbound ledger。
 - Prompt trace 能展示 Project Context、runtime、override 和模型输入；如果未来某场景按需装载 daily notes 或检索结果，也必须在 trace metadata 中明确记录。
 - 记忆写入、hidden commitment 和 heartbeat 不阻塞同步聊天回复。
@@ -484,8 +485,9 @@ OpenClaw shadow trace 只用于测试账号：
 
 - 搜索引用格式和失败话术。
 - 语音媒体保留策略和 ASR 失败体验细节。
-- 除短语音 ASR 可同步尝试外，其他高耗时任务的同步/异步边界。
-- tool schema 是否采用 OpenAI-compatible tool calling，还是先用后端 intent gate。
+- 普通 Web Search 的同步时间预算。
+- 除普通 Web Search 和短语音 ASR 可同步尝试外，其他高耗时任务的同步/异步边界。
+- tool schema 是否完全采用 OpenAI-compatible tool calling，以及多轮 tool call 的最小实现范围。
 - `tasks` / `task_runs` 的最小落地版本是否先用 SQLite 兼容模型。
 - memory search 是否进入 Phase 1。
 - Dreaming 自动调度频率和审批边界。

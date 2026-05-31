@@ -58,6 +58,16 @@ def test_handle_create_reminder_one_shot(fresh_db):
     assert result["recur_rule"] is None
 
 
+def test_execute_tool_call_blocks_web_search_when_disabled():
+    from app.tools.executor import execute_tool_call
+
+    ctx = _make_ctx()
+    result = execute_tool_call("web_search", {"query": "OpenClaw"}, ctx)
+
+    assert result["status"] == "failed"
+    assert result["error"] == "web_search is disabled"
+
+
 def test_handle_create_reminder_recurring(fresh_db):
     from app.tools.reminder_handlers import handle_create_reminder
     with patch("app.db.settings", fresh_db):
