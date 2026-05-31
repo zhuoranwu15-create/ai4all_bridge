@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
@@ -134,9 +135,11 @@ def build_onboarding_prompt_context(
         lines.append('参考话术（仅供参考，请按你的性格自然表达）：你好，很高兴能成为微信好友，你希望我怎么称呼你？')
 
     elif state == ONBOARDING_STEP1_SENT:
-        # User is now REPLYING to the "what should I call you?" question.
-        # Acknowledge their name, then immediately ask what they want to call the AI.
-        lines.append("用户刚刚回复了你关于称呼的问题。自然接收他们的回应（有无均可），然后紧接着询问用户想怎么称呼你（AI）。")
+        # User is replying to "what should I call you?" — their reply is their own desired nickname.
+        if user_name:
+            lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼（比如"好的，那我以后就叫你{user_name}！"），然后询问用户想怎么称呼你（AI）。')
+        else:
+            lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"）。他们的回复就是他们希望你叫的名字/昵称，请自然地确认这个名字（比如"好的，我以后就叫你X！"），然后询问用户想怎么称呼你（AI）。')
         lines.append('参考话术：好的！那你想给我起什么名字呢？或者，你希望怎么称呼我？')
 
     elif state == ONBOARDING_STEP2_SENT:
@@ -189,6 +192,11 @@ _EXTRACT_SYSTEM = """你是一个信息提取助手。从用户的消息中提�
   "skip": "用户是否明确表示跳过或随便（布尔值）"
 }
 
+名字提取规则：
+- 去掉末尾语气词（吧、呢、啊、嘛、哦 等），如"叫二弟吧"→ ai_name="二弟"，"队长呢"→ user_name="队长"
+- 名字通常较短（1-8 字），不含句号、问号等标点
+- "随便"、"都行"、"不设"、"跳过"、"无所谓" 等 → skip=true，名字字段为 null
+
 persona 取值规则：
 - 用户说"1"、"留白"、"空着"→ "blank"
 - 用户说"2"、"朝朝" → "chaochao"
@@ -198,6 +206,25 @@ persona 取值规则：
 - 未明确选择 → null
 
 只返回 JSON，不要解释。"""
+
+# Trailing Chinese modal particles to strip from name candidates
+_PARTICLE_RE = re.compile(r'[吧呢啊嘛哦哇啦喔唉哎诶噢]{1,2}$')
+_SKIP_WORDS = frozenset({'随便', '不设', '跳过', '都行', '无所谓', '随意', '算了', '不知道', '不重要', '没关系'})
+# Sentence-initial characters that indicate the input is a phrase, not a bare name
+_NAME_LEADING_RE = re.compile(r'^[你我他她它们就叫是都]')
+
+
+def _rule_extract_name(text: str) -> Optional[str]:
+    """Strip trailing modal particles; return candidate if it looks like a short name."""
+    raw = text.strip()
+    if not raw or '\n' in raw or len(raw) > 10:
+        return None
+    candidate = _PARTICLE_RE.sub('', raw).strip()
+    if not candidate or candidate in _SKIP_WORDS:
+        return None
+    if len(candidate) > 8 or _NAME_LEADING_RE.match(candidate):
+        return None
+    return candidate
 
 
 async def extract_onboarding_info_async(
@@ -253,6 +280,12 @@ async def extract_onboarding_info_async(
         result["skip"] = bool(extracted.get("skip"))
         if result["skip"] and extract_ai_name:
             result["ai_name"] = None
+        # Rule-based fallback: if LLM returned null for the name, try stripping particles
+        if not result["skip"]:
+            if extract_user_name and not result["user_name"]:
+                result["user_name"] = _rule_extract_name(user_text)
+            if extract_ai_name and not result["ai_name"]:
+                result["ai_name"] = _rule_extract_name(user_text)
         return result
     except Exception as err:
         logger.warning("onboarding info extraction failed state=%s error=%s", current_state, err)

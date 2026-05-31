@@ -17,6 +17,7 @@ from app.db import (
     insert_debug_trace,
     insert_message,
     list_recent_messages,
+    record_chat_usage_charge,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,
     upsert_channel_binding,
@@ -416,12 +417,15 @@ def handle_openclaw_turn(
                 display_name=account.get("display_name"),
             )
             onboarding_pre_written = {}
-            if onboarding_active and onboarding_state == ONBOARDING_STEP2_SENT:
+            if onboarding_active and onboarding_state in {ONBOARDING_STEP1_SENT, ONBOARDING_STEP2_SENT}:
                 onboarding_pre_extracted = _extract_onboarding_info_sync(
                     user_text=text,
                     current_state=onboarding_state,
                 )
-                if onboarding_pre_extracted.get("ai_name"):
+                # For step1: pre-write user_name; for step2: pre-write ai_name.
+                # Writing before prompt build ensures the AI sees what was just collected.
+                _pre_write_key = "user_name" if onboarding_state == ONBOARDING_STEP1_SENT else "ai_name"
+                if onboarding_pre_extracted.get(_pre_write_key):
                     onboarding_pre_written = apply_extracted_onboarding_info(
                         account_id=account_id,
                         extracted=onboarding_pre_extracted,
@@ -511,6 +515,22 @@ def handle_openclaw_turn(
                 )
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
+                # Step2 post-response fallback: if ai_name was not pre-written (extraction
+                # failed or returned null), apply rule-based extraction now so IDENTITY.md
+                # gets the correct name even though the persona options already showed presets.
+                if onboarding_state == ONBOARDING_STEP2_SENT and not onboarding_pre_written.get("ai_name"):
+                    from app.onboarding import _rule_extract_name  # noqa: PLC0415
+                    fallback_ai_name = _rule_extract_name(text)
+                    if fallback_ai_name:
+                        try:
+                            from app.user_profiles import write_ai_name_to_identity  # noqa: PLC0415
+                            write_ai_name_to_identity(account_id=account_id, name=fallback_ai_name)
+                            logger.info(
+                                "onboarding ai_name fallback-written account=%s name=%r",
+                                account_id, fallback_ai_name,
+                            )
+                        except Exception as _fe:
+                            logger.error("onboarding ai_name fallback write failed account=%s error=%s", account_id, _fe)
             else:
                 tools = get_reminder_tools()
                 reply, generation_error = generate_reply_with_tools(
@@ -585,6 +605,27 @@ def handle_openclaw_turn(
         latency_ms=latency_ms,
         error=generation_error,
     )
+
+    billing_result = None
+    if not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS:
+        try:
+            billing_result = record_chat_usage_charge(
+                account_id=account_id,
+                model=settings.llm_model,
+                messages=llm_messages,
+                reply=reply,
+                source_type="chat_turn",
+                source_id=reply_message_id,
+                idempotency_key=f"chat-turn-{account_id}-{message_id or inserted_id}",
+                metadata={
+                    "message_id": message_id,
+                    "reply_message_id": reply_message_id,
+                    "session_id": int(session["id"]),
+                    "estimated": True,
+                },
+            )
+        except Exception as err:
+            logger.exception("chat usage charge failed account=%s reply=%s error=%s", account_id, reply_message_id, err)
 
     if not generation_error and text and text not in _SPECIAL_COMMANDS:
         increment_session_turn_count(session_id=int(session["id"]))
@@ -676,5 +717,19 @@ def handle_openclaw_turn(
             "latency_ms": latency_ms,
             "user_profile_path": str(profile_path),
             "debug_trace_id": trace_id,
+            "billing": {
+                "charged": bool(billing_result and billing_result.get("ledger")),
+                "estimated": True,
+                "amount_shells": (
+                    billing_result["ledger"]["amount_shells"]
+                    if billing_result and billing_result.get("ledger")
+                    else None
+                ),
+                "balance_shells": (
+                    billing_result["wallet"]["balance_shells"]
+                    if billing_result and billing_result.get("wallet")
+                    else None
+                ),
+            },
         },
     )
