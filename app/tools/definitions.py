@@ -155,8 +155,102 @@ def get_web_search_tools() -> list:
     ]
 
 
-def get_default_tools(*, web_search_enabled: bool = False) -> list:
+def get_content_invitation_generation_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_content_invitation_candidate",
+                "description": "为当前账号创建一条朋友式内容邀请候选。只能创建邀请，不发送标题列表。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "invitation_text": {"type": "string"},
+                        "title_items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "source_name": {"type": "string"},
+                                    "url": {"type": "string"},
+                                    "published_at": {"type": "string"},
+                                },
+                                "required": ["title"],
+                            },
+                            "minItems": 3,
+                            "maxItems": 10,
+                        },
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["topic", "invitation_text", "title_items"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "skip_content_invitation",
+                "description": "当前账号不适合创建内容邀请候选时调用，记录跳过原因。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"reason": {"type": "string"}},
+                    "required": ["reason"],
+                },
+            },
+        },
+    ]
+
+
+def get_content_invitation_response_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "send_content_invitation_titles",
+                "description": "当用户正向确认想看上一条内容邀请时，发送该邀请对应的标题列表。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "invitation_id": {"type": "string"},
+                        "max_titles": {"type": "integer", "minimum": 1, "maximum": 10},
+                    },
+                    "required": ["invitation_id"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "record_content_invitation_feedback",
+                "description": "记录用户对内容邀请的拒绝、退订或偏好反馈。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "invitation_id": {"type": "string"},
+                        "feedback_type": {
+                            "type": "string",
+                            "enum": ["decline", "block_topic", "less_like_this", "more_like_this"],
+                        },
+                        "topic": {"type": "string"},
+                        "note": {"type": "string"},
+                    },
+                    "required": ["feedback_type"],
+                },
+            },
+        },
+    ]
+
+
+def get_default_tools(
+    *,
+    web_search_enabled: bool = False,
+    content_invitation_response_enabled: bool = False,
+) -> list:
     tools = list(get_reminder_tools())
     if web_search_enabled:
         tools.extend(get_web_search_tools())
+    if content_invitation_response_enabled:
+        tools.extend(get_content_invitation_response_tools())
     return tools

@@ -6,7 +6,7 @@
 
 本文是 AI4ALL Phase 1 主对话场景的主技术设计，定义一条微信私聊入站消息如何被 Conversation Orchestrator 处理：身份解析、active session、messages、Intent Gate、Prompt/Context、Tool Use、LLM 回复、同步返回、after-turn 动作，以及与异步任务和主动消息的接口。
 
-本文不作为临时 roadmap，而是主场景实现口径。它学习 OpenClaw 的 agent loop、prompt block、tool schema、Dreaming、heartbeat 和 trace 思路，但落地边界以 AI4ALL 一对多后端服务为准。
+本文不作为临时 roadmap，而是主场景实现口径。它学习 OpenClaw 的 agent loop、prompt block、tool schema、Dreaming、账号主动检查和 trace 思路，但落地边界以 AI4ALL 一对多后端服务为准。
 
 它承接以下产品需求：
 
@@ -16,7 +16,7 @@
 - [主动消息与提醒 PRD](../product/proactive_prd.md)
 - [语音输入 PRD](../product/voice_prd.md)
 
-Context Files、active session 生命周期、daily notes、Dreaming 和 Memory 细节见 [Agent Context Files 与记忆机制设计](agent_context_files.md)。主动消息、reminder、commitment、heartbeat、outbound policy 和 outbound 写入 `messages` 的细节见 [主动消息与提醒设计](proactive_messaging_design.md)。
+Context Files、active session 生命周期、daily notes、Dreaming 和 Memory 细节见 [Agent Context Files 与记忆机制设计](agent_context_files.md)。主动消息、reminder、commitment、账号主动检查、outbound policy 和 outbound 写入 `messages` 的细节见 [主动消息与提醒设计](proactive_messaging_design.md)。
 
 Web Search 的 tool schema、provider、同步/异步边界、结果补发和成本事件细节见 [搜索与异步任务技术设计](search_async_tasks_design.md)。微信语音、豆包 ASR、60 秒限制和转写链路细节见 [语音输入技术设计](voice_input_design.md)。贝壳 wallet/ledger、成本事件映射、邀请奖励和可选支付见 [贝壳、增长与可选支付技术设计](entitlement_growth_design.md)。
 
@@ -27,7 +27,7 @@ Phase 1 编排目标：
 - 让微信私聊普通 turn 足够短、稳定、可观测。
 - 将陪伴式聊天作为默认路径，将提醒、搜索、ASR、长内容整理等能力清晰分流。
 - Web Search 对齐 OpenClaw 风格的 LLM tool use：普通搜索同步执行，长耗时搜索或复杂整理才快速确认并异步补发。
-- 将 OpenClaw 的 prompt/context 分层、Dreaming、tool schema、heartbeat、trace 思想转化为 AI4ALL 一对多服务架构。
+- 将 OpenClaw 的 prompt/context 分层、Dreaming、tool schema、账号主动检查、trace 思想转化为 AI4ALL 一对多服务架构。
 - 每个用户以 `ai4all_account_id` 为业务隔离主键，不把 OpenClaw 原生 workspace 或 channel account 当作业务状态中心。
 - 为内测阶段的成本、权益扣减、Admin 排障和客服支持预留 trace 与审计。
 
@@ -50,7 +50,7 @@ Phase 1 编排目标：
 - `app/dreaming.py` 提供手动 Dreaming 入口。
 - Debug trace 支持 AI4ALL prompt/messages/reply 记录。
 - Bridge 支持测试账号 OpenClaw shadow trace / prompt 对比。
-- 显式一次性提醒、hidden commitment、heartbeat candidate 和 proactive scheduler 已有基础代码。
+- 显式一次性提醒、hidden commitment、account check candidate 和 proactive scheduler 已有基础代码。
 
 仍需补齐：
 
@@ -84,7 +84,7 @@ P0 暂不交付：
 - 真实 Web Search provider 和完整 task worker。
 - 微信语音 ASR。
 - 完整 wallet/ledger 扣减。
-- 内容推送、完整 heartbeat 自动发送和复杂 proactive policy。
+- 内容推送、账号主动检查自动发送和复杂 proactive policy。
 - 每日 4 点 Dreaming 自动调度、500 轮自动 session 压缩和 memory candidate 审核 UI。
 - 多 Agent、子代理派发和用户自定义工具市场。
 
@@ -147,14 +147,14 @@ OpenClaw 对 AI4ALL 有价值的部分：
 - Workspace files：AGENTS、SOUL、IDENTITY、USER、TOOLS、MEMORY。
 - Memory：daily notes、长期记忆和 Dreaming。
 - Tool schema：工具名称、参数、权限、失败结果和 trace。
-- Cron/heartbeat：状态可恢复、低打扰、可跳过的主动循环。
+- Cron/账号主动检查：状态可恢复、低打扰、可跳过的主动循环。
 - Debug trace：能解释模型为什么这样回复。
 
 不能照搬的部分：
 
 - OpenClaw 是一对一本地实例；AI4ALL 是一对多后端服务。
 - OpenClaw 的 agent workspace 不能作为 AI4ALL 用户状态源。
-- OpenClaw heartbeat 不能变成一个全局用户循环，必须按账号隔离执行。
+- OpenClaw 的定时自检 不能变成一个全局用户循环，必须按账号隔离执行。
 - OpenClaw 工具清单不能直接暴露给普通用户微信 bot。
 - AI4ALL 需要额外处理权益扣减、通道风险、客服和运营审计。
 
@@ -369,7 +369,7 @@ persist assistant reply
 
 Dreaming 当前保留手动入口；正式内测前建议改为 candidate diff + review。
 
-## 12. 主动消息与 Heartbeat 编排
+## 12. 主动消息与账号主动检查编排
 
 主动消息分三类：
 
@@ -377,23 +377,23 @@ Dreaming 当前保留手动入口；正式内测前建议改为 candidate diff +
 | --- | --- | --- | --- |
 | reminder | 用户明确请求 | 是 | due time + outbound ledger |
 | async task result | 用户触发任务 | 是 | task status + idempotency + outbound ledger |
-| heartbeat / content push | 系统候选 | 否或弱触发 | proactive state + quiet hours + category daily limit + 6h avoidance + cooldown |
+| 账号主动检查/content push | 系统候选 | 否或弱触发 | proactive state + quiet hours + category daily limit + 6h avoidance + cooldown |
 
-heartbeat 机制必须按账号执行：
+账号主动检查机制必须按账号执行：
 
 ```text
 system scheduler
 -> list due accounts
 -> per-account state claim
--> read USER/MEMORY/daily notes/candidates
+-> read USER/MEMORY/recent chat/proactive state/candidates
 -> decide no-op or outbound
 -> outbound ledger + Gateway send
 ```
 
 禁止：
 
-- 读取全局 `HEARTBEAT.md` 作为用户个人任务来源。
-- 在用户未开启或无高置信候选时发送 heartbeat。
+- 读取已废弃的旧策略文件作为用户个人任务来源。
+- 在用户未开启或无高置信候选时发送账号主动检查。
 - 把内容推送混入普通聊天主链路。
 
 ## 13. Debug Trace 与 OpenClaw 对比
@@ -465,7 +465,7 @@ OpenClaw shadow trace 只用于测试账号：
 - 2026-05-17：不追 OpenClaw 多 agent 编排。产品场景是一对一私聊陪伴，先把单 agent 的记忆、工具、人格做扎实。
 - 2026-05-17：记忆写入使用异步后台任务，不阻塞回复。用户等待时间优先，失败可通过日志和后续补写处理。
 - 2026-05-17：Safety 区块全局固定，运营覆盖分离。安全边界不能由单账号覆盖绕过。
-- 2026-05-18：账号级 `HEARTBEAT.md` 从 Context Files 移出。用户主动触达和提醒单独建模。
+- 2026-05-18：旧账号级主动策略文件从 Context Files 移出。用户主动触达和提醒单独建模。
 - 2026-05-24：Phase 1 目标调整为正式内测版本，P0/P1/P1.5 纳入同一 Phase；支付购买可选，不阻塞内测。
 - 2026-05-24：长耗时任务必须先快速确认，再异步补发完整结果。
 - 2026-05-24：记忆机制必须学习 OpenClaw Dreaming，但写入要账号隔离、可追溯、可回滚。
@@ -478,7 +478,7 @@ OpenClaw shadow trace 只用于测试账号：
 - Web Search 由模型通过 tool use 自然触发，普通搜索在当前 turn 同步返回带来源边界的回答；长耗时搜索进入异步兜底后，用户先收到确认回复，任务完成后收到完整结果，失败时收到失败说明。
 - 同一任务不会重复补发，补发写入 outbound ledger。
 - Prompt trace 能展示 Project Context、runtime、override 和模型输入；如果未来某场景按需装载 daily notes 或检索结果，也必须在 trace metadata 中明确记录。
-- 记忆写入、hidden commitment 和 heartbeat 不阻塞同步聊天回复。
+- 记忆写入、hidden commitment 和账号主动检查不阻塞同步聊天回复。
 - 工具或任务未接入时，模型不会承诺已经完成对应动作。
 
 ## 18. 待确认问题

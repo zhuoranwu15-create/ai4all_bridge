@@ -59,6 +59,8 @@ TABLES_TO_CLEAR = [
     # proactive / outbound
     "reminders",
     "proactive_commitments",
+    "content_invitations",
+    "content_invitation_preferences",
     "outbound_messages",
     "proactive_account_state",
     # misc account-scoped

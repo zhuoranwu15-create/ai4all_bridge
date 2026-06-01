@@ -7,6 +7,7 @@ def test_settings(tmp_path):
     s = MagicMock()
     s.database_path = str(tmp_path / "test.db")
     s.user_profiles_dir = str(tmp_path / "profiles")
+    s.system_dir = str(tmp_path / "system")
     s.ai4all_bridge_secret = "test-secret"
     s.admin_token = "test-admin"
     s.admin_staff_token = "test-staff"
@@ -36,13 +37,19 @@ def test_settings(tmp_path):
     s.proactive_outbound_daily_limit = 3
     s.proactive_quiet_hours_start = "22:00"
     s.proactive_quiet_hours_end = "08:00"
+    s.companion_followup_daily_limit = 1
+    s.content_invitation_daily_limit = 1
+    s.proactive_avoidance_window_hours = 6
+    s.content_invitation_rejection_cooldown_days = 30
+    s.content_invitation_expire_hours = 24
     s.proactive_scheduler_enabled = False
     s.proactive_scheduler_interval_seconds = 30.0
     s.proactive_scheduler_batch_size = 20
     s.proactive_scheduler_bypass_quiet_hours = False
-    s.proactive_account_scan_interval_seconds = 3600
-    s.proactive_heartbeat_candidate_context_messages = 12
-    s.proactive_heartbeat_candidate_min_confidence = 0.85
+    s.proactive_account_check_interval_seconds = 3600
+    s.proactive_account_check_context_messages = 12
+    s.proactive_account_check_min_confidence = 0.85
+    s.proactive_content_invitation_generation_enabled = True
     s.proactive_commitment_extraction_enabled = True
     s.proactive_commitment_context_messages = 8
     s.proactive_commitment_min_confidence = 0.9
@@ -89,6 +96,7 @@ def fresh_db(test_settings):
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
+        patch("app.proactive.policy.settings", test_settings),
     ]
     for p in patches:
         p.start()

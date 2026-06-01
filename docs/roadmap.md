@@ -89,20 +89,23 @@ OpenClaw 和 `openclaw-weixin` 只作为微信登录、收消息、发消息的�
 
 ## 主动消息与提醒机制阶段状态
 
-截至 2026-05-23，主动消息与提醒机制的代码开发已基本闭环，但尚未完成真实微信端到端联调。当前先暂停继续扩展该方向，进入架构梳理与边界对齐阶段。
+截至 2026-06-02，主动消息与提醒机制第一轮代码开发已完成。当前先暂停继续扩展该方向，进入真实数据观察和手动测试阶段；内容邀请和陪伴跟进需要更丰富、更稳定的聊天上下文后再评估效果。
 
 已完成：
 
-- 主动发送 Gateway 封装、outbound ledger、每日上限、quiet hours。
+- 主动发送 Gateway 封装、outbound ledger、分类 policy、分类每日上限、quiet hours、6 小时避让第一版。
 - one-shot reminder、显式提醒识别、due reminder scheduler。
 - 账号级 proactive state 和系统级 scheduler。
-- heartbeat draft、人工确认、受控发送。
+- account check draft、人工确认、受控发送。
 - hidden commitment 抽取、pending 存储、到期发送、Admin 查看/取消。
+- 内容邀请候选生成、朋友式邀请发送、用户确认后标题列表回复、拒绝反馈/冷却。
+- Proactive Debug 后台，用于手动运行 scheduler、单账号 proactive check、draft 调试和内容邀请生成原因展示。
 
-待架构对齐后统一验证：
+观察期重点验证：
 
 - 普通聊天产生 commitment 后，到期主动发微信。
-- heartbeat draft 人工确认后，scheduler 主动发微信。
+- account check draft 人工确认后，scheduler 主动发微信。
+- 内容邀请在稳定兴趣上下文下能生成合适候选，在稀疏/跳跃上下文下保持跳过。
 - Gateway 重启和长时间无入站后的主动发送稳定性。
 
 ## Phase 1 工作包：语音支持

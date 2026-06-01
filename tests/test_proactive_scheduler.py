@@ -39,12 +39,14 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     reminder_calls = []
     commitment_calls = []
     account_calls = []
+    expired_content_calls = []
+    content_invitation_calls = []
 
     def fake_dispatch_reminders(**kwargs):
         reminder_calls.append(kwargs)
         return [{"status": "sent", "reminder_id": "rem-1"}]
 
-    def fake_scan_accounts(**kwargs):
+    def fake_scan_account_checks(**kwargs):
         account_calls.append(kwargs)
         return [{"status": "no_op", "account_id": "acc-1"}]
 
@@ -52,14 +54,24 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         commitment_calls.append(kwargs)
         return [{"status": "sent", "commitment_id": "com-1"}]
 
+    def fake_expire_content_invitations(**kwargs):
+        expired_content_calls.append(kwargs)
+        return [{"status": "expired", "invitation_id": "ci-expired"}]
+
+    def fake_dispatch_content_invitations(**kwargs):
+        content_invitation_calls.append(kwargs)
+        return [{"status": "invited", "invitation_id": "ci-1"}]
+
     scheduler = ProactiveScheduler(
         interval_seconds=0,
         batch_size=5,
         bypass_quiet_hours=True,
-        account_scan_interval_seconds=1800,
+        account_check_interval_seconds=1800,
         dispatch_reminders=fake_dispatch_reminders,
         dispatch_commitments=fake_dispatch_commitments,
-        scan_accounts=fake_scan_accounts,
+        dispatch_content_invitations=fake_dispatch_content_invitations,
+        expire_content_invitations=fake_expire_content_invitations,
+        scan_account_checks=fake_scan_account_checks,
     )
     now = datetime(2026, 5, 22, 10, 0)
 
@@ -68,7 +80,9 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert result["status"] == "ok"
     assert result["reminder_count"] == 1
     assert result["commitment_count"] == 1
-    assert result["account_scan_count"] == 1
+    assert result["account_check_count"] == 1
+    assert result["expired_content_invitation_count"] == 1
+    assert result["content_invitation_count"] == 1
     assert reminder_calls == [
         {
             "now": now,
@@ -87,7 +101,20 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         {
             "now": now,
             "limit": 5,
-            "scan_interval_seconds": 1800,
+            "check_interval_seconds": 1800,
+        }
+    ]
+    assert expired_content_calls == [
+        {
+            "now": now,
+            "limit": 5,
+        }
+    ]
+    assert content_invitation_calls == [
+        {
+            "now": now,
+            "limit": 5,
+            "bypass_quiet_hours": True,
         }
     ]
     assert scheduler.last_error is None
@@ -102,7 +129,7 @@ def test_admin_proactive_scheduler_status(client):
     assert body["enabled"] is False
     assert body["scheduler"] is None
     assert body["configured"]["batch_size"] == 20
-    assert body["configured"]["account_scan_interval_seconds"] == 3600
+    assert body["configured"]["account_check_interval_seconds"] == 3600
 
 
 def test_admin_proactive_scheduler_run_once_dispatches_due_reminder(client, fresh_db):
@@ -210,7 +237,7 @@ def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db)
         next_scan_at=datetime(2000, 1, 1, 0, 0),
     )
 
-    with patch("app.proactive.heartbeat.settings", fresh_db):
+    with patch("app.proactive.account_checks.settings", fresh_db):
         res = client.post(
             "/admin/proactive/scheduler/run-once?limit=5",
             headers=ADMIN_HEADERS,
@@ -219,14 +246,14 @@ def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db)
 
     assert res.status_code == 200
     body = res.json()
-    assert body["run"]["account_scan_count"] == 1
-    assert body["run"]["account_scans"][0]["status"] == "skipped"
-    assert body["run"]["account_scans"][0]["reason"] == "no_candidate"
+    assert body["run"]["account_check_count"] == 1
+    assert body["run"]["account_checks"][0]["status"] == "skipped"
+    assert body["run"]["account_checks"][0]["reason"] == "no_candidate"
     assert state["last_scan_at"] is not None
     assert state["next_scan_at"] > state["last_scan_at"]
 
 
-def test_admin_proactive_scheduler_run_once_executes_explicit_heartbeat_candidate(client, fresh_db):
+def test_admin_proactive_scheduler_run_once_executes_explicit_account_check_candidate(client, fresh_db):
     from app.db import list_outbound_messages
     from app.proactive.state import ensure_account_state
 
@@ -239,20 +266,20 @@ def test_admin_proactive_scheduler_run_once_executes_explicit_heartbeat_candidat
         account_id="acc-scan-send",
         next_scan_at=datetime(2000, 1, 1, 0, 0),
         metadata={
-            "heartbeat_candidate": {
+            "account_check_candidate": {
                 "id": "admin-candidate",
-                "text": "从 scheduler 触发 heartbeat。",
+                "text": "从 scheduler 触发主动检查。",
                 "source": "test",
             }
         },
     )
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.proactive.messaging.settings", fresh_db),
         patch(
             "app.proactive.messaging.send_weixin_text",
-            return_value={"messageId": "openclaw-weixin:scheduled-heartbeat"},
+            return_value={"messageId": "openclaw-weixin:scheduled-account-check"},
         ) as mock_send,
     ):
         res = client.post(
@@ -262,14 +289,14 @@ def test_admin_proactive_scheduler_run_once_executes_explicit_heartbeat_candidat
         outbound = list_outbound_messages(account_id="acc-scan-send")
 
     assert res.status_code == 200
-    scan = res.json()["run"]["account_scans"][0]
+    scan = res.json()["run"]["account_checks"][0]
     assert scan["status"] == "sent"
     assert scan["decision"]["action"] == "send_text"
     assert scan["execution"]["outbound_message"]["status"] == "sent"
-    assert outbound[0]["source"] == "heartbeat"
+    assert outbound[0]["source"] == "account_check"
     assert outbound[0]["status"] == "sent"
-    assert outbound[0]["metadata"]["heartbeat_candidate"]["id"] == "admin-candidate"
+    assert outbound[0]["metadata"]["account_check_candidate"]["id"] == "admin-candidate"
     assert scan["account_state"]["last_proactive_sent_at"] is not None
-    assert "heartbeat_candidate" not in scan["account_state"]["metadata"]
-    assert scan["account_state"]["metadata"]["heartbeat_last_sent_candidate"]["id"] == "admin-candidate"
+    assert "account_check_candidate" not in scan["account_state"]["metadata"]
+    assert scan["account_state"]["metadata"]["account_check_last_sent_candidate"]["id"] == "admin-candidate"
     mock_send.assert_called_once()

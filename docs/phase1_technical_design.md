@@ -298,7 +298,7 @@ daily notes 是原始文字材料，不是长期记忆摘要。`MEMORY.md` 的�
 ### 6.5 用户提醒、陪伴跟进和内容推送
 
 ```text
-explicit reminder / hidden commitment / heartbeat / content candidate
+explicit reminder / hidden commitment / 账号主动检查 / content candidate
 -> scheduler or worker claim
 -> category-specific policy
 -> outbound ledger

@@ -42,7 +42,8 @@
 | 文档 | 作用 |
 | --- | --- |
 | [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md) | 产品用户、AI4ALL Account、绑定流程和账号路由 |
-| [主动消息与提醒设计](tech_design/proactive_messaging_design.md) | outbound ledger、用户提醒、陪伴跟进、内容推送和 scheduler |
+| [主动消息与提醒设计](tech_design/proactive_messaging_design.md) | outbound ledger、用户提醒、陪伴跟进、内容邀请、账号主动检查和 scheduler |
+| [内容邀请技术设计](tech_design/content_invitation_design.md) | 内容邀请两阶段状态机、LLM tool use、确认/拒绝工具和标题列表规则 |
 | [Agent Context Files 与记忆机制](tech_design/agent_context_files.md) | AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY、daily notes 和记忆边界 |
 | [Dreaming 记忆压缩与长期记忆](tech_design/dreaming_memory_design.md) | LLM session 压缩、carryover、memory items、自动应用/跳过、debug 调优和回滚 |
 | [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md) | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和异步任务衔接 |

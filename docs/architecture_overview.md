@@ -115,7 +115,7 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │ 提供陪伴感、持续性、偏好和长期记忆                           │
 ├─────────────────────────────────────────────────────────────┤
 │ Async Task & Proactive Layer                                 │
-│ task / worker / reminder / commitment / heartbeat / push     │
+│ task / worker / reminder / commitment / 账号主动检查 / push     │
 │ 处理长耗时任务、提醒、主动触达和补发结果                     │
 ├─────────────────────────────────────────────────────────────┤
 │ Entitlement & Growth Layer                                   │
@@ -217,7 +217,7 @@ WeChat final result
 主动提醒和内容推送也走同一个发送底座：
 
 ```text
-reminder / commitment / heartbeat / content candidate
+reminder / commitment / 账号主动检查 / content candidate
         │
         ▼
 Scheduler / worker claim
@@ -268,10 +268,10 @@ AI4ALL 借鉴 OpenClaw 的“Agent OS”思想，但产品边界不同：
 | Prompt | 本地 agent context | 账号级 context + 后端策略 |
 | Memory | 本地 memory/Dreaming | 账号级记忆 + 运营审计 |
 | Tools | agent 可直接调用工具 | 后端按账号/权益/权限启用 |
-| Cron/Heartbeat | 单用户 agent 循环 | 系统 scheduler + 用户级 run |
+| Cron/定时检查 | 单用户 agent 循环 | 系统 scheduler + 账号级检查 |
 | 运营 | 用户自管理 | Admin/Support/Entitlement 控制面 |
 
-OpenClaw 仍然是重要参考，尤其是 Agent Loop、context engine、tool schema、Dreaming、heartbeat 和 trace。但 AI4ALL 的业务状态必须留在自己的后端。
+OpenClaw 仍然是重要参考，尤其是 Agent Loop、context engine、tool schema、Dreaming、定时检查和 trace。但 AI4ALL 的业务状态必须留在自己的后端。
 
 ## 7. 部署形态
 

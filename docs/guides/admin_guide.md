@@ -185,6 +185,14 @@ curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
 
 ## 主动提醒 Scheduler
 
+开发期手动测试优先使用 Proactive Debug 后台：
+
+```text
+http://127.0.0.1:8000/ui/proactive_debug.html
+```
+
+该页面可以选择账号、开启 proactive state、模拟入站、让 pending reminder 到期、运行 scheduler、生成/提升/清理 account check draft，并在单账号 `Run Proactive Check` 后展示内容邀请是否生成及原因。
+
 查看或更新某个账号的 proactive state：
 
 ```bash
@@ -200,7 +208,7 @@ curl -X PATCH \
     "next_scan_at": "2000-01-01 00:00:00",
     "metadata": {
       "source": "manual-test",
-      "heartbeat_candidate": {
+      "account_check_candidate": {
         "id": "manual-1",
         "text": "记得关注一下事情 B。",
         "source": "manual-test"
@@ -211,35 +219,45 @@ curl -X PATCH \
 
 `next_scan_at` 和 `cooldown_until` 支持 ISO datetime 或 `YYYY-MM-DD HH:MM:SS`，会规范化为 `YYYY-MM-DD HH:MM:SS` 存入 SQLite。
 
-手动触发隐藏 LLM heartbeat 候选生成：
+手动触发隐藏 LLM 账号主动检查候选生成：
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/accounts/acct_example/heartbeat-candidate-draft \
+  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-这个接口只会把结果写入 `metadata.heartbeat_candidate_draft`。它不会写入会触发发送的 `metadata.heartbeat_candidate`，也不会主动发微信。若 LLM 置信度低于 `PROACTIVE_HEARTBEAT_CANDIDATE_MIN_CONFIDENCE`，会返回 no-op 并清理旧 draft。
+这个接口只会把结果写入 `metadata.account_check_candidate_draft`。它不会写入会触发发送的 `metadata.account_check_candidate`，也不会主动发微信。若 LLM 置信度低于 `PROACTIVE_ACCOUNT_CHECK_MIN_CONFIDENCE`，会返回 no-op 并清理旧 draft。
 
 人工确认 draft 可发送后，再把它提升为 active candidate：
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/accounts/acct_example/heartbeat-candidate-draft/promote \
+  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft/promote \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-promote 会把 `metadata.heartbeat_candidate_draft` 移到 `metadata.heartbeat_candidate`，并写入 `heartbeat_candidate_promoted_at`。只有提升后的 `heartbeat_candidate` 才会被 scheduler 的 heartbeat run 视为可发送候选。
+promote 会把 `metadata.account_check_candidate_draft` 移到 `metadata.account_check_candidate`，并写入 `account_check_candidate_promoted_at`。只有提升后的 `account_check_candidate` 才会被 scheduler 的账号主动检查视为可发送候选。
 
 如果 draft 不合适，可以直接清理：
 
 ```bash
 curl -X DELETE \
-  http://127.0.0.1:8000/admin/accounts/acct_example/heartbeat-candidate-draft \
+  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-清理只删除 draft，不会删除已经存在的 active `heartbeat_candidate`。
+清理只删除 draft，不会删除已经存在的 active `account_check_candidate`。
+
+手动触发单账号账号主动检查，并查看是否生成内容邀请候选：
+
+```bash
+curl -X POST \
+  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check/run-once \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+返回体中的 `account_check` 包含本次候选发送决策和执行结果；`display.content_invitation_generated` 为 `true` 时会展示本次生成的内容邀请候选，为 `false` 时 `display.reason` 会说明未生成原因。
 
 查看 scheduler 配置和运行状态：
 
@@ -263,7 +281,7 @@ curl -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-手动触发一次 proactive run。当前会依次处理 due reminders、due commitments，再扫描 due proactive accounts。账号扫描会调用非 LLM heartbeat 决策函数：没有候选事项时返回 `no_candidate` 并跳过发送；如果 state metadata 里显式放入 `heartbeat_candidate`，且 route、quiet hours、daily limit 等策略通过，会通过 outbound ledger / Gateway 发送微信消息。
+手动触发一次 proactive run。当前会依次处理 due reminders、due commitments，再扫描 due proactive accounts。账号主动检查会调用非 LLM 决策函数：没有候选事项时返回 `no_candidate` 并跳过发送；如果 state metadata 里显式放入 `account_check_candidate`，且 route、quiet hours、daily limit 等策略通过，会通过 outbound ledger / Gateway 发送微信消息。
 
 ```bash
 curl -X POST \
@@ -271,16 +289,16 @@ curl -X POST \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-heartbeat 发送成功后，系统会写入 `last_proactive_sent_at`，并把 active `metadata.heartbeat_candidate` 移到 `metadata.heartbeat_last_sent_candidate`，避免同一个候选被下一轮重复发送。
+账号主动检查发送成功后，系统会写入 `last_proactive_sent_at`，并把 active `metadata.account_check_candidate` 移到 `metadata.account_check_last_sent_candidate`，避免同一个候选被下一轮重复发送。
 
-阶段性验证 heartbeat 主动触达的最短路径：
+阶段性验证账号主动检查主动触达的最短路径：
 
 1. 确认目标账号已经有真实微信入站消息和 `channel_bindings` route。
 2. `PATCH /admin/accounts/{account_id}/proactive-state`，设置 `enabled=true`、`next_scan_at` 为过去时间。
-3. `POST /admin/accounts/{account_id}/heartbeat-candidate-draft` 生成隐藏 LLM draft。
-4. `GET /admin/accounts/{account_id}/proactive-state` 检查 `metadata.heartbeat_candidate_draft`。
-5. `POST /admin/accounts/{account_id}/heartbeat-candidate-draft/promote` 人工确认提升。
-6. `POST /admin/proactive/scheduler/run-once?limit=20` 触发扫描。
+3. `POST /admin/accounts/{account_id}/proactive-check-candidate-draft` 生成隐藏 LLM draft。
+4. `GET /admin/accounts/{account_id}/proactive-state` 检查 `metadata.account_check_candidate_draft`。
+5. `POST /admin/accounts/{account_id}/proactive-check-candidate-draft/promote` 人工确认提升。
+6. `POST /admin/accounts/{account_id}/proactive-check/run-once` 调试单账号；或 `POST /admin/proactive/scheduler/run-once?limit=20` 触发 worker 同款扫描。
 7. 若未命中 quiet hours / daily limit / route 缺失，应在微信收到主动消息，并在 `outbound_messages` 看到 `sent`。
 
 最终联调 hidden commitment 的路径：
@@ -298,7 +316,7 @@ heartbeat 发送成功后，系统会写入 `last_proactive_sent_at`，并把 ac
 .venv/bin/python scripts/run_proactive_scheduler.py
 ```
 
-默认 `PROACTIVE_SCHEDULER_ENABLED=false`，FastAPI 不会自动启动 in-process scheduler。若要在 FastAPI 内启动，必须保证 `uvicorn --workers 1`；否则多个 worker 会重复扫描 due reminder / due account。账号扫描间隔由 `PROACTIVE_ACCOUNT_SCAN_INTERVAL_SECONDS` 控制。
+默认 `PROACTIVE_SCHEDULER_ENABLED=false`，FastAPI 不会自动启动 in-process scheduler。若要在 FastAPI 内启动，必须保证 `uvicorn --workers 1`；否则多个 worker 会重复扫描 due reminder / due account。账号主动检查间隔由 `PROACTIVE_ACCOUNT_CHECK_INTERVAL_SECONDS` 控制。
 
 ## 本地 Debug API
 

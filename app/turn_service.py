@@ -10,6 +10,7 @@ from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     get_account_onboarding_state,
+    get_active_content_invitation,
     get_daily_usage,
     get_duplicate_reply,
     increment_session_turn_count,
@@ -101,7 +102,11 @@ def _count_user_name_asks(turn_count: int, state: str) -> int:
     return 0
 
 
-def _tool_instructions(*, web_search_enabled: bool) -> str:
+def _tool_instructions(
+    *,
+    web_search_enabled: bool,
+    active_content_invitation: Optional[dict] = None,
+) -> str:
     instructions = [
         "## 提醒工具使用规则",
         "",
@@ -123,6 +128,20 @@ def _tool_instructions(*, web_search_enabled: bool) -> str:
         )
     else:
         instructions.append("- 不要承诺任何工具之外的功能（如网络搜索、发图片等）。")
+    if active_content_invitation:
+        title_count = len(active_content_invitation.get("title_items") or [])
+        instructions.extend(
+            [
+                "",
+                "## 内容邀请回复工具使用规则",
+                "",
+                f"- 当前存在待回应内容邀请：id={active_content_invitation['id']}，topic={active_content_invitation['topic']}，标题数={title_count}。",
+                "- 用户明确想看上一条邀请内容时，调用 send_content_invitation_titles。",
+                "- 用户拒绝、退订或表达不想看时，调用 record_content_invitation_feedback。",
+                "- 用户表达模糊或转移话题时，不要调用内容邀请工具。",
+                "- 标题列表回复只能包含标题，不要包含 URL、来源链接或长摘要。",
+            ]
+        )
     return "\n".join(instructions)
 
 
@@ -484,6 +503,15 @@ def handle_openclaw_turn(
                     "onboarding_pre_written": onboarding_pre_written,
                 }
             )
+            active_content_invitation = None
+            if not onboarding_active:
+                active_content_invitation = get_active_content_invitation(
+                    account_id=account_id,
+                    now=now.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                debug_metadata["active_content_invitation_id"] = (
+                    active_content_invitation["id"] if active_content_invitation else None
+                )
             onboarding_ctx = ""
             if onboarding_active:
                 onboarding_ctx = build_onboarding_prompt_context(
@@ -510,7 +538,8 @@ def handle_openclaw_turn(
                 model_name=settings.llm_model,
                 tool_instructions=(
                     None if onboarding_active else _tool_instructions(
-                        web_search_enabled=web_search_enabled_for_turn
+                        web_search_enabled=web_search_enabled_for_turn,
+                        active_content_invitation=active_content_invitation,
                     )
                 ),
             )
@@ -561,7 +590,10 @@ def handle_openclaw_turn(
                         except Exception as _fe:
                             logger.error("onboarding ai_name fallback write failed account=%s error=%s", account_id, _fe)
             else:
-                tools = get_default_tools(web_search_enabled=web_search_enabled_for_turn)
+                tools = get_default_tools(
+                    web_search_enabled=web_search_enabled_for_turn,
+                    content_invitation_response_enabled=bool(active_content_invitation),
+                )
                 reply, generation_error = generate_reply_with_tools(
                     user_text=text,
                     history=history,

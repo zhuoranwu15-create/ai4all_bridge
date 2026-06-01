@@ -1,4 +1,9 @@
-from app.tools import get_default_tools, get_reminder_tools, get_web_search_tools
+from app.tools import (
+    get_content_invitation_response_tools,
+    get_default_tools,
+    get_reminder_tools,
+    get_web_search_tools,
+)
 
 
 def test_get_reminder_tools_returns_four_tools():
@@ -46,3 +51,17 @@ def test_get_default_tools_gates_web_search():
     assert "web_search" not in disabled
     assert "web_search" in enabled
     assert {"create_reminder", "list_reminders", "cancel_reminder", "update_reminder"} <= enabled
+
+
+def test_content_invitation_response_tools_are_opt_in():
+    tools = get_content_invitation_response_tools()
+    names = {t["function"]["name"] for t in tools}
+    assert names == {"send_content_invitation_titles", "record_content_invitation_feedback"}
+
+    disabled = {t["function"]["name"] for t in get_default_tools()}
+    enabled = {
+        t["function"]["name"]
+        for t in get_default_tools(content_invitation_response_enabled=True)
+    }
+    assert "send_content_invitation_titles" not in disabled
+    assert "send_content_invitation_titles" in enabled

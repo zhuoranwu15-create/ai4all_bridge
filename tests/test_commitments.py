@@ -133,7 +133,7 @@ def test_dispatch_due_commitment_sends_once(fresh_db):
     from app.proactive.commitments import dispatch_due_commitments
     from app.proactive.state import get_account_state
 
-    fresh_db.proactive_outbound_daily_limit = 3
+    fresh_db.companion_followup_daily_limit = 3
     session_id = _create_account("acc-com-dispatch")
     _create_route("acc-com-dispatch")
     _create_state("acc-com-dispatch")
@@ -169,6 +169,7 @@ def test_dispatch_due_commitment_sends_once(fresh_db):
     assert commitment["outbound_message_id"] == outbound[0]["id"]
     assert outbound[0]["status"] == "sent"
     assert outbound[0]["source"] == "commitment"
+    assert outbound[0]["product_category"] == "companion_followup"
     assert outbound[0]["idempotency_key"] == "commitment-com-dispatch"
     assert outbound[0]["metadata"]["commitment_id"] == "com-dispatch"
     assert state["last_proactive_sent_at"] == "2026-05-22 10:00:00"

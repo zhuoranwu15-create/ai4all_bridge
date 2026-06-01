@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proactive Debug</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #20242a; font-size: 14px; }
+    header { background: #182230; color: #fff; padding: 14px 22px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    header h1 { font-size: 17px; font-weight: 650; }
+    header p { margin-top: 3px; color: #b8c3d4; font-size: 12px; }
+    .badge { background: #f59e0b; color: #111827; border-radius: 999px; padding: 3px 9px; font-size: 11px; font-weight: 700; }
+    .token-bar { background: #fff8e1; border-bottom: 1px solid #ffe082; padding: 10px 22px; display: none; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .token-bar input { width: 240px; border: 1px solid #facc15; border-radius: 6px; padding: 6px 9px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #fffde7; }
+    .layout { display: grid; grid-template-columns: 320px minmax(420px, 1fr) minmax(420px, 1fr); gap: 14px; padding: 14px; height: calc(100vh - 58px); }
+    .panel { background: #fff; border: 1px solid #dde3ea; border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+    .panel-head { padding: 12px 14px; border-bottom: 1px solid #e7ecf2; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .panel-head h2 { font-size: 14px; font-weight: 650; }
+    .panel-head .sub { color: #6b7280; font-size: 12px; margin-top: 3px; line-height: 1.4; }
+    .panel-body { padding: 14px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+    .section { border: 1px solid #e7ecf2; border-radius: 8px; padding: 12px; background: #fcfdff; }
+    .section h3 { font-size: 13px; margin-bottom: 8px; }
+    .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px; }
+    .field label { font-size: 12px; color: #5b6472; font-weight: 600; }
+    input, select, textarea { border: 1px solid #d8dee8; border-radius: 6px; padding: 7px 9px; font: inherit; background: #fff; }
+    textarea { min-height: 76px; resize: vertical; line-height: 1.45; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,.12); }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; padding: 7px 11px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #eef2ff; color: #273a86; }
+    .btn-secondary:hover { background: #e0e7ff; }
+    .btn-outline { background: #fff; border: 1px solid #d8dee8; color: #374151; }
+    .btn-outline:hover { background: #f3f4f6; }
+    .btn-danger { background: #fee2e2; color: #991b1b; }
+    .btn-danger:hover { background: #fecaca; }
+    .btn:disabled { opacity: .55; cursor: not-allowed; }
+    .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; font-size: 13px; }
+    .kv span:nth-child(odd) { color: #6b7280; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .status { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; background: #eef2ff; color: #3730a3; }
+    .status-ok { background: #dcfce7; color: #166534; }
+    .status-warn { background: #fef3c7; color: #92400e; }
+    .status-bad { background: #fee2e2; color: #991b1b; }
+    .list { display: flex; flex-direction: column; gap: 8px; }
+    .item { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; background: #fff; }
+    .item-head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+    .item-title { font-weight: 650; font-size: 13px; }
+    .item-meta { color: #6b7280; font-size: 12px; line-height: 1.5; word-break: break-word; }
+    pre { background: #0f172a; color: #dbeafe; border-radius: 8px; padding: 11px; overflow: auto; max-height: 320px; font-size: 12px; line-height: 1.45; }
+    .empty { color: #8792a2; font-size: 13px; text-align: center; padding: 20px 0; }
+    .toast { position: fixed; right: 18px; bottom: 18px; background: #111827; color: #fff; padding: 10px 14px; border-radius: 8px; display: none; max-width: 420px; line-height: 1.4; }
+    .toast.show { display: block; }
+    @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; height: auto; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Proactive Debug Panel</h1>
+      <p>测试提醒、scheduler、账号主动检查和内容邀请候选生成。</p>
+    </div>
+    <span class="badge">DEV ONLY</span>
+  </header>
+
+  <div id="tokenBar" class="token-bar">
+    <strong>Token</strong>
+    <input id="adminTokenInput" type="text" placeholder="Admin token, e.g. dev-admin-token">
+    <input id="bridgeTokenInput" type="text" placeholder="Bridge token, e.g. dev-secret">
+    <button class="btn btn-primary" onclick="saveTokens()">保存</button>
+  </div>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>账号与状态</h2>
+          <div class="sub">选择目标账号，开启 proactive state，并查看当前队列。</div>
+        </div>
+        <button class="btn btn-outline" onclick="loadAccounts()">刷新</button>
+      </div>
+      <div class="panel-body">
+        <div class="field">
+          <label for="accountSelect">Account</label>
+          <select id="accountSelect" onchange="onAccountChange()">
+            <option value="">选择账号</option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <button class="btn btn-primary" onclick="enableProactiveState()">开启并设为 due</button>
+          <button class="btn btn-outline" onclick="refreshAll()">刷新状态</button>
+        </div>
+        <div class="section">
+          <h3>Proactive State</h3>
+          <div id="stateBox" class="empty">未加载</div>
+        </div>
+        <div class="section">
+          <h3>最近 Outbound</h3>
+          <div id="outboundBox" class="empty">未加载</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>提醒与 Scheduler</h2>
+          <div class="sub">通过模拟聊天创建提醒，把 pending 提醒改成已到期，然后手动跑 scheduler。</div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="section">
+          <h3>模拟入站消息</h3>
+          <div class="field">
+            <label for="turnText">消息文本</label>
+            <textarea id="turnText">明天上午10点提醒我检查事情A</textarea>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="sendDebugTurn()">发送模拟消息</button>
+            <button class="btn btn-secondary" onclick="makeFirstReminderDue()">把第一条 pending 提醒改成已到期</button>
+          </div>
+        </div>
+        <div class="section">
+          <h3>Scheduler</h3>
+          <div class="field">
+            <label for="schedulerLimit">Limit</label>
+            <input id="schedulerLimit" type="number" value="20" min="1" max="100">
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="runScheduler()">Run Scheduler Once</button>
+          </div>
+        </div>
+        <div class="section">
+          <h3>提醒列表</h3>
+          <div id="reminderBox" class="empty">未加载</div>
+        </div>
+        <div class="section">
+          <h3>Scheduler Result</h3>
+          <pre id="schedulerResult">{}</pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div>
+          <h2>账号主动检查与内容邀请</h2>
+          <div class="sub">单账号触发 proactive check；如果内容邀请未生成，会展示 reason。</div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="section">
+          <h3>Account Check Draft</h3>
+          <div class="btn-row">
+            <button class="btn btn-secondary" onclick="generateDraft()">生成 draft</button>
+            <button class="btn btn-primary" onclick="promoteDraft()">Promote draft</button>
+            <button class="btn btn-danger" onclick="clearDraft()">清理 draft</button>
+          </div>
+        </div>
+        <div class="section">
+          <h3>单账号 Run Once</h3>
+          <div class="btn-row">
+            <button class="btn btn-primary" onclick="runAccountCheck()">Run Proactive Check</button>
+          </div>
+          <div id="contentDisplay" class="empty">尚未运行</div>
+        </div>
+        <div class="section">
+          <h3>内容邀请</h3>
+          <div id="invitationBox" class="empty">未加载</div>
+        </div>
+        <div class="section">
+          <h3>Account Check Result</h3>
+          <pre id="accountCheckResult">{}</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+<script>
+let adminToken = localStorage.getItem('proactive_debug_admin_token') || '';
+let bridgeToken = localStorage.getItem('proactive_debug_bridge_token') || '';
+let currentAccountId = '';
+let messageCounter = 0;
+
+if (!adminToken || !bridgeToken) {
+  document.getElementById('tokenBar').style.display = 'flex';
+}
+
+function saveTokens() {
+  const admin = document.getElementById('adminTokenInput').value.trim();
+  const bridge = document.getElementById('bridgeTokenInput').value.trim();
+  if (!admin || !bridge) {
+    showToast('请填写 Admin token 和 Bridge token');
+    return;
+  }
+  localStorage.setItem('proactive_debug_admin_token', admin);
+  localStorage.setItem('proactive_debug_bridge_token', bridge);
+  adminToken = admin;
+  bridgeToken = bridge;
+  document.getElementById('tokenBar').style.display = 'none';
+  loadAccounts();
+}
+
+async function api(method, path, body, auth) {
+  const token = auth === 'bridge' ? bridgeToken : adminToken;
+  const res = await fetch(path, {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail));
+  }
+  return res.json();
+}
+
+async function loadAccounts() {
+  try {
+    const data = await api('GET', '/admin/accounts');
+    const select = document.getElementById('accountSelect');
+    const previous = select.value;
+    const accounts = data.accounts || [];
+    select.innerHTML = '<option value="">选择账号</option>' + accounts.map((account) => {
+      const label = account.display_name || account.id;
+      const selected = account.id === previous ? ' selected' : '';
+      return `<option value="${esc(account.id)}"${selected}>${esc(label)}</option>`;
+    }).join('');
+    if (previous) {
+      currentAccountId = previous;
+    }
+  } catch (err) {
+    showToast(`加载账号失败: ${err.message}`);
+  }
+}
+
+async function onAccountChange() {
+  currentAccountId = document.getElementById('accountSelect').value;
+  await refreshAll();
+}
+
+function requireAccount() {
+  if (!currentAccountId) {
+    showToast('请先选择账号');
+    return false;
+  }
+  return true;
+}
+
+async function refreshAll() {
+  if (!currentAccountId) return;
+  await Promise.allSettled([
+    refreshState(),
+    refreshReminders(),
+    refreshOverview(),
+  ]);
+}
+
+async function refreshState() {
+  const data = await api('GET', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-state`);
+  const state = data.proactive_state || null;
+  if (!state) {
+    document.getElementById('stateBox').innerHTML = '<div class="empty">暂无 proactive state</div>';
+    return;
+  }
+  document.getElementById('stateBox').innerHTML = `
+    <div class="kv">
+      <span>enabled</span><strong>${state.enabled ? 'true' : 'false'}</strong>
+      <span>next_scan_at</span><strong class="mono">${esc(state.next_scan_at || '-')}</strong>
+      <span>last_scan_at</span><strong class="mono">${esc(state.last_scan_at || '-')}</strong>
+      <span>cooldown_until</span><strong class="mono">${esc(state.cooldown_until || '-')}</strong>
+      <span>last_sent</span><strong class="mono">${esc(state.last_proactive_sent_at || '-')}</strong>
+    </div>
+    <pre>${esc(JSON.stringify(state.metadata || {}, null, 2))}</pre>
+  `;
+}
+
+async function enableProactiveState() {
+  if (!requireAccount()) return;
+  try {
+    await api('PATCH', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-state`, {
+      enabled: true,
+      next_scan_at: '2000-01-01 00:00:00',
+    });
+    showToast('已开启 proactive state，并设为 due');
+    await refreshAll();
+  } catch (err) {
+    showToast(`开启失败: ${err.message}`);
+  }
+}
+
+async function refreshReminders() {
+  const data = await api('GET', `/debug/reminders/${encodeURIComponent(currentAccountId)}`);
+  const reminders = data.reminders || [];
+  const box = document.getElementById('reminderBox');
+  if (!reminders.length) {
+    box.innerHTML = '<div class="empty">暂无提醒</div>';
+    return;
+  }
+  box.innerHTML = `<div class="list">${reminders.map((r) => `
+    <div class="item">
+      <div class="item-head">
+        <div class="item-title">${esc(r.text || '')}</div>
+        <span class="status ${statusClass(r.status)}">${esc(r.status || '')}</span>
+      </div>
+      <div class="item-meta mono">${esc(r.id)}</div>
+      <div class="item-meta">due_at: ${esc(r.due_at || '-')}</div>
+      ${r.error ? `<div class="item-meta">error: ${esc(r.error)}</div>` : ''}
+    </div>
+  `).join('')}</div>`;
+}
+
+async function sendDebugTurn() {
+  if (!requireAccount()) return;
+  const text = document.getElementById('turnText').value.trim();
+  if (!text) {
+    showToast('请输入消息文本');
+    return;
+  }
+  try {
+    const payload = {
+      account_id: currentAccountId,
+      session_key: `debug-proactive-${currentAccountId}`,
+      sender_id: 'proactive-debug',
+      chat_id: currentAccountId,
+      chat_type: 'private',
+      message_type: 'text',
+      message_id: `debug-proactive-${Date.now()}-${++messageCounter}`,
+      text,
+    };
+    const data = await api('POST', '/openclaw/turn', payload, 'bridge');
+    showToast(`模拟消息完成: ${data.reply || '无回复'}`);
+    await refreshAll();
+  } catch (err) {
+    showToast(`模拟消息失败: ${err.message}`);
+  }
+}
+
+async function makeFirstReminderDue() {
+  if (!requireAccount()) return;
+  try {
+    const data = await api('GET', `/debug/reminders/${encodeURIComponent(currentAccountId)}`);
+    const reminder = (data.reminders || []).find((item) => item.status === 'pending');
+    if (!reminder) {
+      showToast('没有 pending 提醒可改成 due');
+      return;
+    }
+    await api('PATCH', `/debug/reminders/${encodeURIComponent(reminder.id)}`, {
+      due_at: formatLocalDateTime(new Date(Date.now() - 60 * 1000)),
+    });
+    showToast(`已将提醒 ${reminder.id} 改成已到期`);
+    await refreshReminders();
+  } catch (err) {
+    showToast(`更新提醒失败: ${err.message}`);
+  }
+}
+
+async function runScheduler() {
+  const limit = Math.max(1, Math.min(100, Number(document.getElementById('schedulerLimit').value || 20)));
+  try {
+    const data = await api('POST', `/admin/proactive/scheduler/run-once?limit=${limit}`);
+    document.getElementById('schedulerResult').textContent = JSON.stringify(data.run || data, null, 2);
+    showToast('scheduler run-once 完成');
+    await refreshAll();
+  } catch (err) {
+    showToast(`scheduler 失败: ${err.message}`);
+  }
+}
+
+async function generateDraft() {
+  if (!requireAccount()) return;
+  try {
+    const data = await api('POST', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-check-candidate-draft`);
+    document.getElementById('accountCheckResult').textContent = JSON.stringify(data.result || data, null, 2);
+    showToast('draft 生成调用完成');
+    await refreshState();
+  } catch (err) {
+    showToast(`生成 draft 失败: ${err.message}`);
+  }
+}
+
+async function promoteDraft() {
+  if (!requireAccount()) return;
+  try {
+    const data = await api('POST', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-check-candidate-draft/promote`);
+    document.getElementById('accountCheckResult').textContent = JSON.stringify(data.result || data, null, 2);
+    showToast('promote 完成');
+    await refreshState();
+  } catch (err) {
+    showToast(`promote 失败: ${err.message}`);
+  }
+}
+
+async function clearDraft() {
+  if (!requireAccount()) return;
+  try {
+    const data = await api('DELETE', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-check-candidate-draft`);
+    document.getElementById('accountCheckResult').textContent = JSON.stringify(data.result || data, null, 2);
+    showToast('draft 已清理');
+    await refreshState();
+  } catch (err) {
+    showToast(`清理失败: ${err.message}`);
+  }
+}
+
+async function runAccountCheck() {
+  if (!requireAccount()) return;
+  try {
+    const data = await api('POST', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-check/run-once`);
+    document.getElementById('accountCheckResult').textContent = JSON.stringify(data, null, 2);
+    renderContentDisplay(data.display || {});
+    showToast('账号主动检查完成');
+    await refreshAll();
+  } catch (err) {
+    showToast(`账号主动检查失败: ${err.message}`);
+  }
+}
+
+function renderContentDisplay(display) {
+  const box = document.getElementById('contentDisplay');
+  if (display.content_invitation_generated) {
+    const invitation = display.content_invitation || {};
+    box.innerHTML = `
+      <div class="item">
+        <div class="item-head">
+          <div class="item-title">${esc(invitation.topic || '内容邀请')}</div>
+          <span class="status status-ok">generated</span>
+        </div>
+        <div class="item-meta">${esc(invitation.invitation_text || '')}</div>
+        <div class="item-meta mono">${esc(invitation.id || '')}</div>
+      </div>
+    `;
+  } else {
+    box.innerHTML = `
+      <div class="item">
+        <div class="item-head">
+          <div class="item-title">未生成内容邀请</div>
+          <span class="status status-warn">skipped</span>
+        </div>
+        <div class="item-meta">reason: ${esc(display.reason || '-')}</div>
+        ${display.detail ? `<div class="item-meta">detail: ${esc(display.detail)}</div>` : ''}
+      </div>
+    `;
+  }
+}
+
+async function refreshOverview() {
+  const data = await api('GET', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-overview?limit=10`);
+  renderOutbound(data.outbound_messages || []);
+  renderInvitations(data.content_invitations || []);
+}
+
+function renderOutbound(items) {
+  const box = document.getElementById('outboundBox');
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">暂无 outbound</div>';
+    return;
+  }
+  box.innerHTML = `<div class="list">${items.slice(0, 8).map((item) => `
+    <div class="item">
+      <div class="item-head">
+        <div class="item-title">${esc(item.source || '')}</div>
+        <span class="status ${statusClass(item.status)}">${esc(item.status || '')}</span>
+      </div>
+      <div class="item-meta">${esc(item.product_category || '')} · ${esc(item.created_at || '')}</div>
+      ${item.error ? `<div class="item-meta">error: ${esc(item.error)}</div>` : ''}
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderInvitations(items) {
+  const box = document.getElementById('invitationBox');
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">暂无内容邀请</div>';
+    return;
+  }
+  box.innerHTML = `<div class="list">${items.slice(0, 8).map((item) => `
+    <div class="item">
+      <div class="item-head">
+        <div class="item-title">${esc(item.topic || '')}</div>
+        <span class="status ${statusClass(item.status)}">${esc(item.status || '')}</span>
+      </div>
+      <div class="item-meta">scheduled_at: ${esc(item.scheduled_at || '-')}</div>
+      <div class="item-meta">titles: ${esc(item.title_count == null ? '-' : String(item.title_count))}</div>
+      <div class="item-meta mono">${esc(item.id || '')}</div>
+    </div>
+  `).join('')}</div>`;
+}
+
+function statusClass(status) {
+  if (['ok', 'sent', 'succeeded', 'invited', 'accepted', 'titles_sent'].includes(status)) return 'status-ok';
+  if (['failed', 'cancelled', 'declined', 'rejected_by_policy'].includes(status)) return 'status-bad';
+  return 'status-warn';
+}
+
+function formatLocalDateTime(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join('-') + ' ' + [pad(date.getHours()), pad(date.getMinutes()), pad(date.getSeconds())].join(':');
+}
+
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function showToast(message) {
+  const toast = document.getElementById('toast');
+  toast.textContent = message;
+  toast.classList.add('show');
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => toast.classList.remove('show'), 3600);
+}
+
+loadAccounts();
+</script>
+</body>
+</html>

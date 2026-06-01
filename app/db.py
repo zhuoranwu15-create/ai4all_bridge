@@ -481,6 +481,10 @@ def init_db() -> None:
                 error TEXT,
                 gateway_message_id TEXT,
                 quota_date TEXT NOT NULL,
+                product_category TEXT,
+                policy_version TEXT,
+                policy_reason TEXT,
+                scheduled_at TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 sent_at TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -570,6 +574,53 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
             ON proactive_account_state(enabled, next_scan_at, cooldown_until);
+
+            CREATE TABLE IF NOT EXISTS content_invitations (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                invitation_text TEXT NOT NULL,
+                title_items_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'candidate',
+                scheduled_at TEXT,
+                invited_at TEXT,
+                responded_at TEXT,
+                expires_at TEXT,
+                outbound_message_id INTEGER,
+                trigger_message_id TEXT,
+                tool_invocation_id INTEGER,
+                source_task_id TEXT,
+                policy_reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
+                FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_content_invitations_status_due
+            ON content_invitations(status, scheduled_at, expires_at);
+
+            CREATE INDEX IF NOT EXISTS ix_content_invitations_account_status
+            ON content_invitations(account_id, status, updated_at);
+
+            CREATE TABLE IF NOT EXISTS content_invitation_preferences (
+                account_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'allowed',
+                cooldown_until TEXT,
+                last_feedback_at TEXT,
+                feedback_count INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(account_id, topic),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_content_invitation_preferences_cooldown
+            ON content_invitation_preferences(account_id, status, cooldown_until);
 
             CREATE TABLE IF NOT EXISTS dreaming_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -828,9 +879,95 @@ def init_db() -> None:
         _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
         _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
+        _ensure_column(conn, "outbound_messages", "product_category", "TEXT")
+        _ensure_column(conn, "outbound_messages", "policy_version", "TEXT")
+        _ensure_column(conn, "outbound_messages", "policy_reason", "TEXT")
+        _ensure_column(conn, "outbound_messages", "scheduled_at", "TEXT")
         _ensure_column(conn, "reminders", "recur_rule", "TEXT")
         _ensure_column(conn, "reminders", "sent_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "reminders", "last_sent_at", "TEXT")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_invitations (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                invitation_text TEXT NOT NULL,
+                title_items_json TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'candidate',
+                scheduled_at TEXT,
+                invited_at TEXT,
+                responded_at TEXT,
+                expires_at TEXT,
+                outbound_message_id INTEGER,
+                trigger_message_id TEXT,
+                tool_invocation_id INTEGER,
+                source_task_id TEXT,
+                policy_reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
+                FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_content_invitations_status_due
+            ON content_invitations(status, scheduled_at, expires_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_content_invitations_account_status
+            ON content_invitations(account_id, status, updated_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS content_invitation_preferences (
+                account_id TEXT NOT NULL,
+                topic TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'allowed',
+                cooldown_until TEXT,
+                last_feedback_at TEXT,
+                feedback_count INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(account_id, topic),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_content_invitation_preferences_cooldown
+            ON content_invitation_preferences(account_id, status, cooldown_until)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_outbound_messages_account_category_date
+            ON outbound_messages(account_id, product_category, quota_date, status)
+            """
+        )
+        conn.execute(
+            """
+            UPDATE outbound_messages
+            SET product_category = CASE
+                WHEN source IN ('reminder', 'reminder_change_confirmation') THEN 'user_reminder'
+                WHEN source IN ('commitment', 'account_check', 'heartbeat') THEN 'companion_followup'
+                WHEN source = 'content_invitation' THEN 'content_invitation'
+                WHEN source IN ('content_invitation_titles', 'content_invitation_feedback') THEN 'content_invitation_response'
+                WHEN source = 'async_task_result' THEN 'task_result'
+                ELSE product_category
+            END
+            WHERE product_category IS NULL
+            """
+        )
         conn.execute(
             "UPDATE accounts SET display_name = NULL WHERE display_name = ?",
             ("AI4ALL 助手",),
@@ -3677,6 +3814,57 @@ def insert_message(
         return None
 
 
+def insert_outbound_delivery_message(
+    *,
+    outbound_message: Dict[str, Any],
+) -> Optional[int]:
+    """Persist a delivered proactive outbound text into the account conversation timeline."""
+    account_id = _clean_text(outbound_message.get("account_id"))
+    channel = _clean_text(outbound_message.get("channel"))
+    to_user_id = _clean_text(outbound_message.get("to_user_id"))
+    text = _clean_text(outbound_message.get("text"))
+    if not account_id or not channel or not to_user_id or not text:
+        return None
+
+    session_state = get_or_create_session(
+        account_id=account_id,
+        channel=channel,
+        sender_id=to_user_id,
+        sender_name=None,
+        chat_id=to_user_id,
+        session_key=ACCOUNT_ACTIVE_SESSION_KEY,
+        metadata={"created_reason": "proactive_outbound"},
+    )
+    session = session_state["session"]
+    outbound_id = int(outbound_message["id"])
+    raw_metadata = {
+        "source": "proactive_outbound",
+        "outbound_message_id": outbound_id,
+        "gateway_message_id": outbound_message.get("gateway_message_id"),
+        "idempotency_key": outbound_message.get("idempotency_key"),
+        "channel": channel,
+        "channel_account_id": outbound_message.get("channel_account_id"),
+        "session_key": outbound_message.get("session_key"),
+        "product_category": outbound_message.get("product_category"),
+        "policy_version": outbound_message.get("policy_version"),
+        "policy_reason": outbound_message.get("policy_reason"),
+        "outbound_source": outbound_message.get("source"),
+        "metadata": outbound_message.get("metadata") or {},
+    }
+    return insert_message(
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id=f"outbound-{outbound_id}",
+        reply_to_message_id=None,
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content=text,
+        raw=raw_metadata,
+        error=outbound_message.get("error"),
+    )
+
+
 def get_duplicate_reply(*, account_id: str, reply_to_message_id: Optional[str]) -> Optional[str]:
     if not reply_to_message_id:
         return None
@@ -4107,6 +4295,10 @@ def create_outbound_message(
     quota_date: str,
     status: str = "pending",
     error: Optional[str] = None,
+    product_category: Optional[str] = None,
+    policy_version: Optional[str] = None,
+    policy_reason: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cleaned_account_id = _clean_text(account_id)
@@ -4136,9 +4328,10 @@ def create_outbound_message(
             INSERT OR IGNORE INTO outbound_messages(
                 account_id, channel, channel_account_id, to_user_id, session_key,
                 source, text, idempotency_key, status, error, quota_date,
+                product_category, policy_version, policy_reason, scheduled_at,
                 metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             (
                 cleaned_account_id,
@@ -4152,6 +4345,10 @@ def create_outbound_message(
                 cleaned_status,
                 error,
                 cleaned_quota_date,
+                _clean_text(product_category),
+                _clean_text(policy_version),
+                _clean_text(policy_reason),
+                _clean_text(scheduled_at),
                 json.dumps(metadata or {}, ensure_ascii=False),
             ),
         )
@@ -4207,8 +4404,18 @@ def list_outbound_messages(
     return [_decode_outbound_message(row) for row in rows]
 
 
-def get_outbound_daily_usage(*, account_id: str, quota_date: str) -> int:
+def get_outbound_daily_usage(
+    *,
+    account_id: str,
+    quota_date: str,
+    product_category: Optional[str] = None,
+) -> int:
     placeholders = ", ".join("?" for _ in OUTBOUND_QUOTA_STATUSES)
+    category_clause = ""
+    params: List[Any] = [account_id, quota_date, *OUTBOUND_QUOTA_STATUSES]
+    if product_category:
+        category_clause = " AND product_category = ?"
+        params.append(product_category)
     with connect() as conn:
         row = conn.execute(
             f"""
@@ -4217,8 +4424,64 @@ def get_outbound_daily_usage(*, account_id: str, quota_date: str) -> int:
             WHERE account_id = ?
               AND quota_date = ?
               AND status IN ({placeholders})
+              {category_clause}
             """,
-            (account_id, quota_date, *OUTBOUND_QUOTA_STATUSES),
+            params,
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def get_pending_reminder_count_in_window(
+    *,
+    account_id: str,
+    start_at: str,
+    end_at: str,
+) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM reminders
+            WHERE account_id = ?
+              AND status IN ('pending', 'sending')
+              AND due_at >= ?
+              AND due_at < ?
+            """,
+            (account_id, start_at, end_at),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def get_pending_companion_followup_count_in_window(
+    *,
+    account_id: str,
+    start_at: str,
+    end_at: str,
+) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM proactive_commitments
+                    WHERE account_id = ?
+                      AND status IN ('pending', 'sending')
+                      AND due_at >= ?
+                      AND due_at < ?
+                )
+                +
+                (
+                    SELECT COUNT(*)
+                    FROM outbound_messages
+                    WHERE account_id = ?
+                      AND product_category = 'companion_followup'
+                      AND status IN ('pending', 'sending', 'sent')
+                      AND created_at >= ?
+                      AND created_at < ?
+                ) AS count
+            """,
+            (account_id, start_at, end_at, account_id, start_at, end_at),
         ).fetchone()
     return int(row["count"]) if row else 0
 
@@ -5064,6 +5327,491 @@ def claim_due_proactive_account_state(
 
 
 # ---------------------------------------------------------------------------
+# Content invitations
+# ---------------------------------------------------------------------------
+
+CONTENT_INVITATION_ACTIVE_STATUSES = ("candidate", "sending", "invited", "accepted")
+
+
+def _normalize_title_items(title_items: Any) -> List[Dict[str, Any]]:
+    if not isinstance(title_items, list):
+        return []
+    normalized: List[Dict[str, Any]] = []
+    for item in title_items:
+        if isinstance(item, dict):
+            title = _clean_text(item.get("title"))
+            if not title:
+                continue
+            normalized.append(
+                {
+                    "title": title[:200],
+                    "source_name": _clean_text(item.get("source_name")),
+                    "url": _clean_text(item.get("url")),
+                    "published_at": _clean_text(item.get("published_at")),
+                    "retrieved_at": _clean_text(item.get("retrieved_at")),
+                }
+            )
+        else:
+            title = _clean_text(item)
+            if title:
+                normalized.append({"title": title[:200]})
+    return normalized
+
+
+def _decode_content_invitation(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    title_items_json = item.pop("title_items_json", None)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["title_items"] = json.loads(title_items_json or "[]")
+    except json.JSONDecodeError:
+        item["title_items"] = []
+        item["title_items_decode_error"] = True
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _decode_content_invitation_preference(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    metadata_json = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(metadata_json or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def create_content_invitation(
+    *,
+    account_id: str,
+    topic: str,
+    invitation_text: str,
+    title_items: List[Dict[str, Any]],
+    invitation_id: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
+    expires_at: Optional[str] = None,
+    source_task_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_topic = _clean_text(topic)
+    cleaned_invitation_text = _clean_text(invitation_text)
+    cleaned_invitation_id = _clean_text(invitation_id) or _new_id("cinv")
+    normalized_titles = _normalize_title_items(title_items)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_topic:
+        raise ValueError("topic is required")
+    if not cleaned_invitation_text:
+        raise ValueError("invitation_text is required")
+    if len(normalized_titles) < 1:
+        raise ValueError("title_items is required")
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO content_invitations(
+                id, account_id, topic, invitation_text, title_items_json,
+                scheduled_at, expires_at, source_task_id, metadata_json,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (
+                cleaned_invitation_id,
+                cleaned_account_id,
+                cleaned_topic,
+                cleaned_invitation_text,
+                json.dumps(normalized_titles, ensure_ascii=False),
+                _clean_text(scheduled_at),
+                _clean_text(expires_at),
+                _clean_text(source_task_id),
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (cleaned_invitation_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("content_invitation was not created")
+    return _decode_content_invitation(row)
+
+
+def get_content_invitation(*, invitation_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (_clean_text(invitation_id),),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def list_content_invitations_for_account(
+    *,
+    account_id: str,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    clauses = ["account_id = ?"]
+    params: List[Any] = [account_id]
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM content_invitations
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [_decode_content_invitation(row) for row in rows]
+
+
+def get_active_content_invitation(
+    *,
+    account_id: str,
+    now: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM content_invitations
+            WHERE account_id = ?
+              AND status = 'invited'
+              AND (expires_at IS NULL OR expires_at > ?)
+            ORDER BY invited_at DESC, updated_at DESC
+            LIMIT 1
+            """,
+            (account_id, now),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def list_due_content_invitations(*, now: str, limit: int = 20) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT ci.*
+            FROM content_invitations ci
+            JOIN accounts a ON a.id = ci.account_id
+            WHERE ci.status = 'candidate'
+              AND (ci.scheduled_at IS NULL OR ci.scheduled_at <= ?)
+              AND a.status = 'active'
+            ORDER BY COALESCE(ci.scheduled_at, ci.created_at) ASC, ci.created_at ASC
+            LIMIT ?
+            """,
+            (now, limit),
+        ).fetchall()
+    return [_decode_content_invitation(row) for row in rows]
+
+
+def claim_due_content_invitation(
+    *,
+    invitation_id: str,
+    now: str,
+) -> Optional[Dict[str, Any]]:
+    cleaned_invitation_id = _clean_text(invitation_id)
+    cleaned_now = _clean_text(now)
+    if not cleaned_invitation_id:
+        raise ValueError("invitation_id is required")
+    if not cleaned_now:
+        raise ValueError("now is required")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'sending',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'candidate'
+              AND (scheduled_at IS NULL OR scheduled_at <= ?)
+              AND EXISTS (
+                  SELECT 1 FROM accounts
+                  WHERE accounts.id = content_invitations.account_id
+                    AND accounts.status = 'active'
+              )
+            """,
+            (cleaned_invitation_id, cleaned_now),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (cleaned_invitation_id,),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def release_content_invitation_claim(
+    *,
+    invitation_id: str,
+) -> bool:
+    """Reset a 'sending' invitation back to 'candidate' so it can be retried."""
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'candidate',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'sending'
+            """,
+            (invitation_id,),
+        )
+    return cursor.rowcount == 1
+
+
+def mark_content_invitation_invited(
+    *,
+    invitation_id: str,
+    outbound_message_id: Optional[int],
+    invited_at: str,
+    expires_at: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'invited',
+                invited_at = ?,
+                expires_at = COALESCE(?, expires_at),
+                outbound_message_id = ?,
+                policy_reason = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'sending'
+            """,
+            (invited_at, _clean_text(expires_at), outbound_message_id, invitation_id),
+        )
+        if cursor.rowcount != 1:
+            return None
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (invitation_id,),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def mark_content_invitation_rejected_by_policy(
+    *,
+    invitation_id: str,
+    outbound_message_id: Optional[int],
+    policy_reason: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'rejected_by_policy',
+                outbound_message_id = COALESCE(?, outbound_message_id),
+                policy_reason = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (outbound_message_id, _clean_text(policy_reason), invitation_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (invitation_id,),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def mark_content_invitation_titles_sent(
+    *,
+    invitation_id: str,
+    trigger_message_id: Optional[str],
+    tool_invocation_id: Optional[int],
+    responded_at: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'titles_sent',
+                responded_at = ?,
+                trigger_message_id = ?,
+                tool_invocation_id = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+              AND status = 'invited'
+            """,
+            (responded_at, _clean_text(trigger_message_id), tool_invocation_id, invitation_id),
+        )
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (invitation_id,),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def mark_content_invitation_feedback(
+    *,
+    invitation_id: str,
+    status: str,
+    trigger_message_id: Optional[str],
+    tool_invocation_id: Optional[int],
+    responded_at: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    current = get_content_invitation(invitation_id=invitation_id)
+    if current is None:
+        return None
+    next_metadata = dict(current.get("metadata") or {})
+    if metadata:
+        next_metadata.update(metadata)
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = ?,
+                responded_at = ?,
+                trigger_message_id = ?,
+                tool_invocation_id = ?,
+                metadata_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                _clean_text(status) or "declined",
+                responded_at,
+                _clean_text(trigger_message_id),
+                tool_invocation_id,
+                json.dumps(next_metadata, ensure_ascii=False),
+                invitation_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM content_invitations WHERE id = ?",
+            (invitation_id,),
+        ).fetchone()
+    return _decode_content_invitation(row) if row else None
+
+
+def expire_content_invitations(*, now: str, limit: int = 100) -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM content_invitations
+            WHERE status = 'invited'
+              AND expires_at IS NOT NULL
+              AND expires_at <= ?
+            ORDER BY expires_at ASC
+            LIMIT ?
+            """,
+            (now, limit),
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        if ids:
+            placeholders = ", ".join("?" for _ in ids)
+            conn.execute(
+                f"""
+                UPDATE content_invitations
+                SET status = 'expired',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id IN ({placeholders})
+                """,
+                ids,
+            )
+            rows = conn.execute(
+                f"SELECT * FROM content_invitations WHERE id IN ({placeholders})",
+                ids,
+            ).fetchall()
+        else:
+            rows = []
+    return [_decode_content_invitation(row) for row in rows]
+
+
+def get_content_invitation_preference(
+    *,
+    account_id: str,
+    topic: str,
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM content_invitation_preferences
+            WHERE account_id = ? AND topic = ?
+            """,
+            (account_id, topic),
+        ).fetchone()
+    return _decode_content_invitation_preference(row) if row else None
+
+
+def upsert_content_invitation_preference(
+    *,
+    account_id: str,
+    topic: str,
+    status: str,
+    cooldown_until: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_topic = _clean_text(topic)
+    cleaned_status = _clean_text(status) or "allowed"
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_topic:
+        raise ValueError("topic is required")
+    current = get_content_invitation_preference(
+        account_id=cleaned_account_id,
+        topic=cleaned_topic,
+    )
+    next_metadata = dict((current or {}).get("metadata") or {})
+    if metadata:
+        next_metadata.update(metadata)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO content_invitation_preferences(
+                account_id, topic, status, cooldown_until, last_feedback_at,
+                feedback_count, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(account_id, topic) DO UPDATE SET
+                status = excluded.status,
+                cooldown_until = excluded.cooldown_until,
+                last_feedback_at = CURRENT_TIMESTAMP,
+                feedback_count = content_invitation_preferences.feedback_count + 1,
+                metadata_json = excluded.metadata_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                cleaned_account_id,
+                cleaned_topic,
+                cleaned_status,
+                _clean_text(cooldown_until),
+                json.dumps(next_metadata, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT *
+            FROM content_invitation_preferences
+            WHERE account_id = ? AND topic = ?
+            """,
+            (cleaned_account_id, cleaned_topic),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("content_invitation_preference was not created")
+    return _decode_content_invitation_preference(row)
+
+
+# ---------------------------------------------------------------------------
 # Profiles
 # ---------------------------------------------------------------------------
 
@@ -5424,6 +6172,17 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
             """,
             (account_id,),
         ).rowcount
+        ci = conn.execute(
+            """
+            UPDATE content_invitations
+            SET status = 'cancelled',
+                policy_reason = 'account_unbound',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE account_id = ?
+              AND status IN ('candidate', 'sending', 'invited', 'accepted')
+            """,
+            (account_id,),
+        ).rowcount
         conn.execute(
             """
             UPDATE proactive_account_state
@@ -5437,6 +6196,7 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
         "binding_intents_revoked": bi,
         "reminders_cancelled": rem,
         "proactive_commitments_deleted": pc,
+        "content_invitations_cancelled": ci,
     }
 
 
@@ -5470,6 +6230,14 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
         ).rowcount
         proactive_commitments = conn.execute(
             "DELETE FROM proactive_commitments WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        content_invitations = conn.execute(
+            "DELETE FROM content_invitations WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        content_invitation_preferences = conn.execute(
+            "DELETE FROM content_invitation_preferences WHERE account_id = ?",
             (account_id,),
         ).rowcount
         outbound = conn.execute(
@@ -5536,6 +6304,8 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
         "memory_events_deleted": memory_events,
         "reminders_deleted": reminders,
         "proactive_commitments_deleted": proactive_commitments,
+        "content_invitations_deleted": content_invitations,
+        "content_invitation_preferences_deleted": content_invitation_preferences,
         "cost_events_deleted": cost_events,
         "entitlement_ledger_deleted": ledger,
         "entitlement_wallets_deleted": wallets,

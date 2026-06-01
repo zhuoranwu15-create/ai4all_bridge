@@ -318,6 +318,7 @@ def dispatch_commitment(
             idempotency_key=f"commitment-{claimed['id']}",
             now=current,
             bypass_quiet_hours=bypass_quiet_hours,
+            product_category="companion_followup",
             metadata={
                 "commitment_id": claimed["id"],
                 "commitment_due_at": claimed["due_at"],

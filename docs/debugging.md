@@ -40,6 +40,7 @@ ADMIN_STAFF_TOKEN=
 | --- | --- | --- |
 | Onboarding Debug | 测试 onboarding 状态、reset、跳步骤、prompt preview | `/ui/onboarding_debug.html` |
 | Reminder Debug | 通过模拟聊天创建提醒，查看/编辑/取消测试提醒 | `/ui/reminder_debug.html` |
+| Proactive Debug | 触发 scheduler、账号主动检查、account check draft 和内容邀请生成 | `/ui/proactive_debug.html` |
 | Web Search Debug | 查看 `web_search` schema、模拟 tool invocation 和 provider run trace | `/ui/web_search_debug.html` |
 | Swagger UI | 直接调用 Admin/Debug API | `/docs` |
 
@@ -201,6 +202,17 @@ curl -s -X DELETE "http://localhost:8180/debug/reminders/<reminder_id>" \
 
 ## Proactive / Dreaming
 
+**推荐用 UI：** `http://localhost:8180/ui/proactive_debug.html`
+
+Proactive Debug 可完成以下手动验证，不需要直接写 curl：
+
+- 选择账号并开启 proactive state。
+- 模拟入站消息，给测试账号补充聊天上下文。
+- 将第一条 pending reminder 调整为到期。
+- 运行一次 scheduler，观察 reminder / commitment / account check / content invitation 结果。
+- 生成、提升或清理 account check draft。
+- 单账号执行 `Run Proactive Check`，查看是否生成内容邀请；未生成时页面展示 reason/detail，例如 `llm_no_content_invitation`。
+
 ```bash
 # 手动触发一次 dreaming（生成 memory 更新候选）
 curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/dreaming" \
@@ -210,7 +222,7 @@ curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/dreami
 curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/dreaming" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
-# 查看账号的 proactive 状态（heartbeat 候选、quiet hours 等）
+# 查看账号的 proactive 状态（账号主动检查候选、quiet hours 等）
 curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/proactive-state" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 

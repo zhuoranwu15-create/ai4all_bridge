@@ -87,7 +87,7 @@ def test_admin_proactive_state_create_get_and_scan_no_op(client, fresh_db):
     assert fetched.json()["proactive_state"]["next_scan_at"] == "2000-01-01 00:00:00"
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.proactive.messaging.send_weixin_text") as mock_send,
     ):
         run = client.post(
@@ -97,10 +97,10 @@ def test_admin_proactive_state_create_get_and_scan_no_op(client, fresh_db):
 
     assert run.status_code == 200
     body = run.json()
-    assert body["run"]["account_scan_count"] == 1
-    assert body["run"]["account_scans"][0]["account_id"] == "acc-admin-proactive"
-    assert body["run"]["account_scans"][0]["status"] == "skipped"
-    assert body["run"]["account_scans"][0]["reason"] == "no_candidate"
+    assert body["run"]["account_check_count"] == 1
+    assert body["run"]["account_checks"][0]["account_id"] == "acc-admin-proactive"
+    assert body["run"]["account_checks"][0]["status"] == "skipped"
+    assert body["run"]["account_checks"][0]["reason"] == "no_candidate"
     mock_send.assert_not_called()
     assert list_outbound_messages(account_id="acc-admin-proactive") == []
 
@@ -128,7 +128,7 @@ def test_admin_proactive_state_disabled_account_is_not_scanned(client):
     )
 
     assert run.status_code == 200
-    assert run.json()["run"]["account_scan_count"] == 0
+    assert run.json()["run"]["account_check_count"] == 0
 
 
 def test_admin_proactive_state_validates_datetime(client):
@@ -159,29 +159,29 @@ def test_admin_proactive_state_requires_account(client):
     assert res.status_code == 404
 
     res = client.post(
-        "/admin/accounts/missing/heartbeat-candidate-draft",
+        "/admin/accounts/missing/proactive-check-candidate-draft",
         headers=ADMIN_HEADERS,
     )
     assert res.status_code == 404
 
 
-def test_admin_generates_heartbeat_candidate_draft(client, fresh_db):
+def test_admin_generates_account_check_candidate_draft(client, fresh_db):
     from app.proactive.state import get_account_state
 
     fresh_db.llm_api_key = "fake-key"
-    _create_account("acc-admin-hb-draft")
-    _create_route("acc-admin-hb-draft")
-    _insert_history("acc-admin-hb-draft", "我昨天说今天要检查事情 A，后续 B 明天也要看。")
+    _create_account("acc-admin-check-draft")
+    _create_route("acc-admin-check-draft")
+    _insert_history("acc-admin-check-draft", "我昨天说今天要检查事情 A，后续 B 明天也要看。")
     client.patch(
-        "/admin/accounts/acc-admin-hb-draft/proactive-state",
+        "/admin/accounts/acc-admin-check-draft/proactive-state",
         json={"enabled": True, "next_scan_at": "2000-01-01 00:00:00"},
         headers=ADMIN_HEADERS,
     )
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch(
-            "app.proactive.heartbeat.generate_completion",
+            "app.proactive.account_checks.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得看一下后续 B。", '
                 '"reason": "用户明确提到后续 B", "confidence": 0.91}'
@@ -189,31 +189,31 @@ def test_admin_generates_heartbeat_candidate_draft(client, fresh_db):
         ),
     ):
         res = client.post(
-            "/admin/accounts/acc-admin-hb-draft/heartbeat-candidate-draft",
+            "/admin/accounts/acc-admin-check-draft/proactive-check-candidate-draft",
             headers=ADMIN_HEADERS,
         )
-        state = get_account_state(account_id="acc-admin-hb-draft")
+        state = get_account_state(account_id="acc-admin-check-draft")
 
     assert res.status_code == 200
     body = res.json()
     assert body["result"]["action"] == "draft_candidate"
     assert body["result"]["candidate"]["text"] == "记得看一下后续 B。"
-    assert state["metadata"]["heartbeat_candidate_draft"]["text"] == "记得看一下后续 B。"
-    assert "heartbeat_candidate" not in state["metadata"]
+    assert state["metadata"]["account_check_candidate_draft"]["text"] == "记得看一下后续 B。"
+    assert "account_check_candidate" not in state["metadata"]
 
 
-def test_admin_promotes_and_clears_heartbeat_candidate_draft(client):
+def test_admin_promotes_and_clears_account_check_candidate_draft(client):
     from app.proactive.state import get_account_state
 
-    _create_account("acc-admin-hb-promote")
-    _create_route("acc-admin-hb-promote")
+    _create_account("acc-admin-check-promote")
+    _create_route("acc-admin-check-promote")
     client.patch(
-        "/admin/accounts/acc-admin-hb-promote/proactive-state",
+        "/admin/accounts/acc-admin-check-promote/proactive-state",
         json={
             "enabled": True,
             "next_scan_at": "2000-01-01 00:00:00",
             "metadata": {
-                "heartbeat_candidate_draft": {
+                "account_check_candidate_draft": {
                     "id": "draft-admin",
                     "text": "这条由 draft 提升。",
                     "source": "test",
@@ -224,36 +224,36 @@ def test_admin_promotes_and_clears_heartbeat_candidate_draft(client):
     )
 
     promote = client.post(
-        "/admin/accounts/acc-admin-hb-promote/heartbeat-candidate-draft/promote",
+        "/admin/accounts/acc-admin-check-promote/proactive-check-candidate-draft/promote",
         headers=ADMIN_HEADERS,
     )
-    promoted_state = get_account_state(account_id="acc-admin-hb-promote")
+    promoted_state = get_account_state(account_id="acc-admin-check-promote")
 
     assert promote.status_code == 200
     assert promote.json()["result"]["action"] == "promoted_candidate"
-    assert promoted_state["metadata"]["heartbeat_candidate"]["text"] == "这条由 draft 提升。"
-    assert "heartbeat_candidate_draft" not in promoted_state["metadata"]
+    assert promoted_state["metadata"]["account_check_candidate"]["text"] == "这条由 draft 提升。"
+    assert "account_check_candidate_draft" not in promoted_state["metadata"]
 
     client.patch(
-        "/admin/accounts/acc-admin-hb-promote/proactive-state",
+        "/admin/accounts/acc-admin-check-promote/proactive-state",
         json={
             "metadata": {
                 **promoted_state["metadata"],
-                "heartbeat_candidate_draft": {"text": "清理这个 draft"},
+                "account_check_candidate_draft": {"text": "清理这个 draft"},
             }
         },
         headers=ADMIN_HEADERS,
     )
     clear = client.delete(
-        "/admin/accounts/acc-admin-hb-promote/heartbeat-candidate-draft",
+        "/admin/accounts/acc-admin-check-promote/proactive-check-candidate-draft",
         headers=ADMIN_HEADERS,
     )
-    cleared_state = get_account_state(account_id="acc-admin-hb-promote")
+    cleared_state = get_account_state(account_id="acc-admin-check-promote")
 
     assert clear.status_code == 200
     assert clear.json()["result"]["action"] == "cleared_candidate_draft"
-    assert "heartbeat_candidate_draft" not in cleared_state["metadata"]
-    assert cleared_state["metadata"]["heartbeat_candidate"]["text"] == "这条由 draft 提升。"
+    assert "account_check_candidate_draft" not in cleared_state["metadata"]
+    assert cleared_state["metadata"]["account_check_candidate"]["text"] == "这条由 draft 提升。"
 
 
 def test_admin_lists_and_cancels_commitments(client):
@@ -305,7 +305,7 @@ def test_admin_proactive_overview_redacts_task_text(client):
         enabled=True,
         next_scan_at="2026-05-31 09:00:00",
         metadata={
-            "heartbeat_candidate": {
+            "account_check_candidate": {
                 "id": "candidate-1",
                 "text": "候选正文也要脱敏",
             }
@@ -353,7 +353,7 @@ def test_admin_proactive_overview_redacts_task_text(client):
     assert res.status_code == 200
     body = res.json()
     assert body["redacted"] is True
-    assert body["proactive_state"]["metadata"]["heartbeat_candidate"]["text"]["redacted"] is True
+    assert body["proactive_state"]["metadata"]["account_check_candidate"]["text"]["redacted"] is True
     assert body["reminders"][0]["text_redacted"] is True
     assert body["reminders"][0]["text_chars"] == len(secret_reminder)
     assert body["reminders"][0]["metadata"]["text"]["redacted"] is True

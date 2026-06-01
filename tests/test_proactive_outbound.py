@@ -66,7 +66,7 @@ def test_enqueue_proactive_text_applies_daily_limit(fresh_db):
     from app.db import get_outbound_daily_usage
     from app.proactive.messaging import enqueue_proactive_text
 
-    fresh_db.proactive_outbound_daily_limit = 3
+    fresh_db.companion_followup_daily_limit = 3
     now = datetime(2026, 5, 22, 10, 0)
     with patch("app.db.settings", fresh_db), patch("app.proactive.messaging.settings", fresh_db):
         _create_account("acc-limit")
@@ -77,16 +77,18 @@ def test_enqueue_proactive_text_applies_daily_limit(fresh_db):
                 channel_account_id="bot-1",
                 to_user_id="user@im.wechat",
                 session_key="session-acc-limit",
-                source="reminder",
+                source="account_check",
                 text=f"提醒 {index}",
                 idempotency_key=f"limit-{index}",
                 now=now,
+                product_category="companion_followup",
             )
             for index in range(4)
         ]
         usage = get_outbound_daily_usage(
             account_id="acc-limit",
             quota_date="2026-05-22",
+            product_category="companion_followup",
         )
 
     assert [row["status"] for row in rows] == [
@@ -113,7 +115,7 @@ def test_enqueue_proactive_text_blocks_quiet_hours_without_consuming_quota(fresh
             channel_account_id="bot-1",
             to_user_id="user@im.wechat",
             session_key="session-acc-quiet",
-            source="heartbeat",
+            source="account_check",
             text="晚间消息",
             idempotency_key="quiet-1",
             now=now,
@@ -132,7 +134,7 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
     from app.db import get_outbound_daily_usage
     from app.proactive.messaging import send_proactive_text
 
-    fresh_db.proactive_outbound_daily_limit = 1
+    fresh_db.companion_followup_daily_limit = 1
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
@@ -149,10 +151,11 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
             channel_account_id="bot-1",
             to_user_id="user@im.wechat",
             session_key="session-acc-failed",
-            source="reminder",
+            source="account_check",
             text="会失败",
             idempotency_key="failed-1",
             now=now,
+            product_category="companion_followup",
         )
         blocked = send_proactive_text(
             account_id="acc-failed",
@@ -160,14 +163,16 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
             channel_account_id="bot-1",
             to_user_id="user@im.wechat",
             session_key="session-acc-failed",
-            source="reminder",
+            source="account_check",
             text="第二条",
             idempotency_key="failed-2",
             now=now,
+            product_category="companion_followup",
         )
         usage = get_outbound_daily_usage(
             account_id="acc-failed",
             quota_date="2026-05-22",
+            product_category="companion_followup",
         )
 
     assert failed["status"] == "failed"
@@ -178,6 +183,7 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
 
 
 def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
+    from app.db import list_session_messages, list_sessions_for_account
     from app.proactive.messaging import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3
@@ -202,10 +208,16 @@ def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
             idempotency_key="send-1",
             now=now,
         )
+        sessions = list_sessions_for_account(account_id="acc-send")
+        active_session = next(session for session in sessions if session["session_key"] == "__account_active__")
+        messages = list_session_messages(session_id=active_session["id"])
 
     assert row["status"] == "sent"
     assert row["attempts"] == 1
     assert row["gateway_message_id"] == "openclaw-weixin:msg-1"
+    assert messages[-1]["message_id"] == f"outbound-{row['id']}"
+    assert messages[-1]["role"] == "assistant"
+    assert messages[-1]["content"] == "主动提醒"
     mock_send.assert_called_once_with(
         to_user_id="user@im.wechat",
         text="主动提醒",
@@ -245,6 +257,9 @@ def test_user_reminder_bypasses_quiet_hours(fresh_db):
             product_category="user_reminder",
         )
         assert result["status"] == "pending", f"Expected pending, got {result['status']}: {result.get('error')}"
+        assert result["product_category"] == "user_reminder"
+        assert result["policy_reason"] is None
+        assert result["metadata"]["policy_decision"] == "allowed"
 
 
 def test_companion_followup_blocked_by_quiet_hours(fresh_db):
@@ -275,3 +290,42 @@ def test_companion_followup_blocked_by_quiet_hours(fresh_db):
         )
         assert result["status"] == "cancelled"
         assert result["error"] == "quiet_hours"
+        assert result["product_category"] == "companion_followup"
+
+
+def test_companion_followup_avoids_pending_user_reminder(fresh_db):
+    from app.db import create_reminder
+    from app.proactive.messaging import enqueue_proactive_text
+
+    fresh_db.proactive_quiet_hours_start = "00:00"
+    fresh_db.proactive_quiet_hours_end = "00:00"
+    fresh_db.companion_followup_daily_limit = 3
+    now = datetime(2026, 5, 30, 10, 0)
+    with patch("app.proactive.messaging.settings", fresh_db), patch("app.proactive.policy.settings", fresh_db):
+        with patch("app.db.settings", fresh_db):
+            _create_account("acc-avoid")
+            create_reminder(
+                account_id="acc-avoid",
+                channel="openclaw-weixin",
+                channel_account_id="bot",
+                to_user_id="user",
+                session_key="session-acc-avoid",
+                text="用户设定的提醒",
+                due_at="2026-05-30 12:00:00",
+            )
+        result = enqueue_proactive_text(
+            account_id="acc-avoid",
+            channel="openclaw-weixin",
+            channel_account_id="bot",
+            to_user_id="user",
+            session_key="session-acc-avoid",
+            source="commitment",
+            text="低优先级跟进",
+            now=now,
+            product_category="companion_followup",
+        )
+
+    assert result["status"] == "cancelled"
+    assert result["error"] == "avoidance_window_user_reminder"
+    assert result["policy_reason"] == "avoidance_window_user_reminder"
+    assert result["metadata"]["avoidance_user_reminder_count"] == 1

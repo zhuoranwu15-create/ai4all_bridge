@@ -1,6 +1,6 @@
 # AI4ALL 微信个人 AI 陪伴服务当前状态
 
-更新时间：2026-05-23
+更新时间：2026-06-02
 
 ## 项目定位
 
@@ -232,9 +232,9 @@ AI4ALL 业务账号 ID + session_key
 
 ### 管理能力
 
-当前还没有 Web 后台页面。
+当前已有轻量 Web 后台和开发期 Debug 后台。稳定运营流程仍以 Admin API 和轻量后台为主，Debug 后台只用于研发复现和链路验证。
 
-已经实现的是基于 Token 鉴权的 Admin API：
+已经实现的是基于 Token 鉴权的 Admin API / Debug UI：
 
 - 查看账号。
 - 查看会话。
@@ -242,6 +242,7 @@ AI4ALL 业务账号 ID + session_key
 - 修改当前兼容用户记录的备注和状态。
 - 修改 profile。
 - 重置会话。
+- Onboarding Debug、Reminder Debug、Proactive Debug、Web Search Debug。
 
 现有 Admin API 仍带有 `contacts` 命名，这是早期客服号模型留下的命名，后续需要调整为账号级管理。
 
@@ -279,12 +280,13 @@ AI4ALL 业务账号 ID + session_key
 
 - 已验证主路径是两个微信账号的私聊文本。
 - Web onboarding 的注册（含 OTP 验证）、扫码绑定和首条真实消息路由已完成本机验收。
-- 主动消息/提醒的最新推进基准见 `docs/tech_design/proactive_messaging_design.md`；当前机制代码已经基本闭环，包含 Gateway `send` 文本封装、真实微信主动发送 smoke test、`outbound_messages` ledger、主动发送每日上限、quiet hours、`reminders` 表、due reminder dispatcher、高确定性显式提醒识别、系统级 proactive scheduler、`proactive_account_state`、heartbeat draft/promote/send、hidden commitment 抽取和 due commitment dispatch。代码边界已整理：`/openclaw/turn` 业务逻辑在 `app.turn_service`，proactive 域代码在 `app/proactive/` package，旧顶层 proactive 兼容模块已删除。尚未完成真实微信端到端联调、架构梳理后的边界确认、周期性提醒、自然语言取消/更新提醒、用户级 timezone 或多实例 worker lease。
-- 主动消息功能暂停继续扩展；下一阶段先整体梳理 AI4ALL 后端架构，再统一联调和调参。
+- 主动消息/提醒第一轮代码已完成，最新推进基准见 `docs/tech_design/proactive_messaging_design.md` 和 `docs/tech_design/content_invitation_design.md`。当前包含 Gateway `send` 文本封装、真实微信主动发送 smoke test、`outbound_messages` ledger、分类 outbound policy、用户提醒不受主动触达 quiet hours / 陪伴邀请日上限影响、due reminder dispatcher、系统级 proactive scheduler、`proactive_account_state`、scheduler 内部账号主动检查、account check draft/promote/send、hidden commitment 抽取和 due commitment dispatch、内容邀请候选生成/发送/确认/拒绝链路、Proactive Debug 后台。代码边界已整理：`/openclaw/turn` 业务逻辑在 `app.turn_service`，proactive 域代码在 `app/proactive/` package，旧 standalone heartbeat 机制已移除。
+- 主动消息功能暂时进入数据观察和手动测试阶段，不继续追加新能力。当前测试账号聊天内容较少，内容邀请和陪伴跟进很容易因上下文不稳定而被 LLM 保守跳过；需要更多真实聊天数据后再评估 prompt、阈值和风控策略。
+- 尚未完成周期性提醒、自然语言取消/更新提醒、用户级 timezone、多实例 worker lease、生产 DB 迁移，以及基于丰富真实数据的内容邀请/陪伴跟进效果评估。
 - 语音仍属于 Phase 1 范围，但 ASR 尚未实现。
 - 当前微信插件约束下不支持群聊 bot 模型。
 - 暂不支持图片/多模态。
-- 暂无 Web 管理后台，只有 Admin API。
+- 暂无正式运营后台；当前只有轻量 Web 后台、Debug 后台和 Admin API。
 - 暂无正式登录系统，Admin API 使用共享 token。
 - 当前使用 SQLite，本地和早期测试够用；生产建议评估 PostgreSQL。
 - 手机号格式仅支持大陆 11 位手机号（`1[3-9]XXXXXXXXX`），不支持其他地区格式。

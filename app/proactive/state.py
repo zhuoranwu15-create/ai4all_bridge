@@ -7,13 +7,14 @@ from app.db import (
     list_due_proactive_account_states,
     upsert_proactive_account_state,
 )
-from app.proactive.heartbeat import (
-    decide_heartbeat_action,
-    execute_heartbeat_decision,
+from app.proactive.account_checks import (
+    decide_account_check_action,
+    execute_account_check_decision,
+    generate_content_invitation_candidate,
 )
 
 
-DEFAULT_SCAN_INTERVAL_SECONDS = 60 * 60
+DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS = 60 * 60
 
 
 def format_state_time(value: datetime) -> str:
@@ -57,7 +58,7 @@ def set_account_enabled(
     return upsert_proactive_account_state(**kwargs)
 
 
-def list_due_proactive_accounts(
+def list_due_proactive_account_checks(
     *,
     now: Optional[datetime] = None,
     limit: int = 20,
@@ -69,12 +70,12 @@ def list_due_proactive_accounts(
     )
 
 
-def claim_due_account_scan(
+def claim_due_account_check(
     *,
     account_id: str,
     now: Optional[datetime] = None,
     next_scan_at: Optional[datetime] = None,
-    interval_seconds: int = DEFAULT_SCAN_INTERVAL_SECONDS,
+    interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> Optional[Dict[str, Any]]:
     current = now or datetime.now()
     next_scan = next_scan_at or (
@@ -87,12 +88,12 @@ def claim_due_account_scan(
     )
 
 
-def mark_account_scanned(
+def mark_account_checked(
     *,
     account_id: str,
     now: Optional[datetime] = None,
     next_scan_at: Optional[datetime] = None,
-    interval_seconds: int = DEFAULT_SCAN_INTERVAL_SECONDS,
+    interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> Dict[str, Any]:
     current = now or datetime.now()
     next_scan = next_scan_at or (
@@ -128,7 +129,7 @@ def mark_account_proactive_sent(
     return upsert_proactive_account_state(**kwargs)
 
 
-def mark_account_heartbeat_sent(
+def mark_account_check_sent(
     *,
     account_id: str,
     now: Optional[datetime] = None,
@@ -136,10 +137,12 @@ def mark_account_heartbeat_sent(
     current = now or datetime.now()
     state = get_account_state(account_id=account_id)
     metadata = dict((state or {}).get("metadata") or {})
-    sent_candidate = metadata.pop("heartbeat_candidate", None)
+    sent_candidate = metadata.pop("account_check_candidate", None)
+    if sent_candidate is None:
+        sent_candidate = metadata.pop("heartbeat_candidate", None)
     if sent_candidate is not None:
-        metadata["heartbeat_last_sent_candidate"] = sent_candidate
-    metadata["heartbeat_candidate_sent_at"] = format_state_time(current)
+        metadata["account_check_last_sent_candidate"] = sent_candidate
+    metadata["account_check_candidate_sent_at"] = format_state_time(current)
     return upsert_proactive_account_state(
         account_id=account_id,
         last_proactive_sent_at=format_state_time(current),
@@ -147,20 +150,20 @@ def mark_account_heartbeat_sent(
     )
 
 
-def scan_due_proactive_accounts(
+def scan_due_proactive_account_checks(
     *,
     now: Optional[datetime] = None,
     limit: int = 20,
-    scan_interval_seconds: int = DEFAULT_SCAN_INTERVAL_SECONDS,
+    check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> List[Dict[str, Any]]:
     current = now or datetime.now()
-    due_accounts = list_due_proactive_accounts(now=current, limit=limit)
+    due_accounts = list_due_proactive_account_checks(now=current, limit=limit)
     results: List[Dict[str, Any]] = []
     for item in due_accounts:
-        claimed = claim_due_account_scan(
+        claimed = claim_due_account_check(
             account_id=item["account_id"],
             now=current,
-            interval_seconds=scan_interval_seconds,
+            interval_seconds=check_interval_seconds,
         )
         if claimed is None:
             results.append(
@@ -171,17 +174,29 @@ def scan_due_proactive_accounts(
                 }
             )
             continue
-        decision = decide_heartbeat_action(
+        decision = decide_account_check_action(
             account_id=claimed["account_id"],
             now=current,
         )
-        execution = execute_heartbeat_decision(
+        execution = execute_account_check_decision(
             decision=decision,
             now=current,
         )
         account_state = claimed
         if execution.get("status") == "sent":
-            account_state = mark_account_heartbeat_sent(
+            account_state = mark_account_check_sent(
+                account_id=claimed["account_id"],
+                now=current,
+            )
+            content_invitation_generation = {
+                "action": "no_op",
+                "account_id": claimed["account_id"],
+                "reason": "companion_followup_sent_this_check",
+                "evaluated_at": format_state_time(current),
+                "metadata": {},
+            }
+        else:
+            content_invitation_generation = generate_content_invitation_candidate(
                 account_id=claimed["account_id"],
                 now=current,
             )
@@ -192,6 +207,7 @@ def scan_due_proactive_accounts(
                 "account_id": claimed["account_id"],
                 "decision": decision,
                 "execution": execution,
+                "content_invitation_generation": content_invitation_generation,
                 "account_state": account_state,
             }
         )

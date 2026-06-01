@@ -18,13 +18,13 @@ def _create_account(account_id: str) -> None:
 def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
     from app.proactive.state import (
         ensure_account_state,
-        list_due_proactive_accounts,
+        list_due_proactive_account_checks,
     )
 
     now = datetime(2026, 5, 22, 10, 0)
     _create_account("acc-state")
 
-    assert list_due_proactive_accounts(now=now) == []
+    assert list_due_proactive_account_checks(now=now) == []
 
     state = ensure_account_state(
         account_id="acc-state",
@@ -36,7 +36,7 @@ def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
         next_scan_at=datetime(2026, 5, 23, 9, 59),
         metadata={"source": "should-not-overwrite"},
     )
-    due = list_due_proactive_accounts(now=now)
+    due = list_due_proactive_account_checks(now=now)
 
     assert state["enabled"] is True
     assert state["metadata"]["source"] == "test"
@@ -49,7 +49,7 @@ def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
 def test_proactive_account_state_respects_disabled_and_cooldown(fresh_db):
     from app.proactive.state import (
         ensure_account_state,
-        list_due_proactive_accounts,
+        list_due_proactive_account_checks,
         mark_account_proactive_sent,
         set_account_enabled,
     )
@@ -80,8 +80,8 @@ def test_proactive_account_state_respects_disabled_and_cooldown(fresh_db):
         next_scan_at=datetime(2026, 5, 22, 9, 0),
     )
 
-    due_now = list_due_proactive_accounts(now=now)
-    due_later = list_due_proactive_accounts(now=datetime(2026, 5, 22, 11, 0))
+    due_now = list_due_proactive_account_checks(now=now)
+    due_later = list_due_proactive_account_checks(now=datetime(2026, 5, 22, 11, 0))
 
     assert [item["account_id"] for item in due_now] == ["acc-ready-state"]
     assert {item["account_id"] for item in due_later} == {
@@ -90,11 +90,11 @@ def test_proactive_account_state_respects_disabled_and_cooldown(fresh_db):
     }
 
 
-def test_mark_account_scanned_moves_next_scan_forward(fresh_db):
+def test_mark_account_checked_moves_next_scan_forward(fresh_db):
     from app.proactive.state import (
         ensure_account_state,
-        list_due_proactive_accounts,
-        mark_account_scanned,
+        list_due_proactive_account_checks,
+        mark_account_checked,
     )
 
     now = datetime(2026, 5, 22, 10, 0)
@@ -104,7 +104,7 @@ def test_mark_account_scanned_moves_next_scan_forward(fresh_db):
         next_scan_at=datetime(2026, 5, 22, 9, 0),
     )
 
-    state = mark_account_scanned(
+    state = mark_account_checked(
         account_id="acc-scan-state",
         now=now,
         interval_seconds=30 * 60,
@@ -112,41 +112,41 @@ def test_mark_account_scanned_moves_next_scan_forward(fresh_db):
 
     assert state["last_scan_at"] == "2026-05-22 10:00:00"
     assert state["next_scan_at"] == "2026-05-22 10:30:00"
-    assert list_due_proactive_accounts(now=now) == []
-    assert [item["account_id"] for item in list_due_proactive_accounts(
+    assert list_due_proactive_account_checks(now=now) == []
+    assert [item["account_id"] for item in list_due_proactive_account_checks(
         now=datetime(2026, 5, 22, 10, 30),
     )] == ["acc-scan-state"]
 
 
-def test_scan_due_proactive_accounts_claims_and_marks_no_op(fresh_db):
+def test_scan_due_proactive_account_checks_claims_and_marks_no_op(fresh_db):
     from app.proactive.state import (
         ensure_account_state,
         get_account_state,
-        scan_due_proactive_accounts,
+        scan_due_proactive_account_checks,
     )
 
     now = datetime(2026, 5, 22, 10, 0)
-    _create_account("acc-heartbeat-shell")
+    _create_account("acc-account-check-shell")
     ensure_account_state(
-        account_id="acc-heartbeat-shell",
+        account_id="acc-account-check-shell",
         next_scan_at=datetime(2026, 5, 22, 9, 0),
     )
 
-    first = scan_due_proactive_accounts(
+    first = scan_due_proactive_account_checks(
         now=now,
         limit=10,
-        scan_interval_seconds=1800,
+        check_interval_seconds=1800,
     )
-    second = scan_due_proactive_accounts(
+    second = scan_due_proactive_account_checks(
         now=now,
         limit=10,
-        scan_interval_seconds=1800,
+        check_interval_seconds=1800,
     )
-    state = get_account_state(account_id="acc-heartbeat-shell")
+    state = get_account_state(account_id="acc-account-check-shell")
 
     assert first[0]["status"] == "skipped"
     assert first[0]["reason"] == "no_candidate"
-    assert first[0]["account_id"] == "acc-heartbeat-shell"
+    assert first[0]["account_id"] == "acc-account-check-shell"
     assert first[0]["decision"]["action"] == "no_op"
     assert first[0]["execution"]["status"] == "skipped"
     assert second == []

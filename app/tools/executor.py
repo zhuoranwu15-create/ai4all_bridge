@@ -22,11 +22,23 @@ def execute_tool_call(
         handle_list_reminders,
         handle_update_reminder,
     )
+    from app.tools.content_invitation_handlers import (
+        handle_create_content_invitation_candidate,
+        handle_record_content_invitation_feedback,
+        handle_send_content_invitation_titles,
+        handle_skip_content_invitation,
+    )
     handlers = {
         "create_reminder": handle_create_reminder,
         "list_reminders": handle_list_reminders,
         "cancel_reminder": handle_cancel_reminder,
         "update_reminder": handle_update_reminder,
+        "create_content_invitation_candidate": handle_create_content_invitation_candidate,
+        "skip_content_invitation": handle_skip_content_invitation,
+    }
+    content_invitation_handlers = {
+        "send_content_invitation_titles": handle_send_content_invitation_titles,
+        "record_content_invitation_feedback": handle_record_content_invitation_feedback,
     }
     if name == "web_search":
         if not bool(getattr(ctx, "web_search_enabled", False)):
@@ -46,6 +58,16 @@ def execute_tool_call(
             return {"error": str(err)}
 
     handler = handlers.get(name)
+    if name in content_invitation_handlers:
+        try:
+            return content_invitation_handlers[name](
+                args,
+                ctx,
+                tool_invocation_id=tool_invocation_id,
+            )
+        except Exception as err:
+            logger.exception("tool handler failed tool=%s error=%s", name, err)
+            return {"error": str(err)}
     if handler is None:
         logger.warning("execute_tool_call unknown tool: %s", name)
         return {"error": f"未知工具: {name}"}

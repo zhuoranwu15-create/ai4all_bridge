@@ -60,6 +60,7 @@ from app.db import (
     list_admin_users,
     list_account_owner_bindings_for_account,
     list_binding_intents_for_account,
+    list_content_invitations_for_account,
     list_outbound_messages,
     list_proactive_commitments_for_account,
     list_debug_traces,
@@ -122,10 +123,13 @@ from app.proactive.scheduler import (
     start_proactive_scheduler,
     stop_proactive_scheduler,
 )
-from app.proactive.heartbeat import (
-    clear_heartbeat_candidate_draft,
-    generate_heartbeat_candidate_draft,
-    promote_heartbeat_candidate_draft,
+from app.proactive.account_checks import (
+    clear_account_check_candidate_draft,
+    decide_account_check_action,
+    execute_account_check_decision,
+    generate_content_invitation_candidate,
+    generate_account_check_candidate_draft,
+    promote_account_check_candidate_draft,
 )
 from app.proactive.state import format_state_time
 from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
@@ -154,6 +158,7 @@ app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 _LOCAL_DEBUG_UI_ENVS = {"local", "development", "test"}
 _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/onboarding_debug.html",
+    "/ui/proactive_debug.html",
     "/ui/web_search_debug.html",
 }
 _WEB_SEARCH_DEBUG_PROVIDERS = {"aliyun", "baidu", "bing", "duckduckgo"}
@@ -594,7 +599,7 @@ async def startup_proactive_scheduler() -> None:
         interval_seconds=settings.proactive_scheduler_interval_seconds,
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
-        account_scan_interval_seconds=settings.proactive_account_scan_interval_seconds,
+        account_check_interval_seconds=settings.proactive_account_check_interval_seconds,
     )
     logger.info("proactive scheduler started: %s", scheduler.status())
 
@@ -817,6 +822,18 @@ def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
     if state is None:
         return None
     item = dict(state)
+    if "metadata" in item:
+        item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
+    return item
+
+
+def _content_invitation_for_overview(invitation: dict) -> dict:
+    item = dict(invitation or {})
+    invitation_text = item.pop("invitation_text", None)
+    titles = item.pop("title_items", None) or []
+    item["invitation_text_redacted"] = True
+    item["invitation_text_chars"] = len(invitation_text or "")
+    item["title_count"] = len(titles)
     if "metadata" in item:
         item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
     return item
@@ -2333,6 +2350,13 @@ def admin_account_proactive_overview(
                 limit=limit,
             )
         ],
+        "content_invitations": [
+            _content_invitation_for_overview(invitation)
+            for invitation in list_content_invitations_for_account(
+                account_id=account_id,
+                limit=limit,
+            )
+        ],
         "outbound_messages": [
             _redact_text_field(message)
             for message in list_outbound_messages(account_id=account_id, limit=limit)
@@ -2385,37 +2409,81 @@ def admin_update_proactive_account_state(
     }
 
 
-@app.post("/admin/accounts/{account_id}/heartbeat-candidate-draft")
-def admin_generate_heartbeat_candidate_draft(
+@app.post("/admin/accounts/{account_id}/proactive-check-candidate-draft")
+def admin_generate_account_check_candidate_draft(
     account_id: str,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
-    result = generate_heartbeat_candidate_draft(account_id=account_id)
+    result = generate_account_check_candidate_draft(account_id=account_id)
     return {"status": "ok", "result": result}
 
 
-@app.post("/admin/accounts/{account_id}/heartbeat-candidate-draft/promote")
-def admin_promote_heartbeat_candidate_draft(
+@app.post("/admin/accounts/{account_id}/proactive-check-candidate-draft/promote")
+def admin_promote_account_check_candidate_draft(
     account_id: str,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
-    result = promote_heartbeat_candidate_draft(account_id=account_id)
+    result = promote_account_check_candidate_draft(account_id=account_id)
     return {"status": "ok", "result": result}
 
 
-@app.delete("/admin/accounts/{account_id}/heartbeat-candidate-draft")
-def admin_clear_heartbeat_candidate_draft(
+@app.delete("/admin/accounts/{account_id}/proactive-check-candidate-draft")
+def admin_clear_account_check_candidate_draft(
     account_id: str,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
-    result = clear_heartbeat_candidate_draft(account_id=account_id)
+    result = clear_account_check_candidate_draft(account_id=account_id)
     return {"status": "ok", "result": result}
+
+
+@app.post("/admin/accounts/{account_id}/proactive-check/run-once")
+def admin_run_account_proactive_check_once(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    current = datetime.now()
+    decision = decide_account_check_action(account_id=account_id, now=current)
+    execution = execute_account_check_decision(decision=decision, now=current)
+    if execution.get("status") == "sent":
+        content_generation = {
+            "action": "no_op",
+            "account_id": account_id,
+            "reason": "companion_followup_sent_this_run",
+            "evaluated_at": current.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+            "metadata": {},
+        }
+    else:
+        content_generation = generate_content_invitation_candidate(
+            account_id=account_id,
+            now=current,
+        )
+
+    invitation = content_generation.get("content_invitation")
+    content_generation_metadata = content_generation.get("metadata") or {}
+    display = {
+        "content_invitation_generated": bool(invitation),
+        "reason": None if invitation else content_generation.get("reason"),
+        "detail": None if invitation else content_generation_metadata.get("reply"),
+        "content_invitation": invitation,
+    }
+    return {
+        "status": "ok",
+        "account_id": account_id,
+        "account_check": {
+            "decision": decision,
+            "execution": execution,
+        },
+        "content_invitation_generation": content_generation,
+        "display": display,
+    }
 
 
 @app.get("/admin/accounts/{account_id}/commitments")
@@ -2584,7 +2652,7 @@ def admin_proactive_scheduler_status(_: None = Depends(verify_admin_auth)) -> di
             "interval_seconds": settings.proactive_scheduler_interval_seconds,
             "batch_size": settings.proactive_scheduler_batch_size,
             "bypass_quiet_hours": settings.proactive_scheduler_bypass_quiet_hours,
-            "account_scan_interval_seconds": settings.proactive_account_scan_interval_seconds,
+            "account_check_interval_seconds": settings.proactive_account_check_interval_seconds,
         },
         "scheduler": scheduler.status() if scheduler else None,
     }
@@ -2601,7 +2669,7 @@ async def admin_proactive_scheduler_run_once(
     result = await run_proactive_scheduler_once(
         batch_size=limit,
         bypass_quiet_hours=bypass_quiet_hours,
-        account_scan_interval_seconds=settings.proactive_account_scan_interval_seconds,
+        account_check_interval_seconds=settings.proactive_account_check_interval_seconds,
     )
     dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
     result["daily_dreaming"] = dreaming

@@ -1,8 +1,8 @@
-# AI4ALL 微信 Bot — Claude 开发说明
+# AI4ALL 微信 Bot - Codex 工作说明
 
-微信个人 AI 陪伴项目。每个微信账号都有完全隔离的 Soul、对话状态和记忆。不是客服机器人。
+AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都有完全隔离的 Soul、对话状态和记忆。它不是客服机器人。
 
-## 开发规范
+## Codex 开发规范（替代 Superpowers）
 
 ### 核心工作流（强制执行）
 
@@ -61,7 +61,7 @@
 
 ```bash
 # 直接注入一轮消息，绕过 OpenClaw；默认账号为 "local"。
-.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好"
+.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "hello"
 
 # 查看某个账号组装后的 system prompt。
 .venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot
@@ -71,7 +71,7 @@
 
 主要测试账号：`86f866663cf9-im-bot`，该账号在 `data/ai4all.sqlite3` 中历史最多。
 
-完整调试参考：[`docs/debugging.md`](docs/debugging.md)
+完整调试参考：`docs/debugging.md`。
 
 ## 模块地图
 
@@ -91,7 +91,7 @@
 
 按账号隔离是核心不变量。任何未按 `account_id` 约束的 DB 查询或文件写入都是 bug。
 
-`contacts` 表是历史命名。在当前"一账号一用户"模型中，`contacts.sender_id` 近似等于 `account_id`。Admin 路由仍使用 `/admin/contacts/`，这是已知技术债。不要在这个模式上新增 API。
+`contacts` 表是历史命名。在当前“一账号一用户”模型中，`contacts.sender_id` 近似等于 `account_id`。Admin 路由仍使用 `/admin/contacts/`，这是已知技术债。不要在这个模式上新增 API。
 
 主动调度器作为独立进程运行。`dreaming_scheduler.py` 不是 FastAPI app 的一部分。通过 `scripts/run_proactive_scheduler.py` 运行；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。
 
@@ -99,6 +99,6 @@
 
 所有配置变量都在 `.env.example` 中用行内注释说明。
 
-<!-- SPECKIT START -->
+## Spec Kit
+
 如需了解要使用的技术、项目结构、shell 命令和其他重要信息，阅读当前 plan。
-<!-- SPECKIT END -->

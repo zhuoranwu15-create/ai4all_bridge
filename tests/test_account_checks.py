@@ -58,12 +58,12 @@ def _insert_history(account_id: str, text: str, message_id: str = "history-1") -
     )
 
 
-def test_decide_heartbeat_no_state_no_op(fresh_db):
-    from app.proactive.heartbeat import decide_heartbeat_action
+def test_decide_account_check_no_state_no_op(fresh_db):
+    from app.proactive.account_checks import decide_account_check_action
 
     _create_account("acc-hb-no-state")
 
-    decision = decide_heartbeat_action(
+    decision = decide_account_check_action(
         account_id="acc-hb-no-state",
         now=datetime(2026, 5, 22, 10, 0),
     )
@@ -72,14 +72,14 @@ def test_decide_heartbeat_no_state_no_op(fresh_db):
     assert decision["reason"] == "proactive_state_missing"
 
 
-def test_decide_heartbeat_no_candidate_no_op(fresh_db):
-    from app.proactive.heartbeat import decide_heartbeat_action
+def test_decide_account_check_no_candidate_no_op(fresh_db):
+    from app.proactive.account_checks import decide_account_check_action
 
     _create_account("acc-hb-no-candidate")
     _create_route("acc-hb-no-candidate")
     _create_state("acc-hb-no-candidate")
 
-    decision = decide_heartbeat_action(
+    decision = decide_account_check_action(
         account_id="acc-hb-no-candidate",
         now=datetime(2026, 5, 22, 10, 0),
     )
@@ -88,15 +88,15 @@ def test_decide_heartbeat_no_candidate_no_op(fresh_db):
     assert decision["reason"] == "no_candidate"
 
 
-def test_decide_heartbeat_candidate_returns_send_text_decision(fresh_db):
-    from app.proactive.heartbeat import decide_heartbeat_action
+def test_decide_account_check_candidate_returns_send_text_decision(fresh_db):
+    from app.proactive.account_checks import decide_account_check_action
 
     _create_account("acc-hb-send")
     _create_route("acc-hb-send")
     _create_state(
         "acc-hb-send",
         metadata={
-            "heartbeat_candidate": {
+            "account_check_candidate": {
                 "id": "candidate-1",
                 "text": "记得关注一下事情 B。",
                 "source": "test",
@@ -105,32 +105,32 @@ def test_decide_heartbeat_candidate_returns_send_text_decision(fresh_db):
         },
     )
 
-    with patch("app.proactive.heartbeat.settings", fresh_db):
-        decision = decide_heartbeat_action(
+    with patch("app.proactive.account_checks.settings", fresh_db):
+        decision = decide_account_check_action(
             account_id="acc-hb-send",
             now=datetime(2026, 5, 22, 10, 0),
         )
 
     assert decision["action"] == "send_text"
-    assert decision["source"] == "heartbeat"
+    assert decision["source"] == "account_check"
     assert decision["text"] == "记得关注一下事情 B。"
-    assert decision["idempotency_key"] == "heartbeat-acc-hb-send-candidate-1-2026-05-22"
+    assert decision["idempotency_key"] == "account-check-acc-hb-send-candidate-1-2026-05-22"
     assert decision["route"]["channel"] == "openclaw-weixin"
     assert decision["route"]["channel_account_id"] == "bot-1"
     assert decision["route"]["to_user_id"] == "user@im.wechat"
     assert decision["candidate"]["reason"] == "manual_test"
 
 
-def test_decide_heartbeat_candidate_requires_route(fresh_db):
-    from app.proactive.heartbeat import decide_heartbeat_action
+def test_decide_account_check_candidate_requires_route(fresh_db):
+    from app.proactive.account_checks import decide_account_check_action
 
     _create_account("acc-hb-missing-route")
     _create_state(
         "acc-hb-missing-route",
-        metadata={"heartbeat_candidate_text": "没有路由就不能发。"},
+        metadata={"account_check_candidate_text": "没有路由就不能发。"},
     )
 
-    decision = decide_heartbeat_action(
+    decision = decide_account_check_action(
         account_id="acc-hb-missing-route",
         now=datetime(2026, 5, 22, 10, 0),
     )
@@ -139,36 +139,39 @@ def test_decide_heartbeat_candidate_requires_route(fresh_db):
     assert decision["reason"] == "missing_channel_route"
 
 
-def test_decide_heartbeat_respects_quiet_hours(fresh_db):
-    from app.proactive.heartbeat import decide_heartbeat_action
+def test_execute_account_check_respects_quiet_hours(fresh_db):
+    from app.proactive.account_checks import decide_account_check_action, execute_account_check_decision
 
     _create_account("acc-hb-quiet")
     _create_route("acc-hb-quiet")
     _create_state(
         "acc-hb-quiet",
-        metadata={"heartbeat_candidate_text": "夜间不该主动发。"},
+        metadata={"account_check_candidate_text": "夜间不该主动发。"},
     )
 
-    with patch("app.proactive.heartbeat.settings", fresh_db):
-        decision = decide_heartbeat_action(
+    with patch("app.proactive.account_checks.settings", fresh_db):
+        now = datetime(2026, 5, 22, 23, 0)
+        decision = decide_account_check_action(
             account_id="acc-hb-quiet",
-            now=datetime(2026, 5, 22, 23, 0),
+            now=now,
         )
+        execution = execute_account_check_decision(decision=decision, now=now)
 
-    assert decision["action"] == "no_op"
-    assert decision["reason"] == "quiet_hours"
+    assert decision["action"] == "send_text"
+    assert execution["status"] == "cancelled"
+    assert execution["reason"] == "quiet_hours"
 
 
-def test_decide_heartbeat_respects_outbound_daily_limit(fresh_db):
+def test_execute_account_check_respects_companion_daily_limit(fresh_db):
     from app.db import create_outbound_message
-    from app.proactive.heartbeat import decide_heartbeat_action
+    from app.proactive.account_checks import decide_account_check_action, execute_account_check_decision
 
-    fresh_db.proactive_outbound_daily_limit = 1
+    fresh_db.companion_followup_daily_limit = 1
     _create_account("acc-hb-limit")
     _create_route("acc-hb-limit")
     _create_state(
         "acc-hb-limit",
-        metadata={"heartbeat_candidate_text": "超过额度不该主动发。"},
+        metadata={"account_check_candidate_text": "超过额度不该主动发。"},
     )
     create_outbound_message(
         account_id="acc-hb-limit",
@@ -176,90 +179,95 @@ def test_decide_heartbeat_respects_outbound_daily_limit(fresh_db):
         channel_account_id="bot-1",
         to_user_id="user@im.wechat",
         session_key="session-acc-hb-limit",
-        source="heartbeat",
+        source="account_check",
         text="已占用额度",
         idempotency_key="hb-limit-used",
         quota_date="2026-05-22",
         status="sent",
+        product_category="companion_followup",
     )
 
-    with patch("app.proactive.heartbeat.settings", fresh_db):
-        decision = decide_heartbeat_action(
+    with patch("app.proactive.account_checks.settings", fresh_db):
+        now = datetime(2026, 5, 22, 10, 0)
+        decision = decide_account_check_action(
             account_id="acc-hb-limit",
-            now=datetime(2026, 5, 22, 10, 0),
+            now=now,
         )
+        execution = execute_account_check_decision(decision=decision, now=now)
 
-    assert decision["action"] == "no_op"
-    assert decision["reason"] == "daily_limit_exceeded"
-    assert decision["metadata"]["daily_count"] == 1
+    assert decision["action"] == "send_text"
+    assert execution["status"] == "cancelled"
+    assert execution["reason"] == "daily_limit_exceeded"
+    assert execution["outbound_message"]["metadata"]["daily_count"] == 1
 
 
-def test_execute_heartbeat_decision_sends_via_outbound_ledger(fresh_db):
+def test_execute_account_check_decision_sends_via_outbound_ledger(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.heartbeat import (
-        decide_heartbeat_action,
-        execute_heartbeat_decision,
+    from app.proactive.account_checks import (
+        decide_account_check_action,
+        execute_account_check_decision,
     )
 
-    fresh_db.proactive_outbound_daily_limit = 3
+    fresh_db.companion_followup_daily_limit = 3
     _create_account("acc-hb-execute")
     _create_route("acc-hb-execute")
     _create_state(
         "acc-hb-execute",
         metadata={
-            "heartbeat_candidate": {
+            "account_check_candidate": {
                 "id": "candidate-exec",
-                "text": "执行一次 heartbeat。",
+                "text": "执行一次主动检查。",
                 "source": "test",
             }
         },
     )
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.proactive.messaging.settings", fresh_db),
         patch(
             "app.proactive.messaging.send_weixin_text",
-            return_value={"messageId": "openclaw-weixin:heartbeat-1"},
+            return_value={"messageId": "openclaw-weixin:account-check-1"},
         ) as mock_send,
     ):
         now = datetime(2026, 5, 22, 10, 0)
-        decision = decide_heartbeat_action(account_id="acc-hb-execute", now=now)
-        execution = execute_heartbeat_decision(decision=decision, now=now)
+        decision = decide_account_check_action(account_id="acc-hb-execute", now=now)
+        execution = execute_account_check_decision(decision=decision, now=now)
         outbound = list_outbound_messages(account_id="acc-hb-execute")
 
     assert execution["status"] == "sent"
     assert execution["outbound_message"]["status"] == "sent"
-    assert execution["outbound_message"]["source"] == "heartbeat"
-    assert execution["outbound_message"]["metadata"]["heartbeat_candidate"]["id"] == "candidate-exec"
-    assert outbound[0]["idempotency_key"] == "heartbeat-acc-hb-execute-candidate-exec-2026-05-22"
+    assert execution["outbound_message"]["source"] == "account_check"
+    assert execution["outbound_message"]["product_category"] == "companion_followup"
+    assert execution["outbound_message"]["metadata"]["account_check_candidate"]["id"] == "candidate-exec"
+    assert outbound[0]["idempotency_key"] == "account-check-acc-hb-execute-candidate-exec-2026-05-22"
     mock_send.assert_called_once_with(
         to_user_id="user@im.wechat",
-        text="执行一次 heartbeat。",
+        text="执行一次主动检查。",
         gateway_timeout_ms=fresh_db.openclaw_gateway_call_timeout_ms,
         account_id="bot-1",
-        idempotency_key="heartbeat-acc-hb-execute-candidate-exec-2026-05-22",
+        idempotency_key="account-check-acc-hb-execute-candidate-exec-2026-05-22",
         session_key="session-acc-hb-execute",
         channel="openclaw-weixin",
     )
 
 
-def test_execute_heartbeat_decision_skips_no_op(fresh_db):
+def test_execute_account_check_decision_skips_no_op(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.heartbeat import (
-        decide_heartbeat_action,
-        execute_heartbeat_decision,
+    from app.proactive.account_checks import (
+        decide_account_check_action,
+        execute_account_check_decision,
     )
 
     _create_account("acc-hb-execute-noop")
     _create_route("acc-hb-execute-noop")
     _create_state("acc-hb-execute-noop")
 
-    decision = decide_heartbeat_action(
+    decision = decide_account_check_action(
         account_id="acc-hb-execute-noop",
         now=datetime(2026, 5, 22, 10, 0),
     )
-    execution = execute_heartbeat_decision(
+    execution = execute_account_check_decision(
         decision=decision,
         now=datetime(2026, 5, 22, 10, 0),
     )
@@ -269,11 +277,11 @@ def test_execute_heartbeat_decision_skips_no_op(fresh_db):
     assert list_outbound_messages(account_id="acc-hb-execute-noop") == []
 
 
-def test_generate_heartbeat_candidate_draft_writes_draft_without_enabling_send(fresh_db):
+def test_generate_account_check_candidate_draft_writes_draft_without_enabling_send(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.heartbeat import (
-        decide_heartbeat_action,
-        generate_heartbeat_candidate_draft,
+    from app.proactive.account_checks import (
+        decide_account_check_action,
+        generate_account_check_candidate_draft,
     )
     from app.proactive.state import get_account_state
 
@@ -284,21 +292,21 @@ def test_generate_heartbeat_candidate_draft_writes_draft_without_enabling_send(f
     _insert_history("acc-hb-draft", "昨天我让你提醒我今天检查事情 A，明天可能还要看一下后续 B。")
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.heartbeat.generate_completion",
+            "app.proactive.account_checks.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得关注一下事情 B。", '
                 '"reason": "用户提到后续 B", "confidence": 0.92}'
             ),
         ) as mock_generate,
     ):
-        result = generate_heartbeat_candidate_draft(
+        result = generate_account_check_candidate_draft(
             account_id="acc-hb-draft",
             now=datetime(2026, 5, 22, 10, 0),
         )
-        decision = decide_heartbeat_action(
+        decision = decide_account_check_action(
             account_id="acc-hb-draft",
             now=datetime(2026, 5, 22, 10, 0),
         )
@@ -306,20 +314,21 @@ def test_generate_heartbeat_candidate_draft_writes_draft_without_enabling_send(f
 
     assert result["action"] == "draft_candidate"
     assert result["candidate"]["text"] == "记得关注一下事情 B。"
-    assert state["metadata"]["heartbeat_candidate_draft"]["text"] == "记得关注一下事情 B。"
-    assert "heartbeat_candidate" not in state["metadata"]
+    assert state["metadata"]["account_check_candidate_draft"]["text"] == "记得关注一下事情 B。"
+    assert "account_check_candidate" not in state["metadata"]
     assert decision["action"] == "no_op"
     assert decision["reason"] == "no_candidate"
     assert list_outbound_messages(account_id="acc-hb-draft") == []
     mock_generate.assert_called_once()
     messages = mock_generate.call_args.args[0]
     assert messages[0]["role"] == "system"
-    assert "隐藏 heartbeat 候选生成器" in messages[0]["content"]
+    assert "隐藏账号主动检查候选生成器" in messages[0]["content"]
+    assert "daily_notes" not in messages[1]["content"]
     assert "后续 B" in messages[1]["content"]
 
 
-def test_generate_heartbeat_candidate_draft_rejects_low_confidence(fresh_db):
-    from app.proactive.heartbeat import generate_heartbeat_candidate_draft
+def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db):
+    from app.proactive.account_checks import generate_account_check_candidate_draft
     from app.proactive.state import get_account_state
 
     fresh_db.llm_api_key = "fake-key"
@@ -327,22 +336,22 @@ def test_generate_heartbeat_candidate_draft_rejects_low_confidence(fresh_db):
     _create_route("acc-hb-low-confidence")
     _create_state(
         "acc-hb-low-confidence",
-        metadata={"heartbeat_candidate_draft": {"text": "旧草稿"}},
+        metadata={"account_check_candidate_draft": {"text": "旧草稿"}},
     )
     _insert_history("acc-hb-low-confidence", "最近只是普通聊天。")
 
     with (
-        patch("app.proactive.heartbeat.settings", fresh_db),
+        patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.heartbeat.generate_completion",
+            "app.proactive.account_checks.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "低置信候选", '
                 '"reason": "不够确定", "confidence": 0.4}'
             ),
         ),
     ):
-        result = generate_heartbeat_candidate_draft(
+        result = generate_account_check_candidate_draft(
             account_id="acc-hb-low-confidence",
             now=datetime(2026, 5, 22, 10, 0),
         )
@@ -350,14 +359,14 @@ def test_generate_heartbeat_candidate_draft_rejects_low_confidence(fresh_db):
 
     assert result["action"] == "no_op"
     assert result["reason"] == "llm_no_candidate"
-    assert "heartbeat_candidate_draft" not in state["metadata"]
-    assert state["metadata"]["heartbeat_candidate_draft_generated_at"] == "2026-05-22 10:00:00"
+    assert "account_check_candidate_draft" not in state["metadata"]
+    assert state["metadata"]["account_check_candidate_draft_generated_at"] == "2026-05-22 10:00:00"
 
 
-def test_promote_heartbeat_candidate_draft_enables_send_decision(fresh_db):
-    from app.proactive.heartbeat import (
-        decide_heartbeat_action,
-        promote_heartbeat_candidate_draft,
+def test_promote_account_check_candidate_draft_enables_send_decision(fresh_db):
+    from app.proactive.account_checks import (
+        decide_account_check_action,
+        promote_account_check_candidate_draft,
     )
     from app.proactive.state import get_account_state
 
@@ -366,45 +375,45 @@ def test_promote_heartbeat_candidate_draft_enables_send_decision(fresh_db):
     _create_state(
         "acc-hb-promote",
         metadata={
-            "heartbeat_candidate_draft": {
+            "account_check_candidate_draft": {
                 "id": "draft-1",
                 "text": "提升后可以发送。",
-                "source": "heartbeat_llm_candidate_v1",
+                "source": "account_check_llm_candidate_v1",
                 "reason": "测试提升",
                 "confidence": 0.93,
             }
         },
     )
 
-    result = promote_heartbeat_candidate_draft(
+    result = promote_account_check_candidate_draft(
         account_id="acc-hb-promote",
         now=datetime(2026, 5, 22, 10, 0),
     )
     state = get_account_state(account_id="acc-hb-promote")
-    decision = decide_heartbeat_action(
+    decision = decide_account_check_action(
         account_id="acc-hb-promote",
         now=datetime(2026, 5, 22, 10, 0),
     )
 
     assert result["action"] == "promoted_candidate"
-    assert "heartbeat_candidate_draft" not in state["metadata"]
-    assert state["metadata"]["heartbeat_candidate"]["text"] == "提升后可以发送。"
-    assert state["metadata"]["heartbeat_candidate_promoted_at"] == "2026-05-22 10:00:00"
+    assert "account_check_candidate_draft" not in state["metadata"]
+    assert state["metadata"]["account_check_candidate"]["text"] == "提升后可以发送。"
+    assert state["metadata"]["account_check_candidate_promoted_at"] == "2026-05-22 10:00:00"
     assert decision["action"] == "send_text"
     assert decision["candidate"]["id"] == "draft-1"
 
 
-def test_clear_heartbeat_candidate_draft_removes_draft(fresh_db):
-    from app.proactive.heartbeat import clear_heartbeat_candidate_draft
+def test_clear_account_check_candidate_draft_removes_draft(fresh_db):
+    from app.proactive.account_checks import clear_account_check_candidate_draft
     from app.proactive.state import get_account_state
 
     _create_account("acc-hb-clear-draft")
     _create_state(
         "acc-hb-clear-draft",
-        metadata={"heartbeat_candidate_draft": {"text": "不要发送"}},
+        metadata={"account_check_candidate_draft": {"text": "不要发送"}},
     )
 
-    result = clear_heartbeat_candidate_draft(
+    result = clear_account_check_candidate_draft(
         account_id="acc-hb-clear-draft",
         now=datetime(2026, 5, 22, 10, 0),
     )
@@ -412,5 +421,5 @@ def test_clear_heartbeat_candidate_draft_removes_draft(fresh_db):
 
     assert result["action"] == "cleared_candidate_draft"
     assert result["had_draft"] is True
-    assert "heartbeat_candidate_draft" not in state["metadata"]
-    assert state["metadata"]["heartbeat_candidate_draft_cleared_at"] == "2026-05-22 10:00:00"
+    assert "account_check_candidate_draft" not in state["metadata"]
+    assert state["metadata"]["account_check_candidate_draft_cleared_at"] == "2026-05-22 10:00:00"
