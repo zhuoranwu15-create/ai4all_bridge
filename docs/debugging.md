@@ -92,7 +92,7 @@ ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=86f866663cf9-im-bot,acct_test_1
   --text "你好，帮我设个提醒"
 ```
 
-默认账号 `local`，用 `--sender <account_id>` 切换。  
+默认账号 `local`，用 `--sender <account_id>` 切换。脚本接受 base URL 或完整 `/openclaw/turn` endpoint。
 > 脚本默认端口 8000，本地务必传 `--url`。
 
 ---
@@ -106,7 +106,13 @@ curl -s "http://localhost:8180/debug/accounts/86f866663cf9-im-bot/prompt-preview
 
 返回各 block 的字符数（soul / identity / user prefs / memory / daily notes）。
 
-> `scripts/check_prompt.py` 未传 Auth header，调用会 401，暂用上面的 curl。
+也可以用脚本查看，`--token` 默认读取环境变量 `ADMIN_TOKEN`，未设置时使用本地默认 `dev-admin-token`：
+
+```bash
+.venv/bin/python scripts/check_prompt.py \
+  --url http://127.0.0.1:8180 \
+  --account 86f866663cf9-im-bot
+```
 
 ---
 

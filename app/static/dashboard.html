@@ -10,7 +10,7 @@
 
 <!-- 顶栏 -->
 <nav class="site-nav">
-  <a class="brand-logo" href="home.html">
+  <a class="brand-logo" href="/">
     <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
   </a>
   <div class="nav-actions">
@@ -188,7 +188,8 @@ async function apiFetch(path, opts) {
   var headers = {};
   if (opts.body) headers['Content-Type'] = 'application/json';
   if (S.sessionToken) headers['Authorization'] = 'Bearer ' + S.sessionToken;
-  var res = await fetch(path, Object.assign({}, opts, {
+  var resolvedPath = path.indexOf('/web/') === 0 ? '/api' + path : path;
+  var res = await fetch(resolvedPath, Object.assign({}, opts, {
     headers: Object.assign(headers, opts.headers || {}),
   }));
   if (!res.ok) {
@@ -227,7 +228,7 @@ function renderWallet(wallet) {
 window.addEventListener('load', function() {
   S.sessionToken = localStorage.getItem('chaochao_session');
   if (!S.sessionToken) {
-    window.location.href = 'home.html';
+    window.location.href = '/';
     return;
   }
   loadDashboard();
@@ -258,7 +259,7 @@ async function loadDashboard() {
   } catch(e) {
     if (e.message.indexOf('401') !== -1 || e.message.indexOf('登录') !== -1) {
       localStorage.removeItem('chaochao_session');
-      window.location.href = 'home.html';
+      window.location.href = '/';
     } else {
       document.getElementById('loading').textContent = '加载失败：' + e.message;
     }
@@ -389,7 +390,7 @@ async function pollRebind() {
 function logout() {
   if (S.walletTimer) { clearInterval(S.walletTimer); S.walletTimer = null; }
   localStorage.removeItem('chaochao_session');
-  window.location.href = 'home.html';
+  window.location.href = '/';
 }
 
 // ── 解绑 ──────────────────────────────────────

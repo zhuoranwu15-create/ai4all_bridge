@@ -190,8 +190,17 @@ let messageCounter = 0;
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
 
+function resolveOpsApiPath(path) {
+  const inOps = window.location.pathname === '/ops' || window.location.pathname.startsWith('/ops/');
+  if (!inOps) return path;
+  if (path === '/admin' || path.startsWith('/admin/')) return '/ops' + path;
+  if (path === '/debug' || path.startsWith('/debug/')) return '/ops' + path;
+  if (path === '/openclaw' || path.startsWith('/openclaw/')) return '/ops' + path;
+  return path;
+}
+
 async function api(method, path, body) {
-  const res = await fetch(path, {
+  const res = await fetch(resolveOpsApiPath(path), {
     method,
     headers: {
       'Authorization': `Bearer ${ADMIN_TOKEN}`,
@@ -218,7 +227,7 @@ async function sendTurn(accountId, text) {
     text,
     raw: { event_type: 'message', content: text },
   };
-  const res = await fetch('/openclaw/turn', {
+  const res = await fetch(resolveOpsApiPath('/openclaw/turn'), {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${BRIDGE_TOKEN}`,

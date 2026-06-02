@@ -205,9 +205,18 @@ function saveTokens() {
   loadAccounts();
 }
 
+function resolveOpsApiPath(path) {
+  const inOps = window.location.pathname === '/ops' || window.location.pathname.startsWith('/ops/');
+  if (!inOps) return path;
+  if (path === '/admin' || path.startsWith('/admin/')) return '/ops' + path;
+  if (path === '/debug' || path.startsWith('/debug/')) return '/ops' + path;
+  if (path === '/openclaw' || path.startsWith('/openclaw/')) return '/ops' + path;
+  return path;
+}
+
 async function api(method, path, body, auth) {
   const token = auth === 'bridge' ? bridgeToken : adminToken;
-  const res = await fetch(path, {
+  const res = await fetch(resolveOpsApiPath(path), {
     method,
     headers: {
       'Authorization': `Bearer ${token}`,

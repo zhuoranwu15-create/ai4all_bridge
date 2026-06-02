@@ -21,13 +21,22 @@ async function loadAdminMe() {
   }
 }
 
+function resolveOpsApiPath(path) {
+  var inOps = window.location.pathname === '/ops' || window.location.pathname.indexOf('/ops/') === 0;
+  if (!inOps) return path;
+  if (path === '/admin' || path.indexOf('/admin/') === 0) return '/ops' + path;
+  if (path === '/debug' || path.indexOf('/debug/') === 0) return '/ops' + path;
+  if (path === '/openclaw' || path.indexOf('/openclaw/') === 0) return '/ops' + path;
+  return path;
+}
+
 async function apiFetch(path, options) {
   options = options || {};
   var token = getToken();
   var headers = { 'Authorization': 'Bearer ' + token };
   if (options.body) headers['Content-Type'] = 'application/json';
 
-  var res = await fetch(path, Object.assign({}, options, {
+  var res = await fetch(resolveOpsApiPath(path), Object.assign({}, options, {
     headers: Object.assign(headers, options.headers || {}),
   }));
 

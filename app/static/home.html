@@ -11,11 +11,11 @@
 
 <!-- 顶栏 -->
 <nav class="site-nav">
-  <a class="brand-logo" href="home.html">
+  <a class="brand-logo" href="/">
     <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
   </a>
   <div class="nav-actions">
-    <a class="btn btn-ghost btn-sm" href="dashboard.html">用户中心</a>
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">用户中心</a>
   </div>
 </nav>
 
@@ -99,7 +99,7 @@
     <div id="step-done" style="display:none; text-align:center; padding:16px 0">
       <div style="font-size:2rem;margin-bottom:12px">✅</div>
       <p style="color:var(--text-sub);margin-bottom:20px">登录成功，正在跳转…</p>
-      <a class="btn btn-primary" href="dashboard.html" id="btn-to-dashboard">进入用户中心</a>
+      <a class="btn btn-primary" href="/user/dashboard.html" id="btn-to-dashboard">进入用户中心</a>
     </div>
 
   </div>
@@ -142,7 +142,8 @@ async function apiFetch(path, opts) {
   var headers = {};
   if (opts.body) headers['Content-Type'] = 'application/json';
   if (S.sessionToken) headers['Authorization'] = 'Bearer ' + S.sessionToken;
-  var res = await fetch(path, Object.assign({}, opts, {
+  var resolvedPath = path.indexOf('/web/') === 0 ? '/api' + path : path;
+  var res = await fetch(resolvedPath, Object.assign({}, opts, {
     headers: Object.assign(headers, opts.headers || {}),
   }));
   if (!res.ok) {
@@ -164,7 +165,7 @@ window.addEventListener('load', function() {
     S.sessionToken = token;
     apiFetch('/web/me').then(function(data) {
       if (data && data.platform_user) {
-        window.location.href = 'dashboard.html';
+        window.location.href = '/user/dashboard.html';
       }
     }).catch(function() {
       localStorage.removeItem('chaochao_session');
@@ -272,7 +273,7 @@ async function doLogin() {
       hide('step-phone');
       hide('step-otp');
       show('step-done');
-      setTimeout(function() { window.location.href = 'dashboard.html'; }, 1200);
+      setTimeout(function() { window.location.href = '/user/dashboard.html'; }, 1200);
     } else {
       // 未绑定 → 展示二维码
       S.bindingIntent = data.binding_intent;
@@ -338,7 +339,7 @@ async function pollBinding() {
     if (TERMINAL[S.bindingIntent.status]) {
       stopPolling();
       if (S.bindingIntent.status === 'completed' || S.bindingIntent.status === 'already_connected') {
-        setTimeout(function() { window.location.href = 'dashboard.html'; }, 1500);
+        setTimeout(function() { window.location.href = '/user/dashboard.html'; }, 1500);
       }
     }
   } catch(e) {

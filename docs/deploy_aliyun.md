@@ -25,6 +25,16 @@ python3 -m venv .venv
 cp .env.production.example .env
 ```
 
+如果服务器系统 `python3` 版本过旧，先安装或指定 Python 3.11+ 创建 venv。不要用裸
+`python` / `python3` 启动服务，统一使用 `.venv/bin/python`、`.venv/bin/pip`、
+`.venv/bin/uvicorn`：
+
+```bash
+python3 --version
+.venv/bin/python --version
+.venv/bin/python -m pip check
+```
+
 编辑 `.env`，至少替换：
 
 - `AI4ALL_BRIDGE_SECRET`
@@ -68,6 +78,10 @@ Group=ai4all
 WantedBy=multi-user.target
 ```
 
+如果仓库实际部署路径不是 `/opt/ai4all-weixin-bot`，同步替换
+`WorkingDirectory`、`EnvironmentFile` 和 `ExecStart`。本次阿里云节点实测路径为
+`/home/jack/workspace/ai4all_bridge`，服务用户为 `jack`。
+
 启动：
 
 ```bash
@@ -75,7 +89,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now ai4all-weixin-backend
 sudo systemctl status ai4all-weixin-backend
 curl http://127.0.0.1:8180/health
+curl http://127.0.0.1:8180/health/ready
 ```
+
+`/health/ready` 在非 local 环境会检查生产关键配置：`LLM_API_KEY`、
+`AI4ALL_BRIDGE_SECRET`、`ADMIN_TOKEN`，并验证 SQLite、`data/user_profiles`
+和 `data/system` 可写。首次部署如果这里返回 503，先修 `.env` 或目录权限，
+不要继续接入公网流量。
 
 查看日志：
 
@@ -121,14 +141,63 @@ sudo systemctl status ai4all-weixin-proactive-scheduler
 
 ## nginx 反代
 
-示例只展示核心策略，证书可用阿里云证书服务或 certbot 管理。
+示例只展示核心策略，证书可用阿里云证书服务或 certbot 管理。公网路径约定：
+
+- `/`：用户主页，反代到 Backend `/ui/home.html`。
+- `/user/dashboard.html`：用户中心，反代到 Backend `/ui/dashboard.html`。
+- `/api/web/*`：用户侧前端 API，反代到 Backend `/web/*`。
+- `/api/health`：公开基础存活检查，反代到 Backend `/health`。
+- `/api/health/ready`：生产 readiness，只允许本机、监控或办公网访问。
+- `/ops/*`：运营后台、Debug UI、Admin/Debug API 和 Swagger，必须通过 allowlist/VPN 保护。
+- 旧公网路径 `/ui/*`、`/web/*`、`/health*`、`/admin/*`、`/debug/*`、`/docs` 不再作为公网入口。
 
 ```nginx
 server {
     listen 443 ssl http2;
     server_name your-domain.example;
 
-    location / {
+    location = / {
+        proxy_pass http://127.0.0.1:8180/ui/home.html;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /user/dashboard.html {
+        proxy_pass http://127.0.0.1:8180/ui/dashboard.html;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /site.css {
+        proxy_pass http://127.0.0.1:8180/ui/site.css;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /user/site.css {
+        proxy_pass http://127.0.0.1:8180/ui/site.css;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /brand.png {
+        proxy_pass http://127.0.0.1:8180/ui/brand.png;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /api/web/ {
+        rewrite ^/api/web/(.*)$ /web/$1 break;
         proxy_pass http://127.0.0.1:8180;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -136,16 +205,166 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    location ~ ^/(admin|debug)/ {
+    location = /api/health {
+        proxy_pass http://127.0.0.1:8180/health;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /api/health/ready {
         allow <your-office-ip>;
         deny all;
+        proxy_pass http://127.0.0.1:8180/health/ready;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /ops {
+        return 302 /ops/;
+    }
+
+    location = /ops/ {
+        allow <your-office-ip>;
+        deny all;
+        proxy_pass http://127.0.0.1:8180/ui/index.html;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ~ ^/ops/(index|ops|account|reminder_debug|onboarding_debug|proactive_debug|web_search_debug)\.html$ {
+        allow <your-office-ip>;
+        deny all;
+        rewrite ^/ops/(.*)$ /ui/$1 break;
         proxy_pass http://127.0.0.1:8180;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
     }
+
+    location ~ ^/ops/(style\.css|admin\.js)$ {
+        allow <your-office-ip>;
+        deny all;
+        rewrite ^/ops/(.*)$ /ui/$1 break;
+        proxy_pass http://127.0.0.1:8180;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /ops/admin/ {
+        allow <your-office-ip>;
+        deny all;
+        rewrite ^/ops/admin/(.*)$ /admin/$1 break;
+        proxy_pass http://127.0.0.1:8180;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /ops/debug/ {
+        allow <your-office-ip>;
+        deny all;
+        rewrite ^/ops/debug/(.*)$ /debug/$1 break;
+        proxy_pass http://127.0.0.1:8180;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ^~ /ops/openclaw/ {
+        allow <your-office-ip>;
+        deny all;
+        rewrite ^/ops/openclaw/(.*)$ /openclaw/$1 break;
+        proxy_pass http://127.0.0.1:8180;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /ops/docs {
+        allow <your-office-ip>;
+        deny all;
+        proxy_pass http://127.0.0.1:8180/docs;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        sub_filter_once off;
+        sub_filter '/openapi.json' '/ops/openapi.json';
+    }
+
+    location = /ops/openapi.json {
+        allow <your-office-ip>;
+        deny all;
+        proxy_pass http://127.0.0.1:8180/openapi.json;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location ~ ^/(ui|web|admin|debug|openclaw)/ {
+        return 404;
+    }
+
+    location ~ ^/(health|docs|openapi\.json)$ {
+        return 404;
+    }
 }
+```
+
+改完先验证再 reload：
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+公网路径验收示例：
+
+```bash
+for url in \
+  https://your-domain.example/ \
+  https://your-domain.example/user/dashboard.html \
+  https://your-domain.example/api/health \
+  https://your-domain.example/api/web/me \
+  https://your-domain.example/api/health/ready \
+  https://your-domain.example/ui/home.html \
+  https://your-domain.example/web/me \
+  https://your-domain.example/health \
+  https://your-domain.example/admin/me \
+  https://your-domain.example/docs \
+  https://your-domain.example/ops/index.html; do
+  code=$(curl -s -o /tmp/ai4all_pathcheck.out -w '%{http_code}' "$url")
+  printf '%s %s\n' "$code" "$url"
+done
+```
+
+预期：
+
+- `/`、`/user/dashboard.html`、`/api/health` 返回 200。
+- `/api/web/me` 未登录返回 401。
+- `/api/health/ready` 和 `/ops/*` 在非 allowlist 来源返回 403。
+- 旧公网路径 `/ui/*`、`/web/*`、`/health`、`/admin/*`、`/debug/*`、`/docs` 返回 404。
+
+从服务器本机验证 `/ops/*` allowlist 映射时，绕过代理直连本机 443：
+
+```bash
+curl --noproxy '*' -k \
+  --resolve your-domain.example:443:127.0.0.1 \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  https://your-domain.example/ops/admin/me
 ```
 
 ## OpenClaw Bridge 配置
@@ -157,6 +376,14 @@ cd /opt/ai4all-weixin-bot
 openclaw plugins install ./openclaw-bridge --force
 openclaw config set plugins.entries.ai4all-openclaw-bridge.config.backendUrl http://127.0.0.1:8180
 openclaw config set plugins.entries.ai4all-openclaw-bridge.config.secret '<same value as AI4ALL_BRIDGE_SECRET in .env>'
+openclaw gateway restart
+```
+
+避免手工复制 secret 出错，可以直接从 `.env` 同步：
+
+```bash
+bridge_secret=$(awk -F= '$1=="AI4ALL_BRIDGE_SECRET" {print $2}' .env)
+openclaw config set plugins.entries.ai4all-openclaw-bridge.config.secret "$bridge_secret"
 openclaw gateway restart
 ```
 
@@ -238,13 +465,17 @@ sudo systemctl stop ai4all-weixin-backend
 ```bash
 .venv/bin/pytest tests/ -v
 curl http://127.0.0.1:8180/health
+curl http://127.0.0.1:8180/health/ready
+curl https://your-domain.example/api/health
+.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "hello"
+.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot --token "$ADMIN_TOKEN"
 openclaw plugins inspect ai4all-openclaw-bridge --runtime
 openclaw channels status --probe
 ```
 
 真实冒烟：
 
-1. 打开 Web onboarding 页面并完成手机号、验证码、短信 OTP。
+1. 打开 `https://your-domain.example/` 并完成手机号、验证码、短信 OTP。
 2. 扫码绑定，确认 `binding_intent` 完成且写入 `channel_bindings`。
 3. 发送微信私聊，确认 `/openclaw/turn` 路由到预创建的 `acct_...` 并回复。
 4. 设置一个近期提醒，确认 scheduler 到点发送主动微信消息。

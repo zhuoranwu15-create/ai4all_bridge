@@ -1,7 +1,21 @@
 import argparse
 import json
 import time
+from urllib.parse import urlparse
 import urllib.request
+
+
+def resolve_turn_url(raw_url: str) -> str:
+    """Accept either a base backend URL or the full /openclaw/turn endpoint."""
+    cleaned = (raw_url or "").strip().rstrip("/")
+    if not cleaned:
+        return "http://127.0.0.1:8000/openclaw/turn"
+    parsed = urlparse(cleaned)
+    if not parsed.scheme or not parsed.netloc:
+        raise ValueError("--url must be an absolute http(s) URL")
+    if parsed.path.endswith("/openclaw/turn"):
+        return cleaned
+    return f"{cleaned}/openclaw/turn"
 
 
 def main() -> None:
@@ -29,8 +43,9 @@ def main() -> None:
         "timestamp": now,
         "raw": {},
     }
+    turn_url = resolve_turn_url(args.url)
     request = urllib.request.Request(
-        args.url,
+        turn_url,
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {args.secret}",
