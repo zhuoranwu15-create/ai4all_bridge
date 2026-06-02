@@ -13,7 +13,6 @@
 | [总体架构 / 框架设计](architecture_overview.md) | 系统整体架构、分层、核心链路和状态所有权 |
 | [Phase 1 详细技术设计](phase1_technical_design.md) | 技术平面、目标数据模型、核心链路和 Phase 1 工作包 |
 | [Phase 1 需求追踪矩阵](phase1_traceability_matrix.md) | 产品需求、技术设计、当前代码和开发缺口的追踪索引 |
-| [当前状态](current_status.md) | 已验证事实、当前限制和运行假设 |
 | [后续规划](roadmap.md) | 产品和工程阶段路线 |
 | [下一步开发步骤](next_dev_steps.md) | 当前开发队列和近期联调重点 |
 
@@ -29,9 +28,9 @@
 | [陪伴式聊天](product/companion_chat_prd.md) | 微信私聊、陪伴体验、默认 Soul、安全边界 |
 | [记忆与上下文](product/memory_prd.md) | short-term context、daily notes、Dreaming、记忆管理 |
 | [主动消息与提醒](product/proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 |
-| [搜索与异步任务](product/search_and_async_tasks_prd.md) | Web Search 同步工具调用、高耗时任务异步兜底 |
-| [语音输入](product/voice_prd.md) | 微信语音、ASR、转写后文本回复 |
-| [权益、增长与可选支付](product/entitlement_growth_prd.md) | 贝壳、扣减、拉新、可选购买 |
+| [Web Search 同步工具调用](product/search_and_async_tasks_prd.md) | Web Search 同步工具调用、失败和复杂任务不支持说明 |
+| [语音输入](product/voice_prd.md) | 微信语音、上游转写、文本回复 |
+| [权益、增长与支付后置](product/entitlement_growth_prd.md) | 贝壳、扣减、拉新、支付后置 |
 | [运营与后台](product/admin_ops_prd.md) | Admin、客服支撑、观测、风控、审计 |
 | [运营后台页面规划](product/admin_ops_views.md) | 运营视角下的后台页面、字段、动作、隐私边界和推进顺序 |
 
@@ -46,11 +45,11 @@
 | [内容邀请技术设计](tech_design/content_invitation_design.md) | 内容邀请两阶段状态机、LLM tool use、确认/拒绝工具和标题列表规则 |
 | [Agent Context Files 与记忆机制](tech_design/agent_context_files.md) | AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY、daily notes 和记忆边界 |
 | [Dreaming 记忆压缩与长期记忆](tech_design/dreaming_memory_design.md) | LLM session 压缩、carryover、memory items、自动应用/跳过、debug 调优和回滚 |
-| [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md) | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和异步任务衔接 |
+| [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md) | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和主动消息衔接 |
 | [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md) | Admin/Debug 默认脱敏、角色分级、2 小时临时明文权限和操作日志 |
-| [搜索与异步任务技术设计](tech_design/search_async_tasks_design.md) | Web Search 同步工具调用、provider 回退、异步兜底、结果补发和成本事件 |
-| [语音输入技术设计](tech_design/voice_input_design.md) | 微信语音、豆包 ASR、60 秒限制、转写文本和失败体验 |
-| [贝壳、增长与可选支付技术设计](tech_design/entitlement_growth_design.md) | wallet/ledger、成本事件、邀请奖励、客服补发和可选支付 |
+| [Web Search 同步工具调用技术设计](tech_design/search_async_tasks_design.md) | Web Search 同步工具调用、provider 回退、失败体验和成本事件 |
+| [语音输入技术设计](tech_design/voice_input_design.md) | 微信语音、上游转写文本、后端 ASR fallback 后置 |
+| [贝壳、增长与支付后置技术设计](tech_design/entitlement_growth_design.md) | wallet/ledger、成本事件、邀请奖励、客服补发和支付后置 |
 | [OpenClaw Bridge 设计](tech_design/openclaw_bridge_design.md) | Bridge hook、payload、接口和失败策略 |
 | [OpenClaw 微信 QR 补丁](tech_design/openclaw_weixin_gateway_qr_patch.md) | `openclaw-weixin` Gateway QR login provider discovery 补丁说明 |
 

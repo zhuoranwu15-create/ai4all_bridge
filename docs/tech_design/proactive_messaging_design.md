@@ -2,7 +2,7 @@
 
 更新时间：2026-06-02
 
-本文承接 [主动消息与提醒 PRD](../product/proactive_prd.md)，定义 Phase 1 主动消息、用户提醒、陪伴跟进、内容邀请和异步结果补发的技术边界。后续 `app.proactive.*`、LLM tool use、scheduler、outbound ledger 和 OpenClaw Gateway send 相关开发以本文为准。
+本文承接 [主动消息与提醒 PRD](../product/proactive_prd.md)，定义 Phase 1 主动消息、用户提醒、陪伴跟进和内容邀请的技术边界。后续 `app.proactive.*`、LLM tool use、scheduler、outbound ledger 和 OpenClaw Gateway send 相关开发以本文为准。
 
 ## 1. 设计目标
 
@@ -11,9 +11,8 @@ Phase 1 的目标不是做一个高频推送系统，而是在个人微信号场
 - 用户提醒：用户明确设置的一次性或周期性提醒，按用户设定时间发送。
 - 陪伴跟进：基于聊天历史、hidden commitment 或关系上下文的低频关怀。
 - 内容邀请：发现用户可能感兴趣的内容后，先以朋友式话术询问；用户正向确认后才发送标题列表。
-- 异步结果补发：长耗时 Web Search 兜底、ASR 或其他用户触发长任务完成后的结果投递。
 
-其中异步结果补发复用 outbound ledger 和 Gateway send，但不是产品意义上的主动消息；它来自用户已触发任务，不受主动触达总开关、陪伴/内容邀请日上限约束。
+正式决策：Phase 1 不支持用户请求后的后台整理、异步任务补发或长耗时报告生成。Scheduler / due dispatcher 只用于提醒、陪伴跟进和内容邀请调度，不属于用户请求异步任务机制。
 
 ## 2. 产品不变量
 
@@ -24,12 +23,11 @@ Phase 1 的目标不是做一个高频推送系统，而是在个人微信号场
 | 用户提醒 | 用户明确设置 | 不受影响 | 严格按用户设定时间发送 | 不设上限 | 不被低优先级反向压制 | 提醒投递首条不扣用户贝壳 |
 | 陪伴跟进 | hidden commitment、账号主动检查、历史话题 | 受影响 | 受影响，默认 22:00 到次日 7:00 | 默认 1 条 | 避让用户提醒 | 首条不扣用户贝壳 |
 | 内容邀请 | 内容策略、垂类源、运营配置、用户关注点 | 受影响 | 受影响，默认 22:00 到次日 7:00 | 默认 1 条主动邀请 | 避让用户提醒和陪伴跟进 | 主动邀请首条不扣用户贝壳 |
-| 异步结果补发 | 用户触发的长任务或搜索兜底 | 不受主动触达总开关影响 | 默认不因 quiet hours 丢弃 | 不占主动消息日上限 | 不参与主动消息避让 | 任务本身按任务成本扣减 |
 
 补充规则：
 
 - 所有 outbound 都必须写入 `outbound_messages`，保留幂等键、策略结果、发送状态、Gateway message id 和错误信息。
-- 用户收到主动触达后继续回复，后续 AI 回复、搜索、ASR 或其他任务按普通聊天或任务规则扣减贝壳。
+- 用户收到主动触达后继续回复，后续 AI 回复或搜索按普通聊天或工具调用规则扣减贝壳。
 - 陪伴跟进和内容邀请不设置合计日上限或周上限，但各自默认每日最多 1 条。
 - 内容邀请只能发送朋友式询问，不能直接发送内容列表、链接、长摘要或完整日报。
 - 用户确认后的标题列表属于用户触发后的普通入站回合回复，不占内容邀请主动日上限。
@@ -99,7 +97,7 @@ flowchart LR
     end
 
     subgraph DD["due dispatcher - 默认 60 秒"]
-        D1[扫描 due reminders / commitments / invitations / task results]
+        D1[扫描 due reminders / commitments / invitations]
         D2[原子 claim]
         D3{policy allowed?}
         D4[写 outbound ledger 并发送]
@@ -185,18 +183,6 @@ stateDiagram-v2
 -> 当前回合返回标题列表或写入拒绝冷却
 ```
 
-异步结果补发：
-
-```text
-用户触发长任务
--> task worker 完成
--> due dispatcher claim task result
--> task_result policy
--> outbound ledger
--> Gateway send
--> messages timeline
-```
-
 ## 4. OpenClaw 借鉴与 AI4ALL 差异
 
 OpenClaw 的定时 loop、cron 和 channel send 证明了 agent 产品需要具备定时任务、主动发送、任务恢复和上下文感知能力。AI4ALL 应借鉴这些设计，但不能照搬运行边界：
@@ -235,7 +221,7 @@ OpenClaw 的定时 loop、cron 和 channel send 证明了 agent 产品需要具�
 当前剩余缺口：
 
 - 周期性提醒、自然语言取消/更新提醒二次确认、用户级 timezone 尚未实现。
-- 生产多 worker lease / leader election 尚未实现；正式多实例部署前必须补齐。
+- 生产多实例 scheduler lease / leader election 尚未实现；正式多实例部署前必须补齐。
 - 内容邀请和陪伴跟进仍需更多真实聊天数据验证。当前测试账号上下文稀疏或话题跳跃时，LLM 保守返回 `skip_content_invitation` / `llm_no_content_invitation` 是预期行为。
 - Gateway 重启、长时间无入站后的 route/context token、真实微信端到端长期稳定性仍需观察。
 - 提醒意图仍有高确定性规则解析兼容路径；后续应继续迁移到 LLM tool use，但不应在第一轮收口时新增关键词/正则 intent gate。
@@ -311,7 +297,6 @@ get_default_tools() = enabled tools by account/config/context
 | `content_invitation` | `content_invitation` | 主动发出的朋友式内容邀请，只询问是否想看 |
 | `content_invitation_titles` | `content_invitation_response` | 用户正向确认后的标题列表，属于用户触发的普通回合回复 |
 | `content_invitation_feedback` | `content_invitation_response` | 用户拒绝、退订或反馈某类内容 |
-| `async_task_result` | `task_result` | 用户触发长任务完成后的结果补发 |
 
 建议新增常量或枚举：
 
@@ -320,7 +305,6 @@ OutboundCategory.USER_REMINDER
 OutboundCategory.COMPANION_FOLLOWUP
 OutboundCategory.CONTENT_INVITATION
 OutboundCategory.CONTENT_INVITATION_RESPONSE
-OutboundCategory.TASK_RESULT
 ```
 
 `outbound_messages.source` 继续记录具体来源，新增或在 metadata 中稳定记录 `product_category`、`policy_version`、`policy_decision` 和 `policy_reason`。
@@ -370,7 +354,6 @@ metadata: dict
 | `companion_followup` | 检查主动触达总开关、quiet hours、账号 cooldown、分类日上限 1、6 小时内是否有用户提醒 |
 | `content_invitation` | 检查主动触达总开关、quiet hours、账号 cooldown、分类日上限 1、6 小时内是否有用户提醒或陪伴跟进、内容拒绝冷却；只允许邀请文本，不允许标题列表或链接 |
 | `content_invitation_response` | 用户入站确认后的普通回合响应；不检查主动触达总开关，不占主动日上限；必须校验存在有效 `invited` invitation，且输出只含标题 |
-| `task_result` | 不检查主动触达总开关；不占主动消息日上限；默认不因 quiet hours 丢弃；仍写 ledger、route、幂等和任务成本 metadata |
 
 Admin 手动 `bypass_quiet_hours` 只能作为排障参数进入 metadata，不能成为生产策略绕过用户提醒规则的主要机制。用户提醒本身应天然不受 quiet hours 影响。
 
@@ -524,8 +507,6 @@ lookahead window 内需要检查：
 - 陪伴跟进：`proactive_commitments.status in ('pending', 'scheduled')` 且 `scheduled_at` 落在窗口内。
 - 账号主动检查候选：active `account_check_candidate` 或 draft/promoted candidate 的建议发送时间。
 - 内容邀请：`content_invitations.status in ('candidate', 'invited')` 且 `scheduled_at` 或 `expires_at` 落在窗口内。
-- 异步任务结果：已完成但尚未补发的 task result 可记录在窗口视图中，但它不受主动触达总开关和内容/陪伴限额约束。
-
 处理规则：
 
 - 账号主动检查不应提前发送未来消息；它负责发现、生成、持久化、延后或取消候选。
@@ -543,7 +524,7 @@ proactive_account_check_context_messages = 12
 proactive_due_dispatch_interval_seconds = 60
 ```
 
-`proactive_account_check_interval_seconds` 控制每个账号多久做一次上下文扫描；`proactive_due_dispatch_interval_seconds` 控制 due reminder、commitment、content invitation 和 async task result 的短周期投递扫描。两者不要混淆：账号主动检查负责“想清楚和准备”，due dispatcher 负责“到点发送”。
+`proactive_account_check_interval_seconds` 控制每个账号多久做一次上下文扫描；`proactive_due_dispatch_interval_seconds` 控制 due reminder、commitment 和 content invitation 的短周期投递扫描。两者不要混淆：账号主动检查负责“想清楚和准备”，due dispatcher 负责“到点发送”。
 
 当前实现要求：
 
@@ -586,18 +567,11 @@ scheduler account check
 - 标题列表只包含标题，不包含 URL、不包含长摘要。
 - 用户明确拒绝某类内容后，至少 1 个月内不再邀请该类别。
 
-## 13. 异步结果补发
+## 13. 不处理异步结果补发
 
-普通 Web Search 默认在当前 turn 通过 LLM tool use 同步完成。长耗时搜索、复杂资料整理、provider 超时或用户明确要求后台整理时，才转为异步兜底：先同步告知“后台正在工作”，任务完成后再补发完整结果。
+普通 Web Search 在 Phase 1 只在当前 turn 通过 LLM tool use 同步完成。长耗时搜索、复杂资料整理、provider 超时或用户明确要求后台整理时，当前 turn 返回失败或不支持说明，不进入 scheduler，不补发结果。
 
-异步结果补发应复用 outbound ledger，但策略不同：
-
-- `source=async_task_result`。
-- `product_category=task_result`。
-- 不受主动触达总开关影响。
-- 不占陪伴跟进或内容邀请日上限。
-- 默认不因 quiet hours 丢弃；如果未来产品决定夜间延迟补发，应在搜索/异步任务 PRD 中另行明确。
-- 成本按任务本身的 provider、LLM、搜索、摘要和补发消耗拆解，映射到贝壳扣减。
+Phase 1 不新增、不使用 `source=async_task_result` 或 `product_category=task_result` 的生产链路；代码中如保留兼容分类，只作为历史数据/未来预案，不代表当前支持用户请求后的异步结果补发。后续如单独立项后台研究、报告生成或异步结果补发，需要重新设计用户可见任务状态、幂等、失败说明、quiet hours 关系和成本归因。
 
 ### 13.1 Outbound 与 Session / Message 关系
 
@@ -609,8 +583,7 @@ scheduler account check
 - 陪伴跟进 / hidden commitment / 账号主动检查。
 - 内容邀请。
 - 用户确认后的标题列表回复。
-- 异步任务结果补发。
-- 发送失败说明或任务失败说明，只要实际发给了用户，也应写入 `messages`。
+- 发送失败说明，只要实际发给了用户，也应写入 `messages`。
 
 outbound 写入规则：
 
@@ -633,11 +606,11 @@ outbound 写入规则：
 MVP 可接受两种部署方式：
 
 - 单进程 FastAPI + in-process scheduler，部署必须固定 `uvicorn --workers 1`。
-- 独立 worker 进程运行 `scripts/run_proactive_scheduler.py`，FastAPI 不启动 in-process scheduler。
+- 独立 scheduler worker 进程运行 `scripts/run_proactive_scheduler.py`，FastAPI 不启动 in-process scheduler。
 
-进入正式内测前，推荐使用独立 worker，并补齐：
+进入正式内测前，推荐使用独立 scheduler worker，并补齐：
 
-- worker lease 或 leader election，避免多实例重复扫描。
+- scheduler lease 或 leader election，避免多实例重复扫描。
 - DB 原子 claim 覆盖 reminder、commitment、content invitation candidate 和 account check。
 - outbound quota claim 原子化，避免并发下突破分类上限。
 - 失败重试策略和死信/人工处理状态。
@@ -650,14 +623,13 @@ dispatch due user reminders
 -> scan due accounts for scheduler account check
 -> generate and dispatch content invitations
 -> expire stale content invitations
--> dispatch async task results
 ```
 
-用户提醒优先级最高，但异步任务结果是用户触发任务结果，不应被内容邀请或陪伴跟进阻塞。用户确认后的标题列表由入站回合即时处理，不由 scheduler 主动发送。
+用户提醒优先级最高。用户确认后的标题列表由入站回合即时处理，不由 scheduler 主动发送。
 
 调度职责分层：
 
-- due dispatcher 默认短周期运行，建议 60 秒，负责 claim 和发送已经到期的 reminder、commitment、content invitation 和 async task result。
+- due dispatcher 默认短周期运行，建议 60 秒，负责 claim 和发送已经到期的 reminder、commitment 和 content invitation。
 - 账号主动检查默认每账号 1 小时运行一次，负责 lookahead、候选生成、避让判断、过期处理和 `next_scan_at` 维护。
 - 账号主动检查发现窗口内有未来待发送事项时，必须写入 DB 中的稳定候选或任务，并带 `scheduled_at`；不能依赖内存等待。
 
@@ -713,7 +685,7 @@ SQLite 阶段可先用 JSON metadata 承载部分字段，但进入 PostgreSQL �
 - daily notes 正文。
 - prompt/messages 全文。
 - 模型回复正文。
-- 用户语音 ASR 正文和图片识别正文。
+- 用户语音转写正文和图片识别正文。
 
 明文查看必须遵守 [运营与后台 PRD](../product/admin_ops_prd.md)：管理员可在必要 debug 和事故排查时查看；普通后台用户需要管理员审批后的 2 小时临时明文权限；所有明文查看都记录操作日志。
 
@@ -733,8 +705,7 @@ SQLite 阶段可先用 JSON metadata 承载部分字段，但进入 PostgreSQL �
 1. 统一 LLM tool-use：提醒创建/更新/取消继续迁移到 tool call，不新增关键词或正则 intent gate。
 2. 周期性提醒：扩展 reminder model 和 tool handler，支持最小 1 天周期。
 3. 取消/更新提醒：新增 pending change request 和确认处理。
-4. 异步任务结果补发：接入 `async_task_result` category，和搜索/语音技术设计统一。
-5. 生产化：worker lease、用户 timezone、PostgreSQL schema、真实微信端到端联调和回归测试。
+4. 生产化：scheduler lease、用户 timezone、PostgreSQL schema、真实微信端到端联调和回归测试。
 
 ## 18. 验收点
 
@@ -751,5 +722,5 @@ SQLite 阶段可先用 JSON metadata 承载部分字段，但进入 PostgreSQL �
 - 周期性提醒可以创建、发送、计算下一次触发时间，且不支持小于 1 天周期。
 - 自然语言取消/更新提醒必须先返回拟调整结果，用户确认后才生效。
 - outbound ledger 能区分 `source` 与 `product_category`，并记录 policy reason。
-- Gateway 发送失败、重复调度和 worker 重启不会造成重复发送。
-- 真实微信端到端链路覆盖 reminder、companion followup、content invitation、content invitation titles 和 async task result。
+- Gateway 发送失败、重复调度和 scheduler 重启不会造成重复发送。
+- 真实微信端到端链路覆盖 reminder、companion followup、content invitation 和 content invitation titles。

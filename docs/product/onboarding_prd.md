@@ -1,6 +1,6 @@
 # 产品专题 PRD：注册与扫码接入
 
-更新时间：2026-05-25
+更新时间：2026-06-02
 
 ## 1. 目标
 
@@ -112,18 +112,21 @@ Phase 1 以手机号作为外部用户唯一标识。用户通过短信 OTP 证�
 - 默认 AI4ALL Account 应幂等复用，避免重复注册时反复创建账号。
 - Phase 1 不允许一个 `platform_user` 拥有多个 AI4ALL Account；普通入口和接口都应复用默认账号。
 - Phase 1 以手机号作为 `platform_user` 唯一外部身份；微信扫码结果只作为通道绑定身份。
-- 二维码状态需要覆盖 `created`、`qr_created`、`completed`、`expired`、`cancelled`、`wait_failed`、`already_connected`。
+- 二维码状态至少需要覆盖首次绑定主路径：`created`、`qr_created`、`completed`、`failed`。
+- `expired`、`cancelled`、`wait_failed`、`already_connected` 等异常状态需要保留记录能力和排障可见性，但不作为当前内测首发阻塞项。
 - OpenClaw QR wait 返回 raw id 与 Bridge 入站 normalized id 时，Backend 应能通过 alias lookup 对齐。
-- 同一 `channel_account_id` 已绑定时，不应静默绑定到另一个 AI4ALL Account。
+- 同一 `channel_account_id` 已绑定到其他 AI4ALL Account 的重复绑定策略暂缓，不作为当前内测首发阻塞项。原因是部分状态和控制在 OpenClaw 通道层，Backend 不能完全可靠地判断或接管。
+- 当前优先保证首次绑定成功后，真实微信私聊能稳定路由到预创建的 AI4ALL Account，并持续使用不串线。
 
-## 5. 绑定与解绑策略
+## 5. 当前内测绑定策略
 
-- 同一通道账号已绑定到同一 AI4ALL Account：允许展示“已绑定/可继续使用”。
-- 同一通道账号已绑定到另一个 AI4ALL Account：默认拒绝，提示需要先解绑或联系客服。
+- 当前内测首发只承诺首次绑定链路：手机号 OTP 通过后创建或复用默认 AI4ALL Account，扫码完成后写入 channel binding，后续微信消息稳定进入该账号。
+- 重复绑定、同一微信绑定多个手机号、同一手机号更换微信、`already_connected` / `binded_redirect` 等策略先记录为后续专题处理，不在当前开发窗口继续展开。
+- 如 OpenClaw 通道层返回已连接或复用状态，Backend 先以“不串线、可排障、可人工处理”为底线，不在产品侧承诺自动迁移。
 - 用户主动解绑需要区分 AI4ALL 业务解绑和 OpenClaw runtime 解绑。
 - 用户换手机号或手机号被回收后，不做旧账号找回或自动迁移；用户需要使用新手机号重新注册，并重新扫码生成新的绑定关系。
-- 同一手机号绑定多个微信、同一微信账号尝试绑定多个手机号等异常场景，内测阶段优先通过客服/Admin 进行解绑或修复，但不绕过“手机号重新注册 + 微信重新扫码”的主流程。
-- 内测阶段必须提供 Admin 解绑/修复入口，便于处理误绑和绑定异常。
+- 同一手机号绑定多个微信、同一微信账号尝试绑定多个手机号等异常场景，内测阶段优先通过客服/Admin 观察和人工处理，不绕过“手机号重新注册 + 微信重新扫码”的主流程。
+- Admin 需要能查看绑定链路和通道状态，便于排查首次绑定失败、扫码后消息路由失败和后续人工修复。
 
 ## 6. 体验要求
 
@@ -144,12 +147,13 @@ Phase 1 以手机号作为外部用户唯一标识。用户通过短信 OTP 证�
 - OTP 通过后系统创建或复用 `platform_user` 和默认 AI4ALL Account。
 - 用户扫码后 `binding_intents.status=completed`，并写入 `channel_bindings`。
 - 扫码后的真实微信私聊消息能路由到预创建 `acct_...`。
-- 重复绑定和绑定异常不会导致账号串线。
+- 首次绑定后的真实微信私聊能稳定使用，且不会串到其他 AI4ALL Account。
 - 同一手机号重复 onboarding 时复用同一个 `platform_user` 和默认 AI4ALL Account。
 - 一个 `platform_user` 不能通过普通产品入口创建多个 AI4ALL Account。
 - 换手机号场景走新手机号重新注册和重新扫码绑定，不自动继承旧手机号账号数据。
 
 ## 9. 待确认
 
-- 重复绑定、解绑、换微信号的正式产品话术。
+- 重复绑定、解绑、换微信号的正式产品话术和技术控制边界。
 - 同一手机号绑定多个微信账号、同一微信账号尝试绑定多个手机号时的具体处理话术。
+- OpenClaw 通道层 `already_connected`、运行时复用和账号退出能力的正式接管方式。

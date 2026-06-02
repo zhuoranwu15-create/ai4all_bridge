@@ -1,10 +1,10 @@
-# 贝壳、增长与可选支付技术设计
+# 贝壳、增长与支付后置技术设计
 
-更新时间：2026-05-31
+更新时间：2026-06-02
 
-本文承接 [贝壳、增长与可选支付 PRD](../product/entitlement_growth_prd.md)，定义 Phase 1 内测所需的贝壳 wallet/ledger、用量计量、邀请奖励、客服补发和可选支付技术设计。
+本文承接 [贝壳、增长与支付后置 PRD](../product/entitlement_growth_prd.md)，定义 Phase 1 内测所需的贝壳 wallet/ledger、用量计量、邀请奖励和客服补发技术设计。
 
-Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减，运营能补发和排查，邀请奖励能生效；支付可以不开放，但如果开放必须接入同一套账本。
+Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减，运营能补发和排查，邀请奖励能生效。支付和用户购买正式后置，不进入 Phase 1 内测首发范围；后续如开放购买，必须接入同一套账本。
 
 ## 1. 设计目标
 
@@ -14,9 +14,10 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 邀请新用户注册绑定并发送 3 条有意义消息后，给邀请人暂定发放 1000 个贝壳。
 - 聊天按输入 token + 输出 token 计量，默认 `1000 deepseek v4-flash token = 1 贝壳`。
 - 其他模型按相对 `deepseek v4-flash` 的价格倍率折算。
-- 搜索、ASR 等工具调用或任务先记录成本事件，再映射到贝壳扣减。
+- 搜索等工具调用先记录成本事件，再映射到贝壳扣减。
+- 成功触发商业搜索 provider 的 `web_search` 暂定固定扣减 5 个贝壳。
 - 主动触达首条消息不扣用户贝壳，但要记录平台成本事件；用户回复后的后续链路正常扣减。
-- 支付和用户购买是可选线，不阻塞内测发布。
+- 支付和用户购买正式后置，不阻塞内测发布。
 
 ## 2. 范围
 
@@ -24,18 +25,18 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 
 - wallet / ledger 数据模型。
 - 注册赠送、运营发放、补偿发放、邀请奖励。
-- LLM token、ASR、Search tool/provider、outbound platform cost 的成本事件。
+- LLM token、Search tool/provider、outbound platform cost 的成本事件。
 - 成本事件到贝壳扣减流水的映射。
 - 邀请码、邀请关系、3 条有意义消息验收。
 - 客服/运营补发和误扣排查。
-- 可选支付订单、回调和贝壳生效边界。
+- 支付后置的账本边界和未来价格锚点。
 
 本文不覆盖：
 
-- 搜索 provider 和结果补发细节，见 [搜索与异步任务技术设计](search_async_tasks_design.md)。
-- 语音媒体和豆包 ASR 细节，见 [语音输入技术设计](voice_input_design.md)。
+- 搜索 provider、失败体验和成本细节，见 [Web Search 同步工具调用技术设计](search_async_tasks_design.md)。
+- 语音输入当前依赖上游转写，不产生后端 ASR 成本；细节见 [语音输入技术设计](voice_input_design.md)。
 - Admin 明文权限，见 [隐私与后台访问控制技术设计](privacy_admin_access_control_design.md)。
-- 支付 provider 选型和合规细则，Phase 1 开启支付前单独确认。
+- 支付 provider 选型、订单、退款和合规细则，后续单独立项。
 
 ## 3. 当前代码基线
 
@@ -43,27 +44,32 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 
 - `daily_usage`：按账号和日期记录消息条数。
 - `/admin/accounts/{account_id}/usage`：展示今日和近 7 天消息数。
-- `outbound_messages`：主动发送和异步补发的发送 ledger。
+- `outbound_messages`：主动发送的发送 ledger。
+- `entitlement_wallets`：账号级贝壳钱包。
+- `entitlement_ledger`：注册赠送、扣减等余额流水。
+- `cost_events`：聊天 token 等成本事件。
+- 新用户注册赠送 1000 贝壳，并通过幂等键防重复发放。
+- 普通聊天成功后按估算 token 写成本事件和扣减流水。
+- `/web/me/wallet` 和 `/admin/accounts/{account_id}/wallet` 可查看余额和基础流水。
 
 当前缺口：
 
-- 无 `entitlement_wallets`。
-- 无余额和贝壳流水。
-- 无 token usage / provider cost 的统一成本事件。
-- 无模型价格倍率配置。
-- 无注册赠送、运营补发和误扣回滚。
+- token usage 当前主要是估算，尚未接入 provider 返回的真实 usage。
+- 模型价格倍率配置尚未产品化。
+- 搜索 provider 调用尚未按固定 5 贝壳写入扣减流水。
+- 运营补发和误扣回滚入口尚未完整产品化。
 - 无邀请码、邀请关系和拉新奖励。
-- 无支付订单和回调。
+- 无支付订单和回调；该项已正式后置，不作为 Phase 1 内测首发缺口。
 
-因此，现有 `daily_usage` 只能继续作为消息次数统计，不能承担贝壳余额或计费语义。
+因此，`daily_usage` 继续作为消息次数统计；贝壳余额和计费语义由 wallet / ledger / cost event 承担。
 
 ## 4. 核心概念
 
 | 概念 | 含义 |
 | --- | --- |
 | `entitlement_wallet` | 某个 AI4ALL Account 的贝壳钱包 |
-| `entitlement_ledger` | 所有影响余额的发放、扣减、补偿、回滚和支付生效流水 |
-| `cost_event` | LLM、ASR、Search、outbound 等资源消耗记录，可映射为用户扣减或平台成本 |
+| `entitlement_ledger` | 所有影响余额的发放、扣减、补偿和回滚流水；未来支付生效也必须进入 ledger |
+| `cost_event` | LLM、Search、outbound 等资源消耗记录，可映射为用户扣减或平台成本 |
 | `model_price_rule` | 模型相对基准模型的价格倍率 |
 | `referral_relationship` | 邀请人和被邀请人的拉新关系及奖励状态 |
 
@@ -159,8 +165,8 @@ entitlement_ledger
 | `manual_grant` | credit | 运营手工发放 |
 | `compensation` | credit | 客服补偿或误扣补偿 |
 | `referral_reward` | credit | 邀请奖励 |
-| `payment_order` | credit | 支付成功后贝壳生效 |
-| `usage_charge` | debit | 聊天、ASR、搜索等用户消耗 |
+| `payment_order` | credit | 后续支付成功后贝壳生效，Phase 1 内测不使用 |
+| `usage_charge` | debit | 聊天、搜索等用户消耗 |
 | `reversal` | credit/debit | 反向冲正，永远不删除原流水 |
 
 幂等键示例：
@@ -168,7 +174,7 @@ entitlement_ledger
 ```text
 new-user-grant-{ai4all_account_id}
 usage-message-{message_id}
-usage-task-{task_id}
+usage-tool-{tool_invocation_id}
 referral-reward-{referral_relationship_id}
 payment-order-{order_id}
 reversal-{ledger_id}
@@ -181,7 +187,7 @@ cost_events
 - id
 - ai4all_account_id
 - wallet_id
-- source_type: message | tool_call | task | outbound | admin_operation
+- source_type: message | tool_call | outbound | admin_operation
 - source_id
 - cost_type: llm_tokens | asr | search_provider | provider_call | outbound_delivery
 - cost_owner: user | platform
@@ -202,9 +208,8 @@ cost_events
 
 说明：
 
-- 用户聊天、用户触发搜索工具调用或搜索任务、用户语音 ASR 默认 `cost_owner=user`。
+- 用户聊天和用户触发搜索工具调用默认 `cost_owner=user`。
 - 主动触达首条消息默认 `cost_owner=platform`、`billable_to_user=false`。
-- 异步任务结果补发本身不额外作为主动触达扣费；任务执行过程产生的 cost event 仍可按任务规则扣用户贝壳。
 - `computed_shell_micros` 是技术计算值，是否实际扣减由 `billable_to_user` 和扣减策略决定。
 
 ### 6.4 model_price_rules
@@ -315,7 +320,7 @@ Phase 1 可以先由后台 AI 自动判断 3 条消息是否有意义，Admin �
 
 ### 6.9 orders / payments / refunds
 
-支付是可选线。如果 Phase 1 不开放购买，可以只保留表设计，不暴露用户购买入口。
+支付和用户购买正式后置。Phase 1 内测不创建以下表、不暴露用户购买入口、不实现订单或回调。以下模型仅作为后续立项时的账本边界参考。
 
 ```text
 payment_products
@@ -366,7 +371,7 @@ refunds
 1 元人民币 = 100 贝壳
 ```
 
-支付成功后，只能通过 `entitlement_ledger(source_type=payment_order)` 发放贝壳。
+支付后续如开放，支付成功后只能通过 `entitlement_ledger(source_type=payment_order)` 发放贝壳。
 
 ## 7. 核心流程
 
@@ -404,7 +409,7 @@ Phase 1 推荐先采用简单策略：
 - 请求开始前检查 wallet active 且余额大于 0。
 - 成功生成回复后按实际 token 扣减。
 - 如果扣减后余额小于等于 0，下一轮请求提示用户余额不足或需要等待运营补发。
-- 暂不做复杂预授权和冻结；搜索等高成本任务可以先做最低余额门槛。
+- 暂不做复杂预授权和冻结；搜索等高成本工具调用可以先做最低余额门槛。
 
 失败处理：
 
@@ -413,41 +418,48 @@ Phase 1 推荐先采用简单策略：
 
 ### 7.3 搜索扣减
 
-搜索默认采用同步 `web_search` tool use，长耗时搜索或复杂整理才转为异步任务。成本来自多段事件：
+搜索默认采用同步 `web_search` tool use。长耗时搜索、复杂整理、provider 超时或用户明确要求后台整理时，Phase 1 当前回合返回失败/不支持说明，不创建后台任务。
+
+Phase 1 暂定规则：
+
+- 成功触发商业搜索 provider 的 `web_search` 固定扣减 5 个贝壳。
+- 5 个贝壳用于覆盖约 3 分钱人民币的商业搜索 API 成本和少量结果处理成本。
+- 搜索所在 turn 的 LLM 工具决策、最终回答 token 仍按普通聊天 token 规则另行扣减。
+- 未实际调用商业 provider 的失败搜索，不扣搜索固定费用。
+- 已调用商业 provider 但后续回答失败，先记录成本事件；是否补偿由运营/客服处理。
+
+技术上仍需记录多段成本：
 
 ```text
 tool decision / query rewrite cost
 -> search provider cost
 -> result summarize cost
 -> final answer cost
--> optional async task delivery cost
 ```
 
 技术要求：
 
 - 每段写 `cost_events`。
 - provider 失败、回退和重试都要单独记录。
-- 同步工具调用成功后按策略汇总为一个或多个 `usage_charge` ledger；异步兜底任务成功后按任务策略汇总。
-- 搜索失败是否扣费由后续产品细则确认；技术上必须区分“未实际消耗 provider/LLM”和“已消耗但结果失败”。
+- 同步工具调用成功后，商业搜索 provider 成功调用产生 `usage_charge`，金额为 5 贝壳。
+- 后台整理、长耗时报告和异步补发不进入 Phase 1；不产生任务型汇总扣减。
+- 技术上必须区分“未实际消耗 provider/LLM”和“已消耗但结果失败”。
 
-### 7.4 ASR 扣减
+### 7.4 语音转写扣减
 
-语音输入通过豆包 ASR：
+当前 Phase 1 不接入后端 ASR，依赖 `openclaw-weixin` 上游提供转写文本：
 
 ```text
 voice message
--> media / duration check
--> Doubao ASR
--> transcript
--> cost_event(asr)
+-> upstream transcript
 -> transcript enters normal text turn
 ```
 
 要求：
 
-- 超过 60 秒、媒体不可访问或格式不支持，不调用 ASR，不扣 ASR 贝壳。
-- ASR 成功后记录 `duration_seconds`、provider、request id 和技术实验确定后的 shell 计算值。
-- 转写文本进入普通聊天后，后续 LLM 回复仍按聊天 token 另行扣减。
+- 当前不产生 ASR cost event，不扣 ASR 贝壳。
+- 上游转写文本进入普通聊天后，后续 LLM 回复按聊天 token 扣减。
+- 如果未来接入后端 ASR fallback，再补充 `cost_event(asr)`、duration、provider request id 和贝壳扣减规则。
 
 ### 7.5 主动触达首条成本
 
@@ -462,12 +474,12 @@ user_reminder / companion_followup / content_push first outbound
 
 ```text
 user reply
--> normal chat / search / ASR
+-> normal chat / search
 -> cost_event(cost_owner=user)
 -> entitlement_ledger debit
 ```
 
-异步任务结果补发不是无触发主动推送，不额外按主动触达首条扣费；任务本身按任务成本规则扣减。
+Phase 1 不支持用户请求后的异步任务结果补发；主动触达首条成本仅适用于用户提醒、陪伴跟进和内容邀请。
 
 ### 7.6 邀请奖励
 
@@ -511,9 +523,11 @@ original debit ledger
 
 原流水不能删除或覆盖。
 
-### 7.8 可选支付
+### 7.8 支付后置
 
-如果开启支付：
+Phase 1 内测不开放购买，不实现订单、支付回调或退款。
+
+后续如果开启支付，必须走以下边界：
 
 ```text
 create order
@@ -524,7 +538,7 @@ create order
 -> wallet balance updated
 ```
 
-要求：
+后续要求：
 
 - 支付回调必须验签。
 - 同一个 provider payment id 只能生效一次。
@@ -558,7 +572,7 @@ GET /admin/referrals
 POST /admin/referrals/{id}/review
 ```
 
-支付可选 API：
+支付后置 API，Phase 1 不实现：
 
 ```text
 GET /web/payment-products
@@ -571,14 +585,14 @@ Admin 权限：
 
 - `support` 或 `staff` 可查看余额、流水元数据和邀请状态。
 - `operator` 或 `admin` 可补发贝壳、冲正误扣和处理邀请奖励。
-- 所有补发、冲正、支付修复都写 `admin_access_events` 或等价操作日志。
+- 所有补发、冲正都写 `admin_access_events` 或等价操作日志。支付修复后续立项时同样必须写操作日志。
 
 ## 9. 与其他技术文档的关系
 
 - 对话主链路负责产出 LLM usage 和 message/debug trace。
-- 搜索技术设计负责产出 tool invocation trace、provider runs、异步兜底 task/task_runs 和搜索 cost events。
-- 语音技术设计负责产出 ASR cost events。
-- 主动消息技术设计负责区分用户提醒、陪伴跟进、内容推送和异步结果补发，并标记首条主动触达的平台成本。
+- 搜索技术设计负责产出 tool invocation trace、provider runs 和搜索 cost events。
+- 语音技术设计当前不产出 ASR cost events；后续接入后端 ASR fallback 时再补。
+- 主动消息技术设计负责区分用户提醒、陪伴跟进和内容推送，并标记首条主动触达的平台成本。
 - 隐私与后台访问控制负责后台查看正文、debug trace 和操作日志的权限边界。
 
 权益模块只做三件事：
@@ -596,11 +610,11 @@ Admin 权限：
 3. 新增 `cost_events` 和模型价格倍率配置。
 4. 对话主链路接入 token usage cost event 和聊天扣减。
 5. Admin 增加 wallet summary、ledger list、手工补发和冲正。
-6. 搜索和 ASR 接入 cost events，先按实验配置映射扣减。
+6. 搜索接入 cost events 和 5 贝壳固定扣减。
 7. 主动触达首条写平台成本事件，但不扣用户贝壳。
 8. 新增邀请码、邀请关系和 3 条有意义消息 AI review。
 9. 拉新通过后给邀请人发放 1000 贝壳。
-10. 如决定开放购买，再实现 payment products、orders、callbacks 和支付生效 ledger。
+10. 支付后置；后续单独实现 payment products、orders、callbacks 和支付生效 ledger。
 
 ## 11. 验收点
 
@@ -609,20 +623,21 @@ Admin 权限：
 - 普通聊天能按输入 token + 输出 token 和模型倍率生成扣减流水。
 - `deepseek v4-flash` 以 `1000 token = 1 贝壳` 扣减。
 - 1.5 倍价格模型的 1000 token 扣减 1.5 贝壳。
-- 搜索和 ASR 能生成成本事件，并可映射为贝壳扣减。
+- 搜索能生成成本事件；成功触发商业搜索 provider 后按 5 贝壳扣减。
+- 当前语音依赖上游转写，不产生后端 ASR 成本事件。
 - 主动触达首条消息不扣用户贝壳，但能记录平台成本事件。
 - 用户回复主动触达后的后续聊天或任务按普通规则扣减。
 - 邀请码链接自动填充，用户也可以手动输入邀请码。
 - 新用户注册绑定并发送 3 条有意义消息后，能给邀请人发放 1000 贝壳。
 - Admin 可以查看余额和流水，补发贝壳，冲正误扣，查看邀请关系。
-- 如果开启支付，支付成功后只能通过 ledger 发放贝壳，回调重复不会重复发放。
+- 支付不作为 Phase 1 内测验收项；后续如果开启支付，支付成功后只能通过 ledger 发放贝壳，回调重复不会重复发放。
 
 ## 12. 待确认
 
 - 贝壳是否为最终正式名称。
 - 小数贝壳的用户侧展示方式、最小展示粒度和四舍五入规则。
-- 搜索失败、ASR 低置信、微信发送失败时是否扣费。
-- 搜索 provider API 成本、ASR 时长成本和 outbound delivery 成本如何折算为贝壳。
+- 已调用商业搜索 provider 但最终回答失败时的补偿或退回口径。
+- outbound delivery 成本如何折算为平台成本事件。
 - 拉新奖励是否也给被邀请人额外奖励。
 - “3 条有意义消息”的 AI 判断标准、阈值和人工复核边界。
-- 支付 provider、套餐结构、退款策略和合规边界。
+- 支付后续立项时的 provider、套餐结构、退款策略和合规边界。

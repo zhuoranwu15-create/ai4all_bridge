@@ -1,7 +1,7 @@
 # 身份模型与微信绑定
 
 > 本文是 AI4ALL 账号身份、微信通道绑定和 Web onboarding 绑定流程的主参考文档。
-> 2026-05-20 之后，账号标识和绑定口径以本文、`docs/current_status.md`、`docs/architecture_overview.md` 和 `docs/phase1_technical_design.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
+> 2026-05-20 之后，账号标识和绑定口径以本文、`docs/architecture_overview.md` 和 `docs/phase1_technical_design.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
 
 ## 1. 当前结论
 

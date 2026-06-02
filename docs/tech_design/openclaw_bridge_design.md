@@ -8,7 +8,7 @@
 
 - 一个 OpenClaw 实例连接多个个人微信账号。
 - OpenClaw 负责微信登录、消息接收、消息发送。
-- 我们的后端负责账号隔离、记忆、人设、限流、LLM、ASR。
+- 我们的后端负责账号隔离、记忆、人设、限流和 LLM。语音当前依赖 `openclaw-weixin` 上游转写文本；后端 ASR fallback 已后置。
 - 能本地跑通真实 OpenClaw 到后端再回微信的完整链路。
 - 后续部署到阿里云 Docker 时只改配置，不改核心代码。
 
@@ -24,12 +24,13 @@ Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系�
 
 ### 1.2 身份模型更新
 
-本文是早期 Bridge 方案文档。当前身份模型以 `docs/architecture_overview.md`、`docs/phase1_technical_design.md`、`docs/tech_design/identity_model_and_wechat_binding.md` 和 `docs/current_status.md` 为准：
+本文是早期 Bridge 方案文档。当前身份模型以 `docs/architecture_overview.md`、`docs/phase1_technical_design.md` 和 `docs/tech_design/identity_model_and_wechat_binding.md` 为准：
 
 - AI4ALL 业务账号 ID 是 Backend 业务隔离主键；未绑定 legacy 入站可由 OpenClaw `session_key` fallback，Web onboarding 绑定完成后路由到预创建 `acct_...`。
 - OpenClaw / provider 侧账号 ID 在 Bridge payload 中显式命名为 `channel_account_id`。
 - Backend DB/API 中遗留的 `account_id` 字段暂时保留，但语义是 AI4ALL 业务账号 ID。
 - Bridge 会继续发送 legacy `account_id` 作为兼容别名；新代码应优先读写 `channel_account_id`，不要把 OpenClaw 原生 `account_id` 当业务隔离主键。
+- 语音输入当前以 `openclaw-weixin` 上游提供的转写文本为准，详见 `docs/tech_design/voice_input_design.md`；本文早期 ASR 设想不作为当前 Phase 1 实施口径。
 
 ## 2. 总体链路
 
@@ -123,7 +124,7 @@ Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系�
 - 识别账号和会话。
 - 做消息去重。
 - 做限流和每日额度。
-- 处理语音 ASR。
+- 处理上游转写后的语音文本；后端 ASR fallback 后置。
 - 读取短期记忆。
 - 注入默认 Soul。
 - 组装 Prompt。
@@ -344,24 +345,22 @@ Bridge
 
 ### 8.2 语音消息
 
+当前 Phase 1 口径：不做后端 ASR。`openclaw-weixin` 若提供 `voice_item.text` / `cleanedBody`，Bridge 按文本正文转发给 Backend；Backend 复用普通文本 turn 链路。以下媒体下载和 ASR 方案是早期设想，不作为当前实施范围。
+
 ```text
 Bridge
   -> /openclaw/turn
-  -> backend obtains media url/path
-  -> call ASR
-  -> recognized text enters same text pipeline
+  -> forward upstream transcript text
+  -> text enters same text pipeline
   -> return reply
 ```
 
 注意：
 
-- Day 1 可以先 mock ASR。
-- 真实 ASR 依赖 OpenClaw 能否提供可访问的语音文件 URL 或路径。
-- 如果 Bridge 只能拿到媒体 ID，需要进一步确认 OpenClaw 是否提供媒体下载接口。
-- 微信语音可能是 AMR、SILK、M4A 等格式，ASR 前可能需要转码。
-- 首选方案是 Backend 通过 OpenClaw 提供的 URL/path 获取媒体，并在 Backend 侧完成下载、转码和 ASR，保持 Bridge 足够薄。
-- 如果媒体只存在于 OpenClaw 本地容器，Backend 无法访问，则允许 Bridge 做最小媒体代理：读取本地文件、必要时调用 ffmpeg 转为通用格式，再上传给 Backend 或临时暴露给 Backend。
-- 不建议默认让 Bridge 直接把所有大媒体二进制同步转发给 Backend。需要设置语音时长、文件大小和超时限制。
+- 不新增 ASR provider 配置。
+- 不下载或转码微信语音媒体。
+- 不新增 ASR 成本事件或独立扣费。
+- 如果未来需要后端 ASR fallback，再重新设计媒体获取、格式转换、时长限制、失败体验和成本记录。
 
 ## 9. 本地开发与线上部署差异
 
@@ -409,7 +408,6 @@ Backend 配置：
 DATABASE_URL=postgresql://...
 REDIS_URL=redis://...
 LLM_API_KEY=...
-ASR_API_KEY=...
 ```
 
 核心原则：
@@ -498,14 +496,13 @@ ASR_API_KEY=...
 
 实现：
 
-- Bridge 能识别 voice message。
-- Backend 能收到 media 信息。
-- 先 mock ASR。
-- 如果媒体可访问，再接真实 ASR。
+- Bridge 能读取上游语音转写正文。
+- Backend 能按普通文本消息处理转写正文。
+- 无转写正文时返回改用文字或重发的说明。
 
 验收：
 
-- 语音消息能进入统一对话链路。
+- 带上游转写正文的语音消息能进入统一对话链路。
 
 ## 11. 主要风险
 
@@ -552,14 +549,13 @@ ASR_API_KEY=...
 
 表现：
 
-- Bridge 只能拿到媒体 ID，后端无法下载语音。
+- 上游没有提供可用转写正文，Bridge 只能拿到媒体 ID 或媒体元数据。
 
 处理：
 
-- Day 1 使用 mock ASR。
-- 进一步确认 OpenClaw 是否有媒体下载接口。
-- 必要时让 Bridge 负责读取本地媒体并转发给后端。
-- 如果是 AMR/SILK 等格式，确认 ASR Provider 是否原生支持；不支持则增加 ffmpeg 转码。
+- Phase 1 不尝试后端下载媒体或 ASR fallback。
+- 当前回合提示用户改用文字或重发。
+- 如果未来上游转写不稳定，再单独评估媒体下载、转码和 ASR provider。
 
 ### 11.4 本地和线上网络地址不同
 
@@ -596,6 +592,6 @@ ASR_API_KEY=...
 - `openclaw-weixin` 传给 agent loop 的真实 context 字段：已通过 raw payload 查询验证。
 - Bridge hook 中稳定的通道侧账号字段已显式命名为 `channel_account_id`；旧 `account_id` 仅作为 payload 兼容别名。未绑定 legacy 入站可 fallback 为 `ctx.sessionKey`，典型格式为 `agent:main:openclaw-weixin:<channel_account_id>:direct:<peer_id>`；绑定完成后应通过 `channel_account_id` / `openclaw_login_session_key` 路由到预创建 `acct_...`。
 - 私聊 unknown sender 是否需要 pairing approval。
-- 语音消息在 OpenClaw context 中的 media 表达方式。
-- 语音媒体格式是否为 AMR/SILK/M4A，以及是否需要 ffmpeg 转码。
+- 语音上游转写正文的稳定性和空文本比例。
+- 后端 ASR fallback 是否需要后续单独立项。
 - OpenClaw 部署在 Docker 时，Bridge 插件如何配置后端地址。

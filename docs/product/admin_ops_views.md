@@ -87,7 +87,7 @@
 建议字段：
 
 - reminder/commitment/outbound id。
-- source：reminder、companion_followup、content_push、async_task_result。
+- source：reminder、companion_followup、content_push、content_invitation。
 - account id、channel、route、to_user_id/session key。
 - due_at、claimed_at、sent_at、cancelled_at、attempts。
 - status、error、provider response metadata。

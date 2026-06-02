@@ -1,19 +1,19 @@
-# Web Search 与高耗时任务技术设计
+# Web Search 同步工具调用技术设计
 
-更新时间：2026-05-31
+更新时间：2026-06-02
 
-本文承接 [Web Search 与高耗时任务 PRD](../product/search_and_async_tasks_prd.md)，定义 Phase 1 `web_search` 工具、搜索 provider、同步/异步边界、trace、成本事件和异步兜底设计。
+本文承接 [Web Search 同步工具调用 PRD](../product/search_and_async_tasks_prd.md)，定义 Phase 1 `web_search` 工具、搜索 provider、同步边界、trace、成本事件和失败体验。
 
-语音输入有独立技术文档，见 [语音输入技术设计](voice_input_design.md)。两者可以复用任务、worker、provider adapter、成本事件和 outbound result delivery，但 Web Search 的默认链路是同步 LLM tool use，不是默认异步任务。
+语音输入有独立技术文档，见 [语音输入技术设计](voice_input_design.md)。当前语音依赖上游转写，不进入后端 task/ASR 成本链路。Web Search 的 Phase 1 链路是同步 LLM tool use。
 
 ## 1. 设计目标
 
 - 对齐 OpenClaw：`web_search` 是模型可见工具，由 LLM 基于 tool schema 自然决定是否调用，不使用纯字符串匹配作为主触发机制。
 - 普通 Web Search 默认同步执行：搜索结果回填给当前 LLM turn，并在当前微信回复中给出答案。
-- 长耗时搜索、复杂资料整理、provider 超时或用户明确要求后台整理时，转为异步任务并补发结果。
+- 长耗时搜索、复杂资料整理、provider 超时或用户明确要求后台整理时，Phase 1 当前回合返回失败或不支持说明，不创建后台任务。
 - 默认搜索 provider 为 DuckDuckGo，失败或结果不足后回退 Bing RSS、Aliyun IQS 或 Baidu AI Search。
-- 同步搜索和异步搜索都必须记录工具调用、provider trace、成本事件和失败体验。
-- 异步任务结果补发复用 outbound ledger 和 OpenClaw Gateway send，但不算无触发主动推送。
+- 同步搜索必须记录工具调用、provider trace、成本事件和失败体验。
+- 正式决策：Phase 1 不支持用户请求后的后台整理、异步任务补发或长耗时报告生成；复杂资料整理、报告生成、多步骤后台研究后续单独立项。
 
 ## 2. 范围
 
@@ -25,13 +25,13 @@
 - provider 回退和 trace。
 - 搜索结果清洗、引用和最终答案生成。
 - 同步搜索成本事件。
-- 长耗时搜索的 async task / worker / outbound 兜底。
 
 本文不覆盖：
 
-- 微信语音媒体获取和 ASR，见 [语音输入技术设计](voice_input_design.md)。
+- 微信语音上游转写口径，见 [语音输入技术设计](voice_input_design.md)。
 - 主动消息策略，见 [主动消息与提醒设计](proactive_messaging_design.md)。
-- 贝壳 wallet/ledger 细则，见 [贝壳、增长与可选支付技术设计](entitlement_growth_design.md)。
+- 贝壳 wallet/ledger 细则，见 [贝壳、增长与支付后置技术设计](entitlement_growth_design.md)。
+- 用户请求后的后台整理、报告生成、异步任务补发；这些不进入 Phase 1。
 
 ## 3. 主链路
 
@@ -56,30 +56,26 @@ user message
 - LLM 可以不调用工具，普通聊天仍按现有路径回复。
 - 工具结果必须是 provider 返回的结构化结果，不能由模型自行编造“搜索结果”。
 
-### 3.2 异步兜底
+### 3.2 超时与后台请求
 
 ```text
-web_search handler detects long-running case / timeout risk
-or user explicitly asks for deep/background research
--> create task
--> tool result: {status: "queued", task_id, query}
--> LLM replies with quick confirmation
--> worker claim task
--> provider search / fallback / summarize
--> outbound_messages ledger
--> OpenClaw Gateway send final result
+web_search handler timeout / all providers failed / task too complex
+-> structured tool error or direct failure path
+-> LLM final answer explains limitation
+-> write trace / cost events
+-> no task, no worker, no outbound result delivery
 ```
 
-同步确认示例：
-
-```text
-我先帮你查一下，整理好后发你。
-```
-
-失败补发示例：
+失败说明示例：
 
 ```text
 刚才这次搜索没成功，可能是搜索服务暂时不可用。你可以稍后再试，或者换个关键词发我。
+```
+
+后台整理不支持示例：
+
+```text
+这个需要后台长时间整理，Phase 1 里我暂时不能整理好后再补发。你可以把问题拆小一点，我先帮你查当前能同步完成的部分。
 ```
 
 ## 4. Tool Use 设计
@@ -136,8 +132,8 @@ Provider 不支持的过滤条件应返回结构化错误，允许 fallback 或�
 - `max_tool_rounds = 3`。
 - 每轮可执行一个或多个 tool calls；Phase 1 可先串行执行。
 - 每次工具调用记录 tool name、args、result/error、latency。
-- 遇到 `web_search` queued task result 时，不再继续搜索，交给 LLM 生成确认回复。
 - 遇到 provider 结果时，继续调用 LLM 生成最终答案。
+- 遇到超时、provider 全失败或复杂后台整理请求时，返回结构化失败，由 LLM 给出当前回合说明，不进入任务队列。
 
 ## 5. Provider Adapter
 
@@ -228,7 +224,6 @@ tool_invocations
 search_provider_runs
 - id
 - tool_invocation_id
-- task_id nullable
 - account_id
 - provider
 - attempt
@@ -243,41 +238,11 @@ search_provider_runs
 
 如果 Phase 1 不立即建新表，至少需要把同等信息写入 debug trace metadata 和 cost event metadata；但正式内测前应结构化落库，便于 Admin 排障和成本核算。
 
-### 6.2 异步任务模型
+### 6.2 不建搜索异步任务表
 
-长耗时兜底建议新增 `tasks`：
+Phase 1 搜索不新增 `tasks` / `task_runs`，也不记录 `task_id`。搜索状态只落在当前 turn 的 `tool_invocations`、`search_provider_runs`、`messages`、`debug_traces` 和 `cost_events` 中。
 
-```text
-tasks
-- id
-- account_id
-- session_id
-- trigger_message_id
-- tool_invocation_id nullable
-- task_type: web_search
-- status: pending | running | succeeded | failed | failed_delivery | cancelled
-- payload_json
-- result_json
-- idempotency_key
-- created_at
-- started_at
-- finished_at
-- error
-```
-
-`payload_json` 必须保存补发路由：
-
-```text
-- channel
-- channel_account_id
-- to_user_id
-- session_key
-- original_query
-- normalized_query
-- source_message_id
-```
-
-`search_provider_runs.task_id` 关联异步任务中的 provider 尝试；不再单独为搜索复制一套 `task_runs`，避免同步与异步 trace 分裂。
+如后续单独立项后台研究或报告生成，应重新设计用户可见任务状态、补发策略、幂等、失败说明和成本归因，不复用 Phase 1 搜索同步链路的隐式状态。
 
 ## 7. 搜索结果处理
 
@@ -301,25 +266,21 @@ tasks
 
 搜索引用格式仍待产品确认；技术上需要保留 title、url、snippet、published_at 或 retrieved_at。
 
-## 8. 异步结果补发
+## 8. 无异步结果补发
 
-任务完成后使用 outbound ledger：
+Phase 1 搜索不通过 OpenClaw Gateway send 补发结果，不写 `source=async_task_result`，也不使用 `product_category=task_result`。
 
-```text
-source = async_task_result
-product_category = task_result
-idempotency_key = task-result-{task_id}
-```
-
-策略：
-
-- 不受主动触达总开关影响。
-- 不占陪伴跟进或内容推送日上限。
-- 默认不因 quiet hours 丢弃。
-- Gateway 发送失败时，task 标记为 `failed_delivery` 或保留 delivery retry 状态。
-- 成功补发的 assistant message 需要写入 active session `messages`，便于用户后续追问。
+Scheduler / due dispatcher 属于提醒、陪伴跟进、内容邀请等主动消息调度，不属于用户请求异步任务机制。搜索失败、超时或复杂后台整理请求必须在当前 turn 给出可理解说明。
 
 ## 9. 成本与贝壳
+
+Phase 1 暂定扣减规则：
+
+- 成功触发商业搜索 provider 的 `web_search` 固定扣减 5 个贝壳。
+- 5 个贝壳用于覆盖约 3 分钱人民币的外部商业搜索 API 成本和少量结果处理成本。
+- 搜索所在 turn 的 LLM 工具决策和最终回答 token 仍按普通聊天规则另行扣减。
+- 未实际调用商业 provider 的失败搜索，不扣这 5 个贝壳。
+- 已调用商业 provider 但最终回答或投递失败，先记录成本事件；补偿由运营/客服处理。
 
 搜索需要记录成本明细：
 
@@ -327,13 +288,12 @@ idempotency_key = task-result-{task_id}
 - 可选 query rewrite / result summarize 的 LLM token。
 - provider API 成本。
 - provider 失败后的回退和重试成本。
-- 异步兜底场景中的 outbound 补发成本。
 
 成本事件建议：
 
 ```text
 cost_events
-- source_type: tool_call | task | outbound
+- source_type: tool_call | outbound
 - source_id
 - cost_type: llm_tokens | provider_call | outbound_delivery
 - cost_owner: user | platform
@@ -348,27 +308,26 @@ cost_events
 - metadata_json
 ```
 
-搜索失败是否扣费由权益规则决定；技术上至少要能区分：
+技术上至少要能区分：
 
 - 未实际调用 provider 就失败。
 - 已调用 provider 但无结果。
 - 已调用 provider 且消耗 LLM 摘要后失败。
-- 结果成功生成但同步回复或异步补发失败。
+- 结果成功生成但同步回复失败。
 
-## 10. 与语音输入的共用底座
+## 10. 与语音输入的边界
 
 可复用：
 
 - provider adapter 风格。
-- async task 状态机和 worker claim。
 - cost events。
-- outbound result delivery。
 
 不合并：
 
-- 搜索默认同步 tool use，语音输入默认是媒体转文本链路。
+- 搜索默认同步 tool use，语音输入当前默认依赖上游转写文本。
 - 搜索强调 query、provider 回退、引用和事实性。
-- 语音强调媒体获取、60 秒限制、ASR provider 和转写文本处理。
+- 语音当前强调上游转写可用性和正文隐私；媒体获取和 ASR provider 是后续 fallback 预案。
+- 二者都不进入 Phase 1 用户请求异步任务机制。
 
 ## 11. 开发切分
 
@@ -377,11 +336,10 @@ cost_events
 3. 扩展 `generate_reply_with_tools()` 支持多轮 tool use 和工具 trace。
 4. 实现 DuckDuckGo adapter 和结构化 search result。
 5. 实现 Bing RSS、Aliyun IQS、Baidu AI Search adapter 与 provider fallback。
-6. 实现同步工具调用 trace 和 cost event。
+6. 实现同步工具调用 trace、provider run 和搜索 5 贝壳扣减。
 7. 接入外部不可信内容包装、引用生成和失败话术。
-8. 实现异步兜底任务模型、worker 和 outbound result delivery。
-9. 补 Admin/debug 查询、幂等和失败恢复。
-10. 补齐端到端测试。
+8. 补 Admin/debug 查询、幂等和失败恢复。
+9. 补齐端到端测试。
 
 ## 12. 验收点
 
@@ -391,7 +349,6 @@ cost_events
 - DuckDuckGo 失败或结果不足时能回退已配置的备用 provider。
 - provider、耗时、状态、失败原因和成本事件可追踪。
 - 搜索结果不足时不会编造来源或事实。
-- 长耗时搜索能转为异步任务，用户先收到确认，完成后收到补发结果。
 - 失败或超时时用户收到失败说明。
-- 同一异步任务不会重复补发。
-- 搜索成本事件可映射到贝壳扣减。
+- 后台整理、长耗时报告和异步补发不进入 Phase 1；相关请求不会创建任务。
+- 成功触发商业搜索 provider 的搜索成本事件按 5 贝壳映射到扣减流水。

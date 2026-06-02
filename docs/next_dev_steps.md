@@ -63,14 +63,22 @@ OpenClaw QR wait 返回的通道账号可能是 raw 形式，例如 `example@im.
 - 确认阿里云 Captcha SDK 使用的接入模式和官方文档一致。
 - 禁止把 AccessKey、短信模板密钥等服务端敏感配置暴露给前端。
 
-## Step 1：重复绑定策略
+## Step 1：首次绑定稳定性与重复绑定后置
 
-需要先定义产品行为，再实现代码：
+当前先确保第一次绑定后的稳定使用。重复绑定、同一微信绑定多个手机号、同一手机号更换微信等策略暂时后置，因为部分状态和控制在 OpenClaw 通道层，Backend 不能完全接管。
 
-- 同一个 `channel_account_id` 已绑定到同一个 `ai4all_account_id`：前端展示已绑定，避免重复创建绑定记录。
-- 同一个 `channel_account_id` 已绑定到另一个 `ai4all_account_id`：建议默认拒绝，并要求先解绑。
-- OpenClaw 返回 `already_connected` / `binded_redirect`：不要静默绑定到新账号，除非能确认这是用户主动迁移。
-- 同一个产品用户是否允许多个 AI bot：需要和套餐/订阅策略一起定义。
+当前优先项：
+
+- 首次扫码后 `binding_intent` 完成并写入 `channel_bindings`。
+- 扫码后的真实微信私聊能稳定路由到预创建 AI4ALL Account。
+- Admin 能排查绑定 intent、channel binding、channel account id 和 session key。
+
+后置项：
+
+- 同一个 `channel_account_id` 已绑定到同一个 `ai4all_account_id` 时的重复展示。
+- 同一个 `channel_account_id` 已绑定到另一个 `ai4all_account_id` 时的迁移/拒绝策略。
+- OpenClaw 返回 `already_connected` / `binded_redirect` 时的正式产品话术和技术接管。
+- 同一个产品用户是否允许多个 AI bot。
 
 ## Step 2：正式解绑能力
 
@@ -95,7 +103,7 @@ OpenClaw 运行时解绑
 
 ## Step 3：Binding Intent 异常状态
 
-当前主路径已跑通，下一步补齐异常状态：
+当前主路径已跑通，下一步优先补排障可见性；异常状态先记录，不作为内测首发阻塞：
 
 - `expired`：二维码过期或用户长时间未扫码。
 - `cancelled`：用户在 Web 端取消绑定。
@@ -169,7 +177,7 @@ effective config 应覆盖：
 - 已完成 `outbound_messages` ledger、分类 outbound policy、主动发送分类日上限、quiet hours、6 小时避让第一版和 Gateway 成功发送状态流转的最小实现。
 - 已完成一次性 reminder MVP 的底层能力：`reminders` 表、due scan、原子 claim、调用 `app.proactive.messaging.send_proactive_text()`、成功/取消/失败回写。
 - 已完成显式提醒识别：高确定性文本会在 `/openclaw/turn` 中写入 `reminders`，模糊提醒会要求补充具体日期和时间。
-- 已完成系统级 proactive scheduler 第一阶段：admin run-once、可选 FastAPI loop、独立 worker 脚本；默认不自动启动，生产启用前必须选择单进程 FastAPI 或独立 worker。
+- 已完成系统级 proactive scheduler 第一阶段：admin run-once、可选 FastAPI loop、独立 scheduler worker 脚本；默认不自动启动，生产启用前必须选择单进程 FastAPI 或独立 scheduler worker。这里的 worker 只负责提醒/主动消息调度，不属于用户请求异步任务机制。
 - 已完成架构整理：`/openclaw/turn` 业务逻辑抽到 `app.turn_service`，proactive 相关代码收拢到 `app/proactive/` package；旧顶层 proactive 兼容模块已删除。
 - 已新增 `proactive_account_state` 表和 `app.proactive.state`，作为账号主动检查/commitment cheap pre-filter 的账号级状态底座。
 - 已新增 Admin API：`GET/PATCH /admin/accounts/{account_id}/proactive-state`，用于开发阶段查看、开启和调整账号级 proactive state。
@@ -182,14 +190,14 @@ effective config 应覆盖：
 - 已新增 Admin API：`GET /admin/accounts/{account_id}/commitments` 查看 commitment；`POST /admin/commitments/{commitment_id}/cancel` 取消不应发送的 commitment。
 - 已完成内容邀请第一版：后台 LLM 生成 `content_invitations.candidate`，scheduler 到期发送朋友式邀请，用户正向确认后通过 tool 返回标题列表，用户拒绝后写入偏好/冷却。
 - 已新增 Proactive Debug 后台：`/ui/proactive_debug.html` 可手动开启 proactive state、模拟入站、让第一条 pending reminder 到期、运行 scheduler、生成/提升/清理 account check draft、单账号运行 proactive check，并展示内容邀请是否生成及原因。
-- 当前暂停继续扩展主动消息功能；下一步先积累更丰富真实聊天数据，再基于真实效果调 prompt、阈值和风控策略。之后再做周期性提醒、自然语言取消/更新提醒、用户级 timezone 和多实例 worker lease。
+- 当前暂停继续扩展主动消息功能；下一步先积累更丰富真实聊天数据，再基于真实效果调 prompt、阈值和风控策略。之后再做周期性提醒、自然语言取消/更新提醒、用户级 timezone 和多实例 scheduler lease。
 
 微信 bot 可测试节点：
 
 - `你好`：正常聊天回归。
 - `下午提醒我去趟派出所`：应要求补充具体日期和时间。
 - `明天上午10点提醒我检查事情A`：应确认已设置提醒，并写入 `reminders.status=pending`。
-- 到点主动推送：可调用 `POST /admin/proactive/scheduler/run-once` 触发一次 due reminder 扫描，或启动 `scripts/run_proactive_scheduler.py` 独立 worker。
+- 到点主动推送：可调用 `POST /admin/proactive/scheduler/run-once` 触发一次 due reminder 扫描，或启动 `scripts/run_proactive_scheduler.py` 独立 scheduler worker。
 - 账号主动检查主动触达阶段性验证：真实账号发过微信消息后，开启 proactive state，调用 `POST /admin/accounts/{account_id}/proactive-check-candidate-draft` 生成 draft，人工 promote，再调用 `POST /admin/proactive/scheduler/run-once?limit=20`。若未命中 quiet hours / daily limit / route 缺失，应从微信收到主动消息。
 - commitment 最终联调：开启 proactive state 后，通过微信普通聊天产生明确未来后续事项；用 `GET /admin/accounts/{account_id}/commitments` 确认 pending；到期后 `POST /admin/proactive/scheduler/run-once?limit=20`，应收到 `source=commitment` 的主动消息。
 - 内容邀请验证：使用 `/ui/proactive_debug.html` 选择测试账号，点击 `Run Proactive Check`。若聊天数据不足或兴趣不稳定，页面会显示 `reason: llm_no_content_invitation`；若生成成功，会展示 invitation 文本和候选标题。
@@ -199,5 +207,5 @@ effective config 应覆盖：
 - 小程序/H5 微信官方登录。
 - 支付、自动续费和套餐后台。
 - 多 bot 账号管理。
-- 语音 ASR。
+- 后端语音 ASR fallback。
 - 图片/多模态。

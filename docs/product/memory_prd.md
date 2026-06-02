@@ -129,7 +129,7 @@ Phase 1 中，检索式记忆先作为可选能力处理：内测阶段实际触
 daily notes 内容边界：
 
 - 文本消息保存原始聊天文字。
-- 语音消息保存语音转文字后的 ASR 文本。
+- 语音消息保存上游语音转文字后的文本。
 - 图片消息保存 AI 识别后的图片描述。
 - daily notes 不保存原始图片本身。
 - daily notes 不直接保存 Dreaming 摘要或结构化长期记忆；这些内容属于后续 Dreaming、`MEMORY.md` 或可选的检索索引链路。
@@ -246,7 +246,7 @@ daily notes 内容边界：
 
 - Admin 能查看账号级 Context Files 的元数据、active session 摘要、daily notes 元数据和 `MEMORY.md` 摘要。
 - daily notes 属于原始文字化聊天材料，默认不能在 Admin UI、Debug API 或日志平台直接展示正文。
-- 如确需查看 daily notes 正文、语音 ASR 正文、图片识别正文、用户聊天正文或模型回复正文，必须具备管理员最高权限，或具备管理员审批后的 2 小时临时明文权限，并记录操作日志。
+- 如确需查看 daily notes 正文、语音转写正文、图片识别正文、用户聊天正文或模型回复正文，必须具备管理员最高权限，或具备管理员审批后的 2 小时临时明文权限，并记录操作日志。
 - Admin 能运行或查看 Dreaming 任务状态、结果摘要、memory item 自动应用/跳过结果、diff 和审计记录，用于 debug 和调优。
 - Admin 能禁用某账号记忆写入。
 - Admin 能重置或删除某账号记忆。
@@ -258,7 +258,7 @@ daily notes 内容边界：
 - 不同账号记忆不串线。
 - AI4ALL Account 创建后能开启第一个 session。
 - 普通聊天后 daily notes 可按凌晨 4 点业务日边界沉淀。
-- daily notes 只保存文字化历史材料：文本原文、语音 ASR 文本、图片 AI 识别描述，不保存原始图片。
+- daily notes 只保存文字化历史材料：文本原文、语音转写文本、图片 AI 识别描述，不保存原始图片。
 - 每日凌晨 4 点 Dreaming 能结束旧 session，并开启新 session。
 - Dreaming 能将特别重要的信息写入或更新 `MEMORY.md`。
 - Dreaming 能将特别重要和比较重要的信息延续到新 session。

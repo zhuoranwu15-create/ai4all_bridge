@@ -1,12 +1,12 @@
 # AI4ALL 微信个人 AI 陪伴服务总体架构
 
-更新时间：2026-05-31
+更新时间：2026-06-02
 
 ## 一句话理解
 
 AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL 一对多个人 AI 后端** + **账号级 Agent 体验与运营控制面**。
 
-它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 负责微信连接、消息收发和 hook runtime；AI4ALL Backend 负责普通用户注册、账号隔离、陪伴式 Agent、记忆、任务、权益、拉新和运营管理。
+它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 负责微信连接、消息收发和 hook runtime；AI4ALL Backend 负责普通用户注册、账号隔离、陪伴式 Agent、记忆、提醒、权益、拉新和运营管理。
 
 ## 文档分层
 
@@ -23,8 +23,8 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 | `docs/tech_design/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
 | `docs/tech_design/proactive_messaging_design.md` | 主动消息、提醒、commitment 和 scheduler 专题 |
 | `docs/tech_design/agent_context_files.md` | Agent Context Files、daily notes、长期记忆和 Dreaming |
-| `docs/tech_design/conversation_orchestrator_design.md` | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和异步任务衔接 |
-| `docs/tech_design/entitlement_growth_design.md` | 贝壳 wallet/ledger、成本事件、邀请奖励和可选支付 |
+| `docs/tech_design/conversation_orchestrator_design.md` | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和主动消息衔接 |
+| `docs/tech_design/entitlement_growth_design.md` | 贝壳 wallet/ledger、成本事件、邀请奖励和支付后置 |
 
 ## 1. 顶层架构
 
@@ -60,15 +60,15 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │  │ Identity &   │  │ Conversation │  │ Agent Context &   │  │ Tools &      │ │
 │  │ Binding      │  │ Runtime      │  │ Memory            │  │ Providers    │ │
 │  │              │  │              │  │                   │  │              │ │
-│  │ platform_user│  │ turn service │  │ SOUL / USER       │  │ LLM / ASR    │ │
+│  │ platform_user│  │ turn service │  │ SOUL / USER       │  │ LLM / Search │ │
 │  │ acct_...     │  │ prompt build │  │ daily notes       │  │ Search       │ │
 │  │ channel bind │  │ LLM reply    │  │ Dreaming          │  │ content src  │ │
 │  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  └──────┬───────┘ │
 │         │                 │                   │                   │         │
 │         ▼                 ▼                   ▼                   ▼         │
 │  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │                 Async Task & Proactive Runtime                       │   │
-│  │ reminders / long web_search fallback / ASR / content push / worker   │   │
+│  │              Proactive Scheduler & Outbound Runtime                  │   │
+│  │ reminders / commitment / content push / scheduler                    │   │
 │  └──────────────────────────────────────┬───────────────────────────────┘   │
 │                                         ▼                                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
@@ -82,7 +82,7 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │                         Storage & Infrastructure                             │
 │                                                                              │
 │   Phase 1 local/demo: SQLite + files + optional in-process scheduler          │
-│   Internal beta target: PostgreSQL + Redis + worker + object/file storage     │
+│   Internal beta target: PostgreSQL + Redis + scheduler worker + object/file storage │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -90,9 +90,9 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 
 - **通道层薄**：OpenClaw / Bridge 不保存长期业务状态。
 - **账号隔离强**：所有业务状态都挂到 `ai4all_account_id`。
-- **同步链路短**：普通聊天和普通 Web Search 尽量在当前 turn 同步返回；语音、长耗时搜索和复杂任务通过异步兜底补发。
+- **同步链路短**：普通聊天和普通 Web Search 尽量在当前 turn 同步返回；长耗时搜索、复杂整理或后台报告请求直接返回失败/不支持说明，不创建后台任务。语音当前依赖上游转写后进入普通文本链路。
 - **主动触达受控**：所有主动消息经过 outbound ledger 和类型化策略；用户提醒按用户设定时间发送，陪伴跟进和内容推送受 quiet hours、日上限和偏好约束。
-- **运营可见**：账号、绑定、会话、消息、任务、用量、权益、错误都需要能被 Admin 追踪。
+- **运营可见**：账号、绑定、会话、消息、提醒/主动发送、用量、权益、错误都需要能被 Admin 追踪。
 
 ## 2. 核心概念分层
 
@@ -114,13 +114,13 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │ AGENTS / SOUL / IDENTITY / USER / TOOLS / MEMORY / Dreaming  │
 │ 提供陪伴感、持续性、偏好和长期记忆                           │
 ├─────────────────────────────────────────────────────────────┤
-│ Async Task & Proactive Layer                                 │
-│ task / worker / reminder / commitment / 账号主动检查 / push     │
-│ 处理长耗时任务、提醒、主动触达和补发结果                     │
+│ Proactive Scheduler & Outbound Layer                         │
+│ reminder / commitment / 账号主动检查 / content push / scheduler │
+│ 处理提醒、陪伴跟进、内容推送和发送幂等                       │
 ├─────────────────────────────────────────────────────────────┤
 │ Entitlement & Growth Layer                                   │
-│ wallet / ledger / usage metering / referral / optional pay   │
-│ 管理内测权益、扣减、拉新奖励和可选购买                       │
+│ wallet / ledger / usage metering / referral / pay deferred   │
+│ 管理内测权益、扣减、拉新奖励；支付后置                       │
 ├─────────────────────────────────────────────────────────────┤
 │ Control & Observability Layer                                │
 │ Admin UI/API / support / debug traces / logs / audit         │
@@ -157,10 +157,10 @@ POST /openclaw/turn
 └─────────┬──────────┘
           ▼
 ┌────────────────────┐
-│ Intent Gate         │  reminder / long task / normal chat
+│ Intent Gate         │  reminder / unsupported background request / normal chat
 └──────┬───────┬─────┘
        │       │
-       │       ├───────────────► async task quick acknowledgement
+       │       ├───────────────► unsupported/failure explanation
        │
        ▼
 ┌────────────────────┐
@@ -185,42 +185,28 @@ Bridge Synthetic Reply -> WeChat
 After Turn: memory write / commitment extraction / metrics
 ```
 
-Phase 1 的同步 turn 可以执行低延迟工具调用。普通 Web Search 按 OpenClaw 风格由模型通过 `web_search` tool use 触发并同步返回；长耗时搜索、长内容整理或复杂工具链超过同步等待体验时进入 Async Task。
+Phase 1 的同步 turn 可以执行低延迟工具调用。普通 Web Search 按 OpenClaw 风格由模型通过 `web_search` tool use 触发并同步返回；长耗时搜索、长内容整理或复杂工具链超过同步等待体验时，当前回合返回失败或不支持说明。Phase 1 不创建用户请求后的后台任务，也不补发搜索结果。
 
-## 4. 异步任务与主动发送
+## 4. 主动调度与发送
 
 ```text
-User-triggered long task
-  long web_search fallback / ASR / complex summary
+User-triggered long search / complex background request
         │
         ▼
-Quick reply in current turn
-  “我先帮你查一下，整理好后发你。”
+Failure or unsupported explanation in current turn
+  “这个需要后台长时间整理，Phase 1 暂时不支持整理好后再发。”
         │
         ▼
-tasks / task_runs
-        │
-        ▼
-Worker
-  provider call / retry / timeout / summarize
-        │
-        ▼
-outbound_messages ledger
-        │
-        ▼
-OpenClaw Gateway send
-        │
-        ▼
-WeChat final result
+no task / no worker / no outbound result delivery
 ```
 
-主动提醒和内容推送也走同一个发送底座：
+主动提醒和内容推送走发送底座：
 
 ```text
 reminder / commitment / 账号主动检查 / content candidate
         │
         ▼
-Scheduler / worker claim
+Scheduler due scan
         │
         ▼
 policy check
@@ -235,7 +221,7 @@ Gateway send + status writeback
 
 区别在于：
 
-- 长耗时 Web Search 结果补发是“用户请求结果投递”，不等同无触发主动推送。
+- Scheduler / due dispatcher 只服务提醒、陪伴跟进和内容推送，不属于用户请求异步任务机制。
 - 用户提醒是用户明确设定任务，严格按设定时间发送，不受主动触达总开关和默认日上限影响。
 - 新闻、搞笑等内容推送是“试探性主动触达”，必须严格低频、可拒绝、可冷却。
 
@@ -251,7 +237,7 @@ Gateway send + status writeback
 | Soul、Profile、Context Files | AI4ALL Backend | 文件视图 + 后续结构化存储 |
 | daily notes / long-term memory | AI4ALL Backend | 学习 OpenClaw Dreaming，但账号级隔离 |
 | reminders / commitments / content push | AI4ALL Backend | 不放入 OpenClaw Cron 作为主状态 |
-| 长耗时 Web Search / ASR 等任务 | AI4ALL Backend | `tasks` / `task_runs` |
+| Web Search provider trace | AI4ALL Backend | `tool_invocations` / `search_provider_runs` / `cost_events` |
 | 权益代币/点数和扣减流水 | AI4ALL Backend | 未来可拆 billing 服务 |
 | Debug trace / audit | AI4ALL Backend | 可包含 OpenClaw shadow trace |
 
@@ -298,15 +284,15 @@ AI4ALL Backend API
         │
         ├── PostgreSQL
         ├── Redis
-        ├── Worker / Scheduler
+        ├── Scheduler worker
         ├── Object or shared file storage
         └── OpenClaw Gateway / channel runtime
 ```
 
 关键生产化要求：
 
-- FastAPI 和 scheduler 明确进程边界，避免多 worker 重复扫描。
-- reminder、task、outbound 必须原子 claim。
+- FastAPI 和 scheduler 明确进程边界，避免多实例重复扫描。
+- reminder 和 outbound 必须原子 claim。
 - Redis 承担短期限流、锁、队列或缓存。
 - SQLite 文件模型不能成为长期生产依赖。
 - OpenClaw 插件和 Gateway 能力要有启动前检查和版本固定。
@@ -318,9 +304,9 @@ Phase 1 的架构收口顺序：
 1. 接入与绑定稳定：OTP、QR、重复绑定、解绑、异常状态。
 2. 对话主链路稳定：身份、去重、限流、prompt、LLM、trace。
 3. 记忆产品化：daily notes、Dreaming、查看/重置/禁用/纠错。
-4. 异步任务底座：Web Search 异步兜底、ASR、任务状态、worker、结果补发。
+4. Web Search 同步工具调用：provider、回退、引用、失败说明、成本事件和 5 贝壳扣减。
 5. 主动触达闭环：reminder、commitment、content push、冷却和设置。
 6. 权益和增长：内测赠送、扣减流水、拉新奖励、客服处理。
-7. 内测部署：PostgreSQL/Redis/worker、日志、告警、Admin UI。
+7. 内测部署：PostgreSQL/Redis/scheduler worker、日志、告警、Admin UI。
 
 详细数据模型、工作包和实现缺口见 `docs/phase1_technical_design.md`。

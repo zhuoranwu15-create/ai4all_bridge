@@ -162,7 +162,7 @@ daily notes 是历史材料，不是长期记忆摘要。
 写入内容：
 
 - 文本消息：保存用户原文和已发送给用户的 AI 回复正文。
-- 语音消息：保存 ASR 转写文本，不保存原始语音文件作为 daily notes 正文。
+- 语音消息：保存上游语音转写文本，不保存原始语音文件作为 daily notes 正文。
 - 图片消息：保存 AI 识别后的图片描述，不保存原始图片本身。
 - 不写入调试消息、系统内部 trace、失败回复、未发送给用户的 hidden 链路、hidden commitment prompt 或候选生成 prompt。
 - daily notes 只归档已经写入 `messages` 的用户可见对话事实，不负责改写 session 对话记录。
@@ -228,7 +228,7 @@ MEMORY.md
 - daily notes 不应在改为原始材料后默认全量注入 prompt；未来只能在检索、压缩或 Dreaming 产物明确可控后，按场景和 token 预算装载片段或压缩结果。
 - 检索式记忆启用后，按当前上下文检索 daily notes，再装载相关片段。
 - 新用户 onboarding 需要额外装载默认身份、默认 Soul 和未完成设置项。
-- Web Search、ASR、提醒、主动消息等任务场景只装载该任务需要的信息。
+- Web Search、提醒、主动消息等任务场景只装载该任务需要的信息；后端 ASR fallback 当前后置。
 - Safety、真实能力边界和账号隔离规则始终保持最高优先级。
 
 ## 8. Dreaming
@@ -312,7 +312,7 @@ current turn intent
 
 - 用户具体聊天记录。
 - daily notes 正文。
-- 语音 ASR 正文。
+- 语音转写正文。
 - 图片识别正文。
 - prompt/messages 全文。
 - 模型回复正文。

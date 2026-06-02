@@ -22,7 +22,7 @@
 
 | 类型 | 示例 |
 | --- | --- |
-| 用户聊天正文 | 用户发给 AI 的文本、语音 ASR 文本、图片识别描述 |
+| 用户聊天正文 | 用户发给 AI 的文本、语音转写文本、图片识别描述 |
 | AI 回复正文 | 已发送给用户的模型回复 |
 | raw payload 正文 | OpenClaw / Weixin payload 中的用户消息正文、媒体识别正文 |
 | prompt/messages | system prompt、LLM messages、tool 输入中含正文的部分 |
