@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     admin_staff_token: str = ""
     admin_debug_plaintext_enabled: bool = False
     admin_debug_plaintext_account_allowlist: str = ""
+    feishu_alert_webhook_url: str = ""
     database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"

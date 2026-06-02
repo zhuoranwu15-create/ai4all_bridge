@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>运行状态 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>运行状态</h1>
+      <p class="page-subtitle">用于外测阶段观察核心服务、scheduler 心跳和关键链路指标。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div id="err" style="display:none" class="status-msg error"></div>
+  <div id="content" style="display:none">
+    <section class="metric-grid" aria-label="健康概览">
+      <div class="metric-tile">
+        <span class="metric-label">Ready</span>
+        <strong id="metric-ready">—</strong>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">环境</span>
+        <strong id="metric-env">—</strong>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">窗口</span>
+        <strong id="metric-window">—</strong>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">检查时间</span>
+        <strong id="metric-checked" class="small">—</strong>
+      </div>
+    </section>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h2>Ready Checks</h2>
+        <button onclick="loadOps()">刷新</button>
+      </div>
+      <div id="ready-checks">加载中…</div>
+    </div>
+
+    <div class="card">
+      <h2>Scheduler 心跳</h2>
+      <div id="scheduler-panel">加载中…</div>
+    </div>
+
+    <div class="card">
+      <h2>最近 1 小时指标</h2>
+      <div id="metrics-panel">加载中…</div>
+    </div>
+
+    <div class="card">
+      <h2>最近错误</h2>
+      <div id="errors-panel">加载中…</div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    loadOps();
+
+    function showErr(msg) {
+      var el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    async function loadOps() {
+      try {
+        await loadAdminMe();
+        var data = await apiFetch('/admin/ops/status?window_minutes=60');
+        renderOps(data);
+        document.getElementById('content').style.display = '';
+        document.getElementById('err').style.display = 'none';
+      } catch (e) {
+        showErr(e.message);
+      }
+    }
+
+    function renderOps(data) {
+      var metrics = data.metrics || {};
+      document.getElementById('metric-ready').innerHTML = statusPill((data.ready || {}).status);
+      document.getElementById('metric-env').textContent = data.env || '—';
+      document.getElementById('metric-window').textContent = ((metrics.window_minutes || 60) + ' 分钟');
+      document.getElementById('metric-checked').textContent = formatDateTime(data.checked_at);
+      renderReadyChecks((data.ready || {}).checks || {});
+      renderSchedulers(data.schedulers || {});
+      renderMetrics(metrics);
+      renderErrors((metrics.recent_errors || {}));
+    }
+
+    function renderReadyChecks(checks) {
+      var rows = Object.keys(checks).map(function(name) {
+        var item = checks[name] || {};
+        return '<tr>'
+          + '<td class="mono">' + esc(name) + '</td>'
+          + '<td>' + statusPill(item.status) + '</td>'
+          + '<td class="wrap mono">' + esc(JSON.stringify(item)) + '</td>'
+          + '</tr>';
+      });
+      document.getElementById('ready-checks').innerHTML = renderTable(
+        ['检查项', '状态', '详情'],
+        rows,
+        '暂无 ready checks'
+      );
+    }
+
+    function renderSchedulers(schedulers) {
+      var configured = schedulers.configured || {};
+      var heartbeats = schedulers.heartbeats || [];
+      var rows = heartbeats.map(function(h) {
+        return '<tr>'
+          + '<td class="mono">' + esc(h.service || '—') + '</td>'
+          + '<td>' + statusPill(h.status) + '</td>'
+          + '<td>' + esc(formatDateTime(h.last_seen_at)) + '</td>'
+          + '<td>' + esc(formatDateTime(h.last_success_at)) + '</td>'
+          + '<td>' + esc(formatDateTime(h.last_error_at)) + '</td>'
+          + '<td class="wrap">' + esc(h.last_error || '—') + '</td>'
+          + '</tr>';
+      });
+      var configHtml = '<div class="metric-grid compact">'
+        + '<div class="metric-tile"><span class="metric-label">Proactive</span><strong>' + esc(configured.proactive && configured.proactive.enabled ? 'enabled' : 'disabled') + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Proactive Interval</span><strong>' + esc(configured.proactive ? configured.proactive.interval_seconds : '—') + 's</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Dreaming</span><strong>' + esc(configured.dreaming && configured.dreaming.enabled ? 'enabled' : 'disabled') + '</strong></div>'
+        + '<div class="metric-tile"><span class="metric-label">Dreaming Interval</span><strong>' + esc(configured.dreaming ? configured.dreaming.interval_seconds : '—') + 's</strong></div>'
+        + '</div>';
+      document.getElementById('scheduler-panel').innerHTML = configHtml + renderTable(
+        ['Service', '状态', 'Last Seen', 'Last Success', 'Last Error At', '错误'],
+        rows,
+        '暂无 scheduler heartbeat。scheduler 启动后会写入。'
+      );
+    }
+
+    function renderMetrics(metrics) {
+      var accounts = metrics.accounts || {};
+      var messages = metrics.messages || {};
+      var outbound = metrics.outbound_messages || {};
+      var bindings = metrics.binding_intents || {};
+      document.getElementById('metrics-panel').innerHTML =
+        '<div class="metric-grid compact">'
+        + tile('Accounts', accounts.total)
+        + tile('Active', accounts.active)
+        + tile('Inbound', messages.inbound_total)
+        + tile('Msg Errors', messages.error_total)
+        + tile('Avg Latency', messages.avg_latency_ms == null ? '—' : messages.avg_latency_ms + 'ms')
+        + tile('Outbound Sent', outbound.sent_total)
+        + tile('Outbound Failed', outbound.failed_total)
+        + tile('Binding Failed', bindings.failed_total)
+        + '</div>';
+    }
+
+    function renderErrors(errors) {
+      var messageRows = (errors.messages || []).map(function(item) {
+        return '<tr>'
+          + '<td>message</td>'
+          + '<td class="mono">' + esc(item.id) + '</td>'
+          + '<td class="mono">' + esc(item.account_id || '—') + '</td>'
+          + '<td>' + esc([item.direction, item.role, item.message_type].filter(Boolean).join('/')) + '</td>'
+          + '<td>' + esc(item.latency_ms == null ? '—' : item.latency_ms + 'ms') + '</td>'
+          + '<td class="wrap">' + esc(item.error || '—') + '</td>'
+          + '<td>' + esc(formatDateTime(item.created_at)) + '</td>'
+          + '</tr>';
+      });
+      var outboundRows = (errors.outbound_messages || []).map(function(item) {
+        return '<tr>'
+          + '<td>outbound</td>'
+          + '<td class="mono">' + esc(item.id) + '</td>'
+          + '<td class="mono">' + esc(item.account_id || '—') + '</td>'
+          + '<td>' + esc([item.source, item.status].filter(Boolean).join('/')) + '</td>'
+          + '<td>' + esc(item.attempts == null ? '—' : item.attempts) + '</td>'
+          + '<td class="wrap">' + esc(item.error || '—') + '</td>'
+          + '<td>' + esc(formatDateTime(item.updated_at || item.created_at)) + '</td>'
+          + '</tr>';
+      });
+      document.getElementById('errors-panel').innerHTML = renderTable(
+        ['类型', 'ID', 'Account', '阶段', '耗时/尝试', '错误', '时间'],
+        messageRows.concat(outboundRows),
+        '暂无错误'
+      );
+    }
+
+    function tile(label, value) {
+      return '<div class="metric-tile"><span class="metric-label">' + esc(label) + '</span><strong>' + esc(value == null ? '—' : value) + '</strong></div>';
+    }
+
+    function renderTable(headers, rows, emptyText) {
+      if (!rows.length) return '<div class="empty-note">' + esc(emptyText) + '</div>';
+      return '<div class="compact-table"><table><thead><tr>'
+        + headers.map(function(h) { return '<th>' + esc(h) + '</th>'; }).join('')
+        + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>';
+    }
+
+    function statusPill(status) {
+      status = status || 'missing';
+      return '<span class="status-pill status-pill-' + esc(status) + '">' + esc(status) + '</span>';
+    }
+  </script>
+</body>
+</html>

@@ -13,6 +13,7 @@ from app.proactive.state import (
     DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
     scan_due_proactive_account_checks,
 )
+from app.db import record_scheduler_heartbeat
 
 
 DispatchDueReminders = Callable[..., List[Dict[str, Any]]]
@@ -150,9 +151,12 @@ class ProactiveScheduler:
             self._stop_event = asyncio.Event()
         while not self._stop_event.is_set():
             try:
+                self._record_heartbeat(status="running")
                 await self.run_once()
+                self._record_heartbeat(status="ok")
             except Exception as err:
                 self.last_error = str(err)
+                self._record_heartbeat(status="error", error=str(err))
                 logger.exception("proactive scheduler run failed: %s", err)
             try:
                 await asyncio.wait_for(
@@ -161,6 +165,22 @@ class ProactiveScheduler:
                 )
             except asyncio.TimeoutError:
                 pass
+
+    def _record_heartbeat(self, *, status: str, error: Optional[str] = None) -> None:
+        try:
+            record_scheduler_heartbeat(
+                service="proactive_scheduler",
+                status=status,
+                error=error,
+                metadata={
+                    "interval_seconds": self.interval_seconds,
+                    "batch_size": self.batch_size,
+                    "bypass_quiet_hours": self.bypass_quiet_hours,
+                    "account_check_interval_seconds": self.account_check_interval_seconds,
+                },
+            )
+        except Exception as err:
+            logger.warning("proactive scheduler heartbeat write failed: %s", err)
 
 
 _scheduler: Optional[ProactiveScheduler] = None

@@ -5,6 +5,7 @@ import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -855,6 +856,18 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
             ON phone_verifications(phone, created_at);
+
+            CREATE TABLE IF NOT EXISTS scheduler_heartbeats (
+                service TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_success_at TEXT,
+                last_error_at TEXT,
+                last_error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         # Ensure new columns exist on accounts (for DBs created before this change)
@@ -994,6 +1007,227 @@ def init_db() -> None:
             ON platform_user_sessions(token)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduler_heartbeats (
+                service TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                last_success_at TEXT,
+                last_error_at TEXT,
+                last_error TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+
+# ---------------------------------------------------------------------------
+# Runtime health
+# ---------------------------------------------------------------------------
+
+def _runtime_timestamp(value: Optional[datetime] = None) -> str:
+    return (value or datetime.now()).isoformat(timespec="seconds")
+
+
+def record_scheduler_heartbeat(
+    *,
+    service: str,
+    status: str,
+    error: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    seen_at: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Record the latest externally visible heartbeat for a scheduler process."""
+    cleaned_service = _clean_text(service)
+    if not cleaned_service:
+        raise ValueError("service is required")
+    cleaned_status = _clean_text(status) or "running"
+    now = _runtime_timestamp(seen_at)
+    last_success_at = now if cleaned_status in {"ok", "success"} else None
+    last_error_at = now if cleaned_status in {"error", "failed"} else None
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO scheduler_heartbeats(
+                service, status, last_seen_at, last_success_at, last_error_at,
+                last_error, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(service) DO UPDATE SET
+                status = excluded.status,
+                last_seen_at = excluded.last_seen_at,
+                last_success_at = COALESCE(excluded.last_success_at, scheduler_heartbeats.last_success_at),
+                last_error_at = COALESCE(excluded.last_error_at, scheduler_heartbeats.last_error_at),
+                last_error = excluded.last_error,
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                cleaned_service,
+                cleaned_status,
+                now,
+                last_success_at,
+                last_error_at,
+                error,
+                metadata_json,
+                now,
+            ),
+        )
+    heartbeat = get_scheduler_heartbeat(cleaned_service)
+    if heartbeat is None:
+        raise RuntimeError("scheduler heartbeat write failed")
+    return heartbeat
+
+
+def get_scheduler_heartbeat(service: str) -> Optional[Dict[str, Any]]:
+    cleaned_service = _clean_text(service)
+    if not cleaned_service:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                service, status, last_seen_at, last_success_at, last_error_at,
+                last_error, metadata_json, created_at, updated_at
+            FROM scheduler_heartbeats
+            WHERE service = ?
+            """,
+            (cleaned_service,),
+        ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result["metadata"] = json.loads(result.pop("metadata_json") or "{}")
+    return result
+
+
+def list_scheduler_heartbeats() -> List[Dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                service, status, last_seen_at, last_success_at, last_error_at,
+                last_error, metadata_json, created_at, updated_at
+            FROM scheduler_heartbeats
+            ORDER BY service
+            """
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+        result.append(item)
+    return result
+
+
+def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
+    window = max(int(window_minutes), 1)
+    modifier = f"-{window} minutes"
+    with connect() as conn:
+        message_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN direction = 'inbound' THEN 1 ELSE 0 END) AS inbound_total,
+                SUM(CASE WHEN direction = 'outbound' THEN 1 ELSE 0 END) AS outbound_total,
+                SUM(CASE WHEN error IS NOT NULL AND error != '' THEN 1 ELSE 0 END) AS error_total,
+                AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms ELSE NULL END) AS avg_latency_ms,
+                MAX(latency_ms) AS max_latency_ms
+            FROM messages
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (modifier,),
+        ).fetchone()
+        outbound_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent_total,
+                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_total,
+                SUM(CASE WHEN status IN ('pending', 'sending') THEN 1 ELSE 0 END) AS pending_total
+            FROM outbound_messages
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (modifier,),
+        ).fetchone()
+        binding_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status IN ('completed', 'already_connected') THEN 1 ELSE 0 END) AS success_total,
+                SUM(CASE WHEN status IN ('failed', 'expired', 'cancelled') THEN 1 ELSE 0 END) AS failed_total
+            FROM binding_intents
+            WHERE created_at >= datetime('now', ?)
+            """,
+            (modifier,),
+        ).fetchone()
+        account_row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_total,
+                SUM(CASE WHEN status = 'disabled' THEN 1 ELSE 0 END) AS disabled_total
+            FROM accounts
+            """
+        ).fetchone()
+        recent_message_errors = conn.execute(
+            """
+            SELECT id, account_id, direction, role, message_type, latency_ms, error, created_at
+            FROM messages
+            WHERE error IS NOT NULL AND error != ''
+            ORDER BY id DESC
+            LIMIT 10
+            """
+        ).fetchall()
+        recent_outbound_errors = conn.execute(
+            """
+            SELECT id, account_id, source, status, attempts, error, created_at, updated_at
+            FROM outbound_messages
+            WHERE error IS NOT NULL AND error != ''
+            ORDER BY id DESC
+            LIMIT 10
+            """
+        ).fetchall()
+
+    def _row_count(row: sqlite3.Row, key: str) -> int:
+        return int(row[key] or 0) if row else 0
+
+    avg_latency = message_row["avg_latency_ms"] if message_row else None
+    return {
+        "window_minutes": window,
+        "accounts": {
+            "total": _row_count(account_row, "total"),
+            "active": _row_count(account_row, "active_total"),
+            "disabled": _row_count(account_row, "disabled_total"),
+        },
+        "messages": {
+            "total": _row_count(message_row, "total"),
+            "inbound_total": _row_count(message_row, "inbound_total"),
+            "outbound_total": _row_count(message_row, "outbound_total"),
+            "error_total": _row_count(message_row, "error_total"),
+            "avg_latency_ms": round(float(avg_latency), 1) if avg_latency is not None else None,
+            "max_latency_ms": _row_count(message_row, "max_latency_ms"),
+        },
+        "outbound_messages": {
+            "total": _row_count(outbound_row, "total"),
+            "sent_total": _row_count(outbound_row, "sent_total"),
+            "failed_total": _row_count(outbound_row, "failed_total"),
+            "pending_total": _row_count(outbound_row, "pending_total"),
+        },
+        "binding_intents": {
+            "total": _row_count(binding_row, "total"),
+            "success_total": _row_count(binding_row, "success_total"),
+            "failed_total": _row_count(binding_row, "failed_total"),
+        },
+        "recent_errors": {
+            "messages": [dict(row) for row in recent_message_errors],
+            "outbound_messages": [dict(row) for row in recent_outbound_errors],
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import date as date_cls, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
 
@@ -27,6 +28,7 @@ from app.db import (
     create_tool_invocation,
     create_or_get_platform_user_by_phone,
     create_phone_verification,
+    connect as db_connect,
     find_active_admin_plaintext_grant,
     get_admin_plaintext_grant,
     get_debug_trace,
@@ -42,6 +44,7 @@ from app.db import (
     get_message_raw,
     get_or_create_default_ai4all_account_for_user,
     get_platform_user,
+    get_ops_metrics,
     get_profile_for_account,
     get_profile_for_session,
     get_proactive_commitment,
@@ -68,6 +71,7 @@ from app.db import (
     list_dreaming_runs,
     list_memory_events,
     list_recent_message_raw,
+    list_scheduler_heartbeats,
     list_session_messages,
     list_sessions,
     list_sessions_for_account,
@@ -1041,9 +1045,106 @@ def health() -> dict:
     return {"status": "ok", "env": settings.app_env}
 
 
+@app.get("/health/live")
+def health_live() -> dict:
+    return {"status": "ok", "env": settings.app_env}
+
+
+def _check_writable_dir(path_value: str) -> dict:
+    path = Path(path_value)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".ai4all_ready_check"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return {"status": "ok", "path": str(path)}
+    except Exception as err:
+        return {"status": "error", "path": str(path), "error": str(err)}
+
+
+def _check_runtime_config() -> dict:
+    env = str(getattr(settings, "app_env", "") or "").lower()
+    if env in {"local", "development", "test"}:
+        return {"status": "ok", "mode": "local"}
+    missing = []
+    if not getattr(settings, "llm_api_key", ""):
+        missing.append("LLM_API_KEY")
+    if not getattr(settings, "ai4all_bridge_secret", "") or settings.ai4all_bridge_secret == "dev-secret":
+        missing.append("AI4ALL_BRIDGE_SECRET")
+    if not getattr(settings, "admin_token", "") or settings.admin_token == "dev-admin-token":
+        missing.append("ADMIN_TOKEN")
+    if missing:
+        return {"status": "error", "missing": missing}
+    return {"status": "ok", "mode": env or "production"}
+
+
+def _build_ready_status() -> tuple[int, dict]:
+    checks: dict[str, dict] = {}
+    try:
+        with db_connect() as conn:
+            conn.execute("SELECT 1").fetchone()
+        checks["db"] = {"status": "ok"}
+    except Exception as err:
+        checks["db"] = {"status": "error", "error": str(err)}
+
+    checks["user_profiles_dir"] = _check_writable_dir(settings.user_profiles_dir)
+    checks["system_dir"] = _check_writable_dir(settings.system_dir)
+    checks["runtime_config"] = _check_runtime_config()
+
+    ok = all(item.get("status") == "ok" for item in checks.values())
+    return (
+        200 if ok else 503,
+        {
+            "status": "ok" if ok else "error",
+            "env": settings.app_env,
+            "checks": checks,
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+
+
+@app.get("/health/ready")
+def health_ready() -> JSONResponse:
+    status_code, payload = _build_ready_status()
+    return JSONResponse(status_code=status_code, content=payload)
+
+
 @app.get("/admin/me")
 def admin_me(admin_user: dict = Depends(get_admin_user)) -> dict:
     return {"admin_user": admin_user}
+
+
+@app.get("/admin/ops/status")
+def admin_ops_status(
+    window_minutes: int = 60,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if window_minutes < 1 or window_minutes > 24 * 60:
+        raise HTTPException(status_code=400, detail="window_minutes must be between 1 and 1440")
+    ready_status_code, ready = _build_ready_status()
+    return {
+        "status": "ok",
+        "env": settings.app_env,
+        "ready_status_code": ready_status_code,
+        "ready": ready,
+        "schedulers": {
+            "configured": {
+                "proactive": {
+                    "enabled": settings.proactive_scheduler_enabled,
+                    "interval_seconds": settings.proactive_scheduler_interval_seconds,
+                    "batch_size": settings.proactive_scheduler_batch_size,
+                },
+                "dreaming": {
+                    "enabled": settings.dreaming_scheduler_enabled,
+                    "interval_seconds": settings.dreaming_scheduler_interval_seconds,
+                    "batch_size": settings.dreaming_scheduler_batch_size,
+                },
+            },
+            "heartbeats": list_scheduler_heartbeats(),
+        },
+        "metrics": get_ops_metrics(window_minutes=window_minutes),
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
 
 
 # ---------------------------------------------------------------------------

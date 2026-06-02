@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.db import record_scheduler_heartbeat
 from app.session_lifecycle import run_daily_dreaming_scan
 
 
@@ -77,9 +78,12 @@ class DreamingScheduler:
             self._stop_event = asyncio.Event()
         while not self._stop_event.is_set():
             try:
+                self._record_heartbeat(status="running")
                 await self.run_once()
+                self._record_heartbeat(status="ok")
             except Exception as err:
                 self.last_error = str(err)
+                self._record_heartbeat(status="error", error=str(err))
                 logger.exception("dreaming scheduler run failed: %s", err)
             try:
                 await asyncio.wait_for(
@@ -88,6 +92,20 @@ class DreamingScheduler:
                 )
             except asyncio.TimeoutError:
                 pass
+
+    def _record_heartbeat(self, *, status: str, error: Optional[str] = None) -> None:
+        try:
+            record_scheduler_heartbeat(
+                service="dreaming_scheduler",
+                status=status,
+                error=error,
+                metadata={
+                    "interval_seconds": self.interval_seconds,
+                    "batch_size": self.batch_size,
+                },
+            )
+        except Exception as err:
+            logger.warning("dreaming scheduler heartbeat write failed: %s", err)
 
 
 _scheduler: Optional[DreamingScheduler] = None
