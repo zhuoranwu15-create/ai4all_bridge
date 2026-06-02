@@ -26,6 +26,10 @@
       "shadowTraceAccountIds": {
         "type": "string",
         "default": ""
+      },
+      "voiceDebug": {
+        "type": "boolean",
+        "default": false
       }
     }
   }

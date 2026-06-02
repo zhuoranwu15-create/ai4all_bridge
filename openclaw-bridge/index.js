@@ -5,6 +5,8 @@ const DEFAULT_SECRET = "dev-secret";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_ONLY_CHANNEL = "openclaw-weixin";
 const SHADOW_STATE_TTL_MS = 10 * 60 * 1000;
+const VOICE_DEBUG_MAX_FIELDS = 80;
+const VOICE_DEBUG_MAX_STRING = 240;
 
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -30,7 +32,22 @@ function resolveConfig(api) {
     timeoutMs: Number(cfg.timeoutMs || process.env.AI4ALL_BRIDGE_TIMEOUT_MS || DEFAULT_TIMEOUT_MS),
     onlyChannel: String(cfg.onlyChannel || process.env.AI4ALL_ONLY_CHANNEL || DEFAULT_ONLY_CHANNEL),
     shadowTraceAccountIds: String(cfg.shadowTraceAccountIds || process.env.AI4ALL_SHADOW_TRACE_ACCOUNT_IDS || ""),
+    voiceDebug: parseOptionalBoolean(process.env.AI4ALL_VOICE_DEBUG) ?? parseOptionalBoolean(cfg.voiceDebug) ?? false,
   };
+}
+
+function parseOptionalBoolean(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text === "1" || text === "true" || text === "yes" || text === "on") {
+    return true;
+  }
+  if (text === "0" || text === "false" || text === "no" || text === "off") {
+    return false;
+  }
+  return undefined;
 }
 
 function parseCsvSet(value) {
@@ -87,6 +104,164 @@ function buildAccountCandidates(ctx) {
     accountId: ctx.accountId || undefined,
     providerAccountId: ctx.providerAccountId || undefined,
     botId: ctx.botId || undefined,
+  };
+}
+
+function truncateDebugString(value) {
+  const text = String(value ?? "");
+  if (text.length <= VOICE_DEBUG_MAX_STRING) {
+    return text;
+  }
+  return `${text.slice(0, VOICE_DEBUG_MAX_STRING)}...`;
+}
+
+function extractMediaMarkers(text) {
+  const markers = [];
+  const pattern = /\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/gi;
+  for (const match of text.matchAll(pattern)) {
+    markers.push(truncateDebugString(match[1] || match[0]));
+    if (markers.length >= 5) {
+      break;
+    }
+  }
+  return markers;
+}
+
+function summarizePotentialText(value) {
+  const text = typeof value === "string" ? value : "";
+  const markers = extractMediaMarkers(text);
+  return {
+    kind: "text_summary",
+    length: text.length,
+    hasMediaAttachedMarker: markers.length > 0,
+    mediaMarkers: markers,
+  };
+}
+
+function isSensitiveDebugKey(key) {
+  const lower = String(key || "").toLowerCase();
+  return (
+    lower.includes("token") ||
+    lower.includes("secret") ||
+    lower.includes("authorization") ||
+    lower.includes("accesskey") ||
+    lower.includes("aes_key") ||
+    lower === "key"
+  );
+}
+
+function isTextBodyDebugKey(key) {
+  const lower = String(key || "").toLowerCase();
+  return (
+    lower === "body" ||
+    lower === "rawbody" ||
+    lower === "bodyforagent" ||
+    lower === "bodyforcommands" ||
+    lower === "cleanedbody" ||
+    lower === "content" ||
+    lower === "text"
+  );
+}
+
+function isVoiceDebugKey(key) {
+  const lower = String(key || "").toLowerCase();
+  return (
+    lower.includes("media") ||
+    lower.includes("voice") ||
+    lower.includes("audio") ||
+    lower.includes("transcript") ||
+    isTextBodyDebugKey(lower)
+  );
+}
+
+function isVoiceDebugPath(path) {
+  const lower = String(path || "").toLowerCase();
+  return (
+    lower.includes("media") ||
+    lower.includes("voice") ||
+    lower.includes("audio") ||
+    lower.includes("transcript")
+  );
+}
+
+function isPrimitiveDebugValue(value) {
+  return value == null || typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function sanitizeDebugValue(key, value) {
+  if (isSensitiveDebugKey(key)) {
+    return "[redacted]";
+  }
+  if (typeof value === "string") {
+    return isTextBodyDebugKey(key) ? summarizePotentialText(value) : truncateDebugString(value);
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item) => {
+      if (typeof item === "string") {
+        return truncateDebugString(item);
+      }
+      if (item == null || typeof item === "number" || typeof item === "boolean") {
+        return item;
+      }
+      return `[${typeof item}]`;
+    });
+  }
+  if (value == null || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  return `[${typeof value}]`;
+}
+
+function collectVoiceDebugFields(value, rootName) {
+  const output = [];
+  const seen = new WeakSet();
+  const stack = [{ value, path: rootName, depth: 0, inVoiceContext: false }];
+  while (stack.length && output.length < VOICE_DEBUG_MAX_FIELDS) {
+    const current = stack.pop();
+    if (!current || current.value == null || typeof current.value !== "object") {
+      continue;
+    }
+    if (seen.has(current.value)) {
+      continue;
+    }
+    seen.add(current.value);
+
+    const entries = Array.isArray(current.value)
+      ? current.value.slice(0, 12).map((child, index) => [`[${index}]`, child])
+      : Object.entries(asRecord(current.value));
+
+    for (const [key, child] of entries) {
+      const childPath = key.startsWith("[") ? `${current.path}${key}` : `${current.path}.${key}`;
+      const childIsVoiceKey = isVoiceDebugKey(key);
+      const childInVoiceContext = current.inVoiceContext || childIsVoiceKey || isVoiceDebugPath(childPath);
+      const hasMediaMarker = typeof child === "string" && extractMediaMarkers(child).length > 0;
+      if (childIsVoiceKey || hasMediaMarker || (current.inVoiceContext && isPrimitiveDebugValue(child))) {
+        output.push({
+          path: childPath,
+          value: sanitizeDebugValue(key, child),
+        });
+        if (output.length >= VOICE_DEBUG_MAX_FIELDS) {
+          break;
+        }
+      }
+      if (child && typeof child === "object" && current.depth < 5) {
+        stack.push({ value: child, path: childPath, depth: current.depth + 1, inVoiceContext: childInVoiceContext });
+      }
+    }
+  }
+  return output;
+}
+
+function buildVoiceDebugSummary(event, ctx) {
+  const cleanedBody = typeof event?.cleanedBody === "string" ? event.cleanedBody : "";
+  const eventFields = collectVoiceDebugFields(event, "event");
+  const ctxFields = collectVoiceDebugFields(ctx, "ctx");
+  return {
+    cleanedBody: summarizePotentialText(cleanedBody),
+    eventFieldCount: eventFields.length,
+    ctxFieldCount: ctxFields.length,
+    eventFields,
+    ctxFields,
   };
 }
 
@@ -264,6 +439,7 @@ export default definePluginEntry({
       const accountCandidates = buildAccountCandidates(ctx);
       const channelAccountId = extractAccountId(ctx, provider);
       const shadowTrace = isShadowTraceAccount(config, channelAccountId);
+      const voiceDebugSummary = config.voiceDebug ? buildVoiceDebugSummary(event, ctx) : undefined;
       const payload = {
         event_id: ctx.runId || undefined,
         message_id: ctx.runId || undefined,
@@ -284,11 +460,18 @@ export default definePluginEntry({
             account_candidates: accountCandidates,
             resolved_account_id: channelAccountId,
             channel_account_id: channelAccountId,
+            ...(voiceDebugSummary ? { voice_debug: voiceDebugSummary } : {}),
           },
         },
       };
 
       try {
+        if (voiceDebugSummary) {
+          api.logger.info(
+            `ai4all bridge voice debug channel=${payload.channel} session=${payload.session_key || ""} ` +
+            `summary=${JSON.stringify(voiceDebugSummary)}`
+          );
+        }
         api.logger.info(
           `ai4all bridge forwarding turn channel=${payload.channel} session=${payload.session_key} candidates=${JSON.stringify(accountCandidates)}`
         );

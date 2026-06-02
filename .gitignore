@@ -1,4 +1,6 @@
 .env
+.env.production
+.env.local
 dev_memo.md
 .venv/
 __pycache__/
@@ -7,3 +9,6 @@ __pycache__/
 data/
 ai4all.db
 *.swp
+.claude/
+.specify/
+lark_sync.sh
