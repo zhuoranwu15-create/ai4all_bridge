@@ -581,10 +581,11 @@ cron 示例：
 
 ### 17.7 OpenClaw 状态检查补充
 
-当前 `scripts/monitor_health.py` 尚未内置 OpenClaw channel 检查。服务器现场需要先手动验证：
+`scripts/monitor_health.py` 已支持可选 OpenClaw 检查。服务器现场先手动验证：
 
 ```bash
 openclaw channels status --probe
+openclaw channels list
 ```
 
 预期：
@@ -593,7 +594,16 @@ openclaw channels status --probe
 - 微信账号连接状态正常。
 - bridge 能正常向后端 `POST /openclaw/turn`。
 
-后续需要把 OpenClaw 状态检查接入监控脚本：连续 2 次 disconnected 或 probe 失败时发飞书报警。
+接入监控脚本：
+
+```bash
+MONITOR_CHECK_OPENCLAW=true \
+MONITOR_OPENCLAW_CHANNEL=openclaw-weixin \
+.venv/bin/python scripts/monitor_health.py --dry-run
+```
+
+预期正常输出 `ok`。连续 2 次 probe 失败、gateway 不可达、或 `openclaw-weixin`
+未配置启用时发飞书报警。
 
 ### 17.8 阿里云云监控配置
 

@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -62,6 +63,13 @@ def _parse_scheduler_specs(values: List[str]) -> List[Tuple[str, int]]:
     return specs
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _check_scheduler(service: str, max_age_seconds: int) -> Optional[str]:
     heartbeat = get_scheduler_heartbeat(service)
     if heartbeat is None:
@@ -74,6 +82,57 @@ def _check_scheduler(service: str, max_age_seconds: int) -> Optional[str]:
         return f"{service}: heartbeat stale age={age_seconds}s max={max_age_seconds}s"
     if heartbeat.get("status") in {"error", "failed"}:
         return f"{service}: last status={heartbeat.get('status')} error={heartbeat.get('last_error') or ''}".strip()
+    return None
+
+
+def _run_command(command: List[str], timeout: float) -> Tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout, 1.0),
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"command timed out: {' '.join(command)}"
+    except Exception as err:
+        return False, str(err)
+    output = "\n".join(
+        item.strip() for item in [completed.stdout, completed.stderr] if item and item.strip()
+    )
+    if completed.returncode != 0:
+        return False, output or f"command failed rc={completed.returncode}"
+    return True, output
+
+
+def _check_openclaw(channel: str, timeout: float) -> Optional[str]:
+    ok, output = _run_command(["openclaw", "channels", "status", "--probe"], timeout)
+    if not ok:
+        return f"openclaw status failed: {output[:800]}"
+
+    cleaned_channel = channel.strip()
+    if not cleaned_channel:
+        return None
+
+    ok, output = _run_command(["openclaw", "channels", "list"], timeout)
+    if not ok:
+        return f"openclaw channels list failed: {output[:800]}"
+    if cleaned_channel not in output:
+        return f"openclaw channel missing: {cleaned_channel}"
+
+    channel_line = ""
+    for line in output.splitlines():
+        if cleaned_channel in line:
+            channel_line = line.strip()
+            break
+    normalized_line = channel_line.lower()
+    if channel_line and (
+        "disabled" in normalized_line
+        or "not enabled" in normalized_line
+        or "enabled" not in normalized_line
+    ):
+        return f"openclaw channel not enabled: {channel_line[:500]}"
     return None
 
 
@@ -165,6 +224,17 @@ def main() -> int:
         help="scheduler heartbeat check in service:max_age_seconds form",
     )
     parser.add_argument(
+        "--check-openclaw",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("MONITOR_CHECK_OPENCLAW", False),
+        help="check OpenClaw gateway/channel status via openclaw CLI",
+    )
+    parser.add_argument(
+        "--openclaw-channel",
+        default=os.getenv("MONITOR_OPENCLAW_CHANNEL", "openclaw-weixin"),
+        help="configured OpenClaw channel expected in `openclaw channels list`; empty disables list check",
+    )
+    parser.add_argument(
         "--webhook-url",
         default=getattr(settings, "feishu_alert_webhook_url", ""),
         help="Feishu alert webhook URL; defaults to FEISHU_ALERT_WEBHOOK_URL",
@@ -210,6 +280,11 @@ def main() -> int:
             error = _check_scheduler(service, max_age_seconds)
             if error:
                 errors.append(error)
+
+    if args.check_openclaw:
+        error = _check_openclaw(args.openclaw_channel, args.timeout)
+        if error:
+            errors.append(error)
 
     state = _load_state(args.state_file)
 

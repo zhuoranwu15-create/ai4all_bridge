@@ -139,6 +139,69 @@ sudo systemctl status ai4all-weixin-proactive-scheduler
 
 注意：当前代码没有跨进程 leader election。不要同时运行多个 proactive scheduler，也不要在多 worker FastAPI 内开启 `PROACTIVE_SCHEDULER_ENABLED=true`。
 
+## 健康监控 systemd timer
+
+确认 `.env` 已配置 `FEISHU_ALERT_WEBHOOK_URL` 后，建议用 systemd timer 每分钟运行轻量监控。
+仓库已提供通用 systemd 模板：`deploy/systemd/ai4all-monitor-health.service`
+和 `deploy/systemd/ai4all-monitor-health.timer`。
+
+创建 `/etc/systemd/system/ai4all-monitor-health.service`：
+
+```ini
+[Unit]
+Description=AI4ALL health monitor
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai4all-weixin-bot
+EnvironmentFile=/opt/ai4all-weixin-bot/.env
+Environment=MONITOR_READY_URL=http://127.0.0.1:8180/health/ready
+Environment=MONITOR_SCHEDULERS=proactive_scheduler:90
+Environment=MONITOR_CHECK_OPENCLAW=true
+Environment=MONITOR_OPENCLAW_CHANNEL=openclaw-weixin
+ExecStart=/opt/ai4all-weixin-bot/.venv/bin/python scripts/monitor_health.py
+User=ai4all
+Group=ai4all
+```
+
+创建 `/etc/systemd/system/ai4all-monitor-health.timer`：
+
+```ini
+[Unit]
+Description=Run AI4ALL health monitor every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=ai4all-monitor-health.service
+
+[Install]
+WantedBy=timers.target
+```
+
+如果仓库实际部署路径不是 `/opt/ai4all-weixin-bot`，同步替换
+`WorkingDirectory`、`EnvironmentFile`、`ExecStart`、`User` 和 `Group`。本次阿里云节点实测路径为
+`/home/jack/workspace/ai4all_bridge`，服务用户为 `jack`。
+
+启用前先 dry-run：
+
+```bash
+cd /opt/ai4all-weixin-bot
+MONITOR_SCHEDULERS=proactive_scheduler:90 \
+MONITOR_CHECK_OPENCLAW=true \
+.venv/bin/python scripts/monitor_health.py --dry-run
+```
+
+启用：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now ai4all-monitor-health.timer
+sudo systemctl list-timers --all | grep ai4all-monitor-health
+journalctl -u ai4all-monitor-health.service -n 50 --no-pager
+```
+
 ## nginx 反代
 
 示例只展示核心策略，证书可用阿里云证书服务或 certbot 管理。公网路径约定：

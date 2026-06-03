@@ -1,0 +1,14 @@
+[Unit]
+Description=AI4ALL health monitor
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai4all-weixin-bot
+EnvironmentFile=/opt/ai4all-weixin-bot/.env
+Environment=MONITOR_READY_URL=http://127.0.0.1:8180/health/ready
+Environment=MONITOR_SCHEDULERS=proactive_scheduler:90
+Environment=MONITOR_CHECK_OPENCLAW=true
+Environment=MONITOR_OPENCLAW_CHANNEL=openclaw-weixin
+ExecStart=/opt/ai4all-weixin-bot/.venv/bin/python scripts/monitor_health.py
+User=ai4all
+Group=ai4all

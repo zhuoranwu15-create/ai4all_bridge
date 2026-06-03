@@ -171,3 +171,78 @@ def test_monitor_alert_state_threshold_and_recovery(tmp_path):
     assert recovery is True
     assert loaded["failure_count"] == 0
     assert loaded["last_status"] == "ok"
+
+
+def test_monitor_openclaw_check_passes_for_enabled_channel(monkeypatch):
+    from scripts import monitor_health
+
+    calls = []
+
+    def fake_run(command, timeout):
+        calls.append(command)
+        if command == ["openclaw", "channels", "status", "--probe"]:
+            return True, "Gateway reachable."
+        if command == ["openclaw", "channels", "list"]:
+            return True, "Chat channels:\n- openclaw-weixin default: installed, configured, enabled"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(monitor_health, "_run_command", fake_run)
+
+    error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
+
+    assert error is None
+    assert calls == [
+        ["openclaw", "channels", "status", "--probe"],
+        ["openclaw", "channels", "list"],
+    ]
+
+
+def test_monitor_openclaw_check_reports_missing_channel(monkeypatch):
+    from scripts import monitor_health
+
+    def fake_run(command, timeout):
+        if command == ["openclaw", "channels", "status", "--probe"]:
+            return True, "Gateway reachable."
+        if command == ["openclaw", "channels", "list"]:
+            return True, "Chat channels:\n- telegram default: installed, configured, enabled"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(monitor_health, "_run_command", fake_run)
+
+    error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
+
+    assert error == "openclaw channel missing: openclaw-weixin"
+
+
+def test_monitor_openclaw_check_reports_disabled_channel(monkeypatch):
+    from scripts import monitor_health
+
+    def fake_run(command, timeout):
+        if command == ["openclaw", "channels", "status", "--probe"]:
+            return True, "Gateway reachable."
+        if command == ["openclaw", "channels", "list"]:
+            return True, "Chat channels:\n- openclaw-weixin default: installed, configured, disabled"
+        raise AssertionError(command)
+
+    monkeypatch.setattr(monitor_health, "_run_command", fake_run)
+
+    error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
+
+    assert (
+        error
+        == "openclaw channel not enabled: - openclaw-weixin default: installed, configured, disabled"
+    )
+
+
+def test_monitor_openclaw_check_reports_probe_failure(monkeypatch):
+    from scripts import monitor_health
+
+    def fake_run(command, timeout):
+        assert command == ["openclaw", "channels", "status", "--probe"]
+        return False, "gateway unreachable"
+
+    monkeypatch.setattr(monitor_health, "_run_command", fake_run)
+
+    error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
+
+    assert error == "openclaw status failed: gateway unreachable"
