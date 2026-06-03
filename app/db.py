@@ -868,6 +868,42 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS faq_messages (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                author_name TEXT,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                moderation_status TEXT NOT NULL DEFAULT 'pending',
+                moderation_reason TEXT,
+                moderation_categories_json TEXT NOT NULL DEFAULT '[]',
+                like_count INTEGER NOT NULL DEFAULT 0,
+                reply_count INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                published_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_faq_messages_parent_status_created
+            ON faq_messages(parent_id, status, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_faq_messages_status_created
+            ON faq_messages(status, created_at);
+
+            CREATE TABLE IF NOT EXISTS faq_message_likes (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                voter_key TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(message_id, voter_key),
+                FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_faq_message_likes_message
+            ON faq_message_likes(message_id, created_at);
             """
         )
         # Ensure new columns exist on accounts (for DBs created before this change)
@@ -1022,6 +1058,57 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS faq_messages (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                author_name TEXT,
+                content TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                moderation_status TEXT NOT NULL DEFAULT 'pending',
+                moderation_reason TEXT,
+                moderation_categories_json TEXT NOT NULL DEFAULT '[]',
+                like_count INTEGER NOT NULL DEFAULT 0,
+                reply_count INTEGER NOT NULL DEFAULT 0,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                published_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_faq_messages_parent_status_created
+            ON faq_messages(parent_id, status, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_faq_messages_status_created
+            ON faq_messages(status, created_at)
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS faq_message_likes (
+                id TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                voter_key TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(message_id, voter_key),
+                FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_faq_message_likes_message
+            ON faq_message_likes(message_id, created_at)
+            """
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1121,6 +1208,205 @@ def list_scheduler_heartbeats() -> List[Dict[str, Any]]:
         item = dict(row)
         item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
         result.append(item)
+    return result
+
+
+# ---------------------------------------------------------------------------
+# FAQ public messages
+# ---------------------------------------------------------------------------
+
+_FAQ_MESSAGE_STATUSES = {"pending", "published", "rejected"}
+_FAQ_MODERATION_STATUSES = {"safe", "needs_review", "failed"}
+
+
+def _decode_faq_message(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    item["moderation_categories"] = json.loads(
+        item.pop("moderation_categories_json") or "[]"
+    )
+    item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    return item
+
+
+def get_faq_message(*, message_id: str) -> Optional[Dict[str, Any]]:
+    """Return a FAQ message by id, including unpublished rows."""
+    cleaned_id = _clean_text(message_id)
+    if not cleaned_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM faq_messages WHERE id = ?",
+            (cleaned_id,),
+        ).fetchone()
+    return _decode_faq_message(row) if row else None
+
+
+def create_faq_message(
+    *,
+    author_name: Optional[str],
+    content: str,
+    status: str,
+    moderation_status: str,
+    moderation_reason: Optional[str] = None,
+    moderation_categories: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    parent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a FAQ main message or one-level reply.
+
+    Replies may only target published top-level messages.  Published replies
+    increment the parent reply_count immediately.
+    """
+    cleaned_content = _clean_text(content)
+    if not cleaned_content:
+        raise ValueError("content is required")
+    cleaned_status = _clean_text(status) or "pending"
+    if cleaned_status not in _FAQ_MESSAGE_STATUSES:
+        raise ValueError("invalid faq message status")
+    cleaned_moderation_status = _clean_text(moderation_status) or "needs_review"
+    if cleaned_moderation_status not in _FAQ_MODERATION_STATUSES:
+        raise ValueError("invalid faq moderation status")
+    cleaned_parent_id = _clean_text(parent_id)
+    message_id = _new_id("faq")
+    published_at_expr = "CURRENT_TIMESTAMP" if cleaned_status == "published" else "NULL"
+    categories_json = json.dumps(moderation_categories or [], ensure_ascii=False)
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+    with connect() as conn:
+        if cleaned_parent_id:
+            parent = conn.execute(
+                "SELECT id, parent_id, status FROM faq_messages WHERE id = ?",
+                (cleaned_parent_id,),
+            ).fetchone()
+            if parent is None:
+                raise ValueError("parent message not found")
+            if parent["parent_id"] is not None:
+                raise ValueError("replies can only target main messages")
+            if parent["status"] != "published":
+                raise ValueError("parent message is not published")
+
+        conn.execute(
+            f"""
+            INSERT INTO faq_messages(
+                id, parent_id, author_name, content, status, moderation_status,
+                moderation_reason, moderation_categories_json, metadata_json,
+                published_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {published_at_expr}, CURRENT_TIMESTAMP)
+            """,
+            (
+                message_id,
+                cleaned_parent_id,
+                _clean_text(author_name),
+                cleaned_content,
+                cleaned_status,
+                cleaned_moderation_status,
+                _clean_text(moderation_reason),
+                categories_json,
+                metadata_json,
+            ),
+        )
+        if cleaned_parent_id and cleaned_status == "published":
+            conn.execute(
+                """
+                UPDATE faq_messages
+                SET reply_count = reply_count + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (cleaned_parent_id,),
+            )
+        row = conn.execute(
+            "SELECT * FROM faq_messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("faq message was not created")
+    return _decode_faq_message(row)
+
+
+def list_published_faq_messages(
+    *,
+    limit: int = 50,
+    replies_per_parent: int = 20,
+) -> List[Dict[str, Any]]:
+    """Return published top-level FAQ messages with published one-level replies."""
+    clean_limit = max(1, min(int(limit), 100))
+    clean_reply_limit = max(0, min(int(replies_per_parent), 50))
+    with connect() as conn:
+        parent_rows = conn.execute(
+            """
+            SELECT *
+            FROM faq_messages
+            WHERE parent_id IS NULL
+              AND status = 'published'
+            ORDER BY published_at DESC, created_at DESC
+            LIMIT ?
+            """,
+            (clean_limit,),
+        ).fetchall()
+        parents = [_decode_faq_message(row) for row in parent_rows]
+        for parent in parents:
+            if clean_reply_limit == 0:
+                parent["replies"] = []
+                continue
+            reply_rows = conn.execute(
+                """
+                SELECT *
+                FROM faq_messages
+                WHERE parent_id = ?
+                  AND status = 'published'
+                ORDER BY published_at ASC, created_at ASC
+                LIMIT ?
+                """,
+                (parent["id"], clean_reply_limit),
+            ).fetchall()
+            parent["replies"] = [_decode_faq_message(row) for row in reply_rows]
+    return parents
+
+
+def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, Any]]:
+    """Like a published FAQ message once per voter_key and return the updated row."""
+    cleaned_id = _clean_text(message_id)
+    cleaned_voter_key = _clean_text(voter_key)
+    if not cleaned_id or not cleaned_voter_key:
+        return None
+    with connect() as conn:
+        message = conn.execute(
+            "SELECT id FROM faq_messages WHERE id = ? AND status = 'published'",
+            (cleaned_id,),
+        ).fetchone()
+        if message is None:
+            return None
+        liked = False
+        try:
+            conn.execute(
+                """
+                INSERT INTO faq_message_likes(id, message_id, voter_key)
+                VALUES (?, ?, ?)
+                """,
+                (_new_id("fqlike"), cleaned_id, cleaned_voter_key),
+            )
+            liked = True
+        except sqlite3.IntegrityError:
+            liked = False
+        if liked:
+            conn.execute(
+                """
+                UPDATE faq_messages
+                SET like_count = like_count + 1,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (cleaned_id,),
+            )
+        row = conn.execute(
+            "SELECT * FROM faq_messages WHERE id = ?",
+            (cleaned_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    result = _decode_faq_message(row)
+    result["liked"] = liked
     return result
 
 

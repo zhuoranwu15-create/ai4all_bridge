@@ -13,6 +13,8 @@ def test_settings(tmp_path):
     s.admin_staff_token = "test-staff"
     s.admin_debug_plaintext_enabled = False
     s.admin_debug_plaintext_account_allowlist = ""
+    s.feishu_alert_webhook_url = ""
+    s.feishu_website_webhook_url = ""
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_model = "test-model"

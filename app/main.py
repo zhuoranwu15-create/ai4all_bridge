@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import uuid
 from datetime import date as date_cls, datetime, timedelta
@@ -24,6 +26,7 @@ from app.db import (
     create_ai4all_account_for_user,
     create_admin_plaintext_grant,
     create_binding_intent,
+    create_faq_message,
     create_search_provider_run,
     create_tool_invocation,
     create_or_get_platform_user_by_phone,
@@ -65,6 +68,7 @@ from app.db import (
     list_binding_intents_for_account,
     list_content_invitations_for_account,
     list_outbound_messages,
+    list_published_faq_messages,
     list_proactive_commitments_for_account,
     list_debug_traces,
     list_dreaming_memory_items,
@@ -97,6 +101,7 @@ from app.db import (
     get_reminder,
     list_reminders_for_account,
     get_tool_invocation,
+    like_faq_message,
     list_wallet_ledger,
     list_search_provider_runs,
     list_tool_invocations,
@@ -107,6 +112,7 @@ from app.db import (
     reenable_proactive_after_rebind,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
+from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.openclaw_gateway import (
     logout_weixin_account,
@@ -148,6 +154,8 @@ from app.turn_service import handle_openclaw_turn
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 import shutil
+
+import httpx
 
 from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context, account_profile_dir
 
@@ -246,6 +254,15 @@ class WebCreateBindingIntentRequest(BaseModel):
 
 class WebUnbindRequest(BaseModel):
     keep_memories: bool
+
+
+class FAQMessageRequest(BaseModel):
+    author_name: Optional[str] = Field(default=None, max_length=40)
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class FAQLikeRequest(BaseModel):
+    voter_token: Optional[str] = Field(default=None, max_length=120)
 
 
 def _debug_trace_account_ids() -> set[str]:
@@ -1897,6 +1914,231 @@ def debug_simulate_web_search(
 # ---------------------------------------------------------------------------
 # Web onboarding (MVP)
 # ---------------------------------------------------------------------------
+
+_FAQ_MODERATION_SYSTEM_PROMPT = """
+你是公开网站留言区的安全审核器。请只输出 JSON，不要输出解释。
+判断用户留言是否适合直接公开展示。风险包括但不限于：政治敏感、色情低俗、仇恨歧视、暴力威胁、自伤诱导、违法犯罪、垃圾广告、隐私泄露、辱骂骚扰。
+输出格式：
+{"safe": true|false, "categories": ["..."], "reason": "..."}
+safe=true 表示可以直接公开；safe=false 表示需要人工审核。
+""".strip()
+
+
+def _clean_faq_text(value: Optional[str], *, max_len: int) -> Optional[str]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return text[:max_len]
+
+
+def _parse_faq_moderation_json(raw: str) -> dict:
+    text = str(raw or "").strip()
+    if not text:
+        raise ValueError("empty moderation response")
+    if not text.startswith("{"):
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("moderation response must be an object")
+    return payload
+
+
+def _moderate_faq_message(content: str) -> dict:
+    """Use a one-shot LLM moderation pass for public FAQ messages."""
+    try:
+        raw = generate_completion(
+            [
+                {"role": "system", "content": _FAQ_MODERATION_SYSTEM_PROMPT},
+                {"role": "user", "content": content},
+            ]
+        )
+        payload = _parse_faq_moderation_json(raw)
+    except Exception as err:
+        logger.warning("faq moderation failed: %s", err)
+        return {
+            "status": "pending",
+            "moderation_status": "failed",
+            "reason": "moderation_failed",
+            "categories": ["moderation_failed"],
+        }
+
+    safe = bool(payload.get("safe") is True)
+    categories = payload.get("categories") or []
+    if not isinstance(categories, list):
+        categories = [str(categories)]
+    cleaned_categories = [
+        str(item).strip()[:40]
+        for item in categories
+        if str(item).strip()
+    ][:8]
+    reason = _clean_faq_text(payload.get("reason"), max_len=200)
+    return {
+        "status": "published" if safe else "pending",
+        "moderation_status": "safe" if safe else "needs_review",
+        "reason": reason or ("safe" if safe else "needs_review"),
+        "categories": cleaned_categories,
+    }
+
+
+def _faq_message_for_public(message: dict) -> dict:
+    item = {
+        "id": message["id"],
+        "parent_id": message.get("parent_id"),
+        "author_name": message.get("author_name") or "匿名用户",
+        "content": message["content"],
+        "like_count": int(message.get("like_count") or 0),
+        "reply_count": int(message.get("reply_count") or 0),
+        "published_at": message.get("published_at"),
+        "created_at": message.get("created_at"),
+    }
+    if "replies" in message:
+        item["replies"] = [_faq_message_for_public(reply) for reply in message["replies"]]
+    return item
+
+
+def _faq_voter_key(*, request: Request, voter_token: Optional[str]) -> str:
+    token = str(voter_token or "").strip()
+    if token:
+        source = f"token:{token[:120]}"
+    else:
+        host = request.client.host if request.client else ""
+        user_agent = str(request.headers.get("user-agent") or "")[:200]
+        source = f"fallback:{host}:{user_agent}"
+    return hashlib.sha256(f"faq-like:{source}".encode("utf-8")).hexdigest()
+
+
+def _faq_message_kind(message: dict) -> str:
+    return "回复" if message.get("parent_id") else "留言"
+
+
+def _send_feishu_website_webhook(*, title: str, message: dict) -> None:
+    """Send a best-effort Feishu website webhook notification."""
+    webhook_url = str(getattr(settings, "feishu_website_webhook_url", "") or "").strip()
+    if not webhook_url:
+        return
+    content = str(message.get("content") or "")
+    preview = content[:300] + ("..." if len(content) > 300 else "")
+    text = (
+        f"{title}\n"
+        f"ID: {message.get('id')}\n"
+        f"作者: {message.get('author_name') or '匿名用户'}\n"
+        f"类型: {_faq_message_kind(message)}\n"
+        f"状态: {message.get('status')}\n"
+        f"审核: {message.get('moderation_status')}\n"
+        f"原因: {message.get('moderation_reason') or '无'}\n"
+        f"内容: {preview}"
+    )
+    try:
+        response = httpx.post(
+            webhook_url,
+            json={"msg_type": "text", "content": {"text": text}},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+    except Exception as err:
+        logger.warning("feishu website webhook notification failed: %s", err)
+
+
+def _notify_faq_message_submitted(message: dict) -> None:
+    _send_feishu_website_webhook(title="FAQ 用户发表留言", message=message)
+
+
+def _notify_pending_faq_message(message: dict) -> None:
+    _send_feishu_website_webhook(title="FAQ 留言需要审核待处理", message=message)
+
+
+def _create_faq_message_from_payload(
+    *,
+    payload: FAQMessageRequest,
+    parent_id: Optional[str] = None,
+    request: Optional[Request] = None,
+) -> dict:
+    content = str(payload.content or "").strip()
+    author_name = _clean_faq_text(payload.author_name, max_len=40)
+    moderation = _moderate_faq_message(content)
+    metadata = {"source": "faq_page"}
+    if request is not None:
+        user_agent = _clean_faq_text(request.headers.get("user-agent"), max_len=200)
+        if user_agent:
+            metadata["user_agent"] = user_agent
+    try:
+        message = create_faq_message(
+            parent_id=parent_id,
+            author_name=author_name,
+            content=content,
+            status=moderation["status"],
+            moderation_status=moderation["moderation_status"],
+            moderation_reason=moderation["reason"],
+            moderation_categories=moderation["categories"],
+            metadata=metadata,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    _notify_faq_message_submitted(message)
+    if message["status"] == "pending":
+        _notify_pending_faq_message(message)
+    return {
+        "status": "ok",
+        "message_status": message["status"],
+        "message": _faq_message_for_public(message) if message["status"] == "published" else {
+            "id": message["id"],
+            "status": message["status"],
+        },
+    }
+
+
+@app.get("/web/faq/messages")
+def web_list_faq_messages(limit: int = 50, replies_per_parent: int = 20) -> dict:
+    messages = list_published_faq_messages(
+        limit=limit,
+        replies_per_parent=replies_per_parent,
+    )
+    return {
+        "status": "ok",
+        "messages": [_faq_message_for_public(message) for message in messages],
+    }
+
+
+@app.post("/web/faq/messages")
+def web_create_faq_message(payload: FAQMessageRequest, request: Request) -> dict:
+    return _create_faq_message_from_payload(payload=payload, request=request)
+
+
+@app.post("/web/faq/messages/{message_id}/replies")
+def web_create_faq_reply(
+    message_id: str,
+    payload: FAQMessageRequest,
+    request: Request,
+) -> dict:
+    return _create_faq_message_from_payload(
+        payload=payload,
+        parent_id=message_id,
+        request=request,
+    )
+
+
+@app.post("/web/faq/messages/{message_id}/like")
+def web_like_faq_message(
+    message_id: str,
+    request: Request,
+    payload: Optional[FAQLikeRequest] = None,
+) -> dict:
+    voter_key = _faq_voter_key(
+        request=request,
+        voter_token=payload.voter_token if payload else None,
+    )
+    message = like_faq_message(message_id=message_id, voter_key=voter_key)
+    if message is None:
+        raise HTTPException(status_code=404, detail="faq message not found")
+    return {
+        "status": "ok",
+        "liked": bool(message.get("liked")),
+        "message": _faq_message_for_public(message),
+    }
+
 
 @app.post("/web/sms/send-otp")
 def web_send_otp(payload: SendOtpRequest) -> dict:

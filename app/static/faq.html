@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>常见问题 - 朝夕相伴</title>
+  <link rel="stylesheet" href="site.css">
+  <script src="faq-data.js"></script>
+</head>
+<body>
+
+<nav class="site-nav">
+  <a class="brand-logo" href="/">
+    <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
+  </a>
+  <div class="nav-actions">
+    <a class="btn btn-ghost btn-sm" href="/">首页</a>
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">用户中心</a>
+  </div>
+</nav>
+
+<main class="faq-page">
+  <section class="faq-hero">
+    <h1>常见问题</h1>
+  </section>
+
+  <section class="faq-layout">
+    <div class="faq-list" id="faq-list"></div>
+
+    <aside class="faq-side">
+      <div class="faq-contact">
+        <p class="faq-contact-title">还有其他问题？</p>
+        <p class="faq-contact-text">可以直接在页面下方留言，我们会根据问题补充 FAQ。</p>
+        <a class="btn btn-secondary btn-full" href="#faq-message-form">去留言</a>
+      </div>
+    </aside>
+  </section>
+
+  <section class="faq-messages">
+    <div class="faq-section-head">
+      <div>
+        <h2>用户留言</h2>
+        <p>新留言会先做安全判断，通过后直接展示；需要复核的会进入待处理。</p>
+      </div>
+    </div>
+
+    <form class="faq-message-form" id="faq-message-form">
+      <div class="form-field">
+        <label for="faq-author">称呼</label>
+        <input class="input" id="faq-author" type="text" maxlength="40" placeholder="匿名用户">
+      </div>
+      <div class="form-field">
+        <label for="faq-content">问题或建议</label>
+        <textarea class="input faq-textarea" id="faq-content" maxlength="1000" placeholder="写下你想问的问题"></textarea>
+      </div>
+      <div class="faq-form-actions">
+        <span class="faq-form-note" id="faq-char-count">0 / 1000</span>
+        <button class="btn btn-primary" type="submit" id="faq-submit">提交留言</button>
+      </div>
+      <div id="faq-message-status" class="msg"></div>
+    </form>
+
+    <div class="faq-message-list" id="faq-message-list"></div>
+    <button class="btn btn-ghost faq-more" id="faq-more" type="button" style="display:none">展开更多</button>
+  </section>
+</main>
+
+<footer class="site-footer">
+  © 2026 朝夕相伴 · <a href="mailto:support@ai4company.top" style="color:inherit">support@ai4company.top</a>
+</footer>
+
+<script>
+var FAQ_STATE = {
+  messages: [],
+  expanded: false,
+};
+
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, function(ch) {
+    return ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[ch];
+  });
+}
+
+function showMsg(id, text, type) {
+  var el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'msg show ' + (type || 'info');
+}
+
+function clearMsg(id) {
+  var el = document.getElementById(id);
+  el.textContent = '';
+  el.className = 'msg';
+}
+
+function getFaqVoterToken() {
+  var key = 'chaochao_faq_voter';
+  var existing = localStorage.getItem(key);
+  if (existing) return existing;
+  var token = window.crypto && window.crypto.randomUUID
+    ? window.crypto.randomUUID()
+    : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+  localStorage.setItem(key, token);
+  return token;
+}
+
+async function faqFetch(path, opts) {
+  opts = opts || {};
+  var headers = opts.body ? { 'Content-Type': 'application/json' } : {};
+  var request = Object.assign({}, opts, { headers: Object.assign(headers, opts.headers || {}) });
+  var primary = path.indexOf('/web/') === 0 ? '/api' + path : path;
+  var fallback = path;
+  var res = await fetch(primary, request);
+  if (res.status === 404 && primary !== fallback) {
+    res = await fetch(fallback, request);
+  }
+  if (!res.ok) {
+    var body = await res.json().catch(function() { return { detail: res.statusText }; });
+    throw new Error(body.detail || ('请求失败 ' + res.status));
+  }
+  return res.json();
+}
+
+function renderFaqList() {
+  var groups = window.CX_FAQ_GROUPS || [];
+  var html = groups.map(function(group) {
+    var items = group.items.map(function(item, index) {
+      return [
+        '<details class="faq-item"' + (index === 0 ? ' open' : '') + '>',
+        '<summary>' + escapeHtml(item.question) + '</summary>',
+        '<p>' + escapeHtml(item.answer) + '</p>',
+        '</details>'
+      ].join('');
+    }).join('');
+    return [
+      '<section class="faq-group">',
+      '<h2>' + escapeHtml(group.category) + '</h2>',
+      items,
+      '</section>'
+    ].join('');
+  }).join('');
+  document.getElementById('faq-list').innerHTML = html;
+}
+
+function renderMessages() {
+  var list = document.getElementById('faq-message-list');
+  var more = document.getElementById('faq-more');
+  var visible = FAQ_STATE.expanded ? FAQ_STATE.messages : FAQ_STATE.messages.slice(0, 3);
+
+  if (!FAQ_STATE.messages.length) {
+    list.innerHTML = '<div class="faq-empty">暂时还没有公开留言。</div>';
+    more.style.display = 'none';
+    return;
+  }
+
+  list.innerHTML = visible.map(renderMessage).join('');
+  more.style.display = FAQ_STATE.messages.length > 3 ? '' : 'none';
+  more.textContent = FAQ_STATE.expanded ? '收起' : '展开更多';
+}
+
+function renderMessage(message) {
+  var replies = (message.replies || []).map(function(reply) {
+    return [
+      '<article class="faq-reply">',
+      '<div class="faq-message-meta">',
+      '<strong>' + escapeHtml(reply.author_name) + '</strong>',
+      '<span>' + formatTime(reply.published_at || reply.created_at) + '</span>',
+      '</div>',
+      '<p>' + escapeHtml(reply.content) + '</p>',
+      '<button class="faq-link-btn" type="button" onclick="likeMessage(\'' + escapeHtml(reply.id) + '\')">赞 ' + Number(reply.like_count || 0) + '</button>',
+      '</article>'
+    ].join('');
+  }).join('');
+
+  return [
+    '<article class="faq-message" id="msg-' + escapeHtml(message.id) + '">',
+    '<div class="faq-message-meta">',
+    '<strong>' + escapeHtml(message.author_name) + '</strong>',
+    '<span>' + formatTime(message.published_at || message.created_at) + '</span>',
+    '</div>',
+    '<p>' + escapeHtml(message.content) + '</p>',
+    '<div class="faq-message-actions">',
+    '<button class="faq-link-btn" type="button" onclick="likeMessage(\'' + escapeHtml(message.id) + '\')">赞 ' + Number(message.like_count || 0) + '</button>',
+    '<button class="faq-link-btn" type="button" onclick="toggleReplyForm(\'' + escapeHtml(message.id) + '\')">回复 ' + Number(message.reply_count || 0) + '</button>',
+    '</div>',
+    '<form class="faq-reply-form" id="reply-form-' + escapeHtml(message.id) + '" onsubmit="submitReply(event, \'' + escapeHtml(message.id) + '\')" style="display:none">',
+    '<input class="input" name="author" maxlength="40" placeholder="称呼">',
+    '<textarea class="input faq-textarea small" name="content" maxlength="1000" placeholder="回复这条留言"></textarea>',
+    '<div class="faq-form-actions">',
+    '<span class="faq-reply-status" id="reply-status-' + escapeHtml(message.id) + '"></span>',
+    '<button class="btn btn-primary btn-sm" type="submit">提交回复</button>',
+    '</div>',
+    '</form>',
+    replies ? '<div class="faq-replies">' + replies + '</div>' : '',
+    '</article>'
+  ].join('');
+}
+
+function formatTime(value) {
+  if (!value) return '';
+  var normalized = String(value).replace(' ', 'T');
+  var date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16);
+  return date.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function toggleReplyForm(id) {
+  var el = document.getElementById('reply-form-' + id);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+async function loadMessages() {
+  try {
+    var data = await faqFetch('/web/faq/messages?limit=50&replies_per_parent=20');
+    FAQ_STATE.messages = data.messages || [];
+    renderMessages();
+  } catch (err) {
+    document.getElementById('faq-message-list').innerHTML = '<div class="faq-empty">留言加载失败，请稍后再试。</div>';
+  }
+}
+
+async function submitMessage(event) {
+  event.preventDefault();
+  clearMsg('faq-message-status');
+  var btn = document.getElementById('faq-submit');
+  var author = document.getElementById('faq-author').value.trim();
+  var content = document.getElementById('faq-content').value.trim();
+  if (!content) {
+    showMsg('faq-message-status', '请先写下问题或建议。', 'err');
+    return;
+  }
+  btn.disabled = true;
+  try {
+    var data = await faqFetch('/web/faq/messages', {
+      method: 'POST',
+      body: JSON.stringify({ author_name: author || null, content: content })
+    });
+    document.getElementById('faq-content').value = '';
+    updateCharCount();
+    if (data.message_status === 'published') {
+      showMsg('faq-message-status', '已发布。', 'ok');
+      await loadMessages();
+    } else {
+      showMsg('faq-message-status', '已提交，当前进入待处理。', 'info');
+    }
+  } catch (err) {
+    showMsg('faq-message-status', err.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function submitReply(event, id) {
+  event.preventDefault();
+  var form = event.target;
+  var statusEl = document.getElementById('reply-status-' + id);
+  var author = form.elements.author.value.trim();
+  var content = form.elements.content.value.trim();
+  statusEl.textContent = '';
+  if (!content) {
+    statusEl.textContent = '请填写回复内容';
+    return;
+  }
+  try {
+    var data = await faqFetch('/web/faq/messages/' + encodeURIComponent(id) + '/replies', {
+      method: 'POST',
+      body: JSON.stringify({ author_name: author || null, content: content })
+    });
+    form.elements.content.value = '';
+    statusEl.textContent = data.message_status === 'published' ? '已发布' : '已提交，待处理';
+    if (data.message_status === 'published') await loadMessages();
+  } catch (err) {
+    statusEl.textContent = err.message;
+  }
+}
+
+async function likeMessage(id) {
+  try {
+    await faqFetch('/web/faq/messages/' + encodeURIComponent(id) + '/like', {
+      method: 'POST',
+      body: JSON.stringify({ voter_token: getFaqVoterToken() })
+    });
+    await loadMessages();
+  } catch (err) {
+    showMsg('faq-message-status', err.message, 'err');
+  }
+}
+
+function updateCharCount() {
+  var value = document.getElementById('faq-content').value || '';
+  document.getElementById('faq-char-count').textContent = value.length + ' / 1000';
+}
+
+document.getElementById('faq-more').addEventListener('click', function() {
+  FAQ_STATE.expanded = !FAQ_STATE.expanded;
+  renderMessages();
+});
+document.getElementById('faq-message-form').addEventListener('submit', submitMessage);
+document.getElementById('faq-content').addEventListener('input', updateCharCount);
+
+renderFaqList();
+loadMessages();
+</script>
+
+</body>
+</html>
