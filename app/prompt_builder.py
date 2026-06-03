@@ -55,11 +55,6 @@ def _truncate(text: str, limit: int, block_name: str) -> str:
 # PromptBuilder
 # ---------------------------------------------------------------------------
 
-_EXECUTION_BIAS = (
-    "请积极、主动地提供帮助，保持回复紧扣话题。"
-    "遇到不清晰的输入时，礼貌地请求澄清，或根据上下文给出合理推断，而非直接拒绝。"
-)
-
 _OUTPUT_DIRECTIVES_FIXED = (
     "【回复格式要求】\n"
     "- 微信纯文本回复，不使用 Markdown 语法（不加 **粗体**、# 标题等）\n"
@@ -82,7 +77,7 @@ _CONTEXT_BLOCK_LIMITS = {
     "SOUL": 3000,
     "IDENTITY": 1500,
     "USER": 2000,
-    "TOOLS": 2000,
+    "TOOLS": 3000,
     "MEMORY": 3000,
 }
 
@@ -125,13 +120,13 @@ class PromptBuilder:
             tool_list = "、".join(tools)
             blocks.append(f"【可用工具】\n你可以调用以下工具：{tool_list}。")
 
-        # Block 2: Execution Bias
-        blocks.append(_EXECUTION_BIAS)
-
-        # Block 3: Safety
+        # Block 2: Safety
         if _SAFETY_TEXT:
             safety = _truncate(_SAFETY_TEXT, _MAX_SAFETY_CHARS, "safety")
             blocks.append(safety)
+
+        # Block 3: Fixed output directives
+        blocks.append(_OUTPUT_DIRECTIVES_FIXED)
 
         # Block 4: Skills
         if skills:
@@ -184,12 +179,9 @@ class PromptBuilder:
         if system_prompt_override and system_prompt_override.strip():
             blocks.append(f"【最高优先级覆盖指令】\n{system_prompt_override}")
 
-        # Block 14: Output Directives
-        directives = _OUTPUT_DIRECTIVES_FIXED
         if style and style.strip():
             style_text = _truncate(style, 500, "style")
-            directives = directives + f"\n- 当前用户偏好的回复风格：{style_text}"
-        blocks.append(directives)
+            blocks.append(f"【回复风格】\n- 当前用户偏好的回复风格：{style_text}")
 
         # Block 15: Runtime
         runtime_parts: List[str] = []

@@ -4404,6 +4404,8 @@ def get_duplicate_reply(*, account_id: str, reply_to_message_id: Optional[str]) 
 
 
 def list_recent_messages(*, session_id: int, limit: int) -> List[Dict[str, str]]:
+    if limit <= 0:
+        return []
     with connect() as conn:
         rows = conn.execute(
             """
@@ -4426,6 +4428,65 @@ def list_recent_messages(*, session_id: int, limit: int) -> List[Dict[str, str]]
             (session_id, _NON_CONTEXT_ASSISTANT_REPLY, limit),
         ).fetchall()
     return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+
+def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dict[str, Any]]:
+    """Return recent context messages across sessions for one isolated account."""
+    if limit <= 0:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT session_id, role, content FROM messages
+            WHERE account_id = ?
+              AND content IS NOT NULL
+              AND content != ''
+              AND NOT (
+                role = 'assistant'
+                AND error IS NOT NULL
+                AND error != ''
+              )
+              AND NOT (
+                role = 'assistant'
+                AND content = ?
+              )
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (account_id, _NON_CONTEXT_ASSISTANT_REPLY, limit),
+        ).fetchall()
+    return [
+        {
+            "session_id": row["session_id"],
+            "role": row["role"],
+            "content": row["content"],
+        }
+        for row in reversed(rows)
+    ]
+
+
+def count_context_messages_for_session(*, session_id: int) -> int:
+    """Count messages from a session that are eligible for LLM context."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count FROM messages
+            WHERE session_id = ?
+              AND content IS NOT NULL
+              AND content != ''
+              AND NOT (
+                role = 'assistant'
+                AND error IS NOT NULL
+                AND error != ''
+              )
+              AND NOT (
+                role = 'assistant'
+                AND content = ?
+              )
+            """,
+            (session_id, _NON_CONTEXT_ASSISTANT_REPLY),
+        ).fetchone()
+    return int(row["count"] if row else 0)
 
 
 def clear_session_messages(*, session_id: int) -> int:

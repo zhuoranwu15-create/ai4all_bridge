@@ -42,6 +42,7 @@ ADMIN_STAFF_TOKEN=
 | Reminder Debug | 通过模拟聊天创建提醒，查看/编辑/取消测试提醒 | `/ui/reminder_debug.html` |
 | Proactive Debug | 触发 scheduler、账号主动检查、account check draft 和内容邀请生成 | `/ui/proactive_debug.html` |
 | Web Search Debug | 查看 `web_search` schema、模拟 tool invocation 和 provider run trace | `/ui/web_search_debug.html` |
+| Prompt Lab Debug | 查看账号 context files、构建完整 LLM messages、编辑后无副作用重放 | `/ui/prompt_debug.html` |
 | Swagger UI | 直接调用 Admin/Debug API | `/docs` |
 
 ### 开发期明文策略
@@ -113,6 +114,8 @@ curl -s "http://localhost:8180/debug/accounts/86f866663cf9-im-bot/prompt-preview
   --url http://127.0.0.1:8180 \
   --account 86f866663cf9-im-bot
 ```
+
+需要编辑 prompt 后对比输出时，使用 `http://localhost:8180/ui/prompt_debug.html`。Prompt Lab 的 replay 只调用 LLM，不写正常消息、不发微信、不更新记忆、不触发工具。
 
 ---
 

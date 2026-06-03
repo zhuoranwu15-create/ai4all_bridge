@@ -236,7 +236,12 @@ def test_turn_injects_content_invitation_response_tools(client, fresh_db):
     tool_names = {t["function"]["name"] for t in mock_llm.call_args.kwargs["tools"]}
     assert "send_content_invitation_titles" in tool_names
     assert "record_content_invitation_feedback" in tool_names
-    assert invitation["id"] in mock_llm.call_args.kwargs["system_prompt"]
+    system_prompt = mock_llm.call_args.kwargs["system_prompt"]
+    assert "## 当前内容邀请" in system_prompt
+    assert invitation["id"] in system_prompt
+    assert "## 当前工具状态" not in system_prompt
+    assert "本轮始终提供提醒工具" not in system_prompt
+    assert "本轮提供网络搜索工具" not in system_prompt
 
 
 def test_admin_overview_lists_content_invitations_redacted(client, fresh_db):

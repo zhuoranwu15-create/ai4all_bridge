@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Prompt Lab Debug</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { min-height: 100vh; }
+    .lab-shell {
+      display: grid;
+      grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .lab-sidebar, .lab-main { display: grid; gap: 12px; }
+    .toolbar-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    select, input, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border: 1px solid #d8dee8;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font: inherit;
+      background: #fff;
+    }
+    textarea {
+      min-height: 180px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .prompt-textarea { min-height: 320px; }
+    .messages-textarea { min-height: 220px; }
+    .context-list, .message-list, .trace-list, .run-list { display: grid; gap: 8px; }
+    .context-item, .message-item, .trace-item, .run-item {
+      border: 1px solid #e1e7f0;
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+    }
+    .context-head, .message-head, .trace-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: #516070;
+    }
+    .context-body, .message-body, .reply-box {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.55;
+      max-height: 240px;
+      overflow: auto;
+      background: #f7f9fc;
+      border-radius: 6px;
+      padding: 8px;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .meta-tile {
+      border: 1px solid #e1e7f0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fff;
+    }
+    .meta-tile span {
+      display: block;
+      color: #687386;
+      font-size: 11px;
+      margin-bottom: 4px;
+    }
+    .meta-tile strong { font-size: 14px; }
+    .field-meter {
+      margin-top: 4px;
+      color: #687386;
+      font-size: 12px;
+      text-align: right;
+    }
+    @media (max-width: 980px) {
+      .lab-shell, .split { grid-template-columns: 1fr; }
+      .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <header class="admin-header">
+    <div>
+      <h1>Prompt Lab Debug</h1>
+      <p class="page-subtitle">DEV ONLY · 构建、编辑并重放本轮发送给 LLM 的 messages。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div class="lab-shell">
+    <aside class="lab-sidebar">
+      <section class="card">
+        <h2>账号</h2>
+        <div class="toolbar-row">
+          <select id="accountSelect"></select>
+          <button onclick="reloadCurrent()">刷新</button>
+        </div>
+        <div id="accountStatus" class="status-msg"></div>
+      </section>
+
+      <section class="card">
+        <h2>Context Files</h2>
+        <div id="contextFiles" class="context-list">请选择账号</div>
+      </section>
+    </aside>
+
+    <main class="lab-main">
+      <section class="card">
+        <div class="card-title-row">
+          <h2>对话</h2>
+          <span id="sessionLabel" class="card-note">—</span>
+        </div>
+        <div class="toolbar-row">
+          <input id="userText" placeholder="输入一条用户消息用于 dry-run build">
+          <button class="primary" onclick="buildPrompt()">Build Prompt</button>
+        </div>
+        <div id="conversation" class="message-list">请选择账号</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>最近 Trace</h2>
+          <span class="card-note">可载入已有 trace 的 messages</span>
+        </div>
+        <div id="traceList" class="trace-list">暂无 trace</div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>LLM Input</h2>
+          <span id="buildStatus" class="card-note">未构建</span>
+        </div>
+        <div class="meta-grid" id="metaGrid"></div>
+        <div class="split">
+          <div>
+            <h3>System Prompt</h3>
+            <textarea id="systemPrompt" class="prompt-textarea"></textarea>
+            <div id="systemPromptLength" class="field-meter">0 chars</div>
+          </div>
+          <div>
+            <h3>Messages JSON</h3>
+            <textarea id="messagesJson" class="messages-textarea"></textarea>
+            <div id="messagesJsonLength" class="field-meter">0 chars</div>
+            <div class="toolbar-row">
+              <button onclick="syncSystemIntoMessages()">同步 system 到 messages</button>
+              <button class="primary" onclick="replayPrompt()">Replay</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>Replay 输出</h2>
+          <span id="replayStatus" class="card-note">—</span>
+        </div>
+        <div id="replyBox" class="reply-box">暂无输出</div>
+      </section>
+    </main>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    var currentAccountId = null;
+    var currentSessionId = null;
+    var currentSourceTraceId = null;
+
+    (async function init() {
+      await loadAdminMe();
+      await loadAccounts();
+      bindLengthMeters();
+    })();
+
+    function bindLengthMeters() {
+      document.getElementById('systemPrompt').addEventListener('input', updateLengthMeters);
+      document.getElementById('messagesJson').addEventListener('input', updateLengthMeters);
+      updateLengthMeters();
+    }
+
+    function updateLengthMeters() {
+      var systemPrompt = document.getElementById('systemPrompt').value || '';
+      var messagesJson = document.getElementById('messagesJson').value || '';
+      document.getElementById('systemPromptLength').textContent = systemPrompt.length + ' chars';
+      document.getElementById('messagesJsonLength').textContent = messagesJson.length + ' chars';
+    }
+
+    async function loadAccounts() {
+      var select = document.getElementById('accountSelect');
+      var data = await apiFetch('/admin/accounts');
+      var accounts = data.accounts || [];
+      var params = new URLSearchParams(location.search);
+      var preferred = params.get('id') || (accounts[0] && accounts[0].id);
+      select.innerHTML = accounts.map(function(a) {
+        return '<option value="' + esc(a.id) + '">' + esc(a.id) + (a.display_name ? ' · ' + esc(a.display_name) : '') + '</option>';
+      }).join('');
+      if (preferred) select.value = preferred;
+      select.onchange = function() {
+        currentAccountId = select.value;
+        reloadCurrent();
+      };
+      currentAccountId = select.value;
+      if (currentAccountId) reloadCurrent();
+    }
+
+    async function reloadCurrent() {
+      if (!currentAccountId) return;
+      document.getElementById('accountStatus').textContent = currentAccountId;
+      await Promise.all([loadContextFiles(), loadConversation()]);
+    }
+
+    async function loadContextFiles() {
+      var el = document.getElementById('contextFiles');
+      try {
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/context-files');
+        el.innerHTML = (data.files || []).map(function(file) {
+          var body = file.content_redacted ? ('已脱敏 · ' + file.chars + ' chars') : file.content;
+          return '<div class="context-item">'
+            + '<div class="context-head"><strong>' + esc(file.filename) + '</strong><span>' + esc(file.chars) + ' chars</span></div>'
+            + '<div class="context-body">' + esc(body || '') + '</div>'
+            + '</div>';
+        }).join('');
+      } catch (e) {
+        el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    async function loadConversation() {
+      var el = document.getElementById('conversation');
+      var traceEl = document.getElementById('traceList');
+      try {
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/conversation');
+        currentSessionId = data.session && data.session.id;
+        document.getElementById('sessionLabel').textContent = currentSessionId ? ('session #' + currentSessionId) : '—';
+        var messages = data.messages || [];
+        el.innerHTML = messages.length ? messages.map(renderMessage).join('') : '<div class="status-msg">暂无消息</div>';
+        var traces = data.traces || [];
+        traceEl.innerHTML = traces.length ? traces.map(renderTrace).join('') : '<div class="status-msg">暂无 trace</div>';
+      } catch (e) {
+        el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+        traceEl.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    function renderMessage(m) {
+      var content = m.content_redacted ? ('已脱敏 · ' + m.content_chars + ' chars') : m.content;
+      return '<div class="message-item">'
+        + '<div class="message-head"><strong>' + esc(m.role || m.direction) + '</strong><span>' + esc(formatDateTime(m.created_at)) + '</span></div>'
+        + '<div class="message-body">' + esc(content || '') + '</div>'
+        + '</div>';
+    }
+
+    function renderTrace(t) {
+      var label = t.trace_id || t.id;
+      var detail = t.reply_redacted ? ('reply ' + (t.reply_chars || 0) + ' chars') : (t.reply || '');
+      return '<div class="trace-item">'
+        + '<div class="trace-head"><strong class="mono">' + esc(label) + '</strong><span>' + esc(t.source || '') + '</span></div>'
+        + '<div class="message-body">' + esc(detail || '') + '</div>'
+        + '<button onclick="loadTrace(\'' + esc(label) + '\')">载入</button>'
+        + '</div>';
+    }
+
+    async function buildPrompt() {
+      var status = document.getElementById('buildStatus');
+      status.textContent = '构建中...';
+      currentSourceTraceId = null;
+      try {
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/build', {
+          method: 'POST',
+          body: JSON.stringify({
+            user_text: document.getElementById('userText').value,
+            session_id: currentSessionId,
+            include_tool_instructions: true,
+          }),
+        });
+        applyBuildResult(data);
+        status.textContent = '已构建';
+      } catch (e) {
+        status.textContent = e.message;
+      }
+    }
+
+    async function loadTrace(traceId) {
+      var status = document.getElementById('buildStatus');
+      status.textContent = '载入 trace...';
+      try {
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/build', {
+          method: 'POST',
+          body: JSON.stringify({ source_trace_id: traceId }),
+        });
+        currentSourceTraceId = traceId;
+        applyBuildResult(data);
+        status.textContent = '已载入 trace';
+      } catch (e) {
+        status.textContent = e.message;
+      }
+    }
+
+    function applyBuildResult(data) {
+      if (data.messages_redacted) {
+        throw new Error('当前账号 prompt/messages 已脱敏；请使用本地明文开关、allowlist 或明文授权。');
+      }
+      var messages = data.messages || [];
+      document.getElementById('systemPrompt').value = data.system_prompt || (messages[0] && messages[0].content) || '';
+      document.getElementById('messagesJson').value = JSON.stringify(messages, null, 2);
+      updateLengthMeters();
+      renderMeta(data.metadata || {});
+    }
+
+    function renderMeta(meta) {
+      var items = [
+        ['messages', meta.messages_count],
+        ['history', meta.history_count],
+        ['context', meta.agent_context && meta.agent_context.total_chars],
+        ['tools', meta.include_tool_instructions],
+        ['onboarding', meta.onboarding_state],
+        ['search', meta.web_search_enabled],
+        ['dry-run', meta.debug_dry_run],
+        ['invitation', meta.active_content_invitation_id || '—'],
+      ];
+      document.getElementById('metaGrid').innerHTML = items.map(function(item) {
+        return '<div class="meta-tile"><span>' + esc(item[0]) + '</span><strong>' + esc(String(item[1] == null ? '—' : item[1])) + '</strong></div>';
+      }).join('');
+    }
+
+    function syncSystemIntoMessages() {
+      var messages = JSON.parse(document.getElementById('messagesJson').value || '[]');
+      if (!messages.length) messages = [{ role: 'system', content: '' }];
+      messages[0].role = 'system';
+      messages[0].content = document.getElementById('systemPrompt').value;
+      document.getElementById('messagesJson').value = JSON.stringify(messages, null, 2);
+      updateLengthMeters();
+    }
+
+    async function replayPrompt() {
+      var status = document.getElementById('replayStatus');
+      var box = document.getElementById('replyBox');
+      status.textContent = '调用中...';
+      try {
+        syncSystemIntoMessages();
+        var messages = JSON.parse(document.getElementById('messagesJson').value || '[]');
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/replay', {
+          method: 'POST',
+          body: JSON.stringify({
+            messages: messages,
+            session_id: currentSessionId,
+            source_trace_id: currentSourceTraceId,
+            reason: 'prompt_lab_debug',
+          }),
+        });
+        status.textContent = data.status + ' · ' + data.latency_ms + 'ms · ' + data.trace_id;
+        box.textContent = data.error || data.reply || '';
+        await loadConversation();
+      } catch (e) {
+        status.textContent = e.message;
+      }
+    }
+  </script>
+</body>
+</html>

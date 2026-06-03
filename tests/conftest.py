@@ -18,7 +18,7 @@ def test_settings(tmp_path):
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_model = "test-model"
-    s.llm_context_messages = 12
+    s.llm_context_messages = 100
     s.llm_default_prompt = "你是测试助手"
     s.llm_max_tool_rounds = 3
     s.debug_trace_account_ids = ""

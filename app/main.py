@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 import uuid
 from datetime import date as date_cls, datetime, timedelta
 from pathlib import Path
@@ -113,7 +114,7 @@ from app.db import (
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.llm import generate_completion
-from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
+from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
 from app.openclaw_gateway import (
     logout_weixin_account,
     send_weixin_text,
@@ -150,14 +151,21 @@ from app.dreaming import (
     summarize_memory_item_for_debug,
 )
 from app.session_lifecycle import run_daily_dreaming_scan
-from app.turn_service import handle_openclaw_turn
+from app.turn_service import build_turn_llm_input, handle_openclaw_turn
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 import shutil
 
 import httpx
 
-from app.user_profiles import ensure_user_profile, read_user_profile, read_agent_context, account_profile_dir
+from app.user_profiles import (
+    CONTEXT_FILE_ORDER,
+    account_profile_dir,
+    context_file_path,
+    ensure_user_profile,
+    read_agent_context,
+    read_user_profile,
+)
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -170,6 +178,7 @@ app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 _LOCAL_DEBUG_UI_ENVS = {"local", "development", "test"}
 _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/onboarding_debug.html",
+    "/ui/prompt_debug.html",
     "/ui/proactive_debug.html",
     "/ui/web_search_debug.html",
 }
@@ -263,6 +272,20 @@ class FAQMessageRequest(BaseModel):
 
 class FAQLikeRequest(BaseModel):
     voter_token: Optional[str] = Field(default=None, max_length=120)
+
+
+class PromptLabBuildRequest(BaseModel):
+    user_text: Optional[str] = Field(default="", max_length=8000)
+    session_id: Optional[int] = None
+    include_tool_instructions: bool = True
+    source_trace_id: Optional[str] = None
+
+
+class PromptLabReplayRequest(BaseModel):
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    session_id: Optional[int] = None
+    source_trace_id: Optional[str] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 def _debug_trace_account_ids() -> set[str]:
@@ -987,6 +1010,63 @@ def _redacted_flag_for_account(account_id: Optional[str]) -> bool:
     return not _can_bypass_redaction_for_account(account_id)
 
 
+def _prompt_lab_session_for_account(
+    *,
+    account_id: str,
+    session_id: Optional[int] = None,
+) -> dict:
+    """Return the selected account session for prompt-lab inspection."""
+    if session_id is not None:
+        session = get_session(session_id=session_id)
+        if session is None or session.get("account_id") != account_id:
+            raise HTTPException(status_code=404, detail="session not found")
+        return session
+    sessions = list_sessions_for_account(account_id=account_id, limit=20)
+    if not sessions:
+        raise HTTPException(status_code=404, detail="session not found")
+    active = [
+        session for session in sessions
+        if session.get("session_key") == ACCOUNT_ACTIVE_SESSION_KEY and session.get("status") == "active"
+    ]
+    return active[0] if active else sessions[0]
+
+
+def _validate_prompt_lab_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """Validate replay messages for side-effect-free completion calls."""
+    if not messages:
+        raise HTTPException(status_code=400, detail="messages is required")
+    cleaned: list[dict[str, str]] = []
+    for index, message in enumerate(messages):
+        role = str((message or {}).get("role") or "").strip()
+        content = str((message or {}).get("content") or "")
+        if role not in {"system", "user", "assistant"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"messages[{index}].role must be system, user, or assistant",
+            )
+        cleaned.append({"role": role, "content": content})
+    if cleaned[0]["role"] != "system":
+        raise HTTPException(status_code=400, detail="messages[0].role must be system")
+    return cleaned
+
+
+def _prompt_lab_messages_for_view(*, account_id: str, messages: list[dict[str, Any]]) -> dict:
+    if _can_bypass_redaction_for_account(account_id):
+        return {
+            "messages": messages,
+            "system_prompt": messages[0]["content"] if messages else "",
+            **_debug_redaction_payload(account_id=account_id),
+        }
+    return {
+        "messages_redacted": True,
+        "messages_count": len(messages),
+        "messages_chars": sum(len(str(message.get("content") or "")) for message in messages),
+        "system_prompt_redacted": True,
+        "system_prompt_chars": len(str(messages[0].get("content") or "")) if messages else 0,
+        "redacted": True,
+    }
+
+
 def _audit_plaintext_access(
     *,
     admin_user: dict,
@@ -1340,6 +1420,188 @@ def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)
         "content_chars": len(content),
         "agent_context": context.metadata(),
         "redacted": True,
+    }
+
+
+@app.get("/debug/prompt-lab/accounts/{account_id}/context-files")
+def debug_prompt_lab_context_files(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    """Return account context files for prompt-lab inspection."""
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    context = read_agent_context(account_id)
+    plaintext = _can_bypass_redaction_for_account(account_id)
+    files = []
+    for filename in CONTEXT_FILE_ORDER:
+        path = context_file_path(account_id, filename)
+        exists = path.exists()
+        content = path.read_text(encoding="utf-8") if exists else ""
+        item = {
+            "filename": filename,
+            "path": str(path),
+            "exists": exists,
+            "chars": len(content),
+        }
+        if plaintext:
+            item["content"] = content
+        else:
+            item["content_redacted"] = True
+        files.append(item)
+    return {
+        "account_id": account_id,
+        "agent_context": context.metadata(),
+        "files": files,
+        **(_debug_redaction_payload(account_id=account_id) if plaintext else {"redacted": True}),
+    }
+
+
+@app.get("/debug/prompt-lab/accounts/{account_id}/conversation")
+def debug_prompt_lab_conversation(
+    account_id: str,
+    session_id: Optional[int] = None,
+    limit: int = 80,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """Return the selected account conversation and recent prompt traces."""
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    session = _prompt_lab_session_for_account(account_id=account_id, session_id=session_id)
+    messages = list_session_messages(session_id=int(session["id"]), limit=limit)
+    traces = list_debug_traces(account_id=account_id, session_id=int(session["id"]), limit=20)
+    return {
+        "account_id": account_id,
+        "session": _session_for_view(session),
+        "messages": [_message_for_view(message, account_id=account_id) for message in messages],
+        "traces": [_trace_for_view(trace) for trace in traces],
+        **(_debug_redaction_payload(account_id=account_id) if _can_bypass_redaction_for_account(account_id) else {"redacted": True}),
+    }
+
+
+@app.post("/debug/prompt-lab/accounts/{account_id}/build")
+def debug_prompt_lab_build(
+    account_id: str,
+    payload: PromptLabBuildRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """Build the full LLM message list for a dry-run prompt-lab turn."""
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if payload.source_trace_id:
+        trace = get_debug_trace(trace_id=payload.source_trace_id)
+        if trace is None or trace.get("account_id") != account_id:
+            raise HTTPException(status_code=404, detail="trace not found")
+        messages = trace.get("messages") or []
+        metadata = trace.get("metadata") or {}
+        if not _can_bypass_redaction_for_account(account_id):
+            metadata = _redact_raw_payload(metadata)
+        return {
+            "account_id": account_id,
+            "source": "trace",
+            "source_trace_id": payload.source_trace_id,
+            "llm_model": trace.get("llm_model"),
+            "metadata": metadata,
+            **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
+        }
+
+    session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
+    profile = get_profile_for_account(account_id=account_id) or {}
+    today = date_cls.today().isoformat()
+    onboarding_state = get_account_onboarding_state(account_id=account_id)
+    llm_input = build_turn_llm_input(
+        account_id=account_id,
+        account=account,
+        session=session,
+        profile=profile,
+        text=payload.user_text or "",
+        today=today,
+        onboarding_state=onboarding_state,
+        onboarding_active=is_onboarding_active(onboarding_state),
+        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        include_tool_instructions=payload.include_tool_instructions,
+        debug_dry_run=True,
+    )
+    messages = llm_input["messages"]
+    return {
+        "account_id": account_id,
+        "source": "build",
+        "session": _session_for_view(session),
+        "today": today,
+        "llm_model": settings.llm_model,
+        "metadata": llm_input["metadata"],
+        **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
+    }
+
+
+@app.post("/debug/prompt-lab/accounts/{account_id}/replay")
+def debug_prompt_lab_replay(
+    account_id: str,
+    payload: PromptLabReplayRequest,
+    admin_user: dict = Depends(get_admin_user),
+) -> dict:
+    """Replay edited prompt-lab messages without writing normal chat state."""
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    grant = None
+    if not _can_bypass_redaction_for_account(account_id):
+        grant = _require_plaintext_access(
+            admin_user=admin_user,
+            account_id=account_id,
+            resource_type="debug_trace",
+        )
+    session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
+    messages = _validate_prompt_lab_messages(payload.messages)
+    started = time.monotonic()
+    reply = None
+    error = None
+    try:
+        reply = generate_completion(messages)
+    except Exception as err:
+        logger.exception("prompt lab replay failed account=%s error=%s", account_id, err)
+        error = str(err)
+    latency_ms = int((time.monotonic() - started) * 1000)
+    trace_id = f"prompt-lab-{uuid.uuid4()}"
+    insert_debug_trace(
+        trace_id=trace_id,
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id=None,
+        source="prompt_lab",
+        llm_model=settings.llm_model,
+        system_prompt=messages[0]["content"],
+        messages=messages,
+        reply=reply,
+        metadata={
+            "trace_kind": "prompt_lab_replay",
+            "source_trace_id": payload.source_trace_id,
+            "admin_user_id": admin_user.get("id"),
+            "reason": payload.reason,
+            "side_effects": "llm_only_no_message_no_memory_no_outbound",
+        },
+        latency_ms=latency_ms,
+        error=error,
+    )
+    _audit_plaintext_access(
+        admin_user=admin_user,
+        action="prompt_lab_replay",
+        resource_type="debug_trace",
+        resource_id=trace_id,
+        account_id=account_id,
+        request_path=f"/debug/prompt-lab/accounts/{account_id}/replay",
+        reason=payload.reason or "prompt_lab_replay",
+        grant_id=int(grant["id"]) if grant else None,
+        metadata={"source_trace_id": payload.source_trace_id},
+    )
+    return {
+        "status": "error" if error else "ok",
+        "account_id": account_id,
+        "trace_id": trace_id,
+        "reply": reply,
+        "latency_ms": latency_ms,
+        "error": error,
+        "side_effects": "llm_only_no_message_no_memory_no_outbound",
+        "plaintext": True,
     }
 
 

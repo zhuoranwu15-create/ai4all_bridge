@@ -3,12 +3,13 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
+    count_context_messages_for_session,
     get_account_onboarding_state,
     get_active_content_invitation,
     get_daily_usage,
@@ -17,7 +18,7 @@ from app.db import (
     increment_daily_usage,
     insert_debug_trace,
     insert_message,
-    list_recent_messages,
+    list_recent_messages_for_account,
     record_chat_usage_charge,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,
@@ -104,45 +105,171 @@ def _count_user_name_asks(turn_count: int, state: str) -> int:
 
 def _tool_instructions(
     *,
-    web_search_enabled: bool,
     active_content_invitation: Optional[dict] = None,
 ) -> str:
+    if not active_content_invitation:
+        return ""
+
+    title_count = len(active_content_invitation.get("title_items") or [])
     instructions = [
-        "## 提醒工具使用规则",
+        "## 当前内容邀请",
         "",
-        "- 用户明确要求在未来某个时间收到提醒时，调用 create_reminder。",
-        "- 时间不明确时，不要猜测，告知用户需要补充具体日期和时间。",
-        "- 取消或修改提醒前，先调用 list_reminders 确认提醒存在再操作。",
-        "- 多个提醒且用户描述不精确时，列出让用户选择，不要盲目操作。",
+        f"- 当前存在待回应内容邀请：id={active_content_invitation['id']}，topic={active_content_invitation['topic']}，标题数={title_count}。",
+        "- 本轮提供内容邀请回复工具：send_content_invitation_titles、record_content_invitation_feedback。",
     ]
-    if web_search_enabled:
-        instructions.extend(
-            [
-                "",
-                "## 网络搜索工具使用规则",
-                "",
-                "- 用户询问最新、实时、外部世界事实，或明确要求搜索/查找时，调用 web_search。",
-                "- 搜索后基于结果回答，并在回答里保留关键来源链接。",
-                "- 搜索失败时，说明未能完成实时搜索，不要编造搜索结果。",
-            ]
-        )
-    else:
-        instructions.append("- 不要承诺任何工具之外的功能（如网络搜索、发图片等）。")
-    if active_content_invitation:
-        title_count = len(active_content_invitation.get("title_items") or [])
-        instructions.extend(
-            [
-                "",
-                "## 内容邀请回复工具使用规则",
-                "",
-                f"- 当前存在待回应内容邀请：id={active_content_invitation['id']}，topic={active_content_invitation['topic']}，标题数={title_count}。",
-                "- 用户明确想看上一条邀请内容时，调用 send_content_invitation_titles。",
-                "- 用户拒绝、退订或表达不想看时，调用 record_content_invitation_feedback。",
-                "- 用户表达模糊或转移话题时，不要调用内容邀请工具。",
-                "- 标题列表回复只能包含标题，不要包含 URL、来源链接或长摘要。",
-            ]
-        )
     return "\n".join(instructions)
+
+
+def _history_covers_previous_session(
+    *,
+    current_session_id: int,
+    history_rows: List[Dict[str, Any]],
+) -> bool:
+    """Return True when history fully includes the latest prior session present."""
+    included_by_session: Dict[int, int] = {}
+    for row in history_rows:
+        session_id = row.get("session_id")
+        if session_id is None:
+            continue
+        session_id = int(session_id)
+        if session_id == current_session_id:
+            continue
+        included_by_session[session_id] = included_by_session.get(session_id, 0) + 1
+    if not included_by_session:
+        return False
+
+    previous_session_id = max(included_by_session)
+    total = count_context_messages_for_session(session_id=previous_session_id)
+    return total > 0 and included_by_session[previous_session_id] >= total
+
+
+def build_turn_llm_input(
+    *,
+    account_id: str,
+    account: Dict[str, Any],
+    session: Dict[str, Any],
+    profile: Dict[str, Any],
+    text: str,
+    today: str,
+    onboarding_state: str,
+    onboarding_active: bool,
+    web_search_enabled: bool,
+    force_web_search_enabled: Optional[bool] = None,
+    onboarding_pre_written: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None,
+    include_tool_instructions: bool = True,
+    debug_dry_run: bool = False,
+) -> Dict[str, Any]:
+    """Build the exact LLM input envelope for a chat turn.
+
+    This helper has no persistence side effects: callers that need onboarding
+    pre-writes or message insertion must do that before invoking it.
+    """
+    current_time = now or datetime.now()
+    current_session_id = int(session["id"])
+    history_rows = list_recent_messages_for_account(
+        account_id=account_id,
+        limit=settings.llm_context_messages,
+    )
+    history = [
+        {"role": row["role"], "content": row["content"]}
+        for row in history_rows
+    ]
+    file_profile = read_user_profile(account_id)
+    soul = extract_section(file_profile, "Soul")
+    user_prefs = extract_section(file_profile, "User Preferences")
+    long_term_memory = extract_section(file_profile, "Long-term Memory")
+    agent_context = read_agent_context(
+        account_id,
+        display_name=account.get("display_name"),
+    )
+    suppress_carryover = _history_covers_previous_session(
+        current_session_id=current_session_id,
+        history_rows=history_rows,
+    )
+    carryover_summary = None if suppress_carryover else session.get("carryover_summary")
+
+    metadata: Dict[str, Any] = {
+        "history_count": len(history),
+        "history_cross_session": True,
+        "history_session_count": len({int(row["session_id"]) for row in history_rows if row.get("session_id") is not None}),
+        "soul_chars": len(soul),
+        "user_prefs_chars": len(user_prefs),
+        "long_term_memory_chars": len(long_term_memory),
+        "daily_notes_loaded": False,
+        "daily_notes_chars": 0,
+        "agent_context": agent_context.metadata(),
+        "system_prompt_override": bool(profile.get("system_prompt")),
+        "style": profile.get("style"),
+        "display_name": account.get("display_name"),
+        "onboarding_pre_written": onboarding_pre_written or {},
+        "onboarding_active": onboarding_active,
+        "onboarding_state": onboarding_state,
+        "carryover_summary_included": bool(carryover_summary),
+        "carryover_summary_suppressed_by_history": suppress_carryover,
+    }
+    if debug_dry_run:
+        metadata["debug_dry_run"] = True
+
+    active_content_invitation = None
+    if not onboarding_active and include_tool_instructions:
+        active_content_invitation = get_active_content_invitation(
+            account_id=account_id,
+            now=current_time.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        metadata["active_content_invitation_id"] = (
+            active_content_invitation["id"] if active_content_invitation else None
+        )
+
+    onboarding_ctx = ""
+    if onboarding_active:
+        onboarding_ctx = build_onboarding_prompt_context(
+            state=onboarding_state,
+            user_name=_extract_user_name_from_context(agent_context.blocks),
+            ai_name=_extract_ai_name_from_context(agent_context.blocks),
+            persona=None,
+            user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
+            persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
+        )
+
+    builder = PromptBuilder()
+    system_prompt = builder.build(
+        display_name=account.get("display_name"),
+        soul=soul,
+        user_prefs=user_prefs,
+        long_term_memory=long_term_memory,
+        daily_notes=None,
+        carryover_summary=carryover_summary,
+        system_prompt_override=profile.get("system_prompt"),
+        style=profile.get("style"),
+        agent_context=agent_context.blocks,
+        onboarding_context=onboarding_ctx,
+        today=today,
+        model_name=settings.llm_model,
+        tool_instructions=(
+            None if onboarding_active or not include_tool_instructions else _tool_instructions(
+                active_content_invitation=active_content_invitation,
+            )
+        ),
+    )
+    messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    messages.extend(history)
+    if debug_dry_run and text.strip():
+        messages.append({"role": "user", "content": text.strip()})
+        metadata["dry_run_user_text_included"] = True
+    metadata["messages_count"] = len(messages)
+    metadata["include_tool_instructions"] = bool(include_tool_instructions and not onboarding_active)
+    metadata["web_search_enabled"] = web_search_enabled
+    metadata["web_search_forced"] = force_web_search_enabled is not None
+
+    return {
+        "history": history,
+        "system_prompt": system_prompt,
+        "messages": messages,
+        "metadata": metadata,
+        "active_content_invitation": active_content_invitation,
+        "agent_context": agent_context,
+    }
 
 
 async def _advance_onboarding_state_async(
@@ -455,15 +582,7 @@ def handle_openclaw_turn(
         )
     else:
         try:
-            history = list_recent_messages(
-                session_id=session["id"],
-                limit=settings.llm_context_messages,
-            )
             profile = session_state.get("profile") or {}
-            file_profile = read_user_profile(account_id)
-            soul = extract_section(file_profile, "Soul")
-            user_prefs = extract_section(file_profile, "User Preferences")
-            long_term_memory = extract_section(file_profile, "Long-term Memory")
             agent_context = read_agent_context(
                 account_id,
                 display_name=account.get("display_name"),
@@ -488,63 +607,25 @@ def handle_openclaw_turn(
                             account_id,
                             display_name=account.get("display_name"),
                         )
-            debug_metadata.update(
-                {
-                    "history_count": len(history),
-                    "soul_chars": len(soul),
-                    "user_prefs_chars": len(user_prefs),
-                    "long_term_memory_chars": len(long_term_memory),
-                    "daily_notes_loaded": False,
-                    "daily_notes_chars": 0,
-                    "agent_context": agent_context.metadata(),
-                    "system_prompt_override": bool(profile.get("system_prompt")),
-                    "style": profile.get("style"),
-                    "display_name": account.get("display_name"),
-                    "onboarding_pre_written": onboarding_pre_written,
-                }
-            )
-            active_content_invitation = None
-            if not onboarding_active:
-                active_content_invitation = get_active_content_invitation(
-                    account_id=account_id,
-                    now=now.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
-                )
-                debug_metadata["active_content_invitation_id"] = (
-                    active_content_invitation["id"] if active_content_invitation else None
-                )
-            onboarding_ctx = ""
-            if onboarding_active:
-                onboarding_ctx = build_onboarding_prompt_context(
-                    state=onboarding_state,
-                    user_name=_extract_user_name_from_context(agent_context.blocks),
-                    ai_name=_extract_ai_name_from_context(agent_context.blocks),
-                    persona=None,
-                    user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
-                    persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
-                )
-            builder = PromptBuilder()
-            system_prompt = builder.build(
-                display_name=account.get("display_name"),
-                soul=soul,
-                user_prefs=user_prefs,
-                long_term_memory=long_term_memory,
-                daily_notes=None,
-                carryover_summary=session.get("carryover_summary"),
-                system_prompt_override=profile.get("system_prompt"),
-                style=profile.get("style"),
-                agent_context=agent_context.blocks,
-                onboarding_context=onboarding_ctx,
+            llm_input = build_turn_llm_input(
+                account_id=account_id,
+                account=account,
+                session=session,
+                profile=profile,
+                text=text,
                 today=today,
-                model_name=settings.llm_model,
-                tool_instructions=(
-                    None if onboarding_active else _tool_instructions(
-                        web_search_enabled=web_search_enabled_for_turn,
-                        active_content_invitation=active_content_invitation,
-                    )
-                ),
+                onboarding_state=onboarding_state,
+                onboarding_active=onboarding_active,
+                onboarding_pre_written=onboarding_pre_written,
+                web_search_enabled=web_search_enabled_for_turn,
+                force_web_search_enabled=force_web_search_enabled,
+                now=now,
             )
-            llm_messages = [{"role": "system", "content": system_prompt}]
-            llm_messages.extend(history)
+            history = llm_input["history"]
+            system_prompt = llm_input["system_prompt"]
+            llm_messages = llm_input["messages"]
+            active_content_invitation = llm_input["active_content_invitation"]
+            debug_metadata.update(llm_input["metadata"])
 
             ctx = TurnContext(
                 account_id=account_id,

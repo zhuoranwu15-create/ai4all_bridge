@@ -56,6 +56,8 @@ def test_agent_context_user_files_created_from_legacy_profile(tmp_path):
         # System blocks are populated from data/system/
         assert context.blocks["AGENTS"] != ""
         assert context.blocks["TOOLS"] != ""
+        assert "web_search" in context.blocks["TOOLS"]
+        assert "如网络搜索" not in context.blocks["TOOLS"]
 
 
 def test_agent_context_does_not_overwrite_existing_user_files(tmp_path):
@@ -139,3 +141,34 @@ def test_context_file_path_rejects_account_level_heartbeat(tmp_path):
             assert "unsupported context file" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+
+def test_legacy_default_tools_file_is_upgraded(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import ensure_system_context_files
+
+        system_dir = tmp_path / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        tools_path = system_dir / "TOOLS.md"
+        tools_path.write_text(
+            """# TOOLS
+
+- 你可以调用以下工具帮助用户管理提醒：
+  - **create_reminder**：创建提醒（用户明确了时间和内容时调用）
+  - **list_reminders**：列出用户当前所有待执行的提醒
+  - **cancel_reminder**：取消一个已有的提醒
+  - **update_reminder**：修改提醒的时间或内容
+- 时间不明确时，先向用户确认具体日期和时间，再调用工具。
+- 提醒只能发到**当前对话**——不要承诺发给其他联系人或通过其他渠道通知。
+- 不要承诺工具之外的能力（如网络搜索、发图片、联系其他人等）。
+""",
+            encoding="utf-8",
+        )
+
+        created = ensure_system_context_files()
+
+        updated = tools_path.read_text(encoding="utf-8")
+        assert created["TOOLS.md"] is False
+        assert "web_search" in updated
+        assert "如网络搜索" not in updated

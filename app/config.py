@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = 1
     llm_max_tool_rounds: int = 3
     llm_force_ipv4: bool = True
-    llm_context_messages: int = 12
+    llm_context_messages: int = 100
     llm_default_prompt: str = (
         "你是 AI4ALL 的个人 AI 陪伴与生活助理。"
         "你要自然、温和、简洁地回应用户，优先提供情绪陪伴、日常建议和生活协助。"

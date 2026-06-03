@@ -183,6 +183,9 @@ def test_max_turn_rotation_carries_previous_context_into_next_prompt(client, tes
     assert "第一轮上下文" in active["carryover_summary"]
     assert "第一轮回复" in active["carryover_summary"]
 
-    second_prompt = mock_generate.call_args_list[1].kwargs["system_prompt"]
-    assert "【会话延续摘要】" in second_prompt
-    assert "第一轮上下文" in second_prompt
+    second_call = mock_generate.call_args_list[1].kwargs
+    assert "【会话延续摘要】" not in second_call["system_prompt"]
+    history_text = "\n".join(item["content"] for item in second_call["history"])
+    assert "第一轮上下文" in history_text
+    assert "第一轮回复" in history_text
+    assert "第二轮继续" in history_text

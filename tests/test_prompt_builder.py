@@ -63,9 +63,14 @@ class TestPromptBuilderBasicBuild:
         assert isinstance(out, str)
 
     def test_empty_build_non_empty(self):
-        """Even with all None, execution bias + safety + output directives should appear."""
+        """Even with all None, safety + output directives should appear."""
         out = self.pb.build()
         assert len(out) > 0
+
+    def test_execution_bias_not_hardcoded_without_agent_context(self):
+        out = self.pb.build()
+        assert "请积极、主动地提供帮助" not in out
+        assert "遇到不清晰的输入时" not in out
 
     def test_all_params_present(self):
         out = self.pb.build(
@@ -160,6 +165,15 @@ class TestPromptBuilderBasicBuild:
         assert "旧偏好" not in out
         assert "旧记忆" not in out
 
+    def test_default_agents_context_contains_execution_bias(self):
+        from app.user_profiles import _default_system_templates
+
+        agents = _default_system_templates()["AGENTS.md"]
+        out = self.pb.build(agent_context={"AGENTS": agents})
+        assert "### AGENTS.md" in out
+        assert "请积极、主动地提供帮助" in out
+        assert "遇到不清晰的输入时" in out
+
 
 class TestPromptBuilderTruncation:
     def setup_method(self):
@@ -204,6 +218,14 @@ class TestPromptBuilderTruncation:
         long_user = "U" * 2001
         out = self.pb.build(agent_context={"USER": long_user})
         assert "...[已截断]" in out
+
+    def test_default_tools_context_not_truncated(self):
+        from app.user_profiles import _default_system_templates
+
+        tools = _default_system_templates()["TOOLS.md"]
+        out = self.pb.build(agent_context={"TOOLS": tools})
+        assert "web_search" in out
+        assert "...[已截断]" not in out
 
 
 class TestPromptBuilderSkips:
@@ -285,6 +307,14 @@ class TestPromptBuilderOutputDirectives:
     def test_style_injected_into_output_directives(self):
         out = self.pb.build(style="正式严肃")
         assert "正式严肃" in out
+
+    def test_fixed_output_directives_before_project_context(self):
+        out = self.pb.build(
+            agent_context={
+                "SOUL": "# SOUL\n温和陪伴",
+            }
+        )
+        assert out.index("【回复格式要求】") < out.index("【Project Context】")
 
     def test_style_none_no_error(self):
         out = self.pb.build(style=None)
