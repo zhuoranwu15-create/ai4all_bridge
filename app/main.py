@@ -488,13 +488,14 @@ async def _wait_for_binding_intent(binding_intent_id: str) -> None:
         return
     _complete_binding_intent_from_wait_result(latest, result)
 
-    # After successful binding, schedule a 5-second proactive onboarding welcome.
+    # After successful binding: send activation self-message + schedule onboarding welcome.
     latest_after = get_binding_intent(binding_intent_id=binding_intent_id)
     if latest_after and latest_after.get("status") == "completed":
         account_id = latest_after["account_id"]
         channel = latest_after["channel"]
         channel_account_id = latest_after.get("channel_account_id")
         session_key = latest_after.get("openclaw_login_session_key")
+
         loop = asyncio.get_event_loop()
         loop.call_later(
             5.0,

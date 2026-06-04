@@ -56,10 +56,14 @@
           <button onclick="refreshBinding()" id="btn-refresh" disabled>刷新状态</button>
           <span id="st-binding" class="status-msg"></span>
         </div>
+        <div id="binding-success-banner" class="binding-success-banner" style="display:none">
+          ✅ 微信扫码连接成功！请现在用微信给 AI 发一条消息，激活对话。
+        </div>
         <div id="binding-result" class="binding-result" style="display:none">
           <div id="qr-panel" class="qr-panel" style="display:none">
             <img id="binding-qr" class="qr-image" alt="微信扫码绑定二维码">
             <div class="qr-caption" id="qr-caption">请用要接入 AI4ALL 的微信扫码。</div>
+            <div class="qr-hint">手机端打开？长按上方二维码 → 选择「识别图中二维码」完成连接。</div>
           </div>
           <div class="binding-grid">
             <div>
@@ -125,6 +129,7 @@
       pollTimer: null,
       verifiedToken: null,
       resendTimer: null,
+      prevBindingStatus: null,
     };
 
     var terminalBindingStatuses = {
@@ -356,9 +361,14 @@
       if (!options.silent) setStatus('st-binding', '刷新中…');
       try {
         var data = await webFetch('/web/binding-intents/' + encodeURIComponent(state.bindingIntent.id));
+        var prev = state.prevBindingStatus;
         state.bindingIntent = data.binding_intent;
+        state.prevBindingStatus = state.bindingIntent.status;
         renderBinding();
         setStatus('st-binding', bindingStatusText(state.bindingIntent), state.bindingIntent.status === 'failed');
+        if (prev !== 'completed' && state.bindingIntent.status === 'completed') {
+          show('binding-success-banner');
+        }
         if (terminalBindingStatuses[state.bindingIntent.status]) stopPolling();
       } catch (e) {
         setStatus('st-binding', e.message, true);
