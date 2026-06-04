@@ -204,10 +204,25 @@
       }
     }
 
-    window.addEventListener('load', function() {
+    async function loadWebConfig() {
+      return webFetch('/web/config');
+    }
+
+    function initCaptcha(config) {
+      var captcha = config && config.captcha;
+      if (!captcha || !captcha.configured || !captcha.scene_id || !captcha.prefix) {
+        setStatus('st-send-otp', '验证码配置缺失，请联系管理员', true);
+        document.getElementById('btn-send-otp').disabled = true;
+        return;
+      }
+      if (typeof window.initAliyunCaptcha !== 'function') {
+        setStatus('st-send-otp', '验证码 SDK 加载失败，请刷新后重试', true);
+        document.getElementById('btn-send-otp').disabled = true;
+        return;
+      }
       window.initAliyunCaptcha({
-        SceneId: '6ez3x2ne',
-        prefix: '18if8u',
+        SceneId: captcha.scene_id,
+        prefix: captcha.prefix,
         mode: 'popup',
         element: '#captcha-element',
         button: '#btn-send-otp',
@@ -217,6 +232,15 @@
         slideStyle: { width: 300, height: 40 },
         language: 'cn',
       });
+    }
+
+    window.addEventListener('load', function() {
+      loadWebConfig()
+        .then(initCaptcha)
+        .catch(function(e) {
+          setStatus('st-send-otp', '读取验证码配置失败：' + e.message, true);
+          document.getElementById('btn-send-otp').disabled = true;
+        });
     });
 
     // ---------------------------------------------------------------------------

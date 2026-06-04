@@ -85,6 +85,7 @@ from app.db import (
     normalize_phone,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,
+    set_account_debug_flag,
     set_binding_intent_error,
     set_account_status,
     set_verification_verified,
@@ -932,6 +933,9 @@ def _can_bypass_redaction_for_account(account_id: Optional[str]) -> bool:
         return False
     if account_id in _debug_plaintext_account_allowlist():
         return True
+    account = get_account(account_id=account_id)
+    if account and account.get("is_debug"):
+        return True
     if bool(getattr(settings, "admin_debug_plaintext_enabled", False)):
         return _is_non_production_env()
     return False
@@ -1334,6 +1338,7 @@ def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
 def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     """Show the assembled system prompt and per-block sizes for an account."""
     from app.user_profiles import read_user_profile, read_agent_context
+    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
     account = get_account(account_id=account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="account not found")
@@ -1347,6 +1352,24 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         account_id,
         display_name=account.get("display_name"),
     )
+    onboarding_state = get_account_onboarding_state(account_id=account_id)
+    onboarding_context = ""
+    if is_onboarding_active(onboarding_state):
+        import re as _re
+        identity_text = agent_context.blocks.get("IDENTITY", "")
+        user_text = agent_context.blocks.get("USER", "")
+        _m = _re.search(r"AI 名字[:：]\s*(.+)", identity_text)
+        _ai_name = _m.group(1).strip() if _m else None
+        _m = _re.search(r"用户称呼[:：]\s*(.+)", user_text)
+        _user_name = _m.group(1).strip() if _m else None
+        onboarding_context = build_onboarding_prompt_context(
+            state=onboarding_state,
+            user_name=_user_name,
+            ai_name=_ai_name,
+            persona=None,
+            user_name_ask_count=0,
+            persona_ask_count=0,
+        )
     builder = PromptBuilder()
     prompt = builder.build(
         display_name=account.get("display_name"),
@@ -1357,6 +1380,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
         agent_context=agent_context.blocks,
+        onboarding_context=onboarding_context,
         today=today,
         model_name=settings.llm_model,
     )
@@ -1701,6 +1725,34 @@ def debug_set_onboarding_state(
     return {"status": "ok", "account_id": account_id, "onboarding_state": payload.state}
 
 
+class DebugCreateAccountRequest(BaseModel):
+    account_id: Optional[str] = None
+    display_name: Optional[str] = None
+
+
+@app.post("/debug/accounts/create")
+def debug_create_account(
+    payload: DebugCreateAccountRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """Create a bare test account directly (no turn, no LLM call, state stays pending)."""
+    from app.user_profiles import ensure_user_profile, ensure_agent_context_files
+    account_id = (payload.account_id or "").strip() or f"debug-{int(time.time())}"
+    get_or_create_session(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id=f"debug-sender-{account_id}",
+        sender_name=payload.display_name or None,
+        chat_id=f"debug-sender-{account_id}",
+        session_key=f"openclaw-weixin:{account_id}:debug-sender-{account_id}",
+        business_day=date_cls.today().isoformat(),
+    )
+    ensure_user_profile(account_id)
+    ensure_agent_context_files(account_id, display_name=payload.display_name or None)
+    set_account_debug_flag(account_id=account_id, is_debug=True)
+    return {"account_id": account_id, "status": "created", "onboarding_state": "pending", "is_debug": True}
+
+
 class OnboardingResetRequest(BaseModel):
     clear_context_files: bool = True
 
@@ -1750,6 +1802,16 @@ def debug_reset_onboarding(
         "cleared_files": cleared,
         "cleared_messages": cleared_messages,
     }
+
+
+@app.post("/debug/accounts/{account_id}/mark-debug")
+def debug_mark_account_as_debug(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    """Mark an existing account as a debug account so its prompt is never redacted."""
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    set_account_debug_flag(account_id=account_id, is_debug=True)
+    return {"status": "ok", "account_id": account_id, "is_debug": True}
 
 
 @app.post("/debug/sessions/{session_id}/profile")
@@ -2348,6 +2410,21 @@ def _create_faq_message_from_payload(
         "message": _faq_message_for_public(message) if message["status"] == "published" else {
             "id": message["id"],
             "status": message["status"],
+        },
+    }
+
+
+@app.get("/web/config")
+def web_config() -> dict:
+    """Return public frontend configuration; never include server secrets."""
+    captcha_scene_id = str(getattr(settings, "aliyun_captcha_scene_id", "") or "").strip()
+    captcha_prefix = str(getattr(settings, "aliyun_captcha_prefix", "") or "").strip()
+    return {
+        "captcha": {
+            "provider": "aliyun",
+            "scene_id": captcha_scene_id,
+            "prefix": captcha_prefix,
+            "configured": bool(captcha_scene_id and captcha_prefix),
         },
     }
 

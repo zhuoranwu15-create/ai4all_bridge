@@ -101,7 +101,7 @@ class Settings(BaseSettings):
 
     # Aliyun Captcha 2.0
     aliyun_captcha_scene_id: str = ""
-    aliyun_captcha_prefix: str = ""  # frontend only, documented here for reference
+    aliyun_captcha_prefix: str = ""  # public frontend config exposed via /web/config
 
     # OTP TTL (minutes)
     otp_expires_minutes: int = 10

@@ -43,18 +43,18 @@ def test_next_state_from_step2():
     from app.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step2_sent",
-        extracted={"ai_name": "星星", "skip": False},
+        extracted={"ai_name": "星星", "persona": "xiaotaiyang", "skip": False},
         user_name_ask_count=1,
         persona_ask_count=0,
     )
-    assert result == "step3_sent"
+    assert result == "complete"
 
 
 def test_next_state_from_step3_to_complete():
     from app.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step3_sent",
-        extracted={"persona": "chaochao", "skip": False},
+        extracted={"persona": "xiaotaiyang", "skip": False},
         user_name_ask_count=1,
         persona_ask_count=1,
     )
@@ -92,10 +92,10 @@ def test_prompt_context_pending_includes_step1_guidance():
     assert "不要说自己没有这些能力" in ctx
 
 
-def test_prompt_context_step2_includes_user_name():
+def test_prompt_context_step1_includes_user_name_and_combined_question():
     from app.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
-        state="step2_sent",
+        state="step1_sent",
         user_name="小晨",
         ai_name=None,
         persona=None,
@@ -103,43 +103,44 @@ def test_prompt_context_step2_includes_user_name():
         persona_ask_count=0,
     )
     assert "小晨" in ctx
-    assert "AI" in ctx
+    assert "怎么称呼你（AI）" in ctx
+    assert "希望你是什么样的陪伴" in ctx
 
 
-def test_prompt_context_step2_includes_persona_options():
-    # step2_sent = user just replied to AI-name question; LLM should now ask persona
+def test_prompt_context_step1_includes_combined_options():
+    # step1_sent = user just replied to user-name question; LLM should now ask the combined setup question
     from app.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
-        state="step2_sent",
+        state="step1_sent",
         user_name="小晨",
         ai_name=None,
         persona=None,
         user_name_ask_count=1,
         persona_ask_count=0,
     )
-    assert "朝朝" in ctx
-    assert "夕夕" in ctx
+    assert "小太阳" in ctx
+    assert "小月牙" in ctx
     assert "橘" in ctx
+    assert "自己设定" in ctx
+    assert "名字只是建议" in ctx
 
 
-def test_prompt_context_step2_hides_preset_names_when_ai_name_known():
+def test_prompt_context_step2_is_wrapup_for_combined_reply():
     from app.onboarding import build_onboarding_prompt_context
 
     ctx = build_onboarding_prompt_context(
         state="step2_sent",
         user_name="小晨",
-        ai_name="CC",
-        persona=None,
+        ai_name="小满",
+        persona="xiaotaiyang",
         user_name_ask_count=1,
         persona_ask_count=0,
     )
 
-    assert "2. 爱自由、有好奇心，说话直但不失风趣洒脱" in ctx
-    assert "3. 平和有生活味，喜欢用经历和故事开解人" in ctx
-    assert "4. 慵懒傲娇，格难以捉摸的小猫仙" in ctx
-    assert "2. 朝朝" not in ctx
-    assert "3. 夕夕" not in ctx
-    assert "4. 橘" not in ctx
+    assert "小满" in ctx
+    assert "小太阳" in ctx
+    assert "不再追问 onboarding 问题" in ctx
+    assert "1. 先留白" not in ctx
 
 
 def test_prompt_context_step3_is_wrapup():
@@ -154,7 +155,7 @@ def test_prompt_context_step3_is_wrapup():
         persona_ask_count=1,
     )
     assert "onboarding" in ctx
-    assert "朝朝" not in ctx  # persona options not shown at wrap-up stage
+    assert "小太阳" not in ctx  # persona options not shown at wrap-up stage
 
 
 def test_prompt_context_empty_when_complete():
@@ -163,7 +164,7 @@ def test_prompt_context_empty_when_complete():
         state="complete",
         user_name="小晨",
         ai_name="星星",
-        persona="chaochao",
+        persona="xiaotaiyang",
         user_name_ask_count=1,
         persona_ask_count=1,
     )
@@ -190,6 +191,26 @@ def test_extract_ai_name_uses_llm_result():
         )
 
     assert result["ai_name"] == "小A"
+
+
+def test_extract_combined_ai_name_and_modified_preset():
+    import asyncio
+    from app.onboarding import extract_onboarding_info_async
+
+    with patch(
+        "app.llm.generate_completion",
+        return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
+    ):
+        result = asyncio.run(
+            extract_onboarding_info_async(
+                user_text="选 2，但别叫小太阳，叫你小满",
+                current_state="step2_sent",
+            )
+        )
+
+    assert result["ai_name"] == "小满"
+    assert result["ai_name_source"] == "modified_preset"
+    assert result["persona"] == "xiaotaiyang"
 
 
 def test_extract_ai_name_does_not_guess_when_llm_fails():
@@ -286,16 +307,16 @@ def test_apply_soul_preset_blank(tmp_path, fresh_db):
     assert "温柔" in content
 
 
-def test_apply_soul_preset_chaochao(tmp_path, fresh_db):
+def test_apply_soul_preset_xiaotaiyang(tmp_path, fresh_db):
     from app.user_profiles import apply_soul_preset, write_ai_name_to_identity, context_file_path
 
-    account_id = "test-soul-chaochao"
-    write_ai_name_to_identity(account_id, "朝朝")
-    apply_soul_preset(account_id, "chaochao")
+    account_id = "test-soul-xiaotaiyang"
+    write_ai_name_to_identity(account_id, "小太阳")
+    apply_soul_preset(account_id, "xiaotaiyang")
 
     content = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
-    assert "朝朝" in content
-    assert "爱自由" in content
+    assert "小太阳" in content
+    assert "小精灵" in content
 
 
 def test_apply_soul_preset_with_ai_name(tmp_path, fresh_db):
@@ -329,6 +350,77 @@ def test_persona_preset_preserves_existing_ai_name(tmp_path, fresh_db):
     assert "AI 名字：橘" not in identity
     assert "小A" in soul
     assert "慵懒" in soul
+
+
+def test_step2_modified_preset_writes_custom_ai_name_and_preset_soul(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app.user_profiles import context_file_path
+
+    account_id = "test-step2-modified-preset"
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={
+            "ai_name": "小满",
+            "ai_name_source": "modified_preset",
+            "persona": "xiaotaiyang",
+            "skip": False,
+        },
+        current_state="step2_sent",
+    )
+
+    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
+    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    assert written["ai_name"] == "小满"
+    assert written["persona"] == "xiaotaiyang"
+    assert "AI 名字：小满" in identity
+    assert "小满" in soul
+    assert "小精灵" in soul
+
+
+def test_step2_blank_does_not_fix_ai_name(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app.user_profiles import context_file_path
+
+    account_id = "test-step2-blank"
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"persona": "blank", "skip": True},
+        current_state="step2_sent",
+    )
+
+    assert written["persona"] == "blank"
+    identity = context_file_path(account_id, "IDENTITY.md")
+    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    assert not identity.exists()
+    assert "温柔" in soul
+
+
+def test_step2_custom_persona_writes_summary(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app.user_profiles import context_file_path
+
+    account_id = "test-step2-custom"
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={
+            "ai_name": "岚",
+            "ai_name_source": "custom",
+            "persona": "custom",
+            "persona_custom": "慢热但可靠，平时克制，关键时刻会认真陪着用户。",
+            "skip": False,
+        },
+        current_state="step2_sent",
+    )
+
+    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
+    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    assert written["ai_name"] == "岚"
+    assert written["persona"] == "custom"
+    assert "AI 名字：岚" in identity
+    assert "慢热但可靠" in soul
 
 
 # ---------------------------------------------------------------------------
@@ -434,11 +526,11 @@ def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db
     assert get_account_onboarding_state(account_id=session_key) == "step1_sent"
 
 
-def test_ai_name_is_written_before_persona_prompt_and_hides_preset_names(client, fresh_db):
-    from app.db import set_account_onboarding_state
+def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
+    from app.db import get_account_onboarding_state, set_account_onboarding_state
     from app.user_profiles import context_file_path
 
-    session_key = "onboard-ai-name-before-persona"
+    session_key = "onboard-step2-combined"
 
     with patch("app.turn_service.send_weixin_text", return_value={"messageId": "welcome"}):
         client.post(
@@ -452,26 +544,27 @@ def test_ai_name_is_written_before_persona_prompt_and_hides_preset_names(client,
 
     def fake_generate_reply(*, user_text, history, system_prompt):
         captured["system_prompt"] = system_prompt
-        return "好的，CC。你希望我是什么样的性格？"
+        return "好，那我就是小满了。我们慢慢来。"
 
     with patch(
         "app.llm.generate_completion",
-        return_value='{"user_name": null, "ai_name": "CC", "persona": null, "persona_custom": null, "skip": false}',
+        return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
     ), patch("app.turn_service.generate_reply", side_effect=fake_generate_reply):
         res = client.post(
             "/openclaw/turn",
-            json=_turn_payload(session_key, session_key, "CC", "msg-ai-name"),
+            json=_turn_payload(session_key, session_key, "选 2，但别叫小太阳，叫你小满", "msg-ai-setup"),
             headers=BRIDGE_HEADERS,
         )
 
     assert res.status_code == 200
     identity = context_file_path(session_key, "IDENTITY.md").read_text(encoding="utf-8")
-    assert "AI 名字：CC" in identity
-    assert "2. 爱自由、有好奇心，说话直但不失风趣洒脱" in captured["system_prompt"]
-    assert "4. 慵懒傲娇，格难以捉摸的小猫仙" in captured["system_prompt"]
-    assert "2. 朝朝" not in captured["system_prompt"]
-    assert "3. 夕夕" not in captured["system_prompt"]
-    assert "4. 橘" not in captured["system_prompt"]
+    soul = context_file_path(session_key, "SOUL.md").read_text(encoding="utf-8")
+    assert "AI 名字：小满" in identity
+    assert "小满" in soul
+    assert "小精灵" in soul
+    assert "不再追问 onboarding 问题" in captured["system_prompt"]
+    assert "1. 先留白" not in captured["system_prompt"]
+    assert get_account_onboarding_state(account_id=session_key) == "complete"
 
 
 def test_onboarding_complete_state_not_reprocessed(client, fresh_db):

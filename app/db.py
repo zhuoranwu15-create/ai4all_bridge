@@ -928,6 +928,7 @@ def init_db() -> None:
         _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
         _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
+        _ensure_column(conn, "accounts", "is_debug", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "outbound_messages", "product_category", "TEXT")
         _ensure_column(conn, "outbound_messages", "policy_version", "TEXT")
         _ensure_column(conn, "outbound_messages", "policy_reason", "TEXT")
@@ -4723,6 +4724,7 @@ def get_account(*, account_id: str) -> Optional[Dict[str, Any]]:
                 a.notes,
                 a.daily_limit,
                 a.rpm_limit,
+                a.is_debug,
                 a.created_at,
                 a.updated_at,
                 COUNT(DISTINCT s.id) AS session_count,
@@ -4770,6 +4772,14 @@ def update_account(
             ),
         )
     return get_account(account_id=account_id)
+
+
+def set_account_debug_flag(*, account_id: str, is_debug: bool) -> None:
+    with connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET is_debug = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (1 if is_debug else 0, account_id),
+        )
 
 
 def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, Any]]:

@@ -11,6 +11,7 @@
 它承接以下产品需求：
 
 - [陪伴式聊天 PRD](../product/companion_chat_prd.md)
+- [首次聊天 Onboarding PRD](../product/first_chat_onboarding_prd.md)
 - [记忆与上下文 PRD](../product/memory_prd.md)
 - [Web Search 同步工具调用 PRD](../product/search_and_async_tasks_prd.md)
 - [主动消息与提醒 PRD](../product/proactive_prd.md)
@@ -74,6 +75,7 @@ P0 必须交付：
 - 入站用户消息写入 `messages`，并带账号、session、channel binding、message id 和 raw metadata。
 - 消息去重、账号状态检查和基础限流。
 - Intent Gate v0：pending state 优先、高置信一次性提醒、明确后台/长任务请求的不支持说明，其余进入普通聊天与可用工具链路。
+- 首次聊天 onboarding：`pending` / `step1_sent` / `step2_sent` 状态在主 turn 链路内处理，用户回复解析优先使用专用 LLM 结构化提取。
 - Prompt assembly：读取 active session 最近消息、账号 Context Files、`MEMORY.md` 和必要 runtime metadata；P0 明确不读取 daily notes 注入 prompt。
 - 调用 LLM，保存 assistant reply、usage/trace metadata，并通过 Bridge synthetic reply 同步返回微信。
 - after-turn 异步写 daily notes raw material 作为静态事实归档；不做 LLM memory extraction，长期记忆晋升交给 Dreaming 机制；hidden commitment extraction 可以保留为后置异步动作，失败不影响用户回复。
@@ -136,6 +138,7 @@ P0 不对每条消息额外调用一次 LLM 做总分类。
 - P0 provider 未接入时，普通聊天不会声称已执行 Search、后端 ASR 或长工具链。
 - 已发送 outbound assistant message 写入 active session `messages`，用户后续回复能在最近上下文中看到它。
 - after-turn daily notes 写入失败不影响用户已收到的回复。
+- 首次聊天 onboarding 两步流程能完成用户称呼、AI 名字和人设写入；第二步用户回复解析来自 LLM extraction，不依赖关键词硬匹配。
 
 ## 5. OpenClaw 借鉴点
 
@@ -168,6 +171,10 @@ Inbound WeChat Message
 -> identity resolve
 -> account policy / disabled / limits / entitlement precheck
 -> message dedupe
+-> onboarding state gate
+   -> pending: welcome + ask user alias
+   -> step1_sent: LLM extract user alias + ask AI name/persona
+   -> step2_sent: LLM extract AI name/persona + context file writes + complete
 -> intent gate
    -> explicit reminder: rule-based create reminder + confirmation
    -> background request: unsupported/failure explanation
@@ -180,6 +187,7 @@ Inbound WeChat Message
 核心原则：
 
 - 同步路径只做低延迟工作；普通 Web Search 属于低延迟工具调用，长耗时搜索或复杂整理不在当前 turn 硬等，也不转后台补发。
+- onboarding 是主 turn 的高优先级状态 gate；未完成 onboarding 时先处理 onboarding，再进入正常聊天或生成本轮确认回复。
 - Phase 1 不支持用户请求后的后台整理、异步任务补发或长耗时报告生成。
 - after-turn 动作失败不影响用户已收到的回复。
 - 所有步骤必须带 `ai4all_account_id`。
@@ -247,6 +255,124 @@ Phase 1 不采用“每条消息都先额外调用一次 LLM 做总分类”的�
 ## 8. Prompt 与 Context Assembly
 
 Phase 1 prompt 由稳定前缀和动态上下文组成。当前 `PromptBuilder` 已实现结构化拼装，后续可以继续贴近 OpenClaw 的 block 思路，但不要求完全复制 17-block。
+
+### 8.1 首次聊天 Onboarding 编排
+
+首次聊天 onboarding 是主 turn 链路里的状态型子流程，不走主动消息 scheduler，也不作为普通 Intent Gate 规则的一部分。新流程只有两轮问题：
+
+1. `pending`：AI 回应用户第一条消息，欢迎并询问用户称呼；回复成功后推进到 `step1_sent`。
+2. `step1_sent`：先用 LLM 结构化提取用户称呼，再生成第二步回复，合并询问 AI 称呼和 AI 人设；回复成功后推进到 `step2_sent`。
+3. `step2_sent`：先用 LLM 结构化提取 AI 称呼和人设选择 / 自由描述，写入 Context Files 或留白，再生成确认或正常聊天回复；完成后推进到 `complete`。
+
+旧三步流程的 `step3_sent` 只作为兼容状态保留。新实现不再主动写入 `step3_sent`；如果读到存量 `step3_sent`，按旧"等待人设回复"语义完成一次提取后迁移到 `complete`。
+
+#### 8.1.1 LLM 提取优先
+
+用户回复处理不应以编号、关键词、正则或固定话术作为主路径。规则只承担以下职责：
+
+- 根据 `onboarding_state` 决定当前处于哪一步；
+- 校验 LLM 输出 schema、枚举值、置信度、字段长度和安全边界；
+- 把已确认字段写入对应账号的 Context Files；
+- 在 LLM 失败时做保守 fallback：不写入不确定设定，继续当前问题或按跳过处理。
+
+核心解析都由专用 LLM extraction prompt 完成。提取 prompt 必须显式提供：
+
+- 当前 `ai4all_account_id` 和 `onboarding_state`，只用于 trace 和账号隔离，不暴露给用户；
+- 上一轮 AI 实际问了什么，尤其是第二步候选列表；
+- 当前已确认的用户称呼、AI 名字、人设状态；
+- 用户当前原文；
+- 候选项定义：`blank`、`xiaotaiyang`、`xiaoyueya`、`ju`、`custom`；
+- 明确说明候选名字可以被用户修改，选择预设不等于必须沿用候选名。
+
+第二步回复的提取输出建议使用结构化 JSON：
+
+```json
+{
+  "user_name": null,
+  "ai_name": null,
+  "ai_name_source": "none",
+  "persona": null,
+  "persona_custom": null,
+  "skip": false,
+  "needs_confirmation": false
+}
+```
+
+字段口径：
+
+- `user_name`：只在用户明确说"叫我 X / 我是 X / 你可以叫我 X"等表达时填写；不能把普通签名、昵称猜测或聊天内容当称呼。
+- `ai_name`：用户明确给 AI 起名或修改候选名时填写；如果用户选择"小太阳"且未改名，则填"小太阳"。
+- `ai_name_source`：`preset` / `modified_preset` / `custom` / `none`。
+- `persona`：`blank` / `xiaotaiyang` / `xiaoyueya` / `ju` / `custom` / null。
+- 选择预设时填对应枚举；用户说"第二个但叫你小满"时，`persona=xiaotaiyang`、`ai_name=小满`、`ai_name_source=modified_preset`。
+- `persona_custom`：用户自由设定时，由 LLM 压缩成可写入 `SOUL.md` 的简洁中文描述；不得照抄长段用户原文。
+- `skip=true`：用户表达随便、不设、以后再说、先空着等跳过意图。
+- `needs_confirmation=true`：用户明显在设定，但 AI 名字和人设边界存在关键歧义；此时不写入不确定字段，生成轻量确认回复。
+
+置信度建议：
+
+- `confidence >= 0.75` 才允许写入 `USER.md` / `IDENTITY.md` / `SOUL.md`。
+- `0.5 <= confidence < 0.75` 且用户明显在设定时，可以询问一次确认。
+- `< 0.5` 视为未提供，不写入，且不通过关键词补猜。
+
+#### 8.1.2 第二步回复生成 prompt
+
+`step1_sent` 状态下，系统先运行 LLM 提取用户称呼，再把提取结果注入回复生成 prompt。回复生成 prompt 的目标不是"配置表单"，而是自然完成以下动作：
+
+- 如提取到用户称呼，亲切呼应；
+- 如用户还问了其他问题，先简短回应；
+- 合并询问"想怎么称呼我"和"希望我是什么样的陪伴"；
+- 展示候选：
+  1. 先留白，后续相处里慢慢养成；
+  2. 小太阳：明亮主动，能量往外扑，护短又会看脸色；
+  3. 小月牙：安静发微光，平和地表达自己的感悟；
+  4. 橘：慵懒傲娇，性格难以捉摸的小猫仙；
+  5. 自己设定：直接告诉 AI 想怎么称呼、希望 AI 是什么样；
+- 明确说明候选名字只是建议，也可以改。
+
+#### 8.1.3 Context Files 写入
+
+`step2_sent` 状态下，LLM 提取完成后按以下规则写入：
+
+| 提取结果 | 写入 |
+| --- | --- |
+| 用户称呼明确 | `USER.md` 用户称呼 |
+| AI 名字明确 | `IDENTITY.md` AI 对外名字 |
+| `persona.choice=blank` 或 `skip=true` | 不固定 AI 名字 / 人设，保持默认 Soul 和留白状态 |
+| 选择预设且未改名 | `IDENTITY.md` 写候选名，`SOUL.md` 写对应预设模板 |
+| 选择预设且改名 | `IDENTITY.md` 写用户改后的名字，`SOUL.md` 写对应预设模板 |
+| 自由设定 | `IDENTITY.md` 写明确 AI 名字；`SOUL.md` 写 `custom_summary` |
+| 只给 AI 名字或只给人设 | 只写明确字段，另一部分留白 |
+| 不相关回复 | 不写 AI 名字 / 人设，完成 onboarding 并进入普通聊天 |
+
+所有写入必须绑定 `ai4all_account_id`，并复用 `user_profiles.py` 的账号级路径；不能通过微信 `chat_id`、`sender_id` 或 OpenClaw 原生 account 字段决定文件目录。
+
+写入失败不应让模型假装已经记住。推荐处理：
+
+1. 记录 error trace；
+2. 本轮回复采用保守话术，避免承诺已经保存；
+3. `onboarding_state` 不推进或推进时携带失败 metadata，便于下次修复，具体策略由实现阶段按现有事务边界确定。
+
+#### 8.1.4 Trace 与手工测试
+
+onboarding trace 至少记录：
+
+- `onboarding_state_before` / `onboarding_state_after`；
+- extraction prompt 版本；
+- LLM extraction JSON；
+- 通过校验并写入的字段；
+- 被跳过字段和原因；
+- Context Files path metadata；
+- 是否触发 legacy `step3_sent` 兼容路径。
+
+手工测试重点：
+
+- "叫我阿晨"能写入 `USER.md`；
+- "选 2，但别叫小太阳，叫你小满"能写 `IDENTITY.md=小满`，`SOUL.md=xiaotaiyang预设`；
+- "先空着吧"不会固定 AI 名字和人设；
+- "叫你岚，像一个慢热但可靠的朋友"能写入自定义名字和自定义人设摘要；
+- "随便，你先回答我刚才的问题"不应通过关键词硬写人设，且 onboarding 能结束或保守跳过；
+- 不同账号同时 onboarding 时 Context Files 不串线。
 
 建议逻辑分区：
 
@@ -371,6 +497,7 @@ Trace 必须服务两个目标：
 AI4ALL trace 应记录：
 
 - `ai4all_account_id`、session、message id。
+- onboarding state、extraction JSON、Context Files 写入摘要。
 - intent gate 判断结果。
 - prompt block metadata。
 - Context Files metadata。

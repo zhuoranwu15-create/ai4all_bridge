@@ -159,6 +159,32 @@ function saveSession(token) {
   localStorage.setItem('chaochao_session', token);
 }
 
+function initCaptcha(config) {
+  var captcha = config && config.captcha;
+  if (!captcha || !captcha.configured || !captcha.scene_id || !captcha.prefix) {
+    showMsg('msg-send', '验证码配置缺失，请联系管理员', 'err');
+    document.getElementById('btn-send-otp').disabled = true;
+    return;
+  }
+  if (typeof window.initAliyunCaptcha !== 'function') {
+    showMsg('msg-send', '验证码 SDK 加载失败，请刷新后重试', 'err');
+    document.getElementById('btn-send-otp').disabled = true;
+    return;
+  }
+  window.initAliyunCaptcha({
+    SceneId: captcha.scene_id,
+    prefix: captcha.prefix,
+    mode: 'popup',
+    element: '#captcha-element',
+    button: '#btn-send-otp',
+    captchaVerifyCallback: captchaVerifyCallback,
+    onBizResultCallback: onBizResultCallback,
+    getInstance: function(inst) { window._captchaInst = inst; },
+    slideStyle: { width: 300, height: 40 },
+    language: 'cn',
+  });
+}
+
 // ── 启动时检查已有 session ────────────────────
 window.addEventListener('load', function() {
   var token = localStorage.getItem('chaochao_session');
@@ -175,18 +201,12 @@ window.addEventListener('load', function() {
   }
 
   // 初始化阿里云验证码
-  window.initAliyunCaptcha({
-    SceneId: '6ez3x2ne',
-    prefix: '18if8u',
-    mode: 'popup',
-    element: '#captcha-element',
-    button: '#btn-send-otp',
-    captchaVerifyCallback: captchaVerifyCallback,
-    onBizResultCallback: onBizResultCallback,
-    getInstance: function(inst) { window._captchaInst = inst; },
-    slideStyle: { width: 300, height: 40 },
-    language: 'cn',
-  });
+  apiFetch('/web/config')
+    .then(initCaptcha)
+    .catch(function(e) {
+      showMsg('msg-send', '读取验证码配置失败：' + e.message, 'err');
+      document.getElementById('btn-send-otp').disabled = true;
+    });
 });
 
 // ── 验证码 SDK 回调 ──────────────────────────

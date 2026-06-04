@@ -13,7 +13,7 @@ _SOUL_TEMPLATES_DIR = Path(__file__).parent / "soul_templates"
 
 
 def _load_soul_templates() -> dict:
-    presets = ("blank", "chaochao", "xixi", "ju")
+    presets = ("blank", "xiaotaiyang", "xiaoyueya", "ju")
     templates = {}
     for name in presets:
         path = _SOUL_TEMPLATES_DIR / f"{name}.md"

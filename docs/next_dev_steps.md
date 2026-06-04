@@ -49,17 +49,17 @@ OpenClaw QR wait 返回的通道账号可能是 raw 形式，例如 `example@im.
 - Bridge 的 Backend URL 必须和 FastAPI 实际端口一致。
 - `openclaw-weixin` 当前需要 `gatewayMethods: ["web.login.start", "web.login.wait"]` 补丁；维护说明见 `docs/tech_design/openclaw_weixin_gateway_qr_patch.md`。
 - Aliyun SMS/Captcha 在 local/test 可 mock；非 local/test 缺少凭据会失败关闭。
-- 当前 `onboarding.html` 的 Aliyun Captcha `SceneId` / `prefix` 仍需手工和控制台保持一致。
+- Aliyun Captcha 前端配置由 `GET /web/config` 从 `.env` 暴露公开字段，页面不再硬编码 `SceneId` / `prefix`。
 - 当前 Web 页面已去掉显式“创建智能体”步骤，OTP 验证后通过 `/web/register-and-binding-intent` 直接生成二维码。
 
-## Step 0：前端验证码配置收口
+## Step 0：前端验证码配置收口（已完成）
 
-当前 backend 配置已经放在 `.env` / `app.config`，但静态 `onboarding.html` 不能直接读取后端配置，因此 `SceneId` / `prefix` 仍存在多环境漂移风险。
+当前 backend 配置已经放在 `.env` / `app.config`，静态页面通过 `GET /web/config` 读取非敏感前端配置，因此 `SceneId` / `prefix` 不再在 HTML 中硬编码。
 
-建议新增一个只返回公开前端配置的接口或构建期注入：
+已完成：
 
-- `GET /web/config` 返回 `captcha_scene_id`、`captcha_prefix` 等非敏感配置。
-- `onboarding.html` 初始化验证码前先读取配置。
+- `GET /web/config` 返回 Aliyun Captcha 的 `scene_id`、`prefix`、`configured` 等非敏感配置。
+- `onboarding.html` 和 `home.html` 初始化验证码前先读取配置；配置缺失时 fail closed。
 - 确认阿里云 Captcha SDK 使用的接入模式和官方文档一致。
 - 禁止把 AccessKey、短信模板密钥等服务端敏感配置暴露给前端。
 

@@ -156,6 +156,7 @@ def build_turn_llm_input(
     web_search_enabled: bool,
     force_web_search_enabled: Optional[bool] = None,
     onboarding_pre_written: Optional[Dict[str, Any]] = None,
+    onboarding_pre_extracted: Optional[Dict[str, Any]] = None,
     now: Optional[datetime] = None,
     include_tool_instructions: bool = True,
     debug_dry_run: bool = False,
@@ -227,9 +228,10 @@ def build_turn_llm_input(
             state=onboarding_state,
             user_name=_extract_user_name_from_context(agent_context.blocks),
             ai_name=_extract_ai_name_from_context(agent_context.blocks),
-            persona=None,
+            persona=(onboarding_pre_written or {}).get("persona"),
             user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
             persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
+            needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
         )
 
     builder = PromptBuilder()
@@ -270,42 +272,6 @@ def build_turn_llm_input(
         "active_content_invitation": active_content_invitation,
         "agent_context": agent_context,
     }
-
-
-async def _advance_onboarding_state_async(
-    *,
-    account_id: str,
-    user_text: str,
-    current_state: str,
-) -> None:
-    """Background task: extract onboarding info from user reply and advance state."""
-    try:
-        extracted = await extract_onboarding_info_async(
-            user_text=user_text,
-            current_state=current_state,
-        )
-        apply_extracted_onboarding_info(
-            account_id=account_id,
-            extracted=extracted,
-            current_state=current_state,
-        )
-        new_state = next_onboarding_state(
-            current_state=current_state,
-            extracted=extracted,
-            user_name_ask_count=0,
-            persona_ask_count=0,
-        )
-        if new_state != current_state:
-            set_account_onboarding_state(account_id=account_id, state=new_state)
-            logger.info(
-                "onboarding state advanced account=%s %s -> %s",
-                account_id,
-                current_state,
-                new_state,
-            )
-    except Exception as err:
-        logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
-
 
 def _turn_message_raw(
     *,
@@ -588,15 +554,17 @@ def handle_openclaw_turn(
                 display_name=account.get("display_name"),
             )
             onboarding_pre_written = {}
-            if onboarding_active and onboarding_state in {ONBOARDING_STEP1_SENT, ONBOARDING_STEP2_SENT}:
+            if onboarding_active and onboarding_state in {ONBOARDING_STEP1_SENT, ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT}:
                 onboarding_pre_extracted = _extract_onboarding_info_sync(
                     user_text=text,
                     current_state=onboarding_state,
                 )
-                # For step1: pre-write user_name; for step2: pre-write ai_name.
                 # Writing before prompt build ensures the AI sees what was just collected.
-                _pre_write_key = "user_name" if onboarding_state == ONBOARDING_STEP1_SENT else "ai_name"
-                if onboarding_pre_extracted.get(_pre_write_key):
+                _has_onboarding_write = any(
+                    onboarding_pre_extracted.get(key)
+                    for key in ("user_name", "ai_name", "persona", "persona_custom")
+                )
+                if _has_onboarding_write:
                     onboarding_pre_written = apply_extracted_onboarding_info(
                         account_id=account_id,
                         extracted=onboarding_pre_extracted,
@@ -617,6 +585,7 @@ def handle_openclaw_turn(
                 onboarding_state=onboarding_state,
                 onboarding_active=onboarding_active,
                 onboarding_pre_written=onboarding_pre_written,
+                onboarding_pre_extracted=onboarding_pre_extracted,
                 web_search_enabled=web_search_enabled_for_turn,
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
@@ -654,22 +623,6 @@ def handle_openclaw_turn(
                 )
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
-                # Step2 post-response fallback: if ai_name was not pre-written (extraction
-                # failed or returned null), apply rule-based extraction now so IDENTITY.md
-                # gets the correct name even though the persona options already showed presets.
-                if onboarding_state == ONBOARDING_STEP2_SENT and not onboarding_pre_written.get("ai_name"):
-                    from app.onboarding import _rule_extract_name  # noqa: PLC0415
-                    fallback_ai_name = _rule_extract_name(text)
-                    if fallback_ai_name:
-                        try:
-                            from app.user_profiles import write_ai_name_to_identity  # noqa: PLC0415
-                            write_ai_name_to_identity(account_id=account_id, name=fallback_ai_name)
-                            logger.info(
-                                "onboarding ai_name fallback-written account=%s name=%r",
-                                account_id, fallback_ai_name,
-                            )
-                        except Exception as _fe:
-                            logger.error("onboarding ai_name fallback write failed account=%s error=%s", account_id, _fe)
             else:
                 tools = get_default_tools(
                     web_search_enabled=web_search_enabled_for_turn,
@@ -772,7 +725,8 @@ def handle_openclaw_turn(
     if not generation_error and text and text not in _SPECIAL_COMMANDS:
         increment_session_turn_count(session_id=int(session["id"]))
 
-    # Advance onboarding state synchronously after reply (pending->step1_sent needs no extraction)
+    # Advance onboarding state synchronously after reply so onboarding completion
+    # does not depend on the after-turn background loop.
     if not generation_error and normal_reply_generated and onboarding_active:
         if onboarding_state == "pending":
             try:
@@ -780,6 +734,32 @@ def handle_openclaw_turn(
                 logger.info("onboarding state advanced account=%s pending -> step1_sent", account_id)
             except Exception as err:
                 logger.error("onboarding state set failed account=%s error=%s", account_id, err)
+        elif onboarding_pre_extracted is not None:
+            try:
+                # session.turn_count is pre-increment; normal flow reaches step2 at count=2.
+                # Any higher count means we've already held for one confirmation turn.
+                _confirmation_ask_count = (
+                    max(0, int(session.get("turn_count", 0)) - 2)
+                    if onboarding_state == ONBOARDING_STEP2_SENT
+                    else 0
+                )
+                new_state = next_onboarding_state(
+                    current_state=onboarding_state,
+                    extracted=onboarding_pre_extracted,
+                    user_name_ask_count=0,
+                    persona_ask_count=0,
+                    confirmation_ask_count=_confirmation_ask_count,
+                )
+                if new_state != onboarding_state:
+                    set_account_onboarding_state(account_id=account_id, state=new_state)
+                    logger.info(
+                        "onboarding state advanced account=%s %s -> %s",
+                        account_id,
+                        onboarding_state,
+                        new_state,
+                    )
+            except Exception as err:
+                logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
 
     if not generation_error and text and text not in _SPECIAL_COMMANDS and background_loop is not None:
         turns_for_memory = [
@@ -817,36 +797,6 @@ def handle_openclaw_turn(
                     source_reply_message_id=reply_message_id,
                 ),
             )
-
-        if onboarding_active and normal_reply_generated and onboarding_state != "pending":
-            if onboarding_pre_extracted is not None:
-                try:
-                    new_state = next_onboarding_state(
-                        current_state=onboarding_state,
-                        extracted=onboarding_pre_extracted,
-                        user_name_ask_count=0,
-                        persona_ask_count=0,
-                    )
-                    if new_state != onboarding_state:
-                        set_account_onboarding_state(account_id=account_id, state=new_state)
-                        logger.info(
-                            "onboarding state advanced account=%s %s -> %s",
-                            account_id,
-                            onboarding_state,
-                            new_state,
-                        )
-                except Exception as err:
-                    logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
-            else:
-                # steps 1 and 3: extract info and advance state in background
-                background_loop.call_soon_threadsafe(
-                    background_loop.create_task,
-                    _advance_onboarding_state_async(
-                        account_id=account_id,
-                        user_text=text,
-                        current_state=onboarding_state,
-                    ),
-                )
 
     return OpenClawTurnResponse(
         status="ok",

@@ -8,7 +8,7 @@
 
 - 服务器开放 HTTPS 入口，公网只暴露 Web onboarding 和 OpenClaw Bridge 需要访问的 Backend 地址。
 - `/admin/*` 和 `/debug/*` 应通过 nginx IP allowlist、VPN 或内网访问限制保护；应用层 token 不是唯一边界。
-- 生产 `.env` 必须从 `.env.production.example` 复制后在服务器本地填写，不能提交真实密钥。
+- 生产 `.env` 必须从 `.env.example` 复制后在服务器本地填写，不能提交真实密钥。
 - 当前标准数据库仍是 SQLite：`data/ai4all.sqlite3`。单机内测可以继续使用；不要多实例同时写同一个 SQLite 文件。
 - OpenClaw、`openclaw-weixin` 和 Backend 建议部署在同一台机器上，Bridge 通过 `http://127.0.0.1:<port>` 访问 Backend，公网入口由 nginx 转发。
 
@@ -22,7 +22,7 @@ cd /opt/ai4all-weixin-bot
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 
-cp .env.production.example .env
+cp .env.example .env
 ```
 
 如果服务器系统 `python3` 版本过旧，先安装或指定 Python 3.11+ 创建 venv。不要用裸

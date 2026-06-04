@@ -29,6 +29,33 @@ def _get_login_data(phone: str, client):
     return {"Authorization": f"Bearer {res.json()['session_token']}"}, res.json()
 
 
+def test_web_config_returns_public_captcha_settings(client, fresh_db):
+    fresh_db.aliyun_captcha_scene_id = "scene-from-env"
+    fresh_db.aliyun_captcha_prefix = "prefix-from-env"
+
+    res = client.get("/web/config")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["captcha"] == {
+        "provider": "aliyun",
+        "scene_id": "scene-from-env",
+        "prefix": "prefix-from-env",
+        "configured": True,
+    }
+    assert "access_key" not in str(data).lower()
+
+
+def test_web_config_marks_captcha_unconfigured(client):
+    res = client.get("/web/config")
+
+    assert res.status_code == 200
+    data = res.json()
+    assert data["captcha"]["configured"] is False
+    assert data["captcha"]["scene_id"] == ""
+    assert data["captcha"]["prefix"] == ""
+
+
 def test_web_register_creates_and_reuses_platform_user(client):
     first = client.post(
         "/web/register",
