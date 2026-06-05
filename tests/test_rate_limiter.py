@@ -42,15 +42,15 @@ def test_zero_limit_means_no_limit():
         assert rl.check_rpm("acc", 0) is True
 
 
-def test_window_slides_after_60_seconds(monkeypatch):
+def test_window_slides_after_configured_window(monkeypatch):
     import time as time_module
     rl = RateLimiter()
     now = [0.0]
     monkeypatch.setattr(time_module, "monotonic", lambda: now[0])
 
     for _ in range(3):
-        rl.check_rpm("acc", 3)
-    assert rl.check_rpm("acc", 3) is False  # at limit
+        rl.check_rpm("acc", 3, window_seconds=30)
+    assert rl.check_rpm("acc", 3, window_seconds=30) is False  # at limit
 
-    now[0] = 61.0  # advance past the 60s window
-    assert rl.check_rpm("acc", 3) is True  # old entries expired
+    now[0] = 31.0  # advance past the configured 30s window
+    assert rl.check_rpm("acc", 3, window_seconds=30) is True  # old entries expired

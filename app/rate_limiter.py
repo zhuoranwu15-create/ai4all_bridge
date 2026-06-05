@@ -9,11 +9,12 @@ class RateLimiter:
         self._lock = threading.Lock()
         self._windows: Dict[str, deque] = defaultdict(deque)
 
-    def check_rpm(self, account_id: str, limit: int) -> bool:
+    def check_rpm(self, account_id: str, limit: int, *, window_seconds: float = 60.0) -> bool:
         if limit == 0:
             return True
         now = time.monotonic()
-        cutoff = now - 60.0
+        window_seconds = max(float(window_seconds), 0.001)
+        cutoff = now - window_seconds
         with self._lock:
             window = self._windows[account_id]
             while window and window[0] < cutoff:

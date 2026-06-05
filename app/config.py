@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     )
 
     rate_limit_daily: int = 100
-    rate_limit_rpm: int = 5
+    rate_limit_rpm: int = 10
+    rate_limit_rpm_window_seconds: float = 30.0
     rate_limit_daily_message: str = "今天聊得有点多了，我晚些时候再继续陪你。"
     rate_limit_rpm_message: str = "消息来得太快了，稍等一下再发我吧。"
     debug_trace_account_ids: str = ""

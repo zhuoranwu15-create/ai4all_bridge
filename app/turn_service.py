@@ -309,6 +309,47 @@ def _is_debug_trace_account(account_id: str) -> bool:
     return account_id in _debug_trace_account_ids()
 
 
+def _get_nested_text(value: dict, *path: str) -> Optional[str]:
+    current = value
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    if current is None:
+        return None
+    text = str(current).strip()
+    return text or None
+
+
+def _openclaw_id_diagnostics(payload: OpenClawTurnRequest) -> dict:
+    """Return non-sensitive upstream id candidates for turn dedupe debugging."""
+    raw = payload.raw if isinstance(payload.raw, dict) else {}
+    ctx = raw.get("ctx") if isinstance(raw.get("ctx"), dict) else {}
+    event = raw.get("event") if isinstance(raw.get("event"), dict) else {}
+    ai4all_bridge = raw.get("ai4all_bridge") if isinstance(raw.get("ai4all_bridge"), dict) else {}
+    account_candidates = (
+        ai4all_bridge.get("account_candidates")
+        if isinstance(ai4all_bridge.get("account_candidates"), dict)
+        else {}
+    )
+    return {
+        "payload_message_id": payload.message_id,
+        "payload_event_id": payload.event_id,
+        "ctx_run_id": _get_nested_text(raw, "ctx", "runId"),
+        "ctx_session_id": _get_nested_text(raw, "ctx", "sessionId"),
+        "ctx_message_id": _get_nested_text(raw, "ctx", "messageId"),
+        "ctx_turn_id": _get_nested_text(raw, "ctx", "turnId"),
+        "event_id": event.get("id"),
+        "event_message_id": event.get("messageId") or event.get("message_id"),
+        "event_msg_id": event.get("msgId") or event.get("msg_id"),
+        "event_new_msg_id": event.get("newMsgId") or event.get("NewMsgId"),
+        "bridge_session_id": account_candidates.get("sessionId"),
+        "raw_keys": sorted(raw.keys()),
+        "ctx_keys": sorted(ctx.keys()),
+        "event_keys": sorted(event.keys()),
+    }
+
+
 def handle_openclaw_turn(
     payload: OpenClawTurnRequest,
     *,
@@ -316,14 +357,20 @@ def handle_openclaw_turn(
     force_web_search_enabled: Optional[bool] = None,
 ) -> OpenClawTurnResponse:
     started_at = time.monotonic()
+    id_diagnostics = _openclaw_id_diagnostics(payload)
     logger.info(
-        "openclaw_turn received channel=%s session=%s sender=%s type=%s text=%r raw_keys=%s",
+        "openclaw_turn received channel=%s session=%s sender=%s type=%s text=%r "
+        "message_id=%s event_id=%s ctx_run_id=%s ctx_session_id=%s raw_keys=%s",
         payload.channel,
         payload.session_key,
         payload.sender_id,
         payload.message_type,
         payload.text,
-        sorted(payload.raw.keys()),
+        payload.message_id,
+        payload.event_id,
+        id_diagnostics.get("ctx_run_id"),
+        id_diagnostics.get("ctx_session_id"),
+        id_diagnostics.get("raw_keys"),
     )
 
     if payload.chat_type != "private":
@@ -344,6 +391,16 @@ def handle_openclaw_turn(
     )
     sender_id = identity.sender_id
     message_id = payload.message_id or payload.event_id
+    if not message_id:
+        logger.warning(
+            "openclaw_turn missing_message_id account=%s channel=%s channel_account=%s "
+            "session=%s id_diagnostics=%s",
+            account_id,
+            identity.channel,
+            identity.channel_account_id,
+            openclaw_session_key,
+            id_diagnostics,
+        )
 
     now = datetime.now()
     today = now.date().isoformat()
@@ -433,8 +490,25 @@ def handle_openclaw_turn(
     effective_rpm = settings.rate_limit_rpm if account.get("rpm_limit") is None else account["rpm_limit"]
     effective_daily = settings.rate_limit_daily if account.get("daily_limit") is None else account["daily_limit"]
 
-    if effective_rpm > 0 and not rate_limiter.check_rpm(account_id, effective_rpm):
-        logger.info("openclaw_turn rpm_limited account=%s", account_id)
+    effective_rpm_window_seconds = max(
+        float(getattr(settings, "rate_limit_rpm_window_seconds", 60.0) or 60.0),
+        0.001,
+    )
+
+    if effective_rpm > 0 and not rate_limiter.check_rpm(
+        account_id,
+        effective_rpm,
+        window_seconds=effective_rpm_window_seconds,
+    ):
+        logger.info(
+            "openclaw_turn rpm_limited account=%s limit=%s window_seconds=%s message_id=%s "
+            "id_diagnostics=%s",
+            account_id,
+            effective_rpm,
+            effective_rpm_window_seconds,
+            message_id,
+            id_diagnostics,
+        )
         return OpenClawTurnResponse(
             status="rate_limited",
             reply=settings.rate_limit_rpm_message,

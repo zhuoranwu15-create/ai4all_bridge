@@ -1,5 +1,7 @@
 import pytest
 
+from app.schemas import OpenClawTurnRequest
+
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 AI4ALL_ACCOUNT_ID = "sk-test"
 CHANNEL_ACCOUNT_ID = "acc-test"
@@ -33,6 +35,28 @@ def test_daily_rate_limit_blocks_after_limit(client):
     assert data["metadata"]["ai4all_account_id"] == AI4ALL_ACCOUNT_ID
     assert data["metadata"]["channel_account_id"] == CHANNEL_ACCOUNT_ID
     assert data.get("no_reply") is not True  # reply should be sent
+
+
+def test_rpm_rate_limit_uses_configured_window(fresh_db, monkeypatch):
+    from app.rate_limiter import RateLimiter
+    import app.turn_service as turn_service
+
+    fresh_db.rate_limit_daily = 0
+    fresh_db.rate_limit_rpm = 2
+    fresh_db.rate_limit_rpm_window_seconds = 30
+
+    monkeypatch.setattr(turn_service, "settings", fresh_db)
+    monkeypatch.setattr(turn_service, "rate_limiter", RateLimiter())
+    monkeypatch.setattr(turn_service, "generate_reply_with_tools", lambda **_: ("mock reply", None))
+
+    for i in range(2):
+        res = turn_service.handle_openclaw_turn(OpenClawTurnRequest(**make_payload(f"rpm-{i}")))
+        assert res.status != "rate_limited"
+
+    res = turn_service.handle_openclaw_turn(OpenClawTurnRequest(**make_payload("rpm-2")))
+    assert res.status == "rate_limited"
+    assert res.reply == "每分钟上限"
+    assert res.metadata["reason"] == "rpm"
 
 
 def test_rate_limited_message_not_counted(client):

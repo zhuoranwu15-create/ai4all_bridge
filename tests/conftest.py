@@ -28,6 +28,7 @@ def test_settings(tmp_path):
     s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10
+    s.rate_limit_rpm_window_seconds = 30.0
     s.rate_limit_daily_message = "每日上限"
     s.rate_limit_rpm_message = "每分钟上限"
     s.conversation_session_max_turns = 500
