@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import date as date_cls, datetime, timedelta
+from datetime import date as date_cls, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -657,7 +657,7 @@ async def startup_proactive_scheduler() -> None:
         interval_seconds=settings.proactive_scheduler_interval_seconds,
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
-        account_check_interval_seconds=settings.proactive_account_check_interval_seconds,
+        planning_interval_seconds=settings.proactive_planning_interval_seconds,
     )
     logger.info("proactive scheduler started: %s", scheduler.status())
 
@@ -667,8 +667,8 @@ async def startup_dreaming_scheduler() -> None:
     if not getattr(settings, "dreaming_scheduler_enabled", False):
         return
     scheduler = start_dreaming_scheduler(
-        interval_seconds=settings.dreaming_scheduler_interval_seconds,
         batch_size=settings.dreaming_scheduler_batch_size,
+        start_hour=settings.conversation_session_business_day_start_hour,
     )
     logger.info("dreaming scheduler started: %s", scheduler.status())
 
@@ -897,6 +897,38 @@ def _content_invitation_for_overview(invitation: dict) -> dict:
     return item
 
 
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _beijing_display(value: Any, *, stored: str) -> Any:
+    """Return a Beijing (UTC+8) offset-aware ISO string for admin display.
+
+    The DB mixes timezones: SQLite CURRENT_TIMESTAMP columns (created_at/
+    updated_at/message timestamps) are UTC, while app-written fields
+    (scheduled_at/next_scan_at/...) are naive Beijing local. The admin frontend
+    blindly treats naive strings as UTC, which shifts the local fields +8h. We
+    normalize every displayed timestamp to one explicit Beijing offset-aware
+    string so the frontend renders them all consistently.
+
+    stored="utc": value is a naive UTC string. stored="local": value is a naive
+    Beijing-local string.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return value
+    try:
+        dt = datetime.fromisoformat(text.replace(" ", "T"))
+    except ValueError:
+        return value
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(_BEIJING_TZ)
+    elif stored == "utc":
+        dt = dt.replace(tzinfo=timezone.utc).astimezone(_BEIJING_TZ)
+    else:
+        dt = dt.replace(tzinfo=_BEIJING_TZ)
+    return dt.isoformat()
+
+
 def _content_invitation_for_reactivation_admin(invitation: Optional[dict]) -> Optional[dict]:
     if invitation is None:
         return None
@@ -906,10 +938,12 @@ def _content_invitation_for_reactivation_admin(invitation: Optional[dict]) -> Op
         "status": invitation.get("status"),
         "topic": invitation.get("topic"),
         "title_count": len(titles),
-        "scheduled_at": invitation.get("scheduled_at"),
-        "expires_at": invitation.get("expires_at"),
-        "invited_at": invitation.get("invited_at"),
-        "updated_at": invitation.get("updated_at"),
+        # scheduled_at/expires_at/invited_at are app-written Beijing local;
+        # updated_at is a UTC CURRENT_TIMESTAMP column.
+        "scheduled_at": _beijing_display(invitation.get("scheduled_at"), stored="local"),
+        "expires_at": _beijing_display(invitation.get("expires_at"), stored="local"),
+        "invited_at": _beijing_display(invitation.get("invited_at"), stored="local"),
+        "updated_at": _beijing_display(invitation.get("updated_at"), stored="utc"),
     }
 
 
@@ -959,24 +993,31 @@ def _list_reactivation_candidate_admin_items(
         invitation_id = candidate.get("content_invitation_id")
         if invitation_id:
             invitation = get_content_invitation(invitation_id=str(invitation_id))
+        candidate_view = dict(candidate)
+        for field in ("generated_at", "scheduled_at"):
+            if candidate_view.get(field):
+                candidate_view[field] = _beijing_display(candidate_view[field], stored="local")
         items.append(
             {
                 "account": {
                     "id": row["account_id"],
                     "display_name": row["display_name"],
                     "status": row["account_status"],
-                    "updated_at": row["account_updated_at"],
-                    "last_active_at": row["account_last_active_at"],
+                    # accounts.updated_at and MAX(messages.created_at) are UTC columns.
+                    "updated_at": _beijing_display(row["account_updated_at"], stored="utc"),
+                    "last_active_at": _beijing_display(row["account_last_active_at"], stored="utc"),
                 },
                 "proactive_state": {
                     "enabled": bool(row["enabled"]),
-                    "next_scan_at": row["next_scan_at"],
-                    "last_scan_at": row["last_scan_at"],
-                    "last_proactive_sent_at": row["last_proactive_sent_at"],
-                    "cooldown_until": row["cooldown_until"],
-                    "updated_at": row["proactive_state_updated_at"],
+                    # next_scan_at/last_scan_at/last_proactive_sent_at/cooldown_until
+                    # are app-written Beijing local; updated_at is a UTC column.
+                    "next_scan_at": _beijing_display(row["next_scan_at"], stored="local"),
+                    "last_scan_at": _beijing_display(row["last_scan_at"], stored="local"),
+                    "last_proactive_sent_at": _beijing_display(row["last_proactive_sent_at"], stored="local"),
+                    "cooldown_until": _beijing_display(row["cooldown_until"], stored="local"),
+                    "updated_at": _beijing_display(row["proactive_state_updated_at"], stored="utc"),
                 },
-                "reactivation_candidate": candidate,
+                "reactivation_candidate": candidate_view,
                 "content_invitation": _content_invitation_for_reactivation_admin(invitation),
             }
         )
@@ -3178,6 +3219,8 @@ def admin_get_proactive_account_state(
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
+    # Raw accessor (also backs the edit form round-trip); display normalization
+    # happens on the read-only overview surfaces, not here.
     return {
         "account_id": account_id,
         "proactive_state": get_proactive_account_state(account_id=account_id),
@@ -3513,7 +3556,7 @@ def admin_proactive_scheduler_status(_: None = Depends(verify_admin_auth)) -> di
             "interval_seconds": settings.proactive_scheduler_interval_seconds,
             "batch_size": settings.proactive_scheduler_batch_size,
             "bypass_quiet_hours": settings.proactive_scheduler_bypass_quiet_hours,
-            "account_check_interval_seconds": settings.proactive_account_check_interval_seconds,
+            "planning_interval_seconds": settings.proactive_planning_interval_seconds,
         },
         "scheduler": scheduler.status() if scheduler else None,
     }
@@ -3567,7 +3610,7 @@ async def admin_proactive_scheduler_run_once(
     result = await run_proactive_scheduler_once(
         batch_size=limit,
         bypass_quiet_hours=bypass_quiet_hours,
-        account_check_interval_seconds=settings.proactive_account_check_interval_seconds,
+        planning_interval_seconds=settings.proactive_planning_interval_seconds,
     )
     dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
     result["daily_dreaming"] = dreaming
@@ -3580,7 +3623,6 @@ def admin_dreaming_scheduler_status(_: None = Depends(verify_admin_auth)) -> dic
     return {
         "enabled": bool(getattr(settings, "dreaming_scheduler_enabled", False)),
         "configured": {
-            "interval_seconds": settings.dreaming_scheduler_interval_seconds,
             "batch_size": settings.dreaming_scheduler_batch_size,
             "business_day_start_hour": settings.conversation_session_business_day_start_hour,
         },
