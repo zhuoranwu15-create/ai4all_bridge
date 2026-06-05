@@ -265,6 +265,33 @@ function buildVoiceDebugSummary(event, ctx) {
   };
 }
 
+function firstPresentRecordValue(record, keys) {
+  for (const key of keys) {
+    const value = record?.[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function buildIdDiagnostics(event, ctx) {
+  const safeEvent = asRecord(event);
+  const safeCtx = asRecord(ctx);
+  return {
+    ctxRunId: firstPresentRecordValue(safeCtx, ["runId", "run_id"]),
+    ctxSessionId: firstPresentRecordValue(safeCtx, ["sessionId", "session_id"]),
+    ctxMessageId: firstPresentRecordValue(safeCtx, ["messageId", "message_id"]),
+    ctxTurnId: firstPresentRecordValue(safeCtx, ["turnId", "turn_id"]),
+    eventId: firstPresentRecordValue(safeEvent, ["id", "eventId", "event_id"]),
+    eventMessageId: firstPresentRecordValue(safeEvent, ["messageId", "message_id"]),
+    eventMsgId: firstPresentRecordValue(safeEvent, ["msgId", "msg_id", "MsgId"]),
+    eventNewMsgId: firstPresentRecordValue(safeEvent, ["newMsgId", "NewMsgId"]),
+    eventKeys: Object.keys(safeEvent).sort(),
+    ctxKeys: Object.keys(safeCtx).sort(),
+  };
+}
+
 async function postTurn(config, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), config.timeoutMs);
@@ -440,6 +467,7 @@ export default definePluginEntry({
       const channelAccountId = extractAccountId(ctx, provider);
       const shadowTrace = isShadowTraceAccount(config, channelAccountId);
       const voiceDebugSummary = config.voiceDebug ? buildVoiceDebugSummary(event, ctx) : undefined;
+      const idDiagnostics = buildIdDiagnostics(event, ctx);
       const payload = {
         event_id: ctx.runId || undefined,
         message_id: ctx.runId || undefined,
@@ -473,7 +501,9 @@ export default definePluginEntry({
           );
         }
         api.logger.info(
-          `ai4all bridge forwarding turn channel=${payload.channel} session=${payload.session_key} candidates=${JSON.stringify(accountCandidates)}`
+          `ai4all bridge forwarding turn channel=${payload.channel} session=${payload.session_key} ` +
+          `messageId=${payload.message_id || ""} ids=${JSON.stringify(idDiagnostics)} ` +
+          `candidates=${JSON.stringify(accountCandidates)}`
         );
         const result = await postTurn(config, payload);
         if (shadowTrace) {
