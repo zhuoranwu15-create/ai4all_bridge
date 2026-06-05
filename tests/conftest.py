@@ -15,6 +15,10 @@ def test_settings(tmp_path):
     s.admin_debug_plaintext_account_allowlist = ""
     s.feishu_alert_webhook_url = ""
     s.feishu_website_webhook_url = ""
+    s.feishu_error_log_alert_enabled = False
+    s.feishu_error_log_alert_min_interval_seconds = 300
+    s.feishu_error_log_alert_timeout_seconds = 3.0
+    s.feishu_error_log_alert_max_chars = 3500
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_model = "test-model"

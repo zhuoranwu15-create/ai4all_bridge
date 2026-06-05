@@ -169,6 +169,7 @@ from app.user_profiles import (
     read_agent_context,
     read_user_profile,
 )
+from app.alerting import configure_error_log_alerting
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -631,6 +632,7 @@ def _start_openclaw_qr_for_binding(binding_intent: dict) -> dict:
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    configure_error_log_alerting(settings)
 
 
 @app.on_event("startup")

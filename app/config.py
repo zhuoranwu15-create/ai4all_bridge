@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     admin_debug_plaintext_account_allowlist: str = ""
     feishu_alert_webhook_url: str = ""
     feishu_website_webhook_url: str = ""
+    feishu_error_log_alert_enabled: bool = True
+    feishu_error_log_alert_min_interval_seconds: int = 300
+    feishu_error_log_alert_timeout_seconds: float = 3.0
+    feishu_error_log_alert_max_chars: int = 3500
     database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
