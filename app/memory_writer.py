@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
+
+from app.time_utils import beijing_now_str
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -75,7 +77,7 @@ def _format_daily_note_block(
     if not visible:
         return ""
 
-    timestamp = sent_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    timestamp = sent_at or beijing_now_str()
     turn_id = assistant_message_id or user_message_id or timestamp
     metadata: Dict[str, Any] = {
         "session_id": session_id,

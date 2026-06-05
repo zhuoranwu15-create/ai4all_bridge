@@ -157,8 +157,8 @@ def _migrate_from_contacts_schema(conn: sqlite3.Connection) -> None:
             chat_id TEXT,
             sender_name TEXT,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             UNIQUE(account_id, session_key),
             FOREIGN KEY(account_id) REFERENCES accounts(id)
         )
@@ -192,8 +192,8 @@ def _migrate_from_contacts_schema(conn: sqlite3.Connection) -> None:
             style TEXT,
             preferences_json TEXT NOT NULL DEFAULT '{}',
             system_prompt TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             FOREIGN KEY(account_id) REFERENCES accounts(id)
         )
         """
@@ -239,8 +239,8 @@ def init_db() -> None:
                 notes TEXT,
                 onboarding_state TEXT NOT NULL DEFAULT 'pending',
                 onboarding_updated_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE TABLE IF NOT EXISTS platform_users (
@@ -248,8 +248,8 @@ def init_db() -> None:
                 phone TEXT NOT NULL UNIQUE,
                 display_name TEXT,
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE TABLE IF NOT EXISTS subscriptions (
@@ -257,8 +257,8 @@ def init_db() -> None:
                 platform_user_id TEXT NOT NULL,
                 plan TEXT NOT NULL DEFAULT 'free',
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
             );
 
@@ -271,8 +271,8 @@ def init_db() -> None:
                 platform_user_id TEXT NOT NULL,
                 balance_shell_micros INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
             );
@@ -292,7 +292,7 @@ def init_db() -> None:
                 balance_after_shell_micros INTEGER NOT NULL,
                 idempotency_key TEXT NOT NULL UNIQUE,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
@@ -323,7 +323,7 @@ def init_db() -> None:
                 source_id TEXT,
                 idempotency_key TEXT NOT NULL UNIQUE,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
@@ -343,8 +343,8 @@ def init_db() -> None:
                 binding_method TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'active',
                 verified_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(platform_user_id, account_id),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
@@ -367,8 +367,8 @@ def init_db() -> None:
                 expires_at TEXT,
                 completed_at TEXT,
                 error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -396,8 +396,8 @@ def init_db() -> None:
                 summary_model TEXT,
                 summary_prompt_version TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(account_id, session_key),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -409,8 +409,8 @@ def init_db() -> None:
                 style TEXT,
                 preferences_json TEXT NOT NULL DEFAULT '{}',
                 system_prompt TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
 
@@ -427,7 +427,7 @@ def init_db() -> None:
                 raw_json TEXT,
                 latency_ms INTEGER,
                 error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
@@ -444,7 +444,7 @@ def init_db() -> None:
                 account_id TEXT NOT NULL,
                 date TEXT NOT NULL,
                 message_count INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(account_id, date),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -458,8 +458,8 @@ def init_db() -> None:
                 sender_id TEXT,
                 chat_id TEXT,
                 raw_identity_json TEXT NOT NULL DEFAULT '{}',
-                first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(account_id, channel, session_key),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -488,8 +488,8 @@ def init_db() -> None:
                 scheduled_at TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 sent_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
 
@@ -516,8 +516,8 @@ def init_db() -> None:
                 claimed_at TEXT,
                 sent_at TEXT,
                 cancelled_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
             );
@@ -547,8 +547,8 @@ def init_db() -> None:
                 claimed_at TEXT,
                 sent_at TEXT,
                 cancelled_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(session_id) REFERENCES sessions(id),
                 FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
@@ -568,8 +568,8 @@ def init_db() -> None:
                 last_proactive_sent_at TEXT,
                 cooldown_until TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
 
@@ -593,8 +593,8 @@ def init_db() -> None:
                 source_task_id TEXT,
                 policy_reason TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
                 FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
@@ -614,8 +614,8 @@ def init_db() -> None:
                 last_feedback_at TEXT,
                 feedback_count INTEGER NOT NULL DEFAULT 0,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 PRIMARY KEY(account_id, topic),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -641,8 +641,8 @@ def init_db() -> None:
                 actor_id TEXT,
                 started_at TEXT,
                 completed_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(source_session_id) REFERENCES sessions(id)
             );
@@ -673,7 +673,7 @@ def init_db() -> None:
                 skip_reason TEXT,
                 reason TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 applied_at TEXT,
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(dreaming_run_id) REFERENCES dreaming_runs(id),
@@ -697,7 +697,7 @@ def init_db() -> None:
                 after_text TEXT,
                 diff_text TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(memory_item_id) REFERENCES dreaming_memory_items(id)
             );
@@ -722,7 +722,7 @@ def init_db() -> None:
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 latency_ms INTEGER,
                 error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
@@ -745,9 +745,9 @@ def init_db() -> None:
                 result_json TEXT NOT NULL DEFAULT '{}',
                 latency_ms INTEGER,
                 error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 finished_at TEXT,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(session_id) REFERENCES sessions(id)
             );
@@ -768,12 +768,12 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'running',
                 request_json TEXT NOT NULL DEFAULT '{}',
                 response_json TEXT NOT NULL DEFAULT '{}',
-                started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 finished_at TEXT,
                 latency_ms INTEGER,
                 error TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             );
@@ -790,8 +790,8 @@ def init_db() -> None:
                 display_name TEXT,
                 role TEXT NOT NULL DEFAULT 'staff',
                 status TEXT NOT NULL DEFAULT 'active',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE INDEX IF NOT EXISTS ix_admin_users_role_status
@@ -809,7 +809,7 @@ def init_db() -> None:
                 reason TEXT,
                 request_path TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE INDEX IF NOT EXISTS ix_admin_access_events_account_created
@@ -831,8 +831,8 @@ def init_db() -> None:
                 approved_at TEXT,
                 expires_at TEXT,
                 revoked_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_requester_status
@@ -851,7 +851,7 @@ def init_db() -> None:
                 token_expires_at TEXT,
                 token_consumed_at TEXT,
                 expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
@@ -865,8 +865,8 @@ def init_db() -> None:
                 last_error_at TEXT,
                 last_error TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             );
 
             CREATE TABLE IF NOT EXISTS faq_messages (
@@ -882,8 +882,8 @@ def init_db() -> None:
                 reply_count INTEGER NOT NULL DEFAULT 0,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 published_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
             );
 
@@ -897,7 +897,7 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL,
                 voter_key TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(message_id, voter_key),
                 FOREIGN KEY(message_id) REFERENCES faq_messages(id)
             );
@@ -955,8 +955,8 @@ def init_db() -> None:
                 source_task_id TEXT,
                 policy_reason TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(account_id) REFERENCES accounts(id),
                 FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
                 FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
@@ -985,8 +985,8 @@ def init_db() -> None:
                 last_feedback_at TEXT,
                 feedback_count INTEGER NOT NULL DEFAULT 0,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 PRIMARY KEY(account_id, topic),
                 FOREIGN KEY(account_id) REFERENCES accounts(id)
             )
@@ -1033,7 +1033,7 @@ def init_db() -> None:
                 platform_user_id TEXT NOT NULL,
                 token TEXT NOT NULL UNIQUE,
                 expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
             )
             """
@@ -1054,8 +1054,8 @@ def init_db() -> None:
                 last_error_at TEXT,
                 last_error TEXT,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             )
             """
         )
@@ -1074,8 +1074,8 @@ def init_db() -> None:
                 reply_count INTEGER NOT NULL DEFAULT 0,
                 metadata_json TEXT NOT NULL DEFAULT '{}',
                 published_at TEXT,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
             )
             """
@@ -1098,7 +1098,7 @@ def init_db() -> None:
                 id TEXT PRIMARY KEY,
                 message_id TEXT NOT NULL,
                 voter_key TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 UNIQUE(message_id, voter_key),
                 FOREIGN KEY(message_id) REFERENCES faq_messages(id)
             )
@@ -1269,7 +1269,7 @@ def create_faq_message(
         raise ValueError("invalid faq moderation status")
     cleaned_parent_id = _clean_text(parent_id)
     message_id = _new_id("faq")
-    published_at_expr = "CURRENT_TIMESTAMP" if cleaned_status == "published" else "NULL"
+    published_at_expr = "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))" if cleaned_status == "published" else "NULL"
     categories_json = json.dumps(moderation_categories or [], ensure_ascii=False)
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
     with connect() as conn:
@@ -1292,7 +1292,7 @@ def create_faq_message(
                 moderation_reason, moderation_categories_json, metadata_json,
                 published_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {published_at_expr}, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {published_at_expr}, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 message_id,
@@ -1311,7 +1311,7 @@ def create_faq_message(
                 """
                 UPDATE faq_messages
                 SET reply_count = reply_count + 1,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
                 (cleaned_parent_id,),
@@ -1395,7 +1395,7 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
                 """
                 UPDATE faq_messages
                 SET like_count = like_count + 1,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
                 (cleaned_id,),
@@ -1425,7 +1425,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms ELSE NULL END) AS avg_latency_ms,
                 MAX(latency_ms) AS max_latency_ms
             FROM messages
-            WHERE created_at >= datetime('now', ?)
+            WHERE created_at >= datetime('now', '+8 hours', ?)
             """,
             (modifier,),
         ).fetchone()
@@ -1437,7 +1437,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_total,
                 SUM(CASE WHEN status IN ('pending', 'sending') THEN 1 ELSE 0 END) AS pending_total
             FROM outbound_messages
-            WHERE created_at >= datetime('now', ?)
+            WHERE created_at >= datetime('now', '+8 hours', ?)
             """,
             (modifier,),
         ).fetchone()
@@ -1448,7 +1448,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 SUM(CASE WHEN status IN ('completed', 'already_connected') THEN 1 ELSE 0 END) AS success_total,
                 SUM(CASE WHEN status IN ('failed', 'expired', 'cancelled') THEN 1 ELSE 0 END) AS failed_total
             FROM binding_intents
-            WHERE created_at >= datetime('now', ?)
+            WHERE created_at >= datetime('now', '+8 hours', ?)
             """,
             (modifier,),
         ).fetchone()
@@ -1694,8 +1694,8 @@ def create_tool_invocation(
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
-                    CURRENT_TIMESTAMP)
+                    CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE NULL END,
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_account_id,
@@ -1783,8 +1783,8 @@ def update_tool_invocation(
                 result_json = COALESCE(?, result_json),
                 latency_ms = COALESCE(?, latency_ms),
                 error = ?,
-                finished_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE finished_at END,
-                updated_at = CURRENT_TIMESTAMP
+                finished_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE finished_at END,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -1833,8 +1833,8 @@ def create_search_provider_run(
                 error, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                    CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END,
-                    ?, ?, CURRENT_TIMESTAMP)
+                    CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE NULL END,
+                    ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 tool_invocation_id,
@@ -1929,13 +1929,13 @@ def upsert_admin_user(
         conn.execute(
             """
             INSERT INTO admin_users(id, email, display_name, role, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
                 email = COALESCE(excluded.email, admin_users.email),
                 display_name = COALESCE(excluded.display_name, admin_users.display_name),
                 role = excluded.role,
                 status = excluded.status,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (admin_user_id, email, display_name, role, status),
         )
@@ -2078,7 +2078,7 @@ def update_admin_plaintext_grant_status(
                 approved_at = COALESCE(?, approved_at),
                 expires_at = COALESCE(?, expires_at),
                 revoked_at = COALESCE(?, revoked_at),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -2228,8 +2228,8 @@ def create_dreaming_run(
         conn.execute(
             """
             INSERT INTO accounts(id, updated_at)
-            VALUES (?, CURRENT_TIMESTAMP)
-            ON CONFLICT(id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(id) DO UPDATE SET updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id,),
         )
@@ -2240,7 +2240,7 @@ def create_dreaming_run(
                 status, prompt_version, llm_model, input_hash, actor_type, actor_id,
                 started_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 account_id,
@@ -2284,8 +2284,8 @@ def update_dreaming_run(
                 error = ?,
                 token_input = COALESCE(?, token_input),
                 token_output = COALESCE(?, token_output),
-                completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END,
-                updated_at = CURRENT_TIMESTAMP
+                completed_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE completed_at END,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -2440,7 +2440,7 @@ def update_dreaming_memory_item_status(
                 skip_reason = ?,
                 diff_json = COALESCE(?, diff_json),
                 base_text_hash = COALESCE(?, base_text_hash),
-                applied_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE applied_at END
+                applied_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE applied_at END
             WHERE id = ?
             """,
             (
@@ -2648,7 +2648,7 @@ def update_session_summary(
                 carryover_summary = COALESCE(?, carryover_summary),
                 summary_model = COALESCE(?, summary_model),
                 summary_prompt_version = COALESCE(?, summary_prompt_version),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -2682,13 +2682,13 @@ def close_session(
             UPDATE sessions
             SET session_key = COALESCE(?, session_key),
                 status = 'closed',
-                ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+                ended_at = COALESCE(ended_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                 close_reason = COALESCE(close_reason, ?),
                 session_summary = COALESCE(?, session_summary),
                 carryover_summary = COALESCE(?, carryover_summary),
                 summary_model = COALESCE(?, summary_model),
                 summary_prompt_version = COALESCE(?, summary_prompt_version),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -2755,13 +2755,13 @@ def upsert_channel_binding(
                 account_id, channel, session_key, channel_account_id,
                 sender_id, chat_id, raw_identity_json, last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id, channel, session_key) DO UPDATE SET
                 channel_account_id = COALESCE(excluded.channel_account_id, channel_bindings.channel_account_id),
                 sender_id = COALESCE(excluded.sender_id, channel_bindings.sender_id),
                 chat_id = COALESCE(excluded.chat_id, channel_bindings.chat_id),
                 raw_identity_json = excluded.raw_identity_json,
-                last_seen_at = CURRENT_TIMESTAMP
+                last_seen_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (
                 account_id,
@@ -2847,10 +2847,10 @@ def create_or_get_platform_user_by_phone(
         conn.execute(
             """
             INSERT INTO platform_users(id, phone, display_name, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(phone) DO UPDATE SET
                 display_name = COALESCE(excluded.display_name, platform_users.display_name),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (_new_id("user"), normalized_phone, cleaned_display_name),
         )
@@ -2907,7 +2907,7 @@ def upsert_subscription_for_user(
             conn.execute(
                 """
                 UPDATE subscriptions
-                SET plan = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+                SET plan = ?, status = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
                 (cleaned_plan, cleaned_status, subscription_id),
@@ -2917,7 +2917,7 @@ def upsert_subscription_for_user(
             conn.execute(
                 """
                 INSERT INTO subscriptions(id, platform_user_id, plan, status, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                 """,
                 (subscription_id, platform_user_id, cleaned_plan, cleaned_status),
             )
@@ -3013,7 +3013,7 @@ def _ensure_wallet_in_conn(
         INSERT INTO entitlement_wallets(
             id, account_id, platform_user_id, balance_shell_micros, status, updated_at
         )
-        VALUES (?, ?, ?, 0, 'active', CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, 0, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
         ON CONFLICT(account_id) DO NOTHING
         """,
         (_new_id("wallet"), account_id, platform_user_id),
@@ -3099,7 +3099,7 @@ def _apply_wallet_ledger_in_conn(
     conn.execute(
         """
         UPDATE entitlement_wallets
-        SET balance_shell_micros = balance_shell_micros + ?, updated_at = CURRENT_TIMESTAMP
+        SET balance_shell_micros = balance_shell_micros + ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
         WHERE id = ?
         """,
         (int(amount_shell_micros), wallet["id"]),
@@ -3508,7 +3508,7 @@ def create_ai4all_account_for_user(
                 conn.execute(
                     """
                     INSERT INTO accounts(id, channel, display_name, updated_at)
-                    VALUES (?, 'openclaw-weixin', ?, CURRENT_TIMESTAMP)
+                    VALUES (?, 'openclaw-weixin', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                     """,
                     (account_id, cleaned_display_name),
                 )
@@ -3522,7 +3522,7 @@ def create_ai4all_account_for_user(
         conn.execute(
             """
             INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (account_id, cleaned_display_name, cleaned_prompt),
         )
@@ -3531,7 +3531,7 @@ def create_ai4all_account_for_user(
             INSERT INTO account_owner_bindings(
                 platform_user_id, account_id, binding_method, status, updated_at
             )
-            VALUES (?, ?, 'web_onboarding', 'active', CURRENT_TIMESTAMP)
+            VALUES (?, ?, 'web_onboarding', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (platform_user_id, account_id),
         )
@@ -3680,7 +3680,7 @@ def create_binding_intent(
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, manual_login_command, expires_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'created', ?, datetime('now', '+30 minutes'), CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, 'created', ?, datetime('now', '+8 hours', '+30 minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 binding_intent_id,
@@ -3721,8 +3721,8 @@ def update_binding_intent(
                 qr_data_url = ?,
                 raw_result_json = ?,
                 error = ?,
-                completed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE completed_at END,
-                updated_at = CURRENT_TIMESTAMP
+                completed_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE completed_at END,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -3760,7 +3760,7 @@ def set_binding_intent_error(
             SET status = ?,
                 raw_result_json = ?,
                 error = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -3806,9 +3806,9 @@ def get_binding_intent(
             conn.execute(
                 """
                 UPDATE binding_intents
-                SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+                SET status = 'expired', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ? AND status = 'qr_created'
-                  AND expires_at < datetime('now')
+                  AND expires_at < datetime('now', '+8 hours')
                 """,
                 (binding_intent_id,),
             )
@@ -3993,10 +3993,10 @@ def get_or_create_session(
         conn.execute(
             """
             INSERT INTO accounts(id, channel, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
                 channel = excluded.channel,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, channel),
         )
@@ -4010,14 +4010,14 @@ def get_or_create_session(
                 account_id, session_key, sender_id, chat_id, sender_name,
                 business_day, carryover_summary, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id, session_key) DO UPDATE SET
                 sender_id = COALESCE(excluded.sender_id, sessions.sender_id),
                 chat_id = COALESCE(excluded.chat_id, sessions.chat_id),
                 sender_name = COALESCE(excluded.sender_name, sessions.sender_name),
                 business_day = COALESCE(sessions.business_day, excluded.business_day),
                 carryover_summary = COALESCE(sessions.carryover_summary, excluded.carryover_summary),
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (
                 account_id,
@@ -4038,9 +4038,9 @@ def get_or_create_session(
         conn.execute(
             """
             INSERT INTO profiles(account_id, updated_at)
-            VALUES (?, CURRENT_TIMESTAMP)
+            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id) DO UPDATE SET
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id,),
         )
@@ -4080,10 +4080,10 @@ def get_or_create_account_active_session(
         conn.execute(
             """
             INSERT INTO accounts(id, channel, updated_at)
-            VALUES (?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
                 channel = excluded.channel,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, channel),
         )
@@ -4094,9 +4094,9 @@ def get_or_create_account_active_session(
         conn.execute(
             """
             INSERT INTO profiles(account_id, updated_at)
-            VALUES (?, CURRENT_TIMESTAMP)
+            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id) DO UPDATE SET
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id,),
         )
@@ -4128,10 +4128,10 @@ def get_or_create_account_active_session(
                     UPDATE sessions
                     SET session_key = ?,
                         status = 'closed',
-                        ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP),
+                        ended_at = COALESCE(ended_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
                         close_reason = COALESCE(close_reason, ?),
                         carryover_summary = COALESCE(NULLIF(carryover_summary, ''), ?),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                     WHERE id = ?
                     """,
                     (
@@ -4151,7 +4151,7 @@ def get_or_create_account_active_session(
                         chat_id = COALESCE(?, chat_id),
                         sender_name = COALESCE(?, sender_name),
                         business_day = COALESCE(business_day, ?),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                     WHERE id = ?
                     """,
                     (
@@ -4170,7 +4170,7 @@ def get_or_create_account_active_session(
                     account_id, session_key, sender_id, chat_id, sender_name,
                     business_day, carryover_summary, metadata_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                 """,
                 (
                     account_id,
@@ -4276,7 +4276,7 @@ def increment_session_turn_count(
             """
             UPDATE sessions
             SET turn_count = COALESCE(turn_count, 0) + ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (count, session_id),
@@ -4312,9 +4312,10 @@ def insert_message(
                 """
                 INSERT INTO messages(
                     account_id, session_id, message_id, reply_to_message_id,
-                    direction, role, message_type, content, raw_json, latency_ms, error
+                    direction, role, message_type, content, raw_json, latency_ms, error,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                 """,
                 (
                     account_id,
@@ -4601,7 +4602,7 @@ def count_reactivation_outbound_for_quota_date(
     """Count reactivation outbound rows for a local quota date.
 
     Uses quota_date (set at insert from local date) instead of created_at
-    (stored as UTC by SQLite CURRENT_TIMESTAMP), so the daily limit honors
+    (stored as UTC by SQLite strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))), so the daily limit honors
     the local-day boundary regardless of server timezone. Goes through
     ix_outbound_messages_account_category_date.
     """
@@ -4928,7 +4929,7 @@ def update_account(
                 notes = ?,
                 daily_limit = ?,
                 rpm_limit = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -4945,7 +4946,7 @@ def update_account(
 def set_account_debug_flag(*, account_id: str, is_debug: bool) -> None:
     with connect() as conn:
         conn.execute(
-            "UPDATE accounts SET is_debug = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE accounts SET is_debug = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
             (1 if is_debug else 0, account_id),
         )
 
@@ -4956,7 +4957,7 @@ def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, An
         return None
     with connect() as conn:
         conn.execute(
-            "UPDATE accounts SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE accounts SET status = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
             (status, account_id),
         )
     return get_account(account_id=account_id)
@@ -4976,7 +4977,7 @@ def get_account_onboarding_state(*, account_id: str) -> str:
 def set_account_onboarding_state(*, account_id: str, state: str) -> None:
     with connect() as conn:
         conn.execute(
-            "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
             (state, account_id),
         )
 
@@ -4995,10 +4996,10 @@ def increment_daily_usage(*, account_id: str, date: str) -> int:
         conn.execute(
             """
             INSERT INTO daily_usage(account_id, date, message_count, updated_at)
-            VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+            VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id, date) DO UPDATE SET
                 message_count = message_count + 1,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, date),
         )
@@ -5088,9 +5089,9 @@ def create_outbound_message(
                 account_id, channel, channel_account_id, to_user_id, session_key,
                 source, text, idempotency_key, status, error, quota_date,
                 product_category, policy_version, policy_reason, scheduled_at,
-                metadata_json, updated_at
+                metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_account_id,
@@ -5256,7 +5257,7 @@ def claim_pending_outbound_message(
             SET status = 'sending',
                 attempts = attempts + 1,
                 error = NULL,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'pending'
             """,
@@ -5283,8 +5284,8 @@ def mark_outbound_message_sent(
             SET status = 'sent',
                 gateway_message_id = ?,
                 error = NULL,
-                sent_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+                sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (gateway_message_id, outbound_message_id),
@@ -5307,7 +5308,7 @@ def mark_outbound_message_failed(
             UPDATE outbound_messages
             SET status = 'failed',
                 error = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (error, outbound_message_id),
@@ -5330,7 +5331,7 @@ def cancel_outbound_message(
             UPDATE outbound_messages
             SET status = 'cancelled',
                 error = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (error, outbound_message_id),
@@ -5394,7 +5395,7 @@ def create_reminder(
                 id, account_id, channel, channel_account_id, to_user_id,
                 session_key, text, due_at, recur_rule, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_reminder_id,
@@ -5482,9 +5483,9 @@ def claim_due_reminder(*, reminder_id: str, now: str) -> Optional[Dict[str, Any]
             UPDATE reminders
             SET status = 'sending',
                 attempts = attempts + 1,
-                claimed_at = CURRENT_TIMESTAMP,
+                claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                 error = NULL,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'pending'
               AND due_at <= ?
@@ -5514,10 +5515,10 @@ def mark_reminder_sent(
                 SET status = 'pending',
                     due_at = ?,
                     sent_count = sent_count + 1,
-                    last_sent_at = CURRENT_TIMESTAMP,
+                    last_sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                     claimed_at = NULL,
                     outbound_message_id = ?,
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
                 (next_due_at, outbound_message_id, reminder_id),
@@ -5528,11 +5529,11 @@ def mark_reminder_sent(
                 UPDATE reminders
                 SET status = 'sent',
                     sent_count = sent_count + 1,
-                    last_sent_at = CURRENT_TIMESTAMP,
+                    last_sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                     outbound_message_id = ?,
                     error = NULL,
-                    sent_at = CURRENT_TIMESTAMP,
-                    updated_at = CURRENT_TIMESTAMP
+                    sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
                 (outbound_message_id, reminder_id),
@@ -5557,7 +5558,7 @@ def mark_reminder_failed(
             SET status = 'failed',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, error, reminder_id),
@@ -5582,8 +5583,8 @@ def cancel_reminder(
             SET status = 'cancelled',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                cancelled_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, error, reminder_id),
@@ -5618,7 +5619,7 @@ def update_reminder(
         fields.append("recur_rule = NULL")
     if not fields:
         return get_reminder(reminder_id=reminder_id)
-    fields.append("updated_at = CURRENT_TIMESTAMP")
+    fields.append("updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))")
     values.append(reminder_id)
     with connect() as conn:
         conn.execute(
@@ -5679,7 +5680,7 @@ def create_proactive_commitment(
                 id, account_id, session_id, source_message_id, source_reply_message_id,
                 dedupe_key, text, due_at, confidence, reason, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_commitment_id,
@@ -5782,9 +5783,9 @@ def claim_due_proactive_commitment(
             UPDATE proactive_commitments
             SET status = 'sending',
                 attempts = attempts + 1,
-                claimed_at = CURRENT_TIMESTAMP,
+                claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                 error = NULL,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'pending'
               AND due_at <= ?
@@ -5826,8 +5827,8 @@ def mark_proactive_commitment_sent(
             SET status = 'sent',
                 outbound_message_id = ?,
                 error = NULL,
-                sent_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+                sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, commitment_id),
@@ -5852,7 +5853,7 @@ def mark_proactive_commitment_failed(
             SET status = 'failed',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, error, commitment_id),
@@ -5877,8 +5878,8 @@ def cancel_proactive_commitment(
             SET status = 'cancelled',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                cancelled_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, error, commitment_id),
@@ -5976,7 +5977,7 @@ def upsert_proactive_account_state(
                     last_proactive_sent_at, cooldown_until, metadata_json,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                 """,
                 (
                     cleaned_account_id,
@@ -6006,7 +6007,7 @@ def upsert_proactive_account_state(
                             COALESCE(metadata_json, '{}'),
                             ?
                         ),
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                     WHERE account_id = ?
                     """,
                     (
@@ -6041,7 +6042,7 @@ def upsert_proactive_account_state(
                         last_proactive_sent_at = ?,
                         cooldown_until = ?,
                         metadata_json = ?,
-                        updated_at = CURRENT_TIMESTAMP
+                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                     WHERE account_id = ?
                     """,
                     (
@@ -6143,7 +6144,7 @@ def claim_due_proactive_account_state(
             UPDATE proactive_account_state
             SET last_scan_at = ?,
                 next_scan_at = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ?
               AND enabled = 1
               AND (next_scan_at IS NULL OR next_scan_at <= ?)
@@ -6271,7 +6272,7 @@ def create_content_invitation(
                 scheduled_at, expires_at, source_task_id, metadata_json,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_invitation_id,
@@ -6370,7 +6371,7 @@ def claim_content_invitation_for_send(
             """
             UPDATE content_invitations
             SET status = 'sending',
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'candidate'
               AND EXISTS (
@@ -6400,7 +6401,7 @@ def release_content_invitation_claim(
             """
             UPDATE content_invitations
             SET status = 'candidate',
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'sending'
             """,
@@ -6425,7 +6426,7 @@ def mark_content_invitation_invited(
                 expires_at = COALESCE(?, expires_at),
                 outbound_message_id = ?,
                 policy_reason = NULL,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'sending'
             """,
@@ -6453,7 +6454,7 @@ def mark_content_invitation_rejected_by_policy(
             SET status = 'rejected_by_policy',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 policy_reason = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (outbound_message_id, _clean_text(policy_reason), invitation_id),
@@ -6480,7 +6481,7 @@ def mark_content_invitation_titles_sent(
                 responded_at = ?,
                 trigger_message_id = ?,
                 tool_invocation_id = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
               AND status = 'invited'
             """,
@@ -6517,7 +6518,7 @@ def mark_content_invitation_feedback(
                 trigger_message_id = ?,
                 tool_invocation_id = ?,
                 metadata_json = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (
@@ -6557,7 +6558,7 @@ def expire_content_invitations(*, now: str, limit: int = 100) -> List[Dict[str, 
                 f"""
                 UPDATE content_invitations
                 SET status = 'expired',
-                    updated_at = CURRENT_TIMESTAMP
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id IN ({placeholders})
                 """,
                 ids,
@@ -6617,14 +6618,14 @@ def upsert_content_invitation_preference(
                 account_id, topic, status, cooldown_until, last_feedback_at,
                 feedback_count, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), 1, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id, topic) DO UPDATE SET
                 status = excluded.status,
                 cooldown_until = excluded.cooldown_until,
-                last_feedback_at = CURRENT_TIMESTAMP,
+                last_feedback_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                 feedback_count = content_invitation_preferences.feedback_count + 1,
                 metadata_json = excluded.metadata_json,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (
                 cleaned_account_id,
@@ -6701,7 +6702,7 @@ def update_profile_for_account(
                 style = ?,
                 system_prompt = ?,
                 preferences_json = ?,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ?
             """,
             (
@@ -6754,8 +6755,8 @@ def create_phone_verification(
     with connect() as conn:
         conn.execute(
             """
-            INSERT INTO phone_verifications(id, phone, code, expires_at)
-            VALUES (?, ?, ?, datetime('now', ? || ' minutes'))
+            INSERT INTO phone_verifications(id, phone, code, expires_at, created_at)
+            VALUES (?, ?, ?, datetime('now', '+8 hours', ? || ' minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (verification_id, normalized, code, f"+{expires_minutes}"),
         )
@@ -6774,7 +6775,7 @@ def get_latest_active_verification(phone: str) -> Optional[Dict[str, Any]]:
             SELECT * FROM phone_verifications
             WHERE phone = ?
               AND verified_at IS NULL
-              AND expires_at > datetime('now')
+              AND expires_at > datetime('now', '+8 hours')
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -6790,7 +6791,7 @@ def count_verifications_last_hour(phone: str) -> int:
             """
             SELECT COUNT(*) FROM phone_verifications
             WHERE phone = ?
-              AND created_at > datetime('now', '-1 hour')
+              AND created_at > datetime('now', '+8 hours', '-1 hour')
             """,
             (normalized,),
         ).fetchone()
@@ -6804,9 +6805,9 @@ def invalidate_verifications_for_phone(phone: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '-1 second')
+            SET expires_at = datetime('now', '+8 hours', '-1 second')
             WHERE phone = ?
-              AND expires_at > datetime('now')
+              AND expires_at > datetime('now', '+8 hours')
             """,
             (normalized,),
         )
@@ -6819,10 +6820,10 @@ def invalidate_other_verifications_for_phone(phone: str, keep_id: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '-1 second')
+            SET expires_at = datetime('now', '+8 hours', '-1 second')
             WHERE phone = ?
               AND id != ?
-              AND expires_at > datetime('now')
+              AND expires_at > datetime('now', '+8 hours')
             """,
             (normalized, keep_id),
         )
@@ -6834,7 +6835,7 @@ def invalidate_verification(verification_id: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '-1 second')
+            SET expires_at = datetime('now', '+8 hours', '-1 second')
             WHERE id = ?
             """,
             (verification_id,),
@@ -6868,9 +6869,9 @@ def set_verification_verified(
         conn.execute(
             """
             UPDATE phone_verifications
-            SET verified_at = datetime('now'),
+            SET verified_at = datetime('now', '+8 hours'),
                 verified_token = ?,
-                token_expires_at = datetime('now', ? || ' minutes')
+                token_expires_at = datetime('now', '+8 hours', ? || ' minutes')
             WHERE id = ?
             """,
             (token, f"+{token_expires_minutes}", verification_id),
@@ -6896,7 +6897,7 @@ def consume_verification_token(verification_id: str) -> Optional[Dict[str, Any]]
         conn.execute(
             """
             UPDATE phone_verifications
-            SET token_consumed_at = datetime('now')
+            SET token_consumed_at = datetime('now', '+8 hours')
             WHERE id = ?
             """,
             (verification_id,),
@@ -6920,7 +6921,7 @@ def get_valid_verification_by_token(
             WHERE verified_token = ?
               AND phone = ?
               AND token_consumed_at IS NULL
-              AND token_expires_at > datetime('now')
+              AND token_expires_at > datetime('now', '+8 hours')
             """,
             (verified_token, normalized),
         ).fetchone()
@@ -6943,7 +6944,7 @@ def create_platform_user_session(
         conn.execute(
             """
             INSERT INTO platform_user_sessions(id, platform_user_id, token, expires_at)
-            VALUES (?, ?, ?, datetime('now', ? || ' days'))
+            VALUES (?, ?, ?, datetime('now', '+8 hours', ? || ' days'))
             """,
             (session_id, platform_user_id, token, f"+{days}"),
         )
@@ -6963,7 +6964,7 @@ def get_platform_user_by_session_token(*, token: str) -> Optional[Dict[str, Any]
             FROM platform_users pu
             JOIN platform_user_sessions s ON s.platform_user_id = pu.id
             WHERE s.token = ?
-              AND s.expires_at > datetime('now')
+              AND s.expires_at > datetime('now', '+8 hours')
             """,
             (token,),
         ).fetchone()
@@ -6980,11 +6981,11 @@ def consume_valid_verification_token(
         conn.execute(
             """
             UPDATE phone_verifications
-            SET token_consumed_at = datetime('now')
+            SET token_consumed_at = datetime('now', '+8 hours')
             WHERE verified_token = ?
               AND phone = ?
               AND token_consumed_at IS NULL
-              AND token_expires_at > datetime('now')
+              AND token_expires_at > datetime('now', '+8 hours')
             """,
             (verified_token, normalized),
         )
@@ -7016,7 +7017,7 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
         bi = conn.execute(
             """
             UPDATE binding_intents
-            SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+            SET status = 'revoked', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ? AND status = 'completed'
             """,
             (account_id,),
@@ -7025,8 +7026,8 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
             """
             UPDATE reminders
             SET status = 'cancelled',
-                cancelled_at = CURRENT_TIMESTAMP,
-                updated_at = CURRENT_TIMESTAMP
+                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ? AND status = 'pending'
             """,
             (account_id,),
@@ -7043,7 +7044,7 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
             UPDATE content_invitations
             SET status = 'cancelled',
                 policy_reason = 'account_unbound',
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ?
               AND status IN ('candidate', 'sending', 'invited', 'accepted')
             """,
@@ -7052,7 +7053,7 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
         conn.execute(
             """
             UPDATE proactive_account_state
-            SET enabled = 0, updated_at = CURRENT_TIMESTAMP
+            SET enabled = 0, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ?
             """,
             (account_id,),
@@ -7157,7 +7158,7 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
         conn.execute(
             """
             UPDATE accounts
-            SET status = 'deactivated', updated_at = CURRENT_TIMESTAMP
+            SET status = 'deactivated', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
             """,
             (account_id,),
@@ -7188,7 +7189,7 @@ def reenable_proactive_after_rebind(*, account_id: str) -> None:
         conn.execute(
             """
             UPDATE proactive_account_state
-            SET enabled = 1, updated_at = CURRENT_TIMESTAMP
+            SET enabled = 1, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE account_id = ?
             """,
             (account_id,),

@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
+
+from app.time_utils import beijing_now
 from typing import Any, Dict, Optional
 
 from app.db import record_scheduler_heartbeat
@@ -44,7 +46,7 @@ class DreamingScheduler:
         return self._task is not None and not self._task.done()
 
     def status(self) -> Dict[str, Any]:
-        now = datetime.now()
+        now = beijing_now()
         return {
             "running": self.is_running,
             "start_hour": self.start_hour,
@@ -100,7 +102,7 @@ class DreamingScheduler:
                 self.last_error = str(err)
                 self._record_heartbeat(status="error", error=str(err))
                 logger.exception("dreaming scheduler run failed: %s", err)
-            sleep_seconds = _seconds_until_next_window(datetime.now(), start_hour=self.start_hour)
+            sleep_seconds = _seconds_until_next_window(beijing_now(), start_hour=self.start_hour)
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),

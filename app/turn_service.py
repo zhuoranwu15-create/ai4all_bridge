@@ -3,6 +3,8 @@ import logging
 import time
 import uuid
 from datetime import datetime
+
+from app.time_utils import beijing_now
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -168,7 +170,7 @@ def build_turn_llm_input(
     This helper has no persistence side effects: callers that need onboarding
     pre-writes or message insertion must do that before invoking it.
     """
-    _now = now or datetime.now()
+    _now = now or beijing_now()
     current_session_id = int(session["id"])
     history_rows = list_recent_messages_for_account(
         account_id=account_id,
@@ -405,7 +407,7 @@ def handle_openclaw_turn(
             id_diagnostics,
         )
 
-    now = datetime.now()
+    now = beijing_now()
     today = now.date().isoformat()
     business_day = business_day_for(
         now,

@@ -3,6 +3,8 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+
+from app.time_utils import beijing_now
 from typing import Optional
 
 from app.config import settings
@@ -419,7 +421,7 @@ def check_onboarding_timeout(*, last_updated_at: Optional[str]) -> bool:
         return False
     try:
         updated = datetime.fromisoformat(last_updated_at)
-        idle_minutes = (datetime.now() - updated).total_seconds() / 60
+        idle_minutes = (beijing_now().replace(tzinfo=None) - updated).total_seconds() / 60
         return idle_minutes >= ONBOARDING_TIMEOUT_MINUTES
     except Exception:
         return False

@@ -1,5 +1,7 @@
 import logging
 from datetime import datetime, timedelta
+
+from app.time_utils import beijing_now
 from typing import Any, Dict, Optional
 
 from app.config import settings
@@ -162,7 +164,7 @@ def run_daily_dreaming_scan(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """Scan active sessions from previous business days and rotate them."""
-    current = now or datetime.now()
+    current = now or beijing_now()
     current_business_day = business_day_for(
         current,
         start_hour=int(getattr(settings, "conversation_session_business_day_start_hour", 4)),

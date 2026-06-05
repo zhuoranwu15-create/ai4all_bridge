@@ -445,11 +445,12 @@ def test_admin_reactivation_candidates_render_beijing_timestamps(fresh_db):
     from app.main import _beijing_display, admin_proactive_reactivation_candidates
     from app.proactive.reactivation import upsert_reactivation_candidate
 
-    # UTC column -> +8 Beijing; app-written local -> tagged +08:00 without shift.
-    assert _beijing_display("2026-06-05 10:01:00", stored="utc") == "2026-06-05T18:01:00+08:00"
-    assert _beijing_display("2026-06-05 18:15:00", stored="local") == "2026-06-05T18:15:00+08:00"
-    assert _beijing_display(None, stored="utc") is None
-    assert _beijing_display("", stored="local") == ""
+    # All DB timestamps are now stored as naive Beijing-local strings; _beijing_display
+    # just attaches the +08:00 offset without any UTC shift.
+    assert _beijing_display("2026-06-05 10:01:00") == "2026-06-05T10:01:00+08:00"
+    assert _beijing_display("2026-06-05 18:15:00") == "2026-06-05T18:15:00+08:00"
+    assert _beijing_display(None) is None
+    assert _beijing_display("") == ""
 
     _create_account("acc-react-tz")
     invitation = create_content_invitation(

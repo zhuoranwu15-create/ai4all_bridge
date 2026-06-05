@@ -6,6 +6,8 @@ import threading
 import time
 import uuid
 from datetime import date as date_cls, datetime, timedelta, timezone
+
+from app.time_utils import beijing_now, beijing_now_str
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -879,14 +881,14 @@ def _redact_text_field(item: dict, field: str = "text") -> dict:
 def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
     if state is None:
         return None
-    item = dict(state)
+    item = _normalize_ts(state, "next_scan_at", "last_scan_at", "last_proactive_sent_at", "cooldown_until")
     if "metadata" in item:
         item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
     return item
 
 
 def _content_invitation_for_overview(invitation: dict) -> dict:
-    item = dict(invitation or {})
+    item = _normalize_ts(invitation or {})
     invitation_text = item.pop("invitation_text", None)
     titles = item.pop("title_items", None) or []
     item["invitation_text_redacted"] = True
@@ -900,18 +902,11 @@ def _content_invitation_for_overview(invitation: dict) -> dict:
 _BEIJING_TZ = timezone(timedelta(hours=8))
 
 
-def _beijing_display(value: Any, *, stored: str) -> Any:
-    """Return a Beijing (UTC+8) offset-aware ISO string for admin display.
+def _beijing_display(value: Any) -> Any:
+    """Attach Beijing +08:00 offset to a naive datetime string for admin display.
 
-    The DB mixes timezones: SQLite CURRENT_TIMESTAMP columns (created_at/
-    updated_at/message timestamps) are UTC, while app-written fields
-    (scheduled_at/next_scan_at/...) are naive Beijing local. The admin frontend
-    blindly treats naive strings as UTC, which shifts the local fields +8h. We
-    normalize every displayed timestamp to one explicit Beijing offset-aware
-    string so the frontend renders them all consistently.
-
-    stored="utc": value is a naive UTC string. stored="local": value is a naive
-    Beijing-local string.
+    All DB timestamps are now stored as naive Beijing-local strings. This attaches
+    the explicit +08:00 offset so the admin frontend renders them correctly.
     """
     text = str(value or "").strip()
     if not text:
@@ -920,13 +915,23 @@ def _beijing_display(value: Any, *, stored: str) -> Any:
         dt = datetime.fromisoformat(text.replace(" ", "T"))
     except ValueError:
         return value
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(_BEIJING_TZ)
-    elif stored == "utc":
-        dt = dt.replace(tzinfo=timezone.utc).astimezone(_BEIJING_TZ)
-    else:
+    if dt.tzinfo is None:
         dt = dt.replace(tzinfo=_BEIJING_TZ)
+    else:
+        dt = dt.astimezone(_BEIJING_TZ)
     return dt.isoformat()
+
+
+_TS_FIELDS = ("created_at", "updated_at", "first_seen_at", "last_seen_at", "started_at")
+
+
+def _normalize_ts(item: dict, *extra_fields: str) -> dict:
+    """Return a copy with standard timestamp fields normalized to Beijing-offset ISO strings."""
+    result = dict(item)
+    for field in _TS_FIELDS + extra_fields:
+        if result.get(field) is not None:
+            result[field] = _beijing_display(result[field])
+    return result
 
 
 def _content_invitation_for_reactivation_admin(invitation: Optional[dict]) -> Optional[dict]:
@@ -938,12 +943,10 @@ def _content_invitation_for_reactivation_admin(invitation: Optional[dict]) -> Op
         "status": invitation.get("status"),
         "topic": invitation.get("topic"),
         "title_count": len(titles),
-        # scheduled_at/expires_at/invited_at are app-written Beijing local;
-        # updated_at is a UTC CURRENT_TIMESTAMP column.
-        "scheduled_at": _beijing_display(invitation.get("scheduled_at"), stored="local"),
-        "expires_at": _beijing_display(invitation.get("expires_at"), stored="local"),
-        "invited_at": _beijing_display(invitation.get("invited_at"), stored="local"),
-        "updated_at": _beijing_display(invitation.get("updated_at"), stored="utc"),
+        "scheduled_at": _beijing_display(invitation.get("scheduled_at")),
+        "expires_at": _beijing_display(invitation.get("expires_at")),
+        "invited_at": _beijing_display(invitation.get("invited_at")),
+        "updated_at": _beijing_display(invitation.get("updated_at")),
     }
 
 
@@ -996,26 +999,23 @@ def _list_reactivation_candidate_admin_items(
         candidate_view = dict(candidate)
         for field in ("generated_at", "scheduled_at"):
             if candidate_view.get(field):
-                candidate_view[field] = _beijing_display(candidate_view[field], stored="local")
+                candidate_view[field] = _beijing_display(candidate_view[field])
         items.append(
             {
                 "account": {
                     "id": row["account_id"],
                     "display_name": row["display_name"],
                     "status": row["account_status"],
-                    # accounts.updated_at and MAX(messages.created_at) are UTC columns.
-                    "updated_at": _beijing_display(row["account_updated_at"], stored="utc"),
-                    "last_active_at": _beijing_display(row["account_last_active_at"], stored="utc"),
+                    "updated_at": _beijing_display(row["account_updated_at"]),
+                    "last_active_at": _beijing_display(row["account_last_active_at"]),
                 },
                 "proactive_state": {
                     "enabled": bool(row["enabled"]),
-                    # next_scan_at/last_scan_at/last_proactive_sent_at/cooldown_until
-                    # are app-written Beijing local; updated_at is a UTC column.
-                    "next_scan_at": _beijing_display(row["next_scan_at"], stored="local"),
-                    "last_scan_at": _beijing_display(row["last_scan_at"], stored="local"),
-                    "last_proactive_sent_at": _beijing_display(row["last_proactive_sent_at"], stored="local"),
-                    "cooldown_until": _beijing_display(row["cooldown_until"], stored="local"),
-                    "updated_at": _beijing_display(row["proactive_state_updated_at"], stored="utc"),
+                    "next_scan_at": _beijing_display(row["next_scan_at"]),
+                    "last_scan_at": _beijing_display(row["last_scan_at"]),
+                    "last_proactive_sent_at": _beijing_display(row["last_proactive_sent_at"]),
+                    "cooldown_until": _beijing_display(row["cooldown_until"]),
+                    "updated_at": _beijing_display(row["proactive_state_updated_at"]),
                 },
                 "reactivation_candidate": candidate_view,
                 "content_invitation": _content_invitation_for_reactivation_admin(invitation),
@@ -1238,7 +1238,7 @@ def _audit_plaintext_access(
 
 
 def _now_db_time() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return beijing_now_str()
 
 
 def _require_plaintext_access(
@@ -1484,7 +1484,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         raise HTTPException(status_code=404, detail="account not found")
     profile = get_profile_for_account(account_id=account_id) or {}
     file_profile = read_user_profile(account_id)
-    _now_preview = datetime.now()
+    _now_preview = beijing_now()
     today = _now_preview.date().isoformat()
     _current_time_preview = _now_preview.strftime("%H:%M")
     soul = extract_section(file_profile, "Soul")
@@ -1674,7 +1674,7 @@ def debug_prompt_lab_build(
 
     session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
     profile = get_profile_for_account(account_id=account_id) or {}
-    _now_lab = datetime.now()
+    _now_lab = beijing_now()
     today = _now_lab.date().isoformat()
     onboarding_state = get_account_onboarding_state(account_id=account_id)
     llm_input = build_turn_llm_input(
@@ -1986,7 +1986,10 @@ class ReminderDebugUpdateRequest(BaseModel):
 
 @app.get("/debug/reminders/{account_id}")
 def debug_get_reminders(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    reminders = list_reminders_for_account(account_id=account_id, limit=100)
+    reminders = [
+        _normalize_ts(r, "due_at")
+        for r in list_reminders_for_account(account_id=account_id, limit=100)
+    ]
     return {"account_id": account_id, "reminders": reminders}
 
 
@@ -3012,7 +3015,7 @@ def web_me_unbind(
 
 @app.get("/admin/accounts")
 def admin_accounts(_: None = Depends(verify_admin_auth)) -> dict:
-    return {"accounts": list_accounts()}
+    return {"accounts": [_normalize_ts(a) for a in list_accounts()]}
 
 
 @app.get("/admin/accounts/{account_id}")
@@ -3032,16 +3035,16 @@ def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict
     ]
     recent_traces = list_debug_traces(account_id=account_id, limit=10)
     return {
-        "account": account,
+        "account": _normalize_ts(account),
         "platform_user": _platform_user_for_view(platform_user, account_id=account_id),
         "owner_bindings": owner_bindings,
         "binding_intents": binding_intents,
-        "channel_bindings": list_channel_bindings_for_account(account_id=account_id),
+        "channel_bindings": [_normalize_ts(b) for b in list_channel_bindings_for_account(account_id=account_id)],
         "profile": _profile_for_view(
             get_profile_for_account(account_id=account_id) or {},
             account_id=account_id,
         ),
-        "sessions": list_sessions_for_account(account_id=account_id),
+        "sessions": [_normalize_ts(s) for s in list_sessions_for_account(account_id=account_id)],
         "recent_traces": [_trace_for_view(trace) for trace in recent_traces],
         **(
             _debug_redaction_payload(account_id=account_id)
@@ -3192,11 +3195,11 @@ def admin_account_proactive_overview(
             get_proactive_account_state(account_id=account_id)
         ),
         "reminders": [
-            _redact_text_field(reminder)
+            _normalize_ts(_redact_text_field(reminder), "due_at")
             for reminder in list_reminders_for_account(account_id=account_id, limit=limit)
         ],
         "commitments": [
-            _redact_text_field(_redact_text_field(commitment), field="reason")
+            _normalize_ts(_redact_text_field(_redact_text_field(commitment), field="reason"))
             for commitment in list_proactive_commitments_for_account(
                 account_id=account_id,
                 limit=limit,
@@ -3210,7 +3213,7 @@ def admin_account_proactive_overview(
             )
         ],
         "outbound_messages": [
-            _redact_text_field(message)
+            _normalize_ts(_redact_text_field(message))
             for message in list_outbound_messages(account_id=account_id, limit=limit)
         ],
         "redacted": True,
@@ -3303,7 +3306,7 @@ def admin_run_account_proactive_check_once(
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
-    current = datetime.now()
+    current = beijing_now()
     # Mirror what scan_due_proactive_account_checks does for one account so the
     # admin endpoint surfaces the same dispatch/plan results as the scheduler.
     # Dispatch always runs in dry_run mode here regardless of the production
@@ -3408,11 +3411,14 @@ def admin_list_account_commitments(
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
     return {
         "account_id": account_id,
-        "commitments": list_proactive_commitments_for_account(
-            account_id=account_id,
-            status=status,
-            limit=limit,
-        ),
+        "commitments": [
+            _normalize_ts(c)
+            for c in list_proactive_commitments_for_account(
+                account_id=account_id,
+                status=status,
+                limit=limit,
+            )
+        ],
     }
 
 
@@ -3599,7 +3605,7 @@ def admin_proactive_reactivation_candidates(
     return {
         "items": items,
         "summary": summary,
-        "generated_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
+        "generated_at": beijing_now().replace(microsecond=0, tzinfo=None).isoformat(sep=" "),
         "redacted": False,
     }
 
@@ -3938,7 +3944,7 @@ def admin_approve_plaintext_grant(
         raise HTTPException(status_code=404, detail="plaintext grant not found")
     if grant["status"] != "pending":
         raise HTTPException(status_code=400, detail="only pending grants can be approved")
-    now = datetime.now()
+    now = beijing_now()
     approved_at = now.strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (now + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
     updated = update_admin_plaintext_grant_status(
