@@ -42,7 +42,6 @@ class Settings(BaseSettings):
     conversation_session_max_turns: int = 500
     conversation_session_business_day_start_hour: int = 4
     dreaming_scheduler_enabled: bool = False
-    dreaming_scheduler_interval_seconds: float = 300.0
     dreaming_scheduler_batch_size: int = 100
 
     openclaw_login_auto_start: bool = True
@@ -55,7 +54,6 @@ class Settings(BaseSettings):
     proactive_quiet_hours_start: str = "22:00"
     proactive_quiet_hours_end: str = "08:00"
     companion_followup_daily_limit: int = 1
-    content_invitation_daily_limit: int = 1
     proactive_avoidance_window_hours: int = 6
     content_invitation_rejection_cooldown_days: int = 30
     content_invitation_expire_hours: int = 24
@@ -63,19 +61,21 @@ class Settings(BaseSettings):
     proactive_scheduler_interval_seconds: float = 30.0
     proactive_scheduler_batch_size: int = 20
     proactive_scheduler_bypass_quiet_hours: bool = False
-    proactive_account_check_interval_seconds: int = 3600
+    proactive_planning_interval_seconds: int = 3600
     proactive_account_check_context_messages: int = 12
     proactive_account_check_min_confidence: float = 0.85
-    proactive_content_invitation_generation_enabled: bool = True
     proactive_content_invitation_tool_rounds: int = 5
     reactivation_dispatch_enabled: bool = False
     reactivation_dispatch_dry_run: bool = True
     reactivation_daily_limit: int = 1
-    reactivation_planning_interval_seconds: int = 3600
     reactivation_send_slots: str = "12:15,18:15,21:05"
     reactivation_recent_inbound_delay_minutes: int = 60
     reactivation_avoidance_window_minutes: int = 60
     reactivation_dedupe_days: int = 3
+    # Per-send random jitter (seconds) added on top of the slot time so sends
+    # spread out instead of all firing at the exact slot minute (matters at scale).
+    reactivation_send_jitter_min_seconds: int = 60
+    reactivation_send_jitter_max_seconds: int = 120
     reactivation_topic_followup_window_hours: int = 72
     reactivation_topic_followup_context_messages: int = 100
     reactivation_content_invitation_context_messages: int = 100

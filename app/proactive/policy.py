@@ -103,9 +103,11 @@ def _category_daily_limit(category: OutboundCategory) -> int:
 
     if category == OutboundCategory.COMPANION_FOLLOWUP:
         return _setting_int("companion_followup_daily_limit", 1)
-    if category == OutboundCategory.CONTENT_INVITATION:
-        return _setting_int("content_invitation_daily_limit", 1)
+    # content_invitation sends now flow through the unified reactivation path and
+    # share its single daily limit; the legacy CONTENT_INVITATION category maps to
+    # the same limit so any residual legacy-category send stays bounded.
     if category in {
+        OutboundCategory.CONTENT_INVITATION,
         OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
         OutboundCategory.REACTIVATION_CONTENT_INVITATION,
     }:
