@@ -152,7 +152,8 @@ def build_turn_llm_input(
     profile: Dict[str, Any],
     text: str,
     today: str,
-    onboarding_state: str,
+    current_time: Optional[str] = None,
+    onboarding_state: str = "",
     onboarding_active: bool,
     web_search_enabled: bool,
     force_web_search_enabled: Optional[bool] = None,
@@ -167,7 +168,7 @@ def build_turn_llm_input(
     This helper has no persistence side effects: callers that need onboarding
     pre-writes or message insertion must do that before invoking it.
     """
-    current_time = now or datetime.now()
+    _now = now or datetime.now()
     current_session_id = int(session["id"])
     history_rows = list_recent_messages_for_account(
         account_id=account_id,
@@ -217,7 +218,7 @@ def build_turn_llm_input(
     if not onboarding_active and include_tool_instructions:
         active_content_invitation = get_active_content_invitation(
             account_id=account_id,
-            now=current_time.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+            now=_now.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
         )
         metadata["active_content_invitation_id"] = (
             active_content_invitation["id"] if active_content_invitation else None
@@ -248,6 +249,7 @@ def build_turn_llm_input(
         agent_context=agent_context.blocks,
         onboarding_context=onboarding_ctx,
         today=today,
+        current_time=current_time,
         model_name=settings.llm_model,
         tool_instructions=(
             None if onboarding_active or not include_tool_instructions else _tool_instructions(
@@ -658,6 +660,7 @@ def handle_openclaw_turn(
                 profile=profile,
                 text=text,
                 today=today,
+                current_time=now.strftime("%H:%M"),
                 onboarding_state=onboarding_state,
                 onboarding_active=onboarding_active,
                 onboarding_pre_written=onboarding_pre_written,

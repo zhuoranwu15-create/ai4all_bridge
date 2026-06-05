@@ -1484,7 +1484,9 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         raise HTTPException(status_code=404, detail="account not found")
     profile = get_profile_for_account(account_id=account_id) or {}
     file_profile = read_user_profile(account_id)
-    today = date_cls.today().isoformat()
+    _now_preview = datetime.now()
+    today = _now_preview.date().isoformat()
+    _current_time_preview = _now_preview.strftime("%H:%M")
     soul = extract_section(file_profile, "Soul")
     user_prefs = extract_section(file_profile, "User Preferences")
     long_term_memory = extract_section(file_profile, "Long-term Memory")
@@ -1522,6 +1524,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         agent_context=agent_context.blocks,
         onboarding_context=onboarding_context,
         today=today,
+        current_time=_current_time_preview,
         model_name=settings.llm_model,
     )
     if _can_bypass_redaction_for_account(account_id):
@@ -1671,7 +1674,8 @@ def debug_prompt_lab_build(
 
     session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
     profile = get_profile_for_account(account_id=account_id) or {}
-    today = date_cls.today().isoformat()
+    _now_lab = datetime.now()
+    today = _now_lab.date().isoformat()
     onboarding_state = get_account_onboarding_state(account_id=account_id)
     llm_input = build_turn_llm_input(
         account_id=account_id,
@@ -1680,6 +1684,7 @@ def debug_prompt_lab_build(
         profile=profile,
         text=payload.user_text or "",
         today=today,
+        current_time=_now_lab.strftime("%H:%M"),
         onboarding_state=onboarding_state,
         onboarding_active=is_onboarding_active(onboarding_state),
         web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),

@@ -106,6 +106,7 @@ class PromptBuilder:
         onboarding_context: Optional[str] = None,
         model_name: str = "",
         today: Optional[str] = None,
+        current_time: Optional[str] = None,
         tool_instructions: Optional[str] = None,
     ) -> str:
         """Build and return the assembled system prompt string."""
@@ -185,7 +186,9 @@ class PromptBuilder:
 
         # Block 15: Runtime
         runtime_parts: List[str] = []
-        if today:
+        if today and current_time:
+            runtime_parts.append(f"当前日期时间：{today} {current_time}（北京时间 UTC+8）")
+        elif today:
             runtime_parts.append(f"当前日期：{today}")
         if model_name:
             runtime_parts.append(f"当前模型：{model_name}")
