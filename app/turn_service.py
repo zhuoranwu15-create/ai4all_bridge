@@ -29,6 +29,7 @@ from app.llm import generate_reply, generate_reply_with_tools
 from app.memory_writer import write_memory
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
+from app.proactive.state import ensure_account_state
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools
@@ -432,6 +433,7 @@ def handle_openclaw_turn(
     account = session_state["account"]
     session = session_state["session"]
     profile_path = ensure_user_profile(account_id)
+    ensure_account_state(account_id=account_id)
     debug_trace_enabled = _is_debug_trace_account(account_id)
 
     onboarding_state = get_account_onboarding_state(account_id=account_id)

@@ -94,7 +94,10 @@ def handle_create_content_invitation_candidate(args: dict, ctx: "TurnContext") -
         topic=topic,
         invitation_text=invitation_text[:240],
         title_items=title_items,
-        scheduled_at=_format_time(current),
+        # Send timing is owned by the unified reactivation candidate (slots), so
+        # the row carries no scheduled_at; it stays a plain 'candidate' until the
+        # reactivation dispatcher claims and sends it.
+        scheduled_at=None,
         expires_at=_format_time(current + timedelta(hours=max(expire_hours, 1))),
         metadata={
             "source": "tool_use",

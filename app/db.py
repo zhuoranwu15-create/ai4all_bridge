@@ -6093,6 +6093,34 @@ def list_due_proactive_account_states(
     return [_decode_proactive_account_state(row) for row in rows]
 
 
+def list_due_reactivation_candidate_accounts(*, now: str, limit: int = 20) -> List[str]:
+    """Accounts whose queued reactivation candidate is due to send (scheduled_at<=now).
+
+    Independent of the planning cadence (next_scan_at): the dispatch sweep runs
+    every scheduler tick so a candidate fires at its slot time, not at the next
+    hourly planning pass. scheduled_at is app-written local time, same basis as
+    `now`, so no timezone conversion is needed here.
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT s.account_id
+            FROM proactive_account_state s
+            JOIN accounts a ON a.id = s.account_id
+            WHERE s.enabled = 1
+              AND a.status = 'active'
+              AND json_valid(s.metadata_json)
+              AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') IS NOT NULL
+              AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') <= ?
+            ORDER BY json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') ASC,
+                     s.updated_at ASC
+            LIMIT ?
+            """,
+            (now, limit),
+        ).fetchall()
+    return [row["account_id"] for row in rows]
+
+
 def claim_due_proactive_account_state(
     *,
     account_id: str,
@@ -6322,35 +6350,21 @@ def get_active_content_invitation(
     return _decode_content_invitation(row) if row else None
 
 
-def list_due_content_invitations(*, now: str, limit: int = 20) -> List[Dict[str, Any]]:
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT ci.*
-            FROM content_invitations ci
-            JOIN accounts a ON a.id = ci.account_id
-            WHERE ci.status = 'candidate'
-              AND (ci.scheduled_at IS NULL OR ci.scheduled_at <= ?)
-              AND a.status = 'active'
-            ORDER BY COALESCE(ci.scheduled_at, ci.created_at) ASC, ci.created_at ASC
-            LIMIT ?
-            """,
-            (now, limit),
-        ).fetchall()
-    return [_decode_content_invitation(row) for row in rows]
-
-
-def claim_due_content_invitation(
+def claim_content_invitation_for_send(
     *,
     invitation_id: str,
-    now: str,
 ) -> Optional[Dict[str, Any]]:
+    """Atomically claim a candidate invitation for sending.
+
+    Send timing is governed by the unified reactivation candidate (slots), so
+    this claim does NOT gate on scheduled_at; it only requires the row to still
+    be a 'candidate' for an active account and transitions it to 'sending'.
+    Returns the claimed row, or None if it was already claimed/sent or the
+    account is not active.
+    """
     cleaned_invitation_id = _clean_text(invitation_id)
-    cleaned_now = _clean_text(now)
     if not cleaned_invitation_id:
         raise ValueError("invitation_id is required")
-    if not cleaned_now:
-        raise ValueError("now is required")
     with connect() as conn:
         cursor = conn.execute(
             """
@@ -6359,14 +6373,13 @@ def claim_due_content_invitation(
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
               AND status = 'candidate'
-              AND (scheduled_at IS NULL OR scheduled_at <= ?)
               AND EXISTS (
                   SELECT 1 FROM accounts
                   WHERE accounts.id = content_invitations.account_id
                     AND accounts.status = 'active'
               )
             """,
-            (cleaned_invitation_id, cleaned_now),
+            (cleaned_invitation_id,),
         )
         if cursor.rowcount != 1:
             return None

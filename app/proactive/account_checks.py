@@ -701,13 +701,6 @@ def generate_content_invitation_candidate(
     current = now or datetime.now()
     current_text = _format_decision_time(current)
 
-    if not getattr(settings, "proactive_content_invitation_generation_enabled", False):
-        return _no_op(
-            account_id=account_id,
-            reason="content_invitation_generation_disabled",
-            now=current,
-        )
-
     account = get_account(account_id=account_id)
     if account is None:
         return _no_op(account_id=account_id, reason="account_not_found", now=current)

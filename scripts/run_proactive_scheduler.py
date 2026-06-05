@@ -19,7 +19,7 @@ async def main() -> None:
         interval_seconds=settings.proactive_scheduler_interval_seconds,
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
-        account_check_interval_seconds=settings.proactive_account_check_interval_seconds,
+        planning_interval_seconds=settings.proactive_planning_interval_seconds,
     )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

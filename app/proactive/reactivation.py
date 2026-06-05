@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
 from app.db import (
+    claim_content_invitation_for_send,
     count_reactivation_outbound_for_quota_date,
     count_recent_inbound_messages_for_account,
     get_latest_message_id_for_account,
@@ -13,7 +15,10 @@ from app.db import (
     get_pending_reminder_count_in_window,
     get_proactive_account_state,
     list_channel_bindings_for_account,
+    list_due_reactivation_candidate_accounts,
     list_recent_reactivation_outbound_messages,
+    mark_content_invitation_invited,
+    release_content_invitation_claim,
     upsert_proactive_account_state,
 )
 from app.proactive.messaging import send_proactive_text
@@ -94,6 +99,26 @@ def _slot_datetime(day: datetime, slot: str) -> datetime:
     return day.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
+def _apply_send_jitter(scheduled: datetime) -> datetime:
+    """Add a small forward random offset to a slot time so sends spread out.
+
+    Forward-only (never before the slot). Configurable via
+    reactivation_send_jitter_min/max_seconds; 0/0 disables (used in tests).
+    """
+    try:
+        low = int(getattr(settings, "reactivation_send_jitter_min_seconds", 60) or 0)
+        high = int(getattr(settings, "reactivation_send_jitter_max_seconds", 120) or 0)
+    except (TypeError, ValueError):
+        low, high = 60, 120
+    low = max(low, 0)
+    high = max(high, 0)
+    if high <= 0:
+        return scheduled
+    if low > high:
+        low = high
+    return scheduled + timedelta(seconds=random.randint(low, high))
+
+
 def next_reactivation_slot(
     *,
     now: datetime,
@@ -109,12 +134,12 @@ def next_reactivation_slot(
         if scheduled >= now:
             return {
                 "scheduled_slot": f"slot_{index + 1}",
-                "scheduled_at": format_reactivation_time(scheduled),
+                "scheduled_at": format_reactivation_time(_apply_send_jitter(scheduled)),
             }
     first = _slot_datetime(now + timedelta(days=1), slots[0])
     return {
         "scheduled_slot": "slot_1",
-        "scheduled_at": format_reactivation_time(first),
+        "scheduled_at": format_reactivation_time(_apply_send_jitter(first)),
     }
 
 
@@ -137,7 +162,7 @@ def _next_slot_after(candidate: Dict[str, Any], *, now: datetime) -> Optional[Di
         scheduled = _slot_datetime(now + timedelta(days=1), slot)
     return {
         "scheduled_slot": f"slot_{next_index + 1}",
-        "scheduled_at": format_reactivation_time(scheduled),
+        "scheduled_at": format_reactivation_time(_apply_send_jitter(scheduled)),
     }
 
 
@@ -820,6 +845,33 @@ def dispatch_reactivation_candidate(
             "evaluated_at": format_reactivation_time(current),
         }
 
+    # content_invitation candidates are backed by a content_invitations row that
+    # drives the downstream "send titles" interaction. Reactivation is now the
+    # single dispatch path, so it owns advancing that row's state machine:
+    # candidate -> sending (claim) -> invited (on send) / candidate (on failure).
+    is_content_invitation = candidate["type"] == REACTIVATION_TYPE_CONTENT_INVITATION
+    invitation_id = (
+        _clean_text(candidate.get("content_invitation_id")) if is_content_invitation else ""
+    )
+    if is_content_invitation:
+        if not invitation_id:
+            clear_reactivation_candidate(
+                account_id=account_id, reason="content_invitation_id_missing", now=current
+            )
+            return _no_op(
+                account_id=account_id, reason="content_invitation_id_missing", now=current
+            )
+        # Claim ignores scheduled_at; timing was already decided above.
+        claimed_invitation = claim_content_invitation_for_send(invitation_id=invitation_id)
+        if claimed_invitation is None:
+            # Row already sent/expired/claimed elsewhere -> candidate is stale.
+            clear_reactivation_candidate(
+                account_id=account_id, reason="content_invitation_not_claimable", now=current
+            )
+            return _no_op(
+                account_id=account_id, reason="content_invitation_not_claimable", now=current
+            )
+
     outbound = send_proactive_text(
         account_id=account_id,
         channel=route["channel"],
@@ -833,17 +885,67 @@ def dispatch_reactivation_candidate(
         product_category=_reactivation_product_category(candidate["type"]),
         metadata=outbound_metadata,
     )
-    if outbound.get("status") == "sent":
+    outbound_status = outbound.get("status")
+    if is_content_invitation:
+        if outbound_status == "sent":
+            outbound_id = int(outbound["id"]) if outbound.get("id") is not None else None
+            mark_content_invitation_invited(
+                invitation_id=invitation_id,
+                outbound_message_id=outbound_id,
+                invited_at=format_reactivation_time(current),
+            )
+        else:
+            # Send blocked/failed -> reset the row so a later slot can retry.
+            release_content_invitation_claim(invitation_id=invitation_id)
+
+    if outbound_status == "sent":
         clear_reactivation_candidate(
             account_id=account_id,
             reason="sent",
             now=current,
         )
     return {
-        "action": "sent" if outbound.get("status") == "sent" else "send_blocked",
+        "action": "sent" if outbound_status == "sent" else "send_blocked",
         "account_id": account_id,
         "reason": outbound.get("error"),
         "outbound_message": outbound,
         "reactivation_candidate": candidate,
         "evaluated_at": format_reactivation_time(current),
     }
+
+
+def dispatch_due_reactivation_candidates(
+    *,
+    now: Optional[datetime] = None,
+    limit: int = 20,
+    dispatch_enabled: Optional[bool] = None,
+    dry_run: Optional[bool] = None,
+) -> List[Dict[str, Any]]:
+    """Send any reactivation candidates whose slot time has arrived.
+
+    Runs every scheduler tick, decoupled from the hourly planning pass, so a
+    candidate fires at its scheduled slot (plus jitter) rather than waiting for
+    the account's next planning. Gated by reactivation_dispatch_enabled; defaults
+    fail closed (disabled + dry-run) unless settings/caller opt in.
+    """
+    current = now or datetime.now()
+    if dispatch_enabled is None:
+        dispatch_enabled = bool(getattr(settings, "reactivation_dispatch_enabled", False))
+    if dry_run is None:
+        dry_run = bool(getattr(settings, "reactivation_dispatch_dry_run", True))
+    if not dispatch_enabled:
+        return []
+    due_accounts = list_due_reactivation_candidate_accounts(
+        now=format_reactivation_time(current),
+        limit=limit,
+    )
+    results: List[Dict[str, Any]] = []
+    for account_id in due_accounts:
+        results.append(
+            dispatch_reactivation_candidate(
+                account_id=account_id,
+                now=current,
+                dry_run=dry_run,
+            )
+        )
+    return results

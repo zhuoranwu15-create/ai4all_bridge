@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.config import settings
 from app.db import (
     claim_due_proactive_account_state,
     get_proactive_account_state as db_get_proactive_account_state,
@@ -14,8 +13,10 @@ from app.proactive.account_checks import (
     generate_content_invitation_candidate,
     generate_topic_followup_candidate,
 )
-from app.proactive.reactivation import plan_reactivation_candidate
-from app.proactive.reactivation import dispatch_reactivation_candidate
+from app.proactive.reactivation import (
+    get_reactivation_candidate,
+    plan_reactivation_candidate,
+)
 
 
 DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS = 60 * 60
@@ -165,29 +166,24 @@ def scan_due_proactive_account_checks(
     *,
     now: Optional[datetime] = None,
     limit: int = 20,
-    check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
-    reactivation_dry_run: Optional[bool] = None,
-    reactivation_dispatch_enabled: Optional[bool] = None,
+    planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> List[Dict[str, Any]]:
+    """Per-account planning pass (companion followup + reactivation candidate).
+
+    This NO LONGER sends reactivation messages. Sending is a separate, every-tick
+    sweep (`dispatch_due_reactivation_candidates`) keyed off the candidate's slot
+    time, so a candidate fires at its slot rather than at this hourly pass. Here
+    we only (a) send a due companion-followup candidate, and (b) refresh the
+    reactivation candidate — but never overwrite one that is already queued.
+    """
     current = now or datetime.now()
-    # Default reactivation dispatch off + dry-run; require explicit opt-in via
-    # settings (or caller) before any real outbound is sent. Misconfigured
-    # production deploys should fail closed, not silently push messages.
-    if reactivation_dispatch_enabled is None:
-        reactivation_dispatch_enabled = bool(
-            getattr(settings, "reactivation_dispatch_enabled", False)
-        )
-    if reactivation_dry_run is None:
-        reactivation_dry_run = bool(
-            getattr(settings, "reactivation_dispatch_dry_run", True)
-        )
     due_accounts = list_due_proactive_account_checks(now=current, limit=limit)
     results: List[Dict[str, Any]] = []
     for item in due_accounts:
         claimed = claim_due_account_check(
             account_id=item["account_id"],
             now=current,
-            interval_seconds=check_interval_seconds,
+            interval_seconds=planning_interval_seconds,
         )
         if claimed is None:
             results.append(
@@ -195,81 +191,6 @@ def scan_due_proactive_account_checks(
                     "status": "skipped",
                     "reason": "not_due_or_already_claimed",
                     "account_id": item["account_id"],
-                }
-            )
-            continue
-        if not reactivation_dispatch_enabled:
-            # Kill-switch off: still let planning run so candidates queue up,
-            # but never invoke the sender. fall through to decide/plan path.
-            reactivation_dispatch = {
-                "action": "no_op",
-                "account_id": claimed["account_id"],
-                "reason": "reactivation_dispatch_disabled",
-                "evaluated_at": format_state_time(current),
-                "metadata": {},
-            }
-        else:
-            reactivation_dispatch = dispatch_reactivation_candidate(
-                account_id=claimed["account_id"],
-                now=current,
-                dry_run=reactivation_dry_run,
-            )
-        dispatch_short_circuit_actions = {
-            "sent",
-            "would_send",
-            "delayed",
-            "send_blocked",
-            # not_due means a candidate is already scheduled for a later slot;
-            # do NOT replan or overwrite it in this scan.
-            "not_due",
-        }
-        dispatch_no_op_short_circuit_reasons = {
-            "reactivation_daily_limit_already_sent",
-            "recent_inbound_final_slot",
-            "avoidance_window_final_slot",
-            "dedupe_duplicate_after_retry",
-            "regenerate_failed_after_new_message",
-            "missing_channel_route",
-        }
-        if (
-            reactivation_dispatch.get("action") in dispatch_short_circuit_actions
-            or (
-                reactivation_dispatch.get("action") == "no_op"
-                and reactivation_dispatch.get("reason")
-                in dispatch_no_op_short_circuit_reasons
-            )
-        ):
-            results.append(
-                {
-                    "status": reactivation_dispatch.get("action"),
-                    "reason": reactivation_dispatch.get("reason"),
-                    "account_id": claimed["account_id"],
-                    "reactivation_dispatch": reactivation_dispatch,
-                    "decision": {
-                        "action": "no_op",
-                        "account_id": claimed["account_id"],
-                        "reason": "reactivation_dispatch_handled",
-                        "evaluated_at": format_state_time(current),
-                    },
-                    "execution": {
-                        "status": "skipped",
-                        "reason": "reactivation_dispatch_handled",
-                    },
-                    "reactivation_planning": {
-                        "action": "no_op",
-                        "account_id": claimed["account_id"],
-                        "reason": "reactivation_dispatch_handled",
-                        "evaluated_at": format_state_time(current),
-                        "metadata": {},
-                    },
-                    "content_invitation_generation": {
-                        "action": "no_op",
-                        "account_id": claimed["account_id"],
-                        "reason": "reactivation_dispatch_handled",
-                        "evaluated_at": format_state_time(current),
-                        "metadata": {},
-                    },
-                    "account_state": claimed,
                 }
             )
             continue
@@ -295,6 +216,18 @@ def scan_due_proactive_account_checks(
                 "metadata": {},
             }
             content_invitation_generation = reactivation_planning
+        elif get_reactivation_candidate(account_id=claimed["account_id"]) is not None:
+            # A candidate is already queued (waiting for its slot, or due and
+            # awaiting the dispatch sweep). Do NOT replan/overwrite it; the slot
+            # and any regenerate-on-new-message happen in the dispatch path.
+            reactivation_planning = {
+                "action": "no_op",
+                "account_id": claimed["account_id"],
+                "reason": "reactivation_candidate_pending",
+                "evaluated_at": format_state_time(current),
+                "metadata": {},
+            }
+            content_invitation_generation = reactivation_planning
         else:
             reactivation_planning = plan_reactivation_candidate(
                 account_id=claimed["account_id"],
@@ -313,7 +246,6 @@ def scan_due_proactive_account_checks(
                 "account_id": claimed["account_id"],
                 "decision": decision,
                 "execution": execution,
-                "reactivation_dispatch": reactivation_dispatch,
                 "reactivation_planning": reactivation_planning,
                 "content_invitation_generation": content_invitation_generation,
                 "account_state": account_state,

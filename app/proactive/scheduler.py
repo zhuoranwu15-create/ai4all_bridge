@@ -4,10 +4,8 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from app.proactive.commitments import dispatch_due_commitments
-from app.proactive.content_invitations import (
-    dispatch_due_content_invitations,
-    expire_stale_content_invitations,
-)
+from app.proactive.content_invitations import expire_stale_content_invitations
+from app.proactive.reactivation import dispatch_due_reactivation_candidates
 from app.proactive.reminders import dispatch_due_reminders
 from app.proactive.state import (
     DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
@@ -18,7 +16,7 @@ from app.db import record_scheduler_heartbeat
 
 DispatchDueReminders = Callable[..., List[Dict[str, Any]]]
 DispatchDueCommitments = Callable[..., List[Dict[str, Any]]]
-DispatchDueContentInvitations = Callable[..., List[Dict[str, Any]]]
+DispatchDueReactivation = Callable[..., List[Dict[str, Any]]]
 ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
 ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
 
@@ -34,20 +32,20 @@ class ProactiveScheduler:
         interval_seconds: float,
         batch_size: int,
         bypass_quiet_hours: bool = False,
-        account_check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+        planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
         dispatch_reminders: DispatchDueReminders = dispatch_due_reminders,
         dispatch_commitments: DispatchDueCommitments = dispatch_due_commitments,
-        dispatch_content_invitations: DispatchDueContentInvitations = dispatch_due_content_invitations,
+        dispatch_reactivation: DispatchDueReactivation = dispatch_due_reactivation_candidates,
         expire_content_invitations: ExpireContentInvitations = expire_stale_content_invitations,
         scan_account_checks: ScanDueAccountChecks = scan_due_proactive_account_checks,
     ) -> None:
         self.interval_seconds = max(float(interval_seconds), 1.0)
         self.batch_size = max(int(batch_size), 1)
         self.bypass_quiet_hours = bypass_quiet_hours
-        self.account_check_interval_seconds = max(int(account_check_interval_seconds), 1)
+        self.planning_interval_seconds = max(int(planning_interval_seconds), 1)
         self._dispatch_reminders = dispatch_reminders
         self._dispatch_commitments = dispatch_commitments
-        self._dispatch_content_invitations = dispatch_content_invitations
+        self._dispatch_reactivation = dispatch_reactivation
         self._expire_content_invitations = expire_content_invitations
         self._scan_account_checks = scan_account_checks
         self._task: Optional[asyncio.Task[None]] = None
@@ -65,7 +63,7 @@ class ProactiveScheduler:
             "interval_seconds": self.interval_seconds,
             "batch_size": self.batch_size,
             "bypass_quiet_hours": self.bypass_quiet_hours,
-            "account_check_interval_seconds": self.account_check_interval_seconds,
+            "planning_interval_seconds": self.planning_interval_seconds,
             "last_run": self.last_run,
             "last_error": self.last_error,
         }
@@ -89,18 +87,17 @@ class ProactiveScheduler:
             self._scan_account_checks,
             now=current,
             limit=self.batch_size,
-            check_interval_seconds=self.account_check_interval_seconds,
+            planning_interval_seconds=self.planning_interval_seconds,
+        )
+        reactivation_results = await asyncio.to_thread(
+            self._dispatch_reactivation,
+            now=current,
+            limit=self.batch_size,
         )
         expired_content_results = await asyncio.to_thread(
             self._expire_content_invitations,
             now=current,
             limit=self.batch_size,
-        )
-        content_invitation_results = await asyncio.to_thread(
-            self._dispatch_content_invitations,
-            now=current,
-            limit=self.batch_size,
-            bypass_quiet_hours=self.bypass_quiet_hours,
         )
         finished_at = datetime.now()
         result = {
@@ -113,10 +110,10 @@ class ProactiveScheduler:
             "commitments": commitment_results,
             "account_check_count": len(account_results),
             "account_checks": account_results,
+            "reactivation_count": len(reactivation_results),
+            "reactivations": reactivation_results,
             "expired_content_invitation_count": len(expired_content_results),
             "expired_content_invitations": expired_content_results,
-            "content_invitation_count": len(content_invitation_results),
-            "content_invitations": content_invitation_results,
         }
         self.last_run = result
         self.last_error = None
@@ -176,7 +173,7 @@ class ProactiveScheduler:
                     "interval_seconds": self.interval_seconds,
                     "batch_size": self.batch_size,
                     "bypass_quiet_hours": self.bypass_quiet_hours,
-                    "account_check_interval_seconds": self.account_check_interval_seconds,
+                    "planning_interval_seconds": self.planning_interval_seconds,
                 },
             )
         except Exception as err:
@@ -195,7 +192,7 @@ def start_proactive_scheduler(
     interval_seconds: float,
     batch_size: int,
     bypass_quiet_hours: bool = False,
-    account_check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> ProactiveScheduler:
     global _scheduler
     if _scheduler is None:
@@ -203,7 +200,7 @@ def start_proactive_scheduler(
             interval_seconds=interval_seconds,
             batch_size=batch_size,
             bypass_quiet_hours=bypass_quiet_hours,
-            account_check_interval_seconds=account_check_interval_seconds,
+            planning_interval_seconds=planning_interval_seconds,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -222,13 +219,13 @@ async def run_proactive_scheduler_once(
     *,
     batch_size: int,
     bypass_quiet_hours: bool = False,
-    account_check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     scheduler = ProactiveScheduler(
         interval_seconds=60,
         batch_size=batch_size,
         bypass_quiet_hours=bypass_quiet_hours,
-        account_check_interval_seconds=account_check_interval_seconds,
+        planning_interval_seconds=planning_interval_seconds,
     )
     return await scheduler.run_once(now=now)
