@@ -140,15 +140,34 @@ curl -s http://127.0.0.1:8180/health/ready
 
 在 Admin 页面或 Admin API 将账号状态设为 disabled。停用后验证该账号入站消息会被丢弃或收到预期提示，不影响其他 `account_id`。
 
+## 拉取代码后重启运行态
+
+拉取最新代码后，用脚本统一重启 backend、独立 proactive scheduler、reload nginx，并验证 health 和 scheduler heartbeat：
+
+```bash
+scripts/restart_runtime.sh
+```
+
+如果 `requirements.txt` 有变更，先让脚本安装依赖：
+
+```bash
+scripts/restart_runtime.sh --install-deps
+```
+
+如果本次也改了 OpenClaw bridge 插件，先按部署文档重新安装插件，再追加重启 gateway：
+
+```bash
+scripts/restart_runtime.sh --restart-openclaw
+```
+
+脚本会使用 `sudo` 执行 `nginx -t`、`systemctl restart/reload` 和 monitor timer 启用；需要当前用户具备 sudo 权限。
+
 ## 回滚最近版本
 
 ```bash
 git log --oneline -n 5
 git checkout <known-good-commit>
-.venv/bin/python -m pip check
-sudo systemctl restart ai4all-weixin-backend
-sudo systemctl restart ai4all-weixin-proactive-scheduler
-curl -s http://127.0.0.1:8180/health/ready
+scripts/restart_runtime.sh
 ```
 
 如需回滚数据库，必须先备份当前现场，再按“备份与恢复”执行。
