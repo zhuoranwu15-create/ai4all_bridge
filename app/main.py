@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import threading
 import time
 import uuid
 from datetime import date as date_cls, datetime, timedelta
@@ -58,9 +59,10 @@ from app.db import (
     get_wallet_summary,
     increment_verify_attempts,
     init_db,
+    invalidate_other_verifications_for_phone,
+    invalidate_verification,
     insert_admin_access_event,
     insert_debug_trace,
-    invalidate_verifications_for_phone,
     list_accounts,
     list_admin_access_events,
     list_admin_plaintext_grants,
@@ -2480,6 +2482,26 @@ def web_like_faq_message(
     }
 
 
+_otp_send_master_lock = threading.Lock()
+_otp_send_locks: dict[str, threading.Lock] = {}
+
+
+def _otp_send_lock_for(phone: str) -> threading.Lock:
+    """Return (lazily creating) a per-phone in-process lock for OTP send.
+
+    Serializes count-check + create + send + post-invalidate so two concurrent
+    requests for the same phone cannot both create active verifications and
+    then mutually expire each other's row. Single-worker scope only — the
+    project runs one uvicorn worker in production, so this is sufficient.
+    """
+    with _otp_send_master_lock:
+        lock = _otp_send_locks.get(phone)
+        if lock is None:
+            lock = threading.Lock()
+            _otp_send_locks[phone] = lock
+        return lock
+
+
 @app.post("/web/sms/send-otp")
 def web_send_otp(payload: SendOtpRequest) -> dict:
     try:
@@ -2490,20 +2512,25 @@ def web_send_otp(payload: SendOtpRequest) -> dict:
     if not verify_captcha(payload.captcha_verify_param):
         raise HTTPException(status_code=400, detail="验证码校验未通过")
 
-    count = count_verifications_last_hour(phone)
-    if count >= settings.aliyun_sms_max_per_phone_per_hour:
-        raise HTTPException(status_code=429, detail="发送频率过高，请稍后重试")
+    with _otp_send_lock_for(phone):
+        count = count_verifications_last_hour(phone)
+        if count >= settings.aliyun_sms_max_per_phone_per_hour:
+            raise HTTPException(status_code=429, detail="发送频率过高，请稍后重试")
 
-    invalidate_verifications_for_phone(phone)
-    code = generate_otp()
-    verification = create_phone_verification(phone=phone, code=code, expires_minutes=settings.otp_expires_minutes)
-    try:
-        send_otp(phone=phone, code=code)
-    except Exception:
-        invalidate_verifications_for_phone(phone)
-        logger.exception("sms: send failed for phone=%s", phone)
-        raise HTTPException(status_code=500, detail="短信发送失败，请稍后重试")
+        code = generate_otp()
+        verification = create_phone_verification(
+            phone=phone,
+            code=code,
+            expires_minutes=settings.otp_expires_minutes,
+        )
+        try:
+            send_otp(phone=phone, code=code)
+        except Exception:
+            invalidate_verification(verification["id"])
+            logger.exception("sms: send failed for phone=%s", phone)
+            raise HTTPException(status_code=500, detail="短信发送失败，请稍后重试")
 
+        invalidate_other_verifications_for_phone(phone, verification["id"])
     return {"status": "ok"}
 
 

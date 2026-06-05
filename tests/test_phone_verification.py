@@ -1,3 +1,6 @@
+import threading
+import time
+
 import pytest
 from datetime import datetime, timedelta
 
@@ -247,6 +250,119 @@ def test_send_otp_invalidates_previous_record(client):
     assert second["id"] != first["id"]
 
 
+def test_send_otp_concurrent_requests_leave_one_active(client):
+    """Two simultaneous /web/sms/send-otp for the same phone must not both
+    invalidate each other's row (mutual-expire). At least one active row
+    must remain so the user can verify the SMS they actually received."""
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+    from app.db import connect, get_latest_active_verification
+
+    phone = "13800000014"
+    in_send = threading.Event()
+    resume_send = threading.Event()
+    send_calls: list[int] = []
+    send_calls_lock = threading.Lock()
+
+    def slow_send(*, phone, code):
+        with send_calls_lock:
+            send_calls.append(1)
+            is_first = len(send_calls) == 1
+        if is_first:
+            in_send.set()
+            # Hold the first request inside the would-be-critical section
+            # long enough for the second to race if the per-phone lock is missing.
+            resume_send.wait(timeout=2.0)
+
+    def hit():
+        return client.post(
+            "/web/sms/send-otp",
+            json={"phone": phone, "captcha_verify_param": "ok"},
+        )
+
+    # Patch ONCE at module level so both threads share the same mock.
+    with patch("app.main.verify_captcha", return_value=True), \
+         patch("app.main.send_otp", side_effect=slow_send):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_a = pool.submit(hit)
+            assert in_send.wait(timeout=2.0), "first send did not reach send_otp"
+            fut_b = pool.submit(hit)
+            # Give the second worker a chance to advance to the per-phone lock.
+            time.sleep(0.1)
+            resume_send.set()
+            res_a = fut_a.result(timeout=5.0)
+            res_b = fut_b.result(timeout=5.0)
+
+    assert res_a.status_code == 200
+    assert res_b.status_code == 200
+    active = get_latest_active_verification(phone)
+    assert active is not None, "lock failed: both rows mutually expired"
+    # Both requests counted toward rate limit; both rows exist in DB.
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM phone_verifications WHERE phone = ?", (phone,)
+        ).fetchall()
+    assert len(rows) == 2
+
+
+def test_failed_resend_can_expire_new_record_without_expiring_previous(fresh_db):
+    from app.db import (
+        create_phone_verification,
+        get_latest_active_verification,
+        invalidate_verification,
+    )
+
+    first = create_phone_verification(phone="13800000014", code="111111", expires_minutes=10)
+    failed_new = create_phone_verification(phone="13800000014", code="222222", expires_minutes=10)
+
+    invalidate_verification(failed_new["id"])
+
+    active = get_latest_active_verification("13800000014")
+    assert active["id"] == first["id"]
+    assert active["code"] == "111111"
+
+
+def test_successful_resend_expires_previous_record(fresh_db):
+    from app.db import (
+        create_phone_verification,
+        get_latest_active_verification,
+        invalidate_other_verifications_for_phone,
+    )
+
+    first = create_phone_verification(phone="13800000015", code="111111", expires_minutes=10)
+    second = create_phone_verification(phone="13800000015", code="222222", expires_minutes=10)
+
+    invalidate_other_verifications_for_phone("13800000015", second["id"])
+
+    active = get_latest_active_verification("13800000015")
+    assert active["id"] == second["id"]
+    assert active["id"] != first["id"]
+
+
+def test_send_otp_failed_resend_keeps_previous_record_without_testclient(fresh_db):
+    from unittest.mock import patch
+    from fastapi import HTTPException
+    from app.db import get_latest_active_verification
+    from app.main import SendOtpRequest, web_send_otp
+
+    payload = SendOtpRequest(phone="13800000016", captcha_verify_param="ok")
+    with patch("app.main.settings", fresh_db), \
+         patch("app.main.verify_captcha", return_value=True), \
+         patch("app.main.send_otp"):
+        assert web_send_otp(payload) == {"status": "ok"}
+    first = get_latest_active_verification("13800000016")
+
+    with patch("app.main.settings", fresh_db), \
+         patch("app.main.verify_captcha", return_value=True), \
+         patch("app.main.send_otp", side_effect=RuntimeError("minute flow control")):
+        with pytest.raises(HTTPException) as exc_info:
+            web_send_otp(payload)
+
+    assert exc_info.value.status_code == 500
+    active = get_latest_active_verification("13800000016")
+    assert active["id"] == first["id"]
+
+
 # ---------------------------------------------------------------------------
 # POST /web/sms/verify-otp
 # ---------------------------------------------------------------------------
@@ -418,4 +534,3 @@ def test_register_succeeds_with_valid_token(client):
     data = res.json()
     assert data["platform_user"]["phone"] == "13800000035"
     assert data["platform_user"]["display_name"] == "Valid User"
-

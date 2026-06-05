@@ -6553,6 +6553,7 @@ def count_verifications_last_hour(phone: str) -> int:
 
 
 def invalidate_verifications_for_phone(phone: str) -> None:
+    """Expire all active OTP verification rows for a phone number."""
     normalized = _normalize_phone(phone)
     with connect() as conn:
         conn.execute(
@@ -6563,6 +6564,35 @@ def invalidate_verifications_for_phone(phone: str) -> None:
               AND expires_at > datetime('now')
             """,
             (normalized,),
+        )
+
+
+def invalidate_other_verifications_for_phone(phone: str, keep_id: str) -> None:
+    """Expire active OTP verification rows for a phone number except the row to keep."""
+    normalized = _normalize_phone(phone)
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET expires_at = datetime('now', '-1 second')
+            WHERE phone = ?
+              AND id != ?
+              AND expires_at > datetime('now')
+            """,
+            (normalized, keep_id),
+        )
+
+
+def invalidate_verification(verification_id: str) -> None:
+    """Expire one OTP verification row by id."""
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE phone_verifications
+            SET expires_at = datetime('now', '-1 second')
+            WHERE id = ?
+            """,
+            (verification_id,),
         )
 
 
