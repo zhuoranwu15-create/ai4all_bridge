@@ -438,3 +438,45 @@ def test_admin_lists_reactivation_candidates(fresh_db):
         assert getattr(exc, "status_code", None) == 400
     else:
         raise AssertionError("invalid reactivation type should fail")
+
+
+def test_admin_reactivation_candidates_render_beijing_timestamps(fresh_db):
+    from app.db import create_content_invitation
+    from app.main import _beijing_display, admin_proactive_reactivation_candidates
+    from app.proactive.reactivation import upsert_reactivation_candidate
+
+    # UTC column -> +8 Beijing; app-written local -> tagged +08:00 without shift.
+    assert _beijing_display("2026-06-05 10:01:00", stored="utc") == "2026-06-05T18:01:00+08:00"
+    assert _beijing_display("2026-06-05 18:15:00", stored="local") == "2026-06-05T18:15:00+08:00"
+    assert _beijing_display(None, stored="utc") is None
+    assert _beijing_display("", stored="local") == ""
+
+    _create_account("acc-react-tz")
+    invitation = create_content_invitation(
+        account_id="acc-react-tz",
+        invitation_id="cinv-react-tz",
+        topic="中亚五国",
+        invitation_text="要不要看看几条内容？",
+        title_items=[{"title": "a"}, {"title": "b"}, {"title": "c"}],
+        expires_at="2026-06-06 18:15:00",
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-react-tz",
+        candidate={
+            "id": "react-tz",
+            "type": "content_invitation",
+            "topic": "中亚五国",
+            "text": "要不要看看几条内容？",
+            "content_invitation_id": invitation["id"],
+            "scheduled_slot": "slot_2",
+            "scheduled_at": "2026-06-05 18:15:00",
+        },
+    )
+
+    items = {
+        item["account"]["id"]: item
+        for item in admin_proactive_reactivation_candidates(limit=100)["items"]
+    }
+    view = items["acc-react-tz"]
+    assert view["reactivation_candidate"]["scheduled_at"] == "2026-06-05T18:15:00+08:00"
+    assert view["content_invitation"]["expires_at"] == "2026-06-06T18:15:00+08:00"

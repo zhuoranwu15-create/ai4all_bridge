@@ -241,9 +241,6 @@ def check_generation_gates(*, account_id: str, now: datetime) -> Dict[str, Any]:
     """
     now_text = _fmt(now)
 
-    if not getattr(settings, "proactive_content_invitation_generation_enabled", False):
-        return {"gate": "generation_disabled", "ok": False}
-
     account = get_account(account_id=account_id)
     if account is None:
         return {"gate": "account_not_found", "ok": False}
@@ -465,11 +462,11 @@ def _print_table(results: List[Dict[str, Any]], *, result_file: Optional[str] = 
         start=getattr(settings, "proactive_quiet_hours_start", "22:00"),
         end=getattr(settings, "proactive_quiet_hours_end", "08:00"),
     )
-    gen_enabled = getattr(settings, "proactive_content_invitation_generation_enabled", False)
+    dispatch_enabled = getattr(settings, "reactivation_dispatch_enabled", False)
 
     print(f"\n{'='*72}")
     print(f"  内容邀请策略诊断  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"  generation_enabled={gen_enabled}  |  quiet_hours={quiet}")
+    print(f"  reactivation_dispatch_enabled={dispatch_enabled}  |  quiet_hours={quiet}")
     print(f"{'='*72}")
 
     for r in results:

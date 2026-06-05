@@ -68,51 +68,8 @@ def _insert_history(account_id: str, text: str) -> None:
     )
 
 
-def test_dispatch_due_content_invitation_sends_invitation_only(fresh_db):
-    from app.db import create_content_invitation, get_content_invitation, list_outbound_messages
-    from app.proactive.content_invitations import dispatch_due_content_invitations
-
-    fresh_db.proactive_quiet_hours_start = "00:00"
-    fresh_db.proactive_quiet_hours_end = "00:00"
-    fresh_db.content_invitation_daily_limit = 2
-    with patch("app.db.settings", fresh_db), patch("app.proactive.policy.settings", fresh_db):
-        _create_account("acc-content-dispatch")
-        _create_route("acc-content-dispatch")
-        invitation = create_content_invitation(
-            account_id="acc-content-dispatch",
-            topic="AI",
-            invitation_text="我看到几条 AI 相关标题，要不要发你看看？",
-            title_items=_title_items(),
-            scheduled_at="2026-05-30 10:00:00",
-            expires_at="2026-05-31 10:00:00",
-        )
-
-    with (
-        patch("app.proactive.messaging.settings", fresh_db),
-        patch("app.proactive.policy.settings", fresh_db),
-        patch(
-            "app.proactive.messaging.send_weixin_text",
-            return_value={"messageId": "openclaw-weixin:content-1"},
-        ) as mock_send,
-    ):
-        results = dispatch_due_content_invitations(
-            now=datetime(2026, 5, 30, 10, 0),
-            limit=10,
-        )
-        updated = get_content_invitation(invitation_id=invitation["id"])
-        outbound = list_outbound_messages(account_id="acc-content-dispatch")
-
-    assert results[0]["status"] == "invited"
-    assert updated["status"] == "invited"
-    assert outbound[0]["source"] == "content_invitation"
-    assert outbound[0]["product_category"] == "content_invitation"
-    assert outbound[0]["text"] == "我看到几条 AI 相关标题，要不要发你看看？"
-    assert "标题一" not in outbound[0]["text"]
-    mock_send.assert_called_once()
-
-
 def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
-    from app.db import claim_due_content_invitation, create_content_invitation, mark_content_invitation_invited, get_content_invitation
+    from app.db import claim_content_invitation_for_send, create_content_invitation, mark_content_invitation_invited, get_content_invitation
     from app.tools.content_invitation_handlers import handle_send_content_invitation_titles
     from tests.test_tools_handlers import _make_ctx, _setup_account
 
@@ -123,13 +80,9 @@ def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
             topic="AI",
             invitation_text="要不要看几条 AI 标题？",
             title_items=_title_items(),
-            scheduled_at="2026-05-30 10:00:00",
             expires_at="2099-01-01 00:00:00",
         )
-        claim_due_content_invitation(
-            invitation_id=invitation["id"],
-            now="2026-06-02 10:00:00",
-        )
+        claim_content_invitation_for_send(invitation_id=invitation["id"])
         mark_content_invitation_invited(
             invitation_id=invitation["id"],
             outbound_message_id=None,
@@ -181,7 +134,7 @@ def test_content_invitation_feedback_writes_cooldown(fresh_db):
 
 def test_turn_injects_content_invitation_response_tools(client, fresh_db):
     from app.db import (
-        claim_due_content_invitation,
+        claim_content_invitation_for_send,
         create_content_invitation,
         get_or_create_session,
         mark_content_invitation_invited,
@@ -203,13 +156,9 @@ def test_turn_injects_content_invitation_response_tools(client, fresh_db):
             topic="AI",
             invitation_text="要不要看几条 AI 标题？",
             title_items=_title_items(),
-            scheduled_at="2026-05-30 10:00:00",
             expires_at="2099-01-01 00:00:00",
         )
-        claim_due_content_invitation(
-            invitation_id=invitation["id"],
-            now="2026-06-02 10:00:00",
-        )
+        claim_content_invitation_for_send(invitation_id=invitation["id"])
         mark_content_invitation_invited(
             invitation_id=invitation["id"],
             outbound_message_id=None,
@@ -275,7 +224,6 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
     from app.proactive.account_checks import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
-    fresh_db.proactive_content_invitation_generation_enabled = True
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
 
@@ -356,7 +304,6 @@ def test_account_check_content_invitation_generation_avoids_pending_user_reminde
     from app.proactive.account_checks import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
-    fresh_db.proactive_content_invitation_generation_enabled = True
     _create_account("acc-content-avoid")
     _create_route("acc-content-avoid")
     _create_proactive_state("acc-content-avoid")
@@ -387,30 +334,10 @@ def test_account_check_content_invitation_generation_avoids_pending_user_reminde
     mock_llm.assert_not_called()
 
 
-def test_account_check_content_invitation_generation_can_be_disabled(fresh_db):
-    from app.proactive.account_checks import generate_content_invitation_candidate
-
-    fresh_db.proactive_content_invitation_generation_enabled = False
-    _create_account("acc-content-disabled")
-    _create_route("acc-content-disabled")
-    _create_proactive_state("acc-content-disabled")
-    _insert_history("acc-content-disabled", "我最近在关注 AI。")
-
-    with patch("app.proactive.account_checks.settings", fresh_db):
-        result = generate_content_invitation_candidate(
-            account_id="acc-content-disabled",
-            now=datetime(2026, 5, 30, 10, 0),
-        )
-
-    assert result["action"] == "no_op"
-    assert result["reason"] == "content_invitation_generation_disabled"
-
-
 def test_admin_run_proactive_check_once_displays_generated_content_invitation(client, fresh_db):
     from app.db import get_content_invitation
 
     fresh_db.llm_api_key = "fake-key"
-    fresh_db.proactive_content_invitation_generation_enabled = True
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
 
@@ -476,7 +403,6 @@ def test_admin_run_proactive_check_once_displays_generated_content_invitation(cl
 
 def test_admin_run_proactive_check_once_displays_content_invitation_reason(client, fresh_db):
     fresh_db.llm_api_key = "fake-key"
-    fresh_db.proactive_content_invitation_generation_enabled = True
     _create_account("acc-content-admin-reason")
     _create_route("acc-content-admin-reason")
     _create_proactive_state("acc-content-admin-reason")

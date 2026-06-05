@@ -45,7 +45,6 @@ def test_settings(tmp_path):
     s.proactive_quiet_hours_start = "22:00"
     s.proactive_quiet_hours_end = "08:00"
     s.companion_followup_daily_limit = 1
-    s.content_invitation_daily_limit = 1
     s.proactive_avoidance_window_hours = 6
     s.content_invitation_rejection_cooldown_days = 30
     s.content_invitation_expire_hours = 24
@@ -53,17 +52,17 @@ def test_settings(tmp_path):
     s.proactive_scheduler_interval_seconds = 30.0
     s.proactive_scheduler_batch_size = 20
     s.proactive_scheduler_bypass_quiet_hours = False
-    s.proactive_account_check_interval_seconds = 3600
+    s.proactive_planning_interval_seconds = 3600
     s.proactive_account_check_context_messages = 12
     s.proactive_account_check_min_confidence = 0.85
-    s.proactive_content_invitation_generation_enabled = True
     s.proactive_content_invitation_tool_rounds = 5
     s.reactivation_daily_limit = 1
-    s.reactivation_planning_interval_seconds = 3600
     s.reactivation_send_slots = "12:15,18:15,21:05"
     s.reactivation_recent_inbound_delay_minutes = 60
     s.reactivation_avoidance_window_minutes = 60
     s.reactivation_dedupe_days = 3
+    s.reactivation_send_jitter_min_seconds = 0
+    s.reactivation_send_jitter_max_seconds = 0
     s.reactivation_topic_followup_window_hours = 72
     s.reactivation_topic_followup_context_messages = 100
     s.reactivation_content_invitation_context_messages = 100
@@ -114,6 +113,7 @@ def fresh_db(test_settings):
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
         patch("app.proactive.policy.settings", test_settings),
+        patch("app.proactive.reactivation.settings", test_settings),
     ]
     for p in patches:
         p.start()

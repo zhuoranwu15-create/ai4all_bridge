@@ -271,6 +271,102 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
     ) == 1
 
 
+def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
+    from app.db import (
+        create_content_invitation,
+        get_content_invitation,
+        list_outbound_messages,
+    )
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-ci")
+    _create_route("acc-react-ci")
+    ensure_account_state(account_id="acc-react-ci")
+    invitation = create_content_invitation(
+        account_id="acc-react-ci",
+        topic="中亚五国",
+        invitation_text="要不要看看几条中亚五国的内容？",
+        title_items=[{"title": "标题一"}, {"title": "标题二"}, {"title": "标题三"}],
+        expires_at="2099-01-01 00:00:00",
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-react-ci",
+        candidate={
+            "id": "react-ci-1",
+            "type": "content_invitation",
+            "text": "要不要看看几条中亚五国的内容？",
+            "content_invitation_id": invitation["id"],
+            "scheduled_slot": "slot_2",
+            "scheduled_at": "2026-06-05 18:15:00",
+        },
+    )
+
+    with patch(
+        "app.proactive.messaging.send_weixin_text",
+        return_value={"messageId": "openclaw-weixin:react-ci-1"},
+    ):
+        result = dispatch_reactivation_candidate(
+            account_id="acc-react-ci",
+            now=datetime(2026, 6, 5, 18, 15),
+            dry_run=False,
+            dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+        )
+
+    outbound = list_outbound_messages(account_id="acc-react-ci", limit=10)
+    updated = get_content_invitation(invitation_id=invitation["id"])
+
+    assert result["action"] == "sent"
+    assert outbound[0]["product_category"] == "reactivation_content_invitation"
+    assert outbound[0]["metadata"]["reactivation"] is True
+    # Reactivation owns advancing the content_invitations state machine so the
+    # downstream "send titles" interaction stays available.
+    assert updated["status"] == "invited"
+    assert updated["outbound_message_id"] == outbound[0]["id"]
+    assert get_reactivation_candidate(account_id="acc-react-ci") is None
+
+
+def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(fresh_db):
+    from app.db import list_outbound_messages
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-ci-missing")
+    _create_route("acc-react-ci-missing")
+    ensure_account_state(account_id="acc-react-ci-missing")
+    upsert_reactivation_candidate(
+        account_id="acc-react-ci-missing",
+        candidate={
+            "id": "react-ci-missing",
+            "type": "content_invitation",
+            "text": "要不要看看几条内容？",
+            "content_invitation_id": "cinv-does-not-exist",
+            "scheduled_slot": "slot_2",
+            "scheduled_at": "2026-06-05 18:15:00",
+        },
+    )
+
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-ci-missing",
+        now=datetime(2026, 6, 5, 18, 15),
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+
+    assert result["action"] == "no_op"
+    assert result["reason"] == "content_invitation_not_claimable"
+    assert list_outbound_messages(account_id="acc-react-ci-missing") == []
+    assert get_reactivation_candidate(account_id="acc-react-ci-missing") is None
+
+
 def test_dispatch_reactivation_recent_inbound_reschedules_to_next_slot(fresh_db):
     from app.proactive.reactivation import (
         dispatch_reactivation_candidate,
@@ -365,21 +461,21 @@ def test_dispatch_reactivation_dedupe_regenerates_once_in_dry_run(fresh_db):
     assert result["outbound_metadata"]["dedupe"]["retry_count"] == 1
 
 
-def test_scan_due_account_checks_dispatches_reactivation_in_dry_run(fresh_db):
+def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.reactivation import upsert_reactivation_candidate
-    from app.proactive.state import ensure_account_state, scan_due_proactive_account_checks
-
-    _create_account("acc-react-scan")
-    _create_route("acc-react-scan")
-    ensure_account_state(
-        account_id="acc-react-scan",
-        next_scan_at=datetime(2026, 6, 5, 12, 0),
+    from app.proactive.reactivation import (
+        dispatch_due_reactivation_candidates,
+        upsert_reactivation_candidate,
     )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-sweep")
+    _create_route("acc-react-sweep")
+    ensure_account_state(account_id="acc-react-sweep")
     upsert_reactivation_candidate(
-        account_id="acc-react-scan",
+        account_id="acc-react-sweep",
         candidate={
-            "id": "react-scan-1",
+            "id": "react-sweep-1",
             "type": "topic_followup",
             "text": "昨天那个相亲对象后来有再找你吗？",
             "scheduled_slot": "slot_1",
@@ -387,20 +483,38 @@ def test_scan_due_account_checks_dispatches_reactivation_in_dry_run(fresh_db):
         },
     )
 
-    results = scan_due_proactive_account_checks(
+    # Before the slot: not due -> the sweep does not pick it up at all.
+    early = dispatch_due_reactivation_candidates(
+        now=datetime(2026, 6, 5, 11, 0),
+        limit=10,
+        dispatch_enabled=True,
+        dry_run=True,
+    )
+    assert early == []
+
+    # Kill-switch off: nothing dispatched even when due.
+    off = dispatch_due_reactivation_candidates(
         now=datetime(2026, 6, 5, 12, 15),
         limit=10,
-        reactivation_dispatch_enabled=True,
-        reactivation_dry_run=True,
+        dispatch_enabled=False,
+        dry_run=False,
     )
+    assert off == []
 
-    assert results[0]["status"] == "would_send"
-    assert results[0]["reactivation_dispatch"]["text"] == "昨天那个相亲对象后来有再找你吗？"
-    assert results[0]["decision"]["reason"] == "reactivation_dispatch_handled"
-    assert list_outbound_messages(account_id="acc-react-scan") == []
+    # At the slot, dry-run: would_send, no real outbound created.
+    results = dispatch_due_reactivation_candidates(
+        now=datetime(2026, 6, 5, 12, 15),
+        limit=10,
+        dispatch_enabled=True,
+        dry_run=True,
+    )
+    assert len(results) == 1
+    assert results[0]["action"] == "would_send"
+    assert results[0]["text"] == "昨天那个相亲对象后来有再找你吗？"
+    assert list_outbound_messages(account_id="acc-react-sweep") == []
 
 
-def test_scan_due_not_due_does_not_overwrite_scheduled_candidate(fresh_db):
+def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
     from app.proactive.reactivation import (
         get_reactivation_candidate,
         upsert_reactivation_candidate,
@@ -424,13 +538,14 @@ def test_scan_due_not_due_does_not_overwrite_scheduled_candidate(fresh_db):
         },
     )
 
-    # Scan well before scheduled slot; dispatch must return not_due and the
-    # scan must short-circuit instead of replanning + overwriting the candidate.
+    # Planning runs for a due account, but an existing queued candidate must be
+    # preserved (the slot + send happen in the dispatch sweep), so the planning
+    # generators must NOT run and the candidate must not change.
     def _explode_topic_followup(**_):
-        raise AssertionError("topic_followup generator must not run when not_due")
+        raise AssertionError("topic_followup generator must not run when a candidate exists")
 
     def _explode_content(**_):
-        raise AssertionError("content_invitation generator must not run when not_due")
+        raise AssertionError("content_invitation generator must not run when a candidate exists")
 
     import app.proactive.state as proactive_state
     import app.proactive.account_checks as account_checks
@@ -445,8 +560,6 @@ def test_scan_due_not_due_does_not_overwrite_scheduled_candidate(fresh_db):
         results = scan_due_proactive_account_checks(
             now=datetime(2026, 6, 5, 14, 0),
             limit=10,
-            reactivation_dispatch_enabled=True,
-            reactivation_dry_run=True,
         )
     finally:
         account_checks.generate_topic_followup_candidate = original_topic
@@ -454,10 +567,27 @@ def test_scan_due_not_due_does_not_overwrite_scheduled_candidate(fresh_db):
         proactive_state.generate_topic_followup_candidate = original_topic
         proactive_state.generate_content_invitation_candidate = original_content
 
-    assert results[0]["status"] == "not_due"
+    assert results[0]["reactivation_planning"]["reason"] == "reactivation_candidate_pending"
     candidate = get_reactivation_candidate(account_id="acc-react-notdue")
     assert candidate["id"] == "react-notdue-1"
     assert candidate["scheduled_at"] == "2026-06-05 18:15:00"
+
+
+def test_reactivation_slot_applies_send_jitter(fresh_db):
+    from app.proactive.reactivation import next_reactivation_slot
+
+    fresh_db.reactivation_send_jitter_min_seconds = 60
+    fresh_db.reactivation_send_jitter_max_seconds = 120
+    now = datetime(2026, 6, 5, 12, 0, 0)
+    seen = set()
+    for _ in range(25):
+        slot = next_reactivation_slot(now=now)
+        assert slot["scheduled_slot"] == "slot_1"
+        t = datetime.fromisoformat(slot["scheduled_at"].replace(" ", "T"))
+        # base slot 12:15:00 + forward jitter [60,120]s -> [12:16:00, 12:17:00]
+        assert datetime(2026, 6, 5, 12, 16, 0) <= t <= datetime(2026, 6, 5, 12, 17, 0)
+        seen.add(slot["scheduled_at"])
+    assert len(seen) > 1  # offset is randomized, not constant
 
 
 def test_upsert_proactive_account_state_metadata_patch_preserves_sibling_keys(fresh_db):

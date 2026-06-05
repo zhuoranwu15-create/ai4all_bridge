@@ -135,12 +135,12 @@ def test_scan_due_proactive_account_checks_claims_and_marks_no_op(fresh_db):
     first = scan_due_proactive_account_checks(
         now=now,
         limit=10,
-        check_interval_seconds=1800,
+        planning_interval_seconds=1800,
     )
     second = scan_due_proactive_account_checks(
         now=now,
         limit=10,
-        check_interval_seconds=1800,
+        planning_interval_seconds=1800,
     )
     state = get_account_state(account_id="acc-account-check-shell")
 

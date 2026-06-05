@@ -39,8 +39,8 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     reminder_calls = []
     commitment_calls = []
     account_calls = []
+    reactivation_calls = []
     expired_content_calls = []
-    content_invitation_calls = []
 
     def fake_dispatch_reminders(**kwargs):
         reminder_calls.append(kwargs)
@@ -54,22 +54,22 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         commitment_calls.append(kwargs)
         return [{"status": "sent", "commitment_id": "com-1"}]
 
+    def fake_dispatch_reactivation(**kwargs):
+        reactivation_calls.append(kwargs)
+        return [{"action": "would_send", "account_id": "acc-r"}]
+
     def fake_expire_content_invitations(**kwargs):
         expired_content_calls.append(kwargs)
         return [{"status": "expired", "invitation_id": "ci-expired"}]
-
-    def fake_dispatch_content_invitations(**kwargs):
-        content_invitation_calls.append(kwargs)
-        return [{"status": "invited", "invitation_id": "ci-1"}]
 
     scheduler = ProactiveScheduler(
         interval_seconds=0,
         batch_size=5,
         bypass_quiet_hours=True,
-        account_check_interval_seconds=1800,
+        planning_interval_seconds=1800,
         dispatch_reminders=fake_dispatch_reminders,
         dispatch_commitments=fake_dispatch_commitments,
-        dispatch_content_invitations=fake_dispatch_content_invitations,
+        dispatch_reactivation=fake_dispatch_reactivation,
         expire_content_invitations=fake_expire_content_invitations,
         scan_account_checks=fake_scan_account_checks,
     )
@@ -81,8 +81,9 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert result["reminder_count"] == 1
     assert result["commitment_count"] == 1
     assert result["account_check_count"] == 1
+    assert result["reactivation_count"] == 1
     assert result["expired_content_invitation_count"] == 1
-    assert result["content_invitation_count"] == 1
+    assert reactivation_calls == [{"now": now, "limit": 5}]
     assert reminder_calls == [
         {
             "now": now,
@@ -101,20 +102,13 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         {
             "now": now,
             "limit": 5,
-            "check_interval_seconds": 1800,
+            "planning_interval_seconds": 1800,
         }
     ]
     assert expired_content_calls == [
         {
             "now": now,
             "limit": 5,
-        }
-    ]
-    assert content_invitation_calls == [
-        {
-            "now": now,
-            "limit": 5,
-            "bypass_quiet_hours": True,
         }
     ]
     assert scheduler.last_error is None
@@ -129,7 +123,7 @@ def test_admin_proactive_scheduler_status(client):
     assert body["enabled"] is False
     assert body["scheduler"] is None
     assert body["configured"]["batch_size"] == 20
-    assert body["configured"]["account_check_interval_seconds"] == 3600
+    assert body["configured"]["planning_interval_seconds"] == 3600
 
 
 def test_admin_proactive_scheduler_run_once_dispatches_due_reminder(client, fresh_db):
