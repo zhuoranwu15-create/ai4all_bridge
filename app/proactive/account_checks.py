@@ -11,12 +11,17 @@ from app.db import (
     get_proactive_account_state,
     list_content_invitations_for_account,
     list_recent_messages,
+    list_recent_messages_for_account_since,
     list_channel_bindings_for_account,
     list_sessions_for_account,
     upsert_proactive_account_state,
 )
 from app.llm import generate_completion, generate_reply_with_tools
 from app.proactive.messaging import send_proactive_text
+from app.proactive.reactivation import (
+    REACTIVATION_TYPE_TOPIC_FOLLOWUP,
+    local_to_utc_string,
+)
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
 from app.turn_context import TurnContext
 from app.user_profiles import read_agent_context
@@ -52,19 +57,68 @@ JSON schema:
 """
 
 
+TOPIC_FOLLOWUP_SYSTEM_PROMPT = """你是 AI4ALL 的隐藏 topic_followup 拉活候选生成器。
+
+你的任务是基于用户最近 72 小时的聊天，判断是否适合生成一句朋友式续聊消息。
+
+topic_followup 适合：
+- 相亲、亲子、情绪、关系、社交压力、角色陪伴、日常经历等个人话题。
+- 用户昨天或最近聊过一件具体的事，今天可以自然关心一句后续。
+- 用户表达过希望 AI 主动联系、想被惦记、想继续聊，且最近有一个可自然接上的关系/陪伴话题。
+- 用户聊到“一个人吃饭不香”“不知道怎么和异性聊天”“最近有点孤单/纠结”等轻量社交或情绪状态，可以用一句低压力续聊打开话题。
+- 生成内容要像熟悉的朋友顺手问候，不像客服、任务提醒或文章推荐。
+
+topic_followup 不适合：
+- 新闻、轻知识、地理科普、体育赛事、公开资料、内容标题推荐；这些应交给 content_invitation。
+- 医疗、法律、金融投资建议。
+- 纯寒暄、身份设定闲聊、没有具体可延续事件的话题。
+
+严格规则：
+- 只输出 JSON，不输出解释，不输出 Markdown。
+- 默认不主动打扰；没有自然续聊点时 should_send=false。
+- 只基于输入中的最近 72 小时聊天生成候选，不要主动翻长期旧事。
+- 可以参考 USER/SOUL 的称呼和语气，但不要编造事实、日期、承诺或用户目标。
+- text 必须短、自然、像微信消息，最多 80 个中文字符。
+- 不要说“我找到几篇/几条内容/文章”，不要生成标题列表。
+- 生成的是今日稍后可发送的候选；不要因为当前执行时间是凌晨、quiet hours、用户刚说过晚安而拒绝，这些由调度层决定。
+- 只要有具体可延续点，就可以生成一句轻量候选；不要用“最后以晚安结束”作为唯一拒绝理由。
+
+JSON schema:
+{
+  "should_send": false,
+  "text": "",
+  "topic": "简短主题",
+  "reason": "简短原因",
+  "confidence": 0.0
+}
+"""
+
+
 CONTENT_INVITATION_SYSTEM_PROMPT = """你是 AI4ALL 的隐藏内容邀请候选生成器。
 
-你的任务是判断当前账号是否存在一个非常明确、低打扰、适合朋友式询问的内容邀请候选。
+你的任务是判断当前账号是否存在一个低打扰、和用户最近聊天相关、适合朋友式询问的内容邀请候选。
+
+content_invitation 只负责“可以发几条内容/标题给用户看看”的场景。
+它不是普通关心、不是追问用户个人近况，也不是情绪陪伴。
+
+适合创建候选的情况：
+- 新闻、轻知识、地理科普、体育赛事、公开资料、AI 产品/技术、出行攻略、天气/露营准备等内容型话题。
+- 用户主动问过某类资讯、知识或资料，或最近聊天表现出对某个外部主题的兴趣。
+- 候选内容可以是轻量文章标题、资料标题、观点合集、方法清单或科普标题。
 
 严格规则：
 - 必须通过工具完成动作：适合时调用 create_content_invitation_candidate，不适合时调用 skip_content_invitation。
-- 不使用关键词触发，不要因为用户偶然提到“新闻/日报/看看”就创建候选。
-- 只能基于用户显式关注点、长期画像、近期稳定话题或用户主动请求。
+- 只做一次最终动作：调用 create_content_invitation_candidate 或 skip_content_invitation 后，不要再连续调用其他工具。
+- 不使用关键词机械触发；必须能说明用户最近为什么可能想看这些内容。
+- 相亲、亲子、情绪、关系、社交压力、角色陪伴、日常经历这类个人续聊话题必须 skip，交给 topic_followup。
+- 主动邀请必须紧贴用户最近聊过的具体内容，不能泛泛推“今日热点”“每日鸡汤”。
 - 主动邀请文本只能是短的询问句，不能包含标题、URL、来源链接、长摘要或日报式表达。
 - title_items 至少 3 条，最多 10 条；发给用户前只会展示 title。
+- 如果没有可靠来源或没有联网搜索结果，title_items 可以只是自然的内容标题/话题标题；不要编造 source_name、url 或 published_at。
 - 不要创建医疗、法律、金融投资等高风险内容邀请。
+- 涉及金融时只能做制度、常识或公开背景科普，不能给个股、行情、买卖建议。
 - 不要仅因为当前时间较晚或处于 quiet hours 而跳过；发送时机、quiet hours 和日上限由后端策略处理。
-- 没有足够把握时调用 skip_content_invitation。
+- 只有在最近对话没有合适的内容/标题候选，或候选会显得突兀/冒犯时，才调用 skip_content_invitation。
 """
 
 
@@ -213,6 +267,40 @@ def _build_candidate_user_prompt(
     )
 
 
+def _build_topic_followup_user_prompt(
+    *,
+    account: Dict[str, Any],
+    state: Dict[str, Any],
+    history: list[dict[str, Any]],
+    now: datetime,
+) -> str:
+    account_id = str(account["id"])
+    agent_context = read_agent_context(
+        account_id,
+        display_name=account.get("display_name"),
+    )
+    context_blocks = agent_context.blocks
+    history_lines = [
+        (
+            f"- #{item.get('id')} {item.get('created_at')} "
+            f"{item['role']}: {_truncate_text(item.get('content') or '', 300)}"
+        )
+        for item in history
+        if _clean_text(item.get("content"))
+    ]
+    return "\n\n".join(
+        [
+            f"now: {_format_decision_time(now)}",
+            f"account_id: {account_id}",
+            "SOUL.md:\n" + _truncate_text(context_blocks.get("SOUL", ""), 1000),
+            "USER.md:\n" + _truncate_text(context_blocks.get("USER", ""), 1200),
+            "proactive_state_metadata:\n"
+            + _truncate_text(json.dumps(state.get("metadata") or {}, ensure_ascii=False), 1200),
+            "recent_72h_chat:\n" + ("\n".join(history_lines) if history_lines else "- none"),
+        ]
+    )
+
+
 def _build_content_invitation_user_prompt(
     *,
     account: Dict[str, Any],
@@ -284,6 +372,41 @@ def _normalize_llm_candidate(
         "reason": _clean_text(payload.get("reason")) or "llm_candidate",
         "confidence": confidence,
     }
+
+
+def _normalize_topic_followup_candidate(
+    payload: Dict[str, Any],
+    *,
+    now: datetime,
+    source_message_cutoff_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    if payload.get("should_send") is not True:
+        return None
+    text = _clean_text(payload.get("text"))
+    if not text:
+        return None
+    confidence = float(payload.get("confidence") or 0)
+    min_confidence = float(
+        getattr(settings, "proactive_account_check_min_confidence", 0.85)
+        or 0.85
+    )
+    if confidence < min_confidence:
+        return None
+    # Include microseconds so a regenerate triggered within the same wall-clock
+    # second produces a different candidate id and a different outbound
+    # idempotency_key (reactivation-{account}-{id}-{date}).
+    candidate: Dict[str, Any] = {
+        "id": "reactivation-topic-" + now.strftime("%Y%m%d%H%M%S") + f"{now.microsecond:06d}",
+        "type": REACTIVATION_TYPE_TOPIC_FOLLOWUP,
+        "text": text[:120],
+        "topic": _clean_text(payload.get("topic")) or "topic_followup",
+        "reason": _clean_text(payload.get("reason")) or "topic_followup_llm_candidate",
+        "confidence": confidence,
+        "generated_at": _format_decision_time(now),
+    }
+    if source_message_cutoff_id is not None:
+        candidate["source_message_cutoff_id"] = source_message_cutoff_id
+    return candidate
 
 
 def decide_account_check_action(
@@ -443,22 +566,24 @@ def generate_account_check_candidate_draft(
             metadata={"error": str(err)},
         )
 
-    next_metadata = dict(state.get("metadata") or {})
-    next_metadata["account_check_candidate_draft_generated_at"] = _format_decision_time(current)
     if candidate is None:
-        next_metadata.pop(ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY, None)
-        next_metadata.pop(LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY, None)
         upsert_proactive_account_state(
             account_id=account_id,
-            metadata=next_metadata,
+            metadata_patch={
+                "account_check_candidate_draft_generated_at": _format_decision_time(current),
+                ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY: None,
+                LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY: None,
+            },
         )
         return _no_op(account_id=account_id, reason="llm_no_candidate", now=current)
 
-    next_metadata[ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY] = candidate
-    next_metadata.pop(LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY, None)
     next_state = upsert_proactive_account_state(
         account_id=account_id,
-        metadata=next_metadata,
+        metadata_patch={
+            "account_check_candidate_draft_generated_at": _format_decision_time(current),
+            ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY: candidate,
+            LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY: None,
+        },
     )
     return {
         "action": "draft_candidate",
@@ -466,6 +591,104 @@ def generate_account_check_candidate_draft(
         "candidate": candidate,
         "evaluated_at": _format_decision_time(current),
         "proactive_state": next_state,
+    }
+
+
+def generate_topic_followup_candidate(
+    *,
+    account_id: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Generate one topic_followup reactivation candidate from recent account chat."""
+    current = now or datetime.now()
+
+    account = get_account(account_id=account_id)
+    if account is None:
+        return _no_op(account_id=account_id, reason="account_not_found", now=current)
+    if account.get("status") != "active":
+        return _no_op(account_id=account_id, reason="account_not_active", now=current)
+
+    state = get_proactive_account_state(account_id=account_id)
+    if state is None:
+        return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)
+    if not state.get("enabled"):
+        return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
+
+    if not getattr(settings, "llm_api_key", ""):
+        return _no_op(account_id=account_id, reason="llm_disabled", now=current)
+
+    if _select_route(account_id) is None:
+        return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
+
+    try:
+        window_hours = int(getattr(settings, "reactivation_topic_followup_window_hours", 72) or 72)
+    except (TypeError, ValueError):
+        window_hours = 72
+    try:
+        context_limit = int(getattr(settings, "reactivation_topic_followup_context_messages", 100) or 100)
+    except (TypeError, ValueError):
+        context_limit = 100
+
+    # messages.created_at is UTC; convert local window to UTC for the SQL compare.
+    # Keep both representations so the diagnostic metadata still shows the local
+    # window operators expect to see.
+    since_local = _format_decision_time(current - timedelta(hours=max(window_hours, 1)))
+    since_utc = local_to_utc_string(current - timedelta(hours=max(window_hours, 1)))
+    history = list_recent_messages_for_account_since(
+        account_id=account_id,
+        since=since_utc,
+        limit=max(1, context_limit),
+    )
+    if not history:
+        return _no_op(
+            account_id=account_id,
+            reason="no_recent_72h_history",
+            now=current,
+            metadata={"since": since_local, "since_utc": since_utc},
+        )
+
+    messages = [
+        {"role": "system", "content": TOPIC_FOLLOWUP_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": _build_topic_followup_user_prompt(
+                account=account,
+                state=state,
+                history=history,
+                now=current,
+            ),
+        },
+    ]
+    try:
+        raw = generate_completion(messages)
+        payload = _extract_json_object(raw)
+        source_cutoff = max((int(item["id"]) for item in history if item.get("id") is not None), default=None)
+        candidate = _normalize_topic_followup_candidate(
+            payload,
+            now=current,
+            source_message_cutoff_id=source_cutoff,
+        )
+    except Exception as err:
+        return _no_op(
+            account_id=account_id,
+            reason="topic_followup_generation_failed",
+            now=current,
+            metadata={"error": str(err)},
+        )
+
+    if candidate is None:
+        return _no_op(
+            account_id=account_id,
+            reason="llm_no_topic_followup_candidate",
+            now=current,
+            metadata={"reply": _truncate_text(raw or "", 400)},
+        )
+
+    return {
+        "action": "topic_followup_candidate_created",
+        "account_id": account_id,
+        "reactivation_candidate": candidate,
+        "evaluated_at": _format_decision_time(current),
     }
 
 
@@ -619,6 +842,9 @@ def generate_content_invitation_candidate(
         system_prompt=system_prompt,
         tools=tools,
         ctx=ctx,
+        max_tool_rounds=int(
+            getattr(settings, "proactive_content_invitation_tool_rounds", 5) or 5
+        ),
     )
     if error:
         return _no_op(
@@ -630,13 +856,13 @@ def generate_content_invitation_candidate(
 
     after = list_content_invitations_for_account(account_id=account_id, limit=20)
     created = next((item for item in after if item["id"] not in before_ids), None)
-    next_metadata = dict(state.get("metadata") or {})
-    next_metadata["content_invitation_generation_checked_at"] = current_text
     if created is None:
-        next_metadata["content_invitation_generation_last_reply"] = _truncate_text(reply or "", 400)
         upsert_proactive_account_state(
             account_id=account_id,
-            metadata=next_metadata,
+            metadata_patch={
+                "content_invitation_generation_checked_at": current_text,
+                "content_invitation_generation_last_reply": _truncate_text(reply or "", 400),
+            },
         )
         return _no_op(
             account_id=account_id,
@@ -645,11 +871,13 @@ def generate_content_invitation_candidate(
             metadata={"reply": _truncate_text(reply or "", 400)},
         )
 
-    next_metadata["content_invitation_candidate_created_at"] = current_text
-    next_metadata["content_invitation_candidate_id"] = created["id"]
     next_state = upsert_proactive_account_state(
         account_id=account_id,
-        metadata=next_metadata,
+        metadata_patch={
+            "content_invitation_generation_checked_at": current_text,
+            "content_invitation_candidate_created_at": current_text,
+            "content_invitation_candidate_id": created["id"],
+        },
     )
     return {
         "action": "content_invitation_candidate_created",
@@ -686,14 +914,15 @@ def promote_account_check_candidate_draft(
     if draft.get("confidence") is not None:
         candidate["confidence"] = draft.get("confidence")
 
-    metadata[ACCOUNT_CHECK_CANDIDATE_KEY] = candidate
-    metadata["account_check_candidate_promoted_at"] = _format_decision_time(current)
-    metadata.pop(LEGACY_HEARTBEAT_CANDIDATE_KEY, None)
-    metadata.pop(ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY, None)
-    metadata.pop(LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY, None)
     next_state = upsert_proactive_account_state(
         account_id=account_id,
-        metadata=metadata,
+        metadata_patch={
+            ACCOUNT_CHECK_CANDIDATE_KEY: candidate,
+            "account_check_candidate_promoted_at": _format_decision_time(current),
+            LEGACY_HEARTBEAT_CANDIDATE_KEY: None,
+            ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY: None,
+            LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY: None,
+        },
     )
     return {
         "action": "promoted_candidate",
@@ -714,17 +943,18 @@ def clear_account_check_candidate_draft(
     if state is None:
         return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)
 
-    metadata = dict(state.get("metadata") or {})
+    metadata = state.get("metadata") or {}
     had_draft = (
         ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY in metadata
         or LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY in metadata
     )
-    metadata.pop(ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY, None)
-    metadata.pop(LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY, None)
-    metadata["account_check_candidate_draft_cleared_at"] = _format_decision_time(current)
     next_state = upsert_proactive_account_state(
         account_id=account_id,
-        metadata=metadata,
+        metadata_patch={
+            ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY: None,
+            LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY: None,
+            "account_check_candidate_draft_cleared_at": _format_decision_time(current),
+        },
     )
     return {
         "action": "cleared_candidate_draft",

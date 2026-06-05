@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from app.config import settings
 from app.db import (
+    count_reactivation_outbound_for_quota_date,
     get_account,
     get_content_invitation_preference,
     get_outbound_daily_usage,
@@ -20,6 +21,8 @@ class OutboundCategory(str, Enum):
     USER_REMINDER = "user_reminder"
     COMPANION_FOLLOWUP = "companion_followup"
     CONTENT_INVITATION = "content_invitation"
+    REACTIVATION_TOPIC_FOLLOWUP = "reactivation_topic_followup"
+    REACTIVATION_CONTENT_INVITATION = "reactivation_content_invitation"
     CONTENT_INVITATION_RESPONSE = "content_invitation_response"
     TASK_RESULT = "task_result"
     LEGACY_PROACTIVE = "legacy_proactive"
@@ -102,6 +105,11 @@ def _category_daily_limit(category: OutboundCategory) -> int:
         return _setting_int("companion_followup_daily_limit", 1)
     if category == OutboundCategory.CONTENT_INVITATION:
         return _setting_int("content_invitation_daily_limit", 1)
+    if category in {
+        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
+        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+    }:
+        return _setting_int("reactivation_daily_limit", 1)
     if category == OutboundCategory.LEGACY_PROACTIVE:
         return _setting_int("proactive_outbound_daily_limit", 0)
     return 0
@@ -210,11 +218,20 @@ def evaluate_outbound_policy(
     counts: Dict[str, Any] = {}
     daily_limit = _category_daily_limit(category)
     if daily_limit > 0:
-        current_count = get_outbound_daily_usage(
-            account_id=account_id,
-            quota_date=quota_date,
-            product_category=category.value,
-        )
+        if category in {
+            OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
+            OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+        }:
+            current_count = count_reactivation_outbound_for_quota_date(
+                account_id=account_id,
+                quota_date=quota_date,
+            )
+        else:
+            current_count = get_outbound_daily_usage(
+                account_id=account_id,
+                quota_date=quota_date,
+                product_category=category.value,
+            )
         counts["daily_count"] = current_count
         counts["daily_limit"] = daily_limit
         if current_count >= daily_limit:
@@ -226,7 +243,10 @@ def evaluate_outbound_policy(
                 metadata=policy_metadata,
             )
 
-    if category == OutboundCategory.CONTENT_INVITATION:
+    if category in {
+        OutboundCategory.CONTENT_INVITATION,
+        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+    }:
         topic = str((metadata or {}).get("topic") or "").strip()
         if topic:
             preference = get_content_invitation_preference(
@@ -254,7 +274,12 @@ def evaluate_outbound_policy(
                         metadata=policy_metadata,
                     )
 
-    if category in {OutboundCategory.COMPANION_FOLLOWUP, OutboundCategory.CONTENT_INVITATION}:
+    if category in {
+        OutboundCategory.COMPANION_FOLLOWUP,
+        OutboundCategory.CONTENT_INVITATION,
+        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
+        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+    }:
         try:
             avoidance_hours = int(getattr(settings, "proactive_avoidance_window_hours", 6) or 0)
         except (TypeError, ValueError):
@@ -277,7 +302,10 @@ def evaluate_outbound_policy(
                     next_allowed_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
                     metadata=policy_metadata,
                 )
-            if category == OutboundCategory.CONTENT_INVITATION:
+            if category in {
+                OutboundCategory.CONTENT_INVITATION,
+                OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+            }:
                 companion_count = get_pending_companion_followup_count_in_window(
                     account_id=account_id,
                     start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),

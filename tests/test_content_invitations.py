@@ -346,6 +346,7 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
     assert mock_llm.call_count == 2
     first_messages = mock_llm.call_args_list[0].args[0]
     assert "隐藏内容邀请候选生成器" in first_messages[0]["content"]
+    assert "相亲、亲子、情绪、关系、社交压力、角色陪伴、日常经历这类个人续聊话题必须 skip" in first_messages[0]["content"]
     assert "AI 产品和大模型创业" in first_messages[1]["content"]
     assert "daily_notes" not in first_messages[1]["content"]
 

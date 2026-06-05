@@ -4466,6 +4466,174 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
     ]
 
 
+def list_recent_messages_for_account_since(
+    *,
+    account_id: str,
+    since: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Return recent context messages for one account since a timestamp, oldest to newest."""
+    if limit <= 0:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, session_id, role, content, created_at FROM messages
+            WHERE account_id = ?
+              AND created_at >= ?
+              AND content IS NOT NULL
+              AND content != ''
+              AND NOT (
+                role = 'assistant'
+                AND error IS NOT NULL
+                AND error != ''
+              )
+              AND NOT (
+                role = 'assistant'
+                AND content = ?
+              )
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (account_id, since, _NON_CONTEXT_ASSISTANT_REPLY, limit),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "role": row["role"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
+        for row in reversed(rows)
+    ]
+
+
+def get_latest_message_id_for_account(*, account_id: str) -> Optional[int]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MAX(id) AS id
+            FROM messages
+            WHERE account_id = ?
+            """,
+            (account_id,),
+        ).fetchone()
+    if row is None or row["id"] is None:
+        return None
+    return int(row["id"])
+
+
+def count_recent_inbound_messages_for_account(*, account_id: str, since: str) -> int:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages
+            WHERE account_id = ?
+              AND direction = 'inbound'
+              AND created_at >= ?
+            """,
+            (account_id, since),
+        ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+REACTIVATION_PRODUCT_CATEGORIES = (
+    "reactivation_topic_followup",
+    "reactivation_content_invitation",
+)
+LEGACY_REACTIVATION_PRODUCT_CATEGORIES = (
+    "companion_followup",
+    "content_invitation",
+)
+
+
+def list_recent_reactivation_outbound_messages(
+    *,
+    account_id: str,
+    since: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Return recent outbound messages tagged as reactivation, newest first.
+
+    New rows use reactivation-specific product_category values. The metadata
+    fallback keeps any rows created by the previous wiring (legacy category +
+    metadata_json.reactivation=true) visible to dedupe.
+    """
+    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
+    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND created_at >= ?
+              AND status IN ('pending', 'sending', 'sent')
+              AND (
+                product_category IN ({placeholders})
+                OR (
+                  product_category IN ({legacy_placeholders})
+                  AND json_valid(metadata_json)
+                  AND json_extract(metadata_json, '$.reactivation') = 1
+                )
+              )
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (
+                account_id,
+                since,
+                *REACTIVATION_PRODUCT_CATEGORIES,
+                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
+                max(int(limit), 1),
+            ),
+        ).fetchall()
+    return [_decode_outbound_message(row) for row in rows]
+
+
+def count_reactivation_outbound_for_quota_date(
+    *,
+    account_id: str,
+    quota_date: str,
+) -> int:
+    """Count reactivation outbound rows for a local quota date.
+
+    Uses quota_date (set at insert from local date) instead of created_at
+    (stored as UTC by SQLite CURRENT_TIMESTAMP), so the daily limit honors
+    the local-day boundary regardless of server timezone. Goes through
+    ix_outbound_messages_account_category_date.
+    """
+    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
+    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND quota_date = ?
+              AND status IN ('pending', 'sending', 'sent')
+              AND (
+                product_category IN ({placeholders})
+                OR (
+                  product_category IN ({legacy_placeholders})
+                  AND json_valid(metadata_json)
+                  AND json_extract(metadata_json, '$.reactivation') = 1
+                )
+              )
+            """,
+            (
+                account_id,
+                quota_date,
+                *REACTIVATION_PRODUCT_CATEGORIES,
+                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
+            ),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
 def count_context_messages_for_session(*, session_id: int) -> int:
     """Count messages from a session that are eligible for LLM context."""
     with connect() as conn:
@@ -5756,10 +5924,23 @@ def upsert_proactive_account_state(
     last_proactive_sent_at=_UNSET,
     cooldown_until=_UNSET,
     metadata=_UNSET,
+    metadata_patch=_UNSET,
 ) -> Dict[str, Any]:
+    """Upsert proactive_account_state for an account.
+
+    metadata replaces the entire metadata JSON (legacy semantics).
+    metadata_patch applies an RFC 7396 JSON Merge Patch via SQLite json_patch
+    in a single statement: only the named keys are written, and keys mapped to
+    None are removed. metadata_patch is preferred for concurrent updaters
+    (scheduler + admin) because it avoids the read-modify-write race that
+    silently drops sibling keys; metadata and metadata_patch are mutually
+    exclusive.
+    """
     cleaned_account_id = _clean_text(account_id)
     if not cleaned_account_id:
         raise ValueError("account_id is required")
+    if metadata is not _UNSET and metadata_patch is not _UNSET:
+        raise ValueError("metadata and metadata_patch are mutually exclusive")
 
     current = get_proactive_account_state(account_id=cleaned_account_id)
     if current is None:
@@ -5774,7 +5955,19 @@ def upsert_proactive_account_state(
         cooldown_until_value = (
             None if cooldown_until is _UNSET else _clean_text(cooldown_until)
         )
-        metadata_value = {} if metadata is _UNSET else (metadata or {})
+        if metadata_patch is not _UNSET:
+            # Patch over {} just drops null keys; equivalent to a normal insert
+            # with the non-null keys.
+            seed: Dict[str, Any] = {
+                key: value
+                for key, value in (metadata_patch or {}).items()
+                if value is not None
+            }
+            metadata_value = seed
+        elif metadata is _UNSET:
+            metadata_value = {}
+        else:
+            metadata_value = metadata or {}
         with connect() as conn:
             conn.execute(
                 """
@@ -5796,40 +5989,79 @@ def upsert_proactive_account_state(
                 ),
             )
     else:
-        next_metadata = current.get("metadata") or {}
-        if metadata is not _UNSET:
-            next_metadata = metadata or {}
-        with connect() as conn:
-            conn.execute(
-                """
-                UPDATE proactive_account_state
-                SET enabled = ?,
-                    next_scan_at = ?,
-                    last_scan_at = ?,
-                    last_proactive_sent_at = ?,
-                    cooldown_until = ?,
-                    metadata_json = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE account_id = ?
-                """,
-                (
-                    int(current["enabled"] if enabled is _UNSET else bool(enabled)),
-                    current.get("next_scan_at")
-                    if next_scan_at is _UNSET
-                    else _clean_text(next_scan_at),
-                    current.get("last_scan_at")
-                    if last_scan_at is _UNSET
-                    else _clean_text(last_scan_at),
-                    current.get("last_proactive_sent_at")
-                    if last_proactive_sent_at is _UNSET
-                    else _clean_text(last_proactive_sent_at),
-                    current.get("cooldown_until")
-                    if cooldown_until is _UNSET
-                    else _clean_text(cooldown_until),
-                    json.dumps(next_metadata, ensure_ascii=False),
-                    cleaned_account_id,
-                ),
-            )
+        if metadata_patch is not _UNSET:
+            # Atomic merge: json_patch in a single UPDATE means concurrent
+            # callers cannot silently drop each other's sibling keys.
+            patch_json = json.dumps(metadata_patch or {}, ensure_ascii=False)
+            with connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE proactive_account_state
+                    SET enabled = ?,
+                        next_scan_at = ?,
+                        last_scan_at = ?,
+                        last_proactive_sent_at = ?,
+                        cooldown_until = ?,
+                        metadata_json = json_patch(
+                            COALESCE(metadata_json, '{}'),
+                            ?
+                        ),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE account_id = ?
+                    """,
+                    (
+                        int(current["enabled"] if enabled is _UNSET else bool(enabled)),
+                        current.get("next_scan_at")
+                        if next_scan_at is _UNSET
+                        else _clean_text(next_scan_at),
+                        current.get("last_scan_at")
+                        if last_scan_at is _UNSET
+                        else _clean_text(last_scan_at),
+                        current.get("last_proactive_sent_at")
+                        if last_proactive_sent_at is _UNSET
+                        else _clean_text(last_proactive_sent_at),
+                        current.get("cooldown_until")
+                        if cooldown_until is _UNSET
+                        else _clean_text(cooldown_until),
+                        patch_json,
+                        cleaned_account_id,
+                    ),
+                )
+        else:
+            next_metadata = current.get("metadata") or {}
+            if metadata is not _UNSET:
+                next_metadata = metadata or {}
+            with connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE proactive_account_state
+                    SET enabled = ?,
+                        next_scan_at = ?,
+                        last_scan_at = ?,
+                        last_proactive_sent_at = ?,
+                        cooldown_until = ?,
+                        metadata_json = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE account_id = ?
+                    """,
+                    (
+                        int(current["enabled"] if enabled is _UNSET else bool(enabled)),
+                        current.get("next_scan_at")
+                        if next_scan_at is _UNSET
+                        else _clean_text(next_scan_at),
+                        current.get("last_scan_at")
+                        if last_scan_at is _UNSET
+                        else _clean_text(last_scan_at),
+                        current.get("last_proactive_sent_at")
+                        if last_proactive_sent_at is _UNSET
+                        else _clean_text(last_proactive_sent_at),
+                        current.get("cooldown_until")
+                        if cooldown_until is _UNSET
+                        else _clean_text(cooldown_until),
+                        json.dumps(next_metadata, ensure_ascii=False),
+                        cleaned_account_id,
+                    ),
+                )
 
     item = get_proactive_account_state(account_id=cleaned_account_id)
     if item is None:

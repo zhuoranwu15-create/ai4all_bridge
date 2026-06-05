@@ -44,6 +44,7 @@ from app.db import (
     get_admin_user as get_admin_user_record,
     get_binding_intent,
     get_daily_usage,
+    get_content_invitation,
     get_latest_active_verification,
     get_latest_subscription_for_user,
     get_message_raw,
@@ -143,7 +144,14 @@ from app.proactive.account_checks import (
     execute_account_check_decision,
     generate_content_invitation_candidate,
     generate_account_check_candidate_draft,
+    generate_topic_followup_candidate,
     promote_account_check_candidate_draft,
+)
+from app.proactive.reactivation import (
+    REACTIVATION_TYPES,
+    dispatch_reactivation_candidate,
+    get_reactivation_candidate_from_metadata,
+    plan_reactivation_candidate,
 )
 from app.proactive.state import format_state_time
 from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
@@ -887,6 +895,92 @@ def _content_invitation_for_overview(invitation: dict) -> dict:
     if "metadata" in item:
         item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
     return item
+
+
+def _content_invitation_for_reactivation_admin(invitation: Optional[dict]) -> Optional[dict]:
+    if invitation is None:
+        return None
+    titles = invitation.get("title_items") or []
+    return {
+        "id": invitation.get("id"),
+        "status": invitation.get("status"),
+        "topic": invitation.get("topic"),
+        "title_count": len(titles),
+        "scheduled_at": invitation.get("scheduled_at"),
+        "expires_at": invitation.get("expires_at"),
+        "invited_at": invitation.get("invited_at"),
+        "updated_at": invitation.get("updated_at"),
+    }
+
+
+def _list_reactivation_candidate_admin_items(
+    *,
+    candidate_type: Optional[str],
+    limit: int,
+) -> list[dict]:
+    with db_connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                a.id AS account_id,
+                a.display_name,
+                a.status AS account_status,
+                a.updated_at AS account_updated_at,
+                MAX(m.created_at) AS account_last_active_at,
+                s.enabled,
+                s.next_scan_at,
+                s.last_scan_at,
+                s.last_proactive_sent_at,
+                s.cooldown_until,
+                s.metadata_json,
+                s.updated_at AS proactive_state_updated_at
+            FROM proactive_account_state s
+            JOIN accounts a ON a.id = s.account_id
+            LEFT JOIN messages m ON m.account_id = a.id
+            GROUP BY s.account_id
+            ORDER BY s.updated_at DESC, a.updated_at DESC
+            LIMIT ?
+            """,
+            (max(limit, 1),),
+        ).fetchall()
+
+    items: list[dict] = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata_json"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        candidate = get_reactivation_candidate_from_metadata(metadata)
+        if candidate is None:
+            continue
+        if candidate_type and candidate.get("type") != candidate_type:
+            continue
+        invitation = None
+        invitation_id = candidate.get("content_invitation_id")
+        if invitation_id:
+            invitation = get_content_invitation(invitation_id=str(invitation_id))
+        items.append(
+            {
+                "account": {
+                    "id": row["account_id"],
+                    "display_name": row["display_name"],
+                    "status": row["account_status"],
+                    "updated_at": row["account_updated_at"],
+                    "last_active_at": row["account_last_active_at"],
+                },
+                "proactive_state": {
+                    "enabled": bool(row["enabled"]),
+                    "next_scan_at": row["next_scan_at"],
+                    "last_scan_at": row["last_scan_at"],
+                    "last_proactive_sent_at": row["last_proactive_sent_at"],
+                    "cooldown_until": row["cooldown_until"],
+                    "updated_at": row["proactive_state_updated_at"],
+                },
+                "reactivation_candidate": candidate,
+                "content_invitation": _content_invitation_for_reactivation_admin(invitation),
+            }
+        )
+    return items
 
 
 def _redact_phone(phone: Optional[str]) -> Optional[str]:
@@ -3162,27 +3256,80 @@ def admin_run_account_proactive_check_once(
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
     current = datetime.now()
-    decision = decide_account_check_action(account_id=account_id, now=current)
-    execution = execute_account_check_decision(decision=decision, now=current)
-    if execution.get("status") == "sent":
-        content_generation = {
+    # Mirror what scan_due_proactive_account_checks does for one account so the
+    # admin endpoint surfaces the same dispatch/plan results as the scheduler.
+    # Dispatch always runs in dry_run mode here regardless of the production
+    # killswitch — operators use this endpoint to QA the candidate.
+    reactivation_dispatch = dispatch_reactivation_candidate(
+        account_id=account_id,
+        now=current,
+        dry_run=True,
+    )
+    dispatch_action = reactivation_dispatch.get("action")
+    dispatch_short_circuit_reasons = {
+        "reactivation_daily_limit_already_sent",
+        "recent_inbound_final_slot",
+        "avoidance_window_final_slot",
+        "dedupe_duplicate_after_retry",
+        "regenerate_failed_after_new_message",
+        "missing_channel_route",
+    }
+    dispatch_handled = dispatch_action in {
+        "sent",
+        "would_send",
+        "delayed",
+        "send_blocked",
+        "not_due",
+    } or (
+        dispatch_action == "no_op"
+        and reactivation_dispatch.get("reason") in dispatch_short_circuit_reasons
+    )
+
+    if dispatch_handled:
+        decision = {
             "action": "no_op",
             "account_id": account_id,
-            "reason": "companion_followup_sent_this_run",
+            "reason": "reactivation_dispatch_handled",
+            "evaluated_at": current.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        execution = {"status": "skipped", "reason": "reactivation_dispatch_handled"}
+        reactivation_planning = {
+            "action": "no_op",
+            "account_id": account_id,
+            "reason": "reactivation_dispatch_handled",
             "evaluated_at": current.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
             "metadata": {},
         }
+        content_generation = reactivation_planning
     else:
-        content_generation = generate_content_invitation_candidate(
-            account_id=account_id,
-            now=current,
-        )
+        decision = decide_account_check_action(account_id=account_id, now=current)
+        execution = execute_account_check_decision(decision=decision, now=current)
+        if execution.get("status") == "sent":
+            reactivation_planning = {
+                "action": "no_op",
+                "account_id": account_id,
+                "reason": "companion_followup_sent_this_run",
+                "evaluated_at": current.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+                "metadata": {},
+            }
+            content_generation = reactivation_planning
+        else:
+            reactivation_planning = plan_reactivation_candidate(
+                account_id=account_id,
+                now=current,
+                topic_followup_generator=generate_topic_followup_candidate,
+                content_invitation_generator=generate_content_invitation_candidate,
+            )
+            content_generation = reactivation_planning.get(
+                "content_invitation_generation",
+                reactivation_planning,
+            )
 
-    invitation = content_generation.get("content_invitation")
-    content_generation_metadata = content_generation.get("metadata") or {}
+    invitation = (content_generation or {}).get("content_invitation")
+    content_generation_metadata = (content_generation or {}).get("metadata") or {}
     display = {
         "content_invitation_generated": bool(invitation),
-        "reason": None if invitation else content_generation.get("reason"),
+        "reason": None if invitation else (content_generation or {}).get("reason"),
         "detail": None if invitation else content_generation_metadata.get("reply"),
         "content_invitation": invitation,
     }
@@ -3193,6 +3340,8 @@ def admin_run_account_proactive_check_once(
             "decision": decision,
             "execution": execution,
         },
+        "reactivation_dispatch": reactivation_dispatch,
+        "reactivation_planning": reactivation_planning,
         "content_invitation_generation": content_generation,
         "display": display,
     }
@@ -3367,6 +3516,43 @@ def admin_proactive_scheduler_status(_: None = Depends(verify_admin_auth)) -> di
             "account_check_interval_seconds": settings.proactive_account_check_interval_seconds,
         },
         "scheduler": scheduler.status() if scheduler else None,
+    }
+
+
+@app.get("/admin/proactive/reactivation-candidates")
+def admin_proactive_reactivation_candidates(
+    type: Optional[str] = None,
+    limit: int = 100,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    candidate_type = str(type or "").strip()
+    if candidate_type and candidate_type not in REACTIVATION_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="type must be topic_followup or content_invitation",
+        )
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
+    items = _list_reactivation_candidate_admin_items(
+        candidate_type=candidate_type or None,
+        limit=limit,
+    )
+    summary: dict[str, Any] = {
+        "total": len(items),
+        "by_type": {},
+        "by_scheduled_slot": {},
+    }
+    for item in items:
+        candidate = item.get("reactivation_candidate") or {}
+        ctype = str(candidate.get("type") or "unknown")
+        slot = str(candidate.get("scheduled_slot") or "unscheduled")
+        summary["by_type"][ctype] = summary["by_type"].get(ctype, 0) + 1
+        summary["by_scheduled_slot"][slot] = summary["by_scheduled_slot"].get(slot, 0) + 1
+    return {
+        "items": items,
+        "summary": summary,
+        "generated_at": datetime.now().replace(microsecond=0).isoformat(sep=" "),
+        "redacted": False,
     }
 
 

@@ -363,6 +363,75 @@ def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db)
     assert state["metadata"]["account_check_candidate_draft_generated_at"] == "2026-05-22 10:00:00"
 
 
+def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_db):
+    from app.proactive.account_checks import generate_topic_followup_candidate
+
+    fresh_db.llm_api_key = "fake-key"
+    _create_account("acc-topic-followup")
+    _create_route("acc-topic-followup")
+    _create_state("acc-topic-followup")
+    _insert_history("acc-topic-followup", "昨天那个相亲对象让我回消息回得很累。")
+
+    with (
+        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.user_profiles.settings", fresh_db),
+        patch(
+            "app.proactive.account_checks.generate_completion",
+            return_value=(
+                '{"should_send": true, "text": "昨天那个相亲对象后来有再找你吗？", '
+                '"topic": "相亲聊天压力", "reason": "用户最近讨论相亲回复压力", '
+                '"confidence": 0.91}'
+            ),
+        ) as mock_generate,
+    ):
+        result = generate_topic_followup_candidate(
+            account_id="acc-topic-followup",
+            now=datetime(2026, 6, 5, 10, 0),
+        )
+
+    assert result["action"] == "topic_followup_candidate_created"
+    candidate = result["reactivation_candidate"]
+    assert candidate["type"] == "topic_followup"
+    assert candidate["topic"] == "相亲聊天压力"
+    assert candidate["text"] == "昨天那个相亲对象后来有再找你吗？"
+    assert candidate["source_message_cutoff_id"] > 0
+    messages = mock_generate.call_args.args[0]
+    assert "隐藏 topic_followup 拉活候选生成器" in messages[0]["content"]
+    assert "最近 72 小时" in messages[0]["content"]
+    assert "相亲对象" in messages[1]["content"]
+    assert "MEMORY.md" not in messages[1]["content"]
+
+
+def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
+    from app.proactive.account_checks import generate_topic_followup_candidate
+
+    fresh_db.llm_api_key = "fake-key"
+    _create_account("acc-topic-skip-content")
+    _create_route("acc-topic-skip-content")
+    _create_state("acc-topic-skip-content")
+    _insert_history("acc-topic-skip-content", "中亚五国是哪几个国家？")
+
+    with (
+        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.user_profiles.settings", fresh_db),
+        patch(
+            "app.proactive.account_checks.generate_completion",
+            return_value=(
+                '{"should_send": false, "text": "", "topic": "中亚五国", '
+                '"reason": "轻知识话题应交给 content_invitation", "confidence": 0.2}'
+            ),
+        ),
+    ):
+        result = generate_topic_followup_candidate(
+            account_id="acc-topic-skip-content",
+            now=datetime(2026, 6, 5, 10, 0),
+        )
+
+    assert result["action"] == "no_op"
+    assert result["reason"] == "llm_no_topic_followup_candidate"
+    assert "content_invitation" in result["metadata"]["reply"]
+
+
 def test_promote_account_check_candidate_draft_enables_send_decision(fresh_db):
     from app.proactive.account_checks import (
         decide_account_check_action,

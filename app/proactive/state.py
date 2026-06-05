@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from app.config import settings
 from app.db import (
     claim_due_proactive_account_state,
     get_proactive_account_state as db_get_proactive_account_state,
@@ -11,7 +12,10 @@ from app.proactive.account_checks import (
     decide_account_check_action,
     execute_account_check_decision,
     generate_content_invitation_candidate,
+    generate_topic_followup_candidate,
 )
+from app.proactive.reactivation import plan_reactivation_candidate
+from app.proactive.reactivation import dispatch_reactivation_candidate
 
 
 DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS = 60 * 60
@@ -136,17 +140,24 @@ def mark_account_check_sent(
 ) -> Dict[str, Any]:
     current = now or datetime.now()
     state = get_account_state(account_id=account_id)
-    metadata = dict((state or {}).get("metadata") or {})
-    sent_candidate = metadata.pop("account_check_candidate", None)
+    metadata = (state or {}).get("metadata") or {}
+    # Rename {account_check_candidate, heartbeat_candidate} → last_sent.
+    # Use metadata_patch to scope the write to only these keys so concurrent
+    # writers cannot lose sibling metadata (e.g., reactivation_candidate).
+    sent_candidate = metadata.get("account_check_candidate")
     if sent_candidate is None:
-        sent_candidate = metadata.pop("heartbeat_candidate", None)
+        sent_candidate = metadata.get("heartbeat_candidate")
+    patch: Dict[str, Any] = {
+        "account_check_candidate": None,
+        "heartbeat_candidate": None,
+        "account_check_candidate_sent_at": format_state_time(current),
+    }
     if sent_candidate is not None:
-        metadata["account_check_last_sent_candidate"] = sent_candidate
-    metadata["account_check_candidate_sent_at"] = format_state_time(current)
+        patch["account_check_last_sent_candidate"] = sent_candidate
     return upsert_proactive_account_state(
         account_id=account_id,
         last_proactive_sent_at=format_state_time(current),
-        metadata=metadata,
+        metadata_patch=patch,
     )
 
 
@@ -155,8 +166,21 @@ def scan_due_proactive_account_checks(
     now: Optional[datetime] = None,
     limit: int = 20,
     check_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    reactivation_dry_run: Optional[bool] = None,
+    reactivation_dispatch_enabled: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     current = now or datetime.now()
+    # Default reactivation dispatch off + dry-run; require explicit opt-in via
+    # settings (or caller) before any real outbound is sent. Misconfigured
+    # production deploys should fail closed, not silently push messages.
+    if reactivation_dispatch_enabled is None:
+        reactivation_dispatch_enabled = bool(
+            getattr(settings, "reactivation_dispatch_enabled", False)
+        )
+    if reactivation_dry_run is None:
+        reactivation_dry_run = bool(
+            getattr(settings, "reactivation_dispatch_dry_run", True)
+        )
     due_accounts = list_due_proactive_account_checks(now=current, limit=limit)
     results: List[Dict[str, Any]] = []
     for item in due_accounts:
@@ -174,6 +198,81 @@ def scan_due_proactive_account_checks(
                 }
             )
             continue
+        if not reactivation_dispatch_enabled:
+            # Kill-switch off: still let planning run so candidates queue up,
+            # but never invoke the sender. fall through to decide/plan path.
+            reactivation_dispatch = {
+                "action": "no_op",
+                "account_id": claimed["account_id"],
+                "reason": "reactivation_dispatch_disabled",
+                "evaluated_at": format_state_time(current),
+                "metadata": {},
+            }
+        else:
+            reactivation_dispatch = dispatch_reactivation_candidate(
+                account_id=claimed["account_id"],
+                now=current,
+                dry_run=reactivation_dry_run,
+            )
+        dispatch_short_circuit_actions = {
+            "sent",
+            "would_send",
+            "delayed",
+            "send_blocked",
+            # not_due means a candidate is already scheduled for a later slot;
+            # do NOT replan or overwrite it in this scan.
+            "not_due",
+        }
+        dispatch_no_op_short_circuit_reasons = {
+            "reactivation_daily_limit_already_sent",
+            "recent_inbound_final_slot",
+            "avoidance_window_final_slot",
+            "dedupe_duplicate_after_retry",
+            "regenerate_failed_after_new_message",
+            "missing_channel_route",
+        }
+        if (
+            reactivation_dispatch.get("action") in dispatch_short_circuit_actions
+            or (
+                reactivation_dispatch.get("action") == "no_op"
+                and reactivation_dispatch.get("reason")
+                in dispatch_no_op_short_circuit_reasons
+            )
+        ):
+            results.append(
+                {
+                    "status": reactivation_dispatch.get("action"),
+                    "reason": reactivation_dispatch.get("reason"),
+                    "account_id": claimed["account_id"],
+                    "reactivation_dispatch": reactivation_dispatch,
+                    "decision": {
+                        "action": "no_op",
+                        "account_id": claimed["account_id"],
+                        "reason": "reactivation_dispatch_handled",
+                        "evaluated_at": format_state_time(current),
+                    },
+                    "execution": {
+                        "status": "skipped",
+                        "reason": "reactivation_dispatch_handled",
+                    },
+                    "reactivation_planning": {
+                        "action": "no_op",
+                        "account_id": claimed["account_id"],
+                        "reason": "reactivation_dispatch_handled",
+                        "evaluated_at": format_state_time(current),
+                        "metadata": {},
+                    },
+                    "content_invitation_generation": {
+                        "action": "no_op",
+                        "account_id": claimed["account_id"],
+                        "reason": "reactivation_dispatch_handled",
+                        "evaluated_at": format_state_time(current),
+                        "metadata": {},
+                    },
+                    "account_state": claimed,
+                }
+            )
+            continue
         decision = decide_account_check_action(
             account_id=claimed["account_id"],
             now=current,
@@ -188,17 +287,24 @@ def scan_due_proactive_account_checks(
                 account_id=claimed["account_id"],
                 now=current,
             )
-            content_invitation_generation = {
+            reactivation_planning = {
                 "action": "no_op",
                 "account_id": claimed["account_id"],
                 "reason": "companion_followup_sent_this_check",
                 "evaluated_at": format_state_time(current),
                 "metadata": {},
             }
+            content_invitation_generation = reactivation_planning
         else:
-            content_invitation_generation = generate_content_invitation_candidate(
+            reactivation_planning = plan_reactivation_candidate(
                 account_id=claimed["account_id"],
                 now=current,
+                topic_followup_generator=generate_topic_followup_candidate,
+                content_invitation_generator=generate_content_invitation_candidate,
+            )
+            content_invitation_generation = reactivation_planning.get(
+                "content_invitation_generation",
+                reactivation_planning,
             )
         results.append(
             {
@@ -207,6 +313,8 @@ def scan_due_proactive_account_checks(
                 "account_id": claimed["account_id"],
                 "decision": decision,
                 "execution": execution,
+                "reactivation_dispatch": reactivation_dispatch,
+                "reactivation_planning": reactivation_planning,
                 "content_invitation_generation": content_invitation_generation,
                 "account_state": account_state,
             }

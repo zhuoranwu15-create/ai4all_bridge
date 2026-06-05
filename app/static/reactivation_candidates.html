@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reactivation Candidates</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fa;
+      color: #1f2933;
+      font-size: 14px;
+    }
+    header {
+      background: #17202e;
+      color: #fff;
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+    header .sub { margin-top: 3px; color: #bac6d6; font-size: 12px; }
+    .toolbar {
+      background: #fff;
+      border-bottom: 1px solid #dfe5ec;
+      padding: 12px 22px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    select, input, button {
+      border: 1px solid #cfd8e3;
+      border-radius: 6px;
+      background: #fff;
+      padding: 7px 9px;
+      font: inherit;
+    }
+    button {
+      border: 0;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 650;
+      cursor: pointer;
+      padding: 8px 12px;
+    }
+    button.secondary { background: #e7edf7; color: #24364f; }
+    button:hover { filter: brightness(.96); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      padding: 14px 22px 0;
+    }
+    .stat {
+      background: #fff;
+      border: 1px solid #dfe5ec;
+      border-radius: 8px;
+      padding: 11px 12px;
+    }
+    .stat .label { color: #667085; font-size: 12px; }
+    .stat .value { margin-top: 5px; font-size: 20px; font-weight: 700; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(560px, 1.4fr) minmax(360px, .8fr);
+      gap: 14px;
+      padding: 14px 22px 22px;
+      align-items: start;
+    }
+    .panel {
+      background: #fff;
+      border: 1px solid #dfe5ec;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid #e6ebf1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf1f5;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      color: #5b6675;
+      font-size: 12px;
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tr { cursor: pointer; }
+    tr:hover td { background: #f8fbff; }
+    tr.selected td { background: #eef5ff; }
+    .account { font-weight: 650; word-break: break-all; }
+    .muted { color: #667085; font-size: 12px; line-height: 1.5; }
+    .text { line-height: 1.45; max-width: 360px; }
+    .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #eef2ff;
+      color: #3730a3;
+      white-space: nowrap;
+    }
+    .pill.topic { background: #dcfce7; color: #166534; }
+    .pill.content { background: #fef3c7; color: #92400e; }
+    .detail { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .block {
+      border: 1px solid #e6ebf1;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fcfdff;
+    }
+    .block h3 { margin: 0 0 8px; font-size: 13px; }
+    .kv {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 7px 10px;
+      font-size: 13px;
+    }
+    .kv div:nth-child(odd) { color: #667085; }
+    pre {
+      margin: 0;
+      background: #111827;
+      color: #dbeafe;
+      border-radius: 8px;
+      padding: 11px;
+      overflow: auto;
+      max-height: 360px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .empty { padding: 22px; text-align: center; color: #7b8794; }
+    .status-msg { color: #667085; font-size: 12px; }
+    .status-msg.error { color: #b42318; }
+    @media (max-width: 980px) {
+      .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); padding-left: 12px; padding-right: 12px; }
+      .layout { grid-template-columns: 1fr; padding: 12px; }
+      header, .toolbar { padding-left: 12px; padding-right: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Reactivation Candidates</h1>
+      <div class="sub">topic_followup + content_invitation 当前候选</div>
+    </div>
+    <div id="admin-user" class="sub">—</div>
+  </header>
+
+  <div class="toolbar">
+    <label>类型</label>
+    <select id="typeFilter">
+      <option value="">全部</option>
+      <option value="topic_followup">topic_followup</option>
+      <option value="content_invitation">content_invitation</option>
+    </select>
+    <label>Limit</label>
+    <input id="limitInput" type="number" min="1" max="500" value="100">
+    <button onclick="loadCandidates()">刷新</button>
+    <button class="secondary" onclick="clearToken()">重置 Token</button>
+    <span id="status" class="status-msg"></span>
+  </div>
+
+  <section class="stats">
+    <div class="stat"><div class="label">总候选</div><div id="statTotal" class="value">0</div></div>
+    <div class="stat"><div class="label">topic_followup</div><div id="statTopic" class="value">0</div></div>
+    <div class="stat"><div class="label">content_invitation</div><div id="statContent" class="value">0</div></div>
+    <div class="stat"><div class="label">更新时间</div><div id="statTime" class="value" style="font-size:14px;">—</div></div>
+  </section>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>候选列表</h2>
+        <span id="countLabel" class="muted">0 items</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>账号</th>
+              <th>类型</th>
+              <th>主题</th>
+              <th>候选消息</th>
+              <th>发送时段</th>
+              <th>内容邀请</th>
+            </tr>
+          </thead>
+          <tbody id="candidateRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="panel">
+      <div class="panel-head">
+        <h2>详情</h2>
+        <span id="detailType" class="pill">—</span>
+      </div>
+      <div id="detail" class="detail">
+        <div class="empty">选择一个候选</div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/ui/admin.js"></script>
+  <script>
+    var candidates = [];
+    var selectedIndex = -1;
+
+    function candidateTypeClass(type) {
+      return type === 'content_invitation' ? 'content' : 'topic';
+    }
+
+    function short(value, limit) {
+      var text = String(value == null ? '' : value);
+      return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+    }
+
+    function setStatus(message, error) {
+      var el = document.getElementById('status');
+      el.textContent = message || '';
+      el.className = 'status-msg' + (error ? ' error' : '');
+    }
+
+    function clearToken() {
+      localStorage.removeItem('admin_token');
+      location.reload();
+    }
+
+    function renderStats(payload) {
+      var summary = payload.summary || {};
+      var byType = summary.by_type || {};
+      document.getElementById('statTotal').textContent = summary.total || 0;
+      document.getElementById('statTopic').textContent = byType.topic_followup || 0;
+      document.getElementById('statContent').textContent = byType.content_invitation || 0;
+      document.getElementById('statTime').textContent = formatDateTime(payload.generated_at);
+      document.getElementById('countLabel').textContent = String((payload.items || []).length) + ' items';
+    }
+
+    function renderRows() {
+      var tbody = document.getElementById('candidateRows');
+      if (!candidates.length) {
+        tbody.innerHTML = '<tr><td colspan="6"><div class="empty">暂无候选</div></td></tr>';
+        renderDetail(-1);
+        return;
+      }
+      tbody.innerHTML = candidates.map(function(item, index) {
+        var account = item.account || {};
+        var candidate = item.reactivation_candidate || {};
+        var invitation = item.content_invitation || {};
+        var type = candidate.type || 'unknown';
+        var invLabel = invitation.id
+          ? esc(invitation.status || 'candidate') + ' · ' + esc(invitation.title_count || 0) + ' titles'
+          : '—';
+        return '<tr onclick="selectCandidate(' + index + ')" class="' + (index === selectedIndex ? 'selected' : '') + '">' +
+          '<td><div class="account">' + esc(account.display_name || account.id) + '</div><div class="muted">' + esc(account.id) + '</div></td>' +
+          '<td><span class="pill ' + candidateTypeClass(type) + '">' + esc(type) + '</span></td>' +
+          '<td>' + esc(candidate.topic || '—') + '</td>' +
+          '<td><div class="text">' + esc(short(candidate.text || '', 120)) + '</div></td>' +
+          '<td><div>' + esc(candidate.scheduled_slot || '—') + '</div><div class="muted">' + esc(formatDateTime(candidate.scheduled_at)) + '</div></td>' +
+          '<td><div>' + invLabel + '</div><div class="muted">' + esc(invitation.id || '') + '</div></td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function selectCandidate(index) {
+      selectedIndex = index;
+      renderRows();
+      renderDetail(index);
+    }
+
+    function renderDetail(index) {
+      var detail = document.getElementById('detail');
+      var typePill = document.getElementById('detailType');
+      if (index < 0 || !candidates[index]) {
+        typePill.textContent = '—';
+        typePill.className = 'pill';
+        detail.innerHTML = '<div class="empty">选择一个候选</div>';
+        return;
+      }
+      var item = candidates[index];
+      var account = item.account || {};
+      var state = item.proactive_state || {};
+      var candidate = item.reactivation_candidate || {};
+      var invitation = item.content_invitation || {};
+      typePill.textContent = candidate.type || 'unknown';
+      typePill.className = 'pill ' + candidateTypeClass(candidate.type);
+      detail.innerHTML =
+        '<div class="block"><h3>账号</h3><div class="kv">' +
+        '<div>account_id</div><div>' + esc(account.id) + '</div>' +
+        '<div>display</div><div>' + esc(account.display_name || '—') + '</div>' +
+        '<div>status</div><div>' + esc(account.status || '—') + '</div>' +
+        '<div>last_active</div><div>' + esc(formatDateTime(account.last_active_at)) + '</div>' +
+        '</div></div>' +
+        '<div class="block"><h3>候选消息</h3><div class="kv">' +
+        '<div>id</div><div>' + esc(candidate.id || '—') + '</div>' +
+        '<div>topic</div><div>' + esc(candidate.topic || '—') + '</div>' +
+        '<div>text</div><div>' + esc(candidate.text || '—') + '</div>' +
+        '<div>reason</div><div>' + esc(candidate.reason || '—') + '</div>' +
+        '<div>confidence</div><div>' + esc(candidate.confidence == null ? '—' : candidate.confidence) + '</div>' +
+        '<div>generated_at</div><div>' + esc(formatDateTime(candidate.generated_at)) + '</div>' +
+        '<div>scheduled</div><div>' + esc(candidate.scheduled_slot || '—') + ' · ' + esc(formatDateTime(candidate.scheduled_at)) + '</div>' +
+        '</div></div>' +
+        '<div class="block"><h3>Content Invitation</h3><div class="kv">' +
+        '<div>id</div><div>' + esc(invitation.id || '—') + '</div>' +
+        '<div>status</div><div>' + esc(invitation.status || '—') + '</div>' +
+        '<div>title_count</div><div>' + esc(invitation.title_count == null ? '—' : invitation.title_count) + '</div>' +
+        '<div>expires_at</div><div>' + esc(formatDateTime(invitation.expires_at)) + '</div>' +
+        '</div></div>' +
+        '<div class="block"><h3>Proactive State</h3><div class="kv">' +
+        '<div>enabled</div><div>' + esc(state.enabled) + '</div>' +
+        '<div>next_scan</div><div>' + esc(formatDateTime(state.next_scan_at)) + '</div>' +
+        '<div>last_scan</div><div>' + esc(formatDateTime(state.last_scan_at)) + '</div>' +
+        '<div>last_sent</div><div>' + esc(formatDateTime(state.last_proactive_sent_at)) + '</div>' +
+        '</div></div>' +
+        '<div class="block"><h3>Raw</h3><pre>' + esc(JSON.stringify(item, null, 2)) + '</pre></div>';
+    }
+
+    async function loadCandidates() {
+      setStatus('加载中…');
+      try {
+        await loadAdminMe();
+        var type = document.getElementById('typeFilter').value;
+        var limit = document.getElementById('limitInput').value || '100';
+        var path = '/admin/proactive/reactivation-candidates?limit=' + encodeURIComponent(limit);
+        if (type) path += '&type=' + encodeURIComponent(type);
+        var payload = await apiFetch(path);
+        candidates = payload.items || [];
+        selectedIndex = candidates.length ? 0 : -1;
+        renderStats(payload);
+        renderRows();
+        renderDetail(selectedIndex);
+        setStatus('已刷新');
+      } catch (err) {
+        setStatus(err.message || String(err), true);
+      }
+    }
+
+    document.getElementById('typeFilter').addEventListener('change', loadCandidates);
+    loadCandidates();
+  </script>
+</body>
+</html>

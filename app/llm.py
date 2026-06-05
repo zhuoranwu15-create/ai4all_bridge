@@ -297,6 +297,7 @@ def generate_reply_with_tools(
     system_prompt: Optional[str],
     tools: List[Dict],
     ctx,
+    max_tool_rounds: Optional[int] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None)."""
     if not settings.llm_api_key:
@@ -305,8 +306,9 @@ def generate_reply_with_tools(
     prompt = system_prompt or settings.llm_default_prompt
     messages: List[Dict] = [{"role": "system", "content": prompt}]
     messages.extend(history)
-    max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
-    max_tool_rounds = max(1, min(max_tool_rounds, 8))
+    if max_tool_rounds is None:
+        max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
+    max_tool_rounds = max(1, min(int(max_tool_rounds), 8))
 
     for round_index in range(max_tool_rounds + 1):
         try:

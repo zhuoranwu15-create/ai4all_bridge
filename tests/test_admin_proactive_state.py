@@ -366,3 +366,75 @@ def test_admin_proactive_overview_redacts_task_text(client):
     assert secret_reminder not in dumped
     assert secret_commitment not in dumped
     assert secret_outbound not in dumped
+
+
+def test_admin_lists_reactivation_candidates(fresh_db):
+    from app.db import create_content_invitation, upsert_proactive_account_state
+    from app.main import admin_proactive_reactivation_candidates
+    from app.proactive.reactivation import upsert_reactivation_candidate
+
+    _create_account("acc-admin-react-topic")
+    _create_account("acc-admin-react-content")
+    _create_account("acc-admin-react-empty")
+    upsert_proactive_account_state(
+        account_id="acc-admin-react-empty",
+        enabled=True,
+        metadata={"note": "no candidate"},
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-admin-react-topic",
+        candidate={
+            "id": "react-topic-admin",
+            "type": "topic_followup",
+            "topic": "亲子日常",
+            "text": "昨晚小家伙睡得乖不乖？",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+            "source_message_cutoff_id": 12,
+        },
+    )
+    invitation = create_content_invitation(
+        account_id="acc-admin-react-content",
+        invitation_id="cinv-admin-react",
+        topic="中亚五国地理文化",
+        invitation_text="Mark，要不要看看几条中亚五国内容？",
+        title_items=[
+            {"title": "中亚五国是哪五国"},
+            {"title": "中亚地理入门"},
+            {"title": "丝路上的中亚城市"},
+        ],
+        scheduled_at="2026-06-05 12:15:00",
+        expires_at="2026-06-06 12:15:00",
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-admin-react-content",
+        candidate={
+            "id": "react-content-admin",
+            "type": "content_invitation",
+            "topic": "中亚五国地理文化",
+            "text": "Mark，要不要看看几条中亚五国内容？",
+            "content_invitation_id": invitation["id"],
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+        },
+    )
+
+    body = admin_proactive_reactivation_candidates(limit=100)
+    filtered = admin_proactive_reactivation_candidates(type="content_invitation", limit=100)
+    by_account = {item["account"]["id"]: item for item in body["items"]}
+    assert "acc-admin-react-topic" in by_account
+    assert "acc-admin-react-content" in by_account
+    assert "acc-admin-react-empty" not in by_account
+    assert body["summary"]["by_type"]["topic_followup"] == 1
+    assert body["summary"]["by_type"]["content_invitation"] == 1
+    assert by_account["acc-admin-react-topic"]["reactivation_candidate"]["text"] == "昨晚小家伙睡得乖不乖？"
+    assert by_account["acc-admin-react-content"]["content_invitation"]["title_count"] == 3
+    assert "title_items" not in by_account["acc-admin-react-content"]["content_invitation"]
+
+    assert [item["account"]["id"] for item in filtered["items"]] == ["acc-admin-react-content"]
+    try:
+        admin_proactive_reactivation_candidates(type="bad", limit=100)
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+    else:
+        raise AssertionError("invalid reactivation type should fail")
