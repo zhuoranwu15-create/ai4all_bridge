@@ -1573,7 +1573,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
 def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
-    content = path.read_text(encoding="utf-8")
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,
@@ -3121,7 +3121,7 @@ def admin_get_user_profile(
 ) -> dict:
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
-    content = path.read_text(encoding="utf-8")
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,
@@ -3895,7 +3895,7 @@ def admin_plaintext_user_profile(
     return {
         "account_id": account_id,
         "path": str(path),
-        "content": path.read_text(encoding="utf-8"),
+        "content": path.read_text(encoding="utf-8") if path.exists() else "",
         "agent_context": context.metadata(),
         "plaintext": True,
     }

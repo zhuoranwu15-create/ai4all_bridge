@@ -88,15 +88,20 @@ def context_file_path(account_id: str, filename: str) -> Path:
 
 
 def ensure_user_profile(account_id: str) -> Path:
+    """返回 legacy user_profile.md 路径并确保账号目录存在。
+
+    历史遗留单文件。新版上下文已拆分为 SOUL/IDENTITY/USER/MEMORY，新账号不再
+    生成该文件，仅保留路径解析以兼容历史账号与既有只读端点。已存在的文件不动。
+    """
     path = user_profile_path(account_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(DEFAULT_USER_PROFILE, encoding="utf-8")
     return path
 
 
 def read_user_profile(account_id: str) -> str:
     path = ensure_user_profile(account_id)
+    if not path.exists():
+        return ""
     return path.read_text(encoding="utf-8").strip()
 
 
@@ -250,7 +255,10 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
     """
     profile_path = ensure_user_profile(account_id)
     profile_dir = profile_path.parent
-    legacy_profile = profile_path.read_text(encoding="utf-8")
+    # 新账号不再有 legacy user_profile.md；缺失时按空 legacy 派生（默认模板与历史一致）。
+    legacy_profile = (
+        profile_path.read_text(encoding="utf-8") if profile_path.exists() else ""
+    )
     templates = _default_user_context_templates(
         display_name=display_name,
         legacy_profile=legacy_profile,
@@ -356,24 +364,39 @@ def write_ai_name_to_identity(account_id: str, name: str) -> Path:
     return identity_path
 
 
+# USER.md 用户称呼行：兼容旧格式（无 bullet）与新格式（"- " bullet），便于原地更新。
+_USER_NAME_LINE_RE = re.compile(r"(?m)^[ \t]*-?[ \t]*用户称呼[:：].*$")
+
+
 def write_user_name(account_id: str, name: str) -> Path:
-    """Update or create USER.md with the user's preferred name."""
+    """更新或创建 USER.md 中的用户称呼。
+
+    以 bullet 形式（与 dreaming 长期记忆同格式）维护 "- 用户称呼：X"：
+    - 已存在该行：原地替换，保留其余记忆内容；
+    - 不存在但有其它内容：追加该行，并清掉 "- 暂无" 占位符；
+    - 文件不存在或仅有标题/占位符：写入带标题的新文件。
+
+    绝不整文件覆盖，避免抹掉 dreaming 已写入 USER.md 的长期记忆。
+    """
     name = name.strip()
     user_path = context_file_path(account_id, "USER.md")
     user_path.parent.mkdir(parents=True, exist_ok=True)
+    name_line = f"- 用户称呼：{name}"
 
     if user_path.exists():
         existing = user_path.read_text(encoding="utf-8")
-        if re.search(r"用户称呼[:：]", existing):
-            updated = re.sub(r"(?m)^(用户称呼[:：]\s*).*$", f"用户称呼：{name}", existing)
+        if _USER_NAME_LINE_RE.search(existing):
+            updated = _USER_NAME_LINE_RE.sub(name_line, existing, count=1).rstrip() + "\n"
             user_path.write_text(updated, encoding="utf-8")
             return user_path
+        # 无用户称呼行：保留既有内容并追加，顺带清掉占位符
+        kept = [ln for ln in existing.splitlines() if ln.strip() != "- 暂无"]
+        stripped = "\n".join(kept).rstrip()
+        if stripped and stripped != "# USER":
+            user_path.write_text(f"{stripped}\n{name_line}\n", encoding="utf-8")
+            return user_path
 
-    content = f"""# USER
-
-用户称呼：{name}
-"""
-    user_path.write_text(content, encoding="utf-8")
+    user_path.write_text(f"# USER\n\n{name_line}\n", encoding="utf-8")
     return user_path
 
 

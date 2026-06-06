@@ -596,3 +596,51 @@ def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
     assert res.status_code == 200
     # build_onboarding_prompt_context should not be called when onboarding is complete
     mock_ctx.assert_not_called()
+
+
+def test_write_user_name_preserves_existing_memory(tmp_path, fresh_db):
+    """#1 回归：USER.md 已有 dreaming 记忆且无'用户称呼'行时，写名字不得整文件覆盖。"""
+    from app.user_profiles import write_user_name, context_file_path
+
+    account_id = "test-preserve-mem"
+    path = context_file_path(account_id, "USER.md")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# USER\n\n- 用户自称冲哥。\n- 用户是马刺球迷。\n", encoding="utf-8")
+
+    write_user_name(account_id, "冲哥")
+
+    content = path.read_text(encoding="utf-8")
+    assert "用户是马刺球迷" in content          # 既有记忆保留
+    assert "- 用户称呼：冲哥" in content         # 新名字以 bullet 追加
+    assert content.count("用户称呼") == 1
+
+
+def test_write_user_name_uses_bullet_and_clears_placeholder(tmp_path, fresh_db):
+    """#2 回归：默认占位符被清掉，用户称呼以统一 bullet 格式写入。"""
+    from app.user_profiles import write_user_name, context_file_path, ensure_agent_context_files
+
+    account_id = "test-bullet-fmt"
+    ensure_agent_context_files(account_id)  # 生成 '# USER\n\n- 暂无'
+    write_user_name(account_id, "二哥")
+
+    content = context_file_path(account_id, "USER.md").read_text(encoding="utf-8")
+    assert "暂无" not in content
+    assert "- 用户称呼：二哥" in content
+
+
+def test_write_user_name_migrates_legacy_format_in_place(tmp_path, fresh_db):
+    """旧格式（无 bullet '用户称呼：X'）在再次写入时原地迁移为 bullet，且保留其它行。"""
+    from app.user_profiles import write_user_name, context_file_path
+
+    account_id = "test-migrate-fmt"
+    path = context_file_path(account_id, "USER.md")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# USER\n\n用户称呼：老薛\n- 用户是球迷。\n", encoding="utf-8")
+
+    write_user_name(account_id, "薛哥")
+
+    content = path.read_text(encoding="utf-8")
+    assert "- 用户称呼：薛哥" in content
+    assert "老薛" not in content
+    assert "用户是球迷" in content
+    assert content.count("用户称呼") == 1
