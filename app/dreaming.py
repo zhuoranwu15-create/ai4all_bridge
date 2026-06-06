@@ -73,13 +73,26 @@ DREAMING_JSON_SCHEMA: Dict[str, Any] = {
                     "reason",
                 ],
                 "properties": {
-                    "operation": {"type": "string"},
-                    "target_file": {"type": "string"},
+                    # 枚举值必须严格使用，便于下游自动应用判定（详见 prompt 说明）。
+                    "operation": {
+                        "type": "string",
+                        "enum": ["add", "update", "delete", "downgrade"],
+                    },
+                    "target_file": {
+                        "type": "string",
+                        "enum": ["MEMORY.md", "USER.md", "SOUL.md", "IDENTITY.md"],
+                    },
                     "category": {"type": "string"},
                     "memory_text": {"type": "string"},
-                    "importance": {"type": "string"},
+                    "importance": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    },
                     "confidence": {"type": "number"},
-                    "sensitivity": {"type": "string"},
+                    "sensitivity": {
+                        "type": "string",
+                        "enum": ["normal", "sensitive", "highly_sensitive"],
+                    },
                     "reason": {"type": "string"},
                     "source_message_ids": {"type": "array"},
                     "source_daily_note_dates": {"type": "array"},
@@ -94,6 +107,9 @@ ALLOWED_TARGET_FILES = {"MEMORY.md", "USER.md", "SOUL.md", "IDENTITY.md"}
 ALLOWED_OPERATIONS = {"add", "update", "delete", "downgrade"}
 ALLOWED_IMPORTANCE = {"high", "medium", "low"}
 ALLOWED_SENSITIVITY = {"normal", "sensitive", "highly_sensitive"}
+
+# 上下文文件初始占位符行，写入真实记忆时应被替换掉（见 _append_memory_line）。
+_MEMORY_PLACEHOLDER = "- 暂无"
 
 TEXT_FIELD_RE = re.compile(
     r"(password|passwd|token|secret|验证码|密码|身份证|银行卡|住址|地址|手机号|电话|email|邮箱)",
@@ -196,9 +212,17 @@ def _normalize_dreaming_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         importance = _clean_text(raw_item.get("importance")).lower() or "medium"
         if importance not in ALLOWED_IMPORTANCE:
             importance = "medium"
-        sensitivity = _clean_text(raw_item.get("sensitivity")).lower() or "normal"
+        # sensitivity 必须落在 ALLOWED_SENSITIVITY；模型若返回非法值（历史 bug：
+        # 未在 prompt/schema 告知枚举，导致模型给出"低/无/none"等被全部兜底成
+        # sensitive，进而被自动应用阶段全部 skip），这里兜底成 normal，并由
+        # _auto_apply_skip_reason 中的 TEXT_FIELD_RE 作为 PII 最后防线。
+        raw_sensitivity = _clean_text(raw_item.get("sensitivity")).lower()
+        sensitivity = raw_sensitivity or "normal"
         if sensitivity not in ALLOWED_SENSITIVITY:
-            sensitivity = "sensitive"
+            logger.warning(
+                "dreaming: 非法 sensitivity 值 %r，兜底为 normal", raw_sensitivity
+            )
+            sensitivity = "normal"
         category = _clean_text(raw_item.get("category")).lower() or "other"
         reason = _clean_text(raw_item.get("reason"))
         source_message_ids = _coerce_string_list(raw_item.get("source_message_ids"))
@@ -343,6 +367,16 @@ def _build_dreaming_prompt(
 - long_term_memory_items 必须克制、去重、可追溯。
 - 如果没有长期记忆片段，输出空数组。
 
+每个 long_term_memory_items 元素的枚举字段必须严格使用以下英文取值，不要翻译、不要自创：
+- operation：add | update | delete | downgrade
+- target_file：MEMORY.md（通用长期记忆）| USER.md（用户称呼/身份/偏好）| SOUL.md | IDENTITY.md
+- importance：high | medium | low
+- sensitivity：normal | sensitive | highly_sensitive
+  - normal：称呼、昵称、AI 名字与性格设定、日常偏好、稳定身份等可长期保存的普通信息。
+  - sensitive：医疗、法律、财务、政治、宗教、性取向等敏感话题。
+  - highly_sensitive：密码、验证码、证件号、银行卡、精确住址或精确联系方式（这类本就不应提取为长期记忆）。
+  绝大多数可长期记住的偏好与称呼都应标为 normal；只有真正触及上述敏感/高度敏感类别时才上调。
+
 当前 MEMORY.md：
 {current_memory or "- 暂无"}
 
@@ -443,13 +477,16 @@ def _diff_text(before: str, after: str) -> str:
 
 
 def _append_memory_line(content: str, target_file: str, memory_text: str) -> str:
-    stripped = content.rstrip()
     line = memory_text.strip()
     if not line.startswith("- "):
         line = f"- {line}"
-    if not stripped:
-        heading = target_file[:-3]
-        return f"# {heading}\n\n{line}\n"
+    # 写入真实记忆时清掉占位符行（"- 暂无"），避免与真实条目并存造成自相矛盾，
+    # 也避免占位符进入 prompt。
+    kept = [ln for ln in content.splitlines() if ln.strip() != _MEMORY_PLACEHOLDER]
+    stripped = "\n".join(kept).rstrip()
+    heading = f"# {target_file[:-3]}"
+    if not stripped or stripped == heading:
+        return f"{heading}\n\n{line}\n"
     if line in stripped.splitlines():
         return stripped + "\n"
     return f"{stripped}\n{line}\n"
@@ -875,6 +912,77 @@ def run_dreaming(
         "skipped_count": skipped_count,
         "failed_count": failed_count,
         "items": items,
+    }
+
+
+def reapply_sensitivity_misskips(
+    *,
+    account_id: Optional[str] = None,
+    apply: bool = False,
+    limit: int = 500,
+    actor_id: str = "backfill_sensitivity_fix",
+) -> Dict[str, Any]:
+    """回填历史 bug 误判为敏感而被 skip 的长期记忆条目。
+
+    历史 bug：prompt/schema 未告知模型 sensitivity 枚举，模型返回的非法值被兜底成
+    "sensitive"，导致所有条目在自动应用阶段以 skip_reason='sensitive_item' 被丢弃。
+    本函数把这些条目的 sensitivity 重置为 "normal" 后，按现行 _auto_apply_skip_reason
+    规则重新评估；TEXT_FIELD_RE（PII 后盾）与置信度/重要性门槛仍然生效，因此真正含
+    密码/银行卡/手机号等的条目仍会被拦下。
+
+    apply=False（默认）：仅预演，不写文件、不改 DB。
+    apply=True：调用 _apply_memory_item 真正写入 MEMORY.md/USER.md 并记录审计事件。
+    """
+    candidates = [
+        item
+        for item in list_dreaming_memory_items(
+            account_id=account_id, apply_status="skipped", limit=limit
+        )
+        if item.get("skip_reason") == "sensitive_item"
+    ]
+    decisions: List[Dict[str, Any]] = []
+    applied = would_apply = skipped = 0
+    for item in candidates:
+        eval_item = dict(item)
+        eval_item["sensitivity"] = "normal"
+        if apply:
+            result = _apply_memory_item(
+                eval_item, actor_type="system", actor_id=actor_id
+            )
+            status = str(result.get("apply_status"))
+            reason = result.get("skip_reason")
+            if status == "applied":
+                applied += 1
+            else:
+                skipped += 1
+        else:
+            reason = _auto_apply_skip_reason(
+                eval_item, source_type=str(eval_item.get("source_type"))
+            )
+            status = "would_skip" if reason else "would_apply"
+            if reason:
+                skipped += 1
+            else:
+                would_apply += 1
+        decisions.append(
+            {
+                "id": item["id"],
+                "account_id": item["account_id"],
+                "target_file": item["target_file"],
+                "importance": item["importance"],
+                "confidence": item["confidence"],
+                "status": status,
+                "skip_reason": reason,
+                "memory_text": item["memory_text"],
+            }
+        )
+    return {
+        "apply": apply,
+        "candidates": len(candidates),
+        "applied": applied,
+        "would_apply": would_apply,
+        "skipped": skipped,
+        "decisions": decisions,
     }
 
 

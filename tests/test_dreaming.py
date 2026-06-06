@@ -323,3 +323,101 @@ def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path)
     assert debug["redacted"] is True
     assert "13800138000" not in json.dumps(debug, ensure_ascii=False)
     assert "[redacted-phone]" in json.dumps(debug, ensure_ascii=False)
+
+
+def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, tmp_path):
+    """回归：模型返回非法 sensitivity 值时应兜底为 normal 并正常应用，而非被全部 skip。"""
+    from app.dreaming import read_long_term_memory, run_dreaming
+    from app.db import list_dreaming_memory_items
+
+    fresh_db.llm_api_key = "fake-key"
+    account_id = "acc-invalid-sens"
+    _write_daily(tmp_path, account_id, TODAY, "# 2026-05-18\n\n- 用户希望被称为二哥")
+    payload = _llm_payload(
+        items=[
+            {
+                "operation": "add",
+                "target_file": "USER.md",
+                "category": "identity",
+                "memory_text": "用户希望被称为二哥。",
+                "importance": "high",
+                "confidence": 0.95,
+                "sensitivity": "低",  # 非法枚举值（历史 bug 触发点）
+                "reason": "用户明确告知称呼，非敏感信息。",
+            }
+        ]
+    )
+
+    with patch("app.llm.generate_completion", return_value=payload):
+        result = run_dreaming(account_id=account_id, today=TODAY, days=1)
+
+    assert result["applied_count"] == 1
+    items = list_dreaming_memory_items(account_id=account_id)
+    assert items[0]["sensitivity"] == "normal"
+    assert items[0]["apply_status"] == "applied"
+    # USER.md 落地（read_long_term_memory 读 MEMORY.md，这里直接读 USER.md）
+    from app.user_profiles import context_file_path
+
+    assert "二哥" in context_file_path(account_id, "USER.md").read_text(encoding="utf-8")
+
+
+def _insert_skipped_sensitive_item(account_id, *, memory_text, importance="high", confidence=0.95):
+    from app.db import create_dreaming_run, insert_dreaming_memory_item
+
+    run = create_dreaming_run(
+        account_id=account_id,
+        source_type="daily_dreaming",
+        prompt_version="dreaming_v1",
+    )
+    return insert_dreaming_memory_item(
+        account_id=account_id,
+        dreaming_run_id=int(run["id"]),
+        source_type="daily_dreaming",
+        source_session_id=None,
+        source_daily_note_date=TODAY,
+        operation="add",
+        target_file="MEMORY.md",
+        category="identity",
+        memory_text=memory_text,
+        importance=importance,
+        confidence=confidence,
+        sensitivity="sensitive",  # 历史 bug 兜底结果
+        apply_status="skipped",
+        skip_reason="sensitive_item",
+    )
+
+
+def test_reapply_sensitivity_misskips_backfills_and_respects_pii(fresh_db, tmp_path):
+    """回填：误判条目被复活写入；含 PII 的条目仍被拦下。"""
+    from app.dreaming import reapply_sensitivity_misskips, read_long_term_memory
+    from app.db import get_dreaming_memory_item
+
+    account_id = "acc-backfill"
+    good = _insert_skipped_sensitive_item(account_id, memory_text="用户希望被称为二哥。")
+    pii = _insert_skipped_sensitive_item(account_id, memory_text="用户的手机号需要留意。")
+
+    # dry-run：不写入
+    preview = reapply_sensitivity_misskips(account_id=account_id, apply=False)
+    assert preview["candidates"] == 2
+    assert preview["would_apply"] == 1  # 只有非 PII 的会写入
+    assert "二哥" not in read_long_term_memory(account_id)
+
+    # apply：真正回填
+    result = reapply_sensitivity_misskips(account_id=account_id, apply=True)
+    assert result["applied"] == 1
+    assert result["skipped"] == 1
+    assert "二哥" in read_long_term_memory(account_id)
+    assert "手机号" not in read_long_term_memory(account_id)
+
+    assert get_dreaming_memory_item(item_id=int(good["id"]))["apply_status"] == "applied"
+    assert get_dreaming_memory_item(item_id=int(pii["id"]))["apply_status"] == "skipped"
+
+
+def test_append_memory_line_drops_placeholder():
+    """写入真实记忆时应清掉 '- 暂无' 占位符，避免与真实条目矛盾。"""
+    from app.dreaming import _append_memory_line
+
+    out = _append_memory_line("# USER\n\n- 暂无\n", "USER.md", "用户希望被称为二哥。")
+    assert "暂无" not in out
+    assert "- 用户希望被称为二哥。" in out
+    assert out.startswith("# USER\n\n- 用户")
