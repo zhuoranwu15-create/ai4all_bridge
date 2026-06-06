@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>账号详情 – AI4ALL</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    .context-file { border: 1px solid var(--border, #e2e2e2); border-radius: 6px; margin-bottom: .75rem; overflow: hidden; }
+    .context-file-head { display: flex; align-items: baseline; gap: .5rem; padding: .4rem .6rem; background: rgba(0,0,0,.03); }
+    .context-file-head strong { font-family: monospace; }
+    .context-file-meta { margin-left: auto; font-size: .75rem; opacity: .65; }
+    .context-file-content { margin: 0; padding: .6rem; white-space: pre-wrap; word-break: break-word; font-size: .82rem; line-height: 1.5; max-height: 360px; overflow: auto; }
+  </style>
 </head>
 <body>
   <a class="back-link" href="index.html">← 返回列表</a>
@@ -53,16 +60,9 @@
     </div>
 
     <div class="card">
-      <h2>AI 配置</h2>
-      <div class="form-row"><label>回复风格</label><input type="text" id="f-style" placeholder="例：简洁活泼"></div>
-      <div class="form-row">
-        <label>System Prompt（空 = 系统默认）</label>
-        <textarea id="f-system-prompt" placeholder="留空使用系统默认 Prompt"></textarea>
-      </div>
-      <div class="form-actions">
-        <button class="primary" onclick="saveProfile()">保存</button>
-        <span id="st-profile" class="status-msg"></span>
-      </div>
+      <h2>上下文文件（调试）</h2>
+      <p class="empty-note" style="margin-top:0">账号组装 LLM prompt 时使用的 SOUL / IDENTITY / USER / MEMORY 文件内容，用于排查人设与记忆问题。</p>
+      <div id="context-files">加载中…</div>
     </div>
 
     <div class="card">
@@ -115,11 +115,13 @@
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/usage'),
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/wallet').catch(function(e) { return { error: e.message }; }),
           apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/proactive-overview').catch(function(e) { return { error: e.message }; }),
+          apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/context-files').catch(function(e) { return { error: e.message }; }),
         ]);
         var accountData = results[0];
         var usageData = results[1];
         var walletData = results[2];
         var proactiveData = results[3];
+        var contextFilesData = results[4];
         fillForm(accountData.account, accountData.profile);
         fillBindings(accountData.channel_bindings || []);
         fillBindingTrace(accountData);
@@ -128,6 +130,7 @@
         fillUsage(usageData);
         fillWallet(walletData);
         fillProactiveOverview(proactiveData);
+        fillContextFiles(contextFilesData);
         document.getElementById('content').style.display = '';
         document.title = accountId + ' – AI4ALL';
       } catch (e) {
@@ -265,8 +268,6 @@
       document.getElementById('f-display-name').value = account.display_name || '';
       document.getElementById('f-daily-limit').value = account.daily_limit != null ? account.daily_limit : '';
       document.getElementById('f-rpm-limit').value = account.rpm_limit != null ? account.rpm_limit : '';
-      document.getElementById('f-style').value = (profile && profile.style) || '';
-      document.getElementById('f-system-prompt').value = (profile && profile.system_prompt) || '';
       var btn = document.getElementById('btn-toggle');
       if (account.status === 'active') {
         btn.textContent = '禁用账号';
@@ -280,6 +281,35 @@
     function fillUsage(usage) {
       document.getElementById('usage-text').textContent =
         '今日已发 ' + usage.today.message_count + ' 条';
+    }
+
+    function fillContextFiles(data) {
+      var el = document.getElementById('context-files');
+      if (data && data.error) {
+        el.innerHTML = '<div class="status-msg error">' + esc(data.error) + '</div>';
+        return;
+      }
+      var files = (data && data.files) || [];
+      if (!files.length) {
+        el.innerHTML = '<div class="empty-note">暂无上下文文件</div>';
+        return;
+      }
+      el.innerHTML = files.map(function(f) {
+        var body;
+        if (!f.exists) {
+          body = '<div class="empty-note" style="padding:.6rem">文件不存在</div>';
+        } else if (!(f.content || '').trim()) {
+          body = '<div class="empty-note" style="padding:.6rem">空文件</div>';
+        } else {
+          body = '<pre class="context-file-content">' + esc(f.content) + '</pre>';
+        }
+        return '<div class="context-file">'
+          + '<div class="context-file-head"><strong>' + esc(f.file) + '</strong>'
+          + '<span class="context-file-meta mono">' + (f.chars || 0) + ' 字'
+          + (f.exists ? '' : ' · 不存在') + '</span></div>'
+          + body
+          + '</div>';
+      }).join('');
     }
 
     function fillWallet(data) {
@@ -564,21 +594,6 @@
           body: JSON.stringify({
             daily_limit: dv === '' ? null : parseInt(dv, 10),
             rpm_limit: rv === '' ? null : parseInt(rv, 10),
-          }),
-        });
-        showStatus(st, '已保存 ✓');
-      } catch (e) { showStatus(st, e.message, true); }
-    }
-
-    async function saveProfile() {
-      var st = document.getElementById('st-profile');
-      showStatus(st, '保存中…');
-      try {
-        await apiFetch('/admin/accounts/' + encodeURIComponent(accountId) + '/profile', {
-          method: 'PATCH',
-          body: JSON.stringify({
-            style: document.getElementById('f-style').value || null,
-            system_prompt: document.getElementById('f-system-prompt').value || null,
           }),
         });
         showStatus(st, '已保存 ✓');

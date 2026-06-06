@@ -3140,6 +3140,37 @@ def admin_get_user_profile(
     }
 
 
+@app.get("/admin/accounts/{account_id}/context-files")
+def admin_get_context_files(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """返回账号的 SOUL/IDENTITY/USER/MEMORY 上下文文件正文，供运维调试人设与记忆。
+
+    这些是账号级 AI 上下文配置文件，对登录 admin 直接以明文返回（与原 AI 配置卡片
+    展示 system_prompt 的口径一致）。
+    """
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    context = read_agent_context(account_id)
+    targets = ("SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md")
+    files = []
+    for fname in targets:
+        key = fname[:-3]
+        meta = context.files.get(fname, {})
+        files.append(
+            {
+                "file": fname,
+                "key": key,
+                "path": meta.get("path"),
+                "exists": bool(meta.get("exists")),
+                "chars": int(meta.get("chars") or 0),
+                "content": context.blocks.get(key, ""),
+            }
+        )
+    return {"account_id": account_id, "files": files}
+
+
 @app.get("/admin/accounts/{account_id}/usage")
 def admin_account_usage(
     account_id: str,
