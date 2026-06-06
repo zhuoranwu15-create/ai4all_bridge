@@ -4635,6 +4635,61 @@ def count_reactivation_outbound_for_quota_date(
     return int(row["count"]) if row else 0
 
 
+def list_reactivation_outbound_messages_admin(
+    *,
+    account_id: Optional[str] = None,
+    since: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Return sent reactivation outbound messages across all accounts for admin display.
+
+    Joins with accounts to include display_name. Newest first.
+    Covers both new product_category values and legacy rows with metadata flag.
+    """
+    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
+    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
+    params: List[Any] = []
+    account_clause = ""
+    if account_id:
+        account_clause = "AND o.account_id = ?"
+        params.append(account_id)
+    since_clause = ""
+    if since:
+        since_clause = "AND o.created_at >= ?"
+        params.append(since)
+    params.extend(REACTIVATION_PRODUCT_CATEGORIES)
+    params.extend(LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
+    params.append(max(int(limit), 1))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT o.*, a.display_name AS account_display_name
+            FROM outbound_messages o
+            JOIN accounts a ON a.id = o.account_id
+            WHERE o.status IN ('pending', 'sending', 'sent')
+              {account_clause}
+              {since_clause}
+              AND (
+                o.product_category IN ({placeholders})
+                OR (
+                  o.product_category IN ({legacy_placeholders})
+                  AND json_valid(o.metadata_json)
+                  AND json_extract(o.metadata_json, '$.reactivation') = 1
+                )
+              )
+            ORDER BY o.id DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    results = []
+    for row in rows:
+        item = _decode_outbound_message(row)
+        item["account_display_name"] = row["account_display_name"]
+        results.append(item)
+    return results
+
+
 def count_context_messages_for_session(*, session_id: int) -> int:
     """Count messages from a session that are eligible for LLM context."""
     with connect() as conn:

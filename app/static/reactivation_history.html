@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reactivation History</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f7fa;
+      color: #1f2933;
+      font-size: 14px;
+    }
+    header {
+      background: #17202e;
+      color: #fff;
+      padding: 14px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    header h1 { margin: 0; font-size: 17px; font-weight: 650; }
+    header .sub { margin-top: 3px; color: #bac6d6; font-size: 12px; }
+    .toolbar {
+      background: #fff;
+      border-bottom: 1px solid #dfe5ec;
+      padding: 12px 22px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    select, input, button {
+      border: 1px solid #cfd8e3;
+      border-radius: 6px;
+      background: #fff;
+      padding: 7px 9px;
+      font: inherit;
+    }
+    button {
+      border: 0;
+      background: #2563eb;
+      color: #fff;
+      font-weight: 650;
+      cursor: pointer;
+      padding: 8px 12px;
+    }
+    button.secondary { background: #e7edf7; color: #24364f; }
+    button:hover { filter: brightness(.96); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      padding: 14px 22px 0;
+    }
+    .stat {
+      background: #fff;
+      border: 1px solid #dfe5ec;
+      border-radius: 8px;
+      padding: 11px 12px;
+    }
+    .stat .label { color: #667085; font-size: 12px; }
+    .stat .value { margin-top: 5px; font-size: 20px; font-weight: 700; }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(560px, 1.6fr) minmax(340px, .8fr);
+      gap: 14px;
+      padding: 14px 22px 22px;
+      align-items: start;
+    }
+    .panel {
+      background: #fff;
+      border: 1px solid #dfe5ec;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-head {
+      padding: 12px 14px;
+      border-bottom: 1px solid #e6ebf1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .panel-head h2 { margin: 0; font-size: 14px; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 760px; }
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #edf1f5;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8fafc;
+      color: #5b6675;
+      font-size: 12px;
+      font-weight: 700;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tr { cursor: pointer; }
+    tr:hover td { background: #f8fbff; }
+    tr.selected td { background: #eef5ff; }
+    .account { font-weight: 650; word-break: break-all; }
+    .muted { color: #667085; font-size: 12px; line-height: 1.5; }
+    .text { line-height: 1.45; max-width: 360px; }
+    .pill {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      background: #eef2ff;
+      color: #3730a3;
+      white-space: nowrap;
+    }
+    .pill.topic { background: #dcfce7; color: #166534; }
+    .pill.content { background: #fef3c7; color: #92400e; }
+    .pill.sent { background: #dcfce7; color: #166534; }
+    .pill.blocked { background: #fee2e2; color: #991b1b; }
+    .detail { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+    .block {
+      border: 1px solid #e6ebf1;
+      border-radius: 8px;
+      padding: 12px;
+      background: #fcfdff;
+    }
+    .block h3 { margin: 0 0 8px; font-size: 13px; }
+    .kv {
+      display: grid;
+      grid-template-columns: 160px 1fr;
+      gap: 7px 10px;
+      font-size: 13px;
+    }
+    .kv div:nth-child(odd) { color: #667085; }
+    pre {
+      margin: 0;
+      background: #111827;
+      color: #dbeafe;
+      border-radius: 8px;
+      padding: 11px;
+      overflow: auto;
+      max-height: 360px;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .empty { padding: 22px; text-align: center; color: #7b8794; }
+    .status-msg { color: #667085; font-size: 12px; }
+    .status-msg.error { color: #b42318; }
+    .date-chart { padding: 12px 14px; }
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+    }
+    .bar-label { width: 80px; color: #5b6675; text-align: right; flex-shrink: 0; }
+    .bar-track { flex: 1; background: #edf1f5; border-radius: 4px; height: 14px; overflow: hidden; }
+    .bar-fill { height: 100%; background: #3b82f6; border-radius: 4px; }
+    .bar-count { width: 28px; color: #374151; text-align: right; flex-shrink: 0; }
+    @media (max-width: 980px) {
+      .stats { grid-template-columns: repeat(2, minmax(120px, 1fr)); padding-left: 12px; padding-right: 12px; }
+      .layout { grid-template-columns: 1fr; padding: 12px; }
+      header, .toolbar { padding-left: 12px; padding-right: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Reactivation History</h1>
+      <div class="sub">已发出的主动消息记录（topic_followup + content_invitation）</div>
+    </div>
+    <div id="admin-user" class="sub">—</div>
+  </header>
+
+  <div class="toolbar">
+    <label>账号 ID</label>
+    <input id="accountInput" type="text" placeholder="留空=全部" style="width:200px">
+    <label>近</label>
+    <select id="daysSelect">
+      <option value="7">7 天</option>
+      <option value="14" selected>14 天</option>
+      <option value="30">30 天</option>
+      <option value="60">60 天</option>
+    </select>
+    <label>Limit</label>
+    <input id="limitInput" type="number" min="1" max="1000" value="200" style="width:70px">
+    <button onclick="loadHistory()">刷新</button>
+    <button class="secondary" onclick="clearToken()">重置 Token</button>
+    <span id="status" class="status-msg"></span>
+  </div>
+
+  <section class="stats">
+    <div class="stat"><div class="label">总计发送</div><div id="statTotal" class="value">0</div></div>
+    <div class="stat"><div class="label">topic_followup</div><div id="statTopic" class="value">0</div></div>
+    <div class="stat"><div class="label">content_invitation</div><div id="statContent" class="value">0</div></div>
+    <div class="stat"><div class="label">更新时间</div><div id="statTime" class="value" style="font-size:14px;">—</div></div>
+  </section>
+
+  <main class="layout">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>发送记录</h2>
+        <span id="countLabel" class="muted">0 items</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>账号</th>
+              <th>类型</th>
+              <th>主题</th>
+              <th>消息内容</th>
+              <th>发送时段</th>
+              <th>发送时间</th>
+            </tr>
+          </thead>
+          <tbody id="historyRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside>
+      <div class="panel" style="margin-bottom:14px">
+        <div class="panel-head"><h2>详情</h2><span id="detailType" class="pill">—</span></div>
+        <div id="detail" class="detail"><div class="empty">选择一条记录</div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h2>每日分布</h2></div>
+        <div id="dateChart" class="date-chart"><div class="empty">—</div></div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="admin.js"></script>
+  <script>
+    var items = [];
+    var selectedIndex = -1;
+
+    function typeClass(type) {
+      return type === 'content_invitation' ? 'content' : 'topic';
+    }
+
+    function short(value, limit) {
+      var text = String(value == null ? '' : value);
+      return text.length > limit ? text.slice(0, limit - 1) + '…' : text;
+    }
+
+    function setStatus(message, error) {
+      var el = document.getElementById('status');
+      el.textContent = message || '';
+      el.className = 'status-msg' + (error ? ' error' : '');
+    }
+
+    function clearToken() {
+      localStorage.removeItem('admin_token');
+      location.reload();
+    }
+
+    function renderStats(payload) {
+      var summary = payload.summary || {};
+      var byType = summary.by_type || {};
+      document.getElementById('statTotal').textContent = summary.total || 0;
+      document.getElementById('statTopic').textContent = byType.topic_followup || 0;
+      document.getElementById('statContent').textContent = byType.content_invitation || 0;
+      document.getElementById('statTime').textContent = formatDateTime(payload.generated_at);
+      document.getElementById('countLabel').textContent = String((payload.items || []).length) + ' items';
+    }
+
+    function renderDateChart(summary) {
+      var byDate = summary.by_date || {};
+      var dates = Object.keys(byDate).sort().reverse().slice(0, 14);
+      var max = dates.reduce(function(m, d) { return Math.max(m, byDate[d] || 0); }, 1);
+      var container = document.getElementById('dateChart');
+      if (!dates.length) {
+        container.innerHTML = '<div class="empty">暂无数据</div>';
+        return;
+      }
+      container.innerHTML = dates.map(function(d) {
+        var count = byDate[d] || 0;
+        var pct = Math.round(count / max * 100);
+        return '<div class="bar-row">' +
+          '<div class="bar-label">' + esc(d.slice(5)) + '</div>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + pct + '%"></div></div>' +
+          '<div class="bar-count">' + count + '</div>' +
+          '</div>';
+      }).join('');
+    }
+
+    function renderRows() {
+      var tbody = document.getElementById('historyRows');
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="6"><div class="empty">暂无记录</div></td></tr>';
+        renderDetail(-1);
+        return;
+      }
+      tbody.innerHTML = items.map(function(item, index) {
+        var type = item.reactivation_type || 'unknown';
+        return '<tr onclick="selectItem(' + index + ')" class="' + (index === selectedIndex ? 'selected' : '') + '">' +
+          '<td><div class="account">' + esc(item.account_display_name || item.account_id) + '</div><div class="muted">' + esc(item.account_id) + '</div></td>' +
+          '<td><span class="pill ' + typeClass(type) + '">' + esc(type) + '</span></td>' +
+          '<td>' + esc(item.topic || '—') + '</td>' +
+          '<td><div class="text">' + esc(short(item.text || '', 120)) + '</div></td>' +
+          '<td>' + esc(item.scheduled_slot || '—') + '</td>' +
+          '<td><div class="muted">' + esc(formatDateTime(item.created_at)) + '</div><div class="muted">' + esc(item.quota_date || '') + '</div></td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function selectItem(index) {
+      selectedIndex = index;
+      renderRows();
+      renderDetail(index);
+    }
+
+    function renderDetail(index) {
+      var detail = document.getElementById('detail');
+      var typePill = document.getElementById('detailType');
+      if (index < 0 || !items[index]) {
+        typePill.textContent = '—';
+        typePill.className = 'pill';
+        detail.innerHTML = '<div class="empty">选择一条记录</div>';
+        return;
+      }
+      var item = items[index];
+      var type = item.reactivation_type || 'unknown';
+      typePill.textContent = type;
+      typePill.className = 'pill ' + typeClass(type);
+      detail.innerHTML =
+        '<div class="block"><h3>账号</h3><div class="kv">' +
+        '<div>account_id</div><div>' + esc(item.account_id) + '</div>' +
+        '<div>display</div><div>' + esc(item.account_display_name || '—') + '</div>' +
+        '</div></div>' +
+        '<div class="block"><h3>消息</h3><div class="kv">' +
+        '<div>id</div><div>' + esc(item.id) + '</div>' +
+        '<div>type</div><div>' + esc(item.reactivation_type || '—') + '</div>' +
+        '<div>topic</div><div>' + esc(item.topic || '—') + '</div>' +
+        '<div>text</div><div>' + esc(item.text || '—') + '</div>' +
+        '<div>candidate_id</div><div>' + esc(item.reactivation_candidate_id || '—') + '</div>' +
+        '<div>scheduled_slot</div><div>' + esc(item.scheduled_slot || '—') + '</div>' +
+        '<div>quota_date</div><div>' + esc(item.quota_date || '—') + '</div>' +
+        '<div>created_at</div><div>' + esc(formatDateTime(item.created_at)) + '</div>' +
+        '<div>status</div><div>' + esc(item.status || '—') + '</div>' +
+        '<div>product_category</div><div>' + esc(item.product_category || '—') + '</div>' +
+        '</div></div>';
+    }
+
+    async function loadHistory() {
+      setStatus('加载中…');
+      try {
+        await loadAdminMe();
+        var account = document.getElementById('accountInput').value.trim();
+        var days = document.getElementById('daysSelect').value;
+        var limit = document.getElementById('limitInput').value || '200';
+        var path = '/admin/proactive/reactivation-history?days=' + encodeURIComponent(days) + '&limit=' + encodeURIComponent(limit);
+        if (account) path += '&account_id=' + encodeURIComponent(account);
+        var payload = await apiFetch(path);
+        items = payload.items || [];
+        selectedIndex = items.length ? 0 : -1;
+        renderStats(payload);
+        renderRows();
+        renderDetail(selectedIndex);
+        renderDateChart(payload.summary || {});
+        setStatus('已刷新');
+      } catch (err) {
+        setStatus(err.message || String(err), true);
+      }
+    }
+
+    document.getElementById('daysSelect').addEventListener('change', loadHistory);
+    loadHistory();
+  </script>
+</body>
+</html>

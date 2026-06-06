@@ -74,6 +74,7 @@ from app.db import (
     list_binding_intents_for_account,
     list_content_invitations_for_account,
     list_outbound_messages,
+    list_reactivation_outbound_messages_admin,
     list_published_faq_messages,
     list_proactive_commitments_for_account,
     list_debug_traces,
@@ -210,6 +211,7 @@ async def _gate_debug_ui(request: Request, call_next):
 
 
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
+app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -3607,6 +3609,58 @@ def admin_proactive_reactivation_candidates(
         "summary": summary,
         "generated_at": beijing_now().replace(microsecond=0, tzinfo=None).isoformat(sep=" "),
         "redacted": False,
+    }
+
+
+@app.get("/admin/proactive/reactivation-history")
+def admin_proactive_reactivation_history(
+    account_id: Optional[str] = None,
+    days: int = 14,
+    limit: int = 200,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if days < 1 or days > 90:
+        raise HTTPException(status_code=400, detail="days must be between 1 and 90")
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    since_dt = beijing_now() - timedelta(days=days)
+    # outbound_messages.created_at is stored as Beijing-local time
+    since_str = since_dt.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    rows = list_reactivation_outbound_messages_admin(
+        account_id=account_id or None,
+        since=since_str,
+        limit=limit,
+    )
+    items = []
+    for row in rows:
+        items.append(
+            {
+                "id": row["id"],
+                "account_id": row["account_id"],
+                "account_display_name": row.get("account_display_name"),
+                "text": row["text"],
+                "status": row["status"],
+                "product_category": row.get("product_category"),
+                "quota_date": row.get("quota_date"),
+                "created_at": _beijing_display(row.get("created_at")),
+                "reactivation_type": (row.get("metadata") or {}).get("reactivation_type"),
+                "topic": (row.get("metadata") or {}).get("topic"),
+                "scheduled_slot": (row.get("metadata") or {}).get("scheduled_slot"),
+                "reactivation_candidate_id": (row.get("metadata") or {}).get("reactivation_candidate_id"),
+            }
+        )
+    summary: dict = {"total": len(items), "by_type": {}, "by_date": {}}
+    for item in items:
+        rtype = item.get("reactivation_type") or "unknown"
+        summary["by_type"][rtype] = summary["by_type"].get(rtype, 0) + 1
+        date_key = (item.get("quota_date") or "")[:10]
+        if date_key:
+            summary["by_date"][date_key] = summary["by_date"].get(date_key, 0) + 1
+    return {
+        "items": items,
+        "summary": summary,
+        "filters": {"account_id": account_id, "days": days},
+        "generated_at": beijing_now().replace(microsecond=0, tzinfo=None).isoformat(sep=" "),
     }
 
 
