@@ -187,9 +187,9 @@ class PromptBuilder:
         # Block 15: Runtime
         runtime_parts: List[str] = []
         if today and current_time:
-            runtime_parts.append(f"当前日期时间：{today} {current_time}（北京时间 UTC+8）")
+            runtime_parts.append(f"现在是北京时间 {today} {current_time}")
         elif today:
-            runtime_parts.append(f"当前日期：{today}")
+            runtime_parts.append(f"今天是 {today}")
         if model_name:
             runtime_parts.append(f"当前模型：{model_name}")
         if runtime_parts:
