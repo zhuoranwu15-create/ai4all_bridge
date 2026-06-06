@@ -82,7 +82,8 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 | `user_profiles.py` | 账号级上下文文件：SOUL、IDENTITY、USER |
 | `session_lifecycle.py` | 对话 session 轮转 |
 | `onboarding.py` | 新用户 onboarding 流程 |
-| `dreaming.py` 和 `dreaming_scheduler.py` | 主动消息：heartbeat、提醒、commitment |
+| `dreaming.py` 和 `dreaming_scheduler.py` | Dreaming 记忆压缩与调度 |
+| `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、账号主动检查 |
 | `memory_writer.py` | turn 后记忆更新 |
 | `rate_limiter.py` | 每日和 RPM 配额控制 |
 | `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力 |
@@ -91,9 +92,9 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 按账号隔离是核心不变量。任何未按 `account_id` 约束的 DB 查询或文件写入都是 bug。
 
-`contacts` 表是历史命名。在当前“一账号一用户”模型中，`contacts.sender_id` 近似等于 `account_id`。Admin 路由仍使用 `/admin/contacts/`，这是已知技术债。不要在这个模式上新增 API。
+`contacts` 表是历史模型，当前 DB 初始化会迁移到账号级 schema 并删除该表。Admin 账号管理使用 `/admin/accounts/*`；不要再新增 `/admin/contacts/*` API 或依赖 contacts 表。
 
-主动调度器作为独立进程运行。`dreaming_scheduler.py` 不是 FastAPI app 的一部分。通过 `scripts/run_proactive_scheduler.py` 运行；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。
+主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关或 admin run-once 调试，避免多实例重复扫描。
 
 标准数据库是 `data/ai4all.sqlite3`。忽略仓库根目录和 `data/` 下空的 `ai4all.db` 文件。
 

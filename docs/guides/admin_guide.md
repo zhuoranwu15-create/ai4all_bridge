@@ -5,21 +5,23 @@
 Web 后台入口：
 
 ```text
-http://127.0.0.1:8000/ui/
+http://127.0.0.1:8180/ui/
 ```
 
 Web onboarding 入口：
 
 ```text
-http://127.0.0.1:8000/ui/onboarding.html
+http://127.0.0.1:8180/ui/onboarding.html
 ```
 
 ## Admin 鉴权
 
-所有 `/admin/*` 和 `/debug/*` 接口都需要请求头：
+所有 `/admin/*` 和 `/debug/*` 接口都需要 Admin 或 Staff Token：
 
 ```http
 Authorization: Bearer <ADMIN_TOKEN>
+# 或
+Authorization: Bearer <ADMIN_STAFF_TOKEN>
 ```
 
 本地 `.env` 中配置：
@@ -43,7 +45,7 @@ ADMIN_STAFF_TOKEN=
 新的目标模型以 AI4ALL 业务账号为核心：
 
 ```text
-AI4ALL Account = 业务隔离账号，未绑定 legacy 入站可由 OpenClaw session_key fallback，绑定后使用预创建 acct_...
+AI4ALL Account = 业务隔离账号，未绑定 legacy 入站可由 OpenClaw session_key fallback，绑定后使用预创建 aid_...（当前生成规则为 aid_ + 9 位数字）
 Channel Account = OpenClaw / 微信通道侧账号或机器人账号
 Channel Binding = AI4ALL Account 与 Channel Account / session_key 的绑定
 session = AI4ALL Account 下的会话
@@ -77,41 +79,41 @@ OTP_EXPIRES_MINUTES=10
 OTP_TOKEN_EXPIRES_MINUTES=10
 ```
 
-当前静态 `onboarding.html` 中也存在 Aliyun Captcha 的 `SceneId` / `prefix`，上线或切换环境时需要与控制台配置保持一致；后续应改为由后端或构建流程注入。
+当前静态 onboarding 页面通过 `GET /web/config` 读取 Aliyun Captcha 的公开 `scene_id` / `prefix`。上线或切换环境时需要让 `.env` 中的 `ALIYUN_CAPTCHA_SCENE_ID`、`ALIYUN_CAPTCHA_PREFIX` 与控制台配置保持一致；服务端 AccessKey 和短信模板凭据不得暴露给前端。
 
 ## 查看账号
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts
+  http://127.0.0.1:8180/admin/accounts
 ```
 
 这里返回的是 AI4ALL Account。账号详情接口会包含 `channel_bindings`，用于查看对应的 Channel Account ID、session key、sender/chat 等通道身份。
 
-## 查看兼容用户记录
+## 查看账号详情
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/openclaw-weixin/contacts
+  http://127.0.0.1:8180/admin/accounts/aid_123456789
 ```
 
-这个接口暂时保留用于查看现有数据。它不代表最终产品里的核心管理对象。
+详情接口返回账号基础信息、channel bindings、owner bindings、binding intents、wallet、proactive state 等排障信息。当前代码不再提供旧 `/admin/contacts/*` 路由；账号级管理统一走 `/admin/accounts/*`。
 
-## 查看兼容用户详情
-
-```bash
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/contacts/1
-```
-
-## 修改备注或状态
+## 修改备注、显示名或限流
 
 ```bash
-curl -X PATCH http://127.0.0.1:8000/admin/contacts/1 \
+curl -X PATCH http://127.0.0.1:8180/admin/accounts/aid_123456789 \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"notes":"内部测试账号"}'
+  -d '{"display_name":"测试账号","notes":"内部测试账号","daily_limit":100,"rpm_limit":10}'
 ```
+
+当前支持字段：
+
+- `display_name`
+- `notes`
+- `daily_limit`
+- `rpm_limit`
 
 当前支持的状态：
 
@@ -123,14 +125,14 @@ curl -X PATCH http://127.0.0.1:8000/admin/contacts/1 \
 禁用：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/admin/contacts/1/disable \
+curl -X POST http://127.0.0.1:8180/admin/accounts/aid_123456789/disable \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 启用：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/admin/contacts/1/enable \
+curl -X POST http://127.0.0.1:8180/admin/accounts/aid_123456789/enable \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -139,7 +141,7 @@ curl -X POST http://127.0.0.1:8000/admin/contacts/1/enable \
 ## 修改 Profile
 
 ```bash
-curl -X PATCH http://127.0.0.1:8000/admin/contacts/1/profile \
+curl -X PATCH http://127.0.0.1:8180/admin/accounts/aid_123456789/profile \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"style":"温柔、简洁、像熟悉的朋友"}'
@@ -158,14 +160,14 @@ Profile 当前会影响 LLM Prompt。后续会调整为更明确的账号级 Sou
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/sessions
+  http://127.0.0.1:8180/admin/sessions
 ```
 
 ## 查看会话详情
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/sessions/1
+  http://127.0.0.1:8180/admin/sessions/1
 ```
 
 返回内容包括：
@@ -177,7 +179,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 ## 重置会话
 
 ```bash
-curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
+curl -X POST http://127.0.0.1:8180/admin/sessions/1/reset \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -188,7 +190,7 @@ curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
 开发期手动测试优先使用 Proactive Debug 后台：
 
 ```text
-http://127.0.0.1:8000/ui/proactive_debug.html
+http://127.0.0.1:8180/ui/proactive_debug.html
 ```
 
 该页面可以选择账号、开启 proactive state、模拟入站、让 pending reminder 到期、运行 scheduler、生成/提升/清理 account check draft，并在单账号 `Run Proactive Check` 后展示内容邀请是否生成及原因。
@@ -197,10 +199,10 @@ http://127.0.0.1:8000/ui/proactive_debug.html
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-state
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-state
 
 curl -X PATCH \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-state \
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-state \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -223,7 +225,7 @@ curl -X PATCH \
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft \
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-check-candidate-draft \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -233,7 +235,7 @@ curl -X POST \
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft/promote \
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-check-candidate-draft/promote \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -243,7 +245,7 @@ promote 会把 `metadata.account_check_candidate_draft` 移到 `metadata.account
 
 ```bash
 curl -X DELETE \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check-candidate-draft \
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-check-candidate-draft \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -253,7 +255,7 @@ curl -X DELETE \
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/accounts/acct_example/proactive-check/run-once \
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/proactive-check/run-once \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -263,21 +265,21 @@ curl -X POST \
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/proactive/scheduler
+  http://127.0.0.1:8180/admin/proactive/scheduler
 ```
 
 查看 hidden extractor 写入的 follow-up commitments：
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/acct_example/commitments
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/commitments
 ```
 
 取消不应发送的 commitment：
 
 ```bash
 curl -X POST \
-  http://127.0.0.1:8000/admin/commitments/com_example/cancel \
+  http://127.0.0.1:8180/admin/commitments/com_example/cancel \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -285,7 +287,7 @@ curl -X POST \
 
 ```bash
 curl -X POST \
-  'http://127.0.0.1:8000/admin/proactive/scheduler/run-once?limit=20' \
+  'http://127.0.0.1:8180/admin/proactive/scheduler/run-once?limit=20' \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
@@ -316,7 +318,7 @@ curl -X POST \
 .venv/bin/python scripts/run_proactive_scheduler.py
 ```
 
-默认 `PROACTIVE_SCHEDULER_ENABLED=false`，FastAPI 不会自动启动 in-process scheduler。若要在 FastAPI 内启动，必须保证 `uvicorn --workers 1`；否则多个 worker 会重复扫描 due reminder / due account。账号主动检查间隔由 `PROACTIVE_ACCOUNT_CHECK_INTERVAL_SECONDS` 控制。
+默认 `PROACTIVE_SCHEDULER_ENABLED=false`，FastAPI 不会自动启动 in-process scheduler。若要在 FastAPI 内启动，必须保证 `uvicorn --workers 1`；否则多个 worker 会重复扫描 due reminder / due account。账号主动 planning 间隔由 `PROACTIVE_PLANNING_INTERVAL_SECONDS` 控制。
 
 ## 本地 Debug API
 
@@ -328,17 +330,17 @@ curl -X POST \
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  'http://127.0.0.1:8000/admin/messages/raw?limit=5'
+  'http://127.0.0.1:8180/admin/messages/raw?limit=5'
 
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/messages/27/raw
+  http://127.0.0.1:8180/admin/messages/27/raw
 ```
 
 ## 查看账号级 user_profile.md
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/acct_example/user-profile
+  http://127.0.0.1:8180/admin/accounts/aid_123456789/user-profile
 ```
 
 文件路径：
@@ -352,7 +354,7 @@ data/user_profiles/<account_id>/user_profile.md
 ## 常用排查命令
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8180/health
 openclaw plugins inspect ai4all-openclaw-bridge --runtime
 openclaw channels status --probe
 ```

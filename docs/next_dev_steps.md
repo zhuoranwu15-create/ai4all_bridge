@@ -1,6 +1,6 @@
 # 下一步开发步骤：主动消息观察期与后续收口
 
-更新时间：2026-06-02
+更新时间：2026-06-06
 
 ## 当前阶段判断
 
@@ -28,7 +28,7 @@ Web 输入手机号
 -> 阿里云验证码 + 短信 OTP
 -> 一次性 otp_token 注册
 -> 创建或复用 platform_user
--> 创建或复用默认 AI4ALL Account: acct_...
+-> 创建或复用默认 AI4ALL Account: aid_...
 -> 创建 binding_intent: bind_...
 -> Backend 调 OpenClaw Gateway web.login.start
 -> Web 展示二维码并轮询 binding_intent
@@ -36,7 +36,7 @@ Web 输入手机号
 -> 微信扫码完成
 -> Backend 写入 completed binding_intent + channel_bindings
 -> 微信发送真实消息
--> /openclaw/turn 通过 channel_account_id alias lookup 路由到预创建 acct_...
+-> /openclaw/turn 通过 channel_account_id alias lookup 路由到预创建 aid_...
 -> Backend 生成回复并回到微信
 ```
 
@@ -44,8 +44,7 @@ OpenClaw QR wait 返回的通道账号可能是 raw 形式，例如 `example@im.
 
 本地运行时要点：
 
-- Backend 默认开发端口可以是 `8000`。
-- 本轮 Web onboarding 验证使用 `8012`。
+- 当前本地和部署文档统一使用 Backend 端口 `8180`。
 - Bridge 的 Backend URL 必须和 FastAPI 实际端口一致。
 - `openclaw-weixin` 当前需要 `gatewayMethods: ["web.login.start", "web.login.wait"]` 补丁；维护说明见 `docs/tech_design/openclaw_weixin_gateway_qr_patch.md`。
 - Aliyun SMS/Captcha 在 local/test 可 mock；非 local/test 缺少凭据会失败关闭。

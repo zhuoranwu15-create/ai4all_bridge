@@ -1,6 +1,6 @@
 # AI4ALL 微信个人 AI 陪伴服务总体架构
 
-更新时间：2026-06-02
+更新时间：2026-06-06
 
 ## 一句话理解
 
@@ -61,7 +61,7 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │  │ Binding      │  │ Runtime      │  │ Memory            │  │ Providers    │ │
 │  │              │  │              │  │                   │  │              │ │
 │  │ platform_user│  │ turn service │  │ SOUL / USER       │  │ LLM / Search │ │
-│  │ acct_...     │  │ prompt build │  │ daily notes       │  │ Search       │ │
+│  │ aid_...      │  │ prompt build │  │ daily notes       │  │ Search       │ │
 │  │ channel bind │  │ LLM reply    │  │ Dreaming          │  │ content src  │ │
 │  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  └──────┬───────┘ │
 │         │                 │                   │                   │         │

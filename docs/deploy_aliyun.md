@@ -540,7 +540,7 @@ openclaw channels status --probe
 
 1. 打开 `https://your-domain.example/` 并完成手机号、验证码、短信 OTP。
 2. 扫码绑定，确认 `binding_intent` 完成且写入 `channel_bindings`。
-3. 发送微信私聊，确认 `/openclaw/turn` 路由到预创建的 `acct_...` 并回复。
+3. 发送微信私聊，确认 `/openclaw/turn` 路由到预创建的 `aid_...` 并回复。
 4. 设置一个近期提醒，确认 scheduler 到点发送主动微信消息。
 5. Admin 后台能查看账号、绑定、消息脱敏信息，不能默认看到明文。
 

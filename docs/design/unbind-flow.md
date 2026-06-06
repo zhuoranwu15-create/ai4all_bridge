@@ -146,7 +146,7 @@ Content-Type: application/json
 {
   "status": "ok",
   "keep_memories": true,
-  "account_id": "acct_xxx",
+  "account_id": "aid_123456789",
   "openclaw_cleanup": {
     "status": "unsupported",
     "attempts": [

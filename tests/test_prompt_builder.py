@@ -173,6 +173,7 @@ class TestPromptBuilderBasicBuild:
         assert "### AGENTS.md" in out
         assert "请积极、主动地提供帮助" in out
         assert "遇到不清晰的输入时" in out
+        assert "你可以主动发送消息，但会比较克制" in out
 
 
 class TestPromptBuilderTruncation:
@@ -225,6 +226,7 @@ class TestPromptBuilderTruncation:
         tools = _default_system_templates()["TOOLS.md"]
         out = self.pb.build(agent_context={"TOOLS": tools})
         assert "web_search" in out
+        assert "主动消息能力" not in out
         assert "...[已截断]" not in out
 
 

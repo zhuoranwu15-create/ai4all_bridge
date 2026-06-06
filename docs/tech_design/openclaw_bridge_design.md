@@ -26,7 +26,7 @@ Phase 1 暂不建设完整公开 SaaS onboarding，也不做复杂租户体系�
 
 本文是早期 Bridge 方案文档。当前身份模型以 `docs/architecture_overview.md`、`docs/phase1_technical_design.md` 和 `docs/tech_design/identity_model_and_wechat_binding.md` 为准：
 
-- AI4ALL 业务账号 ID 是 Backend 业务隔离主键；未绑定 legacy 入站可由 OpenClaw `session_key` fallback，Web onboarding 绑定完成后路由到预创建 `acct_...`。
+- AI4ALL 业务账号 ID 是 Backend 业务隔离主键；未绑定 legacy 入站可由 OpenClaw `session_key` fallback，Web onboarding 绑定完成后路由到预创建 `aid_...`。
 - OpenClaw / provider 侧账号 ID 在 Bridge payload 中显式命名为 `channel_account_id`。
 - Backend DB/API 中遗留的 `account_id` 字段暂时保留，但语义是 AI4ALL 业务账号 ID。
 - Bridge 会继续发送 legacy `account_id` 作为兼容别名；新代码应优先读写 `channel_account_id`，不要把 OpenClaw 原生 `account_id` 当业务隔离主键。
@@ -369,7 +369,7 @@ Bridge
 如果 OpenClaw 在本机，Backend 在本机：
 
 ```env
-AI4ALL_BACKEND_URL=http://localhost:8000
+AI4ALL_BACKEND_URL=http://localhost:8180
 ```
 
 如果 OpenClaw 在 Docker，Backend 在宿主机：
@@ -590,7 +590,7 @@ LLM_API_KEY=...
 - Bridge 返回 synthetic reply 的具体代码写法：已通过真实微信回复验证。
 - 禁用默认 agent 或将 Bridge 设置为唯一回复来源的具体配置方式。
 - `openclaw-weixin` 传给 agent loop 的真实 context 字段：已通过 raw payload 查询验证。
-- Bridge hook 中稳定的通道侧账号字段已显式命名为 `channel_account_id`；旧 `account_id` 仅作为 payload 兼容别名。未绑定 legacy 入站可 fallback 为 `ctx.sessionKey`，典型格式为 `agent:main:openclaw-weixin:<channel_account_id>:direct:<peer_id>`；绑定完成后应通过 `channel_account_id` / `openclaw_login_session_key` 路由到预创建 `acct_...`。
+- Bridge hook 中稳定的通道侧账号字段已显式命名为 `channel_account_id`；旧 `account_id` 仅作为 payload 兼容别名。未绑定 legacy 入站可 fallback 为 `ctx.sessionKey`，典型格式为 `agent:main:openclaw-weixin:<channel_account_id>:direct:<peer_id>`；绑定完成后应通过 `channel_account_id` / `openclaw_login_session_key` 路由到预创建 `aid_...`。
 - 私聊 unknown sender 是否需要 pairing approval。
 - 语音上游转写正文的稳定性和空文本比例。
 - 后端 ASR fallback 是否需要后续单独立项。

@@ -1,6 +1,6 @@
 # AI4ALL 微信个人 AI 陪伴服务 Phase 1 技术设计总平面
 
-更新时间：2026-06-02
+更新时间：2026-06-06
 
 ## 1. 文档定位
 
@@ -187,7 +187,7 @@ Phase 1 建议继续在当前仓库形成最小闭环，因为用户链路、任
 
 | 状态域 | 关键实体 | 所有权 | 说明 |
 | --- | --- | --- | --- |
-| 产品用户与业务账号 | `platform_users`、`ai4all_accounts`、`account_owner_bindings` | AI4ALL Backend | Phase 1 普通入口默认一个产品用户对应一个 active AI4ALL Account |
+| 产品用户与业务账号 | `platform_users`、`accounts`、`account_owner_bindings` | AI4ALL Backend | Phase 1 普通入口默认一个产品用户对应一个 active AI4ALL Account；当前表名仍是历史 `accounts` |
 | 微信通道绑定 | `binding_intents`、`channel_bindings` | AI4ALL Backend | OpenClaw 只提供通道 identity 和登录结果 |
 | 会话与消息 | `sessions`、`messages`、`debug_traces` | AI4ALL Backend | 当前 DB 字段 `account_id` 语义上等同 `ai4all_account_id` |
 | Context Files | `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、`USER.md`、`TOOLS.md`、`MEMORY.md` | AI4ALL Backend | Markdown 是 prompt 输入和可读视图，长期应配合结构化审计状态 |
@@ -219,7 +219,7 @@ Web/H5
 -> binding_intent
 -> OpenClaw Gateway QR login start/wait
 -> channel_binding
--> 微信首条消息路由到 acct_...
+-> 微信首条消息路由到 aid_...
 ```
 
 关键要求：

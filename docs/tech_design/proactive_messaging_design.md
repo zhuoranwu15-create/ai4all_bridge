@@ -496,7 +496,7 @@ hidden commitment：
 目标职责：
 
 - 按 `account_id` 隔离读取单个用户的状态、偏好、记忆、近期会话摘要、route 和候选事项。
-- 计算本次账号主动检查的 lookahead window：`window_start = now`，`window_end = now + proactive_account_check_interval_seconds`，默认 1 小时。
+- 计算本次账号主动检查的 lookahead window：`window_start = now`，`window_end = now + proactive_planning_interval_seconds`，默认 1 小时。
 - 检查从 `now` 到 `window_end` 之间可能需要给用户发送或准备发送的事项，并做持久化处理，保证后续短周期 due dispatcher 能及时触发。
 - 判断是否需要生成新的 companion followup 或 content invitation candidate；生成动作必须使用独立 LLM prompt 和 tool use。
 - 更新 `proactive_account_state.last_scan_at`、`next_scan_at` 和相关 metadata。
@@ -519,12 +519,12 @@ lookahead window 内需要检查：
 建议配置：
 
 ```text
-proactive_account_check_interval_seconds = 3600
+proactive_planning_interval_seconds = 3600
 proactive_account_check_context_messages = 12
-proactive_due_dispatch_interval_seconds = 60
+proactive_scheduler_interval_seconds = 30
 ```
 
-`proactive_account_check_interval_seconds` 控制每个账号多久做一次上下文扫描；`proactive_due_dispatch_interval_seconds` 控制 due reminder、commitment 和 content invitation 的短周期投递扫描。两者不要混淆：账号主动检查负责“想清楚和准备”，due dispatcher 负责“到点发送”。
+`proactive_planning_interval_seconds` 控制每个账号多久做一次上下文扫描；`proactive_scheduler_interval_seconds` 控制 scheduler loop 的短周期扫描。两者不要混淆：账号主动检查负责“想清楚和准备”，due dispatcher 负责“到点发送”。
 
 当前实现要求：
 
@@ -643,9 +643,9 @@ proactive_quiet_hours_end = "07:00"
 companion_followup_daily_limit = 1
 content_invitation_daily_limit = 1
 proactive_avoidance_window_hours = 6
-proactive_account_check_interval_seconds = 3600
+proactive_planning_interval_seconds = 3600
 proactive_account_check_context_messages = 12
-proactive_due_dispatch_interval_seconds = 60
+proactive_scheduler_interval_seconds = 30
 content_invitation_rejection_cooldown_days = 30
 content_invitation_expire_hours = 24
 ```

@@ -39,7 +39,7 @@ platform_user
     | Phase 1 普通入口一一对应
     v
 AI4ALL Account
-  account.id / account_id = ai4all_account_id = acct_...
+  account.id / account_id = ai4all_account_id = aid_...
   Soul / Context / Memory / Sessions / Messages / Usage / Entitlement
     |
     | owner relation
@@ -51,7 +51,7 @@ account_owner_binding
   binding_intent
     id = binding_intent_id
     platform_user_id = pu_...
-    account_id = acct_...
+    account_id = aid_...
     openclaw_login_session_key = 本次 QR 登录 session key
     |
     | OpenClaw Gateway QR login / wait
@@ -64,13 +64,13 @@ channel identity
     | completed binding
     v
 channel_binding
-  ai4all_account_id = acct_...
+  ai4all_account_id = aid_...
   channel_account_id / session_key / chat_id / sender_id
 
 真实微信私聊入站
   channel_account_id or openclaw_login_session_key or session_key
     -> identity resolver
-    -> ai4all_account_id = acct_...
+    -> ai4all_account_id = aid_...
     -> account-level active session
 ```
 
@@ -146,7 +146,7 @@ Phase 1 以手机号作为外部用户唯一标识。用户通过短信 OTP 证�
 - 用户可以通过手机号 OTP 完成注册。
 - OTP 通过后系统创建或复用 `platform_user` 和默认 AI4ALL Account。
 - 用户扫码后 `binding_intents.status=completed`，并写入 `channel_bindings`。
-- 扫码后的真实微信私聊消息能路由到预创建 `acct_...`。
+- 扫码后的真实微信私聊消息能路由到预创建 `aid_...`。
 - 首次绑定后的真实微信私聊能稳定使用，且不会串到其他 AI4ALL Account。
 - 同一手机号重复 onboarding 时复用同一个 `platform_user` 和默认 AI4ALL Account。
 - 一个 `platform_user` 不能通过普通产品入口创建多个 AI4ALL Account。

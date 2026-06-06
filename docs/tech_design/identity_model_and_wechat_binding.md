@@ -1,7 +1,7 @@
 # 身份模型与微信绑定
 
 > 本文是 AI4ALL 账号身份、微信通道绑定和 Web onboarding 绑定流程的主参考文档。
-> 2026-05-20 之后，账号标识和绑定口径以本文、`docs/architecture_overview.md` 和 `docs/phase1_technical_design.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
+> 2026-06-06 之后，账号标识和绑定口径以本文、`docs/architecture_overview.md` 和 `docs/phase1_technical_design.md` 为准；早期文档里的 `account_id` 需要结合上下文判断。
 
 ## 1. 当前结论
 
@@ -12,7 +12,7 @@
 - 代码和 DB 里遗留的 `account_id` 字段暂时保留，语义上等同于 `ai4all_account_id`。
 - Phase 1 普通入口下，一个手机号对应一个 `platform_user`，一个 `platform_user` 对应一个默认 AI4ALL Account；换手机号后如何与原 AI4ALL Account 重新绑定先搁置。
 - 未绑定的 OpenClaw 入站消息仍 fallback 为 `ai4all_account_id = payload.session_key`，这是兼容路径。
-- Web onboarding 绑定完成后，`ai4all_account_id` 是 Backend 预创建的 `acct_...`；入站消息通过 `channel_account_id` 或 `openclaw_login_session_key` 路由回这个预创建账号。
+- Web onboarding 绑定完成后，`ai4all_account_id` 是 Backend 预创建的 `aid_...` 账号；当前代码生成规则为 `aid_` + 9 位数字。入站消息通过 `channel_account_id` 或 `openclaw_login_session_key` 路由回这个预创建账号。
 - OpenClaw / provider 侧账号 ID 不再叫业务 `account_id`，统一称为 `channel_account_id`。
 - Bridge payload 会显式发送 `channel_account_id`，同时保留 legacy `account_id` 兼容旧接口。
 - `binding_intent_id` 是一次性绑定流程 ID，不是用户身份、账号身份或长期通道身份。
@@ -91,7 +91,7 @@ channel_account_id = payload.channel_account_id or payload.account_id
 4. 否则 fallback 为 session_key。
 ```
 
-这意味着绑定前的 legacy 账号仍可工作；绑定后，业务数据会进入用户注册阶段创建的 `acct_...`。
+这意味着绑定前的 legacy 账号仍可工作；绑定后，业务数据会进入用户注册阶段创建的 `aid_...`。
 
 解析结果会写入 response metadata 和 debug trace metadata：
 
@@ -180,7 +180,7 @@ subscriptions
 - starts_at
 - expires_at
 
-ai4all_accounts
+accounts  # 当前实现表名；语义上是 ai4all_accounts
 - id / ai4all_account_id
 - status
 - display_name
@@ -311,9 +311,9 @@ if result.connected:
 - OpenClaw Gateway RPC `health` 可访问。
 - `web.login.start` / `web.login.wait` 在 OpenClaw 源码中对应 `loginWithQrStart` / `loginWithQrWait`，返回 `qrDataUrl/sessionKey` 和 `connected/accountId`。
 - AI4ALL 自动化测试已经覆盖二维码生成状态、等待完成绑定、以及后续入站消息路由到预创建 AI4ALL Account。
-- 2026-05-20 已完成一次真实 Web 扫码绑定；2026-05-21 已补齐手机号 OTP + 阿里云图形验证码注册：验证后的 `platform_user`、预创建 `acct_...`、`binding_intent`、OpenClaw QR wait 返回的微信通道账号和 `channel_bindings` 均已对齐。
+- 2026-05-20 已完成一次真实 Web 扫码绑定；2026-05-21 已补齐手机号 OTP + 阿里云图形验证码注册：验证后的 `platform_user`、预创建 `aid_...`、`binding_intent`、OpenClaw QR wait 返回的微信通道账号和 `channel_bindings` 均已对齐。
 - OpenClaw QR wait 返回的微信 bot id 可能是 raw 形式（例如 `example@im.bot`），而 Bridge 入站上下文可能使用 normalized 形式（例如 `example-im-bot`）。Backend 绑定 lookup 已兼容这两种形式。
-- 2026-05-20 已验收扫码后的真实微信消息：微信发送 `你好` 后，normalized `channel_account_id` 成功路由到预创建 `acct_...`，并由 Backend 生成回复。
+- 2026-05-20 已验收扫码后的真实微信消息：微信发送 `你好` 后，normalized `channel_account_id` 成功路由到预创建 `aid_...`，并由 Backend 生成回复。
 
 真实运行前置条件和仍需验证：
 

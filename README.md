@@ -10,7 +10,6 @@ AI4ALL Weixin Bot 面向普通用户提供微信里的个人 AI 陪伴与轻量�
 - [项目启动文档](start.md)
 - [产品需求文档](docs/prd.md)
 - [产品专题 PRD](docs/product/README.md)
-- [当前状态](docs/current_status.md)
 - [用户使用说明](docs/guides/user_guide.md)
 - [后台管理说明](docs/guides/admin_guide.md)
 - [后续规划](docs/roadmap.md)
@@ -28,19 +27,19 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8180 --reload
 ```
 
 Health check:
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8180/health
 ```
 
 Web onboarding:
 
 ```text
-http://127.0.0.1:8000/ui/onboarding.html
+http://127.0.0.1:8180/ui/onboarding.html
 ```
 
 Registration now requires a mainland China mobile number, Aliyun Captcha, SMS
@@ -51,22 +50,21 @@ QR login intent directly. In `APP_ENV=local` or `APP_ENV=test`, empty Aliyun
 SMS/Captcha credentials enable mock mode; in non-local environments, missing
 Aliyun credentials fail closed.
 
-For real SMS/Captcha, fill the `ALIYUN_*` block in `.env`. The current static
-`onboarding.html` also contains the Aliyun Captcha `SceneId` and `prefix`; keep
-those values aligned with the Aliyun console until frontend runtime config
-injection is added.
+For real SMS/Captcha, fill the `ALIYUN_*` block in `.env`. The static onboarding
+pages read public Aliyun Captcha `scene_id` and `prefix` from `/web/config`;
+server-side AccessKey and SMS template credentials must stay in `.env`.
 
 Mock OpenClaw turn:
 
 ```bash
-python scripts/send_mock_turn.py --text "你好"
+.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好"
 ```
 
 Fixed message id for dedupe testing:
 
 ```bash
-python scripts/send_mock_turn.py --text "你好" --message-id fixed-1
-python scripts/send_mock_turn.py --text "你好" --message-id fixed-1
+.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好" --message-id fixed-1
+.venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好" --message-id fixed-1
 ```
 
 ## LLM
@@ -90,7 +88,7 @@ SQLite is used for the first version. The default database path is:
 data/ai4all.sqlite3
 ```
 
-Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `acct_...`。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture_overview.md)、[Phase 1 详细技术设计](docs/phase1_technical_design.md) 和 [身份模型与微信绑定](docs/tech_design/identity_model_and_wechat_binding.md)。
+Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `aid_...` 账号（当前生成规则为 `aid_` + 9 位数字）。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture_overview.md)、[Phase 1 详细技术设计](docs/phase1_technical_design.md) 和 [身份模型与微信绑定](docs/tech_design/identity_model_and_wechat_binding.md)。
 
 ## OpenClaw Bridge
 
@@ -102,11 +100,10 @@ openclaw gateway restart
 ```
 
 Make sure the Bridge backend URL matches the FastAPI port you are using. The
-default docs use `8000`; the 2026-05-20 Web onboarding verification ran on
-`8012`:
+current local and deployment docs use `8180`:
 
 ```bash
-openclaw config set plugins.entries.ai4all-openclaw-bridge.config.backendUrl http://127.0.0.1:8012
+openclaw config set plugins.entries.ai4all-openclaw-bridge.config.backendUrl http://127.0.0.1:8180
 openclaw gateway restart
 ```
 
@@ -138,7 +135,7 @@ backend:
           allowConversationAccess: true
         },
         config: {
-          shadowTraceAccountIds: "acct_example"
+          shadowTraceAccountIds: "aid_123456789"
         }
       }
     }
@@ -149,12 +146,12 @@ backend:
 Set the backend side too:
 
 ```bash
-DEBUG_TRACE_ACCOUNT_IDS=acct_example
+DEBUG_TRACE_ACCOUNT_IDS=aid_123456789
 ```
 
 ## WeChat E2E Check
 
-1. Start the backend on the same port configured in the Bridge (`8000` by default; `8012` in the current Web onboarding verification).
+1. Start the backend on the same port configured in the Bridge (`8180` in the current docs).
 2. Install/update the Bridge plugin.
 3. Restart OpenClaw Gateway.
 4. Confirm `openclaw-weixin` is running.
@@ -166,14 +163,14 @@ DEBUG_TRACE_ACCOUNT_IDS=acct_example
 These endpoints are intended for local development only.
 
 ```bash
-curl http://127.0.0.1:8000/debug/sessions
-curl 'http://127.0.0.1:8000/debug/messages?session_id=1'
-curl 'http://127.0.0.1:8000/debug/messages/raw?limit=5'
-curl 'http://127.0.0.1:8000/debug/traces?account_id=acct_example'
-curl http://127.0.0.1:8000/debug/accounts/acct_example/user-profile
-curl -X POST http://127.0.0.1:8000/debug/sessions/1/reset
-curl http://127.0.0.1:8000/debug/sessions/1/profile
-curl -X POST http://127.0.0.1:8000/debug/sessions/1/profile \
+curl http://127.0.0.1:8180/debug/sessions
+curl 'http://127.0.0.1:8180/debug/messages?session_id=1'
+curl 'http://127.0.0.1:8180/debug/messages/raw?limit=5'
+curl 'http://127.0.0.1:8180/debug/traces?account_id=aid_123456789'
+curl http://127.0.0.1:8180/debug/accounts/aid_123456789/user-profile
+curl -X POST http://127.0.0.1:8180/debug/sessions/1/reset
+curl http://127.0.0.1:8180/debug/sessions/1/profile
+curl -X POST http://127.0.0.1:8180/debug/sessions/1/profile \
   -H 'Content-Type: application/json' \
   -d '{"style":"温柔、简洁、像熟悉的朋友"}'
 ```
@@ -186,32 +183,28 @@ Admin endpoints require `Authorization: Bearer $ADMIN_TOKEN`.
 export ADMIN_TOKEN=dev-admin-token
 
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts
+  http://127.0.0.1:8180/admin/accounts
 
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/accounts/openclaw-weixin/contacts
+  http://127.0.0.1:8180/admin/accounts/aid_123456789
 
-curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://127.0.0.1:8000/admin/contacts/1
-
-curl -X PATCH http://127.0.0.1:8000/admin/contacts/1/profile \
+curl -X PATCH http://127.0.0.1:8180/admin/accounts/aid_123456789/profile \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"style":"温柔、简洁、像熟悉的朋友"}'
 
-curl -X POST http://127.0.0.1:8000/admin/contacts/1/disable \
+curl -X POST http://127.0.0.1:8180/admin/accounts/aid_123456789/disable \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-curl -X POST http://127.0.0.1:8000/admin/contacts/1/enable \
+curl -X POST http://127.0.0.1:8180/admin/accounts/aid_123456789/enable \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
-curl -X POST http://127.0.0.1:8000/admin/sessions/1/reset \
+curl -X POST http://127.0.0.1:8180/admin/sessions/1/reset \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-The current `contacts` endpoints are compatibility APIs from the early data model.
-The target model is account-level management: each connected WeChat account has
-its own Soul, session history, memory, and configuration.
+The old `contacts` table and `/admin/contacts/*` route family have been migrated
+away in current code. Account-level management is now under `/admin/accounts/*`.
 
 ## Troubleshooting
 
@@ -228,7 +221,7 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 Common checks:
 
 ```bash
-curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8180/health
 openclaw plugins inspect ai4all-openclaw-bridge --runtime
 openclaw channels status --probe
 ```
