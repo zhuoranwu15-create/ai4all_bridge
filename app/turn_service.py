@@ -52,6 +52,7 @@ from app.onboarding import (
 )
 from app.openclaw_gateway import send_weixin_text
 from app.user_profiles import (
+    ensure_agent_context_files,
     ensure_user_profile,
     read_agent_context,
     read_user_profile,
@@ -437,6 +438,7 @@ def handle_openclaw_turn(
     account = session_state["account"]
     session = session_state["session"]
     profile_path = ensure_user_profile(account_id)
+    ensure_agent_context_files(account_id, display_name=account.get("display_name"))
     ensure_account_state(account_id=account_id)
     debug_trace_enabled = _is_debug_trace_account(account_id)
 

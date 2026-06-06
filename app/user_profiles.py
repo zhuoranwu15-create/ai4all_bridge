@@ -1,9 +1,12 @@
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
 from app.config import settings
+
+logger = logging.getLogger("ai4all.user_profiles")
 
 # ---------------------------------------------------------------------------
 # SOUL.md preset templates
@@ -17,24 +20,22 @@ def _load_soul_templates() -> dict:
     templates = {}
     for name in presets:
         path = _SOUL_TEMPLATES_DIR / f"{name}.md"
-        templates[name] = path.read_text(encoding="utf-8")
+        try:
+            templates[name] = path.read_text(encoding="utf-8")
+        except OSError as err:
+            logger.error("soul template load failed name=%s path=%s error=%s", name, path, err)
+            if name == "blank":
+                templates[name] = (
+                    "# SOUL\n\n"
+                    "你是这个微信账号的个人 AI 陪伴与生活助理。回应要自然、温和、简洁，"
+                    "优先提供情绪陪伴、日常建议和生活协助。\n"
+                )
+                continue
+            raise
     return templates
 
 
 _SOUL_TEMPLATES = _load_soul_templates()
-
-
-DEFAULT_USER_PROFILE = """# User Profile
-
-## Soul
-你是这个微信账号的个人 AI 陪伴与生活助理。回应要自然、温和、简洁，优先提供情绪陪伴、日常建议和生活协助。
-
-## User Preferences
-- 暂无
-
-## Long-term Memory
-- 暂无
-"""
 
 
 SYSTEM_CONTEXT_FILES = ("AGENTS.md", "TOOLS.md")
@@ -103,14 +104,6 @@ def read_user_profile(account_id: str) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8").strip()
-
-
-def _extract_legacy_section(markdown: str, section_name: str) -> str:
-    pattern = r"(?m)^##\s+" + re.escape(section_name) + r"\s*\n(.*?)(?=^##\s|\Z)"
-    match = re.search(pattern, markdown, re.DOTALL)
-    if not match:
-        return ""
-    return match.group(1).strip()
 
 
 def _default_system_templates() -> Dict[str, str]:
@@ -183,29 +176,30 @@ def _legacy_default_tools_template() -> str:
 """
 
 
+def _render_soul_template(template: str, ai_name: Optional[str], user_name: Optional[str]) -> str:
+    name_clause = ai_name.strip() if ai_name and ai_name.strip() else "我"
+    user_clause = f"{user_name.strip()}的" if user_name and user_name.strip() else "这个用户的"
+    return template.format(name_clause=name_clause, user_clause=user_clause)
+
+
 def _default_user_context_templates(
     *,
     display_name: Optional[str],
-    legacy_profile: str,
 ) -> Dict[str, str]:
-    soul = _extract_legacy_section(legacy_profile, "Soul") or (
-        "你是这个微信账号的个人 AI 陪伴与生活助理。回应要自然、温和、简洁，"
-        "优先提供情绪陪伴、日常建议和生活协助。"
-    )
-    user = _extract_legacy_section(legacy_profile, "User Preferences") or "- 暂无"
-    memory = _extract_legacy_section(legacy_profile, "Long-term Memory") or "- 暂无"
     assistant_name = (display_name or "").strip()
     if assistant_name in _LEGACY_DEFAULT_ASSISTANT_NAMES:
         assistant_name = ""
+    soul = _render_soul_template(
+        _SOUL_TEMPLATES["blank"],
+        ai_name=assistant_name or None,
+        user_name=None,
+    )
     if assistant_name:
         identity_name_line = f"- 你的名字是 {assistant_name}，用它自称。"
     else:
         identity_name_line = _NO_NAME_IDENTITY_LINE
     return {
-        "SOUL.md": f"""# SOUL
-
-{soul}
-""",
+        "SOUL.md": soul,
         "IDENTITY.md": f"""# IDENTITY
 
 {identity_name_line}
@@ -214,11 +208,11 @@ def _default_user_context_templates(
 """,
         "USER.md": f"""# USER
 
-{user}
+- 暂无
 """,
         "MEMORY.md": f"""# MEMORY
 
-{memory}
+- 暂无
 """,
     }
 
@@ -251,22 +245,17 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
 
     Only manages SOUL / IDENTITY / USER / MEMORY. AGENTS and TOOLS are
     system-level and live in data/system/ — see ensure_system_context_files().
-    Existing files are never overwritten.
+    Existing non-empty files are never overwritten.
     """
-    profile_path = ensure_user_profile(account_id)
-    profile_dir = profile_path.parent
-    # 新账号不再有 legacy user_profile.md；缺失时按空 legacy 派生（默认模板与历史一致）。
-    legacy_profile = (
-        profile_path.read_text(encoding="utf-8") if profile_path.exists() else ""
-    )
+    profile_dir = account_profile_dir(account_id)
+    profile_dir.mkdir(parents=True, exist_ok=True)
     templates = _default_user_context_templates(
         display_name=display_name,
-        legacy_profile=legacy_profile,
     )
     created: Dict[str, bool] = {}
     for filename in USER_CONTEXT_FILE_ORDER:
         path = profile_dir / filename
-        if path.exists():
+        if path.exists() and path.read_text(encoding="utf-8").strip():
             created[filename] = False
         else:
             path.write_text(templates[filename].strip() + "\n", encoding="utf-8")
@@ -300,13 +289,6 @@ def read_agent_context(account_id: str, display_name: Optional[str] = None) -> A
         files=files,
     )
 
-
-def _render_soul_template(template: str, ai_name: Optional[str], user_name: Optional[str]) -> str:
-    name_clause = ai_name.strip() if ai_name and ai_name.strip() else "我"
-    user_clause = f"{user_name.strip()}的" if user_name and user_name.strip() else "这个用户的"
-    return template.format(name_clause=name_clause, user_clause=user_clause)
-
-
 def apply_soul_preset(
     account_id: str,
     preset_name: str,
@@ -319,6 +301,24 @@ def apply_soul_preset(
     For 'custom', appends the user's description to the blank template.
     Always overwrites the existing SOUL.md.
     """
+    content = render_soul_preset(
+        account_id=account_id,
+        preset_name=preset_name,
+        custom_description=custom_description,
+    )
+    soul_path = context_file_path(account_id, "SOUL.md")
+    soul_path.parent.mkdir(parents=True, exist_ok=True)
+    soul_path.write_text(content, encoding="utf-8")
+    return soul_path
+
+
+def render_soul_preset(
+    account_id: str,
+    preset_name: str,
+    *,
+    custom_description: Optional[str] = None,
+) -> str:
+    """Render a SOUL.md preset for an account without writing the file."""
     template = _SOUL_TEMPLATES.get(preset_name, _SOUL_TEMPLATES["blank"])
     identity_path = context_file_path(account_id, "IDENTITY.md")
     ai_name: Optional[str] = None
@@ -343,10 +343,7 @@ def apply_soul_preset(
     if custom_description and custom_description.strip():
         content = content.rstrip("\n") + f"\n\n用户对你的期待描述：{custom_description.strip()}\n"
 
-    soul_path = context_file_path(account_id, "SOUL.md")
-    soul_path.parent.mkdir(parents=True, exist_ok=True)
-    soul_path.write_text(content, encoding="utf-8")
-    return soul_path
+    return content
 
 
 def write_ai_name_to_identity(account_id: str, name: str) -> Path:

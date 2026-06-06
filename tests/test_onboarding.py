@@ -471,6 +471,7 @@ def test_first_turn_enters_onboarding_mode(client, fresh_db):
 
 def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_db):
     """The real Weixin bridge puts the sendable peer in chat_id, not sender_id."""
+    from app.user_profiles import context_file_path
     from unittest.mock import patch
 
     session_key = "agent:main:openclaw-weixin:bot-a:direct:peer-a@im.wechat"
@@ -505,6 +506,9 @@ def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_
     assert data["metadata"]["onboarding_welcome_to_user_id"] == "peer-a@im.wechat"
     mock_send.assert_called_once()
     assert mock_send.call_args.kwargs["to_user_id"] == "peer-a@im.wechat"
+    soul = context_file_path(session_key, "SOUL.md").read_text(encoding="utf-8")
+    assert "专属的陪伴" in soul
+    assert "个人 AI 陪伴与生活助理" not in soul
 
 
 def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db):
