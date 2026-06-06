@@ -93,6 +93,21 @@ class Settings(BaseSettings):
     web_search_trace_raw_response: bool = False
 
     dashscope_api_key: str = ""
+
+    # ===== 图片理解（DashScope qwen3-vl-plus）=====
+    # 总开关：关闭时图片轮直接走兜底，不调 VL、不扣图片费。
+    image_understanding_enabled: bool = False
+    image_understanding_model: str = "qwen3-vl-plus"
+    image_understanding_timeout_seconds: float = 30.0
+    # 单张图片读取上限，超过则放弃理解（防止超大文件拖垮请求）。
+    image_max_bytes: int = 10_485_760
+    # OpenClaw 入站图片落地目录；只允许读取该目录内的本地文件（防路径穿越）。
+    image_inbound_dir: str = "~/.openclaw/media/inbound"
+    # 单次图片理解固定扣费（micros，1 贝壳=1_000_000）。独立成本事件，带总开关。
+    image_understanding_cost_shell_micros: int = 5_000_000
+    # VL 超时/失败时的兜底话术（红线：禁止让主模型在无描述时瞎猜图片内容）。
+    image_understanding_fallback_text: str = "这张图我没太看清，你可以说说它，或者再发我一次～"
+
     aliyun_web_search_api_key: str = ""
     aliyun_web_search_enabled: bool = False
     aliyun_web_search_base_url: str = "https://cloud-iqs.aliyuncs.com/search/unified"

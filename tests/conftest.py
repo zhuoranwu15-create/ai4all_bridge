@@ -78,6 +78,13 @@ def test_settings(tmp_path):
     s.web_search_max_results = 5
     s.web_search_trace_raw_response = False
     s.dashscope_api_key = ""
+    s.image_understanding_enabled = False
+    s.image_understanding_model = "qwen3-vl-plus"
+    s.image_understanding_timeout_seconds = 30.0
+    s.image_max_bytes = 10_485_760
+    s.image_inbound_dir = str(tmp_path / "inbound")
+    s.image_understanding_cost_shell_micros = 5_000_000
+    s.image_understanding_fallback_text = "这张图我没太看清，你可以说说它，或者再发我一次～"
     s.aliyun_web_search_api_key = ""
     s.aliyun_web_search_enabled = False
     s.aliyun_web_search_base_url = "https://cloud-iqs.aliyuncs.com/search/unified"

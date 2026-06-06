@@ -1,0 +1,38 @@
+diff --git a/src/auto-reply/reply/get-reply.ts b/src/auto-reply/reply/get-reply.ts
+index 1803b91f63..bc073bc3a1 100644
+--- a/src/auto-reply/reply/get-reply.ts
++++ b/src/auto-reply/reply/get-reply.ts
+@@ -930,9 +930,32 @@ export async function getReplyFromConfig(
+         originatingChannel: sessionCtx.OriginatingChannel,
+         provider: sessionCtx.Provider,
+       });
++      // ai4all: surface the inbound media's absolute local path to before_agent_reply
++      // hooks. The media note is otherwise only injected into the prompt AFTER this
++      // hook (in runPreparedReply), so without this the bridge cannot see the image.
++      // We only enrich the hook's cleanedBody copy; the real prompt is untouched.
++      let hookCleanedBody = cleanedBody;
++      if (hasInboundMedia(ctx)) {
++        const firstMediaPath =
++          normalizeOptionalString(ctx.MediaPath) ||
++          (Array.isArray(ctx.MediaPaths)
++            ? ctx.MediaPaths.map((value) => normalizeOptionalString(value)).find(Boolean)
++            : undefined);
++        if (firstMediaPath) {
++          const firstMediaType =
++            normalizeOptionalString(ctx.MediaType) ||
++            (Array.isArray(ctx.MediaTypes)
++              ? ctx.MediaTypes.map((value) => normalizeOptionalString(value)).find(Boolean)
++              : undefined);
++          const mediaMarker = `[media attached: ${firstMediaPath}${
++            firstMediaType ? ` (${firstMediaType})` : ""
++          }]`;
++          hookCleanedBody = [mediaMarker, cleanedBody].filter(Boolean).join("\n");
++        }
++      }
+       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
+         hookRunner.runBeforeAgentReply(
+-          { cleanedBody },
++          { cleanedBody: hookCleanedBody },
+           {
+             agentId,
+             sessionKey: agentSessionKey,

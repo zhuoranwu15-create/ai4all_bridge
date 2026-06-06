@@ -3387,6 +3387,144 @@ def record_chat_usage_charge(
     }
 
 
+def record_image_understanding_charge(
+    *,
+    account_id: str,
+    source_id: Optional[str],
+    idempotency_key: str,
+    model: Optional[str] = None,
+    cost_shell_micros: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Record one fixed-price image-understanding cost event (independent of chat tokens).
+
+    Mirrors record_chat_usage_charge but charges a flat shell amount with
+    cost_type='image_understanding' and no token estimation. Idempotent on
+    idempotency_key so retries never double-charge. Account-isolated.
+    Returns None when the charge amount is non-positive or the account has no
+    platform user (e.g. unbilled internal accounts).
+    """
+    cleaned_idempotency_key = _clean_text(idempotency_key)
+    if not cleaned_idempotency_key:
+        raise ValueError("idempotency_key is required")
+
+    charge_micros = (
+        int(cost_shell_micros)
+        if cost_shell_micros is not None
+        else int(settings.image_understanding_cost_shell_micros)
+    )
+    if charge_micros <= 0:
+        return None
+
+    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
+    if platform_user_id is None:
+        return None
+
+    with connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT ce.*, l.id AS ledger_exists
+            FROM cost_events ce
+            LEFT JOIN entitlement_ledger l ON l.id = ce.entitlement_ledger_id
+            WHERE ce.idempotency_key = ?
+            """,
+            (cleaned_idempotency_key,),
+        ).fetchone()
+        if existing is not None:
+            event = _decode_cost_event_row(existing)
+            ledger = None
+            if event.get("entitlement_ledger_id"):
+                ledger_row = conn.execute(
+                    "SELECT * FROM entitlement_ledger WHERE id = ?",
+                    (event["entitlement_ledger_id"],),
+                ).fetchone()
+                ledger = _decode_ledger_row(ledger_row) if ledger_row else None
+            wallet_row = conn.execute(
+                """
+                SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                       created_at, updated_at
+                FROM entitlement_wallets
+                WHERE account_id = ?
+                """,
+                (account_id,),
+            ).fetchone()
+            return {
+                "cost_event": event,
+                "ledger": ledger,
+                "wallet": _decode_wallet_row(wallet_row) if wallet_row else None,
+            }
+
+        wallet = _ensure_wallet_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+        )
+        event_id = _new_id("cost")
+        ledger_idempotency_key = f"usage-charge-{cleaned_idempotency_key}"
+        charge_metadata = {
+            "cost_type": "image_understanding",
+            "model": model,
+            **(metadata or {}),
+        }
+        ledger_row = _apply_wallet_ledger_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            amount_shell_micros=-charge_micros,
+            entry_type="debit",
+            source_type="image_understanding_charge",
+            source_id=source_id,
+            idempotency_key=ledger_idempotency_key,
+            metadata=charge_metadata,
+        )
+        conn.execute(
+            """
+            INSERT INTO cost_events(
+                id, wallet_id, account_id, platform_user_id, cost_type,
+                cost_owner, billable_to_user, model, input_tokens, output_tokens,
+                billable_tokens, model_price_multiplier_micros, computed_shell_micros,
+                entitlement_ledger_id, source_type, source_id, idempotency_key,
+                metadata_json
+            )
+            VALUES (?, ?, ?, ?, 'image_understanding', 'user', 1, ?, 0, 0, 0, 1000000, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                wallet["id"],
+                account_id,
+                platform_user_id,
+                _clean_text(model),
+                charge_micros,
+                ledger_row["id"],
+                "image_understanding_charge",
+                _clean_text(source_id),
+                cleaned_idempotency_key,
+                json.dumps(charge_metadata, ensure_ascii=False),
+            ),
+        )
+        event_row = conn.execute(
+            "SELECT * FROM cost_events WHERE id = ?",
+            (event_id,),
+        ).fetchone()
+        wallet_row = conn.execute(
+            """
+            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                   created_at, updated_at
+            FROM entitlement_wallets
+            WHERE id = ?
+            """,
+            (wallet["id"],),
+        ).fetchone()
+
+    if event_row is None:
+        raise RuntimeError("image_understanding cost_event was not created")
+    return {
+        "cost_event": _decode_cost_event_row(event_row),
+        "ledger": _decode_ledger_row(ledger_row),
+        "wallet": _decode_wallet_row(wallet_row),
+    }
+
+
 def get_wallet_summary(
     *,
     account_id: str,

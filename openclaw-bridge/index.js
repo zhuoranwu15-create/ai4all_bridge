@@ -127,6 +127,38 @@ function extractMediaMarkers(text) {
   return markers;
 }
 
+// Parse the first `[media attached: <path> (<type>)]` marker that the OpenClaw
+// core get-reply patch injects into cleanedBody for inbound media. Returns
+// { path, type, caption } or null. We intentionally do NOT reuse
+// extractMediaMarkers: it truncates values for debug logging, which would
+// corrupt a long absolute media path.
+function parseInboundMediaMarker(rawText) {
+  const text = typeof rawText === "string" ? rawText : "";
+  const match = text.match(/\[media attached(?:\s+\d+\/\d+)?:\s*([^\]]+)\]/i);
+  if (!match) {
+    return null;
+  }
+  const inner = match[1].trim();
+  let path = inner;
+  let type = "";
+  const withType = inner.match(/^(.+?)\s+\(([^)]+)\)$/);
+  if (withType) {
+    path = withType[1].trim();
+    type = withType[2].trim();
+  }
+  if (!path) {
+    return null;
+  }
+  const caption = text.replace(match[0], "").trim();
+  return { path, type, caption };
+}
+
+// Treat missing type as image (WeChat photos may omit a MIME type); audio/voice
+// markers are left to the existing text/voice handling.
+function isImageMediaType(type) {
+  return !type || /^image\//i.test(type);
+}
+
 function summarizePotentialText(value) {
   const text = typeof value === "string" ? value : "";
   const markers = extractMediaMarkers(text);
@@ -468,6 +500,10 @@ export default definePluginEntry({
       const shadowTrace = isShadowTraceAccount(config, channelAccountId);
       const voiceDebugSummary = config.voiceDebug ? buildVoiceDebugSummary(event, ctx) : undefined;
       const idDiagnostics = buildIdDiagnostics(event, ctx);
+      // Detect an inbound image via the media marker injected by the OpenClaw
+      // core patch; forward the local path so the backend can run VL on it.
+      const inboundMedia = parseInboundMediaMarker(event.cleanedBody);
+      const isImageTurn = Boolean(inboundMedia && isImageMediaType(inboundMedia.type));
       const payload = {
         event_id: ctx.runId || undefined,
         message_id: ctx.runId || undefined,
@@ -478,8 +514,11 @@ export default definePluginEntry({
         chat_id: ctx.channelId || session.chatId,
         chat_type: "private",
         session_key: session.sessionKey,
-        message_type: "text",
-        text: event.cleanedBody || "",
+        message_type: isImageTurn ? "image" : "text",
+        text: isImageTurn ? inboundMedia.caption : event.cleanedBody || "",
+        ...(isImageTurn
+          ? { media: { path: inboundMedia.path, format: inboundMedia.type || "image" } }
+          : {}),
         timestamp: Math.floor(Date.now() / 1000),
         raw: {
           ctx,

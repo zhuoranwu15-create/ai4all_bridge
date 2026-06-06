@@ -22,11 +22,13 @@ from app.db import (
     insert_message,
     list_recent_messages_for_account,
     record_chat_usage_charge,
+    record_image_understanding_charge,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,
     upsert_channel_binding,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
+from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools
 from app.memory_writer import write_memory
 from app.prompt_builder import PromptBuilder, extract_section
@@ -552,7 +554,28 @@ def handle_openclaw_turn(
         )
 
     text = (payload.text or "").strip()
-    if not text and payload.message_type == "voice":
+    # 图片轮：调 VL 产出多维描述，合成进 user 历史（支撑图后追问 C 场景），
+    # 再走主链路按人设接话；VL 失败/总开关关闭则走兜底，跳过主模型（红线：不瞎猜）。
+    image_described = False
+    image_understanding_failed = False
+    if payload.message_type == "image":
+        caption = text
+        description = None
+        if settings.image_understanding_enabled:
+            media = payload.media
+            if media is not None and (media.path or media.url):
+                description = describe_image(
+                    image_path=media.path,
+                    image_url=media.url,
+                    caption=caption,
+                )
+        if description:
+            text = f"{caption}\n[用户发来一张图片：{description}]".strip()
+            image_described = True
+        else:
+            image_understanding_failed = True
+            text = caption or "[图片]"
+    elif not text and payload.message_type == "voice":
         text = "[voice message]"
 
     inserted_id = insert_message(
@@ -589,6 +612,27 @@ def handle_openclaw_turn(
         )
 
     increment_daily_usage(account_id=account_id, date=today)
+
+    # VL 成功后记一次独立的图片理解成本事件（固定贝壳，带总开关，与 chat 扣费相互独立）。
+    if image_described:
+        try:
+            record_image_understanding_charge(
+                account_id=account_id,
+                source_id=message_id or str(inserted_id),
+                idempotency_key=f"image-understanding-{account_id}-{message_id or inserted_id}",
+                model=settings.image_understanding_model,
+                metadata={
+                    "message_id": message_id,
+                    "session_id": int(session["id"]),
+                },
+            )
+        except Exception as err:
+            logger.exception(
+                "image understanding charge failed account=%s message_id=%s error=%s",
+                account_id,
+                message_id,
+                err,
+            )
 
     generation_error = None
     normal_reply_generated = False
@@ -628,6 +672,9 @@ def handle_openclaw_turn(
             f"active_session_key={ACCOUNT_ACTIVE_SESSION_KEY}, "
             f"openclaw_session_key={openclaw_session_key}"
         )
+    elif image_understanding_failed:
+        # 图片没看清/未开启理解：走兜底话术，不调主模型（禁止无描述瞎猜）。
+        reply = settings.image_understanding_fallback_text
     else:
         try:
             profile = session_state.get("profile") or {}

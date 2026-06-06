@@ -25,10 +25,26 @@ def main() -> None:
     parser.add_argument("--sender", default="wxid_mock")
     parser.add_argument("--text", default="你好")
     parser.add_argument("--message-id", default=None)
+    parser.add_argument(
+        "--message-type",
+        default="text",
+        help="消息类型，如 text / image / voice。给定 --image-path/--image-url 时自动置为 image。",
+    )
+    parser.add_argument("--image-path", default=None, help="本地图片绝对路径（绕过 OpenClaw 自测图片轮）")
+    parser.add_argument("--image-url", default=None, help="远程图片 URL")
     args = parser.parse_args()
 
     now = int(time.time())
     message_id = args.message_id or f"msg_{now}"
+    message_type = args.message_type
+    media = None
+    if args.image_path or args.image_url:
+        message_type = "image"
+        media = {
+            "path": args.image_path,
+            "url": args.image_url,
+            "format": "image",
+        }
     payload = {
         "event_id": f"evt_{message_id}",
         "message_id": message_id,
@@ -38,11 +54,13 @@ def main() -> None:
         "chat_id": args.sender,
         "chat_type": "private",
         "session_key": f"openclaw-weixin:local:{args.sender}",
-        "message_type": "text",
+        "message_type": message_type,
         "text": args.text,
         "timestamp": now,
         "raw": {},
     }
+    if media is not None:
+        payload["media"] = media
     turn_url = resolve_turn_url(args.url)
     request = urllib.request.Request(
         turn_url,
