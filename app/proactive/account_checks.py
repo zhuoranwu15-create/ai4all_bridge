@@ -12,6 +12,7 @@ from app.db import (
     list_content_invitations_for_account,
     list_recent_messages,
     list_recent_messages_for_account_since,
+    list_recent_reactivation_outbound_messages,
     list_channel_bindings_for_account,
     list_sessions_for_account,
     upsert_proactive_account_state,
@@ -82,6 +83,7 @@ topic_followup 不适合：
 - 不要说“我找到几篇/几条内容/文章”，不要生成标题列表。
 - 生成的是今日稍后可发送的候选；不要因为当前执行时间是凌晨、quiet hours、用户刚说过晚安而拒绝，这些由调度层决定。
 - 只要有具体可延续点，就可以生成一句轻量候选；不要用“最后以晚安结束”作为唯一拒绝理由。
+- 如果 recent_sent_reactivations 非空，不要生成与其中任何条目 topic 相同或高度相似的候选；请选择别的自然续聊点，或在没有更好选项时返回 should_send=false。
 
 JSON schema:
 {
@@ -273,6 +275,7 @@ def _build_topic_followup_user_prompt(
     state: Dict[str, Any],
     history: list[dict[str, Any]],
     now: datetime,
+    recent_sent_topics: Optional[list] = None,
 ) -> str:
     account_id = str(account["id"])
     agent_context = read_agent_context(
@@ -288,6 +291,13 @@ def _build_topic_followup_user_prompt(
         for item in history
         if _clean_text(item.get("content"))
     ]
+    sent_lines = (
+        "\n".join(
+            f"- {item.get('sent_at') or item.get('created_at')} topic={item.get('topic')} text={_truncate_text(item.get('text') or '', 80)}"
+            for item in (recent_sent_topics or [])
+        )
+        or "- none"
+    )
     return "\n\n".join(
         [
             f"now: {_format_decision_time(now)}",
@@ -296,6 +306,7 @@ def _build_topic_followup_user_prompt(
             "USER.md:\n" + _truncate_text(context_blocks.get("USER", ""), 1200),
             "proactive_state_metadata:\n"
             + _truncate_text(json.dumps(state.get("metadata") or {}, ensure_ascii=False), 1200),
+            "recent_sent_reactivations:\n" + sent_lines,
             "recent_72h_chat:\n" + ("\n".join(history_lines) if history_lines else "- none"),
         ]
     )
@@ -647,6 +658,26 @@ def generate_topic_followup_candidate(
             metadata={"since": since_local, "since_utc": since_utc},
         )
 
+    try:
+        dedupe_days = int(getattr(settings, "reactivation_dedupe_days", 3) or 3)
+    except (TypeError, ValueError):
+        dedupe_days = 3
+    since_dedupe_utc = local_to_utc_string(current - timedelta(days=max(dedupe_days, 1)))
+    sent_history = list_recent_reactivation_outbound_messages(
+        account_id=account_id,
+        since=since_dedupe_utc,
+        limit=20,
+    )
+    recent_sent_topics = [
+        {
+            "sent_at": item.get("sent_at") or item.get("created_at"),
+            "topic": (item.get("metadata") or {}).get("topic"),
+            "text": item.get("text"),
+        }
+        for item in sent_history
+        if (item.get("metadata") or {}).get("topic")
+    ]
+
     messages = [
         {"role": "system", "content": TOPIC_FOLLOWUP_SYSTEM_PROMPT},
         {
@@ -656,6 +687,7 @@ def generate_topic_followup_candidate(
                 state=state,
                 history=history,
                 now=current,
+                recent_sent_topics=recent_sent_topics,
             ),
         },
     ]
