@@ -13,16 +13,21 @@ logger = logging.getLogger("ai4all.dreaming.scheduler")
 
 # Minimum sleep floor so the loop never busy-waits if clock/config is odd.
 _MIN_SLEEP_SECONDS = 60.0
+_IDLE_HEARTBEAT_INTERVAL_SECONDS = 300.0
 
 
-def _seconds_until_next_window(now: datetime, *, start_hour: int = 4) -> float:
-    """Return seconds until the next business-day boundary (start_hour)."""
+def _raw_seconds_until_next_window(now: datetime, *, start_hour: int = 4) -> float:
     today_boundary = now.replace(hour=start_hour, minute=0, second=0, microsecond=0)
     if now >= today_boundary:
         next_boundary = today_boundary + timedelta(days=1)
     else:
         next_boundary = today_boundary
-    return max((next_boundary - now).total_seconds(), _MIN_SLEEP_SECONDS)
+    return max((next_boundary - now).total_seconds(), 0.0)
+
+
+def _seconds_until_next_window(now: datetime, *, start_hour: int = 4) -> float:
+    """Return seconds until the next business-day boundary (start_hour)."""
+    return max(_raw_seconds_until_next_window(now, start_hour=start_hour), _MIN_SLEEP_SECONDS)
 
 
 class DreamingScheduler:
@@ -51,7 +56,9 @@ class DreamingScheduler:
             "running": self.is_running,
             "start_hour": self.start_hour,
             "batch_size": self.batch_size,
-            "seconds_until_next_window": round(_seconds_until_next_window(now, start_hour=self.start_hour)),
+            "seconds_until_next_window": round(
+                _seconds_until_next_window(now, start_hour=self.start_hour)
+            ),
             "last_run": self.last_run,
             "last_error": self.last_error,
         }
@@ -102,14 +109,39 @@ class DreamingScheduler:
                 self.last_error = str(err)
                 self._record_heartbeat(status="error", error=str(err))
                 logger.exception("dreaming scheduler run failed: %s", err)
-            sleep_seconds = _seconds_until_next_window(beijing_now(), start_hour=self.start_hour)
+                await self._sleep_until_next_window(
+                    heartbeat_status="error",
+                    heartbeat_error=str(err),
+                )
+                continue
+            await self._sleep_until_next_window(heartbeat_status="idle")
+
+    async def _sleep_until_next_window(
+        self,
+        *,
+        heartbeat_status: str,
+        heartbeat_error: Optional[str] = None,
+    ) -> None:
+        if self._stop_event is None:
+            self._stop_event = asyncio.Event()
+        while not self._stop_event.is_set():
+            sleep_seconds = _raw_seconds_until_next_window(
+                beijing_now(),
+                start_hour=self.start_hour,
+            )
+            if sleep_seconds <= 0:
+                return
+            timeout = min(sleep_seconds, _IDLE_HEARTBEAT_INTERVAL_SECONDS)
             try:
                 await asyncio.wait_for(
                     self._stop_event.wait(),
-                    timeout=sleep_seconds,
+                    timeout=timeout,
                 )
+                return
             except asyncio.TimeoutError:
-                pass
+                if sleep_seconds <= _IDLE_HEARTBEAT_INTERVAL_SECONDS:
+                    return
+                self._record_heartbeat(status=heartbeat_status, error=heartbeat_error)
 
     def _record_heartbeat(self, *, status: str, error: Optional[str] = None) -> None:
         try:
