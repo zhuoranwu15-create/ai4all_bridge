@@ -1,6 +1,8 @@
 # 下一步开发步骤：主动消息观察期与后续收口
 
-更新时间：2026-06-06
+更新时间：2026-06-07
+
+> Phase 1 阶段性状态快照见 [Phase 1 收尾总结](phase1_closeout_summary.md)。进入下一阶段的最大缺口是**拉新送贝壳**（邀请码、邀请关系、奖励发放、3 条有意义消息判断均未实现），其次是搜索 5 贝壳扣减/模型倍率等权益扣减收口。
 
 ## 当前阶段判断
 
@@ -8,7 +10,7 @@
 
 当前测试账号聊天内容较少，内容邀请和陪伴跟进两类主动消息缺少稳定兴趣、稳定关系上下文和明确未来事项，因此 LLM 可能返回 `llm_no_content_invitation` 或不生成陪伴候选。这属于当前保守策略的预期行为，不应为了测试通过而降低阈值或引入关键词规则。
 
-总体/框架设计已经整理到 `docs/architecture_overview.md`，Phase 1 详细技术设计已经整理到 `docs/phase1_technical_design.md`。后续按真实数据验证以下链路：
+总体/框架设计已经整理到 `docs/architecture_overview.md`，Phase 1 详细技术设计已经整理到 `docs/phase1/phase1_technical_design.md`。后续按真实数据验证以下链路：
 
 ```text
 普通聊天
@@ -207,4 +209,4 @@ effective config 应覆盖：
 - 支付、自动续费和套餐后台。
 - 多 bot 账号管理。
 - 后端语音 ASR fallback。
-- 图片/多模态。
+- 图片生成（图片**理解**已提前交付，见 [Phase 1 收尾总结 §2.1](phase1_closeout_summary.md)）。

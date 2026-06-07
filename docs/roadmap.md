@@ -1,6 +1,6 @@
 # 后续规划
 
-> 本文描述产品和工程阶段路线。总体架构以 `docs/architecture_overview.md` 为准；Phase 1 详细设计、身份模型和技术分层以 `docs/phase1_technical_design.md` 为准。
+> 本文描述产品和工程阶段路线。总体架构以 `docs/architecture_overview.md` 为准；Phase 1 详细设计、身份模型和技术分层以 `docs/phase1/phase1_technical_design.md` 为准。
 
 ## 总方向
 
@@ -170,6 +170,6 @@ OpenClaw 和 `openclaw-weixin` 只作为微信登录、收消息、发消息的�
 - 完整公开商业化官网、复杂营销系统和多 bot 自助管理。
 - 大规模客服系统。
 - 群聊 bot。
-- 图片/多模态。
+- 图片生成与更广义多模态（图片**理解**已在 Phase 1 收尾期提前交付，见 [Phase 1 收尾总结 §2.1](phase1/phase1_closeout_summary.md)）。
 - 心理咨询工作流。
 - 多 Agent 工作流。

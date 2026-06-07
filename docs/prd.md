@@ -110,7 +110,7 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 
 - 群聊 bot。
 - 一个公共服务微信号接待大量外部用户。
-- 图片理解和图片生成。
+- 图片生成。（注：图片**理解**原列为暂不做，已在 Phase 1 收尾期提前交付，见 [Phase 1 收尾总结 §2.1](phase1/phase1_closeout_summary.md)。）
 - 文件处理。
 - RAG 知识库。
 - 复杂多 Agent 编排。
@@ -138,7 +138,7 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 对应技术文档：
 
 - [总体架构 / 框架设计](architecture_overview.md)
-- [Phase 1 详细技术设计](phase1_technical_design.md)
+- [Phase 1 详细技术设计](phase1/phase1_technical_design.md)
 - [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md)
 - [主动消息与提醒设计](tech_design/proactive_messaging_design.md)
 - [Agent Context Files 与记忆机制](tech_design/agent_context_files.md)
