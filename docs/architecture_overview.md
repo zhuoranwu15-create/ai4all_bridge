@@ -18,8 +18,8 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 | --- | --- |
 | `docs/prd.md` | Phase 1 产品范围、需求和验收标准 |
 | `docs/product/README.md` | 产品专题 PRD 索引，对齐单项能力的详细产品需求 |
-| `docs/phase1_technical_design.md` | Phase 1 详细技术设计、数据模型和工作包 |
-| `docs/phase1_traceability_matrix.md` | 产品需求、技术设计、当前代码和开发缺口的追踪索引 |
+| `docs/phase1/phase1_technical_design.md` | Phase 1 详细技术设计、数据模型和工作包 |
+| `docs/phase1/phase1_traceability_matrix.md` | 产品需求、技术设计、当前代码和开发缺口的追踪索引 |
 | `docs/tech_design/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
 | `docs/tech_design/proactive_messaging_design.md` | 主动消息、提醒、commitment 和 scheduler 专题 |
 | `docs/tech_design/agent_context_files.md` | Agent Context Files、daily notes、长期记忆和 Dreaming |
@@ -309,4 +309,4 @@ Phase 1 的架构收口顺序：
 6. 权益和增长：内测赠送、扣减流水、拉新奖励、客服处理。
 7. 内测部署：PostgreSQL/Redis/scheduler worker、日志、告警、Admin UI。
 
-详细数据模型、工作包和实现缺口见 `docs/phase1_technical_design.md`。
+详细数据模型、工作包和实现缺口见 `docs/phase1/phase1_technical_design.md`。

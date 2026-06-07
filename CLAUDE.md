@@ -71,7 +71,7 @@
 
 主要测试账号：`86f866663cf9-im-bot`，该账号在 `data/ai4all.sqlite3` 中历史最多。
 
-完整调试参考：[`docs/debugging.md`](docs/debugging.md)
+完整调试参考：[`docs/guides/debugging.md`](docs/guides/debugging.md)
 
 ## 模块地图
 

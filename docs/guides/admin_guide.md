@@ -322,7 +322,7 @@ curl -X POST \
 
 ## 本地 Debug API
 
-`/debug/*` 接口仍保留给本地开发使用。它们同样需要 Admin/Staff Token，不应该暴露到公网。Debug 页面和 API 约定见 [调试指南](../debugging.md)。
+`/debug/*` 接口仍保留给本地开发使用。它们同样需要 Admin/Staff Token，不应该暴露到公网。Debug 页面和 API 约定见 [调试指南](debugging.md)。
 
 ## 查看 raw payload
 

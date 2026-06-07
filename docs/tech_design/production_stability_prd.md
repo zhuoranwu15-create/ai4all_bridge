@@ -426,7 +426,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - `.env.example`：补充监控相关配置。
 - `scripts/monitor_health.py`：轻量健康检查和报警脚本。
 - `docs/ops/production_runbook.md`：线上排障手册。
-- `docs/deploy_aliyun.md`：补充上线前监控 checklist。
+- `docs/ops/deploy_aliyun.md`：补充上线前监控 checklist。
 
 ## 15. 验收标准
 
