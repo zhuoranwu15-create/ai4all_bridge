@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 
+    # ===== 数据备份（scripts/backup_data.py）=====
+    backup_dir: str = "data/backups"          # 备份产物根目录
+    backup_retention_count: int = 14          # 保留最新份数，更旧的自动轮转删除
+    backup_rsync_target: str = ""             # 异地 rsync 目标（如 user@host:/path）；空=不启用异地
+
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"

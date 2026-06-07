@@ -173,6 +173,33 @@ def test_monitor_alert_state_threshold_and_recovery(tmp_path):
     assert loaded["last_status"] == "ok"
 
 
+def test_monitor_backup_staleness_check(tmp_path):
+    from scripts.monitor_health import _check_backup_staleness
+
+    backups = tmp_path / "backups"
+    # 没有目录 → 报缺失
+    assert "directory missing" in _check_backup_staleness(backups, 93600)
+
+    backups.mkdir()
+    # 有目录但没有备份 → 报 no backups
+    assert "no backups found" in _check_backup_staleness(backups, 93600)
+
+    # 一个很旧的备份(2020 年) → 报陈旧
+    (backups / "ai4all_20200101_000000").mkdir()
+    stale = _check_backup_staleness(backups, 93600)
+    assert stale is not None and "stale" in stale
+
+    # 加一个当下时间戳的备份 → 不报警(取最新)
+    from datetime import datetime
+
+    fresh = datetime.now().strftime("ai4all_%Y%m%d_%H%M%S")
+    (backups / fresh).mkdir()
+    assert _check_backup_staleness(backups, 93600) is None
+
+    # max_age<=0 关闭检查
+    assert _check_backup_staleness(backups, 0) is None
+
+
 def test_monitor_openclaw_check_passes_for_enabled_channel(monkeypatch):
     from scripts import monitor_health
 

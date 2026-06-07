@@ -1,0 +1,10 @@
+[Unit]
+Description=AI4ALL data backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/ai4all-weixin-bot
+EnvironmentFile=/opt/ai4all-weixin-bot/.env
+ExecStart=/opt/ai4all-weixin-bot/.venv/bin/python scripts/backup_data.py
+User=ai4all
+Group=ai4all

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI4ALL data backup daily
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+Persistent=true
+AccuracySec=1min
+Unit=ai4all-backup.service
+
+[Install]
+WantedBy=timers.target

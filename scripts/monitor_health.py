@@ -85,6 +85,44 @@ def _check_scheduler(service: str, max_age_seconds: int) -> Optional[str]:
     return None
 
 
+def _parse_backup_stamp(name: str) -> Optional[datetime]:
+    """从备份目录名 ai4all_YYYYMMDD_HHMMSS 解析时间；不匹配返回 None。"""
+    prefix = "ai4all_"
+    if not name.startswith(prefix):
+        return None
+    try:
+        return datetime.strptime(name[len(prefix):], "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def _check_backup_staleness(backups_dir: Path, max_age_seconds: int) -> Optional[str]:
+    """最新本地备份超过 max_age_seconds（或一份都没有）时返回错误串。
+
+    以备份目录本身的时间戳为准（持久、重启不丢），不依赖 /tmp 状态文件。
+    max_age_seconds<=0 表示关闭该检查。
+    """
+    if max_age_seconds <= 0:
+        return None
+    if not backups_dir.is_dir():
+        return f"backup: directory missing {backups_dir}"
+    stamps = [
+        stamp
+        for stamp in (_parse_backup_stamp(p.name) for p in backups_dir.iterdir() if p.is_dir())
+        if stamp is not None
+    ]
+    if not stamps:
+        return f"backup: no backups found in {backups_dir}"
+    newest = max(stamps)
+    age_seconds = int((datetime.now() - newest).total_seconds())
+    if age_seconds > max_age_seconds:
+        return (
+            f"backup: latest stale age={age_seconds}s max={max_age_seconds}s "
+            f"newest={newest.isoformat(timespec='seconds')}"
+        )
+    return None
+
+
 def _run_command(command: List[str], timeout: float) -> Tuple[bool, str]:
     try:
         completed = subprocess.run(
@@ -235,6 +273,23 @@ def main() -> int:
         help="configured OpenClaw channel expected in `openclaw channels list`; empty disables list check",
     )
     parser.add_argument(
+        "--check-backup",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("MONITOR_CHECK_BACKUP", True),
+        help="alert when the latest local backup is too old",
+    )
+    parser.add_argument(
+        "--backup-dir",
+        default=os.getenv("MONITOR_BACKUP_DIR", getattr(settings, "backup_dir", "data/backups")),
+        help="backup directory to inspect for staleness",
+    )
+    parser.add_argument(
+        "--backup-max-age-seconds",
+        type=int,
+        default=int(os.getenv("MONITOR_BACKUP_MAX_AGE_SECONDS", "93600")),
+        help="alert when newest backup is older than this (default 26h); 0 disables",
+    )
+    parser.add_argument(
         "--webhook-url",
         default=getattr(settings, "feishu_alert_webhook_url", ""),
         help="Feishu alert webhook URL; defaults to FEISHU_ALERT_WEBHOOK_URL",
@@ -283,6 +338,14 @@ def main() -> int:
 
     if args.check_openclaw:
         error = _check_openclaw(args.openclaw_channel, args.timeout)
+        if error:
+            errors.append(error)
+
+    if args.check_backup:
+        backups_dir = Path(args.backup_dir)
+        if not backups_dir.is_absolute():
+            backups_dir = ROOT / backups_dir
+        error = _check_backup_staleness(backups_dir, args.backup_max_age_seconds)
         if error:
             errors.append(error)
 

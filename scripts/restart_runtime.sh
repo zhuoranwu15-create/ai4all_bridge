@@ -8,6 +8,7 @@ cd "${ROOT_DIR}"
 BACKEND_SERVICE="${AI4ALL_BACKEND_SERVICE:-ai4all-weixin-backend}"
 PROACTIVE_SERVICE="${AI4ALL_PROACTIVE_SERVICE:-ai4all-weixin-proactive-scheduler}"
 MONITOR_TIMER="${AI4ALL_MONITOR_TIMER:-ai4all-monitor-health.timer}"
+BACKUP_TIMER="${AI4ALL_BACKUP_TIMER:-ai4all-backup.timer}"
 READY_URL="${AI4ALL_READY_URL:-http://127.0.0.1:8180/health/ready}"
 MONITOR_SCHEDULERS_VALUE="${MONITOR_SCHEDULERS:-proactive_scheduler:90,dreaming_scheduler:900}"
 
@@ -110,6 +111,7 @@ if [[ "${SKIP_NGINX}" == "0" ]]; then
 fi
 
 run sudo systemctl enable --now "${MONITOR_TIMER}"
+run sudo systemctl enable --now "${BACKUP_TIMER}"
 
 if [[ "${RESTART_OPENCLAW}" == "1" ]]; then
   run openclaw gateway restart
@@ -123,6 +125,7 @@ run curl -fsS "${READY_URL}"
 run systemctl is-active --quiet "${BACKEND_SERVICE}"
 run systemctl is-active --quiet "${PROACTIVE_SERVICE}"
 run systemctl is-active --quiet "${MONITOR_TIMER}"
+run systemctl is-active --quiet "${BACKUP_TIMER}"
 run env "MONITOR_SCHEDULERS=${MONITOR_SCHEDULERS_VALUE}" .venv/bin/python scripts/monitor_health.py --dry-run
 
 echo "restart complete"
