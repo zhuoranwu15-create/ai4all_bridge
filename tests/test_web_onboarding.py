@@ -814,6 +814,53 @@ def test_web_unbind_clear_all_allows_new_default_account(client):
     assert me.json()["wallet"]["display"]["balance"] == "1000"
 
 
+def test_wipe_account_data_clears_tool_invocations_without_fk_error(fresh_db):
+    """回归：wipe 必须先删 sessions 的子表 tool_invocations，否则 DELETE sessions
+    触发 sqlite3.IntegrityError: FOREIGN KEY constraint failed（线上 500 根因）。"""
+    from app.db import (
+        connect,
+        create_tool_invocation,
+        get_account,
+        get_or_create_session,
+        wipe_account_data,
+    )
+
+    account_id = "aid_wipe_fk_test"
+    state = get_or_create_session(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id="s1",
+        sender_name=None,
+        chat_id="c1",
+        session_key="sk-wipe-fk",
+    )
+    session_id = state["session"]["id"]
+    create_tool_invocation(
+        account_id=account_id,
+        tool_name="web_search",
+        session_id=session_id,
+        status="ok",
+        finished=True,
+    )
+
+    # 修复前这里会抛 FK 异常；修复后正常返回并清空。
+    stats = wipe_account_data(account_id=account_id)
+    assert stats["tool_invocations_deleted"] >= 1
+    assert stats["sessions_deleted"] >= 1
+
+    assert get_account(account_id=account_id)["status"] == "deactivated"
+    with connect() as conn:
+        for table in ("tool_invocations", "sessions", "messages"):
+            n = conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE account_id = ?"
+                if table != "messages"
+                else "SELECT COUNT(*) FROM messages WHERE session_id IN "
+                "(SELECT id FROM sessions WHERE account_id = ?)",
+                (account_id,),
+            ).fetchone()[0]
+            assert n == 0, f"{table} not cleared"
+
+
 def test_web_unbind_attempts_openclaw_weixin_logout(client):
     from app.db import get_binding_intent, list_channel_bindings_for_account
     from app.main import _complete_binding_intent_from_wait_result

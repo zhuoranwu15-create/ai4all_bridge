@@ -7400,6 +7400,21 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
             "DELETE FROM proactive_account_state WHERE account_id = ?",
             (account_id,),
         )
+        # tool_invocations 是 sessions 的 NO ACTION 子表，必须先删，否则 DELETE sessions
+        # 触发 FOREIGN KEY constraint failed。search_provider_runs 又是 tool_invocations
+        # 的子表，需更早删（content_invitations 同样引用 tool_invocations，已在上方删除）。
+        search_provider_runs = conn.execute(
+            "DELETE FROM search_provider_runs WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        analytics_events = conn.execute(
+            "DELETE FROM analytics_events WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        tool_invocations = conn.execute(
+            "DELETE FROM tool_invocations WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
         msgs = conn.execute(
             "DELETE FROM messages WHERE session_id IN (SELECT id FROM sessions WHERE account_id = ?)",
             (account_id,),
@@ -7444,6 +7459,9 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
         "outbound_messages_deleted": outbound,
         "daily_usage_deleted": daily_usage,
         "debug_traces_deleted": debug_traces,
+        "tool_invocations_deleted": tool_invocations,
+        "search_provider_runs_deleted": search_provider_runs,
+        "analytics_events_deleted": analytics_events,
         "binding_intents_deleted": binding_intents,
     }
 
