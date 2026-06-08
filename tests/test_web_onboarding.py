@@ -1,6 +1,8 @@
 import re
 from unittest.mock import patch
 
+import pytest
+
 
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 ACCOUNT_ID_RE = re.compile(r"^aid_[1-9]\d{8}$")
@@ -859,6 +861,48 @@ def test_wipe_account_data_clears_tool_invocations_without_fk_error(fresh_db):
                 (account_id,),
             ).fetchone()[0]
             assert n == 0, f"{table} not cleared"
+
+
+def test_unbind_and_wipe_is_atomic_on_failure(fresh_db):
+    """原子性回归：wipe 阶段失败时，unbind 阶段也必须整体回滚，
+    不留「channel 已解绑但账号仍 active / 记忆仍在」的半成品。"""
+    import app.db as db
+    from app.db import (
+        get_account,
+        get_or_create_session,
+        list_channel_bindings_for_account,
+        unbind_and_wipe_account,
+        upsert_channel_binding,
+    )
+
+    account_id = "aid_atomic_test"
+    get_or_create_session(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id="s1",
+        sender_name=None,
+        chat_id="c1",
+        session_key="sk-atomic",
+    )
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        session_key="sk-atomic",
+        channel_account_id="bot-atomic",
+        sender_id="s1",
+        chat_id="c1",
+        raw_identity={},
+    )
+    assert list_channel_bindings_for_account(account_id=account_id)
+
+    # 强制 wipe 阶段抛错（unbind 已在同一事务里执行但尚未提交）。
+    with patch.object(db, "wipe_account_data", side_effect=RuntimeError("boom")):
+        with pytest.raises(RuntimeError):
+            unbind_and_wipe_account(account_id=account_id)
+
+    # 整体回滚：binding 仍在、账号仍未 deactivated。
+    assert list_channel_bindings_for_account(account_id=account_id)
+    assert get_account(account_id=account_id)["status"] != "deactivated"
 
 
 def test_web_unbind_attempts_openclaw_weixin_logout(client):

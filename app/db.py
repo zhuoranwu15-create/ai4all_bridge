@@ -111,6 +111,20 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+@contextmanager
+def _tx(conn: Optional[sqlite3.Connection]) -> Iterator[sqlite3.Connection]:
+    """复用调用方事务（传入 conn，由调用方负责提交/回滚）或自开一个独立事务。
+
+    用于让 unbind/wipe 既能各自独立调用，又能被 unbind_and_wipe_account 串进
+    同一个事务，保证「要么全成、要么整体回滚」。
+    """
+    if conn is not None:
+        yield conn
+        return
+    with connect() as own:
+        yield own
+
+
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
@@ -7267,14 +7281,18 @@ def consume_valid_verification_token(
 # Account unbind / wipe
 # ---------------------------------------------------------------------------
 
-def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
+def unbind_account_channel(
+    *, account_id: str, conn: Optional[sqlite3.Connection] = None
+) -> Dict[str, Any]:
     """Path A: disconnect WeChat channel, cancel reminders & proactive.
 
     Removes channel routing rows so incoming messages can no longer reach this
     account.  All conversation history and context files are preserved.
     Returns counts of affected rows for audit logging.
+
+    传入 conn 时复用调用方事务（供 unbind_and_wipe_account 单事务编排）。
     """
-    with connect() as conn:
+    with _tx(conn) as conn:
         cb = conn.execute(
             "DELETE FROM channel_bindings WHERE account_id = ?",
             (account_id,),
@@ -7332,14 +7350,18 @@ def unbind_account_channel(*, account_id: str) -> Dict[str, Any]:
     }
 
 
-def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
+def wipe_account_data(
+    *, account_id: str, conn: Optional[sqlite3.Connection] = None
+) -> Dict[str, Any]:
     """Path B: hard-delete all account data after unbind_account_channel().
 
     Removes sessions, messages, dreaming data, profile row, and the
     account_owner_binding.  Sets account status to 'deactivated'.
     Does NOT touch the filesystem — caller must remove user_profiles dir.
+
+    传入 conn 时复用调用方事务（供 unbind_and_wipe_account 单事务编排）。
     """
-    with connect() as conn:
+    with _tx(conn) as conn:
         memory_events = conn.execute(
             "DELETE FROM memory_events WHERE account_id = ?",
             (account_id,),
@@ -7464,6 +7486,20 @@ def wipe_account_data(*, account_id: str) -> Dict[str, Any]:
         "analytics_events_deleted": analytics_events,
         "binding_intents_deleted": binding_intents,
     }
+
+
+def unbind_and_wipe_account(*, account_id: str) -> Dict[str, Any]:
+    """单事务完成 unbind + wipe（清空记忆解绑）。
+
+    两步在同一连接/事务里执行：要么全部提交，要么整体回滚，杜绝「channel 已
+    解绑但记忆未清、账号未 deactivate」的半成品状态（旧实现两次独立提交，wipe
+    失败会留下半成品并 500）。文件系统清理（profile 目录）需调用方在提交后单独
+    处理，因为它不在 DB 事务范围内。
+    """
+    with connect() as conn:
+        stats = unbind_account_channel(account_id=account_id, conn=conn)
+        stats.update(wipe_account_data(account_id=account_id, conn=conn))
+    return stats
 
 
 def reenable_proactive_after_rebind(*, account_id: str) -> None:

@@ -117,6 +117,7 @@ from app.db import (
     update_tool_invocation,
     unbind_account_channel,
     wipe_account_data,
+    unbind_and_wipe_account,
     reenable_proactive_after_rebind,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
@@ -2993,14 +2994,26 @@ def web_me_unbind(
 
     bindings_before_unbind = list_channel_bindings_for_account(account_id=account_id)
     openclaw_cleanup = _cleanup_openclaw_weixin_accounts(bindings_before_unbind)
-    stats = unbind_account_channel(account_id=account_id)
 
-    if not payload.keep_memories:
-        wipe_stats = wipe_account_data(account_id=account_id)
-        stats.update(wipe_stats)
-        profile_dir = account_profile_dir(account_id)
-        if profile_dir.exists():
-            shutil.rmtree(profile_dir)
+    if payload.keep_memories:
+        stats = unbind_account_channel(account_id=account_id)
+    else:
+        # 单事务原子完成 unbind + wipe：失败则整体回滚（干净可重试），不再留半成品。
+        stats = unbind_and_wipe_account(account_id=account_id)
+        # profile 目录在 DB 事务之外，提交后单独清理；失败不致命（库已清，残留目录无害）。
+        profile_removed = False
+        try:
+            profile_dir = account_profile_dir(account_id)
+            if profile_dir.exists():
+                shutil.rmtree(profile_dir)
+            profile_removed = True
+        except Exception as err:
+            logger.warning(
+                "web_me_unbind profile_dir cleanup failed account=%s error=%s",
+                account_id,
+                err,
+            )
+        stats["profile_dir_removed"] = profile_removed
 
     return {
         "status": "ok",
