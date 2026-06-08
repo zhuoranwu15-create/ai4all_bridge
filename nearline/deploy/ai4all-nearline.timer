@@ -1,0 +1,12 @@
+# 每天 02:17 跑前一天日报。错开整点与 dreaming(04:00)/backup 时段，降低 SQLite 争用。
+# 02:17 时昨天数据已齐（含夜间主动消息归因窗口大部分闭合）。
+[Unit]
+Description=AI4ALL nearline 每日报告定时器
+
+[Timer]
+OnCalendar=*-*-* 02:17:00
+Persistent=true
+# Persistent=true：机器停机错过的任务，开机后补跑一次。
+
+[Install]
+WantedBy=timers.target

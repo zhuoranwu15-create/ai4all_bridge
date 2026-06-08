@@ -1,0 +1,4 @@
+# nearline 专属依赖，与主 app requirements 隔离。
+# Phase 0 仅用标准库（sqlite3）即可运行；以下为后续指标/报告层预留。
+pandas>=2.0
+jinja2>=3.0

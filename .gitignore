@@ -9,6 +9,12 @@ __pycache__/
 data/
 ai4all.db
 *.swp
+# nearline 分析产物：facts/marts 库与生成日报均为运行时数据（facts 走 backup_data.py，marts 可重建）
+nearline/data/*.sqlite3
+nearline/data/*.sqlite3-*
+nearline/data/reports/
+nearline/data/run_state.json
+nearline/data/cron.log
 .claude/
 .specify/
 lark_sync.sh

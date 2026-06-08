@@ -1,0 +1,15 @@
+# nearline 每日报告（oneshot），由 ai4all-nearline.timer 触发。
+# 安装：复制到 /etc/systemd/system/，把 WorkingDirectory/ExecStart 路径与 User 改成实际值。
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now ai4all-nearline.timer
+# 手动跑一次验证： sudo systemctl start ai4all-nearline.service && journalctl -u ai4all-nearline -n 50
+[Unit]
+Description=AI4ALL nearline 每日运营报告
+After=network.target
+
+[Service]
+Type=oneshot
+User=jack
+WorkingDirectory=/home/jack/workspace/ai4all_bridge
+ExecStart=/home/jack/workspace/ai4all_bridge/.venv/bin/python nearline/run_daily.py --yesterday
+# 失败由脚本内飞书告警 + 非零退出；systemd 记 journal。

@@ -7,6 +7,35 @@ from unittest.mock import patch, MagicMock
 # State machine helpers
 # ---------------------------------------------------------------------------
 
+def test_set_onboarding_state_emits_analytics_event(fresh_db):
+    """A2 打点：状态转移写入 analytics_events（from/to），仅状态实际变化时记一条。"""
+    from app.db import connect, get_or_create_session, set_account_onboarding_state
+
+    account_id = "acc-onb-event"
+    get_or_create_session(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id="sender",
+        sender_name=None,
+        chat_id="chat",
+        session_key=f"session-{account_id}",
+    )
+
+    set_account_onboarding_state(account_id=account_id, state="step1_sent")
+    set_account_onboarding_state(account_id=account_id, state="step1_sent")  # 无变化，不应再记
+    set_account_onboarding_state(account_id=account_id, state="step2_sent")
+
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT from_state, to_state FROM analytics_events "
+            "WHERE account_id = ? AND event_name = 'onboarding_state_changed' ORDER BY id",
+            (account_id,),
+        ).fetchall()
+
+    transitions = [(r["from_state"], r["to_state"]) for r in rows]
+    assert transitions == [("pending", "step1_sent"), ("step1_sent", "step2_sent")]
+
+
 def test_is_onboarding_active_states():
     from app.onboarding import is_onboarding_active
     assert is_onboarding_active("pending") is True

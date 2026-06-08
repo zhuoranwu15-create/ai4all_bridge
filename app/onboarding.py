@@ -357,6 +357,28 @@ def apply_extracted_onboarding_info(
         except Exception as err:
             logger.error("apply soul preset failed account=%s preset=%s error=%s", account_id, preset, err)
 
+    # 旁路打点：人设选择事件。仅存枚举/来源/布尔，绝不写昵称或自定义人设原文。
+    persona_selected = extracted.get("persona")
+    if persona_selected and current_state in {ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT}:
+        try:
+            from app.db import record_analytics_event  # noqa: PLC0415
+
+            record_analytics_event(
+                account_id=account_id,
+                event_name="persona_selected",
+                from_state=current_state,
+                source="turn_service",
+                properties={
+                    "persona": written.get("persona"),
+                    "is_custom": persona_selected == "custom",
+                    "skipped": bool(extracted.get("skip")),
+                    "has_ai_name": "ai_name" in written,
+                    "has_user_name": "user_name" in written,
+                },
+            )
+        except Exception as err:
+            logger.error("persona_selected event emit failed account=%s error=%s", account_id, err)
+
     return written
 
 

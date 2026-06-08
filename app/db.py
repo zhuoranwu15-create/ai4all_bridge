@@ -708,6 +708,25 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_memory_events_item
             ON memory_events(memory_item_id, created_at);
 
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                event_name TEXT NOT NULL,
+                from_state TEXT,
+                to_state TEXT,
+                source TEXT,
+                properties_json TEXT NOT NULL DEFAULT '{}',
+                event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_analytics_events_name_time
+            ON analytics_events(event_name, event_time);
+
+            CREATE INDEX IF NOT EXISTS ix_analytics_events_account
+            ON analytics_events(account_id, event_time);
+
             CREATE TABLE IF NOT EXISTS debug_traces (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trace_id TEXT NOT NULL UNIQUE,
@@ -5167,12 +5186,59 @@ def get_account_onboarding_state(*, account_id: str) -> str:
     return row["onboarding_state"] or "pending"
 
 
+def record_analytics_event(
+    *,
+    account_id: str,
+    event_name: str,
+    from_state: Optional[str] = None,
+    to_state: Optional[str] = None,
+    source: Optional[str] = None,
+    properties: Optional[Dict[str, Any]] = None,
+) -> None:
+    """记录一条结构化分析事件（append-only）。
+
+    仅写元数据（状态/来源/枚举/布尔），严禁写入用户正文（昵称、自定义人设描述等）。
+    供运营分析消费；调用方应自行容错，打点失败不得影响业务主流程。
+    """
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO analytics_events"
+            "(account_id, event_name, from_state, to_state, source, properties_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                account_id,
+                event_name,
+                from_state,
+                to_state,
+                source,
+                json.dumps(properties or {}, ensure_ascii=False),
+            ),
+        )
+
+
 def set_account_onboarding_state(*, account_id: str, state: str) -> None:
     with connect() as conn:
+        row = conn.execute(
+            "SELECT onboarding_state FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        from_state = (row["onboarding_state"] if row else None) or "pending"
         conn.execute(
             "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
             (state, account_id),
         )
+    # 旁路打点：记录状态转移（仅在状态实际变化时）。失败不影响 onboarding 主流程。
+    if from_state != state:
+        try:
+            record_analytics_event(
+                account_id=account_id,
+                event_name="onboarding_state_changed",
+                from_state=from_state,
+                to_state=state,
+                source="turn_service",
+            )
+        except Exception as err:
+            logger.warning("analytics onboarding event emit failed account=%s error=%s", account_id, err)
 
 
 def get_daily_usage(*, account_id: str, date: str) -> int:

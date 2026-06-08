@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -52,8 +52,8 @@ def _chat_transport() -> httpx.HTTPTransport:
     )
 
 
-def _http_chat(messages: List[Dict[str, str]]) -> str:
-    """Send a messages list to the LLM and return the reply content."""
+def _http_chat_payload(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+    """POST messages 到 LLM，返回解析后的 JSON payload（含 choices/usage），带重试。"""
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     body = {
         "model": settings.llm_model,
@@ -79,7 +79,7 @@ def _http_chat(messages: List[Dict[str, str]]) -> str:
                 )
                 response.raise_for_status()
                 payload = response.json()
-            break
+            return payload
         except httpx.HTTPStatusError as err:
             detail = err.response.text
             status_code = err.response.status_code
@@ -99,9 +99,11 @@ def _http_chat(messages: List[Dict[str, str]]) -> str:
         except json.JSONDecodeError as err:
             logger.error("llm invalid json response: %s", err)
             raise RuntimeError("LLM returned invalid JSON") from err
-    else:
-        raise RuntimeError("LLM request failed") from last_request_error
+    raise RuntimeError("LLM request failed") from last_request_error
 
+
+def _extract_content(payload: Dict[str, Any]) -> str:
+    """从 payload 提取回复正文；空则抛错（与原 _http_chat 行为一致）。"""
     content = (
         payload.get("choices", [{}])[0]
         .get("message", {})
@@ -111,6 +113,24 @@ def _http_chat(messages: List[Dict[str, str]]) -> str:
     if not content:
         raise RuntimeError("LLM returned empty content")
     return content
+
+
+def _extract_usage(payload: Dict[str, Any]) -> Optional[Dict[str, Optional[int]]]:
+    """从 OpenAI 风格 payload 取 token 用量；缺失返回 None（NULL 安全）。"""
+    try:
+        usage = payload.get("usage") or {}
+        prompt = usage.get("prompt_tokens")
+        completion = usage.get("completion_tokens")
+        if prompt is None and completion is None:
+            return None
+        return {"input": prompt, "output": completion}
+    except Exception:
+        return None
+
+
+def _http_chat(messages: List[Dict[str, str]]) -> str:
+    """Send a messages list to the LLM and return the reply content."""
+    return _extract_content(_http_chat_payload(messages))
 
 
 def generate_reply(
@@ -132,6 +152,19 @@ def generate_completion(messages: List[Dict[str, str]]) -> str:
     if not settings.llm_api_key:
         return ""
     return _http_chat(messages)
+
+
+def generate_completion_with_usage(
+    messages: List[Dict[str, str]],
+) -> Tuple[str, Optional[Dict[str, Optional[int]]]]:
+    """同 generate_completion，但额外返回 token 用量 {'input','output'}（缺失为 None）。
+
+    无 API key 时返回 ('', None)。供需要计量 token 的旁路（如 dreaming）使用。
+    """
+    if not settings.llm_api_key:
+        return "", None
+    payload = _http_chat_payload(messages)
+    return _extract_content(payload), _extract_usage(payload)
 
 
 def _http_chat_with_tools(messages: List[Dict], tools: List[Dict]) -> Dict:

@@ -41,14 +41,20 @@
 
 **主动消息分类（`outbound_messages.product_category`）：**
 
-| category 值 | 含义 | source 来源 |
-|---|---|---|
-| `user_reminder` | 用户自设提醒 | reminder |
-| `companion_followup` | 陪伴式主动关心 | account_check, heartbeat, commitment |
-| `content_invitation` | 话题邀约 | content_invitation |
-| `content_invitation_response` | 话题邀约响应 | content_invitation_titles/feedback |
-| `task_result` | 异步任务结果 | async_task_result |
-| `legacy_proactive` | 历史兜底类 | 其他 |
+> 事实源为代码 `app/proactive/policy.py:OutboundCategory` + `SOURCE_CATEGORY_MAP`（共 8 个枚举值）。归一逻辑：`product_category` 已显式写入则直接用，否则按 `source` 查表，未命中落 `legacy_proactive`。`fct_proactive_message.category` 直接沿用该列，不再二次归一。
+
+| category 值 | 含义 | source 来源 | 当前数据 |
+|---|---|---|---|
+| `user_reminder` | 用户自设提醒 | reminder, reminder_change_confirmation | 有 |
+| `companion_followup` | 陪伴式主动关心 | commitment, account_check, heartbeat | 有 |
+| `reactivation_topic_followup` | 召回·话题跟进（**当前主力**） | reactivation 路径直写 | 有（最多） |
+| `reactivation_content_invitation` | 召回·话题邀约 | reactivation 路径直写 | 有 |
+| `content_invitation` | 话题邀约（旧路径，已并入 reactivation） | content_invitation | 有 |
+| `content_invitation_response` | 话题邀约响应 | content_invitation_titles/feedback | 暂无 |
+| `task_result` | 异步任务结果 | async_task_result | 暂无 |
+| `legacy_proactive` | 历史兜底类 | 未命中来源 | 暂无 |
+
+> ⚠️ 截至 2026-06-08，线上 44 条 outbound 中 `reactivation_*` 占 35 条——**召回类是当前主力**，域2 报告必须独立展示这两类，不能并入旧 `content_invitation`。
 
 **Onboarding 状态机：**
 `pending → step1_sent → step2_sent → step3_sent → complete / timed_out`
@@ -298,40 +304,157 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
 
 ## 六、实施路径
 
-### Phase 0：基建 + 基础表层（当前）
+> **已校验现状（2026-06-08，对照 `data/ai4all.sqlite3` + 代码）**：
+> - 操作库列名与本文 `fct_`/`dim_` 假设一致（`messages.role/direction`、`outbound_messages.product_category/sent_at/policy_reason`、`dreaming_runs.token_input/output/status`、`entitlement_ledger.entry_type`）。
+> - `created_at` 为无时区的北京本地时间 → `DATE(created_at)` 即北京自然日，无需转换。
+> - 数据量极小：50 账号（0 debug）、597 条用户入站、44 条 outbound、71 次 dreaming（全 succeeded）。→ 留存/分时段初期普遍 < 阈值，按 foundation §8 标注"仅观察"，**先跑通管线而非追指标**。
+> - 备份接入点 = `scripts/backup_data.py`（当前单库 `_backup_sqlite` + `_COUNTED_TABLES` + manifest artifacts）。
+> - `.gitignore` 当前仅含 `ai4all.db`，需补 nearline 产物。
+>
+> 执行顺序原则：**先打通 source→fct→agg→report 端到端最薄一条线（dim_date + dim_account + fct_message → daily_users → Markdown），再横向补齐其余事实表/域**。
 
-- [ ] 搭建 `nearline/analytics/` 目录结构
-- [ ] 实现 `source_db.py`（只读操作库）、`facts_db.py`、`marts_db.py`
-- [ ] 编写 `facts_schema.sql`（dim_/fct_ + etl_watermark）、`marts_schema.sql`（agg_）
-- [ ] 实现 ETL 装载器：`dim_date`、`dim_account`、`fct_message`（watermark 增量先跑通）
-- [ ] 把 `facts.sqlite3` 纳入现有自动备份任务；`marts.sqlite3` 加入 `.gitignore`
-- [ ] 添加 `nearline/requirements.txt`（pandas, jinja2）
+### Phase 0：基建骨架 + 端到端最薄一条线 ✅ 已完成（2026-06-08）
 
-### Phase 1：补齐事实表 + 四个指标模块
+- [x] 搭 `nearline/` 目录骨架（按 §3.1），含 `nearline/requirements.txt`（pandas、jinja2；Phase 0 仅用标准库）
+- [x] `source_db.py`：以 `mode=ro` URI 只读连接 `data/ai4all.sqlite3`（默认仓库根路径，可经 `--source-db`/`NEARLINE_SOURCE_DB` 覆盖，禁止写）
+- [x] `facts_db.py` / `marts_db.py`：连接 + 建表（执行 `facts_schema.sql` / `marts_schema.sql`，幂等 `CREATE TABLE IF NOT EXISTS`）
+- [x] `facts_schema.sql`：`dim_date`、`dim_account`、`fct_message`、`etl_watermark`（其余 fct_ 放 Phase 1）
+- [x] `marts_schema.sql`：`agg_daily_users`（其余 agg_ 放 Phase 1）
+- [x] ETL：`dim_date`（区间生成）、`dim_account`（UPSERT，含 `is_debug`/`registered_date`/首聊日）、`fct_message`（watermark 按 `messages.id` 增量；首条标记对源自相关，重跑稳定）
+- [x] `metrics/daily_users.py`：读 `fct_message`/`dim_account` → 写 `agg_daily_users`（DAU、入站数、新增；留存样本不足标"仅观察"，次日未到标"窗口未闭合"）
+- [x] `reporting/formatter.py` + `run_daily.py --date/--yesterday` + `run_etl.py`：渲染 §七 格式 Markdown"用户增长"段，端到端 source→report 跑通
+- [x] 工程接入：`.gitignore` 补 `nearline/data/*.sqlite3` + `reports/`；`facts.sqlite3` 纳入 `scripts/backup_data.py`（双库快照 + 完整性校验 + manifest），**`marts.sqlite3` 不入备份**
+- 校验：facts 行数=源 1237；first_ever=40=有入站账号数；逐日 DAU 与源一致；06-04 留存 8/12 与源交叉一致；ETL 重跑增量 0；备份 dry-run 通过
 
-- [ ] 事实表：`fct_dreaming_run` / `fct_dreaming_memory_item` / `fct_proactive_message`（含回复晚到归因）/ `fct_onboarding_journey`
-- [ ] `daily_users.py`（读 `fct_message`/`dim_account`）+ 基础报告渲染
-- [ ] `dreaming.py`（数据最完整，先跑通流程）
-- [ ] `onboarding.py`（漏斗框架，人设部分留占位）
-- [ ] `proactive.py`（直接读 `fct_proactive_message` 已归因的回复列）
+### Phase 1：补齐事实表 + 其余三个指标域 ✅ 已完成（2026-06-08）
 
-### Phase 2：报告与调度
+- [x] 事实表（watermark 增量）：`fct_dreaming_run`、`fct_dreaming_memory_item`、`fct_proactive_message`、`fct_onboarding_journey`（累积快照，COALESCE 保留首次捕捉里程碑）
+- [x] `fct_proactive_message` **回复晚到归因**（§3.6）：新行 sent 落 `pending`/非 sent 落 `not_applicable`；每次 ETL 对窗口已闭合行回填 `replied/reply_message_id/reply_latency_sec` 置 `resolved`；窗口默认 24h 存入 `reply_window_hours`，被同账号下一条 sent 截断；`category` 直接沿用 8 类枚举（§二），`reactivation_*` 独立保留。新增 `created_date` 列支撑 blocked 按日归属
+- [x] `metrics/dreaming.py`：`partial` 独立列、token NULL 安全、`skip_reason` 拆解、heartbeat 健康快照
+- [x] `metrics/proactive.py`：读已归因列，分类别（含 `reactivation_*`）出回复率（分母仅 `resolved`）/覆盖账号/P50 延迟/分时段
+- [x] `metrics/onboarding.py`：第②段微信首聊存量分布 + 注册 cohort 完成；人设占位"数据待积累"
+- [x] `marts_schema.sql` 补 `agg_daily_dreaming`/`agg_daily_proactive`/`agg_hourly_proactive`/`agg_onboarding_funnel_daily`；`formatter.py`/`run_daily.py` 渲染四域完整日报
+- 校验（2026-06-05）：proactive 分类 ci4/rci1/rtf4 与源一致；回复归因 sent 10:01:32→msg#581(18:18:39)=29827s 与独立查询一致；dreaming 14 runs、记忆 24/2 与源一致；归因状态 39 resolved/4 pending/1 n/a；ETL 重跑全增量 0；备份含 facts.sqlite3（integrity ok）
+- 已知限制：coverage 仅出覆盖账号分子（eligible 分母待 `proactive_account_state`/`channel_bindings` 接入）；onboarding 中间里程碑历史值空（待 `onboarding_events`）；dreaming token 当前源全 NULL
 
-- [ ] `run_etl.py` 入口（增量刷新基础表）+ `run_daily.py`（基于基础表算 agg_ + 出报告，支持 `--date`/`--yesterday`）
-- [ ] `run_backfill.py` 补跑历史（先 ETL 重建 fct_/dim_，再逐日重算 agg_）
-- [ ] Markdown 日报模板（`reporting/formatter.py`）
-- [ ] 配置 cron：先 `run_etl.py` 再 `run_daily.py`，自动产出每日报告
+### Phase 2：编排、回溯与质量门禁 ✅ 已完成（2026-06-08，调度暂只出脚本不接）
+
+- [x] `run_etl.py`：一次性增量刷新全部 `dim_`/`fct_`（含归因回填）
+- [x] `run_daily.py` 支持 `--yesterday`/`--date`/`--no-write`/`--skip-quality`；ETL → 质量门禁 → 四域 agg → 报告 → `run_state.json`（供监控检测陈旧）
+- [x] `run_backfill.py --from --to [--write-reports]`：先重建 fct_/dim_，再逐日重算 agg_（软质量只打印不阻断；明确回溯填不回历史里程碑/未捕捉归因）
+- [x] **数据质量门禁**（foundation §7）`analytics/quality.py`：5 项硬检查（账号外键 / direction-role / sent 有 sent_at / 回复外键 / memory-run 外键）+ 2 项软检查（DAU 跨层对账 / daily_usage 差异）。硬失败→飞书告警（复用 `app.alerting`）+ 非零退出 + 不出报告；软失败→报告"数据质量提示"段
+- [x] 调度模板（**只出不装**，二选一）：`nearline/deploy/ai4all-nearline.{service,timer}`（systemd，推荐）+ `crontab.example`；均每日 02:17 跑 `--yesterday`，独立进程不挂 FastAPI/dreaming_scheduler
+- 校验：7 检查全过（DAU 对账 facts=源=14）；注入孤儿行→硬检查 FAIL 且软对账独立命中→报告阻断 exit 1；清理后恢复 exit 0；backfill 06-04..06-06 逐日重算正常；`run_state.json` 落盘
 
 ### Phase 3：扩展（视需求）
 
-- [ ] 周活跃（WAU）、7日留存
+- [ ] 周活跃（WAU）、7日留存（数据积累后启用）
+- [ ] `fct_cost_event` + 贝壳消耗趋势
 - [ ] 飞书文档推送（对接 lark-doc）
 - [ ] Jupyter notebook 探索性分析
 - [ ] 话题挖掘（热门候选话题，单独模块）
+- [ ] 推动 app 侧补 `onboarding_events`/`analytics_events` 结构化埋点（foundation §4.4），解锁人设分布与精确漏斗耗时
 
 ---
 
-## 七、报告示例（目标输出格式）
+## 七、当前状态与验收建议（截至 2026-06-08）
+
+### 7.1 整体完成状态
+
+| 模块 | 状态 | 备注 |
+|---|---|---|
+| Phase 0：基建骨架 + 用户增长域 | ✅ 完成 | 端到端 source→fct→agg→report 跑通 |
+| Phase 1：四域事实表 + 三个指标域 | ✅ 完成 | dreaming / proactive / onboarding 报告可出 |
+| Phase 2：run_daily / backfill / 质量门禁 | ✅ 完成 | 调度模板已出，暂不接 cron |
+| A1：dreaming token 写库 | ✅ 完成 | `app/llm.py` + `app/dreaming.py`；新 run 起才有数据 |
+| A2：onboarding 状态变更埋点 | ✅ 完成（半闭合） | `analytics_events` 表已建；nearline 消费侧未接 |
+
+**A2 半闭合说明**：`analytics_events` 已落库（`onboarding_state_changed` + `persona_selected`），但 nearline 尚无消费者（无 `fct_onboarding_event`，无人设分布指标）。现有 `fct_onboarding_journey` 仍靠状态快照，不靠事件流。
+
+### 7.2 重启方式
+
+服务由 systemd 管理。代码更新后执行：
+
+```bash
+# 需要 sudo；--skip-nginx 适用于本地不走反代的环境
+sudo bash scripts/restart_runtime.sh --skip-nginx
+
+# 或 Claude Code 内联执行：
+! sudo bash scripts/restart_runtime.sh --skip-nginx
+```
+
+脚本自动完成：`systemctl restart backend + scheduler` → 等 3s → `GET /health/ready` → `systemctl is-active` × 4 → `monitor_health.py --dry-run`。
+
+**当前状态（2026-06-08 17:33）**：`/health/ready` → ok，`analytics_events` 表已存在，`proactive_scheduler` 心跳正常（17:32），`dreaming_scheduler` 心跳 idle 正常（今日 04:01 成功）。
+
+### 7.3 验收清单
+
+#### 域1：用户增长
+
+| 检查点 | 方法 |
+|---|---|
+| ETL 跑通，facts 行数与源一致 | `python nearline/run_etl.py`（无错退出） |
+| 日报生成 | `python nearline/run_daily.py --date 2026-06-07`，看 `nearline/data/reports/` |
+| DAU / 新增 / 入站量有值 | 核对报告与 `SELECT COUNT(*) FROM messages WHERE direction='inbound'` |
+| D1/D7 留存标注"仅观察"（样本 < 10） | 报告中出现 `observe_only` 或 `N/A` 字样 |
+
+#### 域2：主动消息
+
+| 检查点 | 方法 |
+|---|---|
+| `fct_proactive_message` 行数与 `outbound_messages` 一致 | `SELECT COUNT(*) FROM fct_proactive_message` vs 源 |
+| resolved/pending/n_a 分布合理 | `SELECT resolution_status, COUNT(*) FROM fct_proactive_message GROUP BY 1` |
+| `reactivation_*` 类别独立展示 | 报告含 `reactivation_topic_followup` / `reactivation_content_invitation` 分行 |
+| 回复归因回填在窗口闭合后有效 | 查 `replied=1` 的行，核对 `reply_latency_sec` 值 |
+
+#### 域3：Dreaming
+
+| 检查点 | 方法 |
+|---|---|
+| 历史 runs 全 NULL token | `SELECT token_input, token_output FROM dreaming_runs LIMIT 5` — 历史行仍 NULL，正常 |
+| **新 run（重启后触发）有 token** | 等待当晚 dreaming 跑后检查：`SELECT token_input, token_output FROM dreaming_runs ORDER BY id DESC LIMIT 3` |
+| run 状态 / 记忆条目与源一致 | 报告中 `succeeded` 数 = `SELECT COUNT(*) FROM dreaming_runs WHERE status='succeeded'` |
+
+> ⚠️ token 数据需等服务重启后的**下一次 dreaming 实际执行**才能验证（每日凌晨 4 时）。
+
+#### 域4：Onboarding
+
+| 检查点 | 方法 |
+|---|---|
+| `fct_onboarding_journey` 行数 = 账号数 | `SELECT COUNT(*) FROM fct_onboarding_journey` vs `accounts` |
+| 状态分布与 `accounts.onboarding_state` 一致 | 报告中各 state 数量 vs `SELECT onboarding_state, COUNT(*) FROM accounts GROUP BY 1` |
+| 人设分布标注"数据待积累" | 报告中出现占位说明 |
+| **A2 埋点验证**（需重启后实际操作） | 用 `send_mock_turn.py` 触发新用户 onboarding；查 `SELECT * FROM analytics_events LIMIT 10` |
+
+#### 质量门禁
+
+```bash
+# 应全部通过，exit 0（不带 --skip-quality 即默认执行质量门禁）
+python nearline/run_daily.py --date 2026-06-07
+# 或单独跑质量检查
+python -c "
+import sys; sys.path.insert(0, '.')
+from nearline.analytics.quality import run_checks, summarize
+r = run_checks('2026-06-07')
+print(summarize(r))
+"
+```
+
+期望：5 项硬检查全 PASS，2 项软检查可 WARN（跨层 DAU 差异在早期数据量小时容易触发）。
+
+### 7.4 已知遗留与后续建议
+
+| 项目 | 影响 | 优先级 |
+|---|---|---|
+| A2 nearline 消费侧未接（`fct_onboarding_event` + 人设分布） | `style_distribution` 永远显示"数据待积累" | 中（数据积累后再接） |
+| coverage 分母缺 eligible 账号数 | 覆盖率指标只出分子，报告中应标注 | 低（待 `proactive_account_state`/`channel_bindings` 接入） |
+| WAU / 7日留存 | 需数据积累（当前数量级不足） | 低（Phase 3） |
+| `fct_cost_event` + 贝壳消耗趋势 | 成本视角缺失 | 中（Phase 3） |
+| dreaming token 历史全 NULL | 历史 Dreaming 报告不含 token 数 | 不可追溯（只影响历史，新数据正常） |
+
+---
+
+## 八、报告示例（目标输出格式）
 
 ```
 # AI4ALL 每日运营报告 — 2026-06-07

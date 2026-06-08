@@ -1,0 +1,6 @@
+# nearline 每日报告 —— 裸 crontab 备选（与 systemd timer 二选一）。
+# 安装： crontab -e 后粘贴下面一行，把路径改成实际值。
+# 失败排查靠 cron.log 与脚本内飞书告警；无 systemd 那套统一监控。
+
+# 每天 02:17 跑前一天日报（错开整点 / dreaming 04:00 / 备份时段）
+17 2 * * * cd /home/jack/workspace/ai4all_bridge && .venv/bin/python nearline/run_daily.py --yesterday >> nearline/data/cron.log 2>&1

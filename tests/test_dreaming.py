@@ -41,6 +41,27 @@ def _llm_payload(*, items: Optional[List[dict]] = None) -> str:
     )
 
 
+def test_run_dreaming_records_token_usage(fresh_db, tmp_path):
+    """A1 打点：LLM 返回 usage 时，token_input/output 应落到 dreaming_runs。"""
+    from app.dreaming import run_dreaming
+    from app.db import list_dreaming_runs
+
+    fresh_db.llm_api_key = "fake-key"
+    account_id = "acc-dream-token"
+    _write_daily(tmp_path, account_id, TODAY, "# 2026-05-18\n\n- 用户喜欢简洁回复")
+    usage = {"input": 1234, "output": 56}
+
+    with patch(
+        "app.llm.generate_completion_with_usage", return_value=(_llm_payload(), usage)
+    ):
+        run_dreaming(account_id=account_id, today=TODAY, days=1)
+
+    runs = list_dreaming_runs(account_id=account_id)
+    assert len(runs) == 1
+    assert runs[0]["token_input"] == 1234
+    assert runs[0]["token_output"] == 56
+
+
 def test_list_recent_daily_memory_oldest_to_newest(fresh_db, tmp_path):
     from app.dreaming import list_recent_daily_memory
 
@@ -77,7 +98,7 @@ def test_run_dreaming_writes_run_items_events_and_applies_memory(fresh_db, tmp_p
         ]
     )
 
-    with patch("app.llm.generate_completion", return_value=payload):
+    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["status"] == "updated"
@@ -130,7 +151,7 @@ def test_run_dreaming_skips_sensitive_and_low_confidence_items(fresh_db, tmp_pat
         ]
     )
 
-    with patch("app.llm.generate_completion", return_value=payload):
+    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["applied_count"] == 0
@@ -165,7 +186,7 @@ def test_rollback_applied_memory_item_restores_previous_file(fresh_db, tmp_path)
         ]
     )
 
-    with patch("app.llm.generate_completion", return_value=payload):
+    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     item = list_dreaming_memory_items(account_id=account_id)[0]
@@ -205,7 +226,7 @@ def test_session_lifecycle_uses_llm_carryover_when_available(fresh_db, tmp_path)
         content="昨天的上下文",
     )
 
-    with patch("app.llm.generate_completion", return_value=_llm_payload()):
+    with patch("app.llm.generate_completion_with_usage", return_value=(_llm_payload(), None)):
         second = get_or_create_account_active_session_with_dreaming(
             account_id=account_id,
             channel="openclaw-weixin",
@@ -306,7 +327,7 @@ def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path)
     )
     assert res.status_code == 200
 
-    with patch("app.main.date_cls") as mock_date, patch("app.llm.generate_completion", return_value=payload):
+    with patch("app.main.date_cls") as mock_date, patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         mock_date.today.return_value.isoformat.return_value = TODAY
         res = client.post(
             f"/admin/accounts/{account_id}/dreaming?days=1",
@@ -348,7 +369,7 @@ def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, t
         ]
     )
 
-    with patch("app.llm.generate_completion", return_value=payload):
+    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["applied_count"] == 1

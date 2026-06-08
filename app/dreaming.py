@@ -405,8 +405,8 @@ def _call_dreaming_llm(
     session_metadata: Dict[str, Any],
     session_messages: str,
     daily_notes: str,
-) -> Dict[str, Any]:
-    from app.llm import generate_completion
+) -> Tuple[Dict[str, Any], Optional[Dict[str, Optional[int]]]]:
+    from app.llm import generate_completion_with_usage
 
     if not settings.llm_api_key:
         raise RuntimeError("llm_disabled")
@@ -425,8 +425,8 @@ def _call_dreaming_llm(
             ),
         },
     ]
-    raw = generate_completion(messages)
-    return _normalize_dreaming_payload(_extract_json_object(raw))
+    raw, usage = generate_completion_with_usage(messages)
+    return _normalize_dreaming_payload(_extract_json_object(raw)), usage
 
 
 def _deterministic_payload(
@@ -827,8 +827,9 @@ def run_dreaming(
     )
 
     used_fallback = False
+    token_usage: Optional[Dict[str, Optional[int]]] = None
     try:
-        payload = _call_dreaming_llm(
+        payload, token_usage = _call_dreaming_llm(
             source_type=source_type,
             current_memory=current_memory,
             current_user=current_user,
@@ -890,6 +891,8 @@ def run_dreaming(
         status=run_status,
         output=payload,
         error="llm_failed_fallback_used" if used_fallback else None,
+        token_input=(token_usage or {}).get("input"),
+        token_output=(token_usage or {}).get("output"),
         completed=True,
     )
 

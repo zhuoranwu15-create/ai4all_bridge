@@ -214,6 +214,18 @@ def run_backup(
     if integrity != "ok":
         raise BackupError(f"integrity_check failed: {integrity[:500]}")
 
+    # 1b) nearline facts.sqlite3（分析事实基线，存在才备份；marts 可重建不入备份）
+    facts_src = ROOT / "nearline" / "data" / "facts.sqlite3"
+    facts_size: Optional[int] = None
+    facts_integrity = "absent"
+    if facts_src.exists():
+        facts_dest = target_dir / "facts.sqlite3"
+        _backup_sqlite(facts_src, facts_dest)
+        facts_integrity = _integrity_check(facts_dest)
+        if facts_integrity != "ok":
+            raise BackupError(f"facts integrity_check failed: {facts_integrity[:500]}")
+        facts_size = facts_dest.stat().st_size
+
     # 2) 磁盘目录 + .env
     profiles_size = _archive_dir(profiles_dir, target_dir / "user_profiles.tar.gz")
     system_size = _archive_dir(system_dir, target_dir / "system.tar.gz")
@@ -224,9 +236,11 @@ def run_backup(
         "created_at": stamp,
         "git_commit": _git_commit(),
         "integrity_check": integrity,
+        "facts_integrity_check": facts_integrity,
         "table_counts": _table_counts(db_dest),
         "artifacts": {
             "db.sqlite3": db_dest.stat().st_size,
+            "facts.sqlite3": facts_size,
             "user_profiles.tar.gz": profiles_size,
             "system.tar.gz": system_size,
             "env.bak": env_size,
