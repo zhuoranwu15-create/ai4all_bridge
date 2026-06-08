@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     openclaw_login_start_timeout_ms: int = 35000
     openclaw_login_wait_timeout_ms: int = 480000
     openclaw_gateway_call_timeout_ms: int = 60000
+    # 入站收口开关：True 时，远端 channel 入站若找不到 completed binding 直接 no_reply，
+    # 不再用 session_key 兜底创建账号（防解绑/未绑定账号被重新激活）。
+    # 本地用 send_mock_turn 调试需置 false。
+    openclaw_inbound_require_binding: bool = True
 
     proactive_outbound_enabled: bool = True
     proactive_outbound_daily_limit: int = 3

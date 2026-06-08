@@ -4110,7 +4110,13 @@ def resolve_account_id_for_inbound_channel_identity(
     channel: str,
     session_key: str,
     channel_account_id: Optional[str],
-) -> str:
+) -> Optional[str]:
+    """解析入站身份对应的 AI4ALL account_id。
+
+    仅当存在 completed binding intent 时返回真实 account_id；找不到任何绑定时返回
+    None（不再用 session_key 兜底）。调用方据此决定收口或回退，避免已解绑/未绑定的
+    远端账号被当作新账号自动激活。
+    """
     if channel_account_id:
         intent = get_active_binding_intent_for_channel_account(
             channel=channel,
@@ -4130,7 +4136,7 @@ def resolve_account_id_for_inbound_channel_identity(
     )
     if intent:
         return str(intent["account_id"])
-    return session_key
+    return None
 
 
 def get_or_create_session(

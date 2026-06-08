@@ -366,14 +366,15 @@ def handle_openclaw_turn(
 ) -> OpenClawTurnResponse:
     started_at = time.monotonic()
     id_diagnostics = _openclaw_id_diagnostics(payload)
+    # 入口只记 metadata，不记正文：未绑定/已解绑入站会在下方收口返回，
+    # 正文日志移到绑定校验通过后（见 disabled 检查之后）。
     logger.info(
-        "openclaw_turn received channel=%s session=%s sender=%s type=%s text=%r "
+        "openclaw_turn received channel=%s session=%s sender=%s type=%s "
         "message_id=%s event_id=%s ctx_run_id=%s ctx_session_id=%s raw_keys=%s",
         payload.channel,
         payload.session_key,
         payload.sender_id,
         payload.message_type,
-        payload.text,
         payload.message_id,
         payload.event_id,
         id_diagnostics.get("ctx_run_id"),
@@ -392,11 +393,37 @@ def handle_openclaw_turn(
         chat_id=payload.chat_id,
     )
     openclaw_session_key = identity.session_key
-    account_id = resolve_account_id_for_inbound_channel_identity(
+    resolved_account_id = resolve_account_id_for_inbound_channel_identity(
         channel=identity.channel,
         session_key=identity.session_key,
         channel_account_id=identity.channel_account_id,
     )
+    if resolved_account_id is None:
+        # 找不到 completed binding。收口：不再用 session_key 兜底创建账号，
+        # 避免已解绑/未绑定的远端微信账号被当作新账号自动激活并继续回复。
+        # 仅记 channel/account/session metadata，不记正文（解绑后隐私预期）。
+        if getattr(settings, "openclaw_inbound_require_binding", True):
+            logger.info(
+                "openclaw_turn ignored unbound inbound channel=%s channel_account=%s "
+                "session=%s message_id=%s",
+                identity.channel,
+                identity.channel_account_id,
+                openclaw_session_key,
+                payload.message_id or payload.event_id,
+            )
+            return OpenClawTurnResponse(
+                status="ignored",
+                no_reply=True,
+                metadata={
+                    "reason": "no_binding",
+                    "channel": identity.channel,
+                    "channel_account_id": identity.channel_account_id,
+                    "session_key": openclaw_session_key,
+                },
+            )
+        # 开关关闭（本地调试/测试）：保留 session_key 兜底。
+        resolved_account_id = openclaw_session_key
+    account_id = resolved_account_id
     sender_id = identity.sender_id
     message_id = payload.message_id or payload.event_id
     if not message_id:
@@ -496,6 +523,15 @@ def handle_openclaw_turn(
             no_reply=True,
             metadata=identity_response_metadata(identity, account_id),
         )
+
+    # 绑定有效且账号 active 后再记录正文，未绑定/已解绑/disabled 均已在上方返回。
+    logger.info(
+        "openclaw_turn text account=%s session=%s message_id=%s text=%r",
+        account_id,
+        openclaw_session_key,
+        message_id,
+        payload.text,
+    )
 
     effective_rpm = settings.rate_limit_rpm if account.get("rpm_limit") is None else account["rpm_limit"]
     effective_daily = settings.rate_limit_daily if account.get("daily_limit") is None else account["daily_limit"]

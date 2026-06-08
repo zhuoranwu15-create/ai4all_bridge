@@ -4125,11 +4125,12 @@ def openclaw_debug_trace_ingest(
         sender_id=None,
         chat_id=None,
     )
+    # debug-traces 是显式调试入口，保留 session_key 兜底（resolve 现在无绑定时返回 None）。
     account_id = resolve_account_id_for_inbound_channel_identity(
         channel=identity.channel,
         session_key=identity.session_key,
         channel_account_id=identity.channel_account_id,
-    )
+    ) or identity.session_key
     session_state = get_or_create_session(
         account_id=account_id,
         channel=identity.channel,

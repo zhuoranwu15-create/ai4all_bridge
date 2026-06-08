@@ -40,6 +40,8 @@ def test_settings(tmp_path):
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
     s.openclaw_gateway_call_timeout_ms = 5000
+    # 默认关闭入站收口，保留现有测试依赖的 session_key 兜底；收口路径由专门测试显式开启。
+    s.openclaw_inbound_require_binding = False
     s.proactive_outbound_enabled = True
     s.proactive_outbound_daily_limit = 3
     s.proactive_quiet_hours_start = "22:00"
