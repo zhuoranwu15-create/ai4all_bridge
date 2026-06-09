@@ -92,4 +92,3 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 - [ ] `patches/` 增加 README，统一说明两个 patch 的用法与适用场景。
 - [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除"源码 6.2 / 运行 5.28"漂移与哈希 dist 手术补丁的脆弱性）。
 - [ ] 确认旧 weixin patch 当前在运行环境的生效状态与留档完整性。
-- [ ] **解绑登出 `logoutAccount` 回填上游真源码**：当前阻塞于「腾讯未发布 2.4.4 源码」。跟进 origin（`openclaw-weixin`）何时发布含 logout 的 2.4.4+ 源码 tag；发布前每次插件升级后须重打热补丁。
