@@ -15,6 +15,7 @@
 | [主动消息与提醒](proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | [主动消息与提醒设计](../tech_design/proactive_messaging_design.md) |
 | [Web Search 同步工具调用](search_and_async_tasks_prd.md) | Web Search 同步工具调用、失败和复杂任务不支持说明 | [Web Search 同步工具调用技术设计](../tech_design/search_async_tasks_design.md) |
 | [语音输入](voice_prd.md) | 微信语音、上游转写后文本回复 | [语音输入技术设计](../tech_design/voice_input_design.md) |
+| [内容审核与人工复核](content_moderation_prd.md) | 文本/图片审核、异步机器审核、人工复核、导出材料、角色权限 | [内容审核与人工复核技术设计](../tech_design/content_moderation_design.md) |
 | [权益、增长与支付后置](entitlement_growth_prd.md) | 贝壳、扣减、拉新、支付后置 | [贝壳、增长与支付后置技术设计](../tech_design/entitlement_growth_design.md) |
 | [运营与后台](admin_ops_prd.md) / [后台页面规划](admin_ops_views.md) | Admin、客服支撑、观测、风控、审计、页面优先级 | [隐私与后台访问控制](../tech_design/privacy_admin_access_control_design.md) |
 

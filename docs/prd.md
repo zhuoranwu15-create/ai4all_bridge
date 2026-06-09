@@ -132,6 +132,7 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 | [主动消息与提醒](product/proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | P1 |
 | [Web Search 同步工具调用](product/search_and_async_tasks_prd.md) | Web Search 同步工具调用、失败和复杂任务不支持说明 | P1 |
 | [语音输入](product/voice_prd.md) | 微信语音、上游转写后文本回复 | P1 |
+| [内容审核与人工复核](product/content_moderation_prd.md) | 文本/图片审核、异步机器审核、人工复核、导出材料、角色权限 | P0/P1 |
 | [权益、增长与支付后置](product/entitlement_growth_prd.md) | 贝壳、扣减、拉新、支付后置 | P1.5 |
 | [运营与后台](product/admin_ops_prd.md) | Admin、客服支撑、观测、风控、审计 | P0/P1.5 |
 
@@ -144,6 +145,7 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 - [Agent Context Files 与记忆机制](tech_design/agent_context_files.md)
 - [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md)
 - [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md)
+- [内容审核与人工复核技术设计](tech_design/content_moderation_design.md)
 - [Web Search 同步工具调用技术设计](tech_design/search_async_tasks_design.md)
 - [语音输入技术设计](tech_design/voice_input_design.md)
 - [贝壳、增长与支付后置技术设计](tech_design/entitlement_growth_design.md)
@@ -170,6 +172,7 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 - 响应体验：普通文本回复目标在 5-20 秒内完成；普通 Web Search 在同步预算内直接回答，高耗时搜索或复杂整理当前回合返回失败/不支持说明。
 - 可观测性：关键链路需要可追踪，包括注册、绑定、入站消息、LLM、工具调用、主动发送、权益扣减和错误。
 - 隐私合规：正式开放前必须补充隐私政策、数据保留策略和用户告知机制。
+- 内容审核：文本、图片、语音转写文本、出站回复和主动消息必须具备可追溯审核链路；普通审核异步执行，出站绝对红线需要高置信同步阻断。
 - 可扩展性：Phase 1 应支持语音、搜索、内容推送、贝壳和内测运营闭环，后续可扩展支付、多渠道、多 bot 和更完整商业化后台。
 
 ## 8. 总体验收标准
@@ -206,6 +209,7 @@ P1 验收：
 - 搜索超时、provider 失败、结果不足或复杂后台整理请求会在当前回合给出可理解说明，不创建后台任务，不承诺补发。
 - 搜索工具调用能记录 provider、状态、耗时、失败原因和成本明细；成功触发商业搜索 provider 暂定扣减 5 个贝壳。
 - 微信语音输入在 `openclaw-weixin` 提供上游转写文本时，可以进入统一文本对话链路；当前不接入后端豆包 ASR。
+- 文本、图片、语音转写文本、出站回复和主动消息能进入审核链路；默认抽检比例为入站 15%、出站 30%、主动消息 100%，且所有审核记录按账号隔离。
 - 记忆机制至少具备 daily notes、长期记忆沉淀和 Dream/Dreaming 风格蒸馏链路，且不同账号记忆不串线。
 
 P1.5 验收：
