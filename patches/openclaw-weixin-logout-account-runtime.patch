@@ -1,0 +1,52 @@
+--- a/dist/src/channel.js
++++ b/dist/src/channel.js
+@@ -1,7 +1,7 @@
+ import path from "node:path";
+ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
+-import { registerWeixinAccountId, loadWeixinAccount, saveWeixinAccount, listWeixinAccountIds, resolveWeixinAccount, triggerWeixinChannelReload, clearStaleAccountsForUserId, DEFAULT_BASE_URL, } from "./auth/accounts.js";
++import { registerWeixinAccountId, unregisterWeixinAccountId, loadWeixinAccount, saveWeixinAccount, listWeixinAccountIds, resolveWeixinAccount, clearWeixinAccount, deriveRawAccountId, triggerWeixinChannelReload, clearStaleAccountsForUserId, DEFAULT_BASE_URL, } from "./auth/accounts.js";
+ import { notifyStop, notifyStart } from "./api/api.js";
+ import { assertSessionActive } from "./api/session-guard.js";
+ import { getContextToken, findAccountIdsByContextToken, restoreContextTokens, clearContextTokensForAccount } from "./messaging/inbound.js";
+@@ -419,6 +419,40 @@
+                 aLog.warn(`notifyStop failed during shutdown (ignored): ${String(err)}`);
+             }
+         },
++        logoutAccount: async (ctx) => {
++            // 单账号本地登出。OpenClaw core 在调本方法前已执行 stopChannel
++            // （触发 stopAccount/notifyStop 停掉 webhook），故这里只清本地凭证/状态，不影响其他账号。
++            const accountId = ctx.accountId;
++            const aLog = logger.withAccount(accountId);
++            if (!accountId) {
++                return { cleared: false, loggedOut: false };
++            }
++            const normalizedId = normalizeAccountId(accountId);
++            const candidates = new Set([accountId, normalizedId]);
++            const rawId = deriveRawAccountId(normalizedId);
++            if (rawId)
++                candidates.add(rawId);
++            let cleared = false;
++            for (const id of candidates) {
++                try {
++                    clearWeixinAccount(id);
++                    unregisterWeixinAccountId(id);
++                    clearContextTokensForAccount(id);
++                    cleared = true;
++                }
++                catch (err) {
++                    aLog.warn(`gateway.logoutAccount: cleanup failed id=${id} err=${String(err)}`);
++                }
++            }
++            try {
++                await triggerWeixinChannelReload();
++            }
++            catch (err) {
++                aLog.warn(`gateway.logoutAccount: channel reload failed err=${String(err)}`);
++            }
++            aLog.info(`gateway.logoutAccount: local logout done accountId=${normalizedId} cleared=${cleared}`);
++            return { cleared, loggedOut: cleared };
++        },
+         loginWithQrStart: async ({ accountId, force, verbose }) => {
+             // For re-login: use saved baseUrl from account data; fall back to default for new accounts.
+             const savedBaseUrl = accountId ? loadWeixinAccount(accountId)?.baseUrl?.trim() : "";

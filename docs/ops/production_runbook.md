@@ -162,6 +162,28 @@ scripts/restart_runtime.sh --restart-openclaw
 
 脚本会使用 `sudo` 执行 `nginx -t`、`systemctl restart/reload` 和 monitor timer 启用；需要当前用户具备 sudo 权限。
 
+## OpenClaw / openclaw-weixin 插件升级后（必查补丁）
+
+`@tencent-weixin/openclaw-weixin` 升级或重装会覆盖 `node_modules`，**两个本地热补丁会静默丢失**：
+
+- QR 登录补丁（`gatewayMethods`）丢失 → Web 扫码绑定报 `web login provider is not available`。
+- 解绑登出补丁（`logoutAccount`）丢失 → **解绑只清 AI4ALL 侧，微信账号文件 + 索引残留，孤儿 bot 仍在线收消息**。
+
+升级后立即校验并按需重打：
+
+```bash
+PLUGIN=~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin
+grep -c gatewayMethods $PLUGIN/dist/src/channel.js   # 0 → 重打 QR 补丁
+grep -c logoutAccount  $PLUGIN/dist/src/channel.js   # 0 → 重打解绑登出补丁
+# 整库备份 → 打补丁 → node --check → 重启（完整步骤见部署文档对应节）
+tar czf ~/.openclaw/_plugin_bak_$(date +%s).tgz -C ~/.openclaw openclaw-weixin
+( cd $PLUGIN && patch -p1 < /opt/ai4all-weixin-bot/patches/openclaw-weixin-logout-account-runtime.patch )
+node --check $PLUGIN/dist/src/channel.js && systemctl --user restart openclaw-gateway.service
+```
+
+> ⚠️ **切勿用 workspace `openclaw-weixin`（v2.4.3）build 覆盖线上 dist**：腾讯只发布 2.4.4 npm 产物、未推源码，dist 比 v2.4.3 源码多 20 个模块，覆盖会大规模回退。
+> 完整原理与回滚：[解绑登出补丁](../tech_design/openclaw_weixin_gateway_logout_patch.md)、[补丁维护总表](../tech_design/openclaw_patches_maintenance.md)。
+
 ## 回滚最近版本
 
 ```bash

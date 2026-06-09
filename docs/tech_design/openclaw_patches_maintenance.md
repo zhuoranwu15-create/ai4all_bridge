@@ -19,14 +19,16 @@ OpenClaw（`/home/jack/workspace/openclaw`）是**上游第三方仓库**（`ope
 
 ---
 
-## 1. 两个 patch 对比
+## 1. 三个 patch 对比
 
-| | 旧：`openclaw-weixin-gateway-methods-runtime.patch` | 新：`openclaw-before-agent-reply-media.patch` |
-|---|---|---|
-| 目标组件 | openclaw-weixin **渠道插件** `src/channel.ts` | openclaw **核心** `src/auto-reply/reply/get-reply.ts` |
-| 作用 | 给插件加 `gatewayMethods: ["web.login.start","web.login.wait"]`（登录流程） | 在 `before_agent_reply` 钩子触发前，把入站媒体绝对路径以 `[media attached: <path> (<type>)]` 注入钩子的 `cleanedBody` 副本 |
-| 是否含 dist hunk | **✅ 含**（`dist/src/channel.js`，编译路径稳定、无哈希） | **❌ 仅 src**（核心 dist 是带内容哈希的 bundle，无法写稳定 patch） |
-| 生产生效方式 | 可直接 `git apply` 到运行 dist，无需重新构建 | 由 `scripts/deploy_image_understanding.sh` **手术式改当前哈希 dist 文件** |
+| | QR 登录：`openclaw-weixin-gateway-methods-runtime.patch` | 图片理解：`openclaw-before-agent-reply-media.patch` | 解绑登出：`openclaw-weixin-logout-account-runtime.patch` |
+|---|---|---|---|
+| 目标组件 | openclaw-weixin **渠道插件** `src/channel.ts` | openclaw **核心** `src/auto-reply/reply/get-reply.ts` | openclaw-weixin **渠道插件** `dist/src/channel.js` |
+| 作用 | 给插件加 `gatewayMethods: ["web.login.start","web.login.wait"]`（登录流程） | 在 `before_agent_reply` 钩子触发前，把入站媒体绝对路径以 `[media attached: <path> (<type>)]` 注入钩子的 `cleanedBody` 副本 | 给 gateway 加 `logoutAccount`，解绑时删 weixin 账号文件 + 索引除名，闭合「跨层裂脑」（详见 [解绑登出补丁](openclaw_weixin_gateway_logout_patch.md)） |
+| 是否含 dist hunk | **✅ 含**（`dist/src/channel.js`，编译路径稳定、无哈希） | **❌ 仅 src**（核心 dist 是带内容哈希的 bundle，无法写稳定 patch） | **✅ 含**（`dist/src/channel.js`，路径稳定） |
+| 生产生效方式 | 可直接 `git apply` 到运行 dist，无需重新构建 | 由 `scripts/deploy_image_understanding.sh` **手术式改当前哈希 dist 文件** | `patch -p1` 到运行 dist + `node --check` + 重启 gateway（详见专门文档 §5） |
+
+> ⚠️ **解绑登出补丁的特殊关注点（v2.4.4 源码未发布）**：官方 GitHub 仓库 tag 止于 v2.4.3，腾讯只发布了 **2.4.4 的 npm 产物（dist）**，源码未推。实测 v2.4.4 dist（53 模块）⊃ v2.4.3 源码（33 模块），多 20 个模块。**因此不能从 workspace v2.4.3 build 覆盖 dist（会丢 20 个功能）**；在腾讯发 2.4.4+ 源码前，手术热补丁是唯一正确路径，且插件每次升级会覆盖丢失。详见 [openclaw_weixin_gateway_logout_patch.md](openclaw_weixin_gateway_logout_patch.md)。
 
 ---
 
@@ -66,6 +68,8 @@ OpenClaw 升级/重装会覆盖 dist，图片理解会**静默退回成空文本
 3. **media-note 注入时机若上游调整**（目前在钩子之后），需重新确认本方案前提仍成立。
 4. **`ctx.MediaPath/MediaPaths/MediaTypes` 字段名若上游变更**，源码 patch 需同步。
 5. 旧 weixin patch 同理：升级后确认 `gatewayMethods` 是否仍生效（`grep -r WEIXIN_GATEWAY_METHODS`）。
+6. **解绑登出 patch 同理且更脆弱**：插件升级覆盖 `node_modules` 后 `logoutAccount` 丢失，解绑会退回留孤儿 bot。升级后必查：
+   `grep -c logoutAccount ~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin/dist/src/channel.js`，返回 0 则重打 `patches/openclaw-weixin-logout-account-runtime.patch`。详见 [专门文档](openclaw_weixin_gateway_logout_patch.md)。
 
 ---
 
@@ -88,3 +92,4 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 - [ ] `patches/` 增加 README，统一说明两个 patch 的用法与适用场景。
 - [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除"源码 6.2 / 运行 5.28"漂移与哈希 dist 手术补丁的脆弱性）。
 - [ ] 确认旧 weixin patch 当前在运行环境的生效状态与留档完整性。
+- [ ] **解绑登出 `logoutAccount` 回填上游真源码**：当前阻塞于「腾讯未发布 2.4.4 源码」。跟进 origin（`openclaw-weixin`）何时发布含 logout 的 2.4.4+ 源码 tag；发布前每次插件升级后须重打热补丁。

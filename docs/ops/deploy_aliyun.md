@@ -461,6 +461,8 @@ openclaw channels status --probe
 
 ## openclaw-weixin QR 登录补丁
 
+> **前置（换机首部署）**：`@tencent-weixin/openclaw-weixin` 是官方微信渠道插件，需先随 OpenClaw 渠道安装流程装好（`openclaw channels status --probe` 能看到 `openclaw-weixin` 即已安装）。当前线上版本 **pin 在 2.4.4**（安装清单是精确版本号，不会自动升级）。装好插件后，再依次应用本节（QR）和下一节（解绑登出）两个补丁。
+
 当前仓库已经跟踪以下补丁和说明文件：
 
 - `patches/openclaw-weixin-gateway-methods-runtime.patch`
@@ -501,6 +503,32 @@ openclaw gateway call web.login.start \
 
 预期返回 `qrDataUrl` 和 `sessionKey`。如果仍返回 `web login provider is not available`，说明补丁没有应用到 OpenClaw runtime 实际加载的安装包。
 
+## openclaw-weixin 解绑登出补丁（logoutAccount）
+
+> ⚠️ **本节是部署/升级时的重点关注项。** 解绑（`/web/me/unbind`）需要 OpenClaw gateway 的 `logoutAccount` 才能删除微信账号文件、停止该 bot 长轮询。官方 `@tencent-weixin/openclaw-weixin@2.4.4` **不含** `logoutAccount`，必须热补丁；否则解绑只清 AI4ALL 侧，weixin 账号文件 + 索引残留 = **孤儿 bot 仍在线收消息**。
+
+当前仓库已跟踪：
+
+- `patches/openclaw-weixin-logout-account-runtime.patch`
+- `docs/tech_design/openclaw_weixin_gateway_logout_patch.md`（完整原理、稳健部署流程、回滚、对账法）
+
+**部署/重放（插件升级后必做）：**
+
+```bash
+PLUGIN=~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin
+# 0) 先确认是否已丢失（升级后大概率为 0）
+grep -c logoutAccount $PLUGIN/dist/src/channel.js
+# 1) 整库备份 → 2) 打补丁 → 3) 语法预检 → 4) 重启（详见专门文档 §5）
+tar czf ~/.openclaw/_logout_bak_$(date +%s).tgz -C ~/.openclaw openclaw-weixin
+( cd $PLUGIN && patch -p1 < /opt/ai4all-weixin-bot/patches/openclaw-weixin-logout-account-runtime.patch )
+node --check $PLUGIN/dist/src/channel.js
+systemctl --user restart openclaw-gateway.service
+```
+
+**⚠️ 切勿从 workspace `openclaw-weixin`（v2.4.3）`npm run build` 覆盖线上 dist。** 腾讯只发布了 2.4.4 的 npm 产物、未推 2.4.4 源码；v2.4.4 dist 比 v2.4.3 源码多 20 个模块（streaming、voice-outbound、batch-session、buttons…），build 覆盖会静默大规模回退。在上游发布含 logout 的 2.4.4+ 源码前，**热补丁是唯一正确路径**。
+
+**验证：** `openclaw channels logout --channel openclaw-weixin --account <已确认孤儿 bot>` 不再报 `does not support logout`，且对应 `~/.openclaw/openclaw-weixin/accounts/{bot}.*` 文件消失、`accounts.json` 索引除名。**勿对在用账号测试**——删前先按专门文档 §6 对账法确认无活绑定。
+
 ## 数据备份
 
 发布、重启或迁移前先备份：
@@ -534,6 +562,11 @@ curl https://your-domain.example/api/health
 .venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot --token "$ADMIN_TOKEN"
 openclaw plugins inspect ai4all-openclaw-bridge --runtime
 openclaw channels status --probe
+
+# 补丁生效校验（换机首部署 / 插件升级后必查）——任一为 0 即补丁丢失，需按对应节重打
+PLUGIN=~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin
+grep -c gatewayMethods $PLUGIN/dist/src/channel.js   # QR 登录补丁，期望 >0
+grep -c logoutAccount  $PLUGIN/dist/src/channel.js   # 解绑登出补丁，期望 >0（应为 4）
 ```
 
 真实冒烟：
