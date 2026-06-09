@@ -7418,10 +7418,10 @@ def wipe_account_data(
             "DELETE FROM debug_traces WHERE account_id = ?",
             (account_id,),
         ).rowcount
-        conn.execute(
+        proactive_account_state = conn.execute(
             "DELETE FROM proactive_account_state WHERE account_id = ?",
             (account_id,),
-        )
+        ).rowcount
         # tool_invocations 是 sessions 的 NO ACTION 子表，必须先删，否则 DELETE sessions
         # 触发 FOREIGN KEY constraint failed。search_provider_runs 又是 tool_invocations
         # 的子表，需更早删（content_invitations 同样引用 tool_invocations，已在上方删除）。
@@ -7449,14 +7449,14 @@ def wipe_account_data(
             "DELETE FROM binding_intents WHERE account_id = ?",
             (account_id,),
         ).rowcount
-        conn.execute(
+        profiles = conn.execute(
             "DELETE FROM profiles WHERE account_id = ?",
             (account_id,),
-        )
-        conn.execute(
+        ).rowcount
+        account_owner_bindings = conn.execute(
             "DELETE FROM account_owner_bindings WHERE account_id = ?",
             (account_id,),
-        )
+        ).rowcount
         conn.execute(
             """
             UPDATE accounts
@@ -7485,6 +7485,9 @@ def wipe_account_data(
         "search_provider_runs_deleted": search_provider_runs,
         "analytics_events_deleted": analytics_events,
         "binding_intents_deleted": binding_intents,
+        "profiles_deleted": profiles,
+        "proactive_account_state_deleted": proactive_account_state,
+        "account_owner_bindings_deleted": account_owner_bindings,
     }
 
 
