@@ -63,6 +63,11 @@ _OUTPUT_DIRECTIVES_FIXED = (
     "- 不要在回复末尾重复用户的问题"
 )
 
+_FACTUAL_DISCIPLINE = (
+    "【事实准确】当前时间、日期、星期以下方运行时信息为准；"
+    "涉及你和用户的关系事实（认识多久、连续聊天天数等）必须调用工具取真值，不要凭印象编造。"
+)
+
 _CONTEXT_BLOCK_ORDER = (
     "AGENTS",
     "TOOLS",
@@ -107,6 +112,8 @@ class PromptBuilder:
         model_name: str = "",
         today: Optional[str] = None,
         current_time: Optional[str] = None,
+        weekday: Optional[str] = None,
+        daypart: Optional[str] = None,
         tool_instructions: Optional[str] = None,
     ) -> str:
         """Build and return the assembled system prompt string."""
@@ -128,6 +135,9 @@ class PromptBuilder:
 
         # Block 3: Fixed output directives
         blocks.append(_OUTPUT_DIRECTIVES_FIXED)
+
+        # Block 3b: Factual-accuracy discipline (time → runtime block; relationship → tool)
+        blocks.append(_FACTUAL_DISCIPLINE)
 
         # Block 4: Skills
         if skills:
@@ -187,9 +197,14 @@ class PromptBuilder:
         # Block 15: Runtime
         runtime_parts: List[str] = []
         if today and current_time:
-            runtime_parts.append(f"现在是北京时间 {today} {current_time}")
+            # Compact one-liner: date + weekday + time + day-part, e.g.
+            # "现在是北京时间 2026-06-09 周一 14:30（下午）"
+            wd = f" {weekday}" if weekday else ""
+            dp = f"（{daypart}）" if daypart else ""
+            runtime_parts.append(f"现在是北京时间 {today}{wd} {current_time}{dp}")
         elif today:
-            runtime_parts.append(f"今天是 {today}")
+            wd = f" {weekday}" if weekday else ""
+            runtime_parts.append(f"今天是 {today}{wd}")
         if model_name:
             runtime_parts.append(f"当前模型：{model_name}")
         if runtime_parts:

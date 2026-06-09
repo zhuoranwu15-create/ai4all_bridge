@@ -4,7 +4,7 @@ import time
 import uuid
 from datetime import datetime
 
-from app.time_utils import beijing_now
+from app.time_utils import beijing_now, beijing_daypart_str, beijing_weekday_str
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
@@ -255,6 +255,8 @@ def build_turn_llm_input(
         onboarding_context=onboarding_ctx,
         today=today,
         current_time=current_time,
+        weekday=beijing_weekday_str(_now),
+        daypart=beijing_daypart_str(_now),
         model_name=settings.llm_model,
         tool_instructions=(
             None if onboarding_active or not include_tool_instructions else _tool_instructions(

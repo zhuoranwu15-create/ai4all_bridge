@@ -243,12 +243,38 @@ def get_content_invitation_response_tools() -> list:
     ]
 
 
+def get_session_status_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "session_status",
+                "description": (
+                    "查询你和这个用户之间的关系状态事实。"
+                    "当用户问到这类问题时调用，例如：『我们认识多久了』『我们第一次聊天是什么时候』"
+                    "『我连续找你聊了几天』『最近多久没断过』。"
+                    "返回：认识天数、首次聊天日期、连续聊天天数(streak)。"
+                    "边界：用户没有主动询问关系/会话状态时不要调用，不要为了寒暄或开场白调用；"
+                    "当前时间、日期、星期请直接参考系统提示里的运行时信息，不要用本工具；"
+                    "本工具不返回任何系统内部运行指标。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        }
+    ]
+
+
 def get_default_tools(
     *,
     web_search_enabled: bool = False,
     content_invitation_response_enabled: bool = False,
 ) -> list:
     tools = list(get_reminder_tools())
+    tools.extend(get_session_status_tools())
     if web_search_enabled:
         tools.extend(get_web_search_tools())
     if content_invitation_response_enabled:

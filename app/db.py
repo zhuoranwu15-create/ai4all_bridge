@@ -4644,6 +4644,35 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
     ]
 
 
+def get_first_user_message_at(*, account_id: str) -> Optional[str]:
+    """Return the timestamp ('YYYY-MM-DD HH:MM:SS') of the account's first inbound
+    (user) message, or None if the account has never sent one. Account-scoped."""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT MIN(created_at) AS first_at FROM messages
+            WHERE account_id = ? AND role = 'user'
+            """,
+            (account_id,),
+        ).fetchone()
+    return row["first_at"] if row and row["first_at"] else None
+
+
+def list_user_active_dates(*, account_id: str) -> List[str]:
+    """Return the distinct dates ('YYYY-MM-DD', ascending) on which this account's
+    user sent at least one message. Used to compute the chat streak. Account-scoped."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT substr(created_at, 1, 10) AS d FROM messages
+            WHERE account_id = ? AND role = 'user'
+            ORDER BY d
+            """,
+            (account_id,),
+        ).fetchall()
+    return [row["d"] for row in rows if row["d"]]
+
+
 def list_recent_messages_for_account_since(
     *,
     account_id: str,

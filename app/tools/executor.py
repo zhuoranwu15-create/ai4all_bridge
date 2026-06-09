@@ -28,11 +28,13 @@ def execute_tool_call(
         handle_send_content_invitation_titles,
         handle_skip_content_invitation,
     )
+    from app.tools.session_status_handlers import handle_session_status
     handlers = {
         "create_reminder": handle_create_reminder,
         "list_reminders": handle_list_reminders,
         "cancel_reminder": handle_cancel_reminder,
         "update_reminder": handle_update_reminder,
+        "session_status": handle_session_status,
         "create_content_invitation_candidate": handle_create_content_invitation_candidate,
         "skip_content_invitation": handle_skip_content_invitation,
     }
