@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -211,8 +211,48 @@ async def _gate_debug_ui(request: Request, call_next):
     return await call_next(request)
 
 
+class _ApiPrefixStripMiddleware:
+    """Strip a leading ``/api`` from the request path.
+
+    The static frontend prefixes ``/web/*`` calls with ``/api`` so the production
+    nginx proxy can route them to the backend. When hitting uvicorn directly
+    (local dev), there is no proxy, so ``/api/web/*`` would 404. This rewrites it
+    back to ``/web/*``. In production nginx already strips the prefix, so the
+    backend never receives ``/api`` there and this is a no-op.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = scope.get("path", "")
+            if path == "/api" or path.startswith("/api/"):
+                scope = dict(scope)
+                scope["path"] = path[4:] or "/"
+                raw = scope.get("raw_path")
+                if raw:
+                    scope["raw_path"] = raw[4:] or b"/"
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_ApiPrefixStripMiddleware)
+
+
 app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
 app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
+
+# Local-dev convenience: production nginx serves the static frontend at "/" and
+# "/user/*" (the frontend hardcodes those absolute paths). Replicate that mapping
+# only in local/dev envs so absolute links work when hitting uvicorn directly.
+# Untouched in production, where nginx serves these paths and the backend never
+# receives them.
+if str(settings.app_env or "").lower() in _LOCAL_DEBUG_UI_ENVS:
+    app.mount("/user", StaticFiles(directory="app/static", html=True), name="user_local")
+
+    @app.get("/", include_in_schema=False)
+    async def _local_root() -> RedirectResponse:
+        return RedirectResponse("/ui/home.html")
 
 
 class ProfileUpdateRequest(BaseModel):
