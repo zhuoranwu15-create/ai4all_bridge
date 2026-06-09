@@ -80,7 +80,6 @@
       <div class="card-header">
         <h3>微信绑定</h3>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-secondary btn-sm" id="btn-rebind" onclick="startRebind()">重新绑定</button>
           <button class="btn btn-ghost btn-sm" id="btn-unbind" onclick="openUnbindModal()" style="color:var(--text-hint)">解绑</button>
         </div>
       </div>
@@ -100,50 +99,21 @@
           <div class="card-value" id="d-last-seen">—</div>
         </div>
       </div>
-
-      <!-- 重新绑定二维码区 -->
-      <div id="rebind-qr-area" style="display:none;border-top:1px solid var(--border);padding-top:20px;margin-top:4px">
-        <div class="qr-wrap">
-          <img id="rebind-qr-img" src="" alt="扫码重新绑定" style="width:180px;height:180px">
-          <div class="qr-caption">请用要接入的微信号扫描</div>
-          <div class="qr-status" id="rebind-qr-status">等待扫码中…</div>
-        </div>
-        <div id="msg-rebind" class="msg" style="margin-top:8px"></div>
-      </div>
     </div>
 
     <!-- 解绑弹窗 -->
     <div id="unbind-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:none;align-items:center;justify-content:center">
       <div style="background:#fff;border-radius:14px;padding:28px 28px 24px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18)">
 
-        <!-- Step 1 -->
-        <div id="unbind-step1">
-          <h3 style="font-size:1rem;margin-bottom:10px">解绑微信</h3>
-          <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px">
-            解绑后，AI 将停止回复微信消息。<br>请选择是否保留你的记忆和对话记录：
-          </p>
-          <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
-            <button class="btn btn-secondary" onclick="goUnbindStep2(true)" style="text-align:left;padding:12px 16px">
-              <strong>保留记忆</strong>
-              <div style="font-size:.8rem;color:var(--text-hint);margin-top:3px">AI 暂停服务，重新绑定后可完整恢复</div>
-            </button>
-            <button class="btn btn-ghost" onclick="goUnbindStep2(false)" style="text-align:left;padding:12px 16px;border:1px solid var(--border)">
-              <strong>清除全部</strong>
-              <div style="font-size:.8rem;color:var(--text-hint);margin-top:3px">记忆、对话记录将被永久删除</div>
-            </button>
-          </div>
-          <button class="btn btn-ghost btn-sm" onclick="closeUnbindModal()" style="width:100%">取消</button>
-        </div>
-
-        <!-- Step 2 -->
-        <div id="unbind-step2" style="display:none">
-          <h3 style="font-size:1rem;margin-bottom:10px" id="unbind-step2-title"></h3>
-          <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px" id="unbind-step2-desc"></p>
-          <div id="unbind-err" style="display:none;color:#c0392b;font-size:.85rem;margin-bottom:12px"></div>
-          <div style="display:flex;gap:10px">
-            <button class="btn btn-secondary btn-sm" onclick="goUnbindStep1()">返回</button>
-            <button class="btn btn-sm" id="unbind-confirm-btn" onclick="confirmUnbind()" style="flex:1"></button>
-          </div>
+        <!-- 确认解绑（解绑即永久清空记忆） -->
+        <h3 style="font-size:1rem;margin-bottom:10px">确认解绑</h3>
+        <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px">
+          解绑后，AI 将停止回复微信消息。<br>记忆、对话记录和 AI 设置将被永久删除，无法恢复。
+        </p>
+        <div id="unbind-err" style="display:none;color:#c0392b;font-size:.85rem;margin-bottom:12px"></div>
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-ghost btn-sm" onclick="closeUnbindModal()">取消</button>
+          <button class="btn btn-sm" id="unbind-confirm-btn" onclick="confirmUnbind()" style="flex:1;background:#c0392b;color:#fff">确认解绑</button>
         </div>
 
       </div>
@@ -167,12 +137,8 @@ var S = {
   sessionToken: null,
   platformUser: null,
   account: null,
-  rebindIntent: null,
-  pollTimer: null,
   walletTimer: null,
 };
-
-var TERMINAL = { completed:1, failed:1, already_connected:1, expired:1, cancelled:1 };
 
 function show(id)  { document.getElementById(id).style.display = ''; }
 function hide(id)  { document.getElementById(id).style.display = 'none'; }
@@ -298,94 +264,6 @@ async function refreshWallet() {
   }
 }
 
-// ── 重新绑定 ──────────────────────────────────
-async function startRebind() {
-  document.getElementById('btn-rebind').disabled = true;
-  show('rebind-qr-area');
-  showMsg('msg-rebind', '正在生成二维码…', 'info');
-  try {
-    var data = await apiFetch('/web/binding-intents', {
-      method: 'POST',
-      body: JSON.stringify({ channel: 'openclaw-weixin' }),
-    });
-    S.rebindIntent = data.binding_intent;
-    renderRebindQr();
-    clearRebindMsg();
-    startRebindPolling();
-  } catch(e) {
-    showMsg('msg-rebind', e.message, 'err');
-    document.getElementById('btn-rebind').disabled = false;
-  }
-}
-
-function clearRebindMsg() {
-  var el = document.getElementById('msg-rebind');
-  el.textContent = '';
-  el.className = 'msg';
-}
-
-function renderRebindQr() {
-  var intent = S.rebindIntent;
-  if (!intent) return;
-  if (intent.qr_data_url) {
-    document.getElementById('rebind-qr-img').src = intent.qr_data_url;
-  }
-  updateRebindStatus(intent);
-}
-
-function updateRebindStatus(intent) {
-  var status = typeof intent === 'string' ? intent : intent.status;
-  var el = document.getElementById('rebind-qr-status');
-  var labels = {
-    created: '正在生成二维码…',
-    qr_created: '等待扫码中…',
-    completed: '绑定成功 ✓',
-    already_connected: '微信已连接',
-    failed: (intent && intent.error) || '绑定失败，请重试',
-    expired: '二维码已过期',
-  };
-  el.textContent = labels[status] || status;
-  el.className = 'qr-status' +
-    (status === 'completed' || status === 'already_connected' ? ' done' : '') +
-    (status === 'failed' || status === 'expired' ? ' fail' : '');
-}
-
-function stopRebindPolling() {
-  if (S.pollTimer) { clearInterval(S.pollTimer); S.pollTimer = null; }
-}
-
-function startRebindPolling() {
-  stopRebindPolling();
-  S.pollTimer = setInterval(function() {
-    if (!S.rebindIntent || TERMINAL[S.rebindIntent.status]) {
-      stopRebindPolling(); return;
-    }
-    pollRebind();
-  }, 3000);
-}
-
-async function pollRebind() {
-  try {
-    var data = await apiFetch('/web/binding-intents/' + encodeURIComponent(S.rebindIntent.id));
-    S.rebindIntent = data.binding_intent;
-    renderRebindQr();
-    if (TERMINAL[S.rebindIntent.status]) {
-      stopRebindPolling();
-      document.getElementById('btn-rebind').disabled = false;
-      if (S.rebindIntent.status === 'completed' || S.rebindIntent.status === 'already_connected') {
-        loadBindings();
-        showMsg('msg-rebind',
-          '绑定成功！请在微信中向 AI 发一条消息（比如"你好"），AI 会主动回复并开始初始化。',
-          'info');
-        setTimeout(function() { hide('rebind-qr-area'); }, 8000);
-      }
-    }
-  } catch(e) {
-    stopRebindPolling();
-    showMsg('msg-rebind', e.message, 'err');
-  }
-}
-
 // ── 退出登录 ──────────────────────────────────
 function logout() {
   if (S.walletTimer) { clearInterval(S.walletTimer); S.walletTimer = null; }
@@ -394,44 +272,14 @@ function logout() {
 }
 
 // ── 解绑 ──────────────────────────────────────
-var _unbindKeepMemories = null;
-
+// 解绑即永久清空记忆（keep_memories 恒为 false），成功后账号停用并登出。
 function openUnbindModal() {
-  goUnbindStep1();
+  document.getElementById('unbind-err').style.display = 'none';
   document.getElementById('unbind-modal').style.display = 'flex';
 }
 
 function closeUnbindModal() {
   document.getElementById('unbind-modal').style.display = 'none';
-}
-
-function goUnbindStep1() {
-  document.getElementById('unbind-step1').style.display = '';
-  document.getElementById('unbind-step2').style.display = 'none';
-  document.getElementById('unbind-err').style.display = 'none';
-}
-
-function goUnbindStep2(keepMemories) {
-  _unbindKeepMemories = keepMemories;
-  var title = document.getElementById('unbind-step2-title');
-  var desc  = document.getElementById('unbind-step2-desc');
-  var btn   = document.getElementById('unbind-confirm-btn');
-  if (keepMemories) {
-    title.textContent = '确认解绑（保留记忆）';
-    desc.textContent  = 'AI 服务将暂停，提醒和任务会取消。你的对话记忆和历史完整保留，重新绑定微信后可立即恢复。';
-    btn.textContent   = '确认解绑';
-    btn.style.background = 'var(--color-primary, #4a90e2)';
-    btn.style.color = '#fff';
-  } else {
-    title.textContent = '确认清除全部数据';
-    desc.textContent  = '记忆、对话记录和 AI 设置将被永久删除，无法恢复。下次绑定将重新开始。';
-    btn.textContent   = '确认清除并解绑';
-    btn.style.background = '#c0392b';
-    btn.style.color = '#fff';
-  }
-  document.getElementById('unbind-err').style.display = 'none';
-  document.getElementById('unbind-step1').style.display = 'none';
-  document.getElementById('unbind-step2').style.display = '';
 }
 
 async function confirmUnbind() {
@@ -440,32 +288,19 @@ async function confirmUnbind() {
   btn.textContent = '处理中…';
   document.getElementById('unbind-err').style.display = 'none';
   try {
-    var result = await apiFetch('/web/me/unbind', {
+    await apiFetch('/web/me/unbind', {
       method: 'POST',
-      body: JSON.stringify({ keep_memories: _unbindKeepMemories }),
+      body: JSON.stringify({ keep_memories: false }),
     });
     closeUnbindModal();
-    loadBindings();
-    if (result.openclaw_cleanup &&
-        result.openclaw_cleanup.status &&
-        result.openclaw_cleanup.status !== 'ok' &&
-        result.openclaw_cleanup.status !== 'skipped') {
-      showMsg(
-        'msg-rebind',
-        '本地已解绑；OpenClaw 微信会话未完全退出，请稍后重新扫码或手动清理 OpenClaw 连接。',
-        'info'
-      );
-    }
-    if (!_unbindKeepMemories) {
-      // account is deactivated — log out
-      logout();
-    }
+    // account is deactivated — log out
+    logout();
   } catch(e) {
     var errEl = document.getElementById('unbind-err');
     errEl.textContent = e.message;
     errEl.style.display = '';
     btn.disabled = false;
-    btn.textContent = _unbindKeepMemories ? '确认解绑' : '确认清除并解绑';
+    btn.textContent = '确认解绑';
   }
 }
 
