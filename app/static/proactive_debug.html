@@ -100,6 +100,14 @@
           <div id="stateBox" class="empty">未加载</div>
         </div>
         <div class="section">
+          <h3>主动消息设定（有效值）</h3>
+          <div id="settingsBox" class="empty">未加载</div>
+        </div>
+        <div class="section">
+          <h3>设定变更记录</h3>
+          <div id="settingEventsBox" class="empty">未加载</div>
+        </div>
+        <div class="section">
           <h3>最近 Outbound</h3>
           <div id="outboundBox" class="empty">未加载</div>
         </div>
@@ -465,8 +473,78 @@ function renderContentDisplay(display) {
 
 async function refreshOverview() {
   const data = await api('GET', `/admin/accounts/${encodeURIComponent(currentAccountId)}/proactive-overview?limit=10`);
+  renderSettings(data.proactive_message_settings || null);
+  renderSettingEvents(data.proactive_message_setting_events || []);
   renderOutbound(data.outbound_messages || []);
   renderInvitations(data.content_invitations || []);
+}
+
+function renderSettings(settings) {
+  const box = document.getElementById('settingsBox');
+  if (!settings) {
+    box.innerHTML = '<div class="empty">未加载</div>';
+    return;
+  }
+  const qh = settings.quiet_hours || {};
+  const quietText = qh.enabled === false
+    ? '关闭（用户主动关闭）'
+    : `${esc(qh.start || '')}-${esc(qh.end || '')}${settings.quiet_hours_is_user ? '（用户设定）' : '（全局默认）'}`;
+  const disabledCats = Object.entries(settings.categories || {})
+    .filter(([, v]) => v && v.enabled === false)
+    .map(([k]) => esc(k));
+  const windows = (settings.allowed_windows || [])
+    .map((w) => `${(w.days || []).join('/')} ${esc(w.start || '')}-${esc(w.end || '')}`);
+  // 用 frequency_resolved（含全局默认）渲染频次；fallback 到 frequency（兼容老接口）
+  const freqResolved = settings.frequency_resolved;
+  const totalPerDay = (settings.frequency || {}).total_per_day;
+  let freqLines;
+  if (freqResolved) {
+    const BUCKET_LABEL = { companion_followup: '陪伴跟进', reactivation: '唤醒/邀请', legacy_proactive: '旧版主动' };
+    freqLines = [];
+    if (totalPerDay != null) {
+      freqLines.push(`<b>每日总量上限：${totalPerDay}条（所有主动消息合计，提醒不计）</b>`);
+    }
+    freqLines.push(...Object.entries(freqResolved).filter(([bucket]) => bucket !== 'legacy_proactive').map(([bucket, cfg]) => {
+      const label = BUCKET_LABEL[bucket] || esc(bucket);
+      const src = cfg.source === 'user' ? '用户设定' : '全局默认';
+      const day = cfg.max_per_day != null ? `日${cfg.max_per_day}次` : '日0次';
+      const week = cfg.max_per_week != null ? `、周${cfg.max_per_week}次` : '';
+      return `${label}：${day}${week}（${src}）`;
+    }));
+  } else {
+    freqLines = Object.entries(settings.frequency || {}).map(([bucket, cfg]) => {
+      const parts = [];
+      if (cfg && cfg.max_per_day != null) parts.push(`日${cfg.max_per_day}`);
+      if (cfg && cfg.max_per_week != null) parts.push(`周${cfg.max_per_week}`);
+      return `${esc(bucket)}:${parts.join('/')}`;
+    });
+  }
+  box.innerHTML = `<div class="list">
+    <div class="item"><div class="item-meta">总开关：<b>${settings.master_enabled ? '开启' : '关闭'}</b></div></div>
+    <div class="item"><div class="item-meta">静默时段（黑名单，此段内不发）：${quietText}</div></div>
+    <div class="item"><div class="item-meta">推送时段窗口（白名单，空=不限时段，设置后只在窗口内发，窗口外仍受静默时段约束）：${windows.length ? windows.map(esc).join('；') : '不限制'}</div></div>
+    <div class="item"><div class="item-meta">关闭的分类：${disabledCats.length ? disabledCats.join('、') : '无'}</div></div>
+    <div class="item"><div class="item-meta">频次上限：<br>${(freqLines.length ? freqLines : ['无用户设定（均用全局默认）']).join('<br>')}</div></div>
+    <div class="item"><div class="item-meta">临时静默至：${esc(settings.muted_until || '无')}</div></div>
+  </div>`;
+}
+
+function renderSettingEvents(items) {
+  const box = document.getElementById('settingEventsBox');
+  if (!items.length) {
+    box.innerHTML = '<div class="empty">暂无变更记录</div>';
+    return;
+  }
+  box.innerHTML = `<div class="list">${items.slice(0, 8).map((item) => `
+    <div class="item">
+      <div class="item-head">
+        <div class="item-title">${esc(item.source || '')}</div>
+        <span class="item-meta">${esc(item.created_at || '')}</span>
+      </div>
+      <div class="item-meta">${esc(item.reason || '')}</div>
+      <div class="item-meta">patch: ${esc(item.patch_json || '')}</div>
+    </div>
+  `).join('')}</div>`;
 }
 
 function renderOutbound(items) {

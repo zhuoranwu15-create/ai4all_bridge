@@ -29,6 +29,10 @@ def execute_tool_call(
         handle_skip_content_invitation,
     )
     from app.tools.session_status_handlers import handle_session_status
+    from app.tools.proactive_settings_handlers import (
+        handle_get_proactive_message_settings,
+        handle_update_proactive_message_settings,
+    )
     handlers = {
         "create_reminder": handle_create_reminder,
         "list_reminders": handle_list_reminders,
@@ -37,10 +41,13 @@ def execute_tool_call(
         "session_status": handle_session_status,
         "create_content_invitation_candidate": handle_create_content_invitation_candidate,
         "skip_content_invitation": handle_skip_content_invitation,
+        "get_proactive_message_settings": handle_get_proactive_message_settings,
     }
-    content_invitation_handlers = {
+    # Handlers that need tool_invocation_id (for audit / linking back to the call).
+    invocation_aware_handlers = {
         "send_content_invitation_titles": handle_send_content_invitation_titles,
         "record_content_invitation_feedback": handle_record_content_invitation_feedback,
+        "update_proactive_message_settings": handle_update_proactive_message_settings,
     }
     if name == "web_search":
         if not bool(getattr(ctx, "web_search_enabled", False)):
@@ -60,9 +67,9 @@ def execute_tool_call(
             return {"error": str(err)}
 
     handler = handlers.get(name)
-    if name in content_invitation_handlers:
+    if name in invocation_aware_handlers:
         try:
-            return content_invitation_handlers[name](
+            return invocation_aware_handlers[name](
                 args,
                 ctx,
                 tool_invocation_id=tool_invocation_id,

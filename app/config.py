@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     reactivation_dispatch_enabled: bool = False
     reactivation_dispatch_dry_run: bool = True
     reactivation_daily_limit: int = 1
+    # 用户自定义频次的系统硬顶：用户通过主动消息设定 tool 设的 max_per_day/week
+    # 超过即封顶到此（用户可在硬顶内放宽/收紧，但不能突破）。
+    proactive_frequency_max_per_day_cap: int = 3
+    proactive_frequency_max_per_week_cap: int = 14
     reactivation_send_slots: str = "12:15,18:15,21:05"
     reactivation_recent_inbound_delay_minutes: int = 60
     reactivation_avoidance_window_minutes: int = 60

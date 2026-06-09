@@ -59,6 +59,8 @@ def test_settings(tmp_path):
     s.proactive_account_check_min_confidence = 0.85
     s.proactive_content_invitation_tool_rounds = 5
     s.reactivation_daily_limit = 1
+    s.proactive_frequency_max_per_day_cap = 3
+    s.proactive_frequency_max_per_week_cap = 14
     s.reactivation_send_slots = "12:15,18:15,21:05"
     s.reactivation_recent_inbound_delay_minutes = 60
     s.reactivation_avoidance_window_minutes = 60
@@ -123,6 +125,7 @@ def fresh_db(test_settings):
         patch("app.session_lifecycle.settings", test_settings),
         patch("app.proactive.policy.settings", test_settings),
         patch("app.proactive.reactivation.settings", test_settings),
+        patch("app.proactive.settings.settings", test_settings),
     ]
     for p in patches:
         p.start()

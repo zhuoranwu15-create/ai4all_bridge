@@ -590,6 +590,42 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
             ON proactive_account_state(enabled, next_scan_at, cooldown_until);
 
+            -- 账号级主动消息偏好（source of truth）。稀疏存储：未显式设置的
+            -- override 列为 NULL / 空容器，读取层 merge 全局配置后才是有效值，
+            -- 以此区分"未设置=继承全局"与"用户显式设置"。
+            CREATE TABLE IF NOT EXISTS proactive_message_settings (
+                account_id TEXT PRIMARY KEY,
+                master_enabled INTEGER NOT NULL DEFAULT 1,
+                timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+                quiet_hours_json TEXT,                              -- NULL = 继承全局 quiet hours
+                allowed_windows_json TEXT NOT NULL DEFAULT '[]',    -- 预留，Phase 2
+                frequency_json TEXT NOT NULL DEFAULT '{}',          -- 预留，Phase 2
+                category_settings_json TEXT NOT NULL DEFAULT '{}',
+                muted_until TEXT,                                   -- NULL = 未临时静默
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            -- 主动消息设置变更审计：每次 tool/admin 修改都记录 before/patch/after。
+            CREATE TABLE IF NOT EXISTS proactive_message_setting_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,                              -- tool | admin | system | migration
+                tool_invocation_id INTEGER,
+                previous_settings_json TEXT,
+                patch_json TEXT NOT NULL,
+                next_settings_json TEXT NOT NULL,
+                reason TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                FOREIGN KEY(account_id) REFERENCES accounts(id),
+                FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_proactive_message_setting_events_account
+            ON proactive_message_setting_events(account_id, created_at);
+
             CREATE TABLE IF NOT EXISTS content_invitations (
                 id TEXT PRIMARY KEY,
                 account_id TEXT NOT NULL,
@@ -5500,6 +5536,111 @@ def get_outbound_daily_usage(
     return int(row["count"]) if row else 0
 
 
+def count_outbound_in_window(
+    *,
+    account_id: str,
+    product_category: str,
+    since: str,
+) -> int:
+    """Count outbound rows of one category since *since* (rolling window).
+
+    Uses created_at (北京时间字符串) >= since, mirroring get_outbound_daily_usage
+    status set. For per-category weekly frequency caps.
+    """
+    placeholders = ", ".join("?" for _ in OUTBOUND_QUOTA_STATUSES)
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND created_at >= ?
+              AND status IN ({placeholders})
+              AND product_category = ?
+            """,
+            (account_id, since, *OUTBOUND_QUOTA_STATUSES, product_category),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+def count_reactivation_outbound_in_window(
+    *,
+    account_id: str,
+    since: str,
+) -> int:
+    """Rolling-window twin of count_reactivation_outbound_for_quota_date.
+
+    Counts the shared reactivation category set (incl. legacy rows flagged with
+    metadata.reactivation=1) with created_at >= since. For the shared weekly cap.
+    """
+    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
+    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND created_at >= ?
+              AND status IN ('pending', 'sending', 'sent')
+              AND (
+                product_category IN ({placeholders})
+                OR (
+                  product_category IN ({legacy_placeholders})
+                  AND json_valid(metadata_json)
+                  AND json_extract(metadata_json, '$.reactivation') = 1
+                )
+              )
+            """,
+            (
+                account_id,
+                since,
+                *REACTIVATION_PRODUCT_CATEGORIES,
+                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
+            ),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
+_PROACTIVE_EXEMPT_CATEGORIES = (
+    "user_reminder",
+    "content_invitation_response",
+    "task_result",
+)
+
+
+def count_total_proactive_outbound_for_quota_date(
+    *,
+    account_id: str,
+    quota_date: str,
+) -> int:
+    """Count all non-exempt proactive outbound messages for a given quota_date.
+
+    Excludes user_reminder / content_invitation_response / task_result which are
+    fully exempt from frequency controls. Used for the global total_per_day cap.
+    """
+    exempt_placeholders = ", ".join("?" for _ in _PROACTIVE_EXEMPT_CATEGORIES)
+    status_placeholders = ", ".join("?" for _ in OUTBOUND_QUOTA_STATUSES)
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND quota_date = ?
+              AND status IN ({status_placeholders})
+              AND product_category NOT IN ({exempt_placeholders})
+            """,
+            (
+                account_id,
+                quota_date,
+                *OUTBOUND_QUOTA_STATUSES,
+                *_PROACTIVE_EXEMPT_CATEGORIES,
+            ),
+        ).fetchone()
+    return int(row["count"]) if row else 0
+
+
 def get_pending_reminder_count_in_window(
     *,
     account_id: str,
@@ -6377,6 +6518,226 @@ def upsert_proactive_account_state(
     if item is None:
         raise RuntimeError("proactive_account_state was not created")
     return item
+
+
+# ---------------------------------------------------------------------------
+# Proactive message settings（账号级主动消息偏好 + 审计）
+# ---------------------------------------------------------------------------
+
+def _decode_proactive_message_settings(row: sqlite3.Row) -> Dict[str, Any]:
+    """Decode a proactive_message_settings row.
+
+    quiet_hours 为 None 表示该列为 NULL（继承全局），调用方据此区分
+    "未设置"与"用户显式设置"，不要在这里塞默认值。
+    """
+    item = dict(row)
+    for src, dst in (
+        ("quiet_hours_json", "quiet_hours"),
+        ("category_settings_json", "category_settings"),
+        ("frequency_json", "frequency"),
+        ("allowed_windows_json", "allowed_windows"),
+        ("metadata_json", "metadata"),
+    ):
+        raw = item.pop(src, None)
+        if raw is None:
+            # 可空列保持 None；NOT NULL 列建表默认非空，理论上不会进这里
+            item[dst] = None
+            continue
+        try:
+            item[dst] = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            item[dst] = None
+            item[f"{dst}_decode_error"] = True
+    item["master_enabled"] = bool(item.get("master_enabled"))
+    return item
+
+
+def get_proactive_message_settings_row(*, account_id: str) -> Optional[Dict[str, Any]]:
+    """Return the raw account-level proactive message settings row, or None."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM proactive_message_settings WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    return _decode_proactive_message_settings(row) if row else None
+
+
+def upsert_proactive_message_settings_row(
+    *,
+    account_id: str,
+    master_enabled=_UNSET,
+    quiet_hours=_UNSET,
+    category_settings=_UNSET,
+    frequency=_UNSET,
+    allowed_windows=_UNSET,
+    muted_until=_UNSET,
+    metadata=_UNSET,
+) -> Dict[str, Any]:
+    """Upsert sparse proactive message settings for an account.
+
+    _UNSET 表示不改动该字段。对可空 override 列（quiet_hours/muted_until），传入
+    None 表示显式清除（写 NULL，回到继承全局）。category_settings/frequency/
+    allowed_windows 为 NOT NULL 列，整体替换 JSON（空容器表示无 override）。
+    """
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+
+    current = get_proactive_message_settings_row(account_id=cleaned_account_id)
+
+    def _resolve_json(value, current_value):
+        """None -> 写 NULL；_UNSET -> 保持现状；其它 -> dump。"""
+        if value is _UNSET:
+            return current_value
+        if value is None:
+            return None
+        return json.dumps(value, ensure_ascii=False)
+
+    if current is None:
+        master_value = 1 if master_enabled is _UNSET else int(bool(master_enabled))
+        quiet_hours_value = None if quiet_hours in (_UNSET, None) else json.dumps(quiet_hours, ensure_ascii=False)
+        category_value = (
+            "{}" if category_settings in (_UNSET, None) else json.dumps(category_settings, ensure_ascii=False)
+        )
+        frequency_value = "{}" if frequency in (_UNSET, None) else json.dumps(frequency, ensure_ascii=False)
+        allowed_windows_value = (
+            "[]" if allowed_windows in (_UNSET, None) else json.dumps(allowed_windows, ensure_ascii=False)
+        )
+        muted_value = None if muted_until in (_UNSET, None) else _clean_text(muted_until)
+        metadata_value = "{}" if metadata in (_UNSET, None) else json.dumps(metadata, ensure_ascii=False)
+        with connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO proactive_message_settings(
+                    account_id, master_enabled, quiet_hours_json,
+                    category_settings_json, frequency_json, allowed_windows_json,
+                    muted_until, metadata_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                """,
+                (
+                    cleaned_account_id,
+                    master_value,
+                    quiet_hours_value,
+                    category_value,
+                    frequency_value,
+                    allowed_windows_value,
+                    muted_value,
+                    metadata_value,
+                ),
+            )
+    else:
+        master_value = (
+            int(current["master_enabled"]) if master_enabled is _UNSET else int(bool(master_enabled))
+        )
+        # 现存行的 JSON 字段已被 decode 成 dict/list/None，需要还原成可比较的"当前 JSON 串"
+        def _current_json(key):
+            val = current.get(key)
+            return None if val is None else json.dumps(val, ensure_ascii=False)
+
+        quiet_hours_value = _resolve_json(quiet_hours, _current_json("quiet_hours"))
+        category_value = _resolve_json(category_settings, _current_json("category_settings"))
+        if category_value is None:
+            category_value = "{}"
+        frequency_value = _resolve_json(frequency, _current_json("frequency"))
+        if frequency_value is None:
+            frequency_value = "{}"
+        allowed_windows_value = _resolve_json(allowed_windows, _current_json("allowed_windows"))
+        if allowed_windows_value is None:
+            allowed_windows_value = "[]"
+        muted_value = (
+            current.get("muted_until")
+            if muted_until is _UNSET
+            else (None if muted_until is None else _clean_text(muted_until))
+        )
+        metadata_value = _resolve_json(metadata, _current_json("metadata"))
+        if metadata_value is None:
+            metadata_value = "{}"
+        with connect() as conn:
+            conn.execute(
+                """
+                UPDATE proactive_message_settings
+                SET master_enabled = ?,
+                    quiet_hours_json = ?,
+                    category_settings_json = ?,
+                    frequency_json = ?,
+                    allowed_windows_json = ?,
+                    muted_until = ?,
+                    metadata_json = ?,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE account_id = ?
+                """,
+                (
+                    master_value,
+                    quiet_hours_value,
+                    category_value,
+                    frequency_value,
+                    allowed_windows_value,
+                    muted_value,
+                    metadata_value,
+                    cleaned_account_id,
+                ),
+            )
+
+    item = get_proactive_message_settings_row(account_id=cleaned_account_id)
+    if item is None:
+        raise RuntimeError("proactive_message_settings was not created")
+    return item
+
+
+def insert_proactive_message_setting_event(
+    *,
+    account_id: str,
+    source: str,
+    tool_invocation_id: Optional[int] = None,
+    previous_settings: Optional[Dict[str, Any]] = None,
+    patch: Dict[str, Any],
+    next_settings: Dict[str, Any],
+    reason: Optional[str] = None,
+) -> int:
+    """Record an audit event for a proactive message settings change. Returns row id."""
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO proactive_message_setting_events(
+                account_id, source, tool_invocation_id,
+                previous_settings_json, patch_json, next_settings_json, reason
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cleaned_account_id,
+                source,
+                tool_invocation_id,
+                None if previous_settings is None else json.dumps(previous_settings, ensure_ascii=False),
+                json.dumps(patch, ensure_ascii=False),
+                json.dumps(next_settings, ensure_ascii=False),
+                _clean_text(reason),
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def list_proactive_message_setting_events(
+    *,
+    account_id: str,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """Return recent setting events for an account, newest first."""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM proactive_message_setting_events
+            WHERE account_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (account_id, int(limit)),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_due_proactive_account_states(

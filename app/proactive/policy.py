@@ -5,12 +5,23 @@ from typing import Any, Dict, Optional
 
 from app.config import settings
 from app.db import (
+    count_outbound_in_window,
     count_reactivation_outbound_for_quota_date,
+    count_reactivation_outbound_in_window,
+    count_total_proactive_outbound_for_quota_date,
     get_account,
     get_content_invitation_preference,
     get_outbound_daily_usage,
     get_pending_companion_followup_count_in_window,
     get_pending_reminder_count_in_window,
+)
+from app.proactive.settings import (
+    category_to_frequency_bucket,
+    get_effective_proactive_message_settings,
+    get_total_daily_limit,
+    is_category_enabled,
+    is_in_allowed_window,
+    resolve_frequency_limits,
 )
 
 
@@ -196,6 +207,39 @@ def evaluate_outbound_policy(
     }:
         return _allowed(quota_date=quota_date, category=category, metadata=policy_metadata)
 
+    # 账号级主动消息设置（用户偏好）。在豁免分类之后读取，提醒等不受影响。
+    eff_settings = get_effective_proactive_message_settings(account_id)
+
+    # 用户总开关关闭：拦截全部非豁免主动消息。
+    if not eff_settings.get("master_enabled", True):
+        return _blocked(
+            quota_date=quota_date,
+            category=category,
+            reason="proactive_master_disabled",
+            metadata=policy_metadata,
+        )
+
+    # 用户关闭了当前分类。
+    if not is_category_enabled(eff_settings, category.value):
+        return _blocked(
+            quota_date=quota_date,
+            category=category,
+            reason="proactive_category_disabled",
+            metadata=policy_metadata,
+        )
+
+    # 临时静默窗口。
+    muted_until = str(eff_settings.get("muted_until") or "").strip()
+    if muted_until and muted_until > now.strftime("%Y-%m-%d %H:%M:%S"):
+        return _blocked(
+            quota_date=quota_date,
+            category=category,
+            reason="proactive_muted",
+            next_allowed_at=muted_until,
+            metadata=policy_metadata,
+        )
+
+    # 全局开关（兜底；用户未显式设置时也生效）。
     if not getattr(settings, "proactive_outbound_enabled", True):
         return _blocked(
             quota_date=quota_date,
@@ -204,26 +248,55 @@ def evaluate_outbound_policy(
             metadata=policy_metadata,
         )
 
+    # 允许推送时段窗口：用户设了窗口而当前不在任一窗口内 → 拦截。空窗口=不限制。
+    allowed_windows = eff_settings.get("allowed_windows") or []
+    if allowed_windows and not is_in_allowed_window(now, allowed_windows):
+        return _blocked(
+            quota_date=quota_date,
+            category=category,
+            reason="proactive_outside_allowed_window",
+            metadata=policy_metadata,
+        )
+
+    # 静默时段：优先用用户自定义，否则用全局。用户设置命中时用专属 reason。
     bypass_quiet_hours = bool((metadata or {}).get("bypass_quiet_hours"))
-    if not bypass_quiet_hours and is_quiet_hours(
-        now=now,
-        start=getattr(settings, "proactive_quiet_hours_start", "22:00"),
-        end=getattr(settings, "proactive_quiet_hours_end", "08:00"),
+    eff_quiet = eff_settings.get("quiet_hours") or {}
+    if (
+        bool(eff_quiet.get("enabled", True))
+        and not bypass_quiet_hours
+        and is_quiet_hours(
+            now=now,
+            start=eff_quiet.get("start") or getattr(settings, "proactive_quiet_hours_start", "22:00"),
+            end=eff_quiet.get("end") or getattr(settings, "proactive_quiet_hours_end", "08:00"),
+        )
     ):
         return _blocked(
             quota_date=quota_date,
             category=category,
-            reason="quiet_hours",
+            reason=(
+                "proactive_user_quiet_hours"
+                if eff_settings.get("quiet_hours_is_user")
+                else "quiet_hours"
+            ),
             metadata=policy_metadata,
         )
 
     counts: Dict[str, Any] = {}
-    daily_limit = _category_daily_limit(category)
+    # 频次桶 + 用户自定义频次（已 clamp 到系统硬上限）。
+    bucket = category_to_frequency_bucket(category.value)
+    freq_limits = resolve_frequency_limits(eff_settings, bucket) if bucket else {}
+    is_reactivation_bucket = category in {
+        OutboundCategory.CONTENT_INVITATION,
+        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
+        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
+    }
+
+    # 日上限：用户设了就用用户值（覆盖全局，可放宽/收紧），否则沿用全局。
+    user_daily = freq_limits.get("max_per_day")
+    daily_is_user = user_daily is not None
+    daily_limit = user_daily if daily_is_user else _category_daily_limit(category)
     if daily_limit > 0:
-        if category in {
-            OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
-            OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-        }:
+        if is_reactivation_bucket:
             current_count = count_reactivation_outbound_for_quota_date(
                 account_id=account_id,
                 quota_date=quota_date,
@@ -240,7 +313,51 @@ def evaluate_outbound_policy(
             return _blocked(
                 quota_date=quota_date,
                 category=category,
-                reason="daily_limit_exceeded",
+                reason="proactive_user_frequency_exceeded" if daily_is_user else "daily_limit_exceeded",
+                counts=counts,
+                metadata=policy_metadata,
+            )
+
+    # 周上限（仅用户设置时生效）：滚动最近 7 天计数。
+    weekly_limit = freq_limits.get("max_per_week")
+    if weekly_limit:
+        since = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+        if is_reactivation_bucket:
+            weekly_count = count_reactivation_outbound_in_window(
+                account_id=account_id,
+                since=since,
+            )
+        else:
+            weekly_count = count_outbound_in_window(
+                account_id=account_id,
+                product_category=category.value,
+                since=since,
+            )
+        counts["weekly_count"] = weekly_count
+        counts["weekly_limit"] = weekly_limit
+        if weekly_count >= weekly_limit:
+            return _blocked(
+                quota_date=quota_date,
+                category=category,
+                reason="proactive_user_frequency_exceeded",
+                counts=counts,
+                metadata=policy_metadata,
+            )
+
+    # 全局每日总量上限（所有非豁免分类合计）。提醒/task_result 等已在 fast-path 豁免，不计入。
+    total_daily_limit = get_total_daily_limit(eff_settings)
+    if total_daily_limit is not None:
+        total_count = count_total_proactive_outbound_for_quota_date(
+            account_id=account_id,
+            quota_date=quota_date,
+        )
+        counts["total_daily_count"] = total_count
+        counts["total_daily_limit"] = total_daily_limit
+        if total_count >= total_daily_limit:
+            return _blocked(
+                quota_date=quota_date,
+                category=category,
+                reason="proactive_user_frequency_exceeded",
                 counts=counts,
                 metadata=policy_metadata,
             )

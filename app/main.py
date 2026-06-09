@@ -101,6 +101,7 @@ from app.db import (
     update_profile_for_account,
     update_profile_for_session,
     get_proactive_account_state,
+    list_proactive_message_setting_events,
     list_channel_bindings_for_account,
     upsert_proactive_account_state,
     upsert_channel_binding,
@@ -158,6 +159,11 @@ from app.proactive.reactivation import (
     plan_reactivation_candidate,
 )
 from app.proactive.state import format_state_time
+from app.proactive.settings import (
+    PROACTIVE_FREQUENCY_BUCKETS,
+    get_effective_proactive_message_settings,
+    resolve_frequency_limits,
+)
 from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
 from app.dreaming import (
     rollback_memory_item,
@@ -212,14 +218,19 @@ async def _gate_debug_ui(request: Request, call_next):
 
 
 class _ApiPrefixStripMiddleware:
-    """Strip a leading ``/api`` from the request path.
+    """Strip leading path prefixes added by nginx for routing.
 
-    The static frontend prefixes ``/web/*`` calls with ``/api`` so the production
-    nginx proxy can route them to the backend. When hitting uvicorn directly
-    (local dev), there is no proxy, so ``/api/web/*`` would 404. This rewrites it
-    back to ``/web/*``. In production nginx already strips the prefix, so the
-    backend never receives ``/api`` there and this is a no-op.
+    - ``/api/*`` → ``/*``: static frontend prefixes web API calls with ``/api``
+      so nginx can route them to the backend; strip for local uvicorn access.
+    - ``/ops/admin/*``, ``/ops/debug/*``, ``/ops/openclaw/*`` → ``/admin/*`` etc.:
+      ops debug pages run JS that prefixes API calls with ``/ops`` (so nginx can
+      route them); strip those prefixes for local uvicorn access too.
+      Static file paths like ``/ops/proactive_debug.html`` are NOT matched and
+      remain intact so the StaticFiles mount continues to serve them.
     """
+
+    # API sub-paths that ops debug pages prefix with /ops
+    _OPS_API_PREFIXES = ("/admin", "/debug", "/openclaw")
 
     def __init__(self, app):
         self.app = app
@@ -227,12 +238,19 @@ class _ApiPrefixStripMiddleware:
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
             path = scope.get("path", "")
+            new_path = None
             if path == "/api" or path.startswith("/api/"):
+                new_path = path[4:] or "/"
+            elif path.startswith("/ops/"):
+                rest = path[4:]  # "/admin/..." etc.
+                if any(rest == p or rest.startswith(p + "/") for p in self._OPS_API_PREFIXES):
+                    new_path = rest
+            if new_path is not None:
                 scope = dict(scope)
-                scope["path"] = path[4:] or "/"
+                scope["path"] = new_path
                 raw = scope.get("raw_path")
                 if raw:
-                    scope["raw_path"] = raw[4:] or b"/"
+                    scope["raw_path"] = raw[len(path) - len(new_path):] or b"/"
         await self.app(scope, receive, send)
 
 
@@ -928,6 +946,26 @@ def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
     if "metadata" in item:
         item["metadata"] = _redact_raw_payload(item.get("metadata") or {})
     return item
+
+
+def _proactive_message_settings_with_resolved(eff: dict) -> dict:
+    """在有效设定基础上补充每个频次桶的实际有效值（含全局默认），便于后台展示。"""
+    # 全局桶日上限（与 policy._category_daily_limit 保持一致）
+    _global_day = {
+        "companion_followup": int(getattr(settings, "companion_followup_daily_limit", 1) or 1),
+        "reactivation": int(getattr(settings, "reactivation_daily_limit", 1) or 1),
+        "legacy_proactive": int(getattr(settings, "proactive_outbound_daily_limit", 0) or 0),
+    }
+    resolved = {}
+    for bucket in PROACTIVE_FREQUENCY_BUCKETS:
+        limits = resolve_frequency_limits(eff, bucket)
+        global_day = _global_day.get(bucket, 0)
+        resolved[bucket] = {
+            "max_per_day": limits["max_per_day"] if limits["day_is_user"] else global_day,
+            "max_per_week": limits["max_per_week"],
+            "source": "user" if limits["day_is_user"] or limits["max_per_week"] is not None else "global",
+        }
+    return {**eff, "frequency_resolved": resolved}
 
 
 def _content_invitation_for_overview(invitation: dict) -> dict:
@@ -3279,6 +3317,14 @@ def admin_account_proactive_overview(
         "account_id": account_id,
         "proactive_state": _proactive_state_for_overview(
             get_proactive_account_state(account_id=account_id)
+        ),
+        # 主动消息设定：有效视图（policy 实际读到的合并值）+ 最近变更审计。
+        "proactive_message_settings": _proactive_message_settings_with_resolved(
+            get_effective_proactive_message_settings(account_id)
+        ),
+        "proactive_message_setting_events": list_proactive_message_setting_events(
+            account_id=account_id,
+            limit=limit,
         ),
         "reminders": [
             _normalize_ts(_redact_text_field(reminder), "due_at")

@@ -22,6 +22,11 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.proactive.messaging import send_proactive_text
+from app.proactive.settings import (
+    get_effective_proactive_message_settings,
+    is_in_allowed_window,
+    next_allowed_window_start,
+)
 
 
 REACTIVATION_METADATA_KEY = "reactivation_candidate"
@@ -119,23 +124,65 @@ def _apply_send_jitter(scheduled: datetime) -> datetime:
     return scheduled + timedelta(seconds=random.randint(low, high))
 
 
+def _account_allowed_windows(account_id: str) -> List[Dict[str, Any]]:
+    """读取账号的允许推送时段窗口；读取失败时返回空（=不限制），不阻断调度。"""
+    try:
+        eff = get_effective_proactive_message_settings(account_id)
+        windows = eff.get("allowed_windows") or []
+        return windows if isinstance(windows, list) else []
+    except Exception:  # pragma: no cover - 调度不应因设置读取失败而崩
+        return []
+
+
 def next_reactivation_slot(
     *,
     now: datetime,
     after_slot: Optional[str] = None,
+    allowed_windows: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, str]:
-    """Return the next configured reactivation send slot at or after now."""
+    """Return the next configured reactivation send slot at or after now.
+
+    allowed_windows 非空时，发送时间必须落在用户窗口内：在未来 8 天里取第一个
+    >=now 且命中窗口的固定 slot；若都不命中，则 snap 到下一个窗口起点
+    （scheduled_slot="window_start"），避免固定 slot 落不进窗口导致永不发送。
+    """
     slots = _parse_send_slots()
     start_index = 0
     if after_slot in slots:
         start_index = slots.index(after_slot) + 1
-    for index, slot in enumerate(slots[start_index:], start=start_index):
-        scheduled = _slot_datetime(now, slot)
-        if scheduled >= now:
-            return {
-                "scheduled_slot": f"slot_{index + 1}",
-                "scheduled_at": format_reactivation_time(_apply_send_jitter(scheduled)),
-            }
+
+    if not allowed_windows:
+        for index, slot in enumerate(slots[start_index:], start=start_index):
+            scheduled = _slot_datetime(now, slot)
+            if scheduled >= now:
+                return {
+                    "scheduled_slot": f"slot_{index + 1}",
+                    "scheduled_at": format_reactivation_time(_apply_send_jitter(scheduled)),
+                }
+        first = _slot_datetime(now + timedelta(days=1), slots[0])
+        return {
+            "scheduled_slot": "slot_1",
+            "scheduled_at": format_reactivation_time(_apply_send_jitter(first)),
+        }
+
+    # 窗口感知：第一天尊重 after_slot 起点，后续天数遍历全部 slot。
+    for offset in range(0, 8):
+        day = now + timedelta(days=offset)
+        base_index = start_index if offset == 0 else 0
+        day_slots = slots[base_index:]
+        for j, slot in enumerate(day_slots, start=base_index):
+            scheduled = _slot_datetime(day, slot)
+            if scheduled >= now and is_in_allowed_window(scheduled, allowed_windows):
+                return {
+                    "scheduled_slot": f"slot_{j + 1}",
+                    "scheduled_at": format_reactivation_time(_apply_send_jitter(scheduled)),
+                }
+    window_start = next_allowed_window_start(now, allowed_windows)
+    if window_start is not None:
+        return {
+            "scheduled_slot": "window_start",
+            "scheduled_at": format_reactivation_time(_apply_send_jitter(window_start)),
+        }
     first = _slot_datetime(now + timedelta(days=1), slots[0])
     return {
         "scheduled_slot": "slot_1",
@@ -143,7 +190,16 @@ def next_reactivation_slot(
     }
 
 
-def _next_slot_after(candidate: Dict[str, Any], *, now: datetime) -> Optional[Dict[str, str]]:
+def _next_slot_after(
+    candidate: Dict[str, Any],
+    *,
+    now: datetime,
+    allowed_windows: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, str]]:
+    # 有窗口时：直接取下一个 >=now 且落窗的发送时间（必要时 snap 到窗口起点）。
+    if allowed_windows:
+        return next_reactivation_slot(now=now, allowed_windows=allowed_windows)
+
     slots = _parse_send_slots()
     current_slot = _clean_text(candidate.get("scheduled_slot"))
     if current_slot.startswith("slot_"):
@@ -166,10 +222,15 @@ def _next_slot_after(candidate: Dict[str, Any], *, now: datetime) -> Optional[Di
     }
 
 
-def _with_default_schedule(candidate: Dict[str, Any], *, now: datetime) -> Dict[str, Any]:
+def _with_default_schedule(
+    candidate: Dict[str, Any],
+    *,
+    now: datetime,
+    allowed_windows: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     next_candidate = dict(candidate)
     if not _clean_text(next_candidate.get("scheduled_at")):
-        next_candidate.update(next_reactivation_slot(now=now))
+        next_candidate.update(next_reactivation_slot(now=now, allowed_windows=allowed_windows))
     return next_candidate
 
 
@@ -567,6 +628,7 @@ def plan_reactivation_candidate(
     intentionally injectable and still defaults to a no-op until Phase 4.
     """
     current = now or datetime.now()
+    allowed_windows = _account_allowed_windows(account_id)
     topic_result = (
         topic_followup_generator(account_id=account_id, now=current)
         if topic_followup_generator
@@ -580,7 +642,7 @@ def plan_reactivation_candidate(
     if isinstance(topic_candidate, dict):
         state = upsert_reactivation_candidate(
             account_id=account_id,
-            candidate=_with_default_schedule(topic_candidate, now=current),
+            candidate=_with_default_schedule(topic_candidate, now=current, allowed_windows=allowed_windows),
         )
         return {
             "action": "reactivation_candidate_planned",
@@ -621,7 +683,7 @@ def plan_reactivation_candidate(
         )
         state = upsert_reactivation_candidate(
             account_id=account_id,
-            candidate=_with_default_schedule(candidate, now=current),
+            candidate=_with_default_schedule(candidate, now=current, allowed_windows=allowed_windows),
         )
         return {
             "action": "reactivation_candidate_planned",
@@ -659,6 +721,7 @@ def dispatch_reactivation_candidate(
     In dry_run mode this never creates outbound rows and never calls OpenClaw.
     """
     current = now or datetime.now()
+    allowed_windows = _account_allowed_windows(account_id)
     candidate = get_reactivation_candidate(account_id=account_id)
     if candidate is None:
         return _no_op(account_id=account_id, reason="reactivation_candidate_missing", now=current)
@@ -687,7 +750,7 @@ def dispatch_reactivation_candidate(
 
     recent_inbound = _recent_inbound_count(account_id=account_id, now=current)
     if recent_inbound > 0:
-        next_slot = _next_slot_after(candidate, now=current)
+        next_slot = _next_slot_after(candidate, now=current, allowed_windows=allowed_windows)
         if next_slot:
             state = reschedule_reactivation_candidate(
                 account_id=account_id,
@@ -721,7 +784,7 @@ def dispatch_reactivation_candidate(
 
     avoidance_count = _avoidance_count(account_id=account_id, now=current)
     if avoidance_count > 0:
-        next_slot = _next_slot_after(candidate, now=current)
+        next_slot = _next_slot_after(candidate, now=current, allowed_windows=allowed_windows)
         if next_slot:
             state = reschedule_reactivation_candidate(
                 account_id=account_id,
@@ -766,7 +829,7 @@ def dispatch_reactivation_candidate(
         if isinstance(next_candidate, dict):
             upsert_reactivation_candidate(
                 account_id=account_id,
-                candidate=_with_default_schedule(next_candidate, now=current),
+                candidate=_with_default_schedule(next_candidate, now=current, allowed_windows=allowed_windows),
             )
             candidate = get_reactivation_candidate(account_id=account_id) or candidate
         else:
@@ -795,7 +858,7 @@ def dispatch_reactivation_candidate(
             if isinstance(next_candidate, dict):
                 upsert_reactivation_candidate(
                     account_id=account_id,
-                    candidate=_with_default_schedule(next_candidate, now=current),
+                    candidate=_with_default_schedule(next_candidate, now=current, allowed_windows=allowed_windows),
                 )
                 candidate = get_reactivation_candidate(account_id=account_id) or candidate
                 dedupe = checker(account_id=account_id, candidate=candidate, now=current)

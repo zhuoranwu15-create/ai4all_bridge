@@ -268,6 +268,103 @@ def get_session_status_tools() -> list:
     ]
 
 
+def get_proactive_message_settings_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_proactive_message_settings",
+                "description": (
+                    "查询当前用户的主动消息设定（你会不会、什么时候主动找 TA）。"
+                    "当用户问『你现在会什么时候主动找我』『我是不是关了主动消息』这类问题时调用。"
+                    "返回：总开关、各分类开关、静默时段、临时静默截止时间。"
+                    "边界：这只影响系统主动触达（陪伴跟进、内容邀请、重新激活），不影响用户提醒。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_proactive_message_settings",
+                "description": (
+                    "更新当前用户的主动消息设定。当用户表达主动消息偏好时调用，例如："
+                    "『以后别主动找我了』(master_enabled=false)、"
+                    "『别再发陪伴跟进 / 别推内容了』(用 category_updates 关闭对应分类)、"
+                    "『晚上十点后别发』(quiet_hours)、『这周先别主动发』(muted_until)。"
+                    "重要边界：本工具只管系统主动触达，绝不影响用户提醒(reminder)；"
+                    "用户说『取消提醒/别提醒我了』要走 reminder 工具，不要用本工具。"
+                    "用户只说『少一点』但没指明对象时，先追问清楚再调用，不要擅自关闭全部。"
+                    "调用后回复用户时必须说明变更结果，并点明『提醒不受影响』。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "master_enabled": {
+                            "type": "boolean",
+                            "description": "主动消息总开关。false=以后不再主动找用户（提醒除外）。",
+                        },
+                        "category_updates": {
+                            "type": "object",
+                            "description": (
+                                "按分类开关主动消息。键为分类名，值为 {\"enabled\": true/false}。"
+                                "可用分类：companion_followup(陪伴跟进)、content_invitation(内容邀请)、"
+                                "reactivation_topic_followup(话题唤回)、reactivation_content_invitation(内容唤回)、"
+                                "legacy_proactive。"
+                            ),
+                        },
+                        "quiet_hours": {
+                            "type": "object",
+                            "description": (
+                                "静默时段，时段内不发主动消息。"
+                                "{\"enabled\": true, \"start\": \"22:00\", \"end\": \"08:00\"}，时间为 HH:MM。"
+                                "enabled=false 表示取消静默时段限制。"
+                            ),
+                        },
+                        "muted_until": {
+                            "type": "string",
+                            "description": (
+                                "临时静默截止时间，格式 'YYYY-MM-DD HH:MM:SS'（北京时间）。"
+                                "在此之前不发主动消息。传空字符串或过去时间表示取消临时静默。"
+                            ),
+                        },
+                        "frequency": {
+                            "type": "object",
+                            "description": (
+                                "频次上限。支持两类键：\n"
+                                "1. total_per_day（整数）：所有主动消息每日总条数上限（陪伴跟进+唤醒邀请合计），"
+                                "提醒类不计入。用户说『每天最多X条』时优先用此键。\n"
+                                "2. 分组键 companion_followup/reactivation/default，"
+                                "值为 {\"max_per_day\": N, \"max_per_week\": M}，用于精细控制各类频次。\n"
+                                "所有值受系统硬上限保护，超出自动封顶，需如实告知用户。"
+                            ),
+                        },
+                        "allowed_windows": {
+                            "type": "array",
+                            "description": (
+                                "允许推送时段窗口（只在这些时段发主动消息）。"
+                                "每项 {\"days\": [\"SAT\",\"SUN\"], \"start\": \"09:00\", \"end\": \"12:00\"}；"
+                                "days 取值 MON/TUE/WED/THU/FRI/SAT/SUN，时间 HH:MM，start 必须早于 end（不支持跨午夜）。"
+                                "传空数组表示取消时段限制。例如『只在周末上午找我』。"
+                            ),
+                            "items": {"type": "object"},
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "本次变更的简短原因，用于审计，例如 user_requested。",
+                        },
+                    },
+                    "required": [],
+                },
+            },
+        },
+    ]
+
+
 def get_default_tools(
     *,
     web_search_enabled: bool = False,
@@ -275,6 +372,7 @@ def get_default_tools(
 ) -> list:
     tools = list(get_reminder_tools())
     tools.extend(get_session_status_tools())
+    tools.extend(get_proactive_message_settings_tools())
     if web_search_enabled:
         tools.extend(get_web_search_tools())
     if content_invitation_response_enabled:
