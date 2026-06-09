@@ -1723,10 +1723,11 @@ def create_tool_invocation(
             """
             INSERT INTO tool_invocations(
                 account_id, session_id, message_id, tool_call_id, tool_name,
-                status, args_json, result_json, latency_ms, error, finished_at,
-                updated_at
+                status, args_json, result_json, latency_ms, error,
+                created_at, finished_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                     CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE NULL END,
                     strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
