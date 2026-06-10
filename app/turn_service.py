@@ -11,6 +11,7 @@ from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
+    connect as db_connect,
     count_context_messages_for_session,
     get_account_onboarding_state,
     get_active_content_invitation,
@@ -616,27 +617,31 @@ def handle_openclaw_turn(
     elif not text and payload.message_type == "voice":
         text = "[voice message]"
 
-    inserted_id = insert_message(
-        account_id=account_id,
-        session_id=session["id"],
-        message_id=message_id,
-        reply_to_message_id=None,
-        direction="inbound",
-        role="user",
-        message_type=payload.message_type,
-        content=text,
-        raw=_turn_message_raw(
-            source="openclaw_turn",
-            identity=identity,
+    with db_connect() as conn:
+        inserted_id = insert_message(
             account_id=account_id,
-            binding=binding,
-            raw_payload=payload.raw,
-            extra={
-                "message_id": message_id,
-                "message_type": payload.message_type,
-            },
-        ),
-    )
+            session_id=session["id"],
+            message_id=message_id,
+            reply_to_message_id=None,
+            direction="inbound",
+            role="user",
+            message_type=payload.message_type,
+            content=text,
+            raw=_turn_message_raw(
+                source="openclaw_turn",
+                identity=identity,
+                account_id=account_id,
+                binding=binding,
+                raw_payload=payload.raw,
+                extra={
+                    "message_id": message_id,
+                    "message_type": payload.message_type,
+                },
+            ),
+            conn=conn,
+        )
+        if inserted_id is not None:
+            increment_daily_usage(account_id=account_id, date=today, conn=conn)
     if inserted_id is None:
         duplicate_reply = get_duplicate_reply(
             account_id=account_id,
@@ -648,8 +653,6 @@ def handle_openclaw_turn(
             reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
-
-    increment_daily_usage(account_id=account_id, date=today)
 
     # VL 成功后记一次独立的图片理解成本事件（固定贝壳，带总开关，与 chat 扣费相互独立）。
     if image_described:
@@ -820,22 +823,53 @@ def handle_openclaw_turn(
 
     reply_message_id = f"reply-{uuid.uuid4()}"
     trace_id = None
-    if debug_trace_enabled:
-        trace_id = f"trace-{uuid.uuid4()}"
-        insert_debug_trace(
-            trace_id=trace_id,
+    with db_connect() as conn:
+        if debug_trace_enabled:
+            trace_id = f"trace-{uuid.uuid4()}"
+            insert_debug_trace(
+                trace_id=trace_id,
+                account_id=account_id,
+                session_id=session["id"],
+                message_id=message_id,
+                source="ai4all",
+                llm_model=settings.llm_model,
+                system_prompt=system_prompt,
+                messages=llm_messages,
+                reply=reply,
+                metadata=debug_metadata,
+                latency_ms=latency_ms,
+                error=generation_error,
+                conn=conn,
+            )
+
+        insert_message(
             account_id=account_id,
             session_id=session["id"],
-            message_id=message_id,
-            source="ai4all",
-            llm_model=settings.llm_model,
-            system_prompt=system_prompt,
-            messages=llm_messages,
-            reply=reply,
-            metadata=debug_metadata,
+            message_id=reply_message_id,
+            reply_to_message_id=message_id,
+            direction="outbound",
+            role="assistant",
+            message_type="text",
+            content=reply,
+            raw=_turn_message_raw(
+                source="ai4all_sync_reply",
+                identity=identity,
+                account_id=account_id,
+                binding=binding,
+                extra={
+                    "message_id": reply_message_id,
+                    "reply_to_message_id": message_id,
+                },
+            ),
             latency_ms=latency_ms,
             error=generation_error,
+            conn=conn,
         )
+
+        if not generation_error and text and text not in _SPECIAL_COMMANDS:
+            increment_session_turn_count(session_id=int(session["id"]), conn=conn)
+
+    if debug_trace_enabled:
         logger.info(
             "debug trace recorded trace_id=%s account=%s session=%s message_id=%s messages=%s prompt_chars=%s",
             trace_id,
@@ -845,29 +879,6 @@ def handle_openclaw_turn(
             len(llm_messages),
             len(system_prompt or ""),
         )
-
-    insert_message(
-        account_id=account_id,
-        session_id=session["id"],
-        message_id=reply_message_id,
-        reply_to_message_id=message_id,
-        direction="outbound",
-        role="assistant",
-        message_type="text",
-        content=reply,
-        raw=_turn_message_raw(
-            source="ai4all_sync_reply",
-            identity=identity,
-            account_id=account_id,
-            binding=binding,
-            extra={
-                "message_id": reply_message_id,
-                "reply_to_message_id": message_id,
-            },
-        ),
-        latency_ms=latency_ms,
-        error=generation_error,
-    )
 
     billing_result = None
     if not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS:
@@ -889,9 +900,6 @@ def handle_openclaw_turn(
             )
         except Exception as err:
             logger.exception("chat usage charge failed account=%s reply=%s error=%s", account_id, reply_message_id, err)
-
-    if not generation_error and text and text not in _SPECIAL_COMMANDS:
-        increment_session_turn_count(session_id=int(session["id"]))
 
     # Advance onboarding state synchronously after reply so onboarding completion
     # does not depend on the after-turn background loop.

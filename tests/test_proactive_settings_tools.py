@@ -64,6 +64,20 @@ def test_update_handler_ignores_forged_account_id(fresh_db):
     assert real is not None and real["master_enabled"] is False
 
 
+def test_update_handler_rejects_unknown_fields(fresh_db):
+    from app.db import get_proactive_message_settings_row
+    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+
+    _create_account("acc-unknown")
+    out = handle_update_proactive_message_settings(
+        {"master_enabled": False, "future_limit": 2},
+        SimpleNamespace(account_id="acc-unknown"),
+    )
+    assert "error" in out
+    assert "future_limit" in out["error"]
+    assert get_proactive_message_settings_row(account_id="acc-unknown") is None
+
+
 def test_update_handler_validation_error_returns_dict(fresh_db):
     from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
@@ -73,6 +87,17 @@ def test_update_handler_validation_error_returns_dict(fresh_db):
         SimpleNamespace(account_id="acc-inval"),
     )
     assert "error" in out
+
+
+def test_update_handler_rejects_zero_total_per_day(fresh_db):
+    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+
+    _create_account("acc-zero")
+    out = handle_update_proactive_message_settings(
+        {"total_per_day": 0},
+        SimpleNamespace(account_id="acc-zero"),
+    )
+    assert out == {"error": "total_per_day 必须 >= 1"}
 
 
 def test_update_handler_empty_patch(fresh_db):

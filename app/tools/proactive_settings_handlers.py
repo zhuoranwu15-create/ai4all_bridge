@@ -27,6 +27,18 @@ _CATEGORY_LABELS = {
     "legacy_proactive": "其它主动消息",
 }
 
+_UPDATE_ARG_KEYS = {
+    "master_enabled",
+    "category_updates",
+    "quiet_hours",
+    "muted_until",
+    "frequency",
+    "allowed_windows",
+    "total_per_day",
+    "reason",
+    "account_id",
+}
+
 
 def _summarize(effective: Dict[str, Any]) -> str:
     """把有效设置渲染成一句给 LLM 复述用的中文摘要。"""
@@ -97,6 +109,10 @@ def handle_update_proactive_message_settings(
     tool_invocation_id: Optional[int] = None,
 ) -> dict:
     """校验并应用一次主动消息偏好变更，写审计。校验失败返回 {"error": ...}。"""
+    unknown_keys = sorted(str(key) for key in args.keys() if key not in _UPDATE_ARG_KEYS)
+    if unknown_keys:
+        return {"error": "不支持的设置字段: " + "、".join(unknown_keys)}
+
     patch = {
         key: args[key]
         for key in (
@@ -109,6 +125,11 @@ def handle_update_proactive_message_settings(
         )
         if key in args
     }
+    # 顶层 total_per_day 参数 → 合并进 frequency.total_per_day（更自然的 LLM 调用形式）
+    if "total_per_day" in args and args["total_per_day"] is not None:
+        freq = dict(patch.get("frequency") or {})
+        freq["total_per_day"] = args["total_per_day"]
+        patch["frequency"] = freq
     if not patch:
         return {"error": "没有可更新的设置字段"}
 

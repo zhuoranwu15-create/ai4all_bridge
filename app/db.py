@@ -101,11 +101,21 @@ def _db_path() -> Path:
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(_db_path())
+    """Open a SQLite connection with bridge-wide pragmas and commit on success."""
+    conn = sqlite3.connect(_db_path(), timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_err:
+            logger.warning("db rollback failed after exception: %s", rollback_err)
+        raise
+    else:
         conn.commit()
     finally:
         conn.close()
@@ -1604,10 +1614,11 @@ def insert_debug_trace(
     metadata: Optional[Dict[str, Any]] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Optional[int]:
     try:
-        with connect() as conn:
-            cursor = conn.execute(
+        with _tx(conn) as tx:
+            cursor = tx.execute(
                 """
                 INSERT INTO debug_traces(
                     trace_id, account_id, session_id, message_id, source,
@@ -4483,10 +4494,11 @@ def increment_session_turn_count(
     *,
     session_id: int,
     count: int = 1,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Optional[Dict[str, Any]]:
     count = max(1, int(count))
-    with connect() as conn:
-        conn.execute(
+    with _tx(conn) as tx:
+        tx.execute(
             """
             UPDATE sessions
             SET turn_count = COALESCE(turn_count, 0) + ?,
@@ -4495,7 +4507,7 @@ def increment_session_turn_count(
             """,
             (count, session_id),
         )
-        row = conn.execute(
+        row = tx.execute(
             "SELECT * FROM sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
@@ -4519,10 +4531,11 @@ def insert_message(
     raw: Optional[Dict[str, Any]] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Optional[int]:
     try:
-        with connect() as conn:
-            cursor = conn.execute(
+        with _tx(conn) as tx:
+            cursor = tx.execute(
                 """
                 INSERT INTO messages(
                     account_id, session_id, message_id, reply_to_message_id,
@@ -5336,9 +5349,14 @@ def get_daily_usage(*, account_id: str, date: str) -> int:
     return int(row["message_count"]) if row else 0
 
 
-def increment_daily_usage(*, account_id: str, date: str) -> int:
-    with connect() as conn:
-        conn.execute(
+def increment_daily_usage(
+    *,
+    account_id: str,
+    date: str,
+    conn: Optional[sqlite3.Connection] = None,
+) -> int:
+    with _tx(conn) as tx:
+        tx.execute(
             """
             INSERT INTO daily_usage(account_id, date, message_count, updated_at)
             VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
@@ -5348,7 +5366,7 @@ def increment_daily_usage(*, account_id: str, date: str) -> int:
             """,
             (account_id, date),
         )
-        row = conn.execute(
+        row = tx.execute(
             "SELECT message_count FROM daily_usage WHERE account_id = ? AND date = ?",
             (account_id, date),
         ).fetchone()

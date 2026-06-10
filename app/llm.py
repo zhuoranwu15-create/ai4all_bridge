@@ -22,6 +22,27 @@ _DSML_PARAM_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
+# Patterns indicating the user wants to UPDATE proactive message settings (not just query).
+# Used to force tool_choice on the first LLM round so DeepSeek doesn't ask for confirmation.
+_PROACTIVE_COUNT_RE = r"(?:[0-9０-９]+|[一二两三四五六七八九十]+)"
+_PROACTIVE_UPDATE_RE = re.compile(
+    # frequency: "每天最多1条" / "总共2条" / "一周3次"
+    rf"(每天|每日|一天|总共|一周|每周)\s*(最多|最少|只|就)?\s*发?\s*{_PROACTIVE_COUNT_RE}\s*(条|次)"
+    # e.g. "条数改为3" / "上限设为2" / "改为3条"
+    rf"|(条数|上限|频次).{{0,6}}(改为|设为|调整为|改|设|调|限|调整).{{0,8}}{_PROACTIVE_COUNT_RE}"
+    rf"|(改为|设为|调整为|改成|设成).{{0,6}}{_PROACTIVE_COUNT_RE}.{{0,4}}(条|次)"
+    rf"|{_PROACTIVE_COUNT_RE}.{{0,5}}(条|次).{{0,8}}(就够|就行|为限|上限|够了)"
+    # on/off/mute
+    r"|别(再|继续)?(主动|发).{0,10}(消息|找|发)"
+    r"|(关掉?|开启?|暂停|停止|恢复).{0,6}主动"
+    # action verbs only (exclude noun "设置")
+    r"|主动消息.{0,10}(关闭|开启|暂停|停止|修改|调整|改为|设为|限制|减少|增加)"
+    r"|(?:主动消息|主动|找我|联系我).{0,8}(?:多|少)发.{0,4}(?:点|些|次|条)"
+    r"|(?:多|少)发.{0,4}(?:点|些|次|条).{0,8}(?:主动消息|主动找我|找我|联系我)"
+    r"|总(共|量).{0,8}(条数|上限|改为|设为|[0-9０-９])",
+    re.IGNORECASE,
+)
+
 
 def _parse_dsml_tool_call(content: str):
     """Return (tool_name, args_dict) if content contains a DSML tool call, else None."""
@@ -133,6 +154,21 @@ def _http_chat(messages: List[Dict[str, str]]) -> str:
     return _extract_content(_http_chat_payload(messages))
 
 
+def _history_with_current_user(
+    history: List[Dict[str, str]],
+    user_text: str,
+) -> List[Dict[str, str]]:
+    """Return history plus the current user message when the caller omitted it."""
+    messages = list(history)
+    text = (user_text or "").strip()
+    if not text:
+        return messages
+    if messages and messages[-1].get("role") == "user":
+        return messages
+    messages.append({"role": "user", "content": text})
+    return messages
+
+
 def generate_reply(
     *,
     user_text: str,
@@ -143,7 +179,7 @@ def generate_reply(
         return _fallback_reply(user_text)
     prompt = system_prompt or settings.llm_default_prompt
     messages = [{"role": "system", "content": prompt}]
-    messages.extend(history)
+    messages.extend(_history_with_current_user(history, user_text))
     return _http_chat(messages)
 
 
@@ -167,7 +203,21 @@ def generate_completion_with_usage(
     return _extract_content(payload), _extract_usage(payload)
 
 
-def _http_chat_with_tools(messages: List[Dict], tools: List[Dict]) -> Dict:
+def _infer_proactive_update_tool_choice(messages: List[Dict]) -> Any:
+    """Return a forced tool_choice dict if the last user message contains clear
+    proactive settings update intent, so DeepSeek doesn't ask for confirmation.
+    Returns "auto" otherwise."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = str(msg.get("content") or "")
+            if _PROACTIVE_UPDATE_RE.search(content):
+                logger.debug("proactive_update_intent detected, forcing tool_choice")
+                return {"type": "function", "function": {"name": "update_proactive_message_settings"}}
+            break
+    return "auto"
+
+
+def _http_chat_with_tools(messages: List[Dict], tools: List[Dict], *, tool_choice: Any = "auto") -> Dict:
     """LLM call with tool definitions. Returns raw response dict."""
     url = settings.llm_base_url.rstrip("/") + "/chat/completions"
     body = {
@@ -175,7 +225,7 @@ def _http_chat_with_tools(messages: List[Dict], tools: List[Dict]) -> Dict:
         "messages": messages,
         "temperature": 0.7,
         "tools": tools,
-        "tool_choice": "auto",
+        "tool_choice": tool_choice,
     }
     max_attempts = max(1, int(settings.llm_max_retries) + 1)
     last_request_error: Optional[httpx.RequestError] = None
@@ -199,6 +249,9 @@ def _http_chat_with_tools(messages: List[Dict], tools: List[Dict]) -> Dict:
         except httpx.HTTPStatusError as err:
             logger.error("llm http error status=%s body=%s", err.response.status_code, err.response.text[:500])
             raise RuntimeError(f"LLM HTTP error: {err.response.status_code}") from err
+        except json.JSONDecodeError as err:
+            logger.error("llm invalid json response: %s", err)
+            raise RuntimeError("LLM returned invalid JSON") from err
         except httpx.RequestError as err:
             last_request_error = err
             logger.warning("llm request failed attempt=%s/%s error=%s", attempt, max_attempts, err)
@@ -338,20 +391,32 @@ def generate_reply_with_tools(
 
     prompt = system_prompt or settings.llm_default_prompt
     messages: List[Dict] = [{"role": "system", "content": prompt}]
-    messages.extend(history)
+    messages.extend(_history_with_current_user(history, user_text))
     if max_tool_rounds is None:
         max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
     max_tool_rounds = max(1, min(int(max_tool_rounds), 8))
 
+    # On the very first round, detect proactive settings update intent and force
+    # the tool to avoid DeepSeek's "let me confirm first" behavior.
+    first_round_tool_choice = _infer_proactive_update_tool_choice(messages)
+
     for round_index in range(max_tool_rounds + 1):
+        tc = first_round_tool_choice if round_index == 0 else "auto"
         try:
-            response = _http_chat_with_tools(messages, tools)
+            response = _http_chat_with_tools(messages, tools, tool_choice=tc)
         except RuntimeError as err:
             return "", str(err)
 
         choice = response.get("choices", [{}])[0]
         finish_reason = choice.get("finish_reason", "")
         message = choice.get("message", {})
+        logger.debug(
+            "llm_response round=%d finish_reason=%s has_tool_calls=%s content_prefix=%r",
+            round_index,
+            finish_reason,
+            bool(message.get("tool_calls")),
+            (message.get("content") or "")[:80],
+        )
 
         if finish_reason in ("stop", "end_turn"):
             content = (message.get("content") or "").strip()

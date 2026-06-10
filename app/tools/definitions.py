@@ -292,14 +292,18 @@ def get_proactive_message_settings_tools() -> list:
             "function": {
                 "name": "update_proactive_message_settings",
                 "description": (
-                    "更新当前用户的主动消息设定。当用户表达主动消息偏好时调用，例如："
-                    "『以后别主动找我了』(master_enabled=false)、"
-                    "『别再发陪伴跟进 / 别推内容了』(用 category_updates 关闭对应分类)、"
-                    "『晚上十点后别发』(quiet_hours)、『这周先别主动发』(muted_until)。"
-                    "重要边界：本工具只管系统主动触达，绝不影响用户提醒(reminder)；"
-                    "用户说『取消提醒/别提醒我了』要走 reminder 工具，不要用本工具。"
-                    "用户只说『少一点』但没指明对象时，先追问清楚再调用，不要擅自关闭全部。"
-                    "调用后回复用户时必须说明变更结果，并点明『提醒不受影响』。"
+                    "更新当前用户的主动消息设定。"
+                    "**收到变更指令后直接调用本工具，无需向用户确认，不可口头声称已完成。**\n"
+                    "触发场景（用户说下列任何一句，立即调用，不要问『确定吗』）：\n"
+                    "- 『以后别主动找我了』→ master_enabled=false\n"
+                    "- 『每天最多X条 / 总共X条 / 一天就发X次』→ total_per_day=X\n"
+                    "- 『一周最多X次』→ frequency={\"reactivation\":{\"max_per_week\":X}}\n"
+                    "- 『只在XX时间段找我』→ allowed_windows\n"
+                    "- 『晚上X点后别发』→ quiet_hours\n"
+                    "- 『这周先别主动发』→ muted_until\n"
+                    "- 『别再发陪伴跟进/内容』→ category_updates\n"
+                    "边界：只管主动触达，不影响用户提醒。"
+                    "调用后回复必须说明变更结果并点明『提醒不受影响』。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -332,15 +336,20 @@ def get_proactive_message_settings_tools() -> list:
                                 "在此之前不发主动消息。传空字符串或过去时间表示取消临时静默。"
                             ),
                         },
+                        "total_per_day": {
+                            "type": "integer",
+                            "description": (
+                                "所有主动消息每日总条数上限（陪伴跟进+唤醒邀请合计）。"
+                                "用户说『每天最多X条』『总共X条』『一天就发X次』时使用此参数。"
+                                "提醒不计入此上限。受系统硬上限约束，超出自动封顶。"
+                            ),
+                        },
                         "frequency": {
                             "type": "object",
                             "description": (
-                                "频次上限。支持两类键：\n"
-                                "1. total_per_day（整数）：所有主动消息每日总条数上限（陪伴跟进+唤醒邀请合计），"
-                                "提醒类不计入。用户说『每天最多X条』时优先用此键。\n"
-                                "2. 分组键 companion_followup/reactivation/default，"
-                                "值为 {\"max_per_day\": N, \"max_per_week\": M}，用于精细控制各类频次。\n"
-                                "所有值受系统硬上限保护，超出自动封顶，需如实告知用户。"
+                                "精细频次控制（按分组）。键为 companion_followup/reactivation/default；"
+                                "值为 {\"max_per_day\": N, \"max_per_week\": M}。"
+                                "如只需总量限制，优先用 total_per_day 参数，不必用 frequency。"
                             ),
                         },
                         "allowed_windows": {
