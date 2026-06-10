@@ -137,6 +137,11 @@ function clearMsg(id) {
   el.textContent = '';
   el.className = 'msg';
 }
+function setSendOtpButton(disabled, text) {
+  var btn = document.getElementById('btn-send-otp');
+  btn.disabled = disabled;
+  btn.textContent = text || '获取验证码';
+}
 
 async function apiFetch(path, opts) {
   opts = opts || {};
@@ -213,6 +218,7 @@ window.addEventListener('load', function() {
 async function captchaVerifyCallback(captchaVerifyParam) {
   S.phone = document.getElementById('phone').value.trim();
   clearMsg('msg-send');
+  setSendOtpButton(true, '发送中…');
   try {
     await apiFetch('/web/sms/send-otp', {
       method: 'POST',
@@ -221,6 +227,7 @@ async function captchaVerifyCallback(captchaVerifyParam) {
     return { captchaResult: true, bizResult: true };
   } catch(e) {
     showMsg('msg-send', e.message, 'err');
+    setSendOtpButton(false);
     return { captchaResult: true, bizResult: false };
   }
 }
@@ -239,18 +246,24 @@ function onBizResultCallback(bizResult) {
 
 // ── 倒计时 ────────────────────────────────────
 function startCountdown() {
+  clearInterval(S.resendTimer);
   var secs = 60;
   var el = document.getElementById('resend-cd');
-  var btn = document.getElementById('btn-resend');
-  btn.disabled = true;
-  el.textContent = secs;
+  var resendBtn = document.getElementById('btn-resend');
+  function render() {
+    el.textContent = secs;
+    resendBtn.disabled = secs > 0;
+    setSendOtpButton(secs > 0, secs > 0 ? '获取验证码 (' + secs + 's)' : '获取验证码');
+  }
+  render();
   S.resendTimer = setInterval(function() {
     secs--;
-    el.textContent = secs;
     if (secs <= 0) {
       clearInterval(S.resendTimer);
-      btn.disabled = false;
+      S.resendTimer = null;
+      secs = 0;
     }
+    render();
   }, 1000);
 }
 

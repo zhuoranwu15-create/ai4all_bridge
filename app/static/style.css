@@ -40,6 +40,7 @@ button.primary, .button-link.primary { background: #3b82f6; color: #fff; border-
 button.primary:hover, .button-link.primary:hover { background: #2563eb; }
 button.danger { color: #dc2626; border-color: #dc2626; }
 button.danger:hover { background: #fef2f2; }
+#btn-send-otp:disabled, #btn-resend:disabled { opacity: .5; cursor: not-allowed; }
 .status-active { color: #16a34a; font-weight: 600; }
 .status-disabled { color: #dc2626; font-weight: 600; }
 .status-msg { font-size: .82rem; margin-left: 10px; }

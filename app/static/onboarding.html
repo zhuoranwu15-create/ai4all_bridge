@@ -155,6 +155,11 @@
     }
     function show(id) { document.getElementById(id).style.display = ''; }
     function hide(id) { document.getElementById(id).style.display = 'none'; }
+    function setSendOtpButton(disabled, text) {
+      var btn = document.getElementById('btn-send-otp');
+      btn.disabled = disabled;
+      btn.textContent = text || '获取验证码';
+    }
 
     async function webFetch(path, options) {
       options = options || {};
@@ -185,6 +190,7 @@
     // captchaVerifyCallback: SDK 验证通过后自动调用，触发发送短信
     async function captchaVerifyCallback(captchaVerifyParam) {
       setStatus('st-send-otp', '发送中…');
+      setSendOtpButton(true, '发送中…');
       try {
         await webFetch('/web/sms/send-otp', {
           method: 'POST',
@@ -196,6 +202,7 @@
         return { captchaResult: true, bizResult: true };
       } catch (e) {
         setStatus('st-send-otp', e.message, true);
+        setSendOtpButton(false);
         return { captchaResult: true, bizResult: false };
       }
     }
@@ -252,16 +259,24 @@
     // OTP 倒计时 + 重发
     // ---------------------------------------------------------------------------
     function startResendCountdown() {
+      clearInterval(state.resendTimer);
       var secs = 60;
-      document.getElementById('resend-countdown').textContent = secs;
-      document.getElementById('btn-resend').disabled = true;
+      var countdown = document.getElementById('resend-countdown');
+      var resendBtn = document.getElementById('btn-resend');
+      function render() {
+        countdown.textContent = secs;
+        resendBtn.disabled = secs > 0;
+        setSendOtpButton(secs > 0, secs > 0 ? '获取验证码 (' + secs + 's)' : '获取验证码');
+      }
+      render();
       state.resendTimer = setInterval(function() {
         secs--;
-        document.getElementById('resend-countdown').textContent = secs;
         if (secs <= 0) {
           clearInterval(state.resendTimer);
-          document.getElementById('btn-resend').disabled = false;
+          state.resendTimer = null;
+          secs = 0;
         }
+        render();
       }, 1000);
     }
 
