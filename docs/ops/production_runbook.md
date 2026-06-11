@@ -1,6 +1,6 @@
 # 生产稳定性 Runbook
 
-更新时间：2026-06-02
+更新时间：2026-06-11
 
 适用范围：阿里云单机或少量 ECS 外测环境，FastAPI Backend、SQLite、OpenClaw Gateway、独立 proactive scheduler。
 
@@ -125,6 +125,34 @@ sqlite3 data/ai4all.sqlite3 "PRAGMA integrity_check;"
 - 磁盘超过 80%：清理旧日志、旧备份或扩容。
 - 磁盘超过 90%：先停止大写入任务，释放空间后再恢复服务。
 - SQLite integrity check 非 `ok`：停止写入，保留现场，使用最近备份恢复到临时库验证。
+
+> 自动监控：`ai4all-monitor-health.timer` 内置 `disk` 检查（默认开，盯 `/var/log` 卷，使用率 ≥ 85% 经飞书告警）。可用 `MONITOR_DISK_PATH` / `MONITOR_DISK_MAX_USED_PERCENT` / `MONITOR_DISK_MIN_FREE_BYTES` 调整，`MONITOR_CHECK_DISK=false` 关闭。nginx 日志留存延长后磁盘是主要增长项，详见下一节。
+
+## nginx 访问日志轮转（新机部署必做）
+
+仓库里的 `deploy/logrotate/nginx` 是**版本化模板**，部署目标是生产机 `/etc/logrotate.d/nginx`。拉代码或 `git checkout` **不会**改动 `/etc/logrotate.d/`，新机或模板更新后必须手动同步一次，否则日志按发行版默认（通常仅几天）轮转，留存期不符合数据持有说明。
+
+留存分级（按数据敏感度）：
+
+- `/var/log/nginx/ai4company.access.log`（Web 注册/登录访问日志，含 IP+UA+认证请求行）→ `rotate 1095`（约 3 年，合规/审计）。
+- 其余 nginx 日志（全局 `access.log`/`error.log`、Web 前端 `ai4company.error.log`）→ `rotate 183`（约半年）。
+
+部署（需要 sudo；本机无免密 sudo 时用会话 `! ` 前缀执行）：
+
+```bash
+# 1. 备份现有生产配置
+sudo cp -a /etc/logrotate.d/nginx /etc/logrotate.d/nginx.bak.$(date +%Y%m%d)
+# 2. 用版本化模板覆盖
+sudo cp /opt/ai4all-weixin-bot/deploy/logrotate/nginx /etc/logrotate.d/nginx
+# 3. dry-run 校验：应输出 "Handling 2 logs"、段1 1095 段2 183、无 "duplicate log entry"、exit 0
+sudo logrotate -d /etc/logrotate.d/nginx; echo "exit=$?"
+```
+
+验证与注意：
+
+- dry-run 必须 `exit=0` 且无 `duplicate log entry`；有 duplicate 说明又出现了 `*.log` 通配与显式文件名重叠，需修模板。
+- 该模板用**显式文件名**而非 `/var/log/nginx/*.log` 通配。**新增 vhost 日志须手动加入对应段**，否则该日志不会被轮转、会无限增长（磁盘水位见上节 `disk` 检查）。
+- 日志目录权限 `0640 nginx:root` / 目录 `0750`，查日志需 `sudo`；监控以 `ai4all` 身份只对 `/var/log` 卷做 `statvfs`，不读 nginx 目录内容。
 
 ## 备份与恢复
 
