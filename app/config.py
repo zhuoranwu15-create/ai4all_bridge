@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         "不要把自己定位为心理咨询师，不做诊断。"
     )
 
-    rate_limit_daily: int = 100
+    rate_limit_daily: int = 5000
     rate_limit_rpm: int = 10
     rate_limit_rpm_window_seconds: float = 30.0
     rate_limit_daily_message: str = "今天聊得有点多了，我晚些时候再继续陪你。"
