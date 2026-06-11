@@ -90,10 +90,6 @@
           <div class="card-label">绑定状态</div>
           <div class="card-value" id="d-binding-status">检查中…</div>
         </div>
-        <div class="card-row" id="row-channel-account" style="display:none">
-          <div class="card-label">微信账号标识</div>
-          <div class="card-value mono" id="d-channel-account">—</div>
-        </div>
         <div class="card-row" id="row-last-seen" style="display:none">
           <div class="card-label">最近活跃</div>
           <div class="card-value" id="d-last-seen">—</div>
@@ -165,19 +161,29 @@ async function apiFetch(path, opts) {
   return res.json();
 }
 
+// Format an absolute timestamp as Beijing local time without depending on browser timezone.
+function formatBeijingDate(d) {
+  var beijing = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  var y = beijing.getUTCFullYear();
+  var mo = String(beijing.getUTCMonth() + 1).padStart(2, '0');
+  var dy = String(beijing.getUTCDate()).padStart(2, '0');
+  var h = String(beijing.getUTCHours()).padStart(2, '0');
+  var mi = String(beijing.getUTCMinutes()).padStart(2, '0');
+  return y + '-' + mo + '-' + dy + ' ' + h + ':' + mi;
+}
+
+// DB timestamps are naive Beijing-local strings; explicit timezone inputs are normalized to Beijing.
 function formatDate(iso) {
   if (!iso) return '—';
-  // SQLite timestamps are UTC but have no 'Z' suffix — append it so Date parses correctly.
-  var s = iso.replace(' ', 'T');
-  if (!s.endsWith('Z') && !/[+-]\d{2}:?\d{2}$/.test(s)) s += 'Z';
-  var d = new Date(s);
-  if (isNaN(d.getTime())) return iso.slice(0, 16).replace('T', ' ');
-  var y = d.getFullYear();
-  var mo = String(d.getMonth() + 1).padStart(2, '0');
-  var dy = String(d.getDate()).padStart(2, '0');
-  var h = String(d.getHours()).padStart(2, '0');
-  var mi = String(d.getMinutes()).padStart(2, '0');
-  return y + '-' + mo + '-' + dy + ' ' + h + ':' + mi;
+  var raw = String(iso).trim();
+  if (!raw) return '—';
+  var hasExplicitTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/.test(raw);
+  if (!hasExplicitTimezone) {
+    return raw.slice(0, 16).replace('T', ' ');
+  }
+  var d = new Date(raw.replace(' ', 'T'));
+  if (isNaN(d.getTime())) return raw.slice(0, 16).replace('T', ' ');
+  return formatBeijingDate(d);
 }
 
 function renderWallet(wallet) {
@@ -242,9 +248,7 @@ async function loadBindings() {
       var b = bindings[0];
       statusEl.innerHTML =
         '<span class="binding-status-badge bound">✓ 已绑定</span>';
-      document.getElementById('d-channel-account').textContent = b.channel_account_id || b.session_key || '—';
       document.getElementById('d-last-seen').textContent = formatDate(b.last_seen_at);
-      show('row-channel-account');
       show('row-last-seen');
     } else {
       statusEl.innerHTML =

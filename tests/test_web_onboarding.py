@@ -1,4 +1,7 @@
 import re
+import shutil
+import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -6,6 +9,21 @@ import pytest
 
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 ACCOUNT_ID_RE = re.compile(r"^aid_[1-9]\d{8}$")
+
+
+def _extract_js_function(script: str, name: str) -> str:
+    """Extract a top-level JavaScript function body from a static HTML script."""
+    start = script.index(f"function {name}(")
+    brace = script.index("{", start)
+    depth = 0
+    for i in range(brace, len(script)):
+        if script[i] == "{":
+            depth += 1
+        elif script[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return script[start : i + 1]
+    raise AssertionError(f"function {name} not closed")
 
 
 def _get_verified_token(phone: str) -> str:
@@ -56,6 +74,45 @@ def test_web_config_marks_captcha_unconfigured(client):
     assert data["captcha"]["configured"] is False
     assert data["captcha"]["scene_id"] == ""
     assert data["captcha"]["prefix"] == ""
+
+
+def test_dashboard_page_hides_channel_account_identifier():
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+
+    assert "微信账号标识" not in html
+    assert "row-channel-account" not in html
+    assert "d-channel-account" not in html
+
+
+def test_dashboard_format_date_keeps_naive_beijing_time():
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+    script = re.search(r"<script>(.*?)</script>", html, re.S).group(1)
+    probe = "\n".join(
+        [
+            _extract_js_function(script, "formatBeijingDate"),
+            _extract_js_function(script, "formatDate"),
+            """
+const cases = [
+  ['2026-06-11 22:30:00', '2026-06-11 22:30'],
+  ['2026-06-11T14:30:00Z', '2026-06-11 22:30'],
+  ['2026-06-11T22:30:00+08:00', '2026-06-11 22:30'],
+];
+for (const [input, expected] of cases) {
+  const actual = formatDate(input);
+  if (actual !== expected) {
+    throw new Error(input + ' -> ' + actual + ', expected ' + expected);
+  }
+}
+""",
+        ]
+    )
+    res = subprocess.run([node, "-e", probe], capture_output=True, text=True, check=False)
+
+    assert res.returncode == 0, res.stderr
 
 
 def test_web_register_creates_and_reuses_platform_user(client):
