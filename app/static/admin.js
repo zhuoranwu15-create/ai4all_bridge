@@ -1,7 +1,7 @@
 function getToken() {
   var token = localStorage.getItem('admin_token');
   if (!token) {
-    token = prompt('请输入 Admin / Staff Token：');
+    token = prompt('请输入 Admin / Staff / Reviewer Token：');
     if (token) localStorage.setItem('admin_token', token.trim());
   }
   return token;

@@ -11,6 +11,7 @@ def test_settings(tmp_path):
     s.ai4all_bridge_secret = "test-secret"
     s.admin_token = "test-admin"
     s.admin_staff_token = "test-staff"
+    s.admin_reviewer_token = "test-reviewer"
     s.admin_debug_plaintext_enabled = False
     s.admin_debug_plaintext_account_allowlist = ""
     s.feishu_alert_webhook_url = ""
@@ -88,6 +89,29 @@ def test_settings(tmp_path):
     s.image_inbound_dir = str(tmp_path / "inbound")
     s.image_understanding_cost_shell_micros = 5_000_000
     s.image_understanding_fallback_text = "这张图我没太看清，你可以说说它，或者再发我一次～"
+    s.moderation_enabled = True
+    s.moderation_sync_guard_enabled = True
+    s.moderation_worker_enabled = False
+    s.moderation_worker_batch_size = 50
+    s.moderation_worker_interval_seconds = 5.0
+    s.moderation_worker_claim_timeout_seconds = 300
+    s.moderation_worker_max_attempts = 3
+    s.moderation_sensitive_terms_path = str(tmp_path / "moderation" / "sensitive_terms.json")
+    s.moderation_short_text_skip_chars = 8
+    s.moderation_inbound_sample_percent = 15
+    s.moderation_outbound_sample_percent = 30
+    s.moderation_proactive_sample_percent = 100
+    s.moderation_llm_enabled = False
+    s.moderation_llm_base_url = ""
+    s.moderation_llm_api_key = ""
+    s.moderation_llm_model = ""
+    s.moderation_llm_timeout_seconds = 20.0
+    s.moderation_llm_prompt_version = "moderation_llm_v1"
+    s.moderation_image_safety_enabled = False
+    s.moderation_image_safety_model = ""
+    s.moderation_export_dir = str(tmp_path / "moderation_exports")
+    s.moderation_safe_fallback_text = "这条内容我不能继续发送，我们换个安全的话题吧。"
+    s.moderation_blocked_placeholder = "[blocked by moderation]"
     s.aliyun_web_search_api_key = ""
     s.aliyun_web_search_enabled = False
     s.aliyun_web_search_base_url = "https://cloud-iqs.aliyuncs.com/search/unified"
@@ -111,6 +135,36 @@ def test_settings(tmp_path):
     s.aliyun_captcha_prefix = ""
     s.otp_expires_minutes = 10
     s.otp_token_expires_minutes = 10
+    terms_dir = tmp_path / "moderation"
+    terms_dir.mkdir(parents=True, exist_ok=True)
+    (terms_dir / "sensitive_terms.json").write_text(
+        """
+{
+  "version": "test_terms_v1",
+  "terms": [
+    {
+      "id": "test_block",
+      "term": "MODERATION_TEST_BLOCK",
+      "level": "block",
+      "categories": ["test_block"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "test_review",
+      "term": "MODERATION_TEST_REVIEW",
+      "level": "review",
+      "categories": ["test_review"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
     return s
 
 
@@ -125,6 +179,13 @@ def fresh_db(test_settings):
         patch("app.proactive.policy.settings", test_settings),
         patch("app.proactive.reactivation.settings", test_settings),
         patch("app.proactive.settings.settings", test_settings),
+        patch("app.moderation.policy.settings", test_settings),
+        patch("app.moderation.sensitive_words.settings", test_settings),
+        patch("app.moderation.service.settings", test_settings),
+        patch("app.moderation.worker.settings", test_settings),
+        patch("app.moderation.llm_review.settings", test_settings),
+        patch("app.moderation.image_review.settings", test_settings),
+        patch("app.moderation.export.settings", test_settings),
     ]
     for p in patches:
         p.start()
@@ -147,6 +208,14 @@ def client(fresh_db):
     patches = [
         patch("app.main.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
+        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.moderation.policy.settings", fresh_db),
+        patch("app.moderation.sensitive_words.settings", fresh_db),
+        patch("app.moderation.service.settings", fresh_db),
+        patch("app.moderation.worker.settings", fresh_db),
+        patch("app.moderation.llm_review.settings", fresh_db),
+        patch("app.moderation.image_review.settings", fresh_db),
+        patch("app.moderation.export.settings", fresh_db),
         patch("app.dreaming.settings", fresh_db),
         patch("app.session_lifecycle.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),

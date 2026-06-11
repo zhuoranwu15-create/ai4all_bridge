@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     ai4all_bridge_secret: str = "dev-secret"
     admin_token: str = "dev-admin-token"
     admin_staff_token: str = ""
+    admin_reviewer_token: str = ""
     admin_debug_plaintext_enabled: bool = False
     admin_debug_plaintext_account_allowlist: str = ""
     feishu_alert_webhook_url: str = ""
@@ -125,6 +126,31 @@ class Settings(BaseSettings):
     image_understanding_cost_shell_micros: int = 5_000_000
     # VL 超时/失败时的兜底话术（红线：禁止让主模型在无描述时瞎猜图片内容）。
     image_understanding_fallback_text: str = "这张图我没太看清，你可以说说它，或者再发我一次～"
+
+    # ===== 内容审核与人工复核（Phase A：本地规则 + 任务记录）=====
+    moderation_enabled: bool = True
+    moderation_sync_guard_enabled: bool = True
+    moderation_worker_enabled: bool = False
+    moderation_worker_batch_size: int = 50
+    moderation_worker_interval_seconds: float = 5.0
+    moderation_worker_claim_timeout_seconds: int = 300
+    moderation_worker_max_attempts: int = 3
+    moderation_sensitive_terms_path: str = "data/moderation/sensitive_terms.json"
+    moderation_short_text_skip_chars: int = 8
+    moderation_inbound_sample_percent: int = 15
+    moderation_outbound_sample_percent: int = 30
+    moderation_proactive_sample_percent: int = 100
+    moderation_llm_enabled: bool = False
+    moderation_llm_base_url: str = ""
+    moderation_llm_api_key: str = ""
+    moderation_llm_model: str = ""
+    moderation_llm_timeout_seconds: float = 20.0
+    moderation_llm_prompt_version: str = "moderation_llm_v1"
+    moderation_image_safety_enabled: bool = False
+    moderation_image_safety_model: str = ""
+    moderation_export_dir: str = "data/moderation_exports"
+    moderation_safe_fallback_text: str = "这条内容我不能继续发送，我们换个安全的话题吧。"
+    moderation_blocked_placeholder: str = "[blocked by moderation]"
 
     aliyun_web_search_api_key: str = ""
     aliyun_web_search_enabled: bool = False

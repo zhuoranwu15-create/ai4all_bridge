@@ -1,4 +1,6 @@
+import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -9,7 +11,10 @@ from app.db import (
     insert_outbound_delivery_message,
     mark_outbound_message_failed,
     mark_outbound_message_sent,
+    update_outbound_message_metadata,
 )
+from app.moderation.sensitive_words import check_sync_guard
+from app.moderation.service import create_sync_block_task, enqueue_outbound_for_moderation
 from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
 from app.proactive.policy import (
     POLICY_VERSION,
@@ -17,6 +22,9 @@ from app.proactive.policy import (
     is_quiet_hours,
     normalize_outbound_category,
 )
+
+
+logger = logging.getLogger("ai4all.proactive.messaging")
 
 
 def enqueue_proactive_text(
@@ -66,7 +74,81 @@ def enqueue_proactive_text(
     if decision.next_allowed_at:
         merged_metadata["next_allowed_at"] = decision.next_allowed_at
 
-    return create_outbound_message(
+    effective_idempotency_key = idempotency_key or f"proactive-{account_id}-{uuid.uuid4().hex}"
+    if decision.allowed:
+        sync_decision = check_sync_guard(
+            account_id=account_id,
+            text=text,
+            direction="outbound",
+            content_kind="text",
+            source_type="outbound_message",
+            source_id=effective_idempotency_key,
+        )
+        if not sync_decision.allowed:
+            merged_metadata.update(
+                {
+                    "moderation_sync_blocked": True,
+                    "moderation_risk_level": sync_decision.level,
+                    "moderation_categories": sync_decision.categories,
+                    "policy_reason": "moderation_sync_blocked",
+                    "policy_error": "moderation_sync_blocked",
+                }
+            )
+            outbound = create_outbound_message(
+                account_id=account_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                to_user_id=to_user_id,
+                session_key=session_key,
+                source=source,
+                text=str(getattr(settings, "moderation_blocked_placeholder", "") or "[blocked by moderation]"),
+                idempotency_key=effective_idempotency_key,
+                quota_date=decision.quota_date,
+                status="cancelled",
+                error="moderation_sync_blocked",
+                product_category=category.value,
+                policy_version=POLICY_VERSION,
+                policy_reason="moderation_sync_blocked",
+                scheduled_at=(
+                    scheduled_at.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                    if scheduled_at
+                    else None
+                ),
+                metadata=merged_metadata,
+            )
+            try:
+                blocked_task = create_sync_block_task(
+                    account_id=account_id,
+                    session_id=None,
+                    source_type="outbound_message",
+                    source_id=str(outbound["id"]),
+                    direction="outbound",
+                    content_kind="text",
+                    text=text,
+                    decision=sync_decision,
+                    outbound_message_id=int(outbound["id"]),
+                    metadata={
+                        "source": source,
+                        "product_category": category.value,
+                        "to_user_id": to_user_id,
+                        "idempotency_key": effective_idempotency_key,
+                    },
+                )
+                updated = update_outbound_message_metadata(
+                    outbound_message_id=int(outbound["id"]),
+                    metadata_patch={"moderation_task_id": blocked_task.get("id")},
+                )
+                return updated or outbound
+            except Exception as err:
+                logger.exception(
+                    "proactive sync moderation block task failed account=%s outbound_id=%s error=%s",
+                    account_id,
+                    outbound.get("id"),
+                    err,
+                )
+                return outbound
+
+    outbound = create_outbound_message(
         account_id=account_id,
         channel=channel,
         channel_account_id=channel_account_id,
@@ -74,7 +156,7 @@ def enqueue_proactive_text(
         session_key=session_key,
         source=source,
         text=text,
-        idempotency_key=idempotency_key,
+        idempotency_key=effective_idempotency_key,
         quota_date=decision.quota_date,
         status=decision.status,
         error=decision.reason,
@@ -88,6 +170,17 @@ def enqueue_proactive_text(
         ),
         metadata=merged_metadata,
     )
+    if outbound["status"] == "pending":
+        try:
+            enqueue_outbound_for_moderation(outbound_message_id=int(outbound["id"]))
+        except Exception as err:
+            logger.exception(
+                "proactive moderation enqueue failed account=%s outbound_id=%s error=%s",
+                account_id,
+                outbound.get("id"),
+                err,
+            )
+    return outbound
 
 
 def send_proactive_text(

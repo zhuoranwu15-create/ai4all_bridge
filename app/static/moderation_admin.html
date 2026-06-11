@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>内容审核后台 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    body { padding: 18px; background: #f4f6f8; }
+    .moderation-shell { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 14px; align-items: start; }
+    .moderation-panel { background: #fff; border: 1px solid #e1e7ef; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 2px rgba(15, 23, 42, .05); }
+    .moderation-panel-head { padding: 14px 16px; border-bottom: 1px solid #e8eef5; display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .moderation-panel-head h2 { margin: 0 0 4px; color: #111827; font-size: .98rem; }
+    .moderation-panel-head p { color: #6b7280; font-size: .78rem; line-height: 1.45; }
+    .moderation-panel-body { padding: 14px; }
+    .queue-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .queue-tab { justify-content: center; border-color: #d8e0ea; color: #374151; background: #fff; min-height: 34px; }
+    .queue-tab.active { background: #111827; border-color: #111827; color: #fff; }
+    .filter-grid { display: grid; grid-template-columns: repeat(5, minmax(120px, 1fr)); gap: 10px; margin-bottom: 12px; }
+    .task-list { display: grid; gap: 8px; max-height: calc(100vh - 350px); min-height: 300px; overflow: auto; padding-right: 2px; }
+    .task-row { width: 100%; display: grid; gap: 6px; text-align: left; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 11px; background: #fff; color: #111827; }
+    .task-row:hover { background: #f8fbff; border-color: #bfdbfe; }
+    .task-row.active { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37, 99, 235, .12); }
+    .task-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .task-row-title { font-weight: 700; font-size: .86rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .task-row-meta { color: #6b7280; font-size: .76rem; line-height: 1.45; word-break: break-word; }
+    .risk-review { border-color: #fde68a; background: #fffbeb; color: #92400e; }
+    .risk-block { border-color: #fecaca; background: #fef2f2; color: #b91c1c; }
+    .risk-escalate { border-color: #ddd6fe; background: #f5f3ff; color: #6d28d9; }
+    .risk-pass { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
+    .risk-unknown { border-color: #d1d5db; background: #f9fafb; color: #4b5563; }
+    .detail-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(320px, .85fr); gap: 14px; }
+    .detail-section { border: 1px solid #e6edf5; border-radius: 8px; background: #fcfdff; padding: 13px; margin-bottom: 12px; }
+    .detail-section h3 { font-size: .88rem; margin-bottom: 9px; color: #111827; }
+    .kv-grid { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 7px 10px; font-size: .84rem; }
+    .kv-grid span:nth-child(odd) { color: #6b7280; }
+    .snapshot-box { white-space: pre-wrap; word-break: break-word; border: 1px solid #dce4ef; border-radius: 8px; background: #fff; padding: 12px; line-height: 1.55; min-height: 96px; font-size: .92rem; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { display: inline-flex; align-items: center; min-height: 23px; border: 1px solid #d1d5db; border-radius: 999px; padding: 2px 8px; font-size: .74rem; color: #374151; background: #fff; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .decision-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+    .admin-only { display: none; }
+    .is-admin .admin-only { display: block; }
+    .is-admin .admin-only.inline { display: inline-flex; }
+    .table-scroll { overflow: auto; max-height: 260px; border: 1px solid #edf2f7; border-radius: 8px; }
+    .table-scroll table th { position: sticky; top: 0; z-index: 1; }
+    .empty-state { padding: 30px 12px; color: #6b7280; text-align: center; font-size: .9rem; }
+    .toast { position: fixed; right: 18px; bottom: 18px; max-width: 460px; background: #111827; color: #fff; border-radius: 8px; padding: 10px 13px; line-height: 1.45; display: none; z-index: 20; }
+    .toast.show { display: block; }
+    .danger-zone { border-color: #fecaca; background: #fff7f7; }
+    .textarea-small { min-height: 72px; }
+    @media (max-width: 1100px) {
+      .moderation-shell, .detail-layout { grid-template-columns: 1fr; }
+      .task-list { max-height: none; }
+      .filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .queue-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 640px) {
+      body { padding: 12px; }
+      .filter-grid, .decision-grid { grid-template-columns: 1fr; }
+      .kv-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>内容审核后台</h1>
+      <p class="page-subtitle">审核队列、人工结论、管理员处置和导出材料。列表默认不展示正文，打开详情会记录明文访问审计。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <section class="metric-grid" aria-label="审核概览">
+    <div class="metric-tile">
+      <span class="metric-label">待处理</span>
+      <strong id="metric-review">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">总任务</span>
+      <strong id="metric-total">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">已通过</span>
+      <strong id="metric-passed">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">高风险</span>
+      <strong id="metric-risk">—</strong>
+    </div>
+  </section>
+
+  <main id="pageRoot" class="moderation-shell">
+    <section class="moderation-panel">
+      <div class="moderation-panel-head">
+        <div>
+          <h2>队列</h2>
+          <p>按状态和风险层级筛选。点击任务打开详情。</p>
+        </div>
+        <button onclick="refreshAll()">刷新</button>
+      </div>
+      <div class="moderation-panel-body">
+        <div class="queue-tabs">
+          <button id="tab-needs_review" class="queue-tab active" onclick="switchQueue('needs_review')">待复核</button>
+          <button id="tab-high_risk" class="queue-tab" onclick="switchQueue('high_risk')">高风险/阻断</button>
+          <button id="tab-reviewing" class="queue-tab" onclick="switchQueue('reviewing')">处理中</button>
+          <button id="tab-closed" class="queue-tab" onclick="switchQueue('closed')">已完成</button>
+          <button id="tab-all" class="queue-tab" onclick="switchQueue('all')">全部</button>
+        </div>
+
+        <div class="filter-grid">
+          <div>
+            <label for="accountFilter">账号</label>
+            <input id="accountFilter" type="text" class="mono-input" placeholder="account_id">
+          </div>
+          <div>
+            <label for="riskFilter">风险</label>
+            <select id="riskFilter">
+              <option value="">全部</option>
+              <option value="review">review</option>
+              <option value="block">block</option>
+              <option value="escalate">escalate</option>
+              <option value="pass">pass</option>
+            </select>
+          </div>
+          <div>
+            <label for="directionFilter">方向</label>
+            <select id="directionFilter">
+              <option value="">全部</option>
+              <option value="inbound">inbound</option>
+              <option value="outbound">outbound</option>
+              <option value="internal">internal</option>
+            </select>
+          </div>
+          <div>
+            <label for="kindFilter">类型</label>
+            <select id="kindFilter">
+              <option value="">全部</option>
+              <option value="text">text</option>
+              <option value="image">image</option>
+              <option value="voice_transcript">voice_transcript</option>
+              <option value="memory">memory</option>
+            </select>
+          </div>
+          <div>
+            <label for="limitFilter">数量</label>
+            <input id="limitFilter" type="number" min="1" max="500" value="50">
+          </div>
+        </div>
+
+        <div class="toolbar" style="margin-bottom:12px">
+          <button class="primary" onclick="loadTasks()">应用筛选</button>
+          <button onclick="resetFilters()">清空筛选</button>
+          <span id="listStatus" class="status-msg"></span>
+        </div>
+
+        <div id="taskList" class="task-list">
+          <div class="empty-state">加载中...</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="moderation-panel">
+      <div class="moderation-panel-head">
+        <div>
+          <h2>详情与处理</h2>
+          <p id="detailSubtitle">选择左侧任务查看原文、规则命中和操作记录。</p>
+        </div>
+        <div class="toolbar">
+          <button id="claimBtn" onclick="claimSelected()" disabled>领取</button>
+          <button class="admin-only inline" id="exportBtn" onclick="exportSelected()" disabled>导出</button>
+        </div>
+      </div>
+      <div id="detailBody" class="moderation-panel-body">
+        <div class="empty-state">尚未选择任务</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="admin.js"></script>
+  <script>
+    var state = {
+      role: '',
+      queue: 'needs_review',
+      tasks: [],
+      selectedTaskId: '',
+      selectedDetail: null
+    };
+
+    var doneStatuses = ['approved', 'false_positive', 'exported', 'closed'];
+
+    init();
+
+    async function init() {
+      try {
+        var user = await loadAdminMe();
+        state.role = user && user.role || '';
+        if (state.role === 'admin') document.getElementById('pageRoot').classList.add('is-admin');
+        await Promise.all([loadStats(), loadPolicy(), loadTasks()]);
+      } catch (e) {
+        renderError('初始化失败: ' + e.message);
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all([loadStats(), loadTasks()]);
+      if (state.selectedTaskId) {
+        await openTask(state.selectedTaskId);
+      }
+    }
+
+    async function loadPolicy() {
+      try {
+        var data = await apiFetch('/admin/moderation/policy');
+        var subtitle = '规则开启: ' + (data.moderation_enabled ? '是' : '否')
+          + ' · 同步拦截: ' + (data.sync_guard_enabled ? '是' : '否')
+          + ' · LLM: ' + (data.llm_enabled ? '开启' : '关闭');
+        document.getElementById('detailSubtitle').textContent = subtitle;
+      } catch (e) {
+        document.getElementById('detailSubtitle').textContent = '策略信息读取失败';
+      }
+    }
+
+    async function loadStats() {
+      try {
+        var account = document.getElementById('accountFilter').value.trim();
+        var path = '/admin/moderation/stats' + (account ? '?account_id=' + encodeURIComponent(account) : '');
+        var data = await apiFetch(path);
+        var stats = data.stats || {};
+        var byStatus = stats.by_status || {};
+        var byRisk = stats.by_risk_level || {};
+        document.getElementById('metric-review').textContent = stats.review_queue_count == null ? '—' : stats.review_queue_count;
+        document.getElementById('metric-total').textContent = stats.total == null ? '—' : stats.total;
+        document.getElementById('metric-passed').textContent = byStatus.machine_passed || 0;
+        document.getElementById('metric-risk').textContent = (byRisk.block || 0) + (byRisk.escalate || 0);
+      } catch (e) {
+        document.getElementById('metric-review').textContent = '!';
+      }
+    }
+
+    function switchQueue(queue) {
+      state.queue = queue;
+      ['needs_review', 'high_risk', 'reviewing', 'closed', 'all'].forEach(function(name) {
+        document.getElementById('tab-' + name).classList.toggle('active', name === queue);
+      });
+      loadTasks();
+    }
+
+    function buildTaskQuery() {
+      var params = [];
+      var account = document.getElementById('accountFilter').value.trim();
+      var risk = document.getElementById('riskFilter').value;
+      var direction = document.getElementById('directionFilter').value;
+      var kind = document.getElementById('kindFilter').value;
+      var limit = Math.max(1, Math.min(500, Number(document.getElementById('limitFilter').value || 50)));
+      if (account) params.push('account_id=' + encodeURIComponent(account));
+      if (direction) params.push('direction=' + encodeURIComponent(direction));
+      if (kind) params.push('content_kind=' + encodeURIComponent(kind));
+      if (state.queue === 'needs_review') params.push('status=needs_review');
+      if (state.queue === 'reviewing') params.push('status=reviewing');
+      if (risk) {
+        params.push('risk_level=' + encodeURIComponent(risk));
+      }
+      if (state.queue !== 'closed') params.push('limit=' + limit);
+      return params.join('&');
+    }
+
+    async function loadTasks() {
+      var el = document.getElementById('taskList');
+      var statusEl = document.getElementById('listStatus');
+      statusEl.textContent = '加载中...';
+      try {
+        if (state.queue === 'closed') {
+          state.tasks = await loadDoneTasks();
+        } else if (state.queue === 'high_risk') {
+          state.tasks = await loadHighRiskTasks();
+        } else {
+          var query = buildTaskQuery();
+          var data = await apiFetch('/admin/moderation/tasks' + (query ? '?' + query : ''));
+          state.tasks = data.tasks || [];
+        }
+        renderTaskList();
+        statusEl.textContent = '已加载 ' + state.tasks.length + ' 条';
+        statusEl.className = 'status-msg success';
+        setTimeout(function() { statusEl.textContent = ''; }, 1800);
+      } catch (e) {
+        el.innerHTML = '<div class="empty-state status-msg error">' + esc(e.message) + '</div>';
+        statusEl.textContent = '加载失败';
+        statusEl.className = 'status-msg error';
+      }
+    }
+
+    async function loadHighRiskTasks() {
+      var limit = Math.max(1, Math.min(500, Number(document.getElementById('limitFilter').value || 50)));
+      var account = document.getElementById('accountFilter').value.trim();
+      var direction = document.getElementById('directionFilter').value;
+      var kind = document.getElementById('kindFilter').value;
+      var risk = document.getElementById('riskFilter').value;
+      var queries = [];
+      var all = [];
+
+      ['block', 'escalate'].forEach(function(level) {
+        if (!risk || risk === level) {
+          ['needs_review', 'reviewing'].forEach(function(status) {
+            queries.push({ status: status, risk_level: level });
+          });
+        }
+      });
+      ['risk_confirmed', 'blocked', 'escalated'].forEach(function(status) {
+        queries.push({ status: status, risk_level: risk || '' });
+      });
+
+      for (var i = 0; i < queries.length; i++) {
+        var q = queries[i];
+        var params = ['status=' + encodeURIComponent(q.status), 'limit=' + Math.ceil(limit / queries.length + 8)];
+        if (q.risk_level) params.push('risk_level=' + encodeURIComponent(q.risk_level));
+        if (account) params.push('account_id=' + encodeURIComponent(account));
+        if (direction) params.push('direction=' + encodeURIComponent(direction));
+        if (kind) params.push('content_kind=' + encodeURIComponent(kind));
+        var data = await apiFetch('/admin/moderation/tasks?' + params.join('&'));
+        all = all.concat(data.tasks || []);
+      }
+      return sortAndLimitTasks(uniqueTasks(all), limit);
+    }
+
+    async function loadDoneTasks() {
+      var limit = Math.max(1, Math.min(500, Number(document.getElementById('limitFilter').value || 50)));
+      var account = document.getElementById('accountFilter').value.trim();
+      var risk = document.getElementById('riskFilter').value;
+      var direction = document.getElementById('directionFilter').value;
+      var kind = document.getElementById('kindFilter').value;
+      var all = [];
+      for (var i = 0; i < doneStatuses.length; i++) {
+        var params = ['status=' + doneStatuses[i], 'limit=' + Math.ceil(limit / doneStatuses.length + 5)];
+        if (account) params.push('account_id=' + encodeURIComponent(account));
+        if (risk) params.push('risk_level=' + encodeURIComponent(risk));
+        if (direction) params.push('direction=' + encodeURIComponent(direction));
+        if (kind) params.push('content_kind=' + encodeURIComponent(kind));
+        var data = await apiFetch('/admin/moderation/tasks?' + params.join('&'));
+        all = all.concat(data.tasks || []);
+      }
+      return sortAndLimitTasks(uniqueTasks(all), limit);
+    }
+
+    function uniqueTasks(tasks) {
+      var seen = {};
+      var unique = [];
+      tasks.forEach(function(task) {
+        if (!task || !task.id || seen[task.id]) return;
+        seen[task.id] = true;
+        unique.push(task);
+      });
+      return unique;
+    }
+
+    function sortAndLimitTasks(tasks, limit) {
+      tasks.sort(function(a, b) { return String(b.created_at || '').localeCompare(String(a.created_at || '')); });
+      return tasks.slice(0, limit);
+    }
+
+    function renderTaskList() {
+      var el = document.getElementById('taskList');
+      if (!state.tasks.length) {
+        el.innerHTML = '<div class="empty-state">当前筛选下没有任务</div>';
+        return;
+      }
+      el.innerHTML = state.tasks.map(function(task) {
+        var riskClass = 'risk-' + esc(task.risk_level || 'unknown');
+        var active = task.id === state.selectedTaskId ? ' active' : '';
+        var assigned = task.assigned_admin_user_id ? ' · ' + task.assigned_admin_user_id : '';
+        return '<button class="task-row' + active + '" onclick="openTask(\'' + esc(task.id) + '\')">'
+          + '<div class="task-row-top">'
+          + '<span class="task-row-title mono">' + esc(task.id) + '</span>'
+          + '<span class="status-pill ' + riskClass + '">' + esc(task.risk_level || 'unknown') + '</span>'
+          + '</div>'
+          + '<div class="task-row-meta">' + esc(task.direction || '-') + ' / ' + esc(task.content_kind || '-') + ' · ' + esc(task.status || '-') + assigned + '</div>'
+          + '<div class="task-row-meta mono">' + esc(task.account_id || '-') + '</div>'
+          + '<div class="task-row-meta">' + esc(formatDateTime(task.created_at)) + ' · ' + esc((task.risk_categories || []).join(', ') || 'no categories') + '</div>'
+          + '</button>';
+      }).join('');
+    }
+
+    async function openTask(taskId) {
+      state.selectedTaskId = taskId;
+      renderTaskList();
+      setDetailLoading();
+      try {
+        var data = await apiFetch('/admin/moderation/tasks/' + encodeURIComponent(taskId) + '?reason=moderation-admin-ui');
+        state.selectedDetail = data;
+        renderDetail(data);
+      } catch (e) {
+        document.getElementById('detailBody').innerHTML = '<div class="empty-state status-msg error">' + esc(e.message) + '</div>';
+      }
+    }
+
+    function setDetailLoading() {
+      document.getElementById('detailBody').innerHTML = '<div class="empty-state">加载详情...</div>';
+      document.getElementById('claimBtn').disabled = true;
+      document.getElementById('exportBtn').disabled = true;
+    }
+
+    function renderDetail(data) {
+      var task = data.task || {};
+      var canClaim = ['needs_review', 'blocked', 'escalated'].indexOf(task.status) >= 0
+        || (task.status === 'reviewing' && !task.assigned_admin_user_id);
+      var canExport = state.role === 'admin' && task.id;
+      document.getElementById('claimBtn').disabled = !canClaim;
+      document.getElementById('exportBtn').disabled = !canExport;
+
+      var results = data.results || [];
+      var actions = data.actions || [];
+      var categories = task.risk_categories || [];
+      var matches = [];
+      results.forEach(function(result) {
+        (result.matched_terms || []).forEach(function(term) { matches.push(term); });
+      });
+
+      document.getElementById('detailBody').innerHTML =
+        '<div class="detail-layout">'
+          + '<div>'
+            + '<section class="detail-section">'
+              + '<h3>内容快照</h3>'
+              + '<div class="snapshot-box">' + esc(task.snapshot_text || '') + '</div>'
+            + '</section>'
+            + '<section class="detail-section">'
+              + '<h3>人工结论</h3>'
+              + renderDecisionForm(task, categories)
+            + '</section>'
+            + '<section class="detail-section admin-only danger-zone">'
+              + '<h3>管理员处置</h3>'
+              + renderAdminActions()
+            + '</section>'
+          + '</div>'
+          + '<div>'
+            + '<section class="detail-section">'
+              + '<h3>任务信息</h3>'
+              + renderTaskMeta(task)
+            + '</section>'
+            + '<section class="detail-section">'
+              + '<h3>命中规则</h3>'
+              + renderMatchedTerms(matches)
+            + '</section>'
+            + '<section class="detail-section">'
+              + '<h3>机器结果</h3>'
+              + renderResults(results)
+            + '</section>'
+            + '<section class="detail-section">'
+              + '<h3>操作记录</h3>'
+              + renderActions(actions)
+            + '</section>'
+          + '</div>'
+        + '</div>';
+      if (state.role === 'admin') document.getElementById('pageRoot').classList.add('is-admin');
+    }
+
+    function renderTaskMeta(task) {
+      return '<div class="kv-grid">'
+        + kv('Task ID', task.id)
+        + kv('Account', task.account_id)
+        + kv('状态', task.status)
+        + kv('风险等级', task.risk_level)
+        + kv('方向/类型', [task.direction, task.content_kind].filter(Boolean).join(' / '))
+        + kv('Source', [task.source_type, task.source_id].filter(Boolean).join(':'))
+        + kv('Message DB ID', task.message_db_id)
+        + kv('Assigned', task.assigned_admin_user_id || '—')
+        + kv('Reviewed By', task.reviewed_by_admin_user_id || '—')
+        + kv('创建时间', formatDateTime(task.created_at))
+        + kv('分类', (task.risk_categories || []).join(', ') || '—')
+        + '</div>';
+    }
+
+    function renderDecisionForm(task, categories) {
+      return '<div class="decision-grid">'
+        + '<div class="form-row">'
+          + '<label for="decisionSelect">结论</label>'
+          + '<select id="decisionSelect">'
+            + '<option value="approved">人工通过</option>'
+            + '<option value="false_positive">误报</option>'
+            + '<option value="risk_confirmed">确认风险</option>'
+            + '<option value="escalated">升级 admin</option>'
+            + '<option value="closed">关闭</option>'
+          + '</select>'
+        + '</div>'
+        + '<div class="form-row">'
+          + '<label for="categoryInput">风险分类，逗号分隔</label>'
+          + '<input id="categoryInput" type="text" value="' + esc(categories.join(', ')) + '">'
+        + '</div>'
+        + '</div>'
+        + '<div class="form-row">'
+          + '<label for="decisionReason">备注</label>'
+          + '<textarea id="decisionReason" class="textarea-small" placeholder="填写人工审核备注"></textarea>'
+        + '</div>'
+        + '<div class="toolbar">'
+          + '<button class="primary" onclick="submitDecision()">提交结论</button>'
+          + '<span class="card-note">提交前需要先领取任务。</span>'
+        + '</div>';
+    }
+
+    function renderAdminActions() {
+      return '<div class="decision-grid">'
+        + '<div class="form-row">'
+          + '<label for="actionSelect">处置动作</label>'
+          + '<select id="actionSelect">'
+            + '<option value="restrict_proactive">限制主动消息</option>'
+            + '<option value="disable_account">禁用账号</option>'
+            + '<option value="block">标记 blocked</option>'
+            + '<option value="close">关闭任务</option>'
+          + '</select>'
+        + '</div>'
+        + '<div class="form-row">'
+          + '<label for="proactiveUntil">主动消息限制到</label>'
+          + '<input id="proactiveUntil" type="text" placeholder="YYYY-MM-DD HH:MM:SS，可留空默认 1 天">'
+        + '</div>'
+        + '</div>'
+        + '<div class="form-row">'
+          + '<label for="actionReason">处置原因</label>'
+          + '<textarea id="actionReason" class="textarea-small" placeholder="管理员处置原因"></textarea>'
+        + '</div>'
+        + '<div class="toolbar">'
+          + '<button class="danger" onclick="applyAdminAction()">执行处置</button>'
+        + '</div>';
+    }
+
+    function renderMatchedTerms(matches) {
+      if (!matches.length) return '<div class="empty-note">没有规则命中记录</div>';
+      return '<div class="chips">' + matches.map(function(term) {
+        return '<span class="chip">' + esc(term.id || 'term') + ' · ' + esc(term.level || '') + '</span>';
+      }).join('') + '</div>';
+    }
+
+    function renderResults(results) {
+      if (!results.length) return '<div class="empty-note">暂无机器结果</div>';
+      var rows = results.map(function(result) {
+        return '<tr>'
+          + '<td>' + esc(result.reviewer_type || '') + '</td>'
+          + '<td>' + esc(result.result_level || '') + '</td>'
+          + '<td class="wrap">' + esc((result.categories || []).join(', ')) + '</td>'
+          + '<td class="wrap">' + esc(result.reason || result.error || '') + '</td>'
+          + '<td>' + esc(formatDateTime(result.created_at)) + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<div class="table-scroll"><table><thead><tr><th>类型</th><th>结果</th><th>分类</th><th>理由</th><th>时间</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+
+    function renderActions(actions) {
+      if (!actions.length) return '<div class="empty-note">暂无人工操作</div>';
+      var rows = actions.map(function(action) {
+        return '<tr>'
+          + '<td>' + esc(action.action || '') + '</td>'
+          + '<td>' + esc(action.admin_user_id || '') + '</td>'
+          + '<td>' + esc((action.previous_status || '') + ' -> ' + (action.next_status || '')) + '</td>'
+          + '<td class="wrap">' + esc(action.reason || '') + '</td>'
+          + '<td>' + esc(formatDateTime(action.created_at)) + '</td>'
+          + '</tr>';
+      }).join('');
+      return '<div class="table-scroll"><table><thead><tr><th>动作</th><th>操作人</th><th>状态</th><th>原因</th><th>时间</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+
+    async function claimSelected() {
+      if (!state.selectedTaskId) return;
+      try {
+        await apiFetch('/admin/moderation/tasks/' + encodeURIComponent(state.selectedTaskId) + '/claim', { method: 'POST' });
+        toast('已领取任务');
+        await refreshAll();
+      } catch (e) {
+        toast('领取失败: ' + e.message);
+      }
+    }
+
+    async function submitDecision() {
+      if (!state.selectedTaskId) return;
+      var decision = document.getElementById('decisionSelect').value;
+      var categories = splitCsv(document.getElementById('categoryInput').value);
+      var reason = document.getElementById('decisionReason').value.trim();
+      try {
+        await apiFetch('/admin/moderation/tasks/' + encodeURIComponent(state.selectedTaskId) + '/decision', {
+          method: 'POST',
+          body: JSON.stringify({
+            decision: decision,
+            risk_categories: categories,
+            reason: reason
+          })
+        });
+        toast('结论已提交');
+        await refreshAll();
+      } catch (e) {
+        toast('提交失败: ' + e.message);
+      }
+    }
+
+    async function applyAdminAction() {
+      if (!state.selectedTaskId) return;
+      var action = document.getElementById('actionSelect').value;
+      var reason = document.getElementById('actionReason').value.trim();
+      var until = document.getElementById('proactiveUntil').value.trim();
+      if (!reason) {
+        toast('请填写处置原因');
+        return;
+      }
+      try {
+        await apiFetch('/admin/moderation/tasks/' + encodeURIComponent(state.selectedTaskId) + '/actions', {
+          method: 'POST',
+          body: JSON.stringify({
+            action: action,
+            reason: reason,
+            proactive_blocked_until: until || null
+          })
+        });
+        toast('处置已执行');
+        await refreshAll();
+      } catch (e) {
+        toast('处置失败: ' + e.message);
+      }
+    }
+
+    async function exportSelected() {
+      if (!state.selectedTaskId) return;
+      var reason = prompt('导出原因');
+      if (!reason || !reason.trim()) return;
+      try {
+        var data = await apiFetch('/admin/moderation/tasks/' + encodeURIComponent(state.selectedTaskId) + '/export', {
+          method: 'POST',
+          body: JSON.stringify({ reason: reason.trim() })
+        });
+        toast('已导出: ' + data.export.id);
+        await refreshAll();
+      } catch (e) {
+        toast('导出失败: ' + e.message);
+      }
+    }
+
+    function resetFilters() {
+      document.getElementById('accountFilter').value = '';
+      document.getElementById('riskFilter').value = '';
+      document.getElementById('directionFilter').value = '';
+      document.getElementById('kindFilter').value = '';
+      document.getElementById('limitFilter').value = '50';
+      loadStats();
+      loadTasks();
+    }
+
+    function splitCsv(value) {
+      return String(value || '').split(',').map(function(item) { return item.trim(); }).filter(Boolean);
+    }
+
+    function kv(label, value) {
+      return '<span>' + esc(label) + '</span><span class="mono wrap">' + esc(value == null || value === '' ? '—' : value) + '</span>';
+    }
+
+    function renderError(message) {
+      document.getElementById('taskList').innerHTML = '<div class="empty-state status-msg error">' + esc(message) + '</div>';
+    }
+
+    function toast(message) {
+      var el = document.getElementById('toast');
+      el.textContent = message;
+      el.className = 'toast show';
+      setTimeout(function() { el.className = 'toast'; }, 3200);
+    }
+  </script>
+</body>
+</html>

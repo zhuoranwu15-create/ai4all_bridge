@@ -7,6 +7,11 @@ __pycache__/
 *.py[cod]
 .DS_Store
 data/
+!data/
+data/*
+!data/moderation/
+data/moderation/*
+!data/moderation/sensitive_terms.json
 ai4all.db
 *.swp
 # nearline 分析产物：facts/marts 库与生成日报均为运行时数据（facts 走 backup_data.py，marts 可重建）

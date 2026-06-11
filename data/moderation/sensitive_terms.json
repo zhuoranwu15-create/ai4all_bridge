@@ -1,0 +1,95 @@
+{
+  "version": "test_terms_v2",
+  "terms": [
+    {
+      "id": "test_block",
+      "term": "MODERATION_TEST_BLOCK",
+      "level": "block",
+      "categories": ["test_block"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "test_review",
+      "term": "MODERATION_TEST_REVIEW",
+      "level": "review",
+      "categories": ["test_review"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "test_escalate",
+      "term": "MODERATION_TEST_ESCALATE",
+      "level": "escalate",
+      "categories": ["test_escalate"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_review_nude_chat",
+      "term": "裸聊",
+      "level": "review",
+      "categories": ["sexual_content"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_review_hookup",
+      "term": "约炮",
+      "level": "review",
+      "categories": ["sexual_content"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_review_erotic_image",
+      "term": "涩图",
+      "level": "review",
+      "categories": ["sexual_content"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_block_vulgar_genital",
+      "term": "鸡巴",
+      "level": "block",
+      "categories": ["sexual_content", "vulgar_explicit"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_block_oral_sex",
+      "term": "口交",
+      "level": "block",
+      "categories": ["sexual_content", "explicit_sexual_act"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_escalate_minor",
+      "term": "未成年口交",
+      "level": "escalate",
+      "categories": ["sexual_content", "minor_safety"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    },
+    {
+      "id": "sexual_escalate_minor_nude_chat",
+      "term": "未成年裸聊",
+      "level": "escalate",
+      "categories": ["sexual_content", "minor_safety"],
+      "match_type": "contains",
+      "scopes": ["inbound", "outbound", "internal"],
+      "enabled": true
+    }
+  ]
+}

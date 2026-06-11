@@ -32,6 +32,11 @@ from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools
 from app.memory_writer import write_memory
+from app.moderation.sensitive_words import check_sync_guard
+from app.moderation.service import (
+    create_sync_block_task,
+    enqueue_message_for_moderation,
+)
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.proactive.state import ensure_account_state
@@ -654,6 +659,31 @@ def handle_openclaw_turn(
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
+    try:
+        inbound_content_kind = "voice_transcript" if payload.message_type == "voice" else payload.message_type
+        enqueue_message_for_moderation(
+            message_db_id=int(inserted_id),
+            account_id=account_id,
+            session_id=int(session["id"]),
+            direction="inbound",
+            content_kind=inbound_content_kind,
+            text=text,
+            media=payload.media,
+            source_message_id=message_id,
+            metadata={
+                "message_type": payload.message_type,
+                "image_described": image_described,
+                "image_understanding_failed": image_understanding_failed,
+            },
+        )
+    except Exception as err:
+        logger.exception(
+            "inbound moderation enqueue failed account=%s message_db_id=%s error=%s",
+            account_id,
+            inserted_id,
+            err,
+        )
+
     # VL 成功后记一次独立的图片理解成本事件（固定贝壳，带总开关，与 chat 扣费相互独立）。
     if image_described:
         try:
@@ -822,7 +852,51 @@ def handle_openclaw_turn(
     )
 
     reply_message_id = f"reply-{uuid.uuid4()}"
+    moderation_reply_metadata: Dict[str, Any] = {}
+    sync_decision = check_sync_guard(
+        account_id=account_id,
+        text=reply,
+        direction="outbound",
+        content_kind="text",
+        source_type="generated_reply",
+        source_id=reply_message_id,
+    )
+    if not sync_decision.allowed:
+        original_reply = reply
+        try:
+            blocked_task = create_sync_block_task(
+                account_id=account_id,
+                session_id=int(session["id"]),
+                source_type="generated_reply",
+                source_id=reply_message_id,
+                direction="outbound",
+                content_kind="text",
+                text=original_reply,
+                decision=sync_decision,
+                metadata={
+                    "reply_to_message_id": message_id,
+                    "message_db_id": inserted_id,
+                },
+            )
+        except Exception as err:
+            logger.exception(
+                "sync moderation block task failed account=%s reply_message_id=%s error=%s",
+                account_id,
+                reply_message_id,
+                err,
+            )
+            blocked_task = None
+        reply = str(getattr(settings, "moderation_safe_fallback_text", "") or "这条内容我不能继续发送，我们换个安全的话题吧。")
+        moderation_reply_metadata = {
+            "moderation_blocked": True,
+            "moderation_task_id": blocked_task.get("id") if blocked_task else None,
+            "moderation_risk_level": sync_decision.level,
+            "moderation_categories": sync_decision.categories,
+        }
+        debug_metadata.update(moderation_reply_metadata)
+
     trace_id = None
+    outbound_inserted_id = None
     with db_connect() as conn:
         if debug_trace_enabled:
             trace_id = f"trace-{uuid.uuid4()}"
@@ -842,7 +916,12 @@ def handle_openclaw_turn(
                 conn=conn,
             )
 
-        insert_message(
+        outbound_raw_extra = {
+            "message_id": reply_message_id,
+            "reply_to_message_id": message_id,
+        }
+        outbound_raw_extra.update(moderation_reply_metadata)
+        outbound_inserted_id = insert_message(
             account_id=account_id,
             session_id=session["id"],
             message_id=reply_message_id,
@@ -856,10 +935,7 @@ def handle_openclaw_turn(
                 identity=identity,
                 account_id=account_id,
                 binding=binding,
-                extra={
-                    "message_id": reply_message_id,
-                    "reply_to_message_id": message_id,
-                },
+                extra=outbound_raw_extra,
             ),
             latency_ms=latency_ms,
             error=generation_error,
@@ -879,6 +955,31 @@ def handle_openclaw_turn(
             len(llm_messages),
             len(system_prompt or ""),
         )
+
+    # 已被同步红线拦截的回复，原文已由 create_sync_block_task 记录成审核任务；
+    # 此时 reply 只是安全兜底文案，无需再为它创建一条 machine_passed 任务，避免队列里同一条回复出现两个 task。
+    if outbound_inserted_id is not None and not moderation_reply_metadata.get("moderation_blocked"):
+        try:
+            enqueue_message_for_moderation(
+                message_db_id=int(outbound_inserted_id),
+                account_id=account_id,
+                session_id=int(session["id"]),
+                direction="outbound",
+                content_kind="text",
+                text=reply,
+                media=None,
+                source_message_id=reply_message_id,
+                metadata={
+                    "reply_to_message_id": message_id,
+                },
+            )
+        except Exception as err:
+            logger.exception(
+                "outbound moderation enqueue failed account=%s message_db_id=%s error=%s",
+                account_id,
+                outbound_inserted_id,
+                err,
+            )
 
     billing_result = None
     if not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS:

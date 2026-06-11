@@ -1,6 +1,6 @@
 # 内容审核与人工复核技术设计
 
-更新时间：2026-06-09
+更新时间：2026-06-11
 
 本文承接 [内容审核与人工复核 PRD](../product/content_moderation_prd.md)，定义文本、图片、语音转写文本、AI 出站回复、主动消息和记忆产物的审核技术方案。
 
@@ -19,15 +19,26 @@
 - Admin/Debug 视图已有脱敏和明文审计基础，详见 [隐私与后台访问控制技术设计](privacy_admin_access_control_design.md)。
 - Dreaming 已有 `dreaming_runs`、`dreaming_memory_items`、`memory_events`。
 
-主要缺口：
+第一阶段已落地能力：
 
-- 无统一 moderation task 表。
-- 无同步出站红线拦截。
-- 无独立审核模型调用。
-- 无敏感词/规则引擎和可配置抽检策略。
-- 无 reviewer 角色和审核队列 API。
-- 无人工处置、导出材料和审核专用审计流。
-- 图片理解结果会进入文本历史，但图片本体/媒体引用尚未进入审核任务。
+- `app/db.py` 已增加审核任务、机器结果、人工操作、导出记录和账号风险状态的 schema 与 helper。
+- `app/moderation/` 已包含 `models.py`、`policy.py`、`sensitive_words.py`、`service.py`、`worker.py`、`llm_review.py`、`image_review.py`、`export.py`。
+- `data/moderation/sensitive_terms.json` 已接入测试敏感词，用于验证 `review/block/escalate`。
+- `turn_service.py` 已在入站文本、同步出站回复创建审核任务；出站同步红线命中时使用安全兜底回复。
+- `app/proactive/messaging.py` 已接入主动消息出站审核和同步阻断。
+- `scripts/run_moderation_worker.py` 已提供独立 worker 入口。
+- `/admin/moderation/*` 已提供队列、详情、领取、人工结论、管理员处置、导出、统计和策略只读 API。
+- `ADMIN_REVIEWER_TOKEN` 已映射 reviewer 角色；reviewer 只能访问审核队列和详情处理能力。
+- `app/static/moderation_admin.html` 已提供第一版审核后台，入口在 `/ops/index.html` 和 `/ops/moderation_admin.html`。
+- 审核队列列表默认不返回 `snapshot_text`；详情、结论和导出写入 `admin_access_events`。
+
+第一阶段保留缺口：
+
+- 具体处置策略矩阵未定，当前只提供人工操作能力，不自动固化业务处置。
+- 外部审核 LLM 和图片安全模型默认关闭，生产 provider、价格和阈值待确认。
+- 记忆、daily notes、Dreaming item 的风险过滤和回滚入口后置。
+- 生产敏感词库、更新流程、灰度发布和误报回滚机制待确认。
+- 审核 SLA、保留周期、正式报告模板和法务口径待确认。
 
 ## 2. 设计目标
 
@@ -651,6 +662,20 @@ GET  /admin/moderation/policy
 PUT  /admin/moderation/policy
 ```
 
+第一阶段后台入口：
+
+```text
+http://127.0.0.1:8180/ops/moderation_admin.html
+```
+
+页面队列：
+
+- 待复核：`status=needs_review`。
+- 高风险/阻断：合并 `risk_level=block/escalate` 和 `risk_confirmed/blocked/escalated`。
+- 处理中：`status=reviewing`。
+- 已完成：`approved/false_positive/exported/closed`。
+- 全部：按筛选条件展示最新任务。
+
 权限：
 
 - `reviewer/admin`：tasks 列表、详情、claim、decision。
@@ -746,7 +771,7 @@ PUT  /admin/moderation/policy
 
 ## 17. 开发切分
 
-### Phase A：数据与规则基础
+### Phase A：数据与规则基础（第一阶段已完成）
 
 1. 增加 DB schema 和 `_ensure_column` 兼容迁移。
 2. 增加 `app/moderation/models.py`、`policy.py`、`sensitive_words.py`、`service.py`。
@@ -754,7 +779,7 @@ PUT  /admin/moderation/policy
 4. 增加入站/出站/proactive enqueue，先只写任务和规则结果。
 5. 增加同步出站规则拦截。
 
-### Phase B：Worker 与 LLM
+### Phase B：Worker 与 LLM（第一阶段已搭建，生产默认关闭外部模型）
 
 1. 增加 worker claim 和重试。
 2. 增加独立审核 LLM client。
@@ -762,19 +787,35 @@ PUT  /admin/moderation/policy
 4. 写入 results 并更新 task 状态。
 5. 更新风险状态和主动消息限制能力。
 
-### Phase C：人工后台
+说明：
+
+- Worker 入口和 LLM/image wrapper 已具备，`MODERATION_LLM_ENABLED=false`、`MODERATION_IMAGE_SAFETY_ENABLED=false` 时不调用外部服务。
+- 当前可用本地规则和测试词验证队列、人工审核和同步阻断。
+- 生产 provider、模型、阈值和成本策略后续确认后再启用。
+
+### Phase C：人工后台（第一阶段已完成）
 
 1. 增加 reviewer 角色和 token 映射。
 2. 增加队列、详情、claim、decision API。
 3. 增加处置动作和审计。
 4. 增加导出材料。
 5. 增加基础统计 API。
+6. 增加静态审核后台页面 `/ops/moderation_admin.html`。
 
-### Phase D：记忆与 Dreaming
+### Phase D：记忆与 Dreaming（后置）
 
 1. daily note 风险标记和 prompt 装载过滤。
 2. Dreaming item 审核任务和 `apply_status='skipped'` 集成。
 3. 人工清理/rollback 入口。
+
+### Phase E：处置策略矩阵（后置）
+
+具体策略由产品/运营/合规确认后再开发或固化，包括：
+
+- `review/block/escalate` 到人工结论和管理员处置的映射。
+- 确认风险后是否自动限制主动消息、提高抽检、禁用账号或只记录。
+- 什么情况下导出材料、线下报告或要求二次复核。
+- 审核 SLA、保留周期、敏感词灰度和误报回滚流程。
 
 ## 18. 测试方案
 
@@ -817,6 +858,19 @@ PUT  /admin/moderation/policy
 - 修改 `turn_service`、`app.proactive.messaging`、DB schema 或 admin auth 后，运行 `tests/ -v`。
 
 ## 19. 验收点
+
+### 19.1 第一阶段已验收
+
+- 微信入站文本命中测试敏感词后创建审核任务，并进入对应风险队列。
+- 审核后台可以查看统计、队列、详情、命中规则、机器结果和操作记录。
+- 队列列表不返回正文，只返回元数据和正文长度。
+- 详情读取正文写入 `admin_access_events(plaintext=true)`。
+- reviewer/admin 可以领取任务并提交人工结论。
+- admin 可以执行限制主动消息、禁用账号、标记 blocked、关闭任务和单任务导出。
+- `/admin/moderation/stats`、`/admin/moderation/tasks`、`/admin/moderation/policy` 可正常返回。
+- `tests/test_moderation_admin.py -v` 已覆盖 reviewer/admin 权限、详情审计、结论、导出和处置动作。
+
+### 19.2 全量目标验收
 
 - 任一入站文本消息都有可查 moderation task，包含 `account_id`。
 - 任一入站图片消息都有图片审核 task，包含媒体引用和视觉描述文本。
