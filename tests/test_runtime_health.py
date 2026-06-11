@@ -127,6 +127,68 @@ def test_ops_metrics_counts_recent_message_and_outbound_errors(fresh_db):
     assert metrics["recent_errors"]["outbound_messages"][0]["error"] == "send failed"
 
 
+def test_account_water_level_counts_distinct_active(fresh_db):
+    from app.db import connect, get_account_water_level, upsert_channel_binding
+
+    # 三个账号建绑定（last_seen_at 默认刷成 now）；其中一个手动改成很旧的时间戳。
+    with connect() as conn:
+        for account_id in ("acc-a", "acc-b", "acc-c"):
+            conn.execute("INSERT INTO accounts(id) VALUES (?)", (account_id,))
+    for account_id in ("acc-a", "acc-b", "acc-c"):
+        upsert_channel_binding(
+            account_id=account_id,
+            channel="openclaw-weixin",
+            session_key=f"sess-{account_id}",
+            channel_account_id=None,
+            sender_id="sender",
+            chat_id="chat",
+        )
+    # acc-c 标记为很久没活跃 → 应跌出活跃窗口，但仍计入已绑定总数。
+    with connect() as conn:
+        conn.execute(
+            "UPDATE channel_bindings SET last_seen_at = '2000-01-01 00:00:00' WHERE account_id = ?",
+            ("acc-c",),
+        )
+
+    water_level = get_account_water_level(active_windows_minutes=(15,))
+
+    assert water_level["total_bound_accounts"] == 3
+    assert water_level["bound_accounts_by_channel"] == {"openclaw-weixin": 3}
+    assert water_level["active_accounts"]["15"] == 2
+
+
+def test_monitor_record_water_level_appends_snapshot(fresh_db, tmp_path):
+    import json
+
+    from app.db import connect, upsert_channel_binding
+    from scripts.monitor_health import _record_water_level
+
+    with connect() as conn:
+        conn.execute("INSERT INTO accounts(id) VALUES (?)", ("acc-water",))
+    upsert_channel_binding(
+        account_id="acc-water",
+        channel="openclaw-weixin",
+        session_key="sess-water",
+        channel_account_id=None,
+        sender_id="sender",
+        chat_id="chat",
+    )
+
+    record_file = tmp_path / "water_level.jsonl"
+    assert _record_water_level(str(record_file)) is None
+
+    lines = record_file.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
+    assert record["total_bound_accounts"] == 1
+    assert record["bound_accounts_by_channel"] == {"openclaw-weixin": 1}
+    assert "ts" in record and record["active_accounts"]["15"] == 1
+
+    # 再采一次 → 追加而非覆盖
+    assert _record_water_level(str(record_file)) is None
+    assert len(record_file.read_text(encoding="utf-8").splitlines()) == 2
+
+
 def test_admin_ops_status_endpoint(client):
     res = client.get("/admin/ops/status", headers={"Authorization": "Bearer test-admin"})
 
@@ -273,3 +335,82 @@ def test_monitor_openclaw_check_reports_probe_failure(monkeypatch):
     error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
 
     assert error == "openclaw status failed: gateway unreachable"
+
+
+def test_checkpoint_wal_truncates_after_writes(fresh_db):
+    from app.db import (
+        checkpoint_wal,
+        get_database_storage_stats,
+        record_scheduler_heartbeat,
+    )
+
+    # 产生若干 WAL 帧（不足以触发默认 autocheckpoint，-wal 会留存）
+    for i in range(5):
+        record_scheduler_heartbeat(service=f"svc-{i}", status="ok")
+
+    result = checkpoint_wal()
+
+    assert result["mode"] == "TRUNCATE"
+    assert result["busy"] == 0  # 无长读连接，应能完整 checkpoint
+    assert result["wal_bytes_after"] == 0  # TRUNCATE 后 -wal 被截断回 0
+    assert get_database_storage_stats()["journal_mode"].lower() == "wal"
+
+
+def test_monitor_wal_check_self_heals_before_alert(monkeypatch):
+    from scripts import monitor_health
+
+    monkeypatch.setattr(
+        monitor_health,
+        "get_database_storage_stats",
+        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
+    )
+    # checkpoint 成功把 -wal 截到阈值以下 → 不告警
+    monkeypatch.setattr(
+        monitor_health,
+        "checkpoint_wal",
+        lambda: {"busy": 0, "log_frames": 10, "checkpointed_frames": 10, "wal_bytes_after": 0},
+    )
+
+    assert monitor_health._check_wal_size(100) is None
+
+
+def test_monitor_wal_check_alerts_when_checkpoint_cannot_reclaim(monkeypatch):
+    from scripts import monitor_health
+
+    monkeypatch.setattr(
+        monitor_health,
+        "get_database_storage_stats",
+        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
+    )
+    # 读连接卡住：busy=1，-wal 没缩小 → 仍告警，并带上 checkpoint 诊断
+    monkeypatch.setattr(
+        monitor_health,
+        "checkpoint_wal",
+        lambda: {"busy": 1, "log_frames": 50, "checkpointed_frames": 0, "wal_bytes_after": 200},
+    )
+
+    error = monitor_health._check_wal_size(100)
+
+    assert error is not None
+    assert "too large" in error
+    assert "busy=1" in error
+
+
+def test_monitor_wal_check_skips_checkpoint_when_disabled(monkeypatch):
+    from scripts import monitor_health
+
+    monkeypatch.setattr(
+        monitor_health,
+        "get_database_storage_stats",
+        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
+    )
+
+    def fail():
+        raise AssertionError("checkpoint should not run when disabled")
+
+    monkeypatch.setattr(monitor_health, "checkpoint_wal", fail)
+
+    error = monitor_health._check_wal_size(100, checkpoint_on_bloat=False)
+
+    assert error is not None
+    assert "too large" in error

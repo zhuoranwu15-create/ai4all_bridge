@@ -367,7 +367,8 @@ def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(f
     assert get_reactivation_candidate(account_id="acc-react-ci-missing") is None
 
 
-def test_dispatch_reactivation_recent_inbound_reschedules_to_next_slot(fresh_db):
+def test_dispatch_reactivation_cancels_when_inbound_since_candidate(fresh_db):
+    """候选生成后用户又说过话 → 取消推送并清除候选（取代旧的改期逻辑）。"""
     from app.proactive.reactivation import (
         dispatch_reactivation_candidate,
         get_reactivation_candidate,
@@ -375,90 +376,163 @@ def test_dispatch_reactivation_recent_inbound_reschedules_to_next_slot(fresh_db)
     )
     from app.proactive.state import ensure_account_state
 
-    _create_account("acc-react-delay")
-    _create_route("acc-react-delay")
-    ensure_account_state(account_id="acc-react-delay")
-    _insert_inbound("acc-react-delay", created_at="2026-06-05 11:45:00")
+    _create_account("acc-react-cancel")
+    _create_route("acc-react-cancel")
+    ensure_account_state(account_id="acc-react-cancel")
+    # 候选生成于 11:00，用户 11:45 又有入站 → 12:15 发送时应取消
+    _insert_inbound("acc-react-cancel", created_at="2026-06-05 11:45:00")
     upsert_reactivation_candidate(
-        account_id="acc-react-delay",
+        account_id="acc-react-cancel",
         candidate={
-            "id": "react-delay-1",
+            "id": "react-cancel-1",
             "type": "topic_followup",
             "text": "昨晚小家伙睡得乖不乖？",
+            "generated_at": "2026-06-05 11:00:00",
             "scheduled_slot": "slot_1",
             "scheduled_at": "2026-06-05 12:15:00",
         },
     )
 
     result = dispatch_reactivation_candidate(
-        account_id="acc-react-delay",
+        account_id="acc-react-cancel",
         now=datetime(2026, 6, 5, 12, 15),
         dry_run=True,
     )
-    candidate = get_reactivation_candidate(account_id="acc-react-delay")
+    candidate = get_reactivation_candidate(account_id="acc-react-cancel")
 
-    assert result["action"] == "delayed"
-    assert result["reason"] == "recent_inbound"
-    assert candidate["scheduled_slot"] == "slot_2"
-    assert candidate["scheduled_at"] == "2026-06-05 18:15:00"
-    assert candidate["policy"]["last_reschedule_reason"] == "recent_inbound"
+    assert result["action"] == "no_op"
+    assert result["reason"] == "inbound_since_candidate"
+    assert candidate is None
 
 
-def test_dispatch_reactivation_dedupe_regenerates_once_in_dry_run(fresh_db):
+def test_dispatch_reactivation_keeps_candidate_when_inbound_before_generation(fresh_db):
+    """生成前/同秒的入站不应取消候选。
+
+    时区一致性回归：曾用 local_to_utc_string 把 generated_at -8h，导致生成前 8 小时内
+    的入站被误算为「生成后」而误清候选；`>=` 还会把同秒源消息算进去。
+    """
     from app.proactive.reactivation import (
         dispatch_reactivation_candidate,
+        get_reactivation_candidate,
         upsert_reactivation_candidate,
     )
     from app.proactive.state import ensure_account_state
 
-    _create_account("acc-react-dedupe")
-    _create_route("acc-react-dedupe")
-    ensure_account_state(account_id="acc-react-dedupe")
+    _create_account("acc-react-before")
+    _create_route("acc-react-before")
+    ensure_account_state(account_id="acc-react-before")
+    # 一条在生成前 30 分钟（10:30），一条与生成同秒（11:00:00）——都不应触发取消。
+    _insert_inbound("acc-react-before", created_at="2026-06-05 10:30:00")
+    _insert_inbound("acc-react-before", created_at="2026-06-05 11:00:00")
     upsert_reactivation_candidate(
-        account_id="acc-react-dedupe",
+        account_id="acc-react-before",
         candidate={
-            "id": "react-old",
+            "id": "react-before-1",
             "type": "topic_followup",
-            "text": "昨天相亲对象后来有找你吗？",
+            "text": "昨晚睡得好吗？",
+            "generated_at": "2026-06-05 11:00:00",
             "scheduled_slot": "slot_1",
             "scheduled_at": "2026-06-05 12:15:00",
         },
     )
 
-    def fake_checker(*, candidate, **kwargs):
-        return {
-            "checked": True,
-            "duplicate": candidate["id"] == "react-old",
-            "reason": "same topic" if candidate["id"] == "react-old" else "different enough",
-            "retry_count": 0,
-        }
-
-    def fake_regenerator(*, account_id, now, dedupe_feedback=None):
-        return {
-            "action": "reactivation_candidate_planned",
-            "account_id": account_id,
-            "reactivation_candidate": {
-                "id": "react-new",
-                "type": "topic_followup",
-                "text": "今天回消息有没有轻松一点？",
-                "scheduled_slot": "slot_1",
-                "scheduled_at": "2026-06-05 12:15:00",
-                "metadata": {"dedupe_feedback": dedupe_feedback},
-            },
-        }
-
     result = dispatch_reactivation_candidate(
-        account_id="acc-react-dedupe",
+        account_id="acc-react-before",
         now=datetime(2026, 6, 5, 12, 15),
         dry_run=True,
-        dedupe_checker=fake_checker,
-        regenerator=fake_regenerator,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+    candidate = get_reactivation_candidate(account_id="acc-react-before")
+
+    # 未被误清 → dry_run 下走到 would_send，候选仍在
+    assert result["action"] == "would_send"
+    assert candidate is not None
+
+
+def test_dispatch_reactivation_cancels_on_duplicate(fresh_db):
+    """规则去重命中重复 → 取消并清除候选（无 LLM、无重生成）。"""
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-dup")
+    _create_route("acc-react-dup")
+    ensure_account_state(account_id="acc-react-dup")
+    # 生成于 12:10、无后续入站 → 不会被 inbound 取消，进入去重判定
+    upsert_reactivation_candidate(
+        account_id="acc-react-dup",
+        candidate={
+            "id": "react-dup",
+            "type": "topic_followup",
+            "text": "昨天相亲对象后来有找你吗？",
+            "generated_at": "2026-06-05 12:10:00",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+        },
     )
 
-    assert result["action"] == "would_send"
-    assert result["text"] == "今天回消息有没有轻松一点？"
-    assert result["outbound_metadata"]["dedupe"]["duplicate"] is False
-    assert result["outbound_metadata"]["dedupe"]["retry_count"] == 1
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-dup",
+        now=datetime(2026, 6, 5, 12, 15),
+        dry_run=True,
+        dedupe_checker=lambda **kwargs: {
+            "checked": True,
+            "duplicate": True,
+            "reason": "duplicate_topic",
+        },
+    )
+    candidate = get_reactivation_candidate(account_id="acc-react-dup")
+
+    assert result["action"] == "no_op"
+    assert result["reason"] == "dedupe_duplicate"
+    assert candidate is None
+
+
+def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
+    """规则去重：与近 N 天已发的相同 topic 精确匹配即判重复，无 LLM。"""
+    from app.proactive.messaging import send_proactive_text
+    from app.proactive.reactivation import rule_reactivation_dedupe_check
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-rule-dedupe")
+    _create_route("acc-rule-dedupe")
+    ensure_account_state(account_id="acc-rule-dedupe")
+    now = datetime(2026, 6, 5, 12, 0)
+    with patch(
+        "app.proactive.messaging.send_weixin_text",
+        return_value={"messageId": "openclaw-weixin:rule-dedupe"},
+    ):
+        send_proactive_text(
+            account_id="acc-rule-dedupe",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rule-dedupe",
+            source="reactivation",
+            text="上次说的露营计划定下来了吗？",
+            idempotency_key="rule-dedupe-sent",
+            now=now,
+            product_category="reactivation_topic_followup",
+            metadata={"topic": "露营计划"},
+        )
+
+    duplicate = rule_reactivation_dedupe_check(
+        account_id="acc-rule-dedupe",
+        candidate={"topic": "露营计划", "text": "换个问法但同主题"},
+        now=now,
+    )
+    fresh = rule_reactivation_dedupe_check(
+        account_id="acc-rule-dedupe",
+        candidate={"topic": "周末安排", "text": "完全不同的话题"},
+        now=now,
+    )
+
+    assert duplicate["duplicate"] is True
+    assert duplicate["reason"] == "duplicate_topic"
+    assert fresh["duplicate"] is False
 
 
 def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):

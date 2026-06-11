@@ -182,6 +182,80 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
     assert usage == 1
 
 
+def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
+    """被限速时退避重试，重试用尽后落 failed（不再静默标 sent）。"""
+    from app.openclaw_gateway import OpenClawRateLimited
+    from app.proactive.messaging import send_proactive_text
+
+    fresh_db.proactive_outbound_daily_limit = 3
+    fresh_db.proactive_send_rate_limit_max_retries = 2
+    fresh_db.proactive_send_rate_limit_backoff_seconds = 0.0  # 测试不真正 sleep
+    now = datetime(2026, 5, 22, 10, 0)
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.messaging.settings", fresh_db),
+        patch(
+            "app.proactive.messaging.send_weixin_text",
+            side_effect=OpenClawRateLimited("rate limited", ret=-2),
+        ) as mock_send,
+    ):
+        _create_account("acc-rl")
+        row = send_proactive_text(
+            account_id="acc-rl",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rl",
+            source="reminder",
+            text="主动提醒",
+            idempotency_key="rl-1",
+            now=now,
+        )
+
+    assert row["status"] == "failed"
+    assert "rate_limited" in (row["error"] or "")
+    # 初次 + 2 次重试 = 3 次调用
+    assert mock_send.call_count == 3
+
+
+def test_send_proactive_text_recovers_after_rate_limit_retry(fresh_db):
+    """首次限速、重试成功 → 最终 sent。"""
+    from app.openclaw_gateway import OpenClawRateLimited
+    from app.proactive.messaging import send_proactive_text
+
+    fresh_db.proactive_outbound_daily_limit = 3
+    fresh_db.proactive_send_rate_limit_max_retries = 2
+    fresh_db.proactive_send_rate_limit_backoff_seconds = 0.0
+    now = datetime(2026, 5, 22, 10, 0)
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.messaging.settings", fresh_db),
+        patch(
+            "app.proactive.messaging.send_weixin_text",
+            side_effect=[
+                OpenClawRateLimited("rate limited", ret=-2),
+                {"messageId": "openclaw-weixin:msg-ok"},
+            ],
+        ) as mock_send,
+    ):
+        _create_account("acc-rl2")
+        row = send_proactive_text(
+            account_id="acc-rl2",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rl2",
+            source="reminder",
+            text="主动提醒",
+            idempotency_key="rl-2",
+            now=now,
+        )
+
+    assert row["status"] == "sent"
+    assert row["gateway_message_id"] == "openclaw-weixin:msg-ok"
+    assert mock_send.call_count == 2
+
+
 def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
     from app.db import list_session_messages, list_sessions_for_account
     from app.proactive.messaging import send_proactive_text

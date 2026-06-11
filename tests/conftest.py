@@ -62,7 +62,6 @@ def test_settings(tmp_path):
     s.proactive_frequency_max_per_day_cap = 3
     s.proactive_frequency_max_per_week_cap = 14
     s.reactivation_send_slots = "12:15,18:15,21:05"
-    s.reactivation_recent_inbound_delay_minutes = 60
     s.reactivation_avoidance_window_minutes = 60
     s.reactivation_dedupe_days = 3
     s.reactivation_send_jitter_min_seconds = 0

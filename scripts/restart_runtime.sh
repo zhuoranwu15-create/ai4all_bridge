@@ -16,6 +16,7 @@ INSTALL_DEPS=0
 RESTART_OPENCLAW=0
 SKIP_NGINX=0
 DRY_RUN=0
+ASSUME_YES=0
 WAIT_SECONDS=2
 
 usage() {
@@ -27,8 +28,11 @@ Restart the AI4ALL runtime after code has already been pulled.
 Options:
   --install-deps      Run .venv/bin/python -m pip install -r requirements.txt first.
   --restart-openclaw  Restart OpenClaw gateway after backend services.
+                      DANGEROUS: reconnects ALL WeChat accounts at once (风控 risk).
+                      Requires interactive confirmation, or --yes for automation.
   --skip-nginx        Do not run nginx -t or reload nginx.
   --dry-run           Print commands without executing them.
+  --yes, -y           Assume "yes" for the OpenClaw gateway restart confirmation.
   --wait-seconds N    Seconds to wait after service restarts before health checks. Default: 2.
   -h, --help          Show this help.
 
@@ -57,6 +61,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=1
+      shift
+      ;;
+    --yes|-y)
+      ASSUME_YES=1
       shift
       ;;
     --wait-seconds)
@@ -94,6 +102,23 @@ require_file() {
 require_file ".env"
 require_file ".venv/bin/python"
 require_file "requirements.txt"
+
+# 全局 gateway restart = 该机所有微信账号同时重连，风控高危（见 production_runbook 规模化运维红线）。
+# 在执行任何重启前就地确认/拦截，避免拒绝时已经重启了 backend/nginx。
+# dry-run 不需确认；--yes 跳过；交互终端要求显式输入 yes；非交互且无 --yes 则 fail-fast 拒绝。
+if [[ "${RESTART_OPENCLAW}" == "1" && "${DRY_RUN}" == "0" && "${ASSUME_YES}" == "0" ]]; then
+  if [[ -t 0 ]]; then
+    echo "WARNING: 'openclaw gateway restart' 会让该机所有微信账号同时重连（风控高危）。" >&2
+    read -r -p "确认全局重启 OpenClaw gateway？输入 yes 继续： " _confirm
+    if [[ "${_confirm}" != "yes" ]]; then
+      echo "已取消：未确认 OpenClaw gateway restart（其它重启未执行）。" >&2
+      exit 3
+    fi
+  else
+    echo "拒绝在非交互环境下全局重启 OpenClaw gateway：请显式加 --yes。" >&2
+    exit 3
+  fi
+fi
 
 if [[ "${INSTALL_DEPS}" == "1" ]]; then
   run .venv/bin/python -m pip install -r requirements.txt

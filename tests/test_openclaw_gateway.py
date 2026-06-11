@@ -82,6 +82,69 @@ def test_send_weixin_text_rejects_missing_required_fields(to_user_id, text, mess
         )
 
 
+def test_send_weixin_text_raises_rate_limited_on_ret_minus_2():
+    """CLI 退出码 0 但返回体带 ret=-2 → 抛 OpenClawRateLimited（不再静默标 sent）。"""
+    from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    class RateLimited:
+        returncode = 0
+        stdout = '{"ret":-2,"errmsg":"rate limited"}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=RateLimited()):
+        with pytest.raises(OpenClawRateLimited) as exc_info:
+            send_weixin_text(
+                to_user_id="peer@im.wechat",
+                text="hello",
+                gateway_timeout_ms=1234,
+            )
+    assert exc_info.value.ret == -2
+
+
+def test_send_weixin_text_raises_rate_limited_on_errmsg_only():
+    """无业务码、仅 errmsg 含 rate limit 也应识别为限速。"""
+    from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    class RateLimited:
+        returncode = 0
+        stdout = '{"error":"send blocked: Rate_Limited, retry later"}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=RateLimited()):
+        with pytest.raises(OpenClawRateLimited):
+            send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+
+
+def test_send_weixin_text_raises_gateway_error_on_nonzero_ret():
+    """非限速的非零业务码 → 抛普通 OpenClawGatewayError（非限速，不退避）。"""
+    from app.openclaw_gateway import OpenClawGatewayError, OpenClawRateLimited, send_weixin_text
+
+    class Failed:
+        returncode = 0
+        stdout = '{"ret":500,"errmsg":"internal error"}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=Failed()):
+        with pytest.raises(OpenClawGatewayError) as exc_info:
+            send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+    # 非限速类不应被识别成 RateLimited
+    assert not isinstance(exc_info.value, OpenClawRateLimited)
+
+
+def test_send_weixin_text_success_with_messageid_not_treated_as_error():
+    """有 messageId 即成功，即使返回体里同时带 ret=0 也不误判。"""
+    from app.openclaw_gateway import send_weixin_text
+
+    class Ok:
+        returncode = 0
+        stdout = '{"messageId":"m-ok","ret":0}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=Ok()):
+        result = send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+    assert result["messageId"] == "m-ok"
+
+
 def test_logout_weixin_account_calls_openclaw_channels_logout():
     from app.openclaw_gateway import logout_weixin_account
 

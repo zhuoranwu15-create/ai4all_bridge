@@ -15,6 +15,21 @@
 
 不要在日志、文档或飞书群中粘贴用户聊天正文、完整 webhook、API key、验证码或 Authorization header。
 
+## 规模化运维红线（必读）
+
+> 背景：当前形态是「N 个登录态个人微信号挂在单台机器的单个 OpenClaw daemon、单一出口 IP 上」。账号数越多，以下三条违规的代价越大——可能直接触发微信侧风控（同 IP 账号聚集异常、集中上线）。详见 [`docs/tech_design/single-host-multi-openclaw-scale.md`](../tech_design/single-host-multi-openclaw-scale.md)。
+
+1. **禁止把全局 `openclaw gateway restart` 当日常操作。**
+   - 一次全局重启 = 该 daemon 上**全部**微信账号在同一秒、从同一 IP 重新拉起 iLink 长轮询，是教科书级风控触发点。
+   - 必须重启时：**避开活跃时段、分批错峰**；能用单账号粒度（`openclaw channels logout` / 单账号重登）就**不要**全局重启。
+   - `scripts/restart_runtime.sh` **默认不重启 OpenClaw**；只有显式 `--restart-openclaw` 才会，且会二次确认（见下）。
+
+2. **出口 IP 稳定绑定。** 同一账号长期固定从同一出口 IP 出去，**不要频繁换 IP**——频繁换 IP 本身是风控信号。
+
+3. **登录/重登错峰。** 批量上号或批量重登时分批、错峰，不要同一 IP 在短时间集中上线大量账号（onboarding 高峰、故障恢复重连都适用）。
+
+> 补充：单 OpenClaw daemon 是单点，宁可多实例、每实例少挂账号，以控制爆炸半径（重构方向见上述设计文档，此处仅运维纪律）。
+
 ## Backend 不可用
 
 确认：
@@ -159,6 +174,8 @@ scripts/restart_runtime.sh --install-deps
 ```bash
 scripts/restart_runtime.sh --restart-openclaw
 ```
+
+> ⚠️ `--restart-openclaw` 会重启整个 gateway = 该机所有微信账号同时重连，属「规模化运维红线」第 1 条的高危操作。脚本会要求二次确认；务必避开活跃时段，能单账号重登就不要全局重启。
 
 脚本会使用 `sudo` 执行 `nginx -t`、`systemctl restart/reload` 和 monitor timer 启用；需要当前用户具备 sudo 权限。
 

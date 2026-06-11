@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -9,7 +10,7 @@ from app.db import (
     mark_outbound_message_failed,
     mark_outbound_message_sent,
 )
-from app.openclaw_gateway import send_weixin_text
+from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
 from app.proactive.policy import (
     POLICY_VERSION,
     evaluate_outbound_policy,
@@ -127,24 +128,46 @@ def send_proactive_text(
     if claimed is None:
         return outbound
 
-    try:
-        result = send_weixin_text(
-            to_user_id=to_user_id,
-            text=text,
-            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-            account_id=channel_account_id,
-            idempotency_key=claimed["idempotency_key"],
-            session_key=session_key,
-            channel=channel,
-        )
-    except Exception as err:
-        failed = mark_outbound_message_failed(
-            outbound_message_id=int(claimed["id"]),
-            error=str(err),
-        )
-        if failed is None:
-            raise
-        return failed
+    # 限速（ret=-2 / rate limited）按账号退避重试；其它异常立即落 failed。
+    # 重试复用同一 idempotency_key，网关侧幂等，不会重复投递。本路径为后台主动消息，
+    # 阻塞数秒可接受，不影响用户同步回复。
+    max_retries = max(0, int(getattr(settings, "proactive_send_rate_limit_max_retries", 2) or 0))
+    backoff_seconds = float(getattr(settings, "proactive_send_rate_limit_backoff_seconds", 3.0) or 0.0)
+    result: Optional[Dict[str, Any]] = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = send_weixin_text(
+                to_user_id=to_user_id,
+                text=text,
+                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                account_id=channel_account_id,
+                idempotency_key=claimed["idempotency_key"],
+                session_key=session_key,
+                channel=channel,
+            )
+            break
+        except OpenClawRateLimited as err:
+            # 还有重试次数则再发；退避秒数 > 0 时先线性退避（backoff * 次数）。
+            if attempt < max_retries:
+                if backoff_seconds > 0:
+                    time.sleep(backoff_seconds * (attempt + 1))
+                continue
+            failed = mark_outbound_message_failed(
+                outbound_message_id=int(claimed["id"]),
+                error=f"rate_limited: {err}",
+            )
+            if failed is None:
+                raise
+            return failed
+        except Exception as err:
+            failed = mark_outbound_message_failed(
+                outbound_message_id=int(claimed["id"]),
+                error=str(err),
+            )
+            if failed is None:
+                raise
+            return failed
+    assert result is not None  # 循环要么 break 成功，要么在 except 内 return
 
     gateway_message_id = result.get("messageId") if isinstance(result, dict) else None
     sent = mark_outbound_message_sent(

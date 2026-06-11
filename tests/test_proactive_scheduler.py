@@ -115,6 +115,42 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert scheduler.last_run == result
 
 
+def test_proactive_scheduler_run_once_isolates_failing_step():
+    """单个步骤抛错不应饿死后续步骤（尤其排在后面的 reactivation 发送）。"""
+    from app.proactive.scheduler import ProactiveScheduler
+
+    reactivation_calls = []
+
+    def failing_reminders(**kwargs):
+        raise RuntimeError("reminders boom")
+
+    def fake_reactivation(**kwargs):
+        reactivation_calls.append(kwargs)
+        return [{"action": "sent", "account_id": "acc-r"}]
+
+    scheduler = ProactiveScheduler(
+        interval_seconds=0,
+        batch_size=5,
+        dispatch_reminders=failing_reminders,
+        dispatch_commitments=lambda **kw: [],
+        dispatch_reactivation=fake_reactivation,
+        expire_content_invitations=lambda **kw: [],
+        scan_account_checks=lambda **kw: [],
+    )
+    now = datetime(2026, 5, 22, 10, 0)
+
+    result = asyncio.run(scheduler.run_once(now=now))
+
+    # reminders 失败被隔离、记录，但 reactivation 仍照常执行
+    assert result["status"] == "partial_error"
+    assert "reminders" in result["errors"]
+    assert "reminders boom" in result["errors"]["reminders"]
+    assert result["reminder_count"] == 0
+    assert result["reactivation_count"] == 1
+    assert len(reactivation_calls) == 1
+    assert "reminders" in (scheduler.last_error or "")
+
+
 def test_admin_proactive_scheduler_status(client):
     res = client.get("/admin/proactive/scheduler", headers=ADMIN_HEADERS)
 

@@ -107,6 +107,10 @@ def connect() -> Iterator[sqlite3.Connection]:
     try:
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
+        # WAL 的标准搭档：commit 不再每次 fsync，仅在 checkpoint 时落盘。
+        # 最坏情况（OS 崩溃/断电）只丢断电前最后几条已提交事务，绝不损坏库；
+        # 对陪伴 bot 可接受，写延迟约砍半。
+        conn.execute("PRAGMA synchronous = NORMAL")
         conn.execute("PRAGMA foreign_keys = ON")
         yield conn
     except Exception:
@@ -1490,6 +1494,108 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
     return result
 
 
+def _file_size_bytes(path: Path) -> int:
+    """文件大小（字节）；不存在或不可读时返回 0。"""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def get_database_storage_stats() -> Dict[str, Any]:
+    """SQLite 存储与 WAL 运行态指标，用于 ops 监控。
+
+    重点观测 ``-wal`` 文件大小：WAL 模式下若有长生命周期读连接（如独立调度器进程）
+    压住 checkpoint，``-wal`` 会持续增长。这里只读取、不主动 checkpoint。
+    """
+    db_path = _db_path()
+    wal_path = db_path.with_name(db_path.name + "-wal")
+    shm_path = db_path.with_name(db_path.name + "-shm")
+    with connect() as conn:
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
+        synchronous = conn.execute("PRAGMA synchronous").fetchone()
+        wal_autocheckpoint = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
+    return {
+        "db_bytes": _file_size_bytes(db_path),
+        "wal_bytes": _file_size_bytes(wal_path),
+        "shm_bytes": _file_size_bytes(shm_path),
+        "journal_mode": journal_mode[0] if journal_mode else None,
+        # synchronous: 0=OFF 1=NORMAL 2=FULL 3=EXTRA
+        "synchronous": int(synchronous[0]) if synchronous else None,
+        "wal_autocheckpoint_pages": int(wal_autocheckpoint[0]) if wal_autocheckpoint else None,
+    }
+
+
+def checkpoint_wal(*, mode: str = "TRUNCATE") -> Dict[str, Any]:
+    """主动对 WAL 做一次 checkpoint，回收 ``-wal`` 文件，用于 ops 自愈。
+
+    默认 TRUNCATE：checkpoint 后把 ``-wal`` 截断回 0 字节。若存在长生命周期读连接
+    压住 WAL 帧，SQLite 只能做部分 checkpoint 并返回 ``busy=1``，``-wal`` 不会缩小——
+    调用方可据此判断「是否真有读连接卡住」。跨进程操作共享 WAL，从任一连接发起均可。
+
+    仅 WAL 模式有意义；非 WAL 模式下该 PRAGMA 是无害的 no-op。
+    """
+    mode = (mode or "TRUNCATE").upper()
+    if mode not in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"):
+        raise ValueError(f"unsupported wal_checkpoint mode: {mode}")
+    with connect() as conn:
+        # 返回单行 (busy, log_frames, checkpointed_frames)
+        row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+    busy, log_frames, checkpointed_frames = (row[0], row[1], row[2]) if row else (None, None, None)
+    wal_path = _db_path().with_name(_db_path().name + "-wal")
+    return {
+        "mode": mode,
+        # busy=1 表示有读/写连接挡住，未能完整 checkpoint
+        "busy": int(busy) if busy is not None else None,
+        "log_frames": int(log_frames) if log_frames is not None else None,
+        "checkpointed_frames": int(checkpointed_frames) if checkpointed_frames is not None else None,
+        "wal_bytes_after": _file_size_bytes(wal_path),
+    }
+
+
+def get_account_water_level(*, active_windows_minutes=(15, 60, 1440)) -> Dict[str, Any]:
+    """账号挂载水位快照：已绑定账号总数 + 各时间窗内仍活跃（有入站）的去重账号数。
+
+    用途：规模化前建立「当前实测水位」基线（见 docs/tech_design/
+    single-host-multi-openclaw-scale.md §7）。`channel_bindings.last_seen_at`
+    在每条入站消息 upsert 时刷新，因此「窗口内 last_seen_at 命中的去重 account_id」
+    是账号在线/活跃的可靠 proxy——真正的长轮询在线态在 OpenClaw 侧，此处刻意只用
+    bridge 自有数据，避免盲解析不可控的 openclaw CLI 文本。重复采样即得在线率/掉线率趋势。
+
+    active_windows_minutes：要统计的时间窗口（分钟），<=0 的值按 1 处理。
+    """
+    windows = [max(int(w), 1) for w in active_windows_minutes]
+    with connect() as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(DISTINCT account_id) AS total FROM channel_bindings"
+        ).fetchone()
+        by_channel_rows = conn.execute(
+            """
+            SELECT channel, COUNT(DISTINCT account_id) AS total
+            FROM channel_bindings
+            GROUP BY channel
+            """
+        ).fetchall()
+        active: Dict[str, int] = {}
+        for window in windows:
+            row = conn.execute(
+                """
+                SELECT COUNT(DISTINCT account_id) AS active
+                FROM channel_bindings
+                WHERE last_seen_at >= datetime('now', '+8 hours', ?)
+                """,
+                (f"-{window} minutes",),
+            ).fetchone()
+            active[str(window)] = int(row["active"] or 0) if row else 0
+    return {
+        "total_bound_accounts": int(total_row["total"] or 0) if total_row else 0,
+        "bound_accounts_by_channel": {
+            r["channel"]: int(r["total"] or 0) for r in by_channel_rows
+        },
+        "active_accounts": active,
+    }
+
+
 def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
     window = max(int(window_minutes), 1)
     modifier = f"-{window} minutes"
@@ -1593,6 +1699,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
             "messages": [dict(row) for row in recent_message_errors],
             "outbound_messages": [dict(row) for row in recent_outbound_errors],
         },
+        "database": get_database_storage_stats(),
     }
 
 

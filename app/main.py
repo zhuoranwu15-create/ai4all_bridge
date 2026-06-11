@@ -3451,10 +3451,9 @@ def admin_run_account_proactive_check_once(
     dispatch_action = reactivation_dispatch.get("action")
     dispatch_short_circuit_reasons = {
         "reactivation_daily_limit_already_sent",
-        "recent_inbound_final_slot",
+        "inbound_since_candidate",
         "avoidance_window_final_slot",
-        "dedupe_duplicate_after_retry",
-        "regenerate_failed_after_new_message",
+        "dedupe_duplicate",
         "missing_channel_route",
     }
     dispatch_handled = dispatch_action in {

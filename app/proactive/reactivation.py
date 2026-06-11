@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import random
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -10,7 +9,6 @@ from app.db import (
     claim_content_invitation_for_send,
     count_reactivation_outbound_for_quota_date,
     count_recent_inbound_messages_for_account,
-    get_latest_message_id_for_account,
     get_pending_companion_followup_count_in_window,
     get_pending_reminder_count_in_window,
     get_proactive_account_state,
@@ -42,7 +40,6 @@ REACTIVATION_PRODUCT_CATEGORY_CONTENT_INVITATION = "reactivation_content_invitat
 
 ReactivationGenerator = Callable[..., Dict[str, Any]]
 DedupeChecker = Callable[..., Dict[str, Any]]
-Regenerator = Callable[..., Dict[str, Any]]
 
 
 def format_reactivation_time(value: datetime) -> str:
@@ -442,16 +439,22 @@ def _has_sent_reactivation_today(*, account_id: str, now: datetime) -> bool:
     )
 
 
-def _recent_inbound_count(*, account_id: str, now: datetime) -> int:
-    try:
-        delay_minutes = int(getattr(settings, "reactivation_recent_inbound_delay_minutes", 60) or 60)
-    except (TypeError, ValueError):
-        delay_minutes = 60
-    since = now - timedelta(minutes=max(delay_minutes, 1))
-    # messages.created_at is UTC (CURRENT_TIMESTAMP); convert local since -> UTC.
+def _inbound_count_after(*, account_id: str, after: datetime) -> int:
+    """``after`` 之后（严格大于、不含同秒）该账号的入站消息数。
+
+    仅统计 ``direction='inbound'``（用户真正说的话），不含 bot 自身/提醒等出站，
+    用于判断「候选生成后用户是否又说过话」。
+
+    时区一致性（关键）：``after``（候选 generated_at）与 ``messages.created_at`` **同为
+    北京时间字符串**（created_at 由 insert 显式写 ``datetime('now','+8 hours')``），因此
+    直接按北京时间比较，**不做 UTC 转换**。曾用 ``local_to_utc_string`` 把阈值 -8h，导致
+    生成前 8 小时内的入站被误算为「生成后」而误清候选。``+1s`` 在秒粒度上实现严格 ``>``，
+    排除与候选生成同一秒的源消息。
+    """
+    threshold = format_reactivation_time(after + timedelta(seconds=1))
     return count_recent_inbound_messages_for_account(
         account_id=account_id,
-        since=local_to_utc_string(since),
+        since=threshold,
     )
 
 
@@ -477,27 +480,26 @@ def _avoidance_count(*, account_id: str, now: datetime) -> int:
     )
 
 
-def _extract_json_object(text: str) -> Dict[str, Any]:
-    cleaned = (text or "").strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("LLM output did not contain a JSON object")
-    return json.loads(cleaned[start : end + 1])
+def _normalize_dedupe_key(value: Any) -> str:
+    """归一化 topic/文案用于精确比较：小写 + 去首尾与内部多余空白。"""
+    text = _clean_text(value)
+    if not text:
+        return ""
+    return " ".join(text.lower().split())
 
 
-def llm_reactivation_dedupe_check(
+def rule_reactivation_dedupe_check(
     *,
     account_id: str,
     candidate: Dict[str, Any],
     now: datetime,
-    llm_generate: Optional[Callable[[List[Dict[str, str]]], str]] = None,
 ) -> Dict[str, Any]:
-    """Use recent reactivation outbound history to judge whether a candidate repeats."""
+    """零成本去重兜底：与近 N 天已发拉活做精确 topic/文案匹配，不调 LLM。
+
+    语义去重（避免主题/问法雷同）已在候选**生成**时由生成器 prompt 处理
+    （recent_sent_topics 注入）。这里只保留一层 O(1) 的精确匹配防线，挡住完全相同的
+    topic 或文案被重复发出；不试图做相似度判断，故不需要 LLM。
+    """
     try:
         lookback_days = int(getattr(settings, "reactivation_dedupe_days", 3) or 3)
     except (TypeError, ValueError):
@@ -515,65 +517,33 @@ def llm_reactivation_dedupe_check(
             "duplicate": False,
             "reason": "no_recent_reactivation_history",
             "lookback_days": lookback_days,
-            "retry_count": 0,
         }
-    if llm_generate is None:
-        from app.llm import generate_completion  # noqa: PLC0415
 
-        llm_generate = generate_completion
-    compact_history = [
-        {
-            "id": item.get("id"),
-            "text": item.get("text"),
-            "topic": (item.get("metadata") or {}).get("topic"),
-            "reactivation_type": (item.get("metadata") or {}).get("reactivation_type"),
-            "created_at": item.get("created_at"),
-        }
-        for item in history
-    ]
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是 reactivation 主动消息去重判断器。只输出 JSON。"
-                "判断 new_candidate 是否和 recent_sent 主题、意图或问法过近，"
-                "会不会让用户觉得昨天刚问过。"
-            ),
-        },
-        {
-            "role": "user",
-            "content": json.dumps(
-                {
-                    "new_candidate": candidate,
-                    "recent_sent": compact_history,
-                    "schema": {
-                        "duplicate": False,
-                        "reason": "简短原因",
-                        "matched_outbound_id": None,
-                    },
-                },
-                ensure_ascii=False,
-            ),
-        },
-    ]
-    try:
-        payload = _extract_json_object(llm_generate(messages))
-    except Exception as err:
-        return {
-            "checked": True,
-            "duplicate": False,
-            "reason": "dedupe_check_failed_open",
-            "error": str(err),
-            "lookback_days": lookback_days,
-            "retry_count": 0,
-        }
+    candidate_topic = _normalize_dedupe_key(candidate.get("topic"))
+    candidate_text = _normalize_dedupe_key(candidate.get("text"))
+    for item in history:
+        metadata = item.get("metadata") or {}
+        if candidate_topic and candidate_topic == _normalize_dedupe_key(metadata.get("topic")):
+            return {
+                "checked": True,
+                "duplicate": True,
+                "reason": "duplicate_topic",
+                "matched_outbound_id": item.get("id"),
+                "lookback_days": lookback_days,
+            }
+        if candidate_text and candidate_text == _normalize_dedupe_key(item.get("text")):
+            return {
+                "checked": True,
+                "duplicate": True,
+                "reason": "duplicate_text",
+                "matched_outbound_id": item.get("id"),
+                "lookback_days": lookback_days,
+            }
     return {
         "checked": True,
-        "duplicate": bool(payload.get("duplicate")),
-        "reason": _clean_text(payload.get("reason")) or "llm_dedupe_checked",
-        "matched_outbound_id": payload.get("matched_outbound_id"),
+        "duplicate": False,
+        "reason": "rule_dedupe_checked",
         "lookback_days": lookback_days,
-        "retry_count": 0,
     }
 
 
@@ -714,11 +684,15 @@ def dispatch_reactivation_candidate(
     now: Optional[datetime] = None,
     dry_run: bool = True,
     dedupe_checker: Optional[DedupeChecker] = None,
-    regenerator: Optional[Regenerator] = None,
 ) -> Dict[str, Any]:
     """Revalidate and optionally send the current reactivation candidate.
 
     In dry_run mode this never creates outbound rows and never calls OpenClaw.
+
+    新消息处理：若候选生成后用户又有入站消息（说明用户已自行回来/在线），直接取消本次
+    推送，由下一次 planning 生成更新鲜的候选——取代旧的「最近 N 分钟改期」逻辑。
+    去重改为生成时语义去重 + 发送时零成本精确兜底（`rule_reactivation_dedupe_check`），
+    发送公共路径不再有 LLM 调用。
     """
     current = now or datetime.now()
     allowed_windows = _account_allowed_windows(account_id)
@@ -748,39 +722,23 @@ def dispatch_reactivation_candidate(
             now=current,
         )
 
-    recent_inbound = _recent_inbound_count(account_id=account_id, now=current)
-    if recent_inbound > 0:
-        next_slot = _next_slot_after(candidate, now=current, allowed_windows=allowed_windows)
-        if next_slot:
-            state = reschedule_reactivation_candidate(
+    # 候选生成后用户又说过话 → 取消本次推送（用户已自行回来，拉活无意义）；
+    # 仅统计入站消息（不含 bot 自身/提醒等出站），以候选 generated_at 为基准。
+    generated_at = _parse_reactivation_time(candidate.get("generated_at"))
+    if generated_at is not None:
+        inbound_since = _inbound_count_after(account_id=account_id, after=generated_at)
+        if inbound_since > 0:
+            clear_reactivation_candidate(
                 account_id=account_id,
-                candidate=candidate,
-                scheduled_slot=next_slot["scheduled_slot"],
-                scheduled_at=next_slot["scheduled_at"],
-                reason="recent_inbound",
+                reason="inbound_since_candidate",
                 now=current,
             )
-            return {
-                "action": "delayed",
-                "account_id": account_id,
-                "reason": "recent_inbound",
-                "recent_inbound_count": recent_inbound,
-                "reactivation_candidate": get_reactivation_candidate_from_metadata(
-                    state.get("metadata") or {}
-                ),
-                "evaluated_at": format_reactivation_time(current),
-            }
-        clear_reactivation_candidate(
-            account_id=account_id,
-            reason="recent_inbound_final_slot",
-            now=current,
-        )
-        return _no_op(
-            account_id=account_id,
-            reason="recent_inbound_final_slot",
-            now=current,
-            metadata={"recent_inbound_count": recent_inbound},
-        )
+            return _no_op(
+                account_id=account_id,
+                reason="inbound_since_candidate",
+                now=current,
+                metadata={"inbound_since_candidate_count": inbound_since},
+            )
 
     avoidance_count = _avoidance_count(account_id=account_id, now=current)
     if avoidance_count > 0:
@@ -816,65 +774,21 @@ def dispatch_reactivation_candidate(
             metadata={"avoidance_count": avoidance_count},
         )
 
-    latest_message_id = get_latest_message_id_for_account(account_id=account_id)
-    cutoff_id = candidate.get("source_message_cutoff_id")
-    if (
-        latest_message_id is not None
-        and cutoff_id is not None
-        and int(latest_message_id) > int(cutoff_id)
-        and regenerator is not None
-    ):
-        regenerated = regenerator(account_id=account_id, now=current)
-        next_candidate = regenerated.get("reactivation_candidate")
-        if isinstance(next_candidate, dict):
-            upsert_reactivation_candidate(
-                account_id=account_id,
-                candidate=_with_default_schedule(next_candidate, now=current, allowed_windows=allowed_windows),
-            )
-            candidate = get_reactivation_candidate(account_id=account_id) or candidate
-        else:
-            clear_reactivation_candidate(
-                account_id=account_id,
-                reason="regenerate_failed_after_new_message",
-                now=current,
-            )
-            return _no_op(
-                account_id=account_id,
-                reason="regenerate_failed_after_new_message",
-                now=current,
-                metadata={"regeneration": regenerated},
-            )
-
-    checker = dedupe_checker or llm_reactivation_dedupe_check
+    # 零成本精确去重兜底（无 LLM）：命中完全相同的 topic/文案则取消，等下次生成。
+    checker = dedupe_checker or rule_reactivation_dedupe_check
     dedupe = checker(account_id=account_id, candidate=candidate, now=current)
     if dedupe.get("duplicate"):
-        if regenerator is not None:
-            regenerated = regenerator(
-                account_id=account_id,
-                now=current,
-                dedupe_feedback=dedupe,
-            )
-            next_candidate = regenerated.get("reactivation_candidate")
-            if isinstance(next_candidate, dict):
-                upsert_reactivation_candidate(
-                    account_id=account_id,
-                    candidate=_with_default_schedule(next_candidate, now=current, allowed_windows=allowed_windows),
-                )
-                candidate = get_reactivation_candidate(account_id=account_id) or candidate
-                dedupe = checker(account_id=account_id, candidate=candidate, now=current)
-                dedupe["retry_count"] = 1
-        if dedupe.get("duplicate"):
-            clear_reactivation_candidate(
-                account_id=account_id,
-                reason="dedupe_duplicate_after_retry",
-                now=current,
-            )
-            return _no_op(
-                account_id=account_id,
-                reason="dedupe_duplicate_after_retry",
-                now=current,
-                metadata={"dedupe": dedupe},
-            )
+        clear_reactivation_candidate(
+            account_id=account_id,
+            reason="dedupe_duplicate",
+            now=current,
+        )
+        return _no_op(
+            account_id=account_id,
+            reason="dedupe_duplicate",
+            now=current,
+            metadata={"dedupe": dedupe},
+        )
 
     route = _select_route(account_id)
     if route is None:
@@ -887,11 +801,6 @@ def dispatch_reactivation_candidate(
             "source": "reactivation_scheduler",
             "policy": {
                 "daily_limit_key": "reactivation",
-                "recent_inbound_delay_minutes": getattr(
-                    settings,
-                    "reactivation_recent_inbound_delay_minutes",
-                    60,
-                ),
                 "avoidance_applied": False,
             },
             "channel_binding_id": route.get("channel_binding_id"),

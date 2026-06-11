@@ -442,6 +442,8 @@ openclaw config set plugins.entries.ai4all-openclaw-bridge.config.secret '<same 
 openclaw gateway restart
 ```
 
+> ⚠️ 本文出现的 `openclaw gateway restart` 都会让该机**全部**微信账号同时重连。账号量上来后这是风控高危操作（见 [`production_runbook.md` 规模化运维红线](production_runbook.md#规模化运维红线必读)）：仅在部署/补丁等必要时执行，且避开活跃时段；日常运维优先单账号粒度，不要把它当常规步骤。
+
 避免手工复制 secret 出错，可以直接从 `.env` 同步：
 
 ```bash

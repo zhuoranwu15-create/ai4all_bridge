@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     openclaw_login_start_timeout_ms: int = 35000
     openclaw_login_wait_timeout_ms: int = 480000
     openclaw_gateway_call_timeout_ms: int = 60000
+    # 主动消息发送被限速（ret=-2 / rate limited）时的退避重试：仅作用于后台主动消息链路，
+    # 不影响用户同步回复。max_retries=0 表示不重试，限速即落 failed。
+    proactive_send_rate_limit_max_retries: int = 2
+    proactive_send_rate_limit_backoff_seconds: float = 3.0
     # 入站收口开关：True 时，远端 channel 入站若找不到 completed binding 直接 no_reply，
     # 不再用 session_key 兜底创建账号（防解绑/未绑定账号被重新激活）。
     # 本地用 send_mock_turn 调试需置 false。
@@ -82,13 +86,14 @@ class Settings(BaseSettings):
     proactive_frequency_max_per_day_cap: int = 3
     proactive_frequency_max_per_week_cap: int = 14
     reactivation_send_slots: str = "12:15,18:15,21:05"
-    reactivation_recent_inbound_delay_minutes: int = 60
     reactivation_avoidance_window_minutes: int = 60
     reactivation_dedupe_days: int = 3
     # Per-send random jitter (seconds) added on top of the slot time so sends
     # spread out instead of all firing at the exact slot minute (matters at scale).
+    # 拉活消息无强时效性：把窗口拉到 ~5 分钟，让"到点"节奏匹配调度器 ~20 条/轮的 drain
+    # 能力，单 IP 发送更平滑、降低同 IP 瞬时聚集的风控信号。
     reactivation_send_jitter_min_seconds: int = 60
-    reactivation_send_jitter_max_seconds: int = 120
+    reactivation_send_jitter_max_seconds: int = 300
     reactivation_topic_followup_window_hours: int = 72
     reactivation_topic_followup_context_messages: int = 100
     reactivation_content_invitation_context_messages: int = 100

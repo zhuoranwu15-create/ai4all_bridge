@@ -71,37 +71,54 @@ class ProactiveScheduler:
     async def run_once(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
         started_at = datetime.now()
         current = now or started_at
-        reminder_results = await asyncio.to_thread(
+        # 各步骤相互隔离：单个 dispatcher 抛错只记录并继续，不再让前面的步骤
+        # （如 reminders）持续失败时把后面的 reactivation/commitment 发送整轮饿死。
+        step_errors: Dict[str, str] = {}
+
+        async def _step(name: str, fn: Callable[..., List[Dict[str, Any]]], **kwargs: Any) -> List[Dict[str, Any]]:
+            try:
+                return await asyncio.to_thread(fn, **kwargs)
+            except Exception as err:  # noqa: BLE001 — 步骤级隔离，单步失败不拖垮整轮
+                logger.exception("proactive scheduler step %s failed: %s", name, err)
+                step_errors[name] = str(err)
+                return []
+
+        reminder_results = await _step(
+            "reminders",
             self._dispatch_reminders,
             now=current,
             limit=self.batch_size,
             bypass_quiet_hours=self.bypass_quiet_hours,
         )
-        commitment_results = await asyncio.to_thread(
+        commitment_results = await _step(
+            "commitments",
             self._dispatch_commitments,
             now=current,
             limit=self.batch_size,
             bypass_quiet_hours=self.bypass_quiet_hours,
         )
-        account_results = await asyncio.to_thread(
+        account_results = await _step(
+            "account_checks",
             self._scan_account_checks,
             now=current,
             limit=self.batch_size,
             planning_interval_seconds=self.planning_interval_seconds,
         )
-        reactivation_results = await asyncio.to_thread(
+        reactivation_results = await _step(
+            "reactivation",
             self._dispatch_reactivation,
             now=current,
             limit=self.batch_size,
         )
-        expired_content_results = await asyncio.to_thread(
+        expired_content_results = await _step(
+            "expire_content_invitations",
             self._expire_content_invitations,
             now=current,
             limit=self.batch_size,
         )
         finished_at = datetime.now()
         result = {
-            "status": "ok",
+            "status": "ok" if not step_errors else "partial_error",
             "started_at": started_at.isoformat(timespec="seconds"),
             "finished_at": finished_at.isoformat(timespec="seconds"),
             "reminder_count": len(reminder_results),
@@ -114,9 +131,15 @@ class ProactiveScheduler:
             "reactivations": reactivation_results,
             "expired_content_invitation_count": len(expired_content_results),
             "expired_content_invitations": expired_content_results,
+            "errors": step_errors or None,
         }
         self.last_run = result
-        self.last_error = None
+        # 部分步骤失败时保留错误供 heartbeat/监控感知，不再静默吞掉。
+        self.last_error = (
+            None
+            if not step_errors
+            else "; ".join(f"{name}: {msg}" for name, msg in step_errors.items())
+        )
         return result
 
     def start(self) -> None:
@@ -149,8 +172,13 @@ class ProactiveScheduler:
         while not self._stop_event.is_set():
             try:
                 self._record_heartbeat(status="running")
-                await self.run_once()
-                self._record_heartbeat(status="ok")
+                run_result = await self.run_once()
+                # run_once 现在做步骤级隔离，不再抛步骤错误；部分失败时仍要让
+                # heartbeat 反映出来，否则监控会把"部分步骤一直失败"当成健康。
+                if run_result.get("errors"):
+                    self._record_heartbeat(status="error", error=self.last_error)
+                else:
+                    self._record_heartbeat(status="ok")
             except Exception as err:
                 self.last_error = str(err)
                 self._record_heartbeat(status="error", error=str(err))

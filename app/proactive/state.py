@@ -219,7 +219,9 @@ def scan_due_proactive_account_checks(
         elif get_reactivation_candidate(account_id=claimed["account_id"]) is not None:
             # A candidate is already queued (waiting for its slot, or due and
             # awaiting the dispatch sweep). Do NOT replan/overwrite it; the slot
-            # and any regenerate-on-new-message happen in the dispatch path.
+            # firing and cancel-on-new-inbound both happen in the dispatch path.
+            # (Cancelling there clears the candidate, so the NEXT hourly pass
+            # regenerates a fresh one.)
             reactivation_planning = {
                 "action": "no_op",
                 "account_id": claimed["account_id"],
