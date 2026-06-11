@@ -11,7 +11,7 @@ logger = logging.getLogger("ai4all.prompt_builder")
 # Load safety guardrail text once at module import time
 # ---------------------------------------------------------------------------
 _SAFETY_MD_PATH = Path(__file__).parent / "prompts" / "safety.md"
-_MAX_SAFETY_CHARS = 1000
+_MAX_SAFETY_CHARS = 8000
 
 try:
     _SAFETY_TEXT = _SAFETY_MD_PATH.read_text(encoding="utf-8").strip()
