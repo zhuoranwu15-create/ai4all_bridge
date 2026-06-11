@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -167,6 +168,37 @@ def _check_wal_size(max_bytes: int, *, checkpoint_on_bloat: bool = True) -> Opti
         f"(journal_mode={stats.get('journal_mode')} "
         f"autocheckpoint_pages={stats.get('wal_autocheckpoint_pages')})"
     )
+
+
+def _check_disk_usage(
+    path: str,
+    *,
+    max_used_percent: float,
+    min_free_bytes: int,
+) -> Optional[str]:
+    """``path`` 所在文件系统使用率超阈值或剩余空间过低时返回错误串。
+
+    日志留存延长到 3 年后磁盘是新的容量风险点，这里盯住日志所在卷（默认 /var/log）。
+    用 ``shutil.disk_usage`` 取整个挂载点的容量，只需对 path 有 traverse 权限，
+    不需要读取目录内容（监控以 ai4all 身份运行，读不了 0750 的 /var/log/nginx）。
+    max_used_percent<=0 关闭使用率检查；min_free_bytes<=0 关闭剩余空间检查；两者都关则跳过。
+    """
+    if max_used_percent <= 0 and min_free_bytes <= 0:
+        return None
+    try:
+        usage = shutil.disk_usage(path)
+    except Exception as err:  # noqa: BLE001 — 路径不存在/无权限都应显式告警，不静默
+        return f"disk: usage unavailable for {path}: {err}"
+
+    used_percent = (usage.used / usage.total * 100.0) if usage.total else 0.0
+    problems: List[str] = []
+    if max_used_percent > 0 and used_percent >= max_used_percent:
+        problems.append(f"used={used_percent:.1f}% max={max_used_percent:.0f}%")
+    if min_free_bytes > 0 and usage.free < min_free_bytes:
+        problems.append(f"free={usage.free}B min={min_free_bytes}B")
+    if not problems:
+        return None
+    return f"disk: {path} low ({', '.join(problems)} total={usage.total}B)"
 
 
 def _record_water_level(record_file: str) -> Optional[str]:
@@ -384,6 +416,29 @@ def main() -> int:
         help="run a TRUNCATE checkpoint to self-heal before alerting on -wal bloat",
     )
     parser.add_argument(
+        "--check-disk",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("MONITOR_CHECK_DISK", True),
+        help="alert when the log filesystem is running low on space",
+    )
+    parser.add_argument(
+        "--disk-path",
+        default=os.getenv("MONITOR_DISK_PATH", "/var/log"),
+        help="filesystem path to check for free space (default /var/log, where nginx logs live)",
+    )
+    parser.add_argument(
+        "--disk-max-used-percent",
+        type=float,
+        default=float(os.getenv("MONITOR_DISK_MAX_USED_PERCENT", "85")),
+        help="alert when the filesystem usage reaches this percent (default 85); 0 disables",
+    )
+    parser.add_argument(
+        "--disk-min-free-bytes",
+        type=int,
+        default=int(os.getenv("MONITOR_DISK_MIN_FREE_BYTES", "0")),
+        help="alert when free space drops below this many bytes (default 0=disabled)",
+    )
+    parser.add_argument(
         "--record-water-level",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("MONITOR_RECORD_WATER_LEVEL", False),
@@ -458,6 +513,15 @@ def main() -> int:
         error = _check_wal_size(
             args.wal_max_bytes,
             checkpoint_on_bloat=args.wal_checkpoint_on_bloat,
+        )
+        if error:
+            errors.append(error)
+
+    if args.check_disk:
+        error = _check_disk_usage(
+            args.disk_path,
+            max_used_percent=args.disk_max_used_percent,
+            min_free_bytes=args.disk_min_free_bytes,
         )
         if error:
             errors.append(error)

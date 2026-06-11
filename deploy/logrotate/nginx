@@ -1,0 +1,47 @@
+# AI4ALL — nginx 访问/错误日志轮转
+#
+# 目标文件即生产环境 /etc/logrotate.d/nginx。
+# log_format main 记录客户端 IP、XFF、时间、请求行、状态码、Referer、User-Agent
+# （不含手机号/OTP/聊天正文，这些都在 POST body，nginx 不落地）。
+#
+# 按数据敏感度拆成两段，保留期不同：
+#   1) Web 前端注册/登录访问日志 ai4company.access.log —— daily + rotate 1095 ≈ 3 年。
+#      含客户端 IP + UA + /web/register、/web/login、/web/sms/* 等认证请求行，
+#      为合规/审计需要长留。落地加密后续单独讨论。
+#   2) 其余 nginx 日志（全局 access/error、Web 前端 error）—— daily + rotate 183 ≈ 半年。
+#
+# 注意：本文件用显式文件名而非 /var/log/nginx/*.log 通配，避免两段同时匹配同一文件
+# 触发 logrotate "duplicate log entry" 报错。新增 vhost 日志须按敏感度手动加入对应段，
+# 否则该日志不会被轮转、会无限增长（磁盘水位见 scripts/monitor_health.py 的 disk 检查）。
+
+# 段 1：Web 注册/登录访问日志 —— 留存 3 年
+/var/log/nginx/ai4company.access.log {
+    create 0640 nginx root
+    daily
+    rotate 1095
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /bin/kill -USR1 `cat /run/nginx.pid 2>/dev/null` 2>/dev/null || true
+    endscript
+}
+
+# 段 2：其余 nginx 日志 —— 留存约半年
+/var/log/nginx/access.log
+/var/log/nginx/error.log
+/var/log/nginx/ai4company.error.log {
+    create 0640 nginx root
+    daily
+    rotate 183
+    missingok
+    notifempty
+    compress
+    delaycompress
+    sharedscripts
+    postrotate
+        /bin/kill -USR1 `cat /run/nginx.pid 2>/dev/null` 2>/dev/null || true
+    endscript
+}
