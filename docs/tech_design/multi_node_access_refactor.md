@@ -1,0 +1,555 @@
+# 接入端多机重构落地设计（中心大脑 + 瘦接入节点，A/B 双机 MVP）
+
+> 状态：设计稿（待评审 → 落地）
+> 最后更新：2026-06-11
+> 适用范围：AI4ALL 微信个人 AI 陪伴项目（bridge + OpenClaw）
+> 上游依据：本文是 [`single-host-multi-openclaw-scale.md`](single-host-multi-openclaw-scale.md) §4-B（横向分片 + 路由）+ §4-C（出口 IP 多样化）+ §5（bridge 改造最小集）的**具体落地实现**，聚焦「线上 A 单机 → A+B 双机」的无损切换 MVP。
+>
+> 配套子文档（机器侧操作）：
+> - [`multi_node_access_runbook_B.md`](multi_node_access_runbook_B.md) — **新机 B**（node）：现在可做的零代码被动链路验证 + 一期后接入。
+> - [`multi_node_access_runbook_A.md`](multi_node_access_runbook_A.md) — **线上 A**（central+node）：无损升级与回滚。
+
+---
+
+## 进展与状态（2026-06-12）
+
+### 当前阶段
+- 设计与决策：✅ 完成（本文 + 附录 A/B）。
+- 一期代码：⛔ **未开始**——`scripts/run_access_node.py`、`app/node_gateway.py`、中心 node-facing 端点、schema 迁移均未写。**因此 B 现在还不能作为正式 node 工作。**
+- 机器：
+  - **A** = 线上单机 monolith（systemd：`ai4all-weixin-backend`@`127.0.0.1:8180` + `ai4all-weixin-proactive-scheduler` + nginx + 本机 openclaw，**服务真实用户**）。
+  - **B** = 已到货，**OpenClaw 安装中**。
+
+### 关键事实（已核实，指导落地）
+- **入站** = OpenClaw bridge 插件 POST `AI4ALL_BACKEND_URL/openclaw/turn`；**被动回复内联在 HTTP 响应里** → 跨机被动链路**零重构代码即可验证**（见 runbook B Part 1）。
+- **节点无 DB**：一条主动消息的 claim/mark 在中心、send 在节点（附录 B）。
+- 必须在节点物理执行的代码**仅 6 处**（§6）。
+- **生产部署** = `git pull` + `scripts/restart_runtime.sh`（systemd restart）；全局 `openclaw gateway restart` 是**风控高危**，禁止当日常操作（会让该机所有微信号同时重连）。
+
+### 决策记录（来自评审问答）
+| 维度 | 决策 |
+|---|---|
+| 驱动 | 单机微信会话容量到顶；多机 = 多出口 IP（降风控，承接上游 §3.1/§4-C） |
+| 状态层 | 维持 SQLite 集中；**节点永不碰 DB** |
+| 出站 | 混合：**登录 push + 主动消息 pull** |
+| 形态 | **A = central+node**（保会话不重登），**B = node** |
+| 账号路由 | 中心动态分配；在线会话钉死登录节点（再均衡需重扫码） |
+| 中心切换 A↔B | 设计预留（§8）；一键化 + Litestream 热备留二期 |
+| 范围 | MVP 跨机跑通；自动负载调度留二期 |
+
+### 下一步
+1. **B 现在就做**（零重构代码）：验证跨机被动链路 → [runbook B](multi_node_access_runbook_B.md) Part 1。
+2. **一期编码**：仓库内开发 + `standalone` 全量回归，**不在 live A 上直接改代码**。
+3. **部署**：A 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ B 加 node agent（runbook B Part 2）。
+
+---
+
+## 0. 一句话目标
+
+线上生产（阿里云）目前一台机器 A 跑全部服务、挂全部用户。本次重构要：**新增一台机器 B，让微信接入横向扩展到多机**，过程对在线业务**尽量无损**（A 上已登录的微信会话不重扫码），并把「中心大脑」与「接入能力」解耦，使 **A/B 都能接入**、且**中心节点可在 A↔B 之间切换**（可选项，设计预留、一键化留二期）。
+
+**为什么必须多机**（承接上游 §3.1）：第一瓶颈不是 CPU，而是「同一出口 IP 挂大量微信号」触发官方 iLink 的 per-IP 异常检测/配额。**A、B 是两台独立 ECS = 两个独立公网出口 IP**，多机的首要价值是**出口 IP 多样化 + 故障域切分**，扩容只是顺带。
+
+---
+
+## 1. 不变量（铁律）
+
+1. **只有「中心」进程能读写 `data/ai4all.sqlite3`。** 接入节点永不直连 SQLite，一律走 HTTP 与中心通信。这保住「SQLite 集中 + WAL 单主机」——`db.py`（约 322KB，全 SQLite 方言 + 北京时间 `strftime`）**几乎不动**。
+2. **账号隔离不变。** 所有 DB 查询仍按 `account_id` 约束；新增的 `node_id` 只是「路由属性」，不参与隔离判定。
+3. **绕开 OpenClaw 远程能力未知**（上游 §7.5）：`openclaw` CLI 始终在节点本机调用。中心从不直接 RPC 远程 openclaw daemon。
+
+---
+
+## 2. 角色模型：central / node 可组合
+
+一套代码，按 `AI4ALL_ROLE` 选能力。**central 与 node 是两种可独立、也可共存于一台机的能力**：
+
+| 角色 | 含义 | 跑什么 | 碰 SQLite? |
+|---|---|---|---|
+| `standalone`（默认） | = 今天单机形态 | 全部 + openclaw 本地直发 | 是（本机） |
+| `central` | 中心大脑 | FastAPI 大脑、SQLite、画像、三调度器、审核台、admin、web、节点面向 API | 是（本机，唯一写者） |
+| `node` | 瘦接入节点 | openclaw + 微信会话、节点 agent（入站转发 + 出站轮询 + 登录 exec） | **否** |
+
+**生产落地形态**：
+- **机器 A = `central` + `node`（同机共存）**：A 继续持有它现有的全部微信会话（作为 node「A」），同时跑中心大脑。**这是无损的关键**——A 的 openclaw 会话不动、不重登。
+- **机器 B = `node`（纯节点）**：新登录或再均衡过来的账号落在 B，用 B 的出口 IP。
+
+> `standalone` 等价于「central + node 同机 + 出站本机即时直发」，保证**本地开发与现有测试零回归**。
+
+```
+                          微信用户
+                  ┌──────────┴───────────┐ 微信 iLink 长轮询
+          ┌───────┴────────┐    ┌────────┴────────┐
+          │ 机器 B (node)   │    │ 机器 A          │
+          │ openclaw+会话   │    │ central + node  │
+          │ node-agent      │    │ openclaw+会话    │
+          └───┬─────────┬───┘    │ node-agent      │
+   ① 入站转发 │  ③ 出站  │        │ FastAPI 大脑     │
+   (HTTP→中心)│  轮询认领 │        │ SQLite(唯一写者) │
+   ② 登录RPC  │  ④ 结果   │        │ 画像/调度/审核   │
+   (中心拨B)  ▼  回报    ▼        └─────────────────┘
+          ┌───────────────────────────┐
+          │  中心面向节点的 HTTP API     │ ← 节点经稳定指纹地址访问(见 §8)
+          └───────────────────────────┘
+```
+
+---
+
+## 3. 关键决策：出站走「混合」（登录 push + 主动消息 pull）
+
+被动回复**无需跨机**：`handle_openclaw_turn` 的回复放在 `OpenClawTurnResponse.reply` 里，随 `/openclaw/turn` 的 HTTP 响应**原路回到发起入站的那台节点**，本机 openclaw 直接发。
+
+| 出站路径 | 方案 | 理由 |
+|---|---|---|
+| **被动回复** | 不改 | 回复随响应原路返回，零跨机 |
+| **登录/登出/扫码** | **push**（中心 → 节点 agent RPC） | 用户在 web 同步等二维码，要低延迟；A/B 双向可达，中心直接调目标节点 agent 跑本机 openclaw，二维码同步回传 |
+| **主动消息**（dreaming / 提醒 / 承诺 / onboarding 欢迎语） | **pull**（节点轮询中心队列） | 异步、要可靠；复用既有 `outbound_messages` 表 + `machine_claimed_at` 抢占式 claim 范式（已被 moderation worker 验证）；节点掉线消息留队列，回来续传；中心保持单写者 |
+
+> 双向可达让 push 对主动消息也可行，但 pull 复用面更小、retry/幂等/重启恢复全现成，MVP 选 pull。
+
+---
+
+## 4. 入站路径：MVP 几乎零改动
+
+上游 §1.2 已确认：**入站（OpenClaw → bridge `/openclaw/turn`）是干净的 HTTP POST、天然支持多来源**。多机下：
+
+- **B 的 openclaw** 配置成 POST 到**中心地址**（而非 localhost）；**A 的 openclaw**（中心同机）继续 POST localhost。
+- **node_id 不必进入入站载荷**：中心可由 `accountId → assigned_node_id` 反查归属节点。入站只需「能到达中心」。
+  - （可选增强）节点 agent 在转发时附带 `node_id`，中心据此做「账号漂移检测 / 未知账号自动分配」。MVP 不依赖。
+
+即：**入站的全部改造 = 把 B 的 openclaw 回调 URL 指向中心稳定地址。** 代码侧不动。
+
+---
+
+## 5. 数据模型变更（最小、全部走 `_ensure_column` 加性迁移）
+
+既有迁移范式 `_ensure_column`（`ALTER TABLE ADD COLUMN`，`db.py:150`）保证以下改动**在 A 的线上库上加性、向后兼容、可热迁**。
+
+1. **新表 `access_nodes`**：`node_id` PK、`base_url`（中心 push 登录用）、`egress_ip`（运维记录）、`last_heartbeat_at`、`session_count`、`max_sessions`、`status`。MVP 仅作登记 + 心跳。
+2. **账号 → 节点归属**：`accounts` 加列 `assigned_node_id TEXT`（或新建 `account_node_assignments`，与 contacts 历史命名脱钩，倾向新列最小改动）。
+3. **`outbound_messages` 加列 `node_id TEXT`**：enqueue 时由账号归属解析填入；节点按此过滤认领。
+4. **新函数 `claim_pending_outbound_by_node(node_id, batch, claim_timeout)`**：照搬 `claim_queued_content_moderation_tasks`（`db.py:2478`）的「SELECT 候选 → 逐行带条件 UPDATE 抢占」结构，加 `WHERE node_id = ?`，并复用 `machine_claimed_at` 式 stale 超时回收，保证多节点不重复领、节点崩溃后可重领。
+5. **默认归属兜底 `DEFAULT_NODE_ID`（配置）**：任何 `assigned_node_id` 为空的账号，enqueue/路由时回落到 `DEFAULT_NODE_ID`（迁移期 = `"A"`），保证**没有消息被悬空**。
+
+---
+
+## 6. 必须在节点物理执行的代码点（全项目仅 6 处，已实测）
+
+> 出站咽喉改造，需谨慎回归（上游 §5 已警示）。
+
+**出站 `send_weixin_text`（3 处）→ 改为 enqueue 到节点队列：**
+- `turn_service.py:492` onboarding 欢迎语（**坑**：turn 在中心跑，中心不持有会话，不能直接发 → 按账号归属 enqueue，节点 pull 后发）
+- `main.py:669` 绑定流程内的发送 → 同上 enqueue
+- `proactive/messaging.py:232` 主动消息发送 → 拆分：中心只 enqueue，节点 claim + send
+
+**登录/登出（3 处）→ 改为 push RPC 到目标节点 agent：**
+- `main.py:703` `start_weixin_qr_login`
+- `main.py:580` `wait_weixin_qr_login`
+- `main.py:462` `logout_weixin_account`
+
+`openclaw_gateway.py` **逻辑不变**，只是改为「仅 node 角色进程调用」。
+
+---
+
+## 7. 组件与接口
+
+### 7.1 中心新增「节点面向 API」（`Bearer <AI4ALL_BRIDGE_SECRET>` 鉴权）
+- `POST /openclaw/turn`（已存在）：节点入站转发到此（可选带 `node_id`）。
+- `POST /node/outbound/claim` — body `{node_id, batch}`，返回认领到的待发消息。
+- `POST /node/outbound/{id}/result` — `{status, gateway_message_id|error}`，中心复用 `mark_outbound_message_sent/failed`；限速 `ret=-2` 沿用 `OpenClawRateLimited` 语义记录退避。
+- `POST /node/heartbeat` — `{node_id, session_count, egress_ip}`，upsert `access_nodes`。
+
+### 7.2 节点服务（新增 `scripts/run_access_node.py`）
+瘦服务，只做三件事，**不依赖 SQLite**：
+- **入站**：本机 openclaw webhook → POST `CENTRAL_URL/openclaw/turn`（带 bridge secret）→ 取 `reply` → 本机 openclaw 发出。
+- **出站 pull 循环**：每 `OUTBOUND_PULL_INTERVAL_SECONDS` 轮询 `/node/outbound/claim` → 逐条本机 `send_weixin_text` → `/result` 回报（限速退避、长回复分块 300ms，承接上游 §2.3/§9.2）。
+- **登录 exec 端点**（被中心 push）：`POST /node/exec/login/start|wait`、`/logout` → 跑本机 openclaw → 返回 `qrDataUrl` / 结果。
+
+### 7.3 登录/绑定流程（节点化）
+1. 用户在 web 发起绑定 → 中心选节点（MVP：配置指定 / 取 `session_count` 最小者）→ 写 `assigned_node_id`。
+2. 中心按 `access_nodes.base_url` **push** 到目标节点 `/node/exec/login/start` → 节点本机起 QR → 二维码回中心 → 中心返回 web。
+3. `wait` 同理 push。登录成功后，该账号会话**物理钉死在该节点**（= 钉死在该节点出口 IP，满足上游 §4-C 的 IP 稳定绑定）。
+
+---
+
+## 8. 中心节点可切换（A↔B，可选项）
+
+### 8.1 「中心状态包」= 既有备份产物
+中心的全部状态 = **SQLite + 画像目录 `user_profiles_dir` + `system_dir`（+ `.env`）**。这正是 `scripts/backup_data.py` 已在快照并支持 `rsync` 异地推送的内容（`_backup_sqlite` 用 SQLite Online Backup API 取一致快照，`_archive_dir` 打包画像/system，`_rsync_offsite` 推异地）。**中心切换直接复用这套，不造新轮子。**
+
+### 8.2 可切换的架构钩子（现在就埋）
+- **节点 → 中心方向走「稳定指纹地址」**：`CENTRAL_URL` 不要写 A 的裸 IP，指向一个可重定向的稳定地址——阿里云**内网 SLB / 私网 DNS 名 / keepalived VIP / floating EIP** 之一。切换中心 = 把该地址指向新机，**节点无需改配置**。
+- **中心 → 节点方向**用 `access_nodes.base_url` 直连具体节点（不经指纹地址），切换中心不影响。
+- **角色由配置驱动**：`PROACTIVE_SCHEDULER_ENABLED` 等调度开关跟随「谁是 central」启停；A/B 跑同一份代码，靠 env 决定角色。
+
+### 8.3 计划内切换流程（MVP 可接受，短暂只读/停写窗口）
+1. A 进入维护：停三调度器、停 enqueue（入站可短暂 503 或缓冲），让在途出站队列收敛。
+2. 最终增量同步状态包 A → B（rsync；SQLite 用 Online Backup 取一致拷贝）。
+3. B 起 `central`：`init_db`（加性迁移幂等空跑）+ `PRAGMA integrity_check` 校验。
+4. **翻转指纹地址指向 B** → 节点下一次心跳/入站/出站轮询自动命中 B。
+5. **A 降级为 `node`**（保留其 openclaw 会话，**不重扫码**）；B 成为 `central`（可叠加 `node`）。
+
+> **关键性质：切换中心不导致任何微信会话重登**——因为 A 切换后仍是 node，会话留在 A，只是「大脑 + DB」搬到了 B。反向 B→A 同流程对称。
+
+### 8.4 分级（按需取用）
+- **MVP / 计划内切换**：§8.3，复用备份 + rsync + 指纹地址，分钟级窗口。✅ 本期设计预留、可手动执行。
+- **近实时热备（二期）**：用 Litestream 对 A 的 SQLite 做持续复制到 B（warm standby），缩短切换窗口与数据丢失边界。**新增依赖**，留二期，§8.2 的钩子已为它铺好路。
+- **一键切换脚本（二期）**：把 §8.3 封装成 `scripts/promote_central.py`。
+
+---
+
+## 9. 配置变更（`.env.example`）
+
+```
+AI4ALL_ROLE=standalone            # standalone(默认,=今天) | central | node ; A 设 "central,node" 共存
+NODE_ID=                          # 含 node 能力时必填，全局唯一(如 A / B)
+DEFAULT_NODE_ID=A                 # 账号未分配节点时的兜底归属(迁移期=A)
+CENTRAL_URL=                      # node→中心 的稳定指纹地址(SLB/DNS/VIP)，不要写裸 IP
+NODE_BASE_URL=                    # 本节点基址(中心 push 登录用)，写入 access_nodes
+NODE_MAX_SESSIONS=                # 本机会话上限(MVP 仅上报)
+OUTBOUND_PULL_INTERVAL_SECONDS=2  # 节点出站轮询间隔
+LOCAL_NODE_INLINE_DISPATCH=false  # true: central 同机 node 的出站走同进程即时直发(迁移期降延迟用)
+```
+
+> `LOCAL_NODE_INLINE_DISPATCH`：A 作为 central+node 同机时，可让 A 自己负责的账号出站走同进程即时发送（零轮询延迟），仅 B 走 pull。默认 false（统一 pull，代码单路径）；迁移初期若在意 A 的主动消息延迟可临时置 true。
+
+调度器（`PROACTIVE_SCHEDULER_ENABLED` / `DREAMING_SCHEDULER_ENABLED` / `MODERATION_WORKER_ENABLED`）：**仅在 central 机器开启**，node-only 机器一律关闭。
+
+---
+
+## 10. 无损切换上线 Runbook（A 单机 → A+B）
+
+> 原则：每步独立可回滚；先在 A 上「原地升级且行为不变」，再引入 B。
+
+1. **加性迁移上 A**：部署新代码，`init_db` 自动加 `access_nodes` / `accounts.assigned_node_id` / `outbound_messages.node_id`（加性，老库兼容）。一次性 backfill：所有现存账号 `assigned_node_id="A"`。
+2. **A 切 `central,node` 形态**：`NODE_ID=A`、`DEFAULT_NODE_ID=A`、`CENTRAL_URL=<A 的指纹地址>`（此刻指向 A）。A 的 openclaw 会话不动。验证：入站回复、主动消息、登录、登出全部如常（此时等价 standalone，仅多走了一层本机队列/RPC）。
+3. **引入 B 为 node**：B 部署代码、起 `run_access_node.py`、`NODE_ID=B`、`CENTRAL_URL=<指纹地址>`、`NODE_BASE_URL=<B 内网址>`；B 的 openclaw 指向中心。B 心跳上报，`access_nodes` 出现 B。
+4. **灰度**：把 1～2 个新账号登录分配到 B（或挑非活跃账号在 B 重扫码迁移），验证 B 的入站/出站/登录端到端 + B 的出口 IP 生效。
+5. **常态**：新登录按容量分配到 A/B；存量账号保持在 A，按需再均衡（重扫码）。
+
+**回滚**：任一步异常 → A 改回 `AI4ALL_ROLE=standalone`、停 B，即恢复今天行为（数据加列不影响旧代码路径）。
+
+---
+
+## 11. 影响文件清单（diff 级别）
+
+| 文件 | 改动 |
+|---|---|
+| `app/config.py` | +role/node_id/default_node_id/central_url/node_base_url/max_sessions/pull_interval/inline_dispatch |
+| `app/db.py` | +`access_nodes` 表&迁移；+`accounts.assigned_node_id`、`outbound_messages.node_id` 加列；+`claim_pending_outbound_by_node`；+节点注册/心跳/归属 helper |
+| `app/turn_service.py` | onboarding 欢迎语 `send_weixin_text`→enqueue（解析 node_id）；`/openclaw/turn` 兼容可选 node_id |
+| `app/proactive/messaging.py` | 拆分 enqueue / 节点消费；enqueue 时填 node_id |
+| `app/proactive/scheduler.py` | central 角色下只 enqueue，不内联发送 |
+| `app/main.py` | +节点面向 API（claim/result/heartbeat）；登录/登出/绑定发送（462/580/669/703）改 push RPC / enqueue + 目标节点解析 |
+| `app/openclaw_gateway.py` | 逻辑不变，仅 node 调用 |
+| `scripts/run_access_node.py` | **新增** 节点服务（入站转发 + 出站 pull + 登录 exec 端点） |
+| `scripts/promote_central.py` | **（二期）** 一键中心切换 |
+| `.env.example` / 本文 / `architecture_overview.md` | 文档化拓扑、角色、切换流程 |
+
+---
+
+## 12. 测试方案
+
+- **聚焦单测**：node_id 解析与 enqueue 填充（含 `DEFAULT_NODE_ID` 兜底）；`claim_pending_outbound_by_node` 抢占（两节点不重复领、stale 超时可重领、空队列）；`/node/outbound/result` 状态机（sent/failed/rate_limited）。
+- **契约测试**：节点↔中心 API 鉴权（bridge secret）；入站远程转发取回 reply。
+- **集成测试**（mock `openclaw` CLI + 内存 SQLite）：模拟 A、B 两节点领取互斥账号集并各自发送；登录 push 到指定节点。
+- **回归**：`standalone` 下跑全量 `tests/`（内存 SQLite），确认零回归；重点 `tests/test_turn_service.py`（欢迎语路径变化）、主动消息相关、`test_*moderation*`（审核仍在中心 enqueue/同步红线前执行）。
+- **切换演练**（预发）：按 §8.3 在测试环境跑一次 A→B→A，校验 `integrity_check`、会话不重登、节点零改配。
+
+---
+
+## 13. 风险与缓解
+
+| 风险 | 缓解 |
+|---|---|
+| 出站咽喉改造回归（上游 §5 警示） | 6 个执行点全部列明；`standalone` 全量回归；`LOCAL_NODE_INLINE_DISPATCH` 可临时退回同进程发送 |
+| 中心单点（DB/大脑） | 本期接受（未要求 HA）；§8 提供计划内切换，二期 Litestream 热备 |
+| 节点→中心网络抖动 | 入站靠 openclaw 重试 + 中心 `get_duplicate_reply` 去重；出站留队列，节点恢复续领 |
+| 主动消息多一跳轮询延迟 | 间隔默认 2s；A 同机可开 `LOCAL_NODE_INLINE_DISPATCH` 零延迟 |
+| 账号漂移（会话出现在非归属节点） | MVP 由 accountId→assigned_node 反查为准；可选入站带 node_id 做漂移检测告警 |
+| 切换中心丢数据 | 用 SQLite Online Backup 取一致快照 + 停写窗口；二期 Litestream 收窄丢失边界 |
+
+---
+
+## 14. 待你/评审钉死的开放问题
+
+1. **openclaw 入站回调 URL 是否可配成远程**（B → 中心）？上游 §1.2 判定「天然支持多来源」，但需在 B 上实配验证（openclaw 是打包 dist）。→ **正在验证**：[runbook B](multi_node_access_runbook_B.md) Part 1（零代码）。
+2. **节点 agent 与中心之间**：MVP 仅 bridge secret，还是要内网 + mTLS？（阿里云内网 + 安全组通常 secret 足够）。
+3. **中心指纹地址选型**：内网 SLB / 私网 DNS / keepalived VIP / floating EIP —— 取决于你们阿里云现有网络设施。
+4. **再均衡策略**：存量账号迁到 B 只能重扫码（会话不可热迁），是否接受「按需手动迁移」直到二期调度器？
+5. **多 openclaw 实例 per node**（上游 §4-A）：MVP 一节点一 openclaw；是否需要预留一机多实例的子结构？
+
+---
+
+## 15. 分期
+
+- **一期（本设计，MVP）**：角色拆分 + 加性迁移 + 出站队列/登录 push + 节点 agent + A 原地升级 + 引入 B + 无损 Runbook。目标：**A/B 双机端到端跑通**。
+- **二期**：自动负载调度器（心跳/容量 → 最闲分配 + 再均衡提示）、一键中心切换脚本、Litestream 热备、一机多 openclaw 实例（承接上游 §4-A）。
+
+---
+
+# 附录 A：登录 push 时序（深挖）
+
+## A.1 当前单机流程（基于代码核实）
+
+登录是**异步**的：web 建 intent → 后台起 QR → web 轮询取二维码 → 后台 wait 阻塞至扫码 → 完成绑定 → 延时发欢迎语。
+
+```
+浏览器            中心 FastAPI                      本机 openclaw
+  │ POST /web/binding-intents                          │
+  │───────────────►│ 建 binding_intent                  │
+  │                │ _start_openclaw_qr_for_binding     │
+  │                │   start_weixin_qr_login ──subprocess──►│ web.login.start
+  │                │◄───────── qrDataUrl ──────────────────│
+  │                │ update_binding_intent(qr_created)  │
+  │                │ _schedule_binding_wait → 后台 task   │
+  │◄── 202 ────────│                                    │
+  │ GET /web/binding-intents/{id} (轮询取 qr_data_url)  │
+  │◄── qrDataUrl ──│  → 浏览器渲染二维码，用户扫码         │
+  │                │ [后台] _wait_for_binding_intent     │
+  │                │   wait_weixin_qr_login ──subprocess──►│ web.login.wait (阻塞≤wait_timeout)
+  │                │◄──── connected + channel_account_id ──│
+  │                │ _complete_binding_intent_from_wait  │
+  │                │   upsert_channel_binding            │
+  │                │ loop.call_later(5s, 欢迎语)          │
+  │ GET .../{id} (轮询取 status=completed)               │
+  │◄── completed ──│                                    │
+```
+
+涉及的 3 个本机 openclaw 调用点：`start_weixin_qr_login`(`main.py:703`)、`wait_weixin_qr_login`(`main.py:580`)、欢迎语 `send_weixin_text`(`main.py:669`)。
+
+## A.2 多机改造：引入 `node_gateway` 派发层
+
+新增 `app/node_gateway.py`，把 `openclaw_gateway` 的 4 个函数包一层「按 node_id 派发」：
+
+```python
+# app/node_gateway.py（新增）—— 中心侧调用，决定「本机直调」还是「push 到远程节点」
+from app import openclaw_gateway
+
+def _is_local_node(node_id: str) -> bool:
+    # central+node 同机：node_id == settings.node_id 且本进程具备 node 能力
+    return settings.has_node_role and node_id == settings.node_id
+
+def node_start_qr(*, node_id, account_id, **kw) -> dict:
+    if _is_local_node(node_id):
+        return openclaw_gateway.start_weixin_qr_login(account_id=account_id, **kw)
+    base = _resolve_node_base_url(node_id)          # access_nodes.base_url
+    return _http_post(f"{base}/node/exec/login/start",
+                      json={"account_id": account_id, **kw},
+                      timeout=kw["gateway_timeout_ms"]/1000 + 5)
+
+def node_wait_qr(*, node_id, account_id, wait_timeout_ms, **kw) -> dict:
+    if _is_local_node(node_id):
+        return openclaw_gateway.wait_weixin_qr_login(account_id=account_id,
+                                                     wait_timeout_ms=wait_timeout_ms, **kw)
+    base = _resolve_node_base_url(node_id)
+    # 关键：wait 是长轮询，HTTP 客户端超时必须 > wait_timeout_ms（与今天 subprocess 超时同理）
+    return _http_post(f"{base}/node/exec/login/wait",
+                      json={"account_id": account_id, "wait_timeout_ms": wait_timeout_ms, **kw},
+                      timeout=wait_timeout_ms/1000 + 10)
+
+def node_logout(*, node_id, account_id, **kw) -> dict: ...   # 同模式
+```
+
+`main.py` 的 3 处改为调 `node_gateway.node_start_qr/node_wait_qr` 并传入目标 `node_id`；欢迎语改为 enqueue（见附录 B），不再直接 send。
+
+**节点 agent 侧**（`scripts/run_access_node.py`）暴露对称的 exec 端点，内部仍调本机 `openclaw_gateway`：
+
+```python
+@node_app.post("/node/exec/login/start")   # 鉴权: Bearer <bridge_secret>
+def exec_login_start(body): return openclaw_gateway.start_weixin_qr_login(**body)
+
+@node_app.post("/node/exec/login/wait")
+def exec_login_wait(body):  return openclaw_gateway.wait_weixin_qr_login(**body)
+
+@node_app.post("/node/exec/logout")
+def exec_logout(body):      return openclaw_gateway.logout_weixin_account(**body)
+```
+
+## A.3 目标节点的决定时机
+
+`node_id` 在 **binding_intent 创建时**就定好，并写入账号归属：
+
+```
+POST /web/binding-intents
+  → 选节点 node_id = pick_node()        # MVP: 配置指定 / access_nodes 里 session_count 最小且 status=online
+  → create_binding_intent(..., node_id=node_id)
+  → set_account_assigned_node(account_id, node_id)   # accounts.assigned_node_id
+  → _start_openclaw_qr_for_binding(intent)  # 内部用 intent.node_id 派发
+```
+
+登录成功后会话即钉死在该节点（= 钉死在该节点出口 IP，满足上游 §4-C）。`assigned_node_id` 同时成为后续出站路由（附录 B）和入站反查的依据。
+
+## A.4 多机登录时序（B 为远程节点）
+
+```
+浏览器        中心(A: central)                    节点 B(agent)        B 本机 openclaw
+  │ POST /web/binding-intents                        │                   │
+  │──────────►│ pick_node()=B; 写 assigned_node_id=B │                   │
+  │           │ node_start_qr(node_id=B) ───push────►│ exec_login_start  │
+  │           │                                      │── start ─────────►│
+  │           │◄──────────── qrDataUrl ──────────────│◄── qrDataUrl ─────│
+  │           │ update_binding_intent(qr_created)    │                   │
+  │◄─ qr ─────│ (web 轮询取二维码，用户扫码)            │                   │
+  │           │ [后台] node_wait_qr(node_id=B)─push──►│ exec_login_wait   │
+  │           │   (HTTP 长连，超时>wait_timeout)       │── wait(阻塞) ─────►│
+  │           │◄────── connected+channel_account_id ──│◄── connected ─────│
+  │           │ _complete_binding_intent (写库都在中心)│                   │
+  │           │ enqueue 欢迎语(node_id=B) → 出站队列    │                   │
+  │◄ completed│                                       │ (B pull 出站→发欢迎语)
+```
+
+## A.5 失败 / 边界处理
+- **节点不可达**（push 超时/连接拒绝）：`_start_openclaw_qr_for_binding` 已有 `except` → `set_binding_intent_error(status="failed")`，与今天 openclaw 异常同路径；web 轮询到 failed 提示重试。
+- **wait 长轮询**：中心→节点 HTTP 客户端超时必须 > `wait_timeout_ms`，否则中心先断开但节点 openclaw 仍在 wait（语义与今天 subprocess 超时一致，沿用 `openclaw_login_wait_timeout_ms`）。
+- **幂等**：登录以 `openclaw_login_session_key` 为键，重复 start 由 openclaw 侧 `force=False` 处理，行为不变。
+- **standalone / A 同机**：`_is_local_node` 命中 → 直调本机，零网络跳，行为与今天完全一致。
+
+---
+
+# 附录 B：出站 `claim_pending_outbound_by_node` 与中心/节点拆分（深挖）
+
+## B.1 核心约束：节点无 DB → 认领与标记都在中心
+
+节点不碰 SQLite，所以一条主动消息的生命周期被切成「中心管状态、节点管发送」：
+
+```
+中心: enqueue_proactive_text  →  row(status=pending, node_id=B)        [DB 写]
+节点: POST /node/outbound/claim {node_id:B}                            
+中心:   claim_pending_outbound_by_node → UPDATE status=sending 返回行   [DB 写]
+节点:   send_weixin_text(本机 openclaw, 限速退避/长回复分块)             [无 DB]
+节点: POST /node/outbound/{id}/result {status:sent, gateway_message_id}
+中心:   mark_outbound_message_sent + insert_outbound_delivery_message   [DB 写]
+```
+
+即今天 `send_proactive_text` 的「claim+send+mark」三步被一刀切在 send 两侧：**claim 和 mark 留中心**（DB），**send 搬节点**（openclaw）。`enqueue_proactive_text` 本就是干净的独立函数（policy + 同步审核红线 + 建行），**完全不动**，只在建行时多填一个 `node_id`。
+
+## B.2 schema 迁移（加性，走 `_ensure_column`）
+
+```python
+_ensure_column(conn, "outbound_messages", "node_id", "TEXT")
+_ensure_column(conn, "outbound_messages", "claimed_at", "TEXT")   # stale 回收用
+conn.execute("""CREATE INDEX IF NOT EXISTS ix_outbound_messages_node_dispatch
+                ON outbound_messages(node_id, status, scheduled_at)""")
+```
+
+`node_id` 在 enqueue 时解析：`resolve_node_for_account(account_id) or settings.default_node_id`（迁移期 `default_node_id="A"`，保证存量/未分配账号不悬空）。
+
+## B.3 `claim_pending_outbound_by_node`（照搬 moderation claim 抢占范式 + node 维度）
+
+```python
+def claim_pending_outbound_by_node(
+    *, node_id: str, batch_size: int, claim_timeout_seconds: int, max_attempts: int = 5,
+) -> List[Dict[str, Any]]:
+    """认领某节点的待发主动消息：status=pending，或卡在 sending 且认领超时的（节点崩溃回收）。
+    每行用「带条件 UPDATE + rowcount==1」原子抢占，保证同 node 多消费者不重复领。"""
+    batch = max(1, min(200, int(batch_size)))
+    stale = f"-{max(1, int(claim_timeout_seconds))} seconds"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM outbound_messages
+            WHERE node_id = ?
+              AND attempts < ?
+              AND ( status = 'pending'
+                 OR ( status = 'sending'
+                      AND claimed_at IS NOT NULL
+                      AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now','+8 hours', ?)) ) )
+              AND ( scheduled_at IS NULL
+                 OR scheduled_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now','+8 hours')) )
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (node_id, max_attempts, stale, batch),
+        ).fetchall()
+        claimed: List[Dict[str, Any]] = []
+        for row in rows:
+            cur = conn.execute(
+                """
+                UPDATE outbound_messages
+                SET status = 'sending',
+                    attempts = attempts + 1,
+                    claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now','+8 hours')),
+                    error = NULL,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now','+8 hours'))
+                WHERE id = ?
+                  AND node_id = ?
+                  AND ( status = 'pending'
+                     OR ( status = 'sending'
+                          AND claimed_at IS NOT NULL
+                          AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now','+8 hours', ?)) ) )
+                """,
+                (row["id"], node_id, stale),
+            )
+            if cur.rowcount != 1:          # 已被并发消费者抢走 → 跳过
+                continue
+            r = conn.execute("SELECT * FROM outbound_messages WHERE id = ?", (row["id"],)).fetchone()
+            if r is not None:
+                claimed.append(_decode_outbound_message(r))
+    return claimed
+```
+
+设计要点：
+- **WHERE node_id = ?**：节点只领自己的账号消息，A/B 天然互斥（不同 node_id 不可能撞行）。
+- **rowcount==1 原子抢占**：防同一 node_id 的「重复进程 / 重启叠跑」双领（与 `claim_queued_content_moderation_tasks` 同构）。
+- **stale `sending` 回收**：节点 claim 后崩溃，行卡在 `sending`；超 `claim_timeout_seconds` 可被重领，避免永久卡死。
+- **`attempts < max_attempts`**：毒消息（持续失败）达上限后不再重领，进 failed 兜底，防无限重试。
+- **`scheduled_at` 过滤**：延时消息未到点不领（出站消费者现在统一在节点，必须自己尊重 schedule）。
+
+## B.4 中心/节点代码拆分
+
+**中心**（`proactive/scheduler` 等只 enqueue）：
+```python
+# send_proactive_text 在 role=central 且非 inline 时，退化为「只 enqueue」
+def dispatch_proactive_text(...):
+    outbound = enqueue_proactive_text(..., )       # 已含 node_id 解析
+    return outbound                                # 不再 claim/send；交给节点 pull
+```
+保留旧 `send_proactive_text`（enqueue+claim+本机 send）仅用于 `standalone` 与 `LOCAL_NODE_INLINE_DISPATCH=true` 的同机直发，行为零变化。
+
+**中心节点面向端点**：
+```python
+@app.post("/node/outbound/claim")   # Bearer bridge_secret
+def node_outbound_claim(body):
+    return {"messages": claim_pending_outbound_by_node(
+        node_id=body["node_id"], batch_size=body.get("batch", 20),
+        claim_timeout_seconds=settings.outbound_claim_timeout_seconds)}
+
+@app.post("/node/outbound/{mid}/result")
+def node_outbound_result(mid, body):
+    if body["status"] == "sent":
+        sent = mark_outbound_message_sent(outbound_message_id=mid,
+                                          gateway_message_id=body.get("gateway_message_id"))
+        if sent: insert_outbound_delivery_message(outbound_message=sent)
+        return sent
+    return mark_outbound_message_failed(outbound_message_id=mid, error=body.get("error",""))
+```
+
+**节点 agent 出站循环**（无 DB，只 openclaw + HTTP）：
+```python
+while True:
+    claimed = http_post(f"{CENTRAL}/node/outbound/claim", {"node_id": NODE_ID, "batch": 20})["messages"]
+    for m in claimed:
+        try:
+            res = send_weixin_text(to_user_id=m["to_user_id"], text=m["text"],
+                                   account_id=m["channel_account_id"],
+                                   idempotency_key=m["idempotency_key"],   # UNIQUE → 网关幂等
+                                   session_key=m["session_key"], channel=m["channel"],
+                                   gateway_timeout_ms=GATEWAY_TIMEOUT)      # 内含限速退避/分块
+            http_post(f"{CENTRAL}/node/outbound/{m['id']}/result",
+                      {"status": "sent", "gateway_message_id": (res or {}).get("messageId")})
+        except OpenClawRateLimited as e:
+            http_post(f"{CENTRAL}/node/outbound/{m['id']}/result",
+                      {"status": "failed", "error": f"rate_limited: {e}"})   # stale 回收或下轮重领
+        except Exception as e:
+            http_post(f"{CENTRAL}/node/outbound/{m['id']}/result", {"status": "failed", "error": str(e)})
+    sleep(OUTBOUND_PULL_INTERVAL_SECONDS)
+```
+
+> 限速退避（`ret=-2`）仍在节点本机 `send_weixin_text` 内完成（承接上游 §2.3/§9.2，长回复分块 300ms），最终态才回报；`claimed_at` stale 回收是节点崩溃的安全网，不是常规重试路径。
+
+## B.5 不破坏的既有语义
+- **同步审核红线 + policy** 都在 `enqueue_proactive_text` 内、入队前执行（中心），节点只发已放行内容——审核零改动。
+- **异步审核抽检** `enqueue_outbound_for_moderation` 仍在中心 enqueue 时触发，与今天一致（非发送门禁）。
+- **配额 `quota_date` / 幂等 `idempotency_key`(UNIQUE)** 不变；节点重试复用同 key，网关幂等。
+- **`insert_outbound_delivery_message`**（落地交付记录）留中心 `/result`，与今天落点一致。
