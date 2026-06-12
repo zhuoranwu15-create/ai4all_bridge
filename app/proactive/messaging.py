@@ -11,6 +11,7 @@ from app.db import (
     insert_outbound_delivery_message,
     mark_outbound_message_failed,
     mark_outbound_message_sent,
+    resolve_node_for_account,
     update_outbound_message_metadata,
 )
 from app.moderation.sensitive_words import check_sync_guard
@@ -41,9 +42,18 @@ def enqueue_proactive_text(
     bypass_quiet_hours: bool = False,
     product_category: Optional[str] = None,
     scheduled_at: Optional[datetime] = None,
+    node_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     current = now or datetime.now()
+    # 多机出站:解析归属节点写入 outbound_messages.node_id,供节点按 node 认领。
+    # 显式 node_id 优先;否则查账号归属;再回落 default_node_id(迁移期=aliyun1)。
+    # standalone 下 default_node_id 通常为空 → node_id=None,send_proactive_text 仍按 id 直发,行为不变。
+    effective_node_id = (
+        node_id
+        or resolve_node_for_account(account_id)
+        or (getattr(settings, "default_node_id", "") or None)
+    )
     merged_metadata = {
         **(metadata or {}),
     }
@@ -114,6 +124,7 @@ def enqueue_proactive_text(
                     if scheduled_at
                     else None
                 ),
+                node_id=effective_node_id,
                 metadata=merged_metadata,
             )
             try:
@@ -168,6 +179,7 @@ def enqueue_proactive_text(
             if scheduled_at
             else None
         ),
+        node_id=effective_node_id,
         metadata=merged_metadata,
     )
     if outbound["status"] == "pending":

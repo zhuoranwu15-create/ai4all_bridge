@@ -1137,16 +1137,46 @@ def init_db() -> None:
         _ensure_column(conn, "binding_intents", "manual_login_command", "TEXT")
         _ensure_column(conn, "binding_intents", "error", "TEXT")
         _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
+        # 多机接入:绑定 intent 创建时定好目标节点(登录会话钉死在该节点 = 该出口 IP)。
+        _ensure_column(conn, "binding_intents", "node_id", "TEXT")
         _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
         _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
         _ensure_column(conn, "accounts", "is_debug", "INTEGER NOT NULL DEFAULT 0")
+        # 多机接入:账号 → 节点归属(路由属性,不参与隔离)。见 multi_node_access_refactor.md §5。
+        _ensure_column(conn, "accounts", "assigned_node_id", "TEXT")
         _ensure_column(conn, "outbound_messages", "product_category", "TEXT")
         _ensure_column(conn, "outbound_messages", "policy_version", "TEXT")
         _ensure_column(conn, "outbound_messages", "policy_reason", "TEXT")
         _ensure_column(conn, "outbound_messages", "scheduled_at", "TEXT")
+        # 多机接入:出站按节点认领。node_id=enqueue 时解析的归属节点;claimed_at=sending 抢占时间(stale 回收)。
+        _ensure_column(conn, "outbound_messages", "node_id", "TEXT")
+        _ensure_column(conn, "outbound_messages", "claimed_at", "TEXT")
         _ensure_column(conn, "reminders", "recur_rule", "TEXT")
         _ensure_column(conn, "reminders", "sent_count", "INTEGER NOT NULL DEFAULT 0")
         _ensure_column(conn, "reminders", "last_sent_at", "TEXT")
+        # 多机接入:接入节点登记表(MVP 仅登记 + 心跳),中心据 base_url push 登录。
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS access_nodes (
+                node_id TEXT PRIMARY KEY,
+                base_url TEXT,
+                egress_ip TEXT,
+                last_heartbeat_at TEXT,
+                session_count INTEGER NOT NULL DEFAULT 0,
+                max_sessions INTEGER,
+                status TEXT NOT NULL DEFAULT 'online',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            )
+            """
+        )
+        # 节点出站认领索引:WHERE node_id=? AND status=? ORDER BY scheduled_at。
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS ix_outbound_messages_node_dispatch
+            ON outbound_messages(node_id, status, scheduled_at)
+            """
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS content_invitations (
@@ -4951,6 +4981,7 @@ def create_binding_intent(
     platform_user_id: str,
     account_id: str,
     channel: str = "openclaw-weixin",
+    node_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     cleaned_channel = _clean_text(channel) or "openclaw-weixin"
     binding_intent_id = _new_id("bind")
@@ -4960,6 +4991,15 @@ def create_binding_intent(
         f"--channel {cleaned_channel} "
         f"--account {openclaw_login_session_key} "
         "--verbose"
+    )
+
+    # 多机接入:定目标节点 = 显式 > 账号既有归属 > pick_node(最闲 online) > default_node_id。
+    # standalone 下三者皆空 → None,登录走本机直调(_is_local_node 命中),行为不变。
+    resolved_node_id = (
+        _clean_text(node_id)
+        or resolve_node_for_account(account_id)
+        or pick_node()
+        or (_clean_text(getattr(settings, "default_node_id", "")) or None)
     )
 
     with connect() as conn:
@@ -4978,9 +5018,9 @@ def create_binding_intent(
             """
             INSERT INTO binding_intents(
                 id, platform_user_id, account_id, openclaw_login_session_key,
-                channel, status, manual_login_command, expires_at, updated_at
+                channel, status, manual_login_command, node_id, expires_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'created', ?, datetime('now', '+8 hours', '+30 minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, 'created', ?, ?, datetime('now', '+8 hours', '+30 minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 binding_intent_id,
@@ -4989,8 +5029,12 @@ def create_binding_intent(
                 openclaw_login_session_key,
                 cleaned_channel,
                 manual_login_command,
+                resolved_node_id,
             ),
         )
+    # 登录会话将钉死在该节点 → 同步写账号归属(出站路由/入站反查依据)。
+    if resolved_node_id:
+        set_account_assigned_node(account_id=account_id, node_id=resolved_node_id)
     item = get_binding_intent(binding_intent_id=binding_intent_id)
     if item is None:
         raise RuntimeError("binding_intent was not created")
@@ -5086,7 +5130,7 @@ def get_binding_intent(
             SELECT
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, channel_account_id, qr_data_url, manual_login_command,
-                raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
             FROM binding_intents
             WHERE id = ?
             """,
@@ -5117,7 +5161,7 @@ def get_binding_intent(
                 SELECT
                     id, platform_user_id, account_id, openclaw_login_session_key,
                     channel, status, channel_account_id, qr_data_url, manual_login_command,
-                    raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                    node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
                 FROM binding_intents WHERE id = ?
                 """,
                 (binding_intent_id,),
@@ -5142,7 +5186,7 @@ def list_binding_intents_for_account(
             SELECT
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, channel_account_id, qr_data_url, manual_login_command,
-                raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
             FROM binding_intents
             WHERE account_id = ?
             ORDER BY created_at DESC
@@ -5178,7 +5222,7 @@ def get_active_binding_intent_for_channel_account(
             SELECT
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, channel_account_id, qr_data_url, manual_login_command,
-                raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
             FROM binding_intents
             WHERE channel = ?
               AND status = 'completed'
@@ -5195,7 +5239,7 @@ def get_active_binding_intent_for_channel_account(
                 SELECT
                     id, platform_user_id, account_id, openclaw_login_session_key,
                     channel, status, channel_account_id, qr_data_url, manual_login_command,
-                    raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                    node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
                 FROM binding_intents
                 WHERE channel = ?
                   AND status = 'completed'
@@ -5227,7 +5271,7 @@ def get_completed_binding_intent_for_openclaw_login_session_key(
             SELECT
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, channel_account_id, qr_data_url, manual_login_command,
-                raw_result_json, expires_at, completed_at, error, created_at, updated_at
+                node_id, raw_result_json, expires_at, completed_at, error, created_at, updated_at
             FROM binding_intents
             WHERE channel = ?
               AND status = 'completed'
@@ -6522,6 +6566,7 @@ def create_outbound_message(
     policy_version: Optional[str] = None,
     policy_reason: Optional[str] = None,
     scheduled_at: Optional[str] = None,
+    node_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cleaned_account_id = _clean_text(account_id)
@@ -6552,9 +6597,9 @@ def create_outbound_message(
                 account_id, channel, channel_account_id, to_user_id, session_key,
                 source, text, idempotency_key, status, error, quota_date,
                 product_category, policy_version, policy_reason, scheduled_at,
-                metadata_json, created_at, updated_at
+                node_id, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_account_id,
@@ -6572,6 +6617,7 @@ def create_outbound_message(
                 _clean_text(policy_version),
                 _clean_text(policy_reason),
                 _clean_text(scheduled_at),
+                _clean_text(node_id),
                 json.dumps(metadata or {}, ensure_ascii=False),
             ),
         )
@@ -6869,6 +6915,202 @@ def claim_pending_outbound_message(
             (outbound_message_id,),
         ).fetchone()
     return _decode_outbound_message(row) if row else None
+
+
+def claim_pending_outbound_by_node(
+    *,
+    node_id: str,
+    batch_size: int,
+    claim_timeout_seconds: int,
+    max_attempts: int = 5,
+) -> List[Dict[str, Any]]:
+    """认领某节点的待发主动消息(多机出站,见 multi_node_access_refactor.md 附录 B.3)。
+
+    候选 = status='pending',或卡在 'sending' 且认领超时(claimed_at 早于 stale 阈值,
+    节点崩溃回收)。每行用「带条件 UPDATE + rowcount==1」原子抢占,保证同 node 多消费者
+    不重复领;WHERE node_id=? 使不同节点天然互斥。仅领 attempts<max_attempts(毒消息封顶)、
+    scheduled_at 已到点的行。照搬 claim_queued_content_moderation_tasks 抢占范式。
+    """
+    cleaned_node_id = _clean_text(node_id)
+    if not cleaned_node_id:
+        return []
+    batch = max(1, min(200, int(batch_size)))
+    stale_modifier = f"-{max(1, int(claim_timeout_seconds))} seconds"
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id FROM outbound_messages
+            WHERE node_id = ?
+              AND attempts < ?
+              AND (
+                status = 'pending'
+                OR (
+                  status = 'sending'
+                  AND claimed_at IS NOT NULL
+                  AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                )
+              )
+              AND (
+                scheduled_at IS NULL
+                OR scheduled_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+              )
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (cleaned_node_id, int(max_attempts), stale_modifier, batch),
+        ).fetchall()
+        claimed: List[Dict[str, Any]] = []
+        for row in rows:
+            cursor = conn.execute(
+                """
+                UPDATE outbound_messages
+                SET status = 'sending',
+                    attempts = attempts + 1,
+                    claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    error = NULL,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                  AND node_id = ?
+                  AND attempts < ?
+                  AND (
+                    status = 'pending'
+                    OR (
+                      status = 'sending'
+                      AND claimed_at IS NOT NULL
+                      AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                    )
+                  )
+                """,
+                (row["id"], cleaned_node_id, int(max_attempts), stale_modifier),
+            )
+            if cursor.rowcount != 1:
+                continue
+            claimed_row = conn.execute(
+                "SELECT * FROM outbound_messages WHERE id = ?",
+                (row["id"],),
+            ).fetchone()
+            if claimed_row is not None:
+                claimed.append(_decode_outbound_message(claimed_row))
+    return claimed
+
+
+# ===== 多机接入:账号归属 + 节点登记 helper(见 multi_node_access_refactor.md §5/§7)=====
+
+def set_account_assigned_node(*, account_id: str, node_id: Optional[str]) -> None:
+    """写账号 → 节点归属(路由属性,不参与隔离)。node_id 为空则清空归属。"""
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        return
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE accounts
+            SET assigned_node_id = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (_clean_text(node_id), cleaned_account_id),
+        )
+
+
+def resolve_node_for_account(account_id: str) -> Optional[str]:
+    """反查账号归属节点;无归属/无账号返回 None(调用方回落 default_node_id)。"""
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT assigned_node_id FROM accounts WHERE id = ?",
+            (cleaned_account_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return row["assigned_node_id"] or None
+
+
+def upsert_access_node(
+    *,
+    node_id: str,
+    base_url: Optional[str] = None,
+    egress_ip: Optional[str] = None,
+    session_count: Optional[int] = None,
+    max_sessions: Optional[int] = None,
+    status: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """登记/更新接入节点并刷新心跳。仅覆盖传入的非 None 字段(心跳只带 session_count 时
+    不会抹掉 base_url 等)。首见时以默认值建行。"""
+    cleaned_node_id = _clean_text(node_id)
+    if not cleaned_node_id:
+        return None
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO access_nodes(node_id, session_count, status, last_heartbeat_at)
+            VALUES (?, 0, 'online', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (cleaned_node_id,),
+        )
+        conn.execute(
+            """
+            UPDATE access_nodes
+            SET base_url = COALESCE(?, base_url),
+                egress_ip = COALESCE(?, egress_ip),
+                session_count = COALESCE(?, session_count),
+                max_sessions = COALESCE(?, max_sessions),
+                status = COALESCE(?, status),
+                last_heartbeat_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE node_id = ?
+            """,
+            (
+                _clean_text(base_url),
+                _clean_text(egress_ip),
+                int(session_count) if session_count is not None else None,
+                int(max_sessions) if max_sessions is not None else None,
+                _clean_text(status),
+                cleaned_node_id,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM access_nodes WHERE node_id = ?", (cleaned_node_id,)
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def get_access_node(*, node_id: str) -> Optional[Dict[str, Any]]:
+    """读取单个接入节点登记(含 base_url,中心 push 登录用)。"""
+    cleaned_node_id = _clean_text(node_id)
+    if not cleaned_node_id:
+        return None
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM access_nodes WHERE node_id = ?", (cleaned_node_id,)
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def pick_node(*, preferred_node_id: Optional[str] = None) -> Optional[str]:
+    """MVP 节点选择:优先 preferred(若 online);否则 online 节点中 session_count 最小者。
+    无可用节点返回 None(调用方回落 default_node_id / 本机)。"""
+    cleaned_pref = _clean_text(preferred_node_id)
+    with connect() as conn:
+        if cleaned_pref:
+            row = conn.execute(
+                "SELECT node_id FROM access_nodes WHERE node_id = ? AND status = 'online'",
+                (cleaned_pref,),
+            ).fetchone()
+            if row is not None:
+                return row["node_id"]
+        row = conn.execute(
+            """
+            SELECT node_id FROM access_nodes
+            WHERE status = 'online'
+              AND (max_sessions IS NULL OR max_sessions <= 0 OR session_count < max_sessions)
+            ORDER BY session_count ASC, node_id ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    return row["node_id"] if row is not None else None
 
 
 def mark_outbound_message_sent(

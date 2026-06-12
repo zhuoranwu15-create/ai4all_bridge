@@ -135,10 +135,7 @@ from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
 from app.openclaw_gateway import (
-    logout_weixin_account,
     send_weixin_text,
-    start_weixin_qr_login,
-    wait_weixin_qr_login,
 )
 from app.dreaming_scheduler import (
     get_dreaming_scheduler,
@@ -175,7 +172,23 @@ from app.proactive.settings import (
     get_effective_proactive_message_settings,
     resolve_frequency_limits,
 )
-from app.schemas import OpenClawDebugTraceRequest, OpenClawTurnRequest, OpenClawTurnResponse
+from app.schemas import (
+    NodeHeartbeatRequest,
+    NodeOutboundClaimRequest,
+    NodeOutboundResultRequest,
+    OpenClawDebugTraceRequest,
+    OpenClawTurnRequest,
+    OpenClawTurnResponse,
+)
+from app import node_gateway
+from app.db import (
+    claim_pending_outbound_by_node,
+    insert_outbound_delivery_message,
+    mark_outbound_message_failed,
+    mark_outbound_message_sent,
+    resolve_node_for_account,
+    upsert_access_node,
+)
 from app.dreaming import (
     rollback_memory_item,
     run_dreaming,
@@ -447,7 +460,7 @@ def _collect_openclaw_weixin_logout_targets(bindings: list[dict]) -> list[str]:
     return targets
 
 
-def _cleanup_openclaw_weixin_accounts(bindings: list[dict]) -> dict:
+def _cleanup_openclaw_weixin_accounts(bindings: list[dict], *, node_id: Optional[str] = None) -> dict:
     targets = _collect_openclaw_weixin_logout_targets(bindings)
     if not targets:
         return {
@@ -459,7 +472,9 @@ def _cleanup_openclaw_weixin_accounts(bindings: list[dict]) -> dict:
     attempts = []
     for target in targets:
         try:
-            result = logout_weixin_account(
+            # 多机:登出在会话所在节点本机执行;node_id 为空(standalone/同机)→ 本机直调。
+            result = node_gateway.node_logout(
+                node_id=node_id,
                 account_id=target,
                 channel="openclaw-weixin",
                 timeout_ms=settings.openclaw_gateway_call_timeout_ms,
@@ -577,7 +592,8 @@ async def _wait_for_binding_intent(binding_intent_id: str) -> None:
         return
     try:
         result = await asyncio.to_thread(
-            wait_weixin_qr_login,
+            node_gateway.node_wait_qr,
+            node_id=binding_intent.get("node_id"),
             account_id=binding_intent["openclaw_login_session_key"],
             current_qr_data_url=binding_intent.get("qr_data_url"),
             gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
@@ -700,7 +716,8 @@ def _start_openclaw_qr_for_binding(binding_intent: dict) -> dict:
     if not settings.openclaw_login_auto_start:
         return binding_intent
     try:
-        start_result = start_weixin_qr_login(
+        start_result = node_gateway.node_start_qr(
+            node_id=binding_intent.get("node_id"),
             account_id=binding_intent["openclaw_login_session_key"],
             gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
             start_timeout_ms=settings.openclaw_login_start_timeout_ms,
@@ -3613,7 +3630,10 @@ def web_me_unbind(
     account_id = account_result["account"]["id"]
 
     bindings_before_unbind = list_channel_bindings_for_account(account_id=account_id)
-    openclaw_cleanup = _cleanup_openclaw_weixin_accounts(bindings_before_unbind)
+    openclaw_cleanup = _cleanup_openclaw_weixin_accounts(
+        bindings_before_unbind,
+        node_id=resolve_node_for_account(account_id),
+    )
 
     if payload.keep_memories:
         stats = unbind_account_channel(account_id=account_id)
@@ -4820,3 +4840,65 @@ def openclaw_turn(
     _: None = Depends(verify_bridge_auth),
 ) -> OpenClawTurnResponse:
     return handle_openclaw_turn(payload, background_loop=_background_loop)
+
+
+# ===== 多机接入:节点面向 API(Bearer bridge_secret;见 multi_node_access_refactor.md §7.1)=====
+
+
+@app.post("/node/outbound/claim")
+def node_outbound_claim(
+    payload: NodeOutboundClaimRequest,
+    _: None = Depends(verify_bridge_auth),
+) -> dict:
+    """节点认领其归属的待发主动消息。claim/标记都在中心(节点无 DB)。"""
+    messages = claim_pending_outbound_by_node(
+        node_id=payload.node_id,
+        batch_size=payload.batch,
+        claim_timeout_seconds=settings.outbound_claim_timeout_seconds,
+    )
+    return {"messages": messages}
+
+
+@app.post("/node/outbound/{outbound_message_id}/result")
+def node_outbound_result(
+    outbound_message_id: int,
+    payload: NodeOutboundResultRequest,
+    _: None = Depends(verify_bridge_auth),
+) -> dict:
+    """节点回报发送结果。sent → 标记已发 + 落交付记录;否则标记失败(stale 回收/下轮重领)。"""
+    if payload.status == "sent":
+        sent = mark_outbound_message_sent(
+            outbound_message_id=outbound_message_id,
+            gateway_message_id=payload.gateway_message_id,
+        )
+        if sent is not None:
+            try:
+                insert_outbound_delivery_message(outbound_message=sent)
+            except Exception as err:  # 落交付记录失败不应翻车发送结果
+                logger.exception(
+                    "node_outbound_result delivery insert failed id=%s error=%s",
+                    outbound_message_id,
+                    err,
+                )
+        return {"status": "sent", "outbound_message": sent}
+    failed = mark_outbound_message_failed(
+        outbound_message_id=outbound_message_id,
+        error=str(payload.error or "node_send_failed"),
+    )
+    return {"status": "failed", "outbound_message": failed}
+
+
+@app.post("/node/heartbeat")
+def node_heartbeat(
+    payload: NodeHeartbeatRequest,
+    _: None = Depends(verify_bridge_auth),
+) -> dict:
+    """节点心跳:upsert access_nodes(仅覆盖传入的非 None 字段)。"""
+    node = upsert_access_node(
+        node_id=payload.node_id,
+        base_url=payload.base_url,
+        egress_ip=payload.egress_ip,
+        session_count=payload.session_count,
+        max_sessions=payload.max_sessions,
+    )
+    return {"node": node}

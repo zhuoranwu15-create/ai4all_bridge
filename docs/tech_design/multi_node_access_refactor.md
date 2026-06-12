@@ -11,14 +11,19 @@
 
 ---
 
-## 进展与状态（2026-06-12）
+## 进展与状态（2026-06-13）
 
 ### 当前阶段
 - 设计与决策：✅ 完成（本文 + 附录 A/B）。
-- 一期代码：⛔ **未开始**——`scripts/run_access_node.py`、`app/node_gateway.py`、中心 node-facing 端点、schema 迁移均未写。**因此 aliyun2 现在还不能作为正式 node 工作。**
+- 一期代码：🚧 **进行中，逐阶段评审**（分支 `feat/multi-node-access-phase1`，开发于 aliyun2 仓库 + 内存 sqlite 全量回归，不动 live aliyun1）：
+  - **Phase 1 ✅**（2026-06-13）：角色/节点配置（`AI4ALL_ROLE` 等 + `has_central_role`/`has_node_role`/`is_inline_dispatch`）；加性 schema（`access_nodes` 表、`accounts.assigned_node_id`、`outbound_messages.node_id/claimed_at`、`binding_intents.node_id`、`ix_outbound_messages_node_dispatch`）；`claim_pending_outbound_by_node` + node helper（`set/resolve_node_for_account`、`upsert/get_access_node`、`pick_node`）；`enqueue_proactive_text` 填 node_id。
+  - **Phase 2 ✅**（2026-06-13）：中心 node-facing 端点 `POST /node/outbound/claim|result`、`/node/heartbeat`（bridge secret）；`app/node_gateway.py` 派发层（local 直调 / remote push）；登录链路（start/wait/logout）改经 node_gateway；`create_binding_intent` 定节点 + 写归属。
+  - **Phase 3 ⛔ 待做**：`scripts/run_access_node.py`（节点 agent：出站 pull loop + 登录 exec 端点 + 心跳）+ 出站咽喉 3 处 `send_weixin_text` 在 central 改 enqueue。**因此 aliyun2 现在还不能作为正式 node 工作（缺出站消费进程）。**
+  - **Phase 4 ⛔ 待做**：`.env.example`/`architecture_overview.md` 文档化 + 全量回归收尾。
+  - 回归保障：每阶段末 `standalone` 全量 `tests/` 零回归（Phase 2 末 544 passed，唯一失败为 quiet-hours 时间相关的既有 flake，已 git stash 在 clean tree 复现确认非本次引入）。
 - 机器：
   - **aliyun1**（公网 `59.110.40.50` / 内网 `172.24.16.141`）= 线上单机 monolith（systemd：`ai4all-weixin-backend`@`127.0.0.1:8180` + `ai4all-weixin-proactive-scheduler` + nginx + 本机 openclaw，**服务真实用户**）。
-  - **aliyun2**（公网 `39.96.70.112` / 内网 `172.24.18.88`）= 本机，纯 node。与 aliyun1 内网已通（`/etc/hosts` 互配主机名 + 内网 TCP 已互开），**OpenClaw 安装中**，待跑 [runbook B](multi_node_access_runbook_B.md) Part 1。
+  - **aliyun2**（公网 `39.96.70.112` / 内网 `172.24.18.88`）= 本机，纯 node。与 aliyun1 内网已通；**OpenClaw + openclaw-weixin 已装**，**Part 1 跨机被动链路已闭合**（§14 #1）。开发用 Python 3.11 venv 经 uv 装好（系统仅 py3.6，见 runbook B）。
   - **节点→中心地址**：aliyun2 经内网 hosts 别名 `http://aliyun1`（nginx :80）访问 aliyun1，即 §8.2 的「稳定指纹地址」MVP 取值（中心 aliyun1↔aliyun2 切换时改 hosts 指向即可）。
 
 ### 关键事实（已核实，指导落地）
@@ -39,9 +44,9 @@
 | 范围 | MVP 跨机跑通；自动负载调度留二期 |
 
 ### 下一步
-1. **aliyun2 现在就做**（零重构代码）：验证跨机被动链路 → [runbook B](multi_node_access_runbook_B.md) Part 1。
-2. **一期编码**：仓库内开发 + `standalone` 全量回归，**不在 live aliyun1 上直接改代码**。
-3. **部署**：aliyun1 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ aliyun2 加 node agent（runbook B Part 2）。
+1. ~~aliyun2 验证跨机被动链路~~ → ✅ 已闭合（§14 #1）。
+2. ~~一期编码 Phase 1/2~~ → ✅ 已落地（见上「当前阶段」）。**Phase 3**（节点 agent + 出站咽喉拆分）为下一步,**这是最高风险阶段**（出站咽喉,§6/§13）。
+3. **部署**（Phase 3/4 后）：aliyun1 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ aliyun2 加 node agent（runbook B Part 2）。**前置**:aliyun2 补 `openclaw-weixin-gateway-methods-runtime` patch（中心 push 登录依赖）。
 
 ---
 
@@ -274,7 +279,7 @@ LOCAL_NODE_INLINE_DISPATCH=false  # true: central 同机 node 的出站走同进
 
 ## 14. 待你/评审钉死的开放问题
 
-1. **openclaw 入站回调 URL 是否可配成远程**（aliyun2 → 中心）？上游 §1.2 判定「天然支持多来源」，但需在 aliyun2 上实配验证（openclaw 是打包 dist）。→ **正在验证**：[runbook B](multi_node_access_runbook_B.md) Part 1（零代码）。
+1. **openclaw 入站回调 URL 是否可配成远程**（aliyun2 → 中心）？上游 §1.2 判定「天然支持多来源」，但需在 aliyun2 上实配验证（openclaw 是打包 dist）。→ **✅ 已验证（2026-06-12）**：在 aliyun2 上直连 `POST http://aliyun1/openclaw/turn`（仿桥接 payload + 真实 bridge secret），返回 **HTTP 200** `{"status":"ignored","no_reply":true,"metadata":{"reason":"no_binding",...}}`，66ms。证明跨机远程 POST + Bearer 鉴权 + 中心 ingest 全通；`no_binding` 收口印证线上 `OPENCLAW_INBOUND_REQUIRE_BINDING=true` 生效。最大未知闭合。详见 [runbook B](multi_node_access_runbook_B.md) Part 1。
 2. **节点 agent 与中心之间**：MVP 仅 bridge secret，还是要内网 + mTLS？（阿里云内网 + 安全组通常 secret 足够）。
 3. **中心指纹地址选型**：内网 SLB / 私网 DNS / keepalived VIP / floating EIP —— 取决于你们阿里云现有网络设施。→ **MVP 已选 `/etc/hosts` 主机名别名**（aliyun2 上 `aliyun1`→aliyun1 内网 IP，零设施依赖）；中心 aliyun1↔aliyun2 切换时改各节点 hosts 指向即可。二期若上 SLB/DNS 再平滑替换。
 4. **再均衡策略**：存量账号迁到 aliyun2 只能重扫码（会话不可热迁），是否接受「按需手动迁移」直到二期调度器？

@@ -36,6 +36,28 @@ class OpenClawTurnResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+# ===== 多机接入:节点面向 API(Bearer bridge_secret)=====
+
+
+class NodeOutboundClaimRequest(BaseModel):
+    node_id: str
+    batch: int = 20
+
+
+class NodeOutboundResultRequest(BaseModel):
+    status: str  # "sent" | "failed"
+    gateway_message_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class NodeHeartbeatRequest(BaseModel):
+    node_id: str
+    session_count: Optional[int] = None
+    egress_ip: Optional[str] = None
+    base_url: Optional[str] = None
+    max_sessions: Optional[int] = None
+
+
 class OpenClawDebugTraceRequest(BaseModel):
     trace_id: Optional[str] = None
     channel_account_id: Optional[str] = None

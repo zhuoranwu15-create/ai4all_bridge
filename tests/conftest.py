@@ -135,6 +135,19 @@ def test_settings(tmp_path):
     s.aliyun_captcha_prefix = ""
     s.otp_expires_minutes = 10
     s.otp_token_expires_minutes = 10
+    # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
+    s.ai4all_role = "standalone"
+    s.node_id = ""
+    s.default_node_id = ""
+    s.central_url = ""
+    s.node_base_url = ""
+    s.node_agent_host = "0.0.0.0"
+    s.node_agent_port = 8190
+    s.node_max_sessions = 0
+    s.outbound_pull_interval_seconds = 2.0
+    s.outbound_pull_batch_size = 20
+    s.outbound_claim_timeout_seconds = 60
+    s.local_node_inline_dispatch = False
     terms_dir = tmp_path / "moderation"
     terms_dir.mkdir(parents=True, exist_ok=True)
     (terms_dir / "sensitive_terms.json").write_text(

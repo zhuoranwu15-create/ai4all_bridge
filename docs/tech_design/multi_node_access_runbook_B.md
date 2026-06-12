@@ -83,6 +83,27 @@
 
 > 完成后回填设计文档 §14 #1 状态。
 
+#### ✅ A 层实测结果（2026-06-12，已闭合 §14 #1）
+
+不依赖扫码、不依赖微信登录，直接在 aliyun2 上仿桥接 payload 打中心，即可验证「最大未知=远程 POST」：
+
+```bash
+# aliyun2 上执行；SECRET 取自本机 .env 的 AI4ALL_BRIDGE_SECRET（与 aliyun1 一致）
+curl -sS --noproxy aliyun1 -X POST http://aliyun1/openclaw/turn \
+  -H "Authorization: Bearer ${SECRET}" -H "Content-Type: application/json" \
+  -d '{"channel":"openclaw-weixin","channel_account_id":"conn-test","account_id":"conn-test","chat_type":"private","session_key":"openclaw-weixin:conn-test","message_type":"text","text":"在吗"}'
+```
+
+实测返回 **HTTP 200**：`{"status":"ignored","reply":null,"no_reply":true,"metadata":{"reason":"no_binding",...}}`（66ms）。
+
+- 非 401 → **bridge secret 对齐、鉴权通过**。
+- 拿到中心 ingest 后的 JSON（metadata 原样回显 channel/account/session）→ **跨机远程 POST 成立、中心已受理并走到绑定闸门**。
+- `reason: no_binding` → 线上 `OPENCLAW_INBOUND_REQUIRE_BINDING=true` 生效（合成测试号未绑定被收口）。
+
+副作用：仅两行中心日志，**不建号 / 不调 LLM / 不写记忆 / 不落消息**（`resolve_account_id_for_inbound_channel_identity` 返回 None 即收口，见 `app/turn_service.py`）。
+
+> **B 层（完整回环：微信收消息→桥接 claim turn→回复经微信发回）的「机器间」部分已随此 200 一并证明**（中心跨机回传了 response body）。剩余仅 OpenClaw 本机出站，与单机生产同一份代码。若要眼见完整回环：注册桥接插件指向 `http://aliyun1` + 扫码登测试号 + 在 aliyun1 给该号插一条 binding + 发「在吗」即可，**无需 web 注册端**（web 端按设计仅在中心）。
+
 ### 本阶段限制（重要）
 - **aliyun2 上这个号的主动消息（提醒 / dreaming / 欢迎语）不会发**——出站队列消费（node agent）属一期代码，尚未实现。这是预期的。
 - **不要把 aliyun1 上的存量真实账号迁到 aliyun2**（会话不可热迁，迁了要重扫码）。Part 1 只用一次性测试号。
@@ -92,6 +113,15 @@
 ## Part 2 · aliyun2 作为正式 node 接入（一期代码落地后）
 
 前置：一期代码已合并（`run_access_node.py`、`node_gateway`、中心 node-facing 端点、schema 迁移），aliyun1 已按 [runbook A](multi_node_access_runbook_A.md) 升级为 central+node。
+
+> ⚠️ **OpenClaw patch 前置（2026-06-12 aliyun2 实测：3 个 patch 一个都没打，是上游全新装的 weixin/openclaw）**：
+> | Patch（`patches/`） | 作用 | Part 2 是否硬前置 |
+> |---|---|---|
+> | `openclaw-weixin-gateway-methods-runtime` | 暴露 `web.login.start/wait` 为 gateway 方法 | **是** —— 中心 push 扫码登录（附录 A.2）直接依赖,不打则登录 exec 失败 |
+> | `openclaw-weixin-logout-account-runtime` | 单账号 `logoutAccount` runtime | 多账号登出/再均衡前需要 |
+> | `openclaw-before-agent-reply-media` | 入站图片本地路径透出给 before_agent_reply | 图片理解前需要;纯文本回环不依赖 |
+>
+> 起 node agent 前先把 patch 应用到 aliyun2 的安装包（weixin 在 `~/.openclaw/npm/projects/.../@tencent-weixin/openclaw-weixin`，openclaw core 在 `~/.npm-global/lib/node_modules/openclaw`）。**别等扫码登录失败才回头查。**
 
 ### 步骤
 

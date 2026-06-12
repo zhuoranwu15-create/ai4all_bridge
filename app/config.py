@@ -183,9 +183,50 @@ class Settings(BaseSettings):
     otp_expires_minutes: int = 10
     otp_token_expires_minutes: int = 10
 
+    # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
+    # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
+    # standalone 下所有新路径不触发,行为逐字节不变。
+    ai4all_role: str = "standalone"
+    node_id: str = ""                              # 含 node 能力时必填,全局唯一(如 aliyun1/aliyun2)
+    default_node_id: str = ""                       # 账号未分配节点时兜底归属(迁移期 .env 设 aliyun1)
+    central_url: str = ""                           # node→中心 稳定指纹地址(MVP=http://aliyun1),不写裸 IP
+    node_base_url: str = ""                         # 本节点基址(中心 push 登录用),写入 access_nodes
+    node_agent_host: str = "0.0.0.0"                # node agent HTTP 监听地址
+    node_agent_port: int = 8190                     # node agent HTTP 端口
+    node_max_sessions: int = 0                      # 本机会话上限(MVP 仅上报,0=未设)
+    outbound_pull_interval_seconds: float = 2.0     # 节点出站轮询间隔
+    outbound_pull_batch_size: int = 20              # 节点单轮认领条数
+    outbound_claim_timeout_seconds: int = 60        # sending 卡死回收阈值(节点崩溃安全网)
+    local_node_inline_dispatch: bool = False        # true: central 同机 node 出站同进程即时发(迁移期降延迟)
+
     class Config:
         env_file = ".env"
         extra = "ignore"
+
+    @property
+    def role_set(self) -> set:
+        """解析 ai4all_role 为角色集合(支持逗号分隔的 "central,node")。"""
+        return {r.strip().lower() for r in (self.ai4all_role or "").split(",") if r.strip()}
+
+    @property
+    def has_central_role(self) -> bool:
+        """是否具备中心能力(读写 DB / 大脑 / 节点面向 API)。standalone 视为含中心。"""
+        roles = self.role_set
+        return "central" in roles or "standalone" in roles
+
+    @property
+    def has_node_role(self) -> bool:
+        """是否具备接入节点能力(本机 openclaw 直发 / exec)。standalone 视为含 node。"""
+        roles = self.role_set
+        return "node" in roles or "standalone" in roles
+
+    @property
+    def is_inline_dispatch(self) -> bool:
+        """出站是否走同进程即时直发。standalone 恒 True(行为不变);
+        central+node 同机可由 local_node_inline_dispatch 选开。"""
+        if "standalone" in self.role_set:
+            return True
+        return bool(self.local_node_inline_dispatch)
 
 
 settings = Settings()

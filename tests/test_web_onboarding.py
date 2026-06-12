@@ -41,7 +41,7 @@ def _get_verified_token(phone: str) -> str:
 def _get_login_data(phone: str, client):
     """Login via OTP flow; return (session_headers, login_response_data)."""
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "login-init-key"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         res = client.post("/web/login", json={"phone": phone, "verified_token": _get_verified_token(phone)})
@@ -198,7 +198,7 @@ def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait") as mock_schedule, patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "rawQrDataUrl": "data:image/png;base64,ZmFrZQ==",
@@ -236,7 +236,7 @@ def test_register_and_binding_intent_creates_default_account_and_qr(client):
     token = _get_verified_token("13800000009")
 
     with patch("app.main._schedule_binding_wait") as mock_schedule, patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "sessionKey": "bind-combined",
@@ -301,7 +301,7 @@ def test_register_and_binding_intent_reuses_existing_default_account(client):
     from app.db import connect
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-first"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         first = client.post(
@@ -313,7 +313,7 @@ def test_register_and_binding_intent_reuses_existing_default_account(client):
         ).json()
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-second"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         second = client.post(
@@ -349,7 +349,7 @@ def test_register_and_binding_intent_reuses_existing_default_account(client):
 
 def test_admin_account_includes_binding_diagnostics_for_web_account(client):
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-admin-diag"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         data = client.post(
@@ -501,7 +501,7 @@ def test_binding_wait_completion_binds_channel_account_to_precreated_account(cli
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "sessionKey": "bind-wait-session",
@@ -569,7 +569,7 @@ def test_bound_channel_account_routes_turn_to_precreated_account(client):
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "sessionKey": "bind-route-session",
@@ -622,7 +622,7 @@ def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(cl
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "sessionKey": "bind-normalized-route",
@@ -674,7 +674,7 @@ def test_bound_login_session_key_routes_turn_to_precreated_account(client):
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={
             "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
             "sessionKey": "bind-session-route",
@@ -746,7 +746,7 @@ def test_get_binding_intent_auto_expires_stale_qr(client):
     session_headers, login_data = _get_login_data("13800007777", client)
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "exp-session"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
@@ -785,7 +785,7 @@ def test_channel_binding_deduplicates_by_channel_account_id(client):
     account = login_data["account"]
 
     with patch("app.main._schedule_binding_wait"), patch(
-        "app.main.start_weixin_qr_login",
+        "app.openclaw_gateway.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "bind-dedup-session"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         intent = client.post(
@@ -831,7 +831,7 @@ def test_web_unbind_clear_all_allows_new_default_account(client):
     session_headers, login_data = _get_login_data("13800000212", client)
     old_account_id = login_data["account"]["id"]
 
-    with patch("app.main.logout_weixin_account") as mock_logout:
+    with patch("app.openclaw_gateway.logout_weixin_account") as mock_logout:
         res = client.post(
             "/web/me/unbind",
             headers=session_headers,
@@ -975,7 +975,7 @@ def test_web_unbind_attempts_openclaw_weixin_logout(client):
     )
     assert list_channel_bindings_for_account(account_id=account["id"])
 
-    with patch("app.main.logout_weixin_account", return_value={"ok": True}) as mock_logout:
+    with patch("app.openclaw_gateway.logout_weixin_account", return_value={"ok": True}) as mock_logout:
         res = client.post(
             "/web/me/unbind",
             headers=session_headers,
@@ -1003,7 +1003,7 @@ def test_web_unbind_preserves_local_cleanup_when_openclaw_logout_unsupported(cli
     )
 
     with patch(
-        "app.main.logout_weixin_account",
+        "app.openclaw_gateway.logout_weixin_account",
         side_effect=RuntimeError('Channel "openclaw-weixin" does not support logout.'),
     ):
         res = client.post(
