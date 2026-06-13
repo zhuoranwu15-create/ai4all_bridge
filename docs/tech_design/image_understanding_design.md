@@ -149,6 +149,24 @@ bridge 拿不到图是**钩子层没暴露媒体**，不是图没下载。推荐
 
 ---
 
+## 8.5 多机（node）：bridge 传字节 / 内联 base64（2026-06-13 落地）
+
+单机方案靠「中心读 node 本地路径」成立；多机下 node（aliyun2）的图落在 node 磁盘，中心（aliyun1）读不到、且被 `image_inbound_dir` 白名单拒绝（详见 [补丁维护 §2.5](openclaw_patches_maintenance.md)）。已选 **传字节 / 内联 base64**：
+
+```
+微信图片 → openclaw-weixin 下载到 node 本地 <uuid>.<ext>
+  → [patch] before_agent_reply 的 cleanedBody 注入本地路径标记
+  → [新] bridge 用 node:fs 读该文件 → base64 内联进 media.data_base64(+format+size)
+  → POST 中心 /openclaw/turn
+  → [新] image_understanding.describe_image(image_b64=...) 用字节构 data URL → DashScope VL
+  → 之后与单机完全一致(描述进历史 → 主链路接话)
+```
+
+- 来源优先级 **b64 > path > url**（`describe_image` 内部统一）。单机 aliyun1 仍走同一条 bridge 代码：读字节成功就传字节；若读失败/超限自动**降级**为仅传 `path`（中心可直读），向后兼容。
+- 字节路径不经 `image_inbound_dir` 白名单（字节无路径概念），仍受 `image_max_bytes` 上限保护。bridge 侧另有 cap（`AI4ALL_IMAGE_MAX_BYTES`，默认 5MB）。
+- **运维前置**：node→中心经 aliyun1 nginx，须把 `/openclaw/turn` 的 `client_max_body_size` 调到 12m（默认 1m 会 413）。三方大小协调：bridge 5MB ≤ 中心 10MB ≤ nginx 12MB。
+- **隐私**：base64 仅内存临时用于 VL，不落库（不进 `messages.raw`，moderation `_media_to_dict` 白名单天然过滤 `data_base64`）。
+
 ## 9. 线上机可复用的排查命令
 
 ```bash

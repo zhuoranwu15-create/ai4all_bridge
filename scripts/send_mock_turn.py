@@ -1,5 +1,8 @@
 import argparse
+import base64
 import json
+import mimetypes
+import os
 import time
 from urllib.parse import urlparse
 import urllib.request
@@ -28,17 +31,32 @@ def main() -> None:
     parser.add_argument(
         "--message-type",
         default="text",
-        help="消息类型，如 text / image / voice。给定 --image-path/--image-url 时自动置为 image。",
+        help="消息类型，如 text / image / voice。给定 --image-path/--image-url/--image-bytes 时自动置为 image。",
     )
     parser.add_argument("--image-path", default=None, help="本地图片绝对路径（绕过 OpenClaw 自测图片轮）")
     parser.add_argument("--image-url", default=None, help="远程图片 URL")
+    parser.add_argument(
+        "--image-bytes",
+        default=None,
+        help="本地图片文件：读成 base64 内联进 media.data_base64，模拟多机 node bridge 传字节路径。",
+    )
     args = parser.parse_args()
 
     now = int(time.time())
     message_id = args.message_id or f"msg_{now}"
     message_type = args.message_type
     media = None
-    if args.image_path or args.image_url:
+    if args.image_bytes:
+        message_type = "image"
+        with open(os.path.expanduser(args.image_bytes), "rb") as fh:
+            raw = fh.read()
+        mime, _ = mimetypes.guess_type(args.image_bytes)
+        media = {
+            "data_base64": base64.b64encode(raw).decode("ascii"),
+            "format": mime or "image/jpeg",
+            "size": len(raw),
+        }
+    elif args.image_path or args.image_url:
         message_type = "image"
         media = {
             "path": args.image_path,

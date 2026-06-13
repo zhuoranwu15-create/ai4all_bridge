@@ -1,9 +1,13 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { readFileSync, statSync } from "node:fs";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_SECRET = "dev-secret";
 const DEFAULT_TIMEOUT_MS = 8000;
 const DEFAULT_ONLY_CHANNEL = "openclaw-weixin";
+// 多机：读图片本地字节内联进 turn（base64），让中心无需访问 node 本地路径即可理解图片。
+// 上限须 <= 中心 image_max_bytes 且 <= nginx client_max_body_size（见部署文档）。
+const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const SHADOW_STATE_TTL_MS = 10 * 60 * 1000;
 const VOICE_DEBUG_MAX_FIELDS = 80;
 const VOICE_DEBUG_MAX_STRING = 240;
@@ -33,7 +37,25 @@ function resolveConfig(api) {
     onlyChannel: String(cfg.onlyChannel || process.env.AI4ALL_ONLY_CHANNEL || DEFAULT_ONLY_CHANNEL),
     shadowTraceAccountIds: String(cfg.shadowTraceAccountIds || process.env.AI4ALL_SHADOW_TRACE_ACCOUNT_IDS || ""),
     voiceDebug: parseOptionalBoolean(process.env.AI4ALL_VOICE_DEBUG) ?? parseOptionalBoolean(cfg.voiceDebug) ?? false,
+    imageMaxBytes: Number(cfg.imageMaxBytes || process.env.AI4ALL_IMAGE_MAX_BYTES || DEFAULT_IMAGE_MAX_BYTES),
   };
+}
+
+// 读入站图片本地字节并 base64 内联（多机：中心读不到 node 本地路径）。任何失败/超限
+// 都返回 null —— 调用方降级为仅转发 path（单机 aliyun1 中心可直读，向后兼容）。
+function readInboundImageBytes(api, path, maxBytes) {
+  try {
+    const size = statSync(path).size;
+    if (size > maxBytes) {
+      api.logger.warn(`ai4all bridge image too large, forwarding path only size=${size} max=${maxBytes} path=${path}`);
+      return null;
+    }
+    const buf = readFileSync(path);
+    return { dataBase64: buf.toString("base64"), size: buf.length };
+  } catch (err) {
+    api.logger.warn(`ai4all bridge image read failed, forwarding path only: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
 }
 
 function parseOptionalBoolean(value) {
@@ -504,6 +526,16 @@ export default definePluginEntry({
       // core patch; forward the local path so the backend can run VL on it.
       const inboundMedia = parseInboundMediaMarker(event.cleanedBody);
       const isImageTurn = Boolean(inboundMedia && isImageMediaType(inboundMedia.type));
+      // 图片轮：把 node 本地图片读成 base64 内联（path 保留作单机回退/排查面包屑）。
+      let imageMedia;
+      if (isImageTurn) {
+        imageMedia = { path: inboundMedia.path, format: inboundMedia.type || "image" };
+        const bytes = readInboundImageBytes(api, inboundMedia.path, config.imageMaxBytes);
+        if (bytes) {
+          imageMedia.data_base64 = bytes.dataBase64;
+          imageMedia.size = bytes.size;
+        }
+      }
       const payload = {
         event_id: ctx.runId || undefined,
         message_id: ctx.runId || undefined,
@@ -516,9 +548,7 @@ export default definePluginEntry({
         session_key: session.sessionKey,
         message_type: isImageTurn ? "image" : "text",
         text: isImageTurn ? inboundMedia.caption : event.cleanedBody || "",
-        ...(isImageTurn
-          ? { media: { path: inboundMedia.path, format: inboundMedia.type || "image" } }
-          : {}),
+        ...(isImageTurn ? { media: imageMedia } : {}),
         timestamp: Math.floor(Date.now() / 1000),
         raw: {
           ctx,

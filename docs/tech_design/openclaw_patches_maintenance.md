@@ -1,6 +1,6 @@
 # OpenClaw 补丁与部署机制（临时文档 / 待跟进）
 
-> 状态：**临时草稿，待后续跟进整理**。更新时间：2026-06-07
+> 状态：**临时草稿，待后续跟进整理**。更新时间：2026-06-13
 > 用途：记录本项目"改 OpenClaw 上游 + 部署到运行时"的关键技术流程。**这两处是项目落地的关键点；一旦上游 OpenClaw 有变动，需重点回归检查。**
 > 关联：[图片理解技术设计](image_understanding_design.md)
 
@@ -16,6 +16,26 @@ OpenClaw（`/home/jack/workspace/openclaw`）是**上游第三方仓库**（`ope
   `/home/jack/.openclaw/tools/node-v22.22.0/lib/node_modules/openclaw/dist/`（当前 **v2026.5.28**）。
 - 源码树 `/home/jack/workspace/openclaw` 当前是 **2026.6.2**（与运行版本不一致）。
 - backend = system 服务 `ai4all-weixin-backend.service`。
+
+### ⚠️ 多机：两台机器的 OpenClaw 安装方式不同（2026-06-13 aliyun2 实测）
+
+> 后续还要铺更多 node 机，**安装方式必须有统一标准**，否则每台机路径都不一样、patch/脚本要各写一套。
+
+| | aliyun1（中心） | aliyun2（node） |
+|---|---|---|
+| 安装方式 | OpenClaw **官方安装器**（自带 pinned node） | `npm install -g openclaw` 到 `~/.npm-global` |
+| 核心 dist 根 | `~/.openclaw/tools/node-v22.22.0/lib/node_modules/openclaw/dist/` | `~/.npm-global/lib/node_modules/openclaw/dist/` |
+| 运行 node | OpenClaw 自带 **v22.22.0**（锁定） | 系统 `/usr/bin/node` **v24.16.0** |
+| OpenClaw 版本 | v2026.5.28 | v2026.6.5 |
+| 插件运行时根 | `~/.openclaw/npm/projects/...`（**两机同构**） | `~/.openclaw/npm/projects/...` |
+
+差异只在**核心**（路径 + node 版本）；weixin 插件运行时路径方案两机一致，所以 `patch -p1` 打插件补丁两机通用。
+
+**标准与处置（已定）**：
+- **新机标准 = 官方安装器**（自带 pinned node，对齐 aliyun1）：锁定官方测试过的 node 版本、消除漂移、核心路径全机群一致。
+- **现实前提**：官方安装器要下载 node，国内网络可能被卡（aliyun2 当初走 npm-g 很可能就是这原因）。装不通 → 退用 npm-g，但**显式把系统 node 锁到 v22.x**（对齐官方），并把该机核心/插件路径登记进 runbook。
+- **aliyun2 保持现状不重装**（v2026.6.5 健康运行；重装要重登账号、重打补丁，纯属自找中断）。
+- **耐久修复（比统一安装更重要，已做）**：部署/回滚脚本改为**路径无关**（见 §3 注）—— 因为哈希 bundle 名（`9dLyvuw9` vs `BpFiu3Nn`）是随 OpenClaw 版本变的、跟安装方式无关，每次升级都会变。
 
 ---
 
@@ -57,17 +77,42 @@ bash scripts/rollback_image_understanding.sh      # 回滚
 
 ---
 
+## 2.5 ✅ 多机下图片理解：已选「bridge 传字节 / 内联 base64」并落地（2026-06-13）
+
+`before-agent-reply-media` 补丁透传的是 **接图那台机器的本地绝对路径**；后端 `app/image_understanding.py` 也是**按本地文件路径读图**（`open(real_path,"rb")`，且经 `image_inbound_dir` 白名单根 + realpath 校验防穿越），bridge 只转发**路径字符串**（`media{path,format}`），**不传图片字节**。
+
+单机（aliyun1：接图、后端、读图同机）成立。但多机 node（aliyun2）下：
+
+- 微信图片落在 **aliyun2** 磁盘 → 路径注入标记 → aliyun2 的 bridge 把路径转发到**中心 aliyun1** 的后端；
+- aliyun1 后端 `open(path)` **读不到 aliyun2 上的文件**，且该路径会被 `image_inbound_dir` 白名单校验直接拒绝。
+
+**结论**：node 机上单纯打这个补丁 + 装 bridge **走不通**（曾评估三条路线：node 本地处理 / 传字节 / 共享存储）。
+
+**已选并实现 = 传字节（内联 base64）**：node 的 bridge 把已下载的图片读成字节 → base64 内联进 `/openclaw/turn` 的 `media.data_base64`（+`format`+`size`）→ 中心 `image_understanding.py` 用字节构造 data URL 调 VL，**不再依赖中心能访问 node 本地路径**。零新基建、零新依赖、单机/多机同一条代码路径；OSS 对象存储路线否决（每台 node 要配 bucket+凭证+新依赖）。
+
+代码改动（已合入本分支）：
+- `app/schemas.py::MediaPayload` 加 `data_base64` / `size`。
+- `app/image_understanding.py` 新增 `_data_url_from_b64()`，`describe_image()` 加 `image_b64`/`image_format`，来源优先级 **b64 > path > url**；字节路径不经 `image_inbound_dir` 白名单（字节无路径概念），仍受 `image_max_bytes` 上限保护。
+- `app/turn_service.py` 图片轮把 `data_base64`/`format` 传给 `describe_image`。
+- `openclaw-bridge/index.js` 图片轮用 `node:fs` 读 `inboundMedia.path` → base64 内联（cap=`AI4ALL_IMAGE_MAX_BYTES`，默认 5MB；超限/读失败**降级**为仅转发 `path`，单机 aliyun1 中心可直读，向后兼容）。
+- `scripts/send_mock_turn.py` 加 `--image-bytes` 自测入口。
+
+⚠️ **运维前置（node 上线图片理解必做）**：node→中心是经 **aliyun1 nginx**（`http://aliyun1` → `/openclaw/turn`），默认 `client_max_body_size 1m` 会把 base64 大图 **413** 截断。须在 aliyun1 nginx 该 location 调到 `client_max_body_size 12m;`。三方大小要协调：bridge cap(5MB) ≤ 中心 `image_max_bytes`(10MB) ≤ nginx(12MB，需 ≥ base64 膨胀 ~6.7MB + raw 开销)。aliyun1 本机 bridge 直连 `127.0.0.1`、不过 nginx，不受影响。
+
+**安全/隐私**：base64 仅在内存临时传给 VL，**不落库** —— 不进 `messages.raw`（base64 在 `payload.media` 不在 `payload.raw`），不进审核库（`app/moderation/service.py::_media_to_dict` 的 `allowed_keys` 白名单不含 `data_base64`，天然过滤）。
+
+> 多机接入阶段，node 机现可打全部三个补丁（QR 登录 + 解绑登出 + 图片理解）；图片补丁配套需上 bridge 字节改造 + nginx body-size。
+
 ## 3. ⚠️ 升级 OpenClaw 后必查（重点）
 
 OpenClaw 升级/重装会覆盖 dist，图片理解会**静默退回成空文本（不报错）**。届时需重新部署。当前已知脆弱点：
 
-1. **部署脚本写死了哈希文件名** `get-reply-9dLyvuw9.js`。升级后哈希会变，脚本会找不到文件。
-   - 临时办法：`grep -rl 'runBeforeAgentReply({ cleanedBody }' <dist目录>` 找到新文件名，改脚本 `DIST` 变量。
-   - **待办**：把脚本改成自动发现该文件（去掉写死文件名）。
+1. ~~**部署脚本写死了哈希文件名** `get-reply-9dLyvuw9.js`~~ ✅ **已修复（2026-06-13）**：`scripts/deploy_image_understanding.sh` 与 `rollback_image_understanding.sh` 现在**自动发现**核心 bundle —— 按内容 `grep -rl 'runBeforeAgentReply({ cleanedBody'` 定位（兼容已打/未打补丁两态），并自动探测核心 dist 根（官方安装器 / npm-g 两种布局）与 node。可用 env 覆盖：`OPENCLAW_CORE_DIST_DIR`、`OPENCLAW_NODE`、`OPENCLAW_BRIDGE_DST`。升级后哈希名变化不再需要改脚本。
 2. **钩子调用签名若上游改了** `runBeforeAgentReply({ cleanedBody }, {…})`，脚本的字符串匹配会失效 → 需更新匹配串与源码 patch。
 3. **media-note 注入时机若上游调整**（目前在钩子之后），需重新确认本方案前提仍成立。
 4. **`ctx.MediaPath/MediaPaths/MediaTypes` 字段名若上游变更**，源码 patch 需同步。
 5. 旧 weixin patch 同理：升级后确认 `gatewayMethods` 是否仍生效（`grep -r WEIXIN_GATEWAY_METHODS`）。
+   - ⚠️ **v2026.6.5+ 新增钩子安全闸（2026-06-13 aliyun2 实测）**：非内置(path)插件的会话钩子默认被拦，`openclaw plugins inspect ai4all-openclaw-bridge --runtime` 会报 `typed hook "before_agent_reply" blocked ... must set plugins.entries.ai4all-openclaw-bridge.hooks.allowConversationAccess=true`。装/升级 bridge 后须 `openclaw config set plugins.entries.ai4all-openclaw-bridge.hooks.allowConversationAccess true` 再重启 gateway，否则 bridge 加载了但**所有钩子静默失效**（aliyun1 旧版 v2026.5.28 无此闸）。
 6. **解绑登出 patch 同理且更脆弱**：插件升级覆盖 `node_modules` 后 `logoutAccount` 丢失，解绑会退回留孤儿 bot。升级后必查：
    `grep -c logoutAccount ~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin/dist/src/channel.js`，返回 0 则重打 `patches/openclaw-weixin-logout-account-runtime.patch`。详见 [专门文档](openclaw_weixin_gateway_logout_patch.md)。
 
@@ -88,7 +133,9 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 
 ## 5. 待跟进 TODO
 
-- [ ] 部署脚本自动发现哈希 dist 文件名（去掉写死的 `get-reply-9dLyvuw9.js`）。
-- [ ] `patches/` 增加 README，统一说明两个 patch 的用法与适用场景。
-- [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除"源码 6.2 / 运行 5.28"漂移与哈希 dist 手术补丁的脆弱性）。
+- [x] ~~部署脚本自动发现哈希 dist 文件名~~ 已完成（2026-06-13，见 §3 注）。
+- [ ] `patches/` 增加 README，统一说明三个 patch 的用法与适用场景。
+- [x] ~~**多机图片理解方案**：在 §2.5 三条路线里选定并实现~~ 已选 **传字节/内联 base64** 并落地（2026-06-13，见 §2.5）。剩余：node 真机端到端验证 + aliyun1 nginx `client_max_body_size` 调整。
+- [ ] **统一 OpenClaw 安装标准**：新机优先官方安装器；装不通则 npm-g + 锁 node v22.x（见 §0 多机表）。
+- [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除版本漂移与哈希 dist 手术补丁的脆弱性）。
 - [ ] 确认旧 weixin patch 当前在运行环境的生效状态与留档完整性。

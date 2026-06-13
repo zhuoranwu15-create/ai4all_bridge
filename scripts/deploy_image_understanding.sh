@@ -11,17 +11,57 @@
 # Reversible: every modified runtime file is backed up to *.bak.imageunderstanding
 # (created once, kept pristine). Run scripts/rollback_image_understanding.sh to revert.
 #
-# Run from the repo root on the gateway host (aliyun1):
+# Run from the repo root on the CENTRAL backend host (the machine that runs both
+# the OpenClaw gateway and ai4all-weixin-backend; today that is aliyun1). The core
+# dist path, node binary and bridge dest are auto-discovered so this works across
+# different OpenClaw install layouts (official installer's bundled node vs `npm i -g`)
+# and survives OpenClaw upgrades (the hashed bundle name changes every release).
+#
+# Override any of these via env if auto-discovery picks the wrong one:
+#   OPENCLAW_NODE           path to the node binary
+#   OPENCLAW_CORE_DIST_DIR  openclaw core `dist/` directory
+#   OPENCLAW_BRIDGE_DST     installed bridge extension index.js
+#
 #   bash scripts/deploy_image_understanding.sh
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIST="/home/jack/.openclaw/tools/node-v22.22.0/lib/node_modules/openclaw/dist/get-reply-9dLyvuw9.js"
 BRIDGE_SRC="$REPO/openclaw-bridge/index.js"
-BRIDGE_DST="/home/jack/.openclaw/extensions/ai4all-openclaw-bridge/index.js"
+BRIDGE_DST="${OPENCLAW_BRIDGE_DST:-/home/jack/.openclaw/extensions/ai4all-openclaw-bridge/index.js}"
 ENV_FILE="$REPO/.env"
-NODE="/home/jack/.openclaw/tools/node-v22.22.0/bin/node"
 export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
+# --- Resolve node binary: env override > PATH > openclaw bundled toolchain. ---
+NODE="${OPENCLAW_NODE:-}"
+[ -n "$NODE" ] || NODE="$(command -v node || true)"
+[ -n "$NODE" ] || NODE="$(ls -d /home/jack/.openclaw/tools/node-v*/bin/node 2>/dev/null | head -1 || true)"
+[ -n "$NODE" ] && [ -x "$NODE" ] || { echo "ERROR: node not found (set OPENCLAW_NODE)"; exit 1; }
+
+# --- Resolve openclaw core dist dir: env override > known install layouts. ---
+CORE_DIST_DIR="${OPENCLAW_CORE_DIST_DIR:-}"
+if [ -z "$CORE_DIST_DIR" ]; then
+  for cand in \
+    /home/jack/.openclaw/tools/node-v*/lib/node_modules/openclaw/dist \
+    /home/jack/.npm-global/lib/node_modules/openclaw/dist \
+    "$(npm config get prefix 2>/dev/null)/lib/node_modules/openclaw/dist"; do
+    for d in $cand; do
+      [ -d "$d" ] && { CORE_DIST_DIR="$d"; break 2; }
+    done
+  done
+fi
+[ -d "$CORE_DIST_DIR" ] || { echo "ERROR: openclaw core dist dir not found (set OPENCLAW_CORE_DIST_DIR)"; exit 1; }
+
+# --- Discover the hashed bundle holding the before_agent_reply hook call, by
+# --- content (matches both unpatched `{ cleanedBody }` and patched
+# --- `{ cleanedBody: hookCleanedBody }`), instead of a hardcoded hash name. ---
+DIST="$(grep -rl 'runBeforeAgentReply({ cleanedBody' "$CORE_DIST_DIR"/get-reply-*.js 2>/dev/null | head -1 || true)"
+[ -n "$DIST" ] && [ -f "$DIST" ] || { echo "ERROR: before_agent_reply bundle not found in $CORE_DIST_DIR"; exit 1; }
+
+echo "==> Resolved runtime paths:"
+echo "    NODE=$NODE"
+echo "    CORE_DIST_DIR=$CORE_DIST_DIR"
+echo "    DIST=$DIST"
+echo "    BRIDGE_DST=$BRIDGE_DST"
 
 echo "==> [1/4] Patch OpenClaw core dist: $DIST"
 [ -f "$DIST" ] || { echo "ERROR: dist not found: $DIST"; exit 1; }

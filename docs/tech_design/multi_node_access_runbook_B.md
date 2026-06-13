@@ -119,9 +119,20 @@ curl -sS --noproxy aliyun1 -X POST http://aliyun1/openclaw/turn \
 > |---|---|---|
 > | `openclaw-weixin-gateway-methods-runtime` | 暴露 `web.login.start/wait` 为 gateway 方法 | **是** —— 中心 push 扫码登录（附录 A.2）直接依赖,不打则登录 exec 失败 |
 > | `openclaw-weixin-logout-account-runtime` | 单账号 `logoutAccount` runtime | 多账号登出/再均衡前需要 |
-> | `openclaw-before-agent-reply-media` | 入站图片本地路径透出给 before_agent_reply | 图片理解前需要;纯文本回环不依赖 |
+> | `openclaw-before-agent-reply-media` | 入站图片本地路径透出给 before_agent_reply | 图片理解前需要;纯文本回环不依赖。**多机配套**:已选「bridge 传字节/内联 base64」(见 [补丁维护 §2.5](openclaw_patches_maintenance.md)),node 还须部署字节改造后的 bridge + aliyun1 nginx 调 `client_max_body_size 12m`,否则中心读不到 node 本地图、base64 大图会 413 |
 >
 > 起 node agent 前先把 patch 应用到 aliyun2 的安装包（weixin 在 `~/.openclaw/npm/projects/.../@tencent-weixin/openclaw-weixin`，openclaw core 在 `~/.npm-global/lib/node_modules/openclaw`）。**别等扫码登录失败才回头查。**
+>
+> **2026-06-13 实测落地（aliyun2）**：QR + 登出两个插件补丁**已应用并验证**（`logoutAccount`=4、`gatewayMethods`=1、`WEIXIN_GATEWAY_METHODS`=2，`node --check` 通过，gateway 重启健康、无 `unsupported channel`）。两个实操坑：
+> 1. **`gateway-methods` 不能 `patch -p1`**：该 patch 的 hunk 头是裸 `@@`（无行号），GNU patch 报 "Only garbage"。按文档约定**做等价手动编辑**：在 weixin 插件 `dist/src/channel.js`（运行态）+ `src/channel.ts`（留档）的 `MEDIA_OUTBOUND_TEMP_DIR` 行后加 `export const WEIXIN_GATEWAY_METHODS = ["web.login.start","web.login.wait"];`，并在 `capabilities` 同级加 `gatewayMethods: WEIXIN_GATEWAY_METHODS,`。`logout` patch 可正常 `patch -p1`（offset 容忍）。
+> 2. **冒烟 `openclaw gateway call web.login.start` 会被 gateway 设备配对拦住**（报 `pairing required: scope upgrade pending`，**不是** `provider not available`，所以不是补丁问题）。aliyun2 的 loopback CLI 未做 scope 配对授权；真机登录冒烟应走**中心 push 扫码登录**链路（附录 A.4）来验证，而非本机 CLI。
+>
+> **2026-06-13 图片理解 + 字节 bridge 落地（aliyun2，本次）**：
+> - **核心 dist 图片补丁已打**：`get-reply-BpFiu3Nn.js` 手术注入 `hookCleanedBody`（备份 `.bak.imageunderstanding`，`node --check` 通过）。目标串在 v2026.6.5 精确匹配 1 次、依赖符号齐全，**未跑 deploy 脚本**（那是中心机用的，会改 backend `.env`/重启 backend，node 上手动做 dist 那一步即可）。
+> - **字节版 bridge 已装+注册**：`openclaw plugins install ./openclaw-bridge --force` → `~/.openclaw/extensions/ai4all-openclaw-bridge`；`openclaw config set ...config.backendUrl http://aliyun1` + secret 从 `.env` 同步（64 字符，已与 aliyun1 对齐，curl `/openclaw/turn` 得 200 `no_binding` 验证通过）。
+> - **⚠️ v2026.6.5 新坑（aliyun1 旧版 v2026.5.28 没有）**：非内置(path)插件的会话钩子默认被挡，inspect 报 `typed hook "before_agent_reply" blocked ... must set ...hooks.allowConversationAccess=true`。须 `openclaw config set plugins.entries.ai4all-openclaw-bridge.hooks.allowConversationAccess true` 再重启，钩子才生效。
+> - **仍待办（端到端发图前）**：① **aliyun1 nginx** 把 `/openclaw/turn` 的 `client_max_body_size` 调到 `12m`（默认 1m，base64 图会 413）——此步在中心机，aliyun2 无法代劳；② aliyun2 **扫码登一个测试微信号** + 中心给该号插 binding，才能真机发图验证。
+> - aliyun2 当前**无任何微信号登录**（仅 weixin 插件 v2.4.4 loaded 可用），故本次 gateway 重启零冲击。
 
 ### 步骤
 

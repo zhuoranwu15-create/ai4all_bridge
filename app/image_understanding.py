@@ -9,6 +9,7 @@
 """
 
 import base64
+import binascii
 import json
 import logging
 import mimetypes
@@ -79,15 +80,52 @@ def _resolve_data_url_from_path(image_path: str) -> Optional[str]:
     return f"data:{mime};base64,{encoded}"
 
 
+def _data_url_from_b64(image_b64: str, image_format: Optional[str]) -> Optional[str]:
+    """把内联 base64 图片字节构造成 data URL；解码失败/超限返回 None。
+
+    多机场景：node 的 bridge 已下载图片并以 base64 内联转发，中心无本地路径可读，
+    直接据字节构图。不经 image_inbound_dir 白名单（白名单只防本地路径穿越，字节无路径
+    概念），但仍受 settings.image_max_bytes 上限保护，防止超大图拖垮请求。
+    """
+    cleaned = (image_b64 or "").strip()
+    if not cleaned:
+        return None
+    try:
+        raw = base64.b64decode(cleaned, validate=True)
+    except (ValueError, binascii.Error) as err:
+        logger.warning("inline image base64 decode failed error=%s", err)
+        return None
+    if not raw:
+        logger.warning("inline image base64 decoded empty")
+        return None
+    if len(raw) > int(settings.image_max_bytes):
+        logger.warning(
+            "inline image too large size=%s max=%s", len(raw), settings.image_max_bytes
+        )
+        return None
+    fmt = (image_format or "").strip().lower()
+    # format 可能是裸 "image"（bridge 兜底）或完整 MIME，统一规整成 image/* MIME。
+    if fmt.startswith("image/"):
+        mime = fmt
+    elif fmt and fmt not in ("image", "img"):
+        mime = f"image/{fmt}"
+    else:
+        mime = "image/jpeg"
+    return f"data:{mime};base64,{cleaned}"
+
+
 def describe_image(
     *,
+    image_b64: Optional[str] = None,
+    image_format: Optional[str] = None,
     image_path: Optional[str] = None,
     image_url: Optional[str] = None,
     caption: Optional[str] = None,
 ) -> Optional[str]:
     """调用 VL 模型返回图片的多维描述文本；任何失败返回 None。
 
-    参数 image_path（本地文件，优先）与 image_url（远程）二选一。
+    图片来源优先级 image_b64（内联字节，多机）> image_path（本地文件，单机）> image_url（远程）。
+    image_format 仅用于内联字节路径，构造 data URL 的 MIME。
     caption 为用户随图发送的文字（可空），作为提问上下文一并传给模型。
     """
     if not settings.dashscope_api_key:
@@ -95,14 +133,19 @@ def describe_image(
         return None
 
     resolved_image_url: Optional[str] = None
-    if image_path:
+    if image_b64:
+        resolved_image_url = _data_url_from_b64(image_b64, image_format)
+    elif image_path:
         resolved_image_url = _resolve_data_url_from_path(image_path)
     elif image_url:
         resolved_image_url = image_url.strip() or None
 
     if not resolved_image_url:
         logger.warning(
-            "no usable image reference (path=%r url=%r)", image_path, image_url
+            "no usable image reference (b64=%s path=%r url=%r)",
+            bool(image_b64),
+            image_path,
+            image_url,
         )
         return None
 

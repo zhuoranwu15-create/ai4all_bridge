@@ -607,8 +607,11 @@ def handle_openclaw_turn(
         description = None
         if settings.image_understanding_enabled:
             media = payload.media
-            if media is not None and (media.path or media.url):
+            if media is not None and (media.data_base64 or media.path or media.url):
+                # 来源优先级（多机字节 > 单机本地路径 > 远程 URL）在 describe_image 内部统一。
                 description = describe_image(
+                    image_b64=media.data_base64,
+                    image_format=media.format,
                     image_path=media.path,
                     image_url=media.url,
                     caption=caption,

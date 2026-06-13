@@ -30,6 +30,12 @@
       "voiceDebug": {
         "type": "boolean",
         "default": false
+      },
+      "imageMaxBytes": {
+        "type": "integer",
+        "default": 5242880,
+        "minimum": 65536,
+        "maximum": 12582912
       }
     }
   }

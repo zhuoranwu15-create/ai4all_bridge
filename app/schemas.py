@@ -9,6 +9,10 @@ class MediaPayload(BaseModel):
     path: Optional[str] = None
     format: Optional[str] = None
     duration_ms: Optional[int] = None
+    # 多机：node 的 bridge 内联转发图片字节（base64，无 data: 前缀），中心据此构造
+    # data URL 调 VL —— 解决 node 本地路径中心读不到的问题。size 为原始字节数。
+    data_base64: Optional[str] = None
+    size: Optional[int] = None
 
 
 class OpenClawTurnRequest(BaseModel):

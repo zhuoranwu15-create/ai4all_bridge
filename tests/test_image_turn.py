@@ -12,7 +12,17 @@ from app.schemas import OpenClawTurnRequest
 
 # 不带 channel 字段：identity.channel 不为 openclaw-weixin，从而绕过 onboarding 流程，
 # 聚焦测试图片理解链路本身（与 test_turn_rate_limit 等既有 turn 测试一致）。
-def _image_payload(msg_id, *, text="", url="https://example.com/a.jpg", path=None, sender="sender-img", session="acc-img"):
+def _image_payload(
+    msg_id,
+    *,
+    text="",
+    url="https://example.com/a.jpg",
+    path=None,
+    data_base64=None,
+    fmt="image",
+    sender="sender-img",
+    session="acc-img",
+):
     return {
         "channel_account_id": "chan-img",
         "account_id": "chan-img",
@@ -23,7 +33,7 @@ def _image_payload(msg_id, *, text="", url="https://example.com/a.jpg", path=Non
         "message_type": "image",
         "message_id": msg_id,
         "text": text,
-        "media": {"url": url, "path": path, "format": "image"},
+        "media": {"url": url, "path": path, "data_base64": data_base64, "format": fmt},
     }
 
 
@@ -210,3 +220,66 @@ def test_record_image_understanding_charge_fixed_and_idempotent(monkeypatch, fre
             (account_id,),
         ).fetchone()["c"]
     assert count == 1
+
+
+# ---------- 多机：内联字节优先于本地路径 ----------
+def test_inline_bytes_preferred_over_path(monkeypatch, fresh_db):
+    """node 传来的 data_base64 应优先于 path 交给 VL（中心读不到 node 本地路径）。"""
+    import base64 as _b64
+
+    cap = _setup(monkeypatch, fresh_db, describe_return="一束花，暖色调")
+    b64 = _b64.b64encode(b"fake-image-bytes").decode("ascii")
+    res = turn_service.handle_openclaw_turn(
+        OpenClawTurnRequest(
+            **_image_payload("img-bytes", text="看这个", path="/node/local/only.jpg", data_base64=b64, fmt="image/jpeg")
+        )
+    )
+    assert res.status == "ok"
+    call = cap["describe_calls"][-1]
+    assert call["image_b64"] == b64, "内联字节应优先传给 VL"
+    assert call["image_format"] == "image/jpeg"
+    # path 仍随 payload 透传（单机回退/排查），但优先级在 describe_image 内部决定。
+    assert call["image_path"] == "/node/local/only.jpg"
+
+
+# ---------- describe_image: base64 字节构图（_data_url_from_b64）----------
+def _iu_with_settings(monkeypatch, *, max_bytes=10_485_760):
+    """给 image_understanding 注入精简 settings（不触网，仅测构图分支）。"""
+    import types
+    import app.image_understanding as iu
+
+    fake = types.SimpleNamespace(
+        dashscope_api_key="",  # 空 key：describe_image 早返回 None，聚焦测 _data_url_from_b64
+        image_max_bytes=max_bytes,
+        image_inbound_dir="~/.openclaw/media/inbound",
+        image_understanding_model="qwen3-vl-plus",
+        image_understanding_timeout_seconds=30.0,
+    )
+    monkeypatch.setattr(iu, "settings", fake)
+    return iu
+
+
+def test_data_url_from_b64_normal(monkeypatch):
+    import base64 as _b64
+
+    iu = _iu_with_settings(monkeypatch)
+    b64 = _b64.b64encode(b"\xff\xd8\xff\x00abc").decode("ascii")
+    assert iu._data_url_from_b64(b64, "image/png") == f"data:image/png;base64,{b64}"
+    # 裸 "image" / "png" 规整成 MIME。
+    assert iu._data_url_from_b64(b64, "image").startswith("data:image/jpeg;base64,")
+    assert iu._data_url_from_b64(b64, "png").startswith("data:image/png;base64,")
+
+
+def test_data_url_from_b64_oversize_returns_none(monkeypatch):
+    import base64 as _b64
+
+    iu = _iu_with_settings(monkeypatch, max_bytes=4)
+    b64 = _b64.b64encode(b"way-too-many-bytes").decode("ascii")
+    assert iu._data_url_from_b64(b64, "image/jpeg") is None
+
+
+def test_data_url_from_b64_bad_input_returns_none(monkeypatch):
+    iu = _iu_with_settings(monkeypatch)
+    assert iu._data_url_from_b64("!!!not-base64!!!", "image/jpeg") is None
+    assert iu._data_url_from_b64("", "image/jpeg") is None
+    assert iu._data_url_from_b64("   ", "image/jpeg") is None
