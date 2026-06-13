@@ -8,6 +8,8 @@ from uuid import uuid4
 
 import qrcode
 
+from app.config import settings
+
 
 class OpenClawGatewayError(RuntimeError):
     pass
@@ -85,7 +87,7 @@ def _run_gateway_call(
     timeout_ms: int,
 ) -> Dict[str, Any]:
     cmd = [
-        "openclaw",
+        settings.openclaw_cli_path,
         "gateway",
         "call",
         method,
@@ -198,7 +200,7 @@ def logout_weixin_account(
         resolved_channel = DEFAULT_WEIXIN_CHANNEL
 
     cmd = [
-        "openclaw",
+        settings.openclaw_cli_path,
         "channels",
         "logout",
         "--channel",

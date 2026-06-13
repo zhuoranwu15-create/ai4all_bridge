@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     openclaw_login_start_timeout_ms: int = 35000
     openclaw_login_wait_timeout_ms: int = 480000
     openclaw_gateway_call_timeout_ms: int = 60000
+    openclaw_cli_path: str = "openclaw"             # openclaw CLI 名或绝对路径;不在服务 PATH 时填绝对路径(见 .env.example)
     # 主动消息发送被限速（ret=-2 / rate limited）时的退避重试：仅作用于后台主动消息链路，
     # 不影响用户同步回复。max_retries=0 表示不重试，限速即落 failed。
     proactive_send_rate_limit_max_retries: int = 2
