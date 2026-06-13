@@ -59,6 +59,7 @@ from app.onboarding import (
     ONBOARDING_WELCOME_TEXT,
 )
 from app.openclaw_gateway import send_weixin_text
+from app.proactive.messaging import enqueue_onboarding_welcome
 from app.user_profiles import (
     ensure_agent_context_files,
     ensure_user_profile,
@@ -489,14 +490,26 @@ def handle_openclaw_turn(
     welcome_to_user_id = identity.chat_id or sender_id
     if onboarding_channel_enabled and onboarding_state == ONBOARDING_PENDING and welcome_to_user_id:
         try:
-            send_weixin_text(
-                to_user_id=welcome_to_user_id,
-                text=ONBOARDING_WELCOME_TEXT,
-                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-                account_id=identity.channel_account_id,
-                session_key=openclaw_session_key,
-                channel=identity.channel,
-            )
+            # 多机:inline/standalone 本机直发(行为同今天);central 非 inline 入队由归属
+            # 节点发(turn 在中心跑,中心不持有会话,不能直接 send)。
+            if settings.is_inline_dispatch:
+                send_weixin_text(
+                    to_user_id=welcome_to_user_id,
+                    text=ONBOARDING_WELCOME_TEXT,
+                    gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                    account_id=identity.channel_account_id,
+                    session_key=openclaw_session_key,
+                    channel=identity.channel,
+                )
+            else:
+                enqueue_onboarding_welcome(
+                    account_id=account_id,
+                    channel=identity.channel,
+                    channel_account_id=identity.channel_account_id,
+                    to_user_id=welcome_to_user_id,
+                    session_key=openclaw_session_key,
+                    text=ONBOARDING_WELCOME_TEXT,
+                )
             set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
             logger.info(
                 "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",

@@ -137,6 +137,7 @@ from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_on
 from app.openclaw_gateway import (
     send_weixin_text,
 )
+from app.proactive.messaging import enqueue_onboarding_welcome
 from app.dreaming_scheduler import (
     get_dreaming_scheduler,
     run_dreaming_scheduler_once,
@@ -681,15 +682,28 @@ async def _send_onboarding_welcome_if_pending(
             )
             return
 
-        await asyncio.to_thread(
-            send_weixin_text,
-            to_user_id=to_user_id,
-            text=_ONBOARDING_WELCOME_TEXT,
-            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-            account_id=channel_account_id,
-            session_key=resolved_session_key,
-            channel=channel,
-        )
+        # 多机:inline/standalone 本机直发(行为同今天);central 非 inline 入队由归属节点发
+        # (中心不持有该账号会话)。
+        if settings.is_inline_dispatch:
+            await asyncio.to_thread(
+                send_weixin_text,
+                to_user_id=to_user_id,
+                text=_ONBOARDING_WELCOME_TEXT,
+                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                account_id=channel_account_id,
+                session_key=resolved_session_key,
+                channel=channel,
+            )
+        else:
+            await asyncio.to_thread(
+                enqueue_onboarding_welcome,
+                account_id=account_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                to_user_id=to_user_id,
+                session_key=resolved_session_key,
+                text=_ONBOARDING_WELCOME_TEXT,
+            )
         await asyncio.to_thread(
             set_account_onboarding_state, account_id=account_id, state=ONBOARDING_STEP1_SENT
         )

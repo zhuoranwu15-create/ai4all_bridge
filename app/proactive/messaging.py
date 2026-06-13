@@ -281,3 +281,99 @@ def send_proactive_text(
     ) or claimed
     insert_outbound_delivery_message(outbound_message=sent)
     return sent
+
+
+def dispatch_proactive_text(
+    *,
+    account_id: str,
+    channel: str,
+    channel_account_id: Optional[str],
+    to_user_id: str,
+    session_key: Optional[str],
+    source: str,
+    text: str,
+    idempotency_key: Optional[str] = None,
+    now: Optional[datetime] = None,
+    bypass_quiet_hours: bool = False,
+    product_category: Optional[str] = None,
+    scheduled_at: Optional[datetime] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """主动消息出站派发(多机)。
+
+    - `is_inline_dispatch`(standalone,或 central+node 同机且开 inline)→ 走
+      `send_proactive_text`,enqueue+claim+本机即时发送,行为与单机完全一致(零回归)。
+    - 否则(central 非 inline)→ 只 `enqueue_proactive_text` 建 pending 行;由归属节点
+      的出站 pull 循环 claim+send(设计附录 B.4),中心保持单写者、不直接发送。
+
+    两分支返回同形 outbound dict(状态可能为 pending/cancelled/sent 等)。
+    """
+    if settings.is_inline_dispatch:
+        return send_proactive_text(
+            account_id=account_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            to_user_id=to_user_id,
+            session_key=session_key,
+            source=source,
+            text=text,
+            idempotency_key=idempotency_key,
+            now=now,
+            bypass_quiet_hours=bypass_quiet_hours,
+            product_category=product_category,
+            scheduled_at=scheduled_at,
+            metadata=metadata,
+        )
+    return enqueue_proactive_text(
+        account_id=account_id,
+        channel=channel,
+        channel_account_id=channel_account_id,
+        to_user_id=to_user_id,
+        session_key=session_key,
+        source=source,
+        text=text,
+        idempotency_key=idempotency_key,
+        now=now,
+        bypass_quiet_hours=bypass_quiet_hours,
+        product_category=product_category,
+        scheduled_at=scheduled_at,
+        metadata=metadata,
+    )
+
+
+def enqueue_onboarding_welcome(
+    *,
+    account_id: str,
+    channel: str,
+    channel_account_id: Optional[str],
+    to_user_id: str,
+    session_key: Optional[str],
+    text: str,
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """central 非 inline 时的 onboarding 欢迎语入队(turn/binding 在中心跑,中心不持有会话)。
+
+    解析账号归属节点,建一条 `status="pending"` 出站行,由该节点的 pull 循环发送、并经中心
+    `/node/outbound/{id}/result` 落交付记录。inline/standalone 路径仍在调用方本机直发,不进此函数。
+
+    欢迎语是固定安全常量,**不过** proactive 政策/配额闸门,保「必发」语义与今天一致。
+    `idempotency_key` 取账号维度常量,outbound_messages 的 UNIQUE 约束天然去重,避免重复欢迎。
+    """
+    current = now or datetime.now()
+    effective_node_id = resolve_node_for_account(account_id) or (
+        getattr(settings, "default_node_id", "") or None
+    )
+    return create_outbound_message(
+        account_id=account_id,
+        channel=channel,
+        channel_account_id=channel_account_id,
+        to_user_id=to_user_id,
+        session_key=session_key,
+        source="onboarding_welcome",
+        text=text,
+        idempotency_key=f"onboarding-welcome-{account_id}",
+        quota_date=current.date().isoformat(),
+        status="pending",
+        node_id=effective_node_id,
+        metadata={"source": "onboarding_welcome", "outbound_source": "onboarding_welcome"},
+    )

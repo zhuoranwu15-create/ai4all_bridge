@@ -265,7 +265,7 @@ def test_recurring_reminder_resets_after_dispatch(fresh_db):
 
     mock_send = MagicMock(return_value={"id": None, "status": "sent"})
     with patch("app.db.settings", fresh_db), \
-         patch("app.proactive.reminders.send_proactive_text", mock_send):
+         patch("app.proactive.reminders.dispatch_proactive_text", mock_send):
         from app.proactive.reminders import dispatch_reminder
         result = dispatch_reminder(
             reminder_id="rem-recur-1",

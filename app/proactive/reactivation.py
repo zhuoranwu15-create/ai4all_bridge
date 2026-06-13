@@ -19,7 +19,7 @@ from app.db import (
     release_content_invitation_claim,
     upsert_proactive_account_state,
 )
-from app.proactive.messaging import send_proactive_text
+from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.settings import (
     get_effective_proactive_message_settings,
     is_in_allowed_window,
@@ -844,7 +844,7 @@ def dispatch_reactivation_candidate(
                 account_id=account_id, reason="content_invitation_not_claimable", now=current
             )
 
-    outbound = send_proactive_text(
+    outbound = dispatch_proactive_text(
         account_id=account_id,
         channel=route["channel"],
         channel_account_id=route.get("channel_account_id"),

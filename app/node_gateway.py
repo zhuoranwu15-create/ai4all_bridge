@@ -52,6 +52,18 @@ def _exec_post(*, path: str, base_url: str, payload: Dict[str, Any], timeout: fl
         resp = httpx.post(url, json=payload, headers=headers, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
+    except httpx.HTTPStatusError as err:
+        # 远程节点 exec 失败(如 openclaw "does not support logout")时,原始文案在
+        # 响应体里。必须拼进异常,否则 main.py 的子串分类(unsupported vs failed)在
+        # 远程路径会因 httpx 错误串不含原文案而误判为 failed。
+        body = ""
+        try:
+            body = (err.response.text or "")[:500]
+        except Exception:
+            pass
+        raise OpenClawGatewayError(
+            f"node exec push failed ({url}): {err}; body={body}"
+        ) from err
     except httpx.HTTPError as err:
         raise OpenClawGatewayError(f"node exec push failed ({url}): {err}") from err
 

@@ -8,7 +8,7 @@ from app.db import (
     mark_reminder_failed,
     mark_reminder_sent,
 )
-from app.proactive.messaging import send_proactive_text
+from app.proactive.messaging import dispatch_proactive_text
 from app.reminder_utils import compute_next_due_at
 
 
@@ -35,7 +35,7 @@ def dispatch_reminder(
         }
 
     try:
-        outbound = send_proactive_text(
+        outbound = dispatch_proactive_text(
             account_id=claimed["account_id"],
             channel=claimed["channel"],
             channel_account_id=claimed.get("channel_account_id"),

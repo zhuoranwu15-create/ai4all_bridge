@@ -16,7 +16,7 @@ from app.db import (
     mark_proactive_commitment_sent,
 )
 from app.llm import generate_completion
-from app.proactive.messaging import send_proactive_text
+from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.state import mark_account_proactive_sent
 
 
@@ -307,7 +307,7 @@ def dispatch_commitment(
         }
 
     try:
-        outbound = send_proactive_text(
+        outbound = dispatch_proactive_text(
             account_id=claimed["account_id"],
             channel=route["channel"],
             channel_account_id=route.get("channel_account_id"),
