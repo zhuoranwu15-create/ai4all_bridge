@@ -1,6 +1,6 @@
 # AI4ALL 微信个人 AI 陪伴服务总体架构
 
-更新时间：2026-06-06
+更新时间：2026-06-13
 
 ## 一句话理解
 
@@ -296,6 +296,38 @@ AI4ALL Backend API
 - Redis 承担短期限流、锁、队列或缓存。
 - SQLite 文件模型不能成为长期生产依赖。
 - OpenClaw 插件和 Gateway 能力要有启动前检查和版本固定。
+
+### 多机接入形态（中心大脑 + 瘦接入节点）
+
+为突破「单一出口 IP 挂大量微信号」触发风控的瓶颈，接入层可横向扩展到多机。一套代码按 `AI4ALL_ROLE` 选能力，**central（中心大脑）与 node（瘦接入节点）可独立、也可同机共存**：
+
+| 角色 | 跑什么 | 碰 SQLite? |
+| --- | --- | --- |
+| `standalone`（默认） | = 今天单机形态，全部 + openclaw 本机直发 | 是（本机） |
+| `central` | FastAPI 大脑、SQLite（唯一写者）、画像、三调度器、审核台、admin、节点面向 API | 是（本机） |
+| `node` | openclaw + 微信会话、节点 agent（入站转发 + 出站轮询 + 登录 exec） | **否，一律走 HTTP 与中心通信** |
+
+生产落地（aliyun1+aliyun2 双机 MVP）：
+
+```text
+                         微信用户
+        ┌───────────────────┴───────────────────┐
+┌───────┴────────┐                      ┌────────┴────────────┐
+│ aliyun2 (node) │                      │ aliyun1             │
+│ openclaw+会话   │                      │ central + node 同机  │
+│ node-agent     │  ① 入站转发(HTTP→中心) │ openclaw+会话         │
+│                │  ② 登录 push(中心拨节点)│ FastAPI 大脑 + 调度   │
+│                │  ③ 出站 pull 认领       │ SQLite(唯一写者)      │
+└────────────────┘  ④ 结果回报            └─────────────────────┘
+```
+
+- **不变量**：只有 central 进程读写 `data/ai4all.sqlite3`；节点永不直连 SQLite。`node_id` 只是路由属性，不参与账号隔离判定。
+- **入站**：节点 openclaw 把 `/openclaw/turn` POST 到中心；**被动回复内联在 HTTP 响应里原路返回**，零跨机。
+- **出站混合**：登录/登出/扫码走 **push**（中心按 `access_nodes.base_url` 直拨目标节点 agent，二维码低延迟同步回传）；主动消息走 **pull**（节点轮询 `/node/outbound/claim` 认领，复用 `outbound_messages` 抢占式 claim，节点掉线消息留队列可续传）。
+- **节点 → 中心**走「稳定指纹地址」`CENTRAL_URL`（MVP=内网 hosts 别名），切换中心只改该指向，节点零改配。
+- **中心可切换 aliyun1↔aliyun2**：中心状态 = SQLite + 画像目录 + system 目录，复用既有 `backup_data.py` 快照 + rsync；切换后原中心机降为 node，**微信会话不重扫码**。
+
+`standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/tech_design/multi_node_access_refactor.md`](tech_design/multi_node_access_refactor.md)。
 
 ## 8. Phase 1 架构主线
 

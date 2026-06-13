@@ -15,12 +15,12 @@
 
 ### 当前阶段
 - 设计与决策：✅ 完成（本文 + 附录 A/B）。
-- 一期代码：🚧 **进行中，逐阶段评审**（分支 `feat/multi-node-access-phase1`，开发于 aliyun2 仓库 + 内存 sqlite 全量回归，不动 live aliyun1）：
+- 一期代码：✅ **四阶段全部落地，标准回归绿**（分支 `feat/multi-node-access-phase1`，开发于 aliyun2 仓库 + 内存 sqlite 全量回归，不动 live aliyun1）：
   - **Phase 1 ✅**（2026-06-13）：角色/节点配置（`AI4ALL_ROLE` 等 + `has_central_role`/`has_node_role`/`is_inline_dispatch`）；加性 schema（`access_nodes` 表、`accounts.assigned_node_id`、`outbound_messages.node_id/claimed_at`、`binding_intents.node_id`、`ix_outbound_messages_node_dispatch`）；`claim_pending_outbound_by_node` + node helper（`set/resolve_node_for_account`、`upsert/get_access_node`、`pick_node`）；`enqueue_proactive_text` 填 node_id。
   - **Phase 2 ✅**（2026-06-13）：中心 node-facing 端点 `POST /node/outbound/claim|result`、`/node/heartbeat`（bridge secret）；`app/node_gateway.py` 派发层（local 直调 / remote push）；登录链路（start/wait/logout）改经 node_gateway；`create_binding_intent` 定节点 + 写归属。
-  - **Phase 3 ⛔ 待做**：`scripts/run_access_node.py`（节点 agent：出站 pull loop + 登录 exec 端点 + 心跳）+ 出站咽喉 3 处 `send_weixin_text` 在 central 改 enqueue。**因此 aliyun2 现在还不能作为正式 node 工作（缺出站消费进程）。**
-  - **Phase 4 ⛔ 待做**：`.env.example`/`architecture_overview.md` 文档化 + 全量回归收尾。
-  - 回归保障：每阶段末 `standalone` 全量 `tests/` 零回归（Phase 2 末 544 passed，唯一失败为 quiet-hours 时间相关的既有 flake，已 git stash 在 clean tree 复现确认非本次引入）。
+  - **Phase 3 ✅**（2026-06-13）：`scripts/run_access_node.py` + `app/node_agent.py`（节点 agent：出站 pull loop + 登录 exec 端点 + 心跳）；出站咽喉在 central 改 enqueue（`dispatch_proactive_text` 按 `is_inline_dispatch` 分流、`enqueue_onboarding_welcome`、绑定发送）；图片理解多机走 bridge 内联 base64。
+  - **Phase 4 ✅**（2026-06-13）：`.env.example`（27–38 行多机变量齐全）+ `architecture_overview.md` §7 补「多机接入形态」（角色/拓扑/入站出站/中心切换）；全量回归收尾。
+  - 回归保障：每阶段末 `standalone` 全量 `tests/` 零回归。**Phase 4 末：556 passed（含 `tests/test_multi_node.py`、`tests/test_node_agent.py`）**。注意 `tests/test_content_invitations.py::...content_invitation_reason` 依赖**真实全局 settings 的 `LLM_API_KEY`**（`account_checks.settings` 未被 conftest patch，是既有测试隔离遗留），跑全量回归需本机 `.env` 或 env 设 `LLM_API_KEY`，否则该用例报 `llm_disabled`（非本期回归）。
 - 机器：
   - **aliyun1**（公网 `59.110.40.50` / 内网 `172.24.16.141`）= 线上单机 monolith（systemd：`ai4all-weixin-backend`@`127.0.0.1:8180` + `ai4all-weixin-proactive-scheduler` + nginx + 本机 openclaw，**服务真实用户**）。
   - **aliyun2**（公网 `39.96.70.112` / 内网 `172.24.18.88`）= 本机，纯 node。与 aliyun1 内网已通；**OpenClaw + openclaw-weixin 已装**，**Part 1 跨机被动链路已闭合**（§14 #1）。开发用 Python 3.11 venv 经 uv 装好（系统仅 py3.6，见 runbook B）。
@@ -45,8 +45,9 @@
 
 ### 下一步
 1. ~~aliyun2 验证跨机被动链路~~ → ✅ 已闭合（§14 #1）。
-2. ~~一期编码 Phase 1/2~~ → ✅ 已落地（见上「当前阶段」）。**Phase 3**（节点 agent + 出站咽喉拆分）为下一步,**这是最高风险阶段**（出站咽喉,§6/§13）。
-3. **部署**（Phase 3/4 后）：aliyun1 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ aliyun2 加 node agent（runbook B Part 2）。**前置**:aliyun2 补 `openclaw-weixin-gateway-methods-runtime` patch（中心 push 登录依赖）。
+2. ~~一期编码 Phase 1/2/3/4~~ → ✅ 全部落地（见上「当前阶段」），标准回归 556 passed。
+3. **aliyun1 原地升级演练（不引入 aliyun2）**：本分支以 `central,node` + `LOCAL_NODE_INLINE_DISPATCH=true` + backfill `assigned_node_id=aliyun1` 跑起来，验证入站回复/主动消息/登录/图片行为不变（runbook A 无损上线第 1–2 步，等价 standalone 仅多一层本机队列/RPC）。
+4. **部署**：aliyun1 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ aliyun2 加 node agent（runbook B Part 2）。**前置**:aliyun2 补 `openclaw-weixin-gateway-methods-runtime` patch（中心 push 登录依赖）。
 
 ---
 
