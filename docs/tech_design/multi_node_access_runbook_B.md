@@ -146,6 +146,11 @@ curl -sS --noproxy aliyun1 -X POST http://aliyun1/openclaw/turn \
 > - **仍待办（端到端发图前）**：aliyun2 **扫码登一个测试微信号** + 中心给该号插 binding，才能真机发图验证。
 > - aliyun2 当前**无任何微信号登录**（仅 weixin 插件 v2.4.4 loaded 可用），故本次 gateway 重启零冲击。
 
+> **2026-06-14 实测落地(aliyun2 node bring-up)**:`.env` 已追加 node 角色块(`AI4ALL_ROLE=node` / `NODE_ID=aliyun2` / `CENTRAL_URL=http://aliyun1` / `NODE_BASE_URL=http://172.24.18.88:8190` / `OUTBOUND_PULL_INTERVAL_SECONDS=2` / `OPENCLAW_CLI_PATH=/home/jack/.npm-global/bin/openclaw` 绝对路径;`AI4ALL_BRIDGE_SECRET` 已在首行,64 字符与 aliyun1 对齐;schedulers 全 `false`)。
+> - **unit**:`~/.config/systemd/user/ai4all-weixin-node.service`(`systemctl --user`,linger=yes)跑 `.venv/bin/python scripts/run_access_node.py`。**关键决策**:靠 `WorkingDirectory` 让 pydantic `env_file=".env"` 自载,**不用 systemd `EnvironmentFile`** → 从源头规避雷区 #1(systemd 把 `# 注释` 连进值)。unit 内 `NO_PROXY=aliyun1,172.24.16.141,...` 大小写双写,实测进程 `/proc/<pid>/environ` 仅有 `NO_PROXY`、**无 `http_proxy`**(雷区 #3)。
+> - **实测**:`active(running)`;`curl :8190/health/live`→`{"status":"ok","node_id":"aliyun2"}`;aliyun2 上 `curl --noproxy '*' http://aliyun1/health/live`→200;node journal 无 heartbeat/pull 告警(`send_heartbeat_once` 仅失败才 log,clean=`/node/heartbeat` 2xx)。
+> - **待中心侧协同**:① aliyun1 查 `access_nodes` 现 aliyun2 心跳;② 中心 push 扫码登录;③ 主动消息 aliyun1 触发→aliyun2 pull 发出。aliyun2 当前零微信号登录,gateway 未重启。
+
 ### 步骤
 
 **1. 部署代码**

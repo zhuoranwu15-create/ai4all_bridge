@@ -7028,6 +7028,39 @@ def resolve_node_for_account(account_id: str) -> Optional[str]:
     return row["assigned_node_id"] or None
 
 
+def should_inline_dispatch_for_account(account_id: Optional[str], settings_obj: Any) -> bool:
+    """出站是否对该账号走同进程即时直发（per-account，多机正确版）。
+
+    取代「直接判全局 `settings.is_inline_dispatch`」——后者不看账号归属节点，会让
+    central+node（开 LOCAL_NODE_INLINE_DISPATCH）误把**远程节点账号**的主动消息在本机
+    inline 发送（本机无该会话 → 失败 + 抢走归属节点的 pull 队列行）。
+
+    判定（语义等价于 `is_inline_dispatch`，但加 per-account 节点校验）：
+    - `standalone` → True（单机，无节点路由，行为逐字节不变）。
+    - 未开 `local_node_inline_dispatch` → False（统一走 enqueue/pull）。
+    - central+node 且开 inline → 仅当账号归属**本机 node**时 True；归属远程 node 的账号
+      返回 False，必须 enqueue 由归属节点 pull 发送。
+    归属解析与 `enqueue_proactive_text` 一致：账号归属 > `default_node_id`。
+
+    `settings_obj` 由调用方传入其所在模块的 `settings`（生产中各模块同为 config 单例；
+    便于测试按模块替身保持一致）。直接读 `ai4all_role`/`local_node_inline_dispatch` 等
+    原始字段（而非 `is_inline_dispatch`/`role_set` 计算属性），逻辑一致且对测试替身稳健。
+    """
+    roles = {
+        r.strip().lower()
+        for r in (getattr(settings_obj, "ai4all_role", "") or "").split(",")
+        if r.strip()
+    }
+    if "standalone" in roles:
+        return True
+    if not getattr(settings_obj, "local_node_inline_dispatch", False):
+        return False
+    account_node = resolve_node_for_account(account_id) or (
+        getattr(settings_obj, "default_node_id", "") or None
+    )
+    return bool(account_node) and account_node == (getattr(settings_obj, "node_id", "") or None)
+
+
 def upsert_access_node(
     *,
     node_id: str,

@@ -188,6 +188,7 @@ from app.db import (
     mark_outbound_message_failed,
     mark_outbound_message_sent,
     resolve_node_for_account,
+    should_inline_dispatch_for_account,
     upsert_access_node,
 )
 from app.dreaming import (
@@ -682,9 +683,9 @@ async def _send_onboarding_welcome_if_pending(
             )
             return
 
-        # 多机:inline/standalone 本机直发(行为同今天);central 非 inline 入队由归属节点发
-        # (中心不持有该账号会话)。
-        if settings.is_inline_dispatch:
+        # 多机:本机账号 inline 直发(standalone/本机归属);远程账号或 central 非 inline
+        # 入队由归属节点发(中心不持有远程账号会话)。
+        if should_inline_dispatch_for_account(account_id, settings):
             await asyncio.to_thread(
                 send_weixin_text,
                 to_user_id=to_user_id,

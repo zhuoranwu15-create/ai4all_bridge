@@ -26,6 +26,7 @@ from app.db import (
     record_image_understanding_charge,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,
+    should_inline_dispatch_for_account,
     upsert_channel_binding,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
@@ -490,9 +491,9 @@ def handle_openclaw_turn(
     welcome_to_user_id = identity.chat_id or sender_id
     if onboarding_channel_enabled and onboarding_state == ONBOARDING_PENDING and welcome_to_user_id:
         try:
-            # 多机:inline/standalone 本机直发(行为同今天);central 非 inline 入队由归属
-            # 节点发(turn 在中心跑,中心不持有会话,不能直接 send)。
-            if settings.is_inline_dispatch:
+            # 多机:本机账号 inline 直发(standalone/本机归属);远程账号或 central 非 inline
+            # 入队由归属节点发(turn 在中心跑,中心不持有远程会话,不能直接 send)。
+            if should_inline_dispatch_for_account(account_id, settings):
                 send_weixin_text(
                     to_user_id=welcome_to_user_id,
                     text=ONBOARDING_WELCOME_TEXT,

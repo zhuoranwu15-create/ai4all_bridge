@@ -12,6 +12,7 @@ from app.db import (
     mark_outbound_message_failed,
     mark_outbound_message_sent,
     resolve_node_for_account,
+    should_inline_dispatch_for_account,
     update_outbound_message_metadata,
 )
 from app.moderation.sensitive_words import check_sync_guard
@@ -301,14 +302,16 @@ def dispatch_proactive_text(
 ) -> Dict[str, Any]:
     """主动消息出站派发(多机)。
 
-    - `is_inline_dispatch`(standalone,或 central+node 同机且开 inline)→ 走
-      `send_proactive_text`,enqueue+claim+本机即时发送,行为与单机完全一致(零回归)。
-    - 否则(central 非 inline)→ 只 `enqueue_proactive_text` 建 pending 行;由归属节点
-      的出站 pull 循环 claim+send(设计附录 B.4),中心保持单写者、不直接发送。
+    - `should_inline_dispatch_for_account`(standalone,或 central+node 同机且开 inline
+      **且账号归属本机 node**)→ 走 `send_proactive_text`,enqueue+claim+本机即时发送,
+      行为与单机完全一致(零回归)。
+    - 否则(central 非 inline,或账号归属**远程** node)→ 只 `enqueue_proactive_text`
+      建 pending 行;由归属节点的出站 pull 循环 claim+send(设计附录 B.4),中心保持单写者、
+      不直接发送。**关键:远程账号必须走这里,否则本机无该会话会误发失败。**
 
     两分支返回同形 outbound dict(状态可能为 pending/cancelled/sent 等)。
     """
-    if settings.is_inline_dispatch:
+    if should_inline_dispatch_for_account(account_id, settings):
         return send_proactive_text(
             account_id=account_id,
             channel=channel,

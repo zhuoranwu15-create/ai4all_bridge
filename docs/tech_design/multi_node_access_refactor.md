@@ -13,6 +13,34 @@
 
 ## 进展与状态（2026-06-13）
 
+### 🟢 2026-06-14 上线验证：aliyun1(central)+aliyun2(node) 双机已部署，微信收发回环 E2E 打通
+
+双机均已按 runbook 部署上线（非仅设计/单测）：
+- **aliyun1** = `central`（线上大脑 + DB + 节点面向 API），从 5.28 起的单机服务平滑升级。
+- **aliyun2** = `node`：main 分支，`ai4all-weixin-node.service`(`scripts/run_access_node.py`) + `openclaw-gateway.service` 双服务在跑，`AI4ALL_ROLE=node / NODE_ID=aliyun2 / CENTRAL_URL=http://aliyun1 / NODE_BASE_URL=http://172.24.18.88:8190`。
+
+**端到端验证矩阵（aliyun2 节点，真机微信）**：
+
+| 链路 | 状态 | 证据 |
+|---|---|---|
+| 入站转发（node→中心 `/openclaw/turn`） | ✅ 已验证 | weixin 收消息 → bridge `forwarding turn` → `http://aliyun1` |
+| 被动回复（HTTP 响应原路回 + 本机发） | ✅ 已验证 | 16:43 `outbound: text sent OK`，微信收到回复 |
+| 登录 push（中心→节点 QR，附录 A.4） | ✅ 已验证 | 节点 agent `/node/exec/login/start|wait` 被 aliyun1 调用 200；微信扫码成功 |
+| 中心 web 注册 + 绑定 | ✅ 已验证 | 新号 `568d…-im-bot` → 账号 `aid_956326343`，binding completed |
+| 心跳（节点→`/node/heartbeat`） | ✅ 已验证 | 直打 200，`access_nodes` aliyun2 `status:online`、`created_at 10:55` 起持续心跳 |
+| **出站 pull（主动消息 claim→send→result）** | ✅ **已验证** | 2026-06-14 17:08 中心 `enqueue_proactive_text`→行 26242（node=aliyun2）→aliyun2 pull `claimed_at` 同秒→网关 `⇄ res ✓ send 504ms`→中心标 `sent`（gateway_message_id 回填） |
+| 图片理解（多机内联 base64） | ✅ 已验证 | 用户在 aid_956326343 微信发图，得到正确回复（2026-06-14） |
+
+> **⚠️ 已知 bug（出站 inline 分支非 node-aware，2026-06-14 发现）**：`settings.is_inline_dispatch`（`config.py:225`）是**全局**开关，`dispatch_proactive_text`（`proactive/messaging.py:310`）只判它、**不看账号归属节点**。aliyun1=`central,node` + `LOCAL_NODE_INLINE_DISPATCH=true` 时，发给**远程（aliyun2）账号**的主动消息会被 aliyun1 走 `send_proactive_text` → `claim_pending_outbound_message(by id)` + 本机 `send_weixin_text`（aliyun1 无该会话）→ **失败 mark_failed，且把行从 aliyun2 pull 队列里按 id 抢走**。即**当前配置下所有发往 aliyun2 账号的提醒/承诺/心跳/reactivation 都不会真正送达**。本次 pull 验证是**绕过** dispatch、直接 `enqueue_proactive_text` 才跑通的。
+> **✅ 已修复（2026-06-14，代码+测试，待部署 aliyun1）**：新增 `db.should_inline_dispatch_for_account(account_id, settings)` —— standalone→恒 inline；否则需 `local_node_inline_dispatch` 开 **且** 账号归属本机 node（`resolve_node_for_account(account_id) or default_node_id == node_id`）才 inline，远程账号一律 enqueue 走 pull。三处全局判断（`messaging.py:dispatch_proactive_text`、`turn_service.py` onboarding 欢迎语、`main.py` 绑定发送）改用该 helper。新增 7 个单测（含远程账号 dispatch 必 enqueue 的回归守卫），standalone 全量回归 559 passed（4 个失败为环境相关、与改动无关、原始代码同样失败）。**剩余：部署到 aliyun1（`git pull` + restart）才生效。**
+
+**踩到的关键坑（全部已解，详见 [investigation](multi_node_weixin_login_investigation_20260614.md)）**：
+1. weixin 插件**配置了 channel 实例才会被网关发现/加载**（npm 装在 `~/.openclaw/npm/projects/`，非 `extensions/`）。
+2. 6.5 设备 **scope/pairing 闸**挡 loopback CLI 的 `web.login.start`（`devices approve` 不带 `--url` 走本地信任根批准）。
+3. **6.5 core 把 bot `AccountId` 漏出了 `before_agent_reply` hook ctx** → bridge 转发 `channel_account_id="openclaw-weixin"` → 中心 `no_binding` 静默不回复。**已打第 4 个 core 补丁**（`openclaw_patches_maintenance.md` §2.6）。⚠️ **aliyun1 从 5.28 升 6.5 时必打此补丁，否则多机入站全静默**。
+
+**结论**：MVP 的「双机端到端跑通」目标**全部链路已实测**（入站/被动回复/登录/绑定/出站 pull/图片理解 6 条全绿）。**唯一遗留 = 上面的 inline 分支非 node-aware bug**：当前 aliyun1 配置下，发往 aliyun2 账号的主动消息走正常 dispatch 会失败（pull 机制本身正确，是 dispatch 的分流条件错了）。修掉它，多机主动消息才算生产可用。
+
 ### 当前阶段
 - 设计与决策：✅ 完成（本文 + 附录 A/B）。
 - 一期代码：✅ **四阶段全部落地，标准回归绿**（分支 `feat/multi-node-access-phase1`，开发于 aliyun2 仓库 + 内存 sqlite 全量回归，不动 live aliyun1）：
@@ -46,8 +74,11 @@
 ### 下一步
 1. ~~aliyun2 验证跨机被动链路~~ → ✅ 已闭合（§14 #1）。
 2. ~~一期编码 Phase 1/2/3/4~~ → ✅ 全部落地（见上「当前阶段」），标准回归 556 passed。
-3. **aliyun1 原地升级演练（不引入 aliyun2）**：本分支以 `central,node` + `LOCAL_NODE_INLINE_DISPATCH=true` + backfill `assigned_node_id=aliyun1` 跑起来，验证入站回复/主动消息/登录/图片行为不变（runbook A 无损上线第 1–2 步，等价 standalone 仅多一层本机队列/RPC）。
-4. **部署**：aliyun1 升级为 central+node（[runbook A](multi_node_access_runbook_A.md)）→ aliyun2 加 node agent（runbook B Part 2）。**前置**:aliyun2 补 `openclaw-weixin-gateway-methods-runtime` patch（中心 push 登录依赖）。
+3. ~~aliyun1 原地升级演练~~ / ~~部署 aliyun1=central + aliyun2=node~~ → ✅ **已上线**（见上「🟢 2026-06-14 上线验证」）：双机服务在跑，入站/被动回复/登录 push/绑定 E2E 实测通过。aliyun2 四个补丁全打（QR/登出/图片/**accountId**）。
+4. ~~补验出站 pull / 图片理解~~ → ✅ **均已 E2E 验证**（出站 pull：行 26242 中心 enqueue→aliyun2 pull→send 504ms→sent；图片：用户真机发图得正确回复）。
+5. ~~修 inline 分支非 node-aware bug~~ → ✅ **代码已修 + 7 测试 + 559 回归绿**（见上「已知 bug」注）。**待部署 aliyun1**（`git pull`+restart）生效；部署前 aliyun2 账号的提醒/承诺/心跳仍不送达。
+6. **耐久化第 4 个补丁**：把 `before-agent-reply-accountid` 注入折进 `scripts/deploy_image_understanding.sh`（同文件同锚点），避免 core 升级后漏打致多机静默不回复。
+7. **二期**：自动负载调度、一键中心切换、Litestream 热备（§15）。
 
 ---
 
@@ -280,7 +311,7 @@ LOCAL_NODE_INLINE_DISPATCH=false  # true: central 同机 node 的出站走同进
 
 ## 14. 待你/评审钉死的开放问题
 
-1. **openclaw 入站回调 URL 是否可配成远程**（aliyun2 → 中心）？上游 §1.2 判定「天然支持多来源」，但需在 aliyun2 上实配验证（openclaw 是打包 dist）。→ **✅ 已验证（2026-06-12）**：在 aliyun2 上直连 `POST http://aliyun1/openclaw/turn`（仿桥接 payload + 真实 bridge secret），返回 **HTTP 200** `{"status":"ignored","no_reply":true,"metadata":{"reason":"no_binding",...}}`，66ms。证明跨机远程 POST + Bearer 鉴权 + 中心 ingest 全通；`no_binding` 收口印证线上 `OPENCLAW_INBOUND_REQUIRE_BINDING=true` 生效。最大未知闭合。详见 [runbook B](multi_node_access_runbook_B.md) Part 1。
+1. **openclaw 入站回调 URL 是否可配成远程**（aliyun2 → 中心）？上游 §1.2 判定「天然支持多来源」，但需在 aliyun2 上实配验证（openclaw 是打包 dist）。→ **✅ 已验证（2026-06-12）**：在 aliyun2 上直连 `POST http://aliyun1/openclaw/turn`（仿桥接 payload + 真实 bridge secret），返回 **HTTP 200** `{"status":"ignored","no_reply":true,"metadata":{"reason":"no_binding",...}}`，66ms。证明跨机远程 POST + Bearer 鉴权 + 中心 ingest 全通；`no_binding` 收口印证线上 `OPENCLAW_INBOUND_REQUIRE_BINDING=true` 生效。最大未知闭合。详见 [runbook B](multi_node_access_runbook_B.md) Part 1。→ **2026-06-14 进一步：真机微信走完整回环（绑定→入站→被动回复发回微信）E2E 验证通过**，期间发现并修复 6.5 core hook ctx 缺 AccountId 的回归（见 [investigation](multi_node_weixin_login_investigation_20260614.md) §10 + patches §2.6）。
 2. **节点 agent 与中心之间**：MVP 仅 bridge secret，还是要内网 + mTLS？（阿里云内网 + 安全组通常 secret 足够）。
 3. **中心指纹地址选型**：内网 SLB / 私网 DNS / keepalived VIP / floating EIP —— 取决于你们阿里云现有网络设施。→ **MVP 已选 `/etc/hosts` 主机名别名**（aliyun2 上 `aliyun1`→aliyun1 内网 IP，零设施依赖）；中心 aliyun1↔aliyun2 切换时改各节点 hosts 指向即可。二期若上 SLB/DNS 再平滑替换。
 4. **再均衡策略**：存量账号迁到 aliyun2 只能重扫码（会话不可热迁），是否接受「按需手动迁移」直到二期调度器？

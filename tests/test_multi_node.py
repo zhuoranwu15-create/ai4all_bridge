@@ -349,3 +349,95 @@ def test_node_heartbeat_upserts_access_node(client):
         "/node/heartbeat", json={"node_id": "aliyun2", "session_count": 9}, headers=_BEARER
     ).json()["node"]
     assert node2["session_count"] == 9 and node2["base_url"] == "http://aliyun2:8190"
+
+
+# ===== should_inline_dispatch_for_account（per-account inline 判定；修复全局 inline bug）=====
+# bug：is_inline_dispatch 是全局开关，central+node 开 LOCAL_NODE_INLINE_DISPATCH 时，
+# 发给远程节点账号的主动消息会被本机 inline 误发（本机无会话→失败 + 抢走远程 pull 队列行）。
+
+
+def _set_role(fresh_db, *, role, node_id="", default_node_id="", inline=False):
+    fresh_db.ai4all_role = role
+    fresh_db.node_id = node_id
+    fresh_db.default_node_id = default_node_id
+    fresh_db.local_node_inline_dispatch = inline
+
+
+def test_inline_standalone_always_true(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="standalone")
+    # 单机：任何账号（含未知 / None）都 inline，行为逐字节不变
+    assert should_inline_dispatch_for_account("anything", fresh_db) is True
+    assert should_inline_dispatch_for_account(None, fresh_db) is True
+
+
+def test_inline_central_node_local_account_true(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=True)
+    _create_account("acc-local", node_id="aliyun1")
+    assert should_inline_dispatch_for_account("acc-local", fresh_db) is True
+
+
+def test_inline_central_node_remote_account_false(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=True)
+    _create_account("acc-remote", node_id="aliyun2")
+    # 关键回归：归属远程节点的账号必须 False（走 enqueue，不在本机误发）
+    assert should_inline_dispatch_for_account("acc-remote", fresh_db) is False
+
+
+def test_inline_unassigned_uses_default_node(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=True)
+    _create_account("acc-unassigned")  # 无 assigned_node_id → 回落 default
+    assert should_inline_dispatch_for_account("acc-unassigned", fresh_db) is True  # default=本机
+    fresh_db.default_node_id = "aliyun2"
+    assert should_inline_dispatch_for_account("acc-unassigned", fresh_db) is False  # default=远程
+
+
+def test_inline_disabled_when_flag_off(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=False)
+    _create_account("acc-local2", node_id="aliyun1")
+    # 未开 LOCAL_NODE_INLINE_DISPATCH → 即便本机账号也 enqueue
+    assert should_inline_dispatch_for_account("acc-local2", fresh_db) is False
+
+
+def test_inline_central_only_false(fresh_db):
+    from app.db import should_inline_dispatch_for_account
+
+    _set_role(fresh_db, role="central", node_id="", default_node_id="aliyun1", inline=False)
+    _create_account("acc-c", node_id="aliyun1")
+    assert should_inline_dispatch_for_account("acc-c", fresh_db) is False
+
+
+def test_dispatch_proactive_remote_account_enqueues_not_sends(fresh_db):
+    """dispatch_proactive_text 对远程账号必须走 enqueue（pending + node_id=远程），
+    而不是 send_proactive_text（会在本机误发）。这是本次 bug 的端到端回归守卫。"""
+    from app.proactive.messaging import dispatch_proactive_text
+
+    _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=True)
+    with patch("app.db.settings", fresh_db), patch("app.proactive.messaging.settings", fresh_db):
+        _create_account("acc-remote-dispatch", node_id="aliyun2")
+        # 若误走 inline，send_proactive_text 会调用真实 send_weixin_text（openclaw）→ 必然炸；
+        # 走 enqueue 则只建 pending 行，不碰 openclaw。
+        out = dispatch_proactive_text(
+            account_id="acc-remote-dispatch",
+            channel="openclaw-weixin",
+            channel_account_id="bot-remote",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-remote-dispatch",
+            source="reminder",
+            text="远程账号主动消息",
+            idempotency_key="disp-remote-1",
+            now=datetime(2026, 6, 12, 10, 0),
+            bypass_quiet_hours=True,
+            product_category="user_reminder",
+        )
+    assert out["status"] == "pending"
+    assert out["node_id"] == "aliyun2"
