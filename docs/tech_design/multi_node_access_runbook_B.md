@@ -31,7 +31,18 @@
 
 > ✅ 可达方式已定：走 **aliyun1 的 nginx**（`http://aliyun1`，内网 hosts 别名，无需 aliyun1 backend 额外监听内网网卡）。443 当前无 TLS，用 80。
 >
-> ⚠️ **Part 1 前置(aliyun1 侧待修)**：2026-06-12 从 aliyun2 实测 `curl http://aliyun1/health/live` 与 `:8180` 均返回 **502 Bad Gateway**。网络层 aliyun2→aliyun1 已通（能拿到 HTTP 响应），502 = **aliyun1 的 backend 经 nginx 未就绪**。Part 1 跑通前需在 aliyun1 上恢复：`systemctl status ai4all-weixin-backend`、`curl -fsS 127.0.0.1:8180/health/live`、查 nginx upstream。`<A_HEALTH>` 返回 200 后再继续。
+> ⚠️ **Part 1 前置(aliyun1 侧待修)**：2026-06-12 从 aliyun2 实测 `curl http://aliyun1/health/live` 非 200。**根因已定位(2026-06-12,aliyun1 侧诊断)：不是 backend 故障,而是 nginx 缺面向节点的内网 vhost。**
+>   - aliyun1 的 `ai4all-weixin-backend` 健康(本机 `curl 127.0.0.1:8180/health/live` → 200)。
+>   - aliyun2 用内网 hosts 别名访问时 Host 头是 `aliyun1`,现有 nginx 无任何 `server_name aliyun1`,请求落进 `governor-game.conf` 的 `listen 80 default_server`(`return 404`);且 `ai4company.top.conf` 主动把 `/openclaw/` 全部 `return 404`,入站路径本就堵死。
+>   - **修复(已落地)**：在 aliyun1 新增独立内网 vhost `/etc/nginx/conf.d/ai4all-node.conf`(`server_name aliyun1 172.24.16.141`,`allow 172.24.18.88`,代理 `/health/live` 与 `/openclaw/turn` → `127.0.0.1:8180`),不动现有 vhost。`sudo nginx -t && sudo systemctl reload nginx` 后 `<A_HEALTH>` 返回 200 再继续。
+
+> ⚠️ **Part 1 真正的拦路虎(aliyun2 侧):出站 HTTP 代理必须对内网绕过(no_proxy)**。2026-06-12 实测:aliyun2 上 `curl http://aliyun1/health/live`(乃至裸 IP `172.24.16.141`)返回 **502**,响应头带 `Proxy-Connection: keep-alive` 且**无 `Server: nginx`**——502 不是 aliyun1 nginx 发的(aliyun1 nginx 日志里没有任何 aliyun2 的访问记录),而是 **aliyun2 本机的出站 HTTP 代理**发的:该代理路由不到 VPC 内网 IP,自行回 502。`curl --noproxy '*'` 立即 200 即可证实。
+>   - **判别**:`curl -sS -i http://aliyun1/health/live` 看响应头有 `Proxy-Connection`/无 `Server: nginx` = 走了代理;`env | grep -i proxy` 看 `http_proxy/https_proxy`。
+>   - **范围澄清(重要)**:这个 502 主要咬的是**交互式 shell 里的 `curl`**(curl 读了 shell 的 `http_proxy`)。而 **OpenClaw 是 user systemd 服务 `openclaw-gateway.service`**(`~/.config/systemd/user/`,`systemctl --user` 管,无需 sudo),启动时用 unit 里 `Environment=` 写死的环境,**不继承 shell**。2026-06-12 实测两机该进程环境**均无 proxy 变量** → 插件 POST `http://aliyun1/openclaw/turn` 本来就直连,**通常不需要任何 no_proxy 改动**。
+>   - **正确做法:先验证、再决定**。查 OpenClaw 真实进程环境:`cat /proc/$(pgrep -f 'openclaw/dist/index.js')/environ | tr '\0' '\n' | grep -i proxy`。
+>     - 输出为空 → 不用改,直接进 Part 1。
+>     - 出现 `http_proxy=`(说明该机 user systemd 全局注了代理)→ 才需给服务加 no_proxy:`systemctl --user edit openclaw-gateway.service` 写 drop-in(Node 不认 CIDR,显式列):`Environment=NO_PROXY=aliyun1,172.24.16.141,localhost,127.0.0.1`(再加一行小写 `no_proxy`),然后 `systemctl --user daemon-reload && systemctl --user restart openclaw-gateway.service`,用 `/proc/<新PID>/environ` 复核。用 drop-in 不动主 unit,OpenClaw 升级重生成 unit 也不被覆盖。
+>   - 至于你**手动 curl 验证**方便:shell 里 `export no_proxy=aliyun1,172.24.16.141,localhost,127.0.0.1`(或 `curl --noproxy '*'`)即可,与插件无关。
 
 ---
 
@@ -51,7 +62,7 @@
   ```bash
   curl -fsS http://aliyun1/health/live    # 预期返回 health/live 的 JSON，HTTP 200
   ```
-  当前返回 502（aliyun1 backend 未就绪，见上方 ⚠️）→ 先在 aliyun1 侧恢复 backend，拿到 200 再往下走。
+  若非 200,按上方两条 ⚠️ 依次排除:① 响应头带 `Proxy-Connection`/无 `Server: nginx` → 是 **aliyun2 出站代理**作祟,配 `no_proxy`(`curl --noproxy '*'` 能 200 即坐实);② 响应是 nginx 的 404/502 → 是 **aliyun1 nginx** 缺内网 vhost,装 `ai4all-node.conf` 并 reload。拿到 200 再往下走。
 
 **2. 配 OpenClaw bridge 插件指向 aliyun1**
 - 在 aliyun2 的 OpenClaw bridge 插件配置里设置：
