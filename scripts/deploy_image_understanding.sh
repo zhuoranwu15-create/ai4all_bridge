@@ -98,6 +98,12 @@ PY
 
 "$NODE" --check "$DIST" && echo "    dist syntax OK"
 
+echo "==> [1b/4] Patch OpenClaw core hook ctx accountId (same bundle, idempotent)"
+# Folded in so this script is the single source of truth for all core patches.
+# --no-restart: the gateway is restarted once at step [4/4] below. Reuses the same
+# discovered $DIST; the helper backs up to *.bak.accountid and skips if already applied.
+OPENCLAW_NODE="$NODE" OPENCLAW_DIST="$DIST" bash "$REPO/scripts/patch_openclaw_accountid.sh" --no-restart
+
 echo "==> [2/4] Sync bridge plugin: $BRIDGE_SRC -> $BRIDGE_DST"
 [ -f "$BRIDGE_DST" ] || { echo "ERROR: installed bridge not found: $BRIDGE_DST"; exit 1; }
 [ -f "$BRIDGE_DST.bak.imageunderstanding" ] || cp -p "$BRIDGE_DST" "$BRIDGE_DST.bak.imageunderstanding"

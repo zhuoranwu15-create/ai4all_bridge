@@ -46,7 +46,7 @@ OpenClaw（`/home/jack/workspace/openclaw`）是**上游第三方仓库**（`ope
 | 目标组件 | openclaw-weixin **渠道插件** `src/channel.ts` | openclaw **核心** `src/auto-reply/reply/get-reply.ts` | openclaw-weixin **渠道插件** `dist/src/channel.js` | openclaw **核心** `get-reply-*.js`（与图片补丁同文件） |
 | 作用 | 给插件加 `gatewayMethods: ["web.login.start","web.login.wait"]`（登录流程） | 在 `before_agent_reply` 钩子触发前，把入站媒体绝对路径以 `[media attached: <path> (<type>)]` 注入钩子的 `cleanedBody` 副本 | 给 gateway 加 `logoutAccount`，解绑时删 weixin 账号文件 + 索引除名，闭合「跨层裂脑」（详见 [解绑登出补丁](openclaw_weixin_gateway_logout_patch.md)） | 把 bot `AccountId` 注入 `before_agent_reply` hook ctx，使 bridge 能转发正确 `channel_account_id`（多机入站绑定解析依赖） |
 | 是否含 dist hunk | **✅ 含**（`dist/src/channel.js`，编译路径稳定、无哈希） | **❌ 仅 src**（核心 dist 是带内容哈希的 bundle，无法写稳定 patch） | **✅ 含**（`dist/src/channel.js`，路径稳定） | **❌ 仅手术 dist**（哈希 bundle，暂无 patch 文件；锚点字符串稳定，见 §2.6） |
-| 生产生效方式 | 可直接 `git apply` 到运行 dist，无需重新构建 | 由 `scripts/deploy_image_understanding.sh` **手术式改当前哈希 dist 文件** | `patch -p1` 到运行 dist + `node --check` + 重启 gateway（详见专门文档 §5） | 手术加一行 + `node --check` + 重启 gateway（§2.6；建议折进 deploy 脚本） |
+| 生产生效方式 | 可直接 `git apply` 到运行 dist，无需重新构建 | 由 `scripts/deploy_image_understanding.sh` **手术式改当前哈希 dist 文件** | `patch -p1` 到运行 dist + `node --check` + 重启 gateway（详见专门文档 §5） | `scripts/patch_openclaw_accountid.sh`（幂等、自动发现；已折进 deploy 脚本 `[1b/4]`，§2.6） |
 
 > ⚠️ **解绑登出补丁的特殊关注点（v2.4.4 源码未发布）**：官方 GitHub 仓库 tag 止于 v2.4.3，腾讯只发布了 **2.4.4 的 npm 产物（dist）**，源码未推。实测 v2.4.4 dist（53 模块）⊃ v2.4.3 源码（33 模块），多 20 个模块。**因此不能从 workspace v2.4.3 build 覆盖 dist（会丢 20 个功能）**；在腾讯发 2.4.4+ 源码前，手术热补丁是唯一正确路径，且插件每次升级会覆盖丢失。详见 [openclaw_weixin_gateway_logout_patch.md](openclaw_weixin_gateway_logout_patch.md)。
 
@@ -119,16 +119,16 @@ accountId: sessionCtx.AccountId ?? ctx.AccountId,
 
 `sessionCtx.AccountId`/`ctx.AccountId` 是 bot 账号（core 自己当 `agentAccountId`/`originatingAccountId` 用），补进后 bridge 第一步 `ctx.accountId` 即命中。
 
-**手术步骤（当前 = aliyun2 v2026.6.5 已落地）**：
+**耐久化脚本（✅ 2026-06-14 已落地）**：`scripts/patch_openclaw_accountid.sh` —— host-agnostic、幂等、自动发现 node + 哈希 bundle，备份到 `*.bak.accountid`，已打则跳过；默认重启 gateway，`--no-restart` 仅打补丁。**在哪台跑就打哪台**（今天 = aliyun2 接入节点；aliyun1 升到 6.x 时也跑）：
 ```bash
-F=$(grep -rl 'runBeforeAgentReply({ cleanedBody' ~/.npm-global/lib/node_modules/openclaw/dist/get-reply-*.js)
-cp -p "$F" "$F.bak-accountid-$(date +%Y%m%d%H%M%S)"        # 备份
-# 在 'trigger: opts?.isHeartbeat ? "heartbeat" : "user",' 行后插入：
-#   accountId: sessionCtx.AccountId ?? ctx.AccountId,
-node --check "$F" && systemctl --user restart openclaw-gateway.service
+bash scripts/patch_openclaw_accountid.sh                 # 打补丁 + 重启 gateway
+# 或仅打补丁（调用方自行重启）：bash scripts/patch_openclaw_accountid.sh --no-restart
 ```
-- 锚点字符串 `runBeforeAgentReply({ cleanedBody` 与图片补丁 deploy 脚本用的**完全一致**（`scripts/deploy_image_understanding.sh` 已靠它定位 bundle）→ 建议把这一行注入折进该脚本，和图片补丁一起重放（见 §5 TODO）。
+该脚本也已**折进** `scripts/deploy_image_understanding.sh`（步骤 `[1b/4]`，传 `--no-restart`，复用同一 `$DIST`，由该脚本步骤 4 统一重启）→ 图片补丁与 accountId 补丁现为**同一入口**一起重放。
+
+**底层手术（脚本内部逻辑，供参考）**：在 core dist `get-reply-*.js` 的 `runBeforeAgentReply(...)` ctx 字面量里、`trigger: opts?.isHeartbeat ? "heartbeat" : "user",` 行后插入 `accountId: sessionCtx.AccountId ?? ctx.AccountId,`，幂等判据 = 文件是否已含 `accountId: sessionCtx.AccountId`。
 - aliyun2 已落地：备份 `get-reply-BpFiu3Nn.js.bak-accountid-20260614164059`，`node --check` 通过，重启后微信收发回环 E2E 验证通过。
+- 注：aliyun1 v5.28 core 含**完全相同**的锚点结构（同 `sessionCtx`/`ctx` 命名）但当前未打此补丁（5.28 不漏，本机账号正常）→ 暂不主动改其在跑 core；待其升级到 6.x 时随脚本一并打。
 
 **升级/重装必查**：`grep -c 'sessionCtx.AccountId ?? ctx.AccountId' ~/.npm-global/lib/node_modules/openclaw/dist/get-reply-*.js`，返回 0 则重打。
 
@@ -165,7 +165,7 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 
 - [x] ~~部署脚本自动发现哈希 dist 文件名~~ 已完成（2026-06-13，见 §3 注）。
 - [ ] `patches/` 增加 README，统一说明四个 patch 的用法与适用场景。
-- [ ] **把 `before-agent-reply-accountid`（§2.6）注入折进 `scripts/deploy_image_understanding.sh`**：同一文件、同一锚点字符串，可与图片补丁一起手术重放，避免升级后漏打导致多机静默不回复。当前仅 aliyun2 手工落地、无 patch 文件/脚本。
+- [x] ~~**把 `before-agent-reply-accountid`（§2.6）注入折进 `scripts/deploy_image_understanding.sh`**~~ ✅ 已完成（2026-06-14）：抽成独立耐久化脚本 `scripts/patch_openclaw_accountid.sh`（host-agnostic、幂等、自动发现），并被 deploy 脚本步骤 `[1b/4]` 复用。aliyun2 已用脚本确认幂等落地。
 - [x] ~~**多机图片理解方案**：在 §2.5 三条路线里选定并实现~~ 已选 **传字节/内联 base64** 并落地（2026-06-13，见 §2.5）。剩余：node 真机端到端验证 + aliyun1 nginx `client_max_body_size` 调整。
 - [ ] **统一 OpenClaw 安装标准**：新机优先官方安装器；装不通则 npm-g + 锁 node v22.x（见 §0 多机表）。
 - [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除版本漂移与哈希 dist 手术补丁的脆弱性）。
