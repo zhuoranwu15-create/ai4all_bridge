@@ -142,7 +142,8 @@ curl -sS --noproxy aliyun1 -X POST http://aliyun1/openclaw/turn \
 > - **核心 dist 图片补丁已打**：`get-reply-BpFiu3Nn.js` 手术注入 `hookCleanedBody`（备份 `.bak.imageunderstanding`，`node --check` 通过）。目标串在 v2026.6.5 精确匹配 1 次、依赖符号齐全，**未跑 deploy 脚本**（那是中心机用的，会改 backend `.env`/重启 backend，node 上手动做 dist 那一步即可）。
 > - **字节版 bridge 已装+注册**：`openclaw plugins install ./openclaw-bridge --force` → `~/.openclaw/extensions/ai4all-openclaw-bridge`；`openclaw config set ...config.backendUrl http://aliyun1` + secret 从 `.env` 同步（64 字符，已与 aliyun1 对齐，curl `/openclaw/turn` 得 200 `no_binding` 验证通过）。
 > - **⚠️ v2026.6.5 新坑（aliyun1 旧版 v2026.5.28 没有）**：非内置(path)插件的会话钩子默认被挡，inspect 报 `typed hook "before_agent_reply" blocked ... must set ...hooks.allowConversationAccess=true`。须 `openclaw config set plugins.entries.ai4all-openclaw-bridge.hooks.allowConversationAccess true` 再重启，钩子才生效。
-> - **仍待办（端到端发图前）**：① **aliyun1 nginx** 把 `/openclaw/turn` 的 `client_max_body_size` 调到 `12m`（默认 1m，base64 图会 413）——此步在中心机，aliyun2 无法代劳；② aliyun2 **扫码登一个测试微信号** + 中心给该号插 binding，才能真机发图验证。
+> - **~~仍待办① aliyun1 nginx~~ → ✅ 已落地（2026-06-14，中心机）**：`/etc/nginx/conf.d/ai4all-node.conf` 已加 `client_max_body_size 12m`（默认 1m，base64 图会 413）并放行 `location ^~ /node/`（节点心跳/出站认领&回报/登录 push）；`nginx -t` 通过、`reload` 已生效。本机实测 `Host: aliyun1` 下 `/health/live`→200、`/node/heartbeat` 无凭据→401（backend 鉴权闸，非 nginx 404，证明 `/node/` 已正确反代）。备份 `ai4all-node.conf.bak.prenode`。
+> - **仍待办（端到端发图前）**：aliyun2 **扫码登一个测试微信号** + 中心给该号插 binding，才能真机发图验证。
 > - aliyun2 当前**无任何微信号登录**（仅 weixin 插件 v2.4.4 loaded 可用），故本次 gateway 重启零冲击。
 
 ### 步骤
