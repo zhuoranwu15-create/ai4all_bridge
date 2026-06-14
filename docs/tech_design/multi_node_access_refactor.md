@@ -5,9 +5,11 @@
 > 适用范围：AI4ALL 微信个人 AI 陪伴项目（bridge + OpenClaw）
 > 上游依据：本文是 [`single-host-multi-openclaw-scale.md`](single-host-multi-openclaw-scale.md) §4-B（横向分片 + 路由）+ §4-C（出口 IP 多样化）+ §5（bridge 改造最小集）的**具体落地实现**，聚焦「线上 aliyun1 单机 → aliyun1+aliyun2 双机」的无损切换 MVP。
 >
-> 配套子文档（机器侧操作）：
+> 配套子文档：
+> - 🧭 **[`multi_node_access_retrospective.md`](multi_node_access_retrospective.md)** — **上线后复盘与后续工作指南（后续接手者先读这个）**：现状总览、升级踩坑、技术债、二期架构优化方向。
 > - [`multi_node_access_runbook_B.md`](multi_node_access_runbook_B.md) — **新机 aliyun2**（node）：现在可做的零代码被动链路验证 + 一期后接入。
 > - [`multi_node_access_runbook_A.md`](multi_node_access_runbook_A.md) — **线上 aliyun1**（central+node）：无损升级与回滚。
+> - 本文末「附录 C」= 落地踩坑速查表。
 
 ---
 
@@ -592,3 +594,23 @@ while True:
 - **异步审核抽检** `enqueue_outbound_for_moderation` 仍在中心 enqueue 时触发，与今天一致（非发送门禁）。
 - **配额 `quota_date` / 幂等 `idempotency_key`(UNIQUE)** 不变；节点重试复用同 key，网关幂等。
 - **`insert_outbound_delivery_message`**（落地交付记录）留中心 `/result`，与今天落点一致。
+
+---
+
+# 附录 C：落地踩坑记录（实施复盘速查）
+
+> 本附录把「设计阶段没料到、落地时才炸出来」的坑集中成一张速查表，挂在原设计/计划之后（原文不删，纯追加）。
+> 面向后续工作的完整复盘（现状 + 后续建议 + 架构优化方向）见 **[`multi_node_access_retrospective.md`](multi_node_access_retrospective.md)**；OpenClaw 补丁细节见 [`openclaw_patches_maintenance.md`](openclaw_patches_maintenance.md)；aliyun2 登录的逐层追踪见 [`multi_node_weixin_login_investigation_20260614.md`](multi_node_weixin_login_investigation_20260614.md)。
+
+| # | 坑 | 根因 | 解法 | 留下的教训 |
+|---|---|---|---|---|
+| C1 | 中心 push 扫码报 502 | 6.5 设备 **scope/pairing 闸**挡 loopback CLI 的 `web.login.start`（需 `operator.admin`） | `openclaw devices approve <id>`（**不带 `--url`**，走本地信任根 fallback 批本机设备） | 6.5 在 token 之上多叠了「设备+scope 审批」层；5.28 无 |
+| C2 | scope 修完后 `web login provider is not available` | weixin channel 插件**网关启动时连「发现」都没发现**（装在 `~/.openclaw/npm/projects/`，网关只扫 `~/.openclaw/extensions/`） | weixin 插件**只有配置了 channel 实例后才被网关发现/加载**（manifest 无 `activation`）；`channels login` 顺带写配置 → 强制重启 → 加载成立 | **CLI 发现路径 ≠ 网关启动发现路径**；验证看网关日志 `listening (N plugins)` / `starting channels`，别只看 `plugins list` enabled |
+| C3 | bridge 装了但所有钩子静默失效 | 6.5+ 默认拦非内置插件会话钩子 `before_agent_reply blocked` | `openclaw config set plugins.entries.ai4all-openclaw-bridge.hooks.allowConversationAccess true` + 重启 | 6.5 新增安全闸，5.28 无；装/升级 bridge 必设 |
+| C4 | **登录全通后仍「连上但不回复」**（最隐蔽） | **6.5 core 漏 bot `AccountId` 出 `before_agent_reply` hook ctx** → bridge `extractAccountId` 兜底成 provider 字面量 `"openclaw-weixin"` → 中心 `no_binding` → bridge `no_reply` 静默吞掉 | 第 4 个 core 补丁：hook ctx 加 `accountId: sessionCtx.AccountId ?? ctx.AccountId`（`scripts/patch_openclaw_accountid.sh`） | **多机才暴露的版本回归**（5.28 不漏）；**aliyun1 升 6.x 必打**；症状无报错/日志空白，排查链极长 |
+| C5 | 远程账号主动消息全部送不达 | `is_inline_dispatch` 是**全局**开关，`dispatch_proactive_text` 不看账号归属节点；aliyun1 inline 误发远程 aliyun2 账号（无会话→失败 + 按 id 抢走队列行） | `db.should_inline_dispatch_for_account(account_id, settings)`：仅账号归属本机 node 才 inline，远程一律 enqueue（commit `c4f97da`，+7 测，已上线） | 多机下「全局开关」几乎都暗含「应 per-account 判定」的 bug；分流条件必过一遍「远程账号会怎样」 |
+| C6 | 多机图片 base64 被 nginx 413 截断 | node→中心经 aliyun1 nginx，默认 `client_max_body_size 1m` | nginx 调到 `12m`；三方协调 bridge cap(5MB) ≤ `image_max_bytes`(10MB) ≤ nginx(12MB) | 多机图片走「传字节/内联 base64」，body-size 是硬前置 |
+| C7 | core 补丁升级后静默丢失 | 补丁打在带内容哈希的 bundle（`get-reply-<hash>.js`，每次升级哈希变），无法写稳定 `.patch` | 部署/回滚脚本改**路径无关 + 按内容 grep 自动发现 bundle**；每补丁配「升级必查」grep | 结构性脆弱，根治留二期（统一源码构建 / 等上游发源码） |
+| C8 | 两机路径/node 版本漂移 | aliyun1 官方安装器(node v22)、aliyun2 npm-g(node v24)，安装方式不同 | 已定标准：新机优先官方安装器，装不通则 npm-g + 锁 node v22.x + 登记路径 | 安装方式不统一会放大补丁/脚本维护成本，还撞上 6.5 回归 |
+
+> **追查方法论**（C1→C4 是同一次排查的层层前移）：错误信息会随每修掉一层而「前进」到下一层，**前进 = 上一层已过**，但**不等于问题解决**——真根因可能在更深处（本例最深在 OpenClaw core hook ctx）。早期基于 `plugins list` / runbook 的乐观假设被推翻了两次，最终靠「直连中心对比单个字段差异」定位。investigation 文档完整保留了这条路径。
