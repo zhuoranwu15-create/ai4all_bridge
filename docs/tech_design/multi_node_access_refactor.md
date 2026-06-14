@@ -32,14 +32,14 @@
 | 图片理解（多机内联 base64） | ✅ 已验证 | 用户在 aid_956326343 微信发图，得到正确回复（2026-06-14） |
 
 > **⚠️ 已知 bug（出站 inline 分支非 node-aware，2026-06-14 发现）**：`settings.is_inline_dispatch`（`config.py:225`）是**全局**开关，`dispatch_proactive_text`（`proactive/messaging.py:310`）只判它、**不看账号归属节点**。aliyun1=`central,node` + `LOCAL_NODE_INLINE_DISPATCH=true` 时，发给**远程（aliyun2）账号**的主动消息会被 aliyun1 走 `send_proactive_text` → `claim_pending_outbound_message(by id)` + 本机 `send_weixin_text`（aliyun1 无该会话）→ **失败 mark_failed，且把行从 aliyun2 pull 队列里按 id 抢走**。即**当前配置下所有发往 aliyun2 账号的提醒/承诺/心跳/reactivation 都不会真正送达**。本次 pull 验证是**绕过** dispatch、直接 `enqueue_proactive_text` 才跑通的。
-> **✅ 已修复（2026-06-14，代码+测试，待部署 aliyun1）**：新增 `db.should_inline_dispatch_for_account(account_id, settings)` —— standalone→恒 inline；否则需 `local_node_inline_dispatch` 开 **且** 账号归属本机 node（`resolve_node_for_account(account_id) or default_node_id == node_id`）才 inline，远程账号一律 enqueue 走 pull。三处全局判断（`messaging.py:dispatch_proactive_text`、`turn_service.py` onboarding 欢迎语、`main.py` 绑定发送）改用该 helper。新增 7 个单测（含远程账号 dispatch 必 enqueue 的回归守卫），standalone 全量回归 559 passed（4 个失败为环境相关、与改动无关、原始代码同样失败）。**剩余：部署到 aliyun1（`git pull` + restart）才生效。**
+> **✅ 已修复并上线（2026-06-14，commit `c4f97da`）**：新增 `db.should_inline_dispatch_for_account(account_id, settings)` —— standalone→恒 inline；否则需 `local_node_inline_dispatch` 开 **且** 账号归属本机 node（`resolve_node_for_account(account_id) or default_node_id == node_id`）才 inline，远程账号一律 enqueue 走 pull。三处全局判断（`messaging.py:dispatch_proactive_text`、`turn_service.py` onboarding 欢迎语、`main.py` 绑定发送）改用该 helper。新增 7 个单测（含远程账号 dispatch 必 enqueue 的回归守卫），standalone 全量回归 559 passed（4 个失败为环境相关、与改动无关、原始代码同样失败）。**已部署 aliyun1**（`ai4all-weixin-backend` + `proactive-scheduler` 17:40:54 重启，后者 `Requires=backend` 级联）：生产实测路由正确——4 个 aliyun2 远程账号判 `inline=False` 走 enqueue/pull，本机账号判 `True`。**至此多机主动消息生产可用。**
 
 **踩到的关键坑（全部已解，详见 [investigation](multi_node_weixin_login_investigation_20260614.md)）**：
 1. weixin 插件**配置了 channel 实例才会被网关发现/加载**（npm 装在 `~/.openclaw/npm/projects/`，非 `extensions/`）。
 2. 6.5 设备 **scope/pairing 闸**挡 loopback CLI 的 `web.login.start`（`devices approve` 不带 `--url` 走本地信任根批准）。
 3. **6.5 core 把 bot `AccountId` 漏出了 `before_agent_reply` hook ctx** → bridge 转发 `channel_account_id="openclaw-weixin"` → 中心 `no_binding` 静默不回复。**已打第 4 个 core 补丁**（`openclaw_patches_maintenance.md` §2.6）。⚠️ **aliyun1 从 5.28 升 6.5 时必打此补丁，否则多机入站全静默**。
 
-**结论**：MVP 的「双机端到端跑通」目标**全部链路已实测**（入站/被动回复/登录/绑定/出站 pull/图片理解 6 条全绿）。**唯一遗留 = 上面的 inline 分支非 node-aware bug**：当前 aliyun1 配置下，发往 aliyun2 账号的主动消息走正常 dispatch 会失败（pull 机制本身正确，是 dispatch 的分流条件错了）。修掉它，多机主动消息才算生产可用。
+**结论**：MVP 的「双机端到端跑通」目标**全部链路已实测**（入站/被动回复/登录/绑定/出站 pull/图片理解 6 条全绿）。上面的 inline 分支非 node-aware bug **已修复并部署 aliyun1（commit `c4f97da`，生产路由实测正确）**，多机主动消息**生产可用**。重构目标达成；剩余仅为运维耐久化与清理项（见下）。
 
 ### 当前阶段
 - 设计与决策：✅ 完成（本文 + 附录 A/B）。
@@ -76,9 +76,10 @@
 2. ~~一期编码 Phase 1/2/3/4~~ → ✅ 全部落地（见上「当前阶段」），标准回归 556 passed。
 3. ~~aliyun1 原地升级演练~~ / ~~部署 aliyun1=central + aliyun2=node~~ → ✅ **已上线**（见上「🟢 2026-06-14 上线验证」）：双机服务在跑，入站/被动回复/登录 push/绑定 E2E 实测通过。aliyun2 四个补丁全打（QR/登出/图片/**accountId**）。
 4. ~~补验出站 pull / 图片理解~~ → ✅ **均已 E2E 验证**（出站 pull：行 26242 中心 enqueue→aliyun2 pull→send 504ms→sent；图片：用户真机发图得正确回复）。
-5. ~~修 inline 分支非 node-aware bug~~ → ✅ **代码已修 + 7 测试 + 559 回归绿**（见上「已知 bug」注）。**待部署 aliyun1**（`git pull`+restart）生效；部署前 aliyun2 账号的提醒/承诺/心跳仍不送达。
-6. **耐久化第 4 个补丁**：把 `before-agent-reply-accountid` 注入折进 `scripts/deploy_image_understanding.sh`（同文件同锚点），避免 core 升级后漏打致多机静默不回复。
-7. **二期**：自动负载调度、一键中心切换、Litestream 热备（§15）。
+5. ~~修 inline 分支非 node-aware bug~~ → ✅ **已修 + 7 测试 + 559 回归绿 + 已部署 aliyun1**（commit `c4f97da`，生产路由实测正确，见上「已知 bug」注）。
+6. ~~耐久化第 4 个补丁~~ → ✅ **已完成**（commit `06a4249`）：抽成 `scripts/patch_openclaw_accountid.sh`（host-agnostic、幂等、自动发现），并折进 `scripts/deploy_image_understanding.sh` 步骤 `[1b/4]`；aliyun2 实跑确认幂等。
+7. **延后（非必要）**：aliyun2 空壳 `default` channel 清理——weixin 插件不支持 `--delete`，需手改网关 state，生产节点风险高，暂留（无害，详见 [[openclaw-install-patch-state]]）。
+8. **二期**：自动负载调度、一键中心切换、Litestream 热备（§15）。
 
 ---
 
