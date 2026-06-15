@@ -25,6 +25,11 @@ Usage: scripts/restart_runtime.sh [options]
 
 Restart the AI4ALL runtime after code has already been pulled.
 
+仅用于具备 central 能力的机器(.env AI4ALL_ROLE 含 central 或 standalone,
+镜像 app/config.py has_central_role)。node-only 机请改用:
+  systemctl --user restart ai4all-weixin-node
+如确需在非 central 机执行,设 AI4ALL_ALLOW_NON_CENTRAL=1 跳过该守卫。
+
 Options:
   --install-deps      Run .venv/bin/python -m pip install -r requirements.txt first.
   --restart-openclaw  Restart OpenClaw gateway after backend services.
@@ -42,6 +47,7 @@ Environment overrides:
   AI4ALL_MONITOR_TIMER
   AI4ALL_READY_URL
   MONITOR_SCHEDULERS
+  AI4ALL_ALLOW_NON_CENTRAL   设为 1 跳过 central 角色守卫(用于非 central 机的特殊场景)。
 USAGE
 }
 
@@ -102,6 +108,34 @@ require_file() {
 require_file ".env"
 require_file ".venv/bin/python"
 require_file "requirements.txt"
+
+# central 角色守卫:本脚本重启的是中心服务(backend / proactive-scheduler / 系统级 systemctl /
+# :8180 health),只适用于具备 central 能力的机器。node-only 机(如 aliyun2)跑的是
+# systemctl --user ai4all-weixin-node、端口 8190,无这些 unit,误跑会在 systemctl restart 处失败。
+# 逻辑镜像 app/config.py has_central_role:AI4ALL_ROLE 含 central 或 standalone(默认)即放行。
+detect_ai4all_role() {
+  # 从 .env 取最后一条未注释的 AI4ALL_ROLE;键缺失则回落 standalone(与 config 默认一致)。
+  local line raw
+  line="$(grep -E '^[[:space:]]*AI4ALL_ROLE[[:space:]]*=' .env | tail -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    echo "standalone"
+    return
+  fi
+  raw="${line#*=}"            # 取 = 之后
+  raw="${raw%%#*}"           # 去行内注释(role 仅含字母/逗号,# 必为注释 —— 见 env 行内注释雷区)
+  raw="${raw//[[:space:]]/}" # 去全部空白
+  echo "${raw,,}"            # 转小写
+}
+
+if [[ "${AI4ALL_ALLOW_NON_CENTRAL:-0}" != "1" ]]; then
+  _role="$(detect_ai4all_role)"
+  if [[ ",${_role}," != *",central,"* && ",${_role}," != *",standalone,"* ]]; then
+    echo "拒绝:本脚本仅用于具备 central 能力的机器(当前 .env AI4ALL_ROLE='${_role:-<空>}')。" >&2
+    echo "node-only 机请改用:systemctl --user restart ai4all-weixin-node" >&2
+    echo "如确需在本机执行,设 AI4ALL_ALLOW_NON_CENTRAL=1 跳过该守卫。" >&2
+    exit 4
+  fi
+fi
 
 # 全局 gateway restart = 该机所有微信账号同时重连，风控高危（见 production_runbook 规模化运维红线）。
 # 在执行任何重启前就地确认/拦截，避免拒绝时已经重启了 backend/nginx。
