@@ -1,0 +1,10 @@
+"""app.db 包：按领域拆分；重导出全部公共 API 以兼容 `from app.db import X`。"""
+from app.db._core import *  # noqa: F401,F403
+from app.db.ops import *  # noqa: F401,F403
+from app.db.analytics import *  # noqa: F401,F403
+from app.db.moderation import *  # noqa: F401,F403
+from app.db.admin import *  # noqa: F401,F403
+from app.db.billing import *  # noqa: F401,F403
+from app.db.accounts import *  # noqa: F401,F403
+from app.db.proactive import *  # noqa: F401,F403
+from app.db.lifecycle import *  # noqa: F401,F403

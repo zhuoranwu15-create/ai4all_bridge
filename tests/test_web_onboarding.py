@@ -1689,7 +1689,9 @@ def test_unbind_and_wipe_is_atomic_on_failure(fresh_db):
     assert list_channel_bindings_for_account(account_id=account_id)
 
     # 强制 wipe 阶段抛错（unbind 已在同一事务里执行但尚未提交）。
-    with patch.object(db, "wipe_account_data", side_effect=RuntimeError("boom")):
+    # 拆包后 unbind_and_wipe_account 与 wipe_account_data 同在 app.db.lifecycle，
+    # 内部按本模块名调用，故 patch 其所在模块（patch where it's used）。
+    with patch("app.db.lifecycle.wipe_account_data", side_effect=RuntimeError("boom")):
         with pytest.raises(RuntimeError):
             unbind_and_wipe_account(account_id=account_id)
 

@@ -1,0 +1,1392 @@
+import json
+import logging
+import math
+import re
+import sqlite3
+import uuid
+from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterator, List, Optional
+
+from app.config import settings
+
+logger = logging.getLogger("ai4all.db")
+
+_UNSET = object()
+_NON_CONTEXT_ASSISTANT_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+# 入站内容被同步审核拦截后写入 messages.error 的标记；用于将命中原文从所有 LLM 上下文路径中剔除。
+MODERATION_BLOCKED_ERROR = "moderation_blocked"
+ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
+_LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
+SHELL_MICROS_PER_SHELL = 1_000_000
+SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
+NEW_USER_GRANT_SHELLS = 1000
+NEW_USER_GRANT_SHELL_MICROS = NEW_USER_GRANT_SHELLS * SHELL_MICROS_PER_SHELL
+REFERRAL_REWARD_SHELLS = 1000
+REFERRAL_REWARD_SHELL_MICROS = REFERRAL_REWARD_SHELLS * SHELL_MICROS_PER_SHELL
+REFERRAL_QUALIFYING_MESSAGE_COUNT = 3
+REFERRAL_SOFT_REVIEW_WINDOW_DAYS = 7
+REFERRAL_SOFT_REVIEW_REGISTRATION_LIMIT = 5
+REFERRAL_SOFT_REVIEW_REWARD_DELAY_DAYS = 3
+_ACCOUNT_ID_RANDOM_MIN = 100_000_000
+_ACCOUNT_ID_RANDOM_SPACE = 900_000_000
+_ACCOUNT_ID_GENERATION_RETRIES = 20
+_REFERRAL_CODE_GENERATION_RETRIES = 20
+
+
+def _new_id(prefix: str) -> str:
+    return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def _new_account_id() -> str:
+    return f"aid_{_ACCOUNT_ID_RANDOM_MIN + uuid.uuid4().int % _ACCOUNT_ID_RANDOM_SPACE}"
+
+
+def _clean_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_referral_code(code: Optional[str]) -> Optional[str]:
+    cleaned = _clean_text(code)
+    if not cleaned:
+        return None
+    return re.sub(r"\s+", "", cleaned).upper()
+
+
+def _new_referral_code() -> str:
+    return uuid.uuid4().hex[:8].upper()
+
+
+def _clean_default_account_display_name(value: Optional[str]) -> Optional[str]:
+    cleaned = _clean_text(value)
+    if cleaned in _LEGACY_DEFAULT_ASSISTANT_NAMES:
+        return None
+    return cleaned
+
+
+def _format_shell_amount(amount_shell_micros: int) -> str:
+    sign = "-" if amount_shell_micros < 0 else ""
+    amount = abs(int(amount_shell_micros))
+    whole = amount // SHELL_MICROS_PER_SHELL
+    fraction = amount % SHELL_MICROS_PER_SHELL
+    if fraction == 0:
+        return f"{sign}{whole}"
+    return f"{sign}{whole}.{fraction:06d}".rstrip("0")
+
+
+def _channel_account_id_aliases(value: str) -> List[str]:
+    """Return known OpenClaw/provider account id variants for lookup.
+
+    openclaw-weixin's QR wait result returns the raw ilink bot id such as
+    `abc@im.bot`, while OpenClaw runtime context commonly uses its normalized
+    account id form `abc-im-bot`.
+    """
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return []
+    aliases = [cleaned]
+    if cleaned.endswith("@im.bot"):
+        aliases.append(f"{cleaned[:-7]}-im-bot")
+    elif cleaned.endswith("-im-bot"):
+        aliases.append(f"{cleaned[:-7]}@im.bot")
+    if cleaned.endswith("@im.wechat"):
+        aliases.append(f"{cleaned[:-10]}-im-wechat")
+    elif cleaned.endswith("-im-wechat"):
+        aliases.append(f"{cleaned[:-10]}@im.wechat")
+    return list(dict.fromkeys(aliases))
+
+
+_PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
+
+
+def _normalize_phone(phone: str) -> str:
+    normalized = str(phone or "")
+    for ch in (" ", "-", "(", ")", "."):
+        normalized = normalized.replace(ch, "")
+    normalized = normalized.strip()
+    if not _PHONE_RE.match(normalized):
+        raise ValueError("phone must be a valid Chinese mobile number (1[3-9]XXXXXXXXX)")
+    return normalized
+
+
+def _settings():
+    """返回实时 settings 对象。
+
+    通过包命名空间 `app.db.settings` 动态读取，使测试中 `patch("app.db.settings")`
+    能路由整个 db 层到临时工作区（拆包后各子模块的模块级 settings 名字在 import 期
+    已绑定，直接用会绕过 patch）。
+    """
+    import app.db as _pkg
+    return getattr(_pkg, "settings", settings)
+
+
+def _db_path() -> Path:
+    path = Path(_settings().database_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
+    """Open a SQLite connection with bridge-wide pragmas and commit on success."""
+    conn = sqlite3.connect(_db_path(), timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA busy_timeout = 5000")
+        conn.execute("PRAGMA journal_mode = WAL")
+        # WAL 的标准搭档：commit 不再每次 fsync，仅在 checkpoint 时落盘。
+        # 最坏情况（OS 崩溃/断电）只丢断电前最后几条已提交事务，绝不损坏库；
+        # 对陪伴 bot 可接受，写延迟约砍半。
+        conn.execute("PRAGMA synchronous = NORMAL")
+        conn.execute("PRAGMA foreign_keys = ON")
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception as rollback_err:
+            logger.warning("db rollback failed after exception: %s", rollback_err)
+        raise
+    else:
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _tx(conn: Optional[sqlite3.Connection]) -> Iterator[sqlite3.Connection]:
+    """复用调用方事务（传入 conn，由调用方负责提交/回滚）或自开一个独立事务。
+
+    用于让 unbind/wipe 既能各自独立调用，又能被 unbind_and_wipe_account 串进
+    同一个事务，保证「要么全成、要么整体回滚」。
+    """
+    if conn is not None:
+        yield conn
+        return
+    with connect() as own:
+        yield own
+
+
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+    ).fetchone()
+    return row is not None
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def init_db() -> None:
+    """应用所有待执行的 schema 迁移（版本由 PRAGMA user_version 跟踪）。"""
+    with connect() as conn:
+        _run_migrations(conn)
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """按 user_version 顺序应用未执行迁移；在调用方事务内运行，整体提交/回滚。"""
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    for version, apply in _MIGRATIONS:
+        if version > current:
+            logger.info("db migration applying version=%s", version)
+            apply(conn)
+            conn.execute(f"PRAGMA user_version = {version}")
+
+
+def _migration_0001_baseline(conn: sqlite3.Connection) -> None:
+    """基线迁移：建立当前全量 schema（幂等，可在已有库上重复执行）。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS accounts (
+            id TEXT PRIMARY KEY,
+            channel TEXT,
+            display_name TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            notes TEXT,
+            onboarding_state TEXT NOT NULL DEFAULT 'pending',
+            onboarding_updated_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE TABLE IF NOT EXISTS platform_users (
+            id TEXT PRIMARY KEY,
+            phone TEXT NOT NULL UNIQUE,
+            display_name TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_subscriptions_user
+        ON subscriptions(platform_user_id, updated_at);
+
+        CREATE TABLE IF NOT EXISTS entitlement_wallets (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL UNIQUE,
+            platform_user_id TEXT NOT NULL,
+            balance_shell_micros INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_entitlement_wallets_user
+        ON entitlement_wallets(platform_user_id, status);
+
+        CREATE TABLE IF NOT EXISTS entitlement_ledger (
+            id TEXT PRIMARY KEY,
+            wallet_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            platform_user_id TEXT NOT NULL,
+            entry_type TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            amount_shell_micros INTEGER NOT NULL,
+            balance_after_shell_micros INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_wallet_created
+        ON entitlement_ledger(wallet_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_account_created
+        ON entitlement_ledger(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS cost_events (
+            id TEXT PRIMARY KEY,
+            wallet_id TEXT,
+            account_id TEXT NOT NULL,
+            platform_user_id TEXT,
+            cost_type TEXT NOT NULL,
+            cost_owner TEXT NOT NULL DEFAULT 'user',
+            billable_to_user INTEGER NOT NULL DEFAULT 1,
+            model TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            billable_tokens INTEGER,
+            model_price_multiplier_micros INTEGER NOT NULL DEFAULT 1000000,
+            computed_shell_micros INTEGER NOT NULL DEFAULT 0,
+            entitlement_ledger_id TEXT,
+            source_type TEXT,
+            source_id TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(entitlement_ledger_id) REFERENCES entitlement_ledger(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_cost_events_account_created
+        ON cost_events(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_cost_events_wallet_created
+        ON cost_events(wallet_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS account_owner_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            platform_user_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            binding_method TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            verified_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(platform_user_id, account_id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_account_owner_bindings_account
+        ON account_owner_bindings(account_id);
+
+        CREATE TABLE IF NOT EXISTS referral_codes (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT,
+            code TEXT NOT NULL UNIQUE,
+            code_type TEXT NOT NULL DEFAULT 'personal',
+            status TEXT NOT NULL DEFAULT 'active',
+            max_uses INTEGER,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            created_by_admin_user_id TEXT,
+            disabled_reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_personal_user
+        ON referral_codes(platform_user_id, code_type)
+        WHERE code_type = 'personal' AND platform_user_id IS NOT NULL;
+
+        CREATE INDEX IF NOT EXISTS ix_referral_codes_user_status
+        ON referral_codes(platform_user_id, status);
+
+        CREATE TABLE IF NOT EXISTS referral_relationships (
+            id TEXT PRIMARY KEY,
+            inviter_platform_user_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL UNIQUE,
+            referral_code_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'registered',
+            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            reward_ledger_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            rewarded_at TEXT,
+            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
+            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_created
+        ON referral_relationships(inviter_platform_user_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_status
+        ON referral_relationships(status, review_status);
+
+        CREATE TABLE IF NOT EXISTS meaningful_message_reviews (
+            id TEXT PRIMARY KEY,
+            referral_relationship_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            message_ids_json TEXT NOT NULL DEFAULT '[]',
+            reviewer_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_meaningful_reviews_relationship_reviewer
+        ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
+
+        CREATE TABLE IF NOT EXISTS binding_intents (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            openclaw_login_session_key TEXT NOT NULL,
+            channel TEXT NOT NULL DEFAULT 'openclaw-weixin',
+            status TEXT NOT NULL DEFAULT 'created',
+            channel_account_id TEXT,
+            qr_data_url TEXT,
+            manual_login_command TEXT,
+            raw_result_json TEXT NOT NULL DEFAULT '{}',
+            expires_at TEXT,
+            completed_at TEXT,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_binding_intents_user_created
+        ON binding_intents(platform_user_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_binding_intents_account_created
+        ON binding_intents(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            sender_id TEXT,
+            chat_id TEXT,
+            sender_name TEXT,
+            status TEXT NOT NULL DEFAULT 'active',
+            ended_at TEXT,
+            close_reason TEXT,
+            turn_count INTEGER NOT NULL DEFAULT 0,
+            business_day TEXT,
+            session_summary TEXT,
+            carryover_summary TEXT,
+            summary_model TEXT,
+            summary_prompt_version TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(account_id, session_key),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL UNIQUE,
+            display_name TEXT,
+            style TEXT,
+            preferences_json TEXT NOT NULL DEFAULT '{}',
+            system_prompt TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            message_id TEXT,
+            reply_to_message_id TEXT,
+            direction TEXT NOT NULL,
+            role TEXT NOT NULL,
+            message_type TEXT NOT NULL DEFAULT 'text',
+            content TEXT,
+            raw_json TEXT,
+            latency_ms INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_account_message
+        ON messages(account_id, message_id)
+        WHERE message_id IS NOT NULL AND message_id != '';
+
+        CREATE INDEX IF NOT EXISTS ix_messages_session_created
+        ON messages(session_id, id);
+
+        CREATE TABLE IF NOT EXISTS daily_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            message_count INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(account_id, date),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS channel_bindings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            session_key TEXT NOT NULL,
+            channel_account_id TEXT,
+            sender_id TEXT,
+            chat_id TEXT,
+            raw_identity_json TEXT NOT NULL DEFAULT '{}',
+            first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(account_id, channel, session_key),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_channel_bindings_account_seen
+        ON channel_bindings(account_id, last_seen_at);
+
+        CREATE TABLE IF NOT EXISTS outbound_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            channel_account_id TEXT,
+            to_user_id TEXT NOT NULL,
+            session_key TEXT,
+            source TEXT NOT NULL,
+            text TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            gateway_message_id TEXT,
+            quota_date TEXT NOT NULL,
+            product_category TEXT,
+            policy_version TEXT,
+            policy_reason TEXT,
+            scheduled_at TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            sent_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_outbound_messages_account_date
+        ON outbound_messages(account_id, quota_date, status);
+
+        CREATE INDEX IF NOT EXISTS ix_outbound_messages_status_created
+        ON outbound_messages(status, created_at);
+
+        CREATE TABLE IF NOT EXISTS content_moderation_tasks (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            session_id INTEGER,
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            message_db_id INTEGER,
+            outbound_message_id INTEGER,
+            direction TEXT NOT NULL,
+            content_kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            risk_level TEXT NOT NULL DEFAULT 'unknown',
+            risk_categories_json TEXT NOT NULL DEFAULT '[]',
+            confidence REAL,
+            content_hash TEXT,
+            snapshot_text TEXT,
+            media_json TEXT NOT NULL DEFAULT '{}',
+            sampling_reason TEXT,
+            sample_rate_percent INTEGER,
+            policy_version TEXT NOT NULL,
+            prompt_version TEXT,
+            machine_attempts INTEGER NOT NULL DEFAULT 0,
+            machine_claimed_at TEXT,
+            machine_completed_at TEXT,
+            assigned_admin_user_id TEXT,
+            reviewed_by_admin_user_id TEXT,
+            reviewed_at TEXT,
+            last_error TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id),
+            FOREIGN KEY(message_db_id) REFERENCES messages(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_tasks_account_created
+        ON content_moderation_tasks(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_tasks_status_created
+        ON content_moderation_tasks(status, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_tasks_source
+        ON content_moderation_tasks(source_type, source_id);
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_tasks_review_queue
+        ON content_moderation_tasks(status, risk_level, created_at);
+
+        CREATE TABLE IF NOT EXISTS content_moderation_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            reviewer_type TEXT NOT NULL,
+            engine TEXT,
+            engine_version TEXT,
+            result_level TEXT NOT NULL,
+            categories_json TEXT NOT NULL DEFAULT '[]',
+            confidence REAL,
+            matched_terms_json TEXT NOT NULL DEFAULT '[]',
+            reason TEXT,
+            raw_result_json TEXT NOT NULL DEFAULT '{}',
+            latency_ms INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_results_task
+        ON content_moderation_results(task_id, id);
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_results_account_created
+        ON content_moderation_results(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS content_moderation_actions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            admin_user_id TEXT,
+            action TEXT NOT NULL,
+            previous_status TEXT,
+            next_status TEXT,
+            reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_actions_task_created
+        ON content_moderation_actions(task_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_actions_account_created
+        ON content_moderation_actions(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS content_moderation_exports (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            admin_user_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'created',
+            artifact_path TEXT,
+            artifact_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_moderation_exports_account_created
+        ON content_moderation_exports(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS moderation_account_risk_state (
+            account_id TEXT PRIMARY KEY,
+            risk_level TEXT NOT NULL DEFAULT 'normal',
+            risk_score INTEGER NOT NULL DEFAULT 0,
+            sample_multiplier REAL NOT NULL DEFAULT 1.0,
+            proactive_blocked_until TEXT,
+            conversation_blocked_until TEXT,
+            last_risk_at TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            channel_account_id TEXT,
+            to_user_id TEXT NOT NULL,
+            session_key TEXT,
+            text TEXT NOT NULL,
+            due_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            outbound_message_id INTEGER,
+            error TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            claimed_at TEXT,
+            sent_at TEXT,
+            cancelled_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_reminders_status_due
+        ON reminders(status, due_at);
+
+        CREATE INDEX IF NOT EXISTS ix_reminders_account_due
+        ON reminders(account_id, due_at);
+
+        CREATE TABLE IF NOT EXISTS proactive_commitments (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            session_id INTEGER,
+            source_message_id TEXT,
+            source_reply_message_id TEXT,
+            dedupe_key TEXT NOT NULL UNIQUE,
+            text TEXT NOT NULL,
+            due_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            confidence REAL,
+            reason TEXT,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            outbound_message_id INTEGER,
+            error TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            claimed_at TEXT,
+            sent_at TEXT,
+            cancelled_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_proactive_commitments_status_due
+        ON proactive_commitments(status, due_at);
+
+        CREATE INDEX IF NOT EXISTS ix_proactive_commitments_account_due
+        ON proactive_commitments(account_id, due_at);
+
+        CREATE TABLE IF NOT EXISTS proactive_account_state (
+            account_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            next_scan_at TEXT,
+            last_scan_at TEXT,
+            last_proactive_sent_at TEXT,
+            cooldown_until TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
+        ON proactive_account_state(enabled, next_scan_at, cooldown_until);
+
+        -- 账号级主动消息偏好（source of truth）。稀疏存储：未显式设置的
+        -- override 列为 NULL / 空容器，读取层 merge 全局配置后才是有效值，
+        -- 以此区分"未设置=继承全局"与"用户显式设置"。
+        CREATE TABLE IF NOT EXISTS proactive_message_settings (
+            account_id TEXT PRIMARY KEY,
+            master_enabled INTEGER NOT NULL DEFAULT 1,
+            timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+            quiet_hours_json TEXT,                              -- NULL = 继承全局 quiet hours
+            allowed_windows_json TEXT NOT NULL DEFAULT '[]',    -- 预留，Phase 2
+            frequency_json TEXT NOT NULL DEFAULT '{}',          -- 预留，Phase 2
+            category_settings_json TEXT NOT NULL DEFAULT '{}',
+            muted_until TEXT,                                   -- NULL = 未临时静默
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        -- 主动消息设置变更审计：每次 tool/admin 修改都记录 before/patch/after。
+        CREATE TABLE IF NOT EXISTS proactive_message_setting_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            source TEXT NOT NULL,                              -- tool | admin | system | migration
+            tool_invocation_id INTEGER,
+            previous_settings_json TEXT,
+            patch_json TEXT NOT NULL,
+            next_settings_json TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_proactive_message_setting_events_account
+        ON proactive_message_setting_events(account_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS content_invitations (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            invitation_text TEXT NOT NULL,
+            title_items_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'candidate',
+            scheduled_at TEXT,
+            invited_at TEXT,
+            responded_at TEXT,
+            expires_at TEXT,
+            outbound_message_id INTEGER,
+            trigger_message_id TEXT,
+            tool_invocation_id INTEGER,
+            source_task_id TEXT,
+            policy_reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
+            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_invitations_status_due
+        ON content_invitations(status, scheduled_at, expires_at);
+
+        CREATE INDEX IF NOT EXISTS ix_content_invitations_account_status
+        ON content_invitations(account_id, status, updated_at);
+
+        CREATE TABLE IF NOT EXISTS content_invitation_preferences (
+            account_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'allowed',
+            cooldown_until TEXT,
+            last_feedback_at TEXT,
+            feedback_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY(account_id, topic),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_content_invitation_preferences_cooldown
+        ON content_invitation_preferences(account_id, status, cooldown_until);
+
+        CREATE TABLE IF NOT EXISTS dreaming_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_session_id INTEGER,
+            source_business_day TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            prompt_version TEXT NOT NULL,
+            llm_model TEXT,
+            input_hash TEXT,
+            output_json TEXT NOT NULL DEFAULT '{}',
+            error TEXT,
+            token_input INTEGER,
+            token_output INTEGER,
+            actor_type TEXT NOT NULL DEFAULT 'system',
+            actor_id TEXT,
+            started_at TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_dreaming_runs_account_created
+        ON dreaming_runs(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_dreaming_runs_source_session
+        ON dreaming_runs(source_session_id);
+
+        CREATE TABLE IF NOT EXISTS dreaming_memory_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            dreaming_run_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL,
+            source_session_id INTEGER,
+            source_daily_note_date TEXT,
+            operation TEXT NOT NULL DEFAULT 'add',
+            target_file TEXT NOT NULL DEFAULT 'MEMORY.md',
+            category TEXT NOT NULL DEFAULT 'other',
+            memory_text TEXT NOT NULL,
+            base_text_hash TEXT,
+            diff_json TEXT NOT NULL DEFAULT '{}',
+            importance TEXT NOT NULL DEFAULT 'medium',
+            confidence REAL NOT NULL DEFAULT 0,
+            sensitivity TEXT NOT NULL DEFAULT 'normal',
+            apply_status TEXT NOT NULL DEFAULT 'generated',
+            skip_reason TEXT,
+            reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            applied_at TEXT,
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(dreaming_run_id) REFERENCES dreaming_runs(id),
+            FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_dreaming_memory_items_run
+        ON dreaming_memory_items(dreaming_run_id, id);
+
+        CREATE INDEX IF NOT EXISTS ix_dreaming_memory_items_account_status
+        ON dreaming_memory_items(account_id, apply_status, created_at);
+
+        CREATE TABLE IF NOT EXISTS memory_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            memory_item_id INTEGER,
+            event_type TEXT NOT NULL,
+            actor_type TEXT NOT NULL DEFAULT 'system',
+            actor_id TEXT,
+            before_text TEXT,
+            after_text TEXT,
+            diff_text TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(memory_item_id) REFERENCES dreaming_memory_items(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_memory_events_account_created
+        ON memory_events(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_memory_events_item
+        ON memory_events(memory_item_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS analytics_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            event_name TEXT NOT NULL,
+            from_state TEXT,
+            to_state TEXT,
+            source TEXT,
+            properties_json TEXT NOT NULL DEFAULT '{}',
+            event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_analytics_events_name_time
+        ON analytics_events(event_name, event_time);
+
+        CREATE INDEX IF NOT EXISTS ix_analytics_events_account
+        ON analytics_events(account_id, event_time);
+
+        CREATE TABLE IF NOT EXISTS debug_traces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trace_id TEXT NOT NULL UNIQUE,
+            account_id TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            message_id TEXT,
+            source TEXT NOT NULL,
+            llm_model TEXT,
+            system_prompt TEXT,
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            reply TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            latency_ms INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_debug_traces_account_created
+        ON debug_traces(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_debug_traces_session_created
+        ON debug_traces(session_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS tool_invocations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            session_id INTEGER,
+            message_id TEXT,
+            tool_call_id TEXT,
+            tool_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running',
+            args_json TEXT NOT NULL DEFAULT '{}',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            latency_ms INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            finished_at TEXT,
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(session_id) REFERENCES sessions(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_tool_invocations_account_created
+        ON tool_invocations(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_tool_invocations_tool_status
+        ON tool_invocations(tool_name, status, created_at);
+
+        CREATE TABLE IF NOT EXISTS search_provider_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tool_invocation_id INTEGER,
+            task_id TEXT,
+            account_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            attempt INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'running',
+            request_json TEXT NOT NULL DEFAULT '{}',
+            response_json TEXT NOT NULL DEFAULT '{}',
+            started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            finished_at TEXT,
+            latency_ms INTEGER,
+            error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_search_provider_runs_account_created
+        ON search_provider_runs(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_search_provider_runs_invocation
+        ON search_provider_runs(tool_invocation_id, id);
+
+        CREATE TABLE IF NOT EXISTS admin_users (
+            id TEXT PRIMARY KEY,
+            email TEXT,
+            display_name TEXT,
+            role TEXT NOT NULL DEFAULT 'staff',
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_admin_users_role_status
+        ON admin_users(role, status);
+
+        CREATE TABLE IF NOT EXISTS admin_access_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_user_id TEXT,
+            action TEXT NOT NULL,
+            resource_type TEXT NOT NULL,
+            resource_id TEXT,
+            account_id TEXT,
+            plaintext INTEGER NOT NULL DEFAULT 0,
+            grant_id INTEGER,
+            reason TEXT,
+            request_path TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_admin_access_events_account_created
+        ON admin_access_events(account_id, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_admin_access_events_plaintext_created
+        ON admin_access_events(plaintext, created_at);
+
+        CREATE TABLE IF NOT EXISTS admin_plaintext_grants (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            requester_admin_user_id TEXT NOT NULL,
+            approver_admin_user_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            account_scope_json TEXT NOT NULL DEFAULT '[]',
+            resource_scope_json TEXT NOT NULL DEFAULT '[]',
+            time_scope_start TEXT,
+            time_scope_end TEXT,
+            approved_at TEXT,
+            expires_at TEXT,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_requester_status
+        ON admin_plaintext_grants(requester_admin_user_id, status, expires_at);
+
+        CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_status_created
+        ON admin_plaintext_grants(status, created_at);
+
+        CREATE TABLE IF NOT EXISTS phone_verifications (
+            id TEXT PRIMARY KEY,
+            phone TEXT NOT NULL,
+            code TEXT NOT NULL,
+            verify_attempts INTEGER NOT NULL DEFAULT 0,
+            verified_at TEXT,
+            verified_token TEXT,
+            token_expires_at TEXT,
+            token_consumed_at TEXT,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
+        ON phone_verifications(phone, created_at);
+
+        CREATE TABLE IF NOT EXISTS scheduler_heartbeats (
+            service TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_success_at TEXT,
+            last_error_at TEXT,
+            last_error TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE TABLE IF NOT EXISTS faq_messages (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT,
+            author_name TEXT,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            moderation_status TEXT NOT NULL DEFAULT 'pending',
+            moderation_reason TEXT,
+            moderation_categories_json TEXT NOT NULL DEFAULT '[]',
+            like_count INTEGER NOT NULL DEFAULT 0,
+            reply_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            published_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_faq_messages_parent_status_created
+        ON faq_messages(parent_id, status, created_at);
+
+        CREATE INDEX IF NOT EXISTS ix_faq_messages_status_created
+        ON faq_messages(status, created_at);
+
+        CREATE TABLE IF NOT EXISTS faq_message_likes (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            voter_key TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(message_id, voter_key),
+            FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_faq_message_likes_message
+        ON faq_message_likes(message_id, created_at);
+        """
+    )
+    # Ensure new columns exist on accounts (for DBs created before this change)
+    _ensure_column(conn, "accounts", "status", "TEXT NOT NULL DEFAULT 'active'")
+    _ensure_column(conn, "accounts", "notes", "TEXT")
+    _ensure_column(conn, "accounts", "daily_limit", "INTEGER")
+    _ensure_column(conn, "accounts", "rpm_limit", "INTEGER")
+    _ensure_column(conn, "sessions", "ended_at", "TEXT")
+    _ensure_column(conn, "sessions", "close_reason", "TEXT")
+    _ensure_column(conn, "sessions", "turn_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "sessions", "business_day", "TEXT")
+    _ensure_column(conn, "sessions", "session_summary", "TEXT")
+    _ensure_column(conn, "sessions", "carryover_summary", "TEXT")
+    _ensure_column(conn, "sessions", "summary_model", "TEXT")
+    _ensure_column(conn, "sessions", "summary_prompt_version", "TEXT")
+    _ensure_column(conn, "sessions", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(conn, "messages", "latency_ms", "INTEGER")
+    _ensure_column(conn, "messages", "error", "TEXT")
+    _ensure_column(conn, "binding_intents", "qr_data_url", "TEXT")
+    _ensure_column(conn, "binding_intents", "manual_login_command", "TEXT")
+    _ensure_column(conn, "binding_intents", "error", "TEXT")
+    _ensure_column(conn, "binding_intents", "channel_account_id", "TEXT")
+    # 多机接入:绑定 intent 创建时定好目标节点(登录会话钉死在该节点 = 该出口 IP)。
+    _ensure_column(conn, "binding_intents", "node_id", "TEXT")
+    _ensure_column(conn, "accounts", "onboarding_state", "TEXT NOT NULL DEFAULT 'pending'")
+    _ensure_column(conn, "accounts", "onboarding_updated_at", "TEXT")
+    _ensure_column(conn, "accounts", "is_debug", "INTEGER NOT NULL DEFAULT 0")
+    # 多机接入:账号 → 节点归属(路由属性,不参与隔离)。见 multi_node_access_refactor.md §5。
+    _ensure_column(conn, "accounts", "assigned_node_id", "TEXT")
+    _ensure_column(conn, "outbound_messages", "product_category", "TEXT")
+    _ensure_column(conn, "outbound_messages", "policy_version", "TEXT")
+    _ensure_column(conn, "outbound_messages", "policy_reason", "TEXT")
+    _ensure_column(conn, "outbound_messages", "scheduled_at", "TEXT")
+    # 多机接入:出站按节点认领。node_id=enqueue 时解析的归属节点;claimed_at=sending 抢占时间(stale 回收)。
+    _ensure_column(conn, "outbound_messages", "node_id", "TEXT")
+    _ensure_column(conn, "outbound_messages", "claimed_at", "TEXT")
+    _ensure_column(conn, "reminders", "recur_rule", "TEXT")
+    _ensure_column(conn, "reminders", "sent_count", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "reminders", "last_sent_at", "TEXT")
+    # 多机接入:接入节点登记表(MVP 仅登记 + 心跳),中心据 base_url push 登录。
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_nodes (
+            node_id TEXT PRIMARY KEY,
+            base_url TEXT,
+            egress_ip TEXT,
+            last_heartbeat_at TEXT,
+            session_count INTEGER NOT NULL DEFAULT 0,
+            max_sessions INTEGER,
+            status TEXT NOT NULL DEFAULT 'online',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        )
+        """
+    )
+    # 节点出站认领索引:WHERE node_id=? AND status=? ORDER BY scheduled_at。
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_outbound_messages_node_dispatch
+        ON outbound_messages(node_id, status, scheduled_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_invitations (
+            id TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            invitation_text TEXT NOT NULL,
+            title_items_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'candidate',
+            scheduled_at TEXT,
+            invited_at TEXT,
+            responded_at TEXT,
+            expires_at TEXT,
+            outbound_message_id INTEGER,
+            trigger_message_id TEXT,
+            tool_invocation_id INTEGER,
+            source_task_id TEXT,
+            policy_reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
+            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_content_invitations_status_due
+        ON content_invitations(status, scheduled_at, expires_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_content_invitations_account_status
+        ON content_invitations(account_id, status, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS content_invitation_preferences (
+            account_id TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'allowed',
+            cooldown_until TEXT,
+            last_feedback_at TEXT,
+            feedback_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY(account_id, topic),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_content_invitation_preferences_cooldown
+        ON content_invitation_preferences(account_id, status, cooldown_until)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_outbound_messages_account_category_date
+        ON outbound_messages(account_id, product_category, quota_date, status)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE outbound_messages
+        SET product_category = CASE
+            WHEN source IN ('reminder', 'reminder_change_confirmation') THEN 'user_reminder'
+            WHEN source IN ('commitment', 'account_check', 'heartbeat') THEN 'companion_followup'
+            WHEN source = 'content_invitation' THEN 'content_invitation'
+            WHEN source IN ('content_invitation_titles', 'content_invitation_feedback') THEN 'content_invitation_response'
+            WHEN source = 'async_task_result' THEN 'task_result'
+            ELSE product_category
+        END
+        WHERE product_category IS NULL
+        """
+    )
+    conn.execute(
+        "UPDATE accounts SET display_name = NULL WHERE display_name = ?",
+        ("AI4ALL 助手",),
+    )
+    conn.execute(
+        "UPDATE profiles SET display_name = NULL WHERE display_name = ?",
+        ("AI4ALL 助手",),
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS platform_user_sessions (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_platform_user_sessions_token
+        ON platform_user_sessions(token)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scheduler_heartbeats (
+            service TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            last_success_at TEXT,
+            last_error_at TEXT,
+            last_error TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS faq_messages (
+            id TEXT PRIMARY KEY,
+            parent_id TEXT,
+            author_name TEXT,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            moderation_status TEXT NOT NULL DEFAULT 'pending',
+            moderation_reason TEXT,
+            moderation_categories_json TEXT NOT NULL DEFAULT '[]',
+            like_count INTEGER NOT NULL DEFAULT 0,
+            reply_count INTEGER NOT NULL DEFAULT 0,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            published_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_faq_messages_parent_status_created
+        ON faq_messages(parent_id, status, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_faq_messages_status_created
+        ON faq_messages(status, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS faq_message_likes (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            voter_key TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(message_id, voter_key),
+            FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_faq_message_likes_message
+        ON faq_message_likes(message_id, created_at)
+        """
+    )
+
+
+_MIGRATIONS = [
+    (1, _migration_0001_baseline),
+]
+
+
+# ---------------------------------------------------------------------------
+# Dreaming runs / memory items / memory events
+# ---------------------------------------------------------------------------
+
+def _decode_json_field(
+    item: Dict[str, Any],
+    *,
+    source_field: str,
+    target_field: str,
+    default: Any,
+) -> Dict[str, Any]:
+    raw_json = item.pop(source_field, None)
+    try:
+        item[target_field] = json.loads(raw_json or json.dumps(default))
+    except json.JSONDecodeError:
+        item[target_field] = default
+        item[f"{target_field}_decode_error"] = True
+    return item
+
+

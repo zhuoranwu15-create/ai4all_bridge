@@ -89,12 +89,15 @@
 | `memory_writer.py` | turn 后记忆更新 |
 | `rate_limiter.py` | 每日和 RPM 配额控制 |
 | `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力 |
+| `app/db/*` | SQLite 数据访问层（按域拆分的包：`_core`/`accounts`/`sessions`相关/`billing`/`moderation`/`proactive`/`admin`/`analytics`/`ops`/`lifecycle`）。`from app.db import X` 接口不变，由 `__init__.py` 重导出；`connect()`/`init_db()`/迁移框架在 `_core.py` |
 
 ## 开发约定
 
 按账号隔离是核心不变量。任何未按 `account_id` 约束的 DB 查询或文件写入都是 bug。
 
-`contacts` 表是历史模型，当前 DB 初始化会迁移到账号级 schema 并删除该表。Admin 账号管理使用 `/admin/accounts/*`；不要再新增 `/admin/contacts/*` API 或依赖 contacts 表。
+`contacts` 表是历史模型，早期 DB 已迁移到账号级 schema；当前代码不再包含该迁移、也无 contacts 表。Admin 账号管理使用 `/admin/accounts/*`；不要再新增 `/admin/contacts/*` API 或依赖 contacts 表。
+
+数据库 schema 由 `PRAGMA user_version` 跟踪版本（`app/db/_core.py` 的 `_MIGRATIONS` 注册表，`init_db()` 顺序应用）。修改 schema 时**新增一个迁移函数并追加到 `_MIGRATIONS`**，不要再用启动期 `_ensure_column` 补丁。基线 m0001 是当前全量 schema 的幂等定义。
 
 主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关（`DREAMING_SCHEDULER_ENABLED`）或 admin run-once 调试，避免多实例重复扫描。
 
