@@ -5092,6 +5092,17 @@ def _release_delayed_referral_reward_in_conn(
 
 
 def _is_meaningful_referral_message(*, content: Optional[str], message_type: str) -> bool:
+    """判断一条入站消息是否计入拉新有效消息（用于满 3 条触发邀请奖励）。
+
+    规则：
+    - 图片消息无条件计为有效（用户发图视为真实互动）。
+    - 文本/语音消息需去空白后 >= 3 个字符、非寒暄黑名单、含中英文字符、
+      非纯数字、非纯 URL、非单字符重复。
+    - 其余消息类型一律不计。
+    """
+    # 图片视为有效互动，不受字数/占位符限制
+    if message_type == "image":
+        return True
     if message_type not in {"text", "voice"}:
         return False
     compact = re.sub(r"\s+", "", content or "")
@@ -5113,7 +5124,7 @@ def _is_meaningful_referral_message(*, content: Optional[str], message_type: str
         "哈哈哈",
     }:
         return False
-    if len(compact) < 6:
+    if len(compact) < 3:
         return False
     if lowered.startswith(("http://", "https://")):
         return False

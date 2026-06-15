@@ -335,6 +335,15 @@ meaningful_message_reviews
 
 Phase 1 可以先由后台 AI 自动判断 3 条消息是否有意义，Admin 只提供查看和必要手工修正入口。
 
+**有效消息启发式（当前实现，见 `app/db.py::_is_meaningful_referral_message`）：**
+
+- 图片消息（`message_type == "image"`）无条件计为有效——用户发图视为真实互动，不受字数/占位符限制。
+- 文本 / 语音消息需同时满足：去除空白后 **≥ 3 个字符**、不在寒暄黑名单（你好/在吗/ok/谢谢 等）、包含中英文字符、非纯数字、非纯 URL、非单字符重复。
+- 其余消息类型一律不计。
+- 满 `REFERRAL_QUALIFYING_MESSAGE_COUNT`（当前 3）条有效消息后，关系进入 `qualified` 并触发奖励（或软风控延迟）。
+
+> 2026-06-15 调参：字数阈值由 6 降为 3；图片由"不计"改为"无条件计为有效"。
+
 ### 6.9 registration_access_settings
 
 Phase 1 建议先做全局单行配置，后续再扩展到渠道、活动或地区维度。
