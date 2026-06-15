@@ -253,7 +253,11 @@ def _run_command(command: List[str], timeout: float) -> Tuple[bool, str]:
 
 
 def _check_openclaw(channel: str, timeout: float) -> Optional[str]:
-    ok, output = _run_command(["openclaw", "channels", "status", "--probe"], timeout)
+    # 与 openclaw_gateway 一致用 settings.openclaw_cli_path，而非裸 "openclaw"：
+    # systemd 服务 PATH 不含 ~/.openclaw/bin（那只是交互式 shell 的 alias），
+    # 裸命令会 Errno 2 导致健康探测长期假失败（见 OPENCLAW_CLI_PATH）。
+    cli = settings.openclaw_cli_path
+    ok, output = _run_command([cli, "channels", "status", "--probe"], timeout)
     if not ok:
         return f"openclaw status failed: {output[:800]}"
 
@@ -261,7 +265,7 @@ def _check_openclaw(channel: str, timeout: float) -> Optional[str]:
     if not cleaned_channel:
         return None
 
-    ok, output = _run_command(["openclaw", "channels", "list"], timeout)
+    ok, output = _run_command([cli, "channels", "list"], timeout)
     if not ok:
         return f"openclaw channels list failed: {output[:800]}"
     if cleaned_channel not in output:

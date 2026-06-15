@@ -164,7 +164,7 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 ## 5. 待跟进 TODO
 
 - [x] ~~部署脚本自动发现哈希 dist 文件名~~ 已完成（2026-06-13，见 §3 注）。
-- [ ] `patches/` 增加 README，统一说明四个 patch 的用法与适用场景。
+- [x] ~~`patches/` 增加 README，统一说明四个 patch 的用法与适用场景。~~ ✅ 已完成（2026-06-15，`patches/README.md`：4 补丁一览 + 适用机型/版本 + 升级必查 grep，索引到本文）。
 - [x] ~~**把 `before-agent-reply-accountid`（§2.6）注入折进 `scripts/deploy_image_understanding.sh`**~~ ✅ 已完成（2026-06-14）：抽成独立耐久化脚本 `scripts/patch_openclaw_accountid.sh`（host-agnostic、幂等、自动发现），并被 deploy 脚本步骤 `[1b/4]` 复用。aliyun2 已用脚本确认幂等落地。
 - [x] ~~**多机图片理解方案**：在 §2.5 三条路线里选定并实现~~ 已选 **传字节/内联 base64** 并落地（2026-06-13，见 §2.5）。剩余：node 真机端到端验证 + aliyun1 nginx `client_max_body_size` 调整。
 - [ ] **统一 OpenClaw 安装标准**：新机优先官方安装器；装不通则 npm-g + 锁 node v22.x（见 §0 多机表）。
