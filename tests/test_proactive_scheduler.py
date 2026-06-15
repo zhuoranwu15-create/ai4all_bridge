@@ -198,7 +198,7 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_reminder(client, fres
     assert body["run"]["reminders"][0]["status"] == "sent"
     assert reminder["status"] == "sent"
     assert outbound[0]["status"] == "sent"
-    assert outbound[0]["idempotency_key"] == "reminder-rem-scheduler"
+    assert outbound[0]["idempotency_key"] == "reminder-rem-scheduler-20000101000000"
     mock_send.assert_called_once()
 
 

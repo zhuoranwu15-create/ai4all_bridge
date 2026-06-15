@@ -106,14 +106,14 @@ def test_dispatch_due_reminders_sends_due_one_shot(fresh_db):
     assert reminder["outbound_message_id"] == outbound[0]["id"]
     assert outbound[0]["status"] == "sent"
     assert outbound[0]["source"] == "reminder"
-    assert outbound[0]["idempotency_key"] == "reminder-rem-dispatch"
+    assert outbound[0]["idempotency_key"] == "reminder-rem-dispatch-20260522095959"
     assert outbound[0]["metadata"]["reminder_id"] == "rem-dispatch"
     mock_send.assert_called_once_with(
         to_user_id="user@im.wechat",
         text="记得出门",
         gateway_timeout_ms=fresh_db.openclaw_gateway_call_timeout_ms,
         account_id="bot-1",
-        idempotency_key="reminder-rem-dispatch",
+        idempotency_key="reminder-rem-dispatch-20260522095959",
         session_key="session-acc-dispatch",
         channel="openclaw-weixin",
     )
@@ -279,3 +279,61 @@ def test_recurring_reminder_resets_after_dispatch(fresh_db):
     assert updated["status"] == "pending"
     assert updated["sent_count"] == 1
     assert updated["due_at"] == "2026-06-06 09:00:00"
+
+
+def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
+    """回归:周期提醒的第二次触发必须真正发送,而不是被幂等键去重短路。
+
+    走真实出站去重路径(只 mock 网关 send_weixin_text),覆盖
+    create_outbound_message 的 INSERT OR IGNORE。修复前第二周期的键与第一
+    周期相同,会命中已 sent 的出站行而静默不发;修复后键含当次 due_at。
+    """
+    from app.db import create_reminder, get_reminder, list_outbound_messages
+    from app.proactive.reminders import dispatch_reminder
+
+    fresh_db.proactive_outbound_daily_limit = 10
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.messaging.settings", fresh_db),
+        patch(
+            "app.proactive.messaging.send_weixin_text",
+            return_value={"messageId": "openclaw-weixin:recur"},
+        ) as mock_send,
+    ):
+        _create_account("acc-recur-twice")
+        create_reminder(
+            reminder_id="rem-recur-twice",
+            account_id="acc-recur-twice",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-recur-twice",
+            text="每周提醒",
+            due_at="2026-05-30 09:00:00",
+            recur_rule="weekly:5",  # 每周六
+        )
+
+        # 第一周期
+        first = dispatch_reminder(
+            reminder_id="rem-recur-twice",
+            now=datetime(2026, 5, 30, 9, 0, 0),
+        )
+        after_first = get_reminder(reminder_id="rem-recur-twice")
+        # 第二周期(已 reschedule 到 6/6)
+        second = dispatch_reminder(
+            reminder_id="rem-recur-twice",
+            now=datetime(2026, 6, 6, 9, 0, 0),
+        )
+        outbound = list_outbound_messages(account_id="acc-recur-twice")
+
+    assert first["status"] == "sent"
+    assert after_first["status"] == "pending"
+    assert after_first["due_at"] == "2026-06-06 09:00:00"
+    assert second["status"] == "sent"
+    # 关键:两次触发都真正调用了网关,且生成两条独立幂等键的出站行。
+    assert mock_send.call_count == 2
+    keys = {row["idempotency_key"] for row in outbound}
+    assert keys == {
+        "reminder-rem-recur-twice-20260530090000",
+        "reminder-rem-recur-twice-20260606090000",
+    }

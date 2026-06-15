@@ -16,6 +16,23 @@ def format_scheduler_time(value: datetime) -> str:
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _reminder_idempotency_key(reminder: Dict[str, Any]) -> str:
+    """为每个到期周期生成独立的幂等键。
+
+    周期提醒(recur_rule)的行 id 永不变,只把 due_at 往后推。若键只用 id,
+    第二次触发时 create_outbound_message 的 INSERT OR IGNORE 会命中上一周期
+    已 sent 的出站行,被去重短路而不再发送,导致之后每个周期都静默丢失。
+    把当次 due_at 编进键,保证每个周期是独立的幂等单元。
+    """
+    due_at = reminder.get("due_at")
+    base = f"reminder-{reminder['id']}"
+    if not due_at:
+        return base
+    # 去掉日期里的连字符/冒号/空格,得到适合做幂等键并透传给网关的紧凑时间戳。
+    compact = due_at.replace("-", "").replace(":", "").replace(" ", "")
+    return f"{base}-{compact}"
+
+
 def dispatch_reminder(
     *,
     reminder_id: str,
@@ -43,7 +60,7 @@ def dispatch_reminder(
             session_key=claimed.get("session_key"),
             source="reminder",
             text=claimed["text"],
-            idempotency_key=f"reminder-{claimed['id']}",
+            idempotency_key=_reminder_idempotency_key(claimed),
             now=current,
             bypass_quiet_hours=bypass_quiet_hours,
             product_category="user_reminder",
