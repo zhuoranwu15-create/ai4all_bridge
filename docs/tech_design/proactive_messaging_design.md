@@ -201,8 +201,8 @@ OpenClaw 的定时 loop、cron 和 channel send 证明了 agent 产品需要具�
 - `outbound_messages` 已有 `pending -> sending -> sent / failed / cancelled` 生命周期。
 - `reminders` 已支持 one-shot reminder 的创建、due scan、claim、发送和状态回写。
 - `app.tools` 已有 reminder tools，Web Search 已按 LLM tool use 接入。
-- `app.reminder_parser.parse_explicit_reminder()` 已支持高确定性一次性提醒解析，但目标设计应迁移到 LLM tool use，不再作为提醒意图主路径。
-- `app.proactive.scheduler.ProactiveScheduler` 已按 due reminder、due commitment、account check 的顺序运行。
+- 提醒意图已全部由 LLM tool use 落地(`app/tools/reminder_handlers.py`:create/list/cancel/update),**不存在** `app/reminder_parser.py` / `parse_explicit_reminder()` 这一规则解析路径(该规则路径最终未采用)。
+- `app.proactive.scheduler.ProactiveScheduler` 已按 due reminder、reactivation 拉活、due commitment、account check、内容邀请的顺序运行。
 - `proactive_account_state` 已作为账号主动检查/commitment 的账号级 cheap pre-filter。
 - `proactive_commitments` 已支持 hidden commitment 抽取、存储、due dispatch、Admin 查看和取消。
 - `account_check_candidate_draft -> promote -> account_check_candidate -> send` 已形成人工确认链路。
@@ -215,12 +215,13 @@ OpenClaw 的定时 loop、cron 和 channel send 证明了 agent 产品需要具�
 - 6 小时避让已有第一版：陪伴跟进避让用户提醒，内容邀请避让用户提醒和陪伴跟进。
 - scheduler 已按 due reminder、due commitment、账号主动检查、内容邀请过期、due content invitation 的顺序运行。
 - standalone heartbeat 机制已移除；账号主动检查是 `ProactiveScheduler` 的内部阶段。
+- reactivation 拉活已落地为一等子系统(`app/proactive/reactivation.py`):两类候选 `reactivation_topic_followup` / `reactivation_content_invitation`、独立 config(`reactivation_dispatch_enabled`、`reactivation_send_slots`、`reactivation_daily_limit`、`reactivation_dedupe_days` 等,见 `app/config.py`)、scheduler 阶段和用户级开关分类。
 - 内容邀请已具备候选生成、朋友式邀请发送、用户确认后标题列表回复、拒绝反馈/冷却和 Debug 展示。
 - Proactive Debug 后台已支持手动触发 scheduler、单账号 proactive check、account check draft 和内容邀请生成检查。
 
 当前剩余缺口：
 
-- 周期性提醒、自然语言取消/更新提醒二次确认、用户级 timezone 尚未实现。
+- 周期性提醒**基础版已实现**(`recur_rule` = `daily` / `weekly:N` / `monthly:N`,最小 1 天周期;见 `app/reminder_utils.py`、`app/tools/reminder_handlers.py`、`app/proactive/reminders.py`)。仍未实现:§10.2 的富 `recurrence_rule_json` 模型、自然语言取消/更新提醒二次确认、用户级 timezone。
 - 生产多实例 scheduler lease / leader election 尚未实现；正式多实例部署前必须补齐。
 - 内容邀请和陪伴跟进仍需更多真实聊天数据验证。当前测试账号上下文稀疏或话题跳跃时，LLM 保守返回 `skip_content_invitation` / `llm_no_content_invitation` 是预期行为。
 - Gateway 重启、长时间无入站后的 route/context token、真实微信端到端长期稳定性仍需观察。
@@ -641,7 +642,8 @@ dispatch due user reminders
 proactive_quiet_hours_start = "22:00"
 proactive_quiet_hours_end = "07:00"
 companion_followup_daily_limit = 1
-content_invitation_daily_limit = 1
+# 注:content_invitation_daily_limit 未采用;内容邀请已并入统一 reactivation 路径,
+# 与拉活共用 reactivation_daily_limit(见 app/proactive/policy.py:_category_daily_limit)。
 proactive_avoidance_window_hours = 6
 proactive_planning_interval_seconds = 3600
 proactive_account_check_context_messages = 12
@@ -702,8 +704,8 @@ SQLite 阶段可先用 JSON metadata 承载部分字段，但进入 PostgreSQL �
 
 后续观察期之后再推进：
 
-1. 统一 LLM tool-use：提醒创建/更新/取消继续迁移到 tool call，不新增关键词或正则 intent gate。
-2. 周期性提醒：扩展 reminder model 和 tool handler，支持最小 1 天周期。
+1. 统一 LLM tool-use：提醒创建/更新/取消继续迁移到 tool call，不新增关键词或正则 intent gate。**（已完成:`app/tools/reminder_handlers.py`)**
+2. 周期性提醒：扩展 reminder model 和 tool handler，支持最小 1 天周期。**（已完成基础版:`recur_rule` daily/weekly:N/monthly:N)**
 3. 取消/更新提醒：新增 pending change request 和确认处理。
 4. 生产化：scheduler lease、用户 timezone、PostgreSQL schema、真实微信端到端联调和回归测试。
 

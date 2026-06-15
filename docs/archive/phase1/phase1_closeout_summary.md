@@ -1,6 +1,8 @@
-# Phase 1 收尾总结
+# Phase 1 收尾总结（已冻结快照）
 
 更新时间：2026-06-07
+
+> **已冻结（2026-06-15 归档）：** 本文是 Phase 1 收尾时（全量 424 passed）的状态快照与基线交接，现已归档**不再更新**。它记录"Phase 1 交付了什么、当时还剩什么"。**当前现状、缺口与近期队列以 [`STATUS.md`](../../STATUS.md) 为准。**
 
 ## 0. 文档定位
 
@@ -10,13 +12,13 @@
 2. 哪些能力超出原计划提前交付了。
 3. 进入下一阶段前，还剩哪些大功能和收口项。
 
-权威设计仍以 [PRD](../prd.md)、[总体架构](../architecture_overview.md)、[Phase 1 详细技术设计](phase1_technical_design.md) 和各专题技术设计为准；逐项需求-代码映射见 [Phase 1 需求追踪矩阵](phase1_traceability_matrix.md)。本文不重复字段级设计。
+权威设计仍以 [PRD](../../prd.md)、[总体架构](../../architecture_overview.md)、[Phase 1 详细技术设计](../../system_design.md) 和各专题技术设计为准；逐项需求-代码映射见 [Phase 1 需求追踪矩阵](phase1_traceability_matrix.md)。本文不重复字段级设计。
 
 测试基线：截至本次收尾，`.venv/bin/pytest tests/` 全量 **424 passed**。
 
 ## 1. 工作包状态总览
 
-工作包定义见 [Phase 1 详细技术设计 §7](phase1_technical_design.md)。状态以当前代码为准。
+工作包定义见 [Phase 1 详细技术设计 §7](../../system_design.md)。状态以当前代码为准。
 
 | 工作包 | 状态 | 已落地 | 主要剩余 |
 | --- | --- | --- | --- |
@@ -32,7 +34,7 @@
 
 ## 2. 超出原 Phase 1 范围的已交付能力
 
-原 [PRD §4.4](../prd.md) 和 [roadmap 暂不做](../roadmap.md) 把"图片/多模态"列为暂不做。Phase 1 收尾期实际提前交付了以下能力：
+原 [PRD §4.4](../../prd.md) 和 [roadmap 暂不做](../../roadmap.md) 把"图片/多模态"列为暂不做。Phase 1 收尾期实际提前交付了以下能力：
 
 ### 2.1 微信图片理解（VL 多维描述 → 文本对话链路）
 
@@ -43,8 +45,8 @@
   - 配置：`app/config.py` + `.env.example` 新增 `image_understanding_*` 全套（默认 `enabled=false`）。
   - bridge：`openclaw-bridge/index.js` 解析 `[media attached: ...]` 标记，转发 `message_type=image` + `media{path,format}`。
   - 自测：`scripts/send_mock_turn.py` 加 `--image-path/--image-url`；`tests/test_image_turn.py` 9 用例（A/B/C 场景、失败兜底、开关、账号隔离、modality、计费幂等）全过。
-- 设计与运维文档：[图片理解技术设计](../tech_design/image_understanding_design.md)、[OpenClaw 补丁与部署机制](../tech_design/openclaw_patches_maintenance.md)。
-- **运维待跟进（关键）**：端到端需要 OpenClaw 核心 patch `patches/openclaw-before-agent-reply-media.patch` 生效。当前生产用 `scripts/deploy_image_understanding.sh` 手术式改哈希 dist；**OpenClaw 升级会静默退回成空文本**，且部署脚本写死了哈希文件名 `get-reply-9dLyvuw9.js`。升级后必查项见 [OpenClaw 补丁与部署机制 §3](../tech_design/openclaw_patches_maintenance.md)。
+- 设计与运维文档：[图片理解技术设计](../../tech_design/image_understanding_design.md)、[OpenClaw 补丁与部署机制](../../tech_design/openclaw_patches_maintenance.md)。
+- **运维待跟进（关键）**：端到端需要 OpenClaw 核心 patch `patches/openclaw-before-agent-reply-media.patch` 生效。当前生产用 `scripts/deploy_image_understanding.sh` 手术式改哈希 dist；**OpenClaw 升级会静默退回成空文本**，且部署脚本写死了哈希文件名 `get-reply-9dLyvuw9.js`。升级后必查项见 [OpenClaw 补丁与部署机制 §3](../../tech_design/openclaw_patches_maintenance.md)。
 - 两份文档当前标注为"草稿/待联调""临时草稿"，待生产 patch 部署 + 真图质量回归后转正。
 
 ### 2.2 自动化数据备份 + 备份陈旧告警
@@ -54,7 +56,7 @@
 
 ## 3. 剩余的大功能：拉新送贝壳（未实现）
 
-[权益 PRD §5](../product/entitlement_growth_prd.md) 定义的拉新激励是 Phase 1 P1.5 范围内**尚未动工**的最大块功能。当前代码现状：
+[权益 PRD §5](../../product/entitlement_growth_prd.md) 定义的拉新激励是 Phase 1 P1.5 范围内**尚未动工**的最大块功能。当前代码现状：
 
 已就绪（拉新的底座）：
 
@@ -65,7 +67,7 @@
 完全未实现：
 
 - 邀请码生成/校验、带邀请码注册链接自动填充。
-- 邀请人 ↔ 被邀请人关系记录（`referral_codes` / `referral_relationships` 在 [技术设计目标模型](phase1_technical_design.md#5-状态所有权与数据模型摘要) 里规划，但表和逻辑均未建）。
+- 邀请人 ↔ 被邀请人关系记录（`referral_codes` / `referral_relationships` 在 [技术设计目标模型](../../system_design.md#5-状态所有权与数据模型摘要) 里规划，但表和逻辑均未建）。
 - "新用户发 3 条有意义信息 → 后台 AI 判断 → 给邀请人发 1000 贝壳"的判定与发放链路。
 - 反作弊（重复手机号/设备、刷量）。
 

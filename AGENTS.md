@@ -37,10 +37,12 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 ## 鉴权
 
-| 调用方 | Header |
-|---|---|
-| OpenClaw bridge | `Authorization: Bearer dev-secret` |
-| Admin / debug | `Authorization: Bearer dev-admin-token` |
+| 调用方 | Header | 说明 |
+|---|---|---|
+| OpenClaw bridge | `Authorization: Bearer dev-secret` | `AI4ALL_BRIDGE_SECRET` |
+| Admin / debug | `Authorization: Bearer dev-admin-token` | `ADMIN_TOKEN`，完全权限 |
+| Staff | `Authorization: Bearer <ADMIN_STAFF_TOKEN>` | 运营权限，约等于 admin；默认空=禁用 |
+| Reviewer | `Authorization: Bearer <ADMIN_REVIEWER_TOKEN>` | 仅 moderation 队列/详情；默认空=禁用 |
 
 ## 测试
 
@@ -71,7 +73,7 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 主要测试账号：`86f866663cf9-im-bot`，该账号在 `data/ai4all.sqlite3` 中历史最多。
 
-完整调试参考：`docs/debugging.md`。
+完整调试参考：[`docs/guides/debugging.md`](docs/guides/debugging.md)。
 
 ## 模块地图
 
@@ -83,7 +85,7 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 | `session_lifecycle.py` | 对话 session 轮转 |
 | `onboarding.py` | 新用户 onboarding 流程 |
 | `dreaming.py` 和 `dreaming_scheduler.py` | Dreaming 记忆压缩与调度 |
-| `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、账号主动检查 |
+| `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、reactivation 拉活、账号主动检查 |
 | `memory_writer.py` | turn 后记忆更新 |
 | `rate_limiter.py` | 每日和 RPM 配额控制 |
 | `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力 |

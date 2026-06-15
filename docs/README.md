@@ -8,14 +8,12 @@
 
 | 文档 | 作用 |
 | --- | --- |
-| [PRD](prd.md) | Phase 1 产品定位、范围、需求和验收标准 |
+| [项目现状与近期方向](STATUS.md) | **持续更新**：当前阶段、重点方向、在途工作、已知大缺口（现状入口） |
+| [PRD](prd.md) | 产品定位、范围、需求和验收标准 |
 | [产品专题 PRD 导航](product/README.md) | 单项产品能力的详细 PRD 索引 |
 | [总体架构 / 框架设计](architecture_overview.md) | 系统整体架构、分层、核心链路和状态所有权 |
-| [Phase 1 详细技术设计](phase1/phase1_technical_design.md) | 技术平面、目标数据模型、核心链路和 Phase 1 工作包 |
-| [Phase 1 需求追踪矩阵](phase1/phase1_traceability_matrix.md) | 产品需求、技术设计、当前代码和开发缺口的追踪索引 |
-| [Phase 1 收尾总结](phase1/phase1_closeout_summary.md) | 工作包状态快照、超额交付能力、剩余大功能和基线交接 |
-| [后续规划](roadmap.md) | 产品和工程阶段路线 |
-| [下一步开发步骤](phase1/next_dev_steps.md) | 当前开发队列和近期联调重点 |
+| [详细技术设计 / 技术平面](system_design.md) | 技术平面、目标数据模型、核心链路（§7 工作包为 Phase 1 历史快照） |
+| [后续规划 / 北极星](roadmap.md) | 产品愿景、原则和暂不做边界（稳定层） |
 
 ## 产品专题 PRD
 
@@ -89,12 +87,12 @@
 | `archive/early/` | Day 1 方案、早期技术草案、Agent Context Files 落地计划 |
 | `archive/superpowers/plans/` | 一次性 agent 实施计划 |
 | `archive/superpowers/specs/` | 已落地功能的早期设计草案 |
-| `archive/phase1/` | Phase 1 内已完成的一次性计划（如时区统一重构） |
+| `archive/phase1/` | Phase 1 里程碑冻结快照：[收尾总结](archive/phase1/phase1_closeout_summary.md)、[需求追踪矩阵](archive/phase1/phase1_traceability_matrix.md)、已完成的一次性计划（如时区统一重构） |
 
 ## 维护规则
 
-- 新增长期有效的产品或技术结论，优先更新 PRD、总体架构或 Phase 1 详细技术设计。
-- 需求、技术、代码和验收状态的映射更新到 `phase1/phase1_traceability_matrix.md`。
+- 新增长期有效的产品或技术结论，优先更新 PRD、总体架构或详细技术设计（`system_design.md`）。
+- 当前阶段、近期队列和缺口状态的变化，更新到 `STATUS.md`；Phase 1 需求追踪矩阵已冻结归档，不再维护。
 - 新增单一产品能力的详细需求，放入 `product/`。
 - 新增单一技术领域的深入设计，放入 `tech_design/`；`tech_design/` 是唯一技术专题入口，不再新增 `topics/`。
 - 操作步骤、排障、Admin 使用说明，放入 `guides/`。

@@ -2,6 +2,13 @@
 
 更新时间：2026-06-02
 
+> **实现现状校正（2026-06-15）：** 本文设计的独立 "Intent Gate" 规则层**最终未落地**。
+> 当前 `app/turn_service.py::handle_openclaw_turn` 的实际链路是:特殊命令(`#重置会话`/`#状态`)
+> → onboarding 状态子流程 → 普通聊天 + LLM tool use,**没有**位于 LLM 之前的提醒/后台请求
+> 规则分流层。提醒(创建/列出/取消/更新)全部走 LLM 工具(`app/tools/reminder_handlers.py`),
+> 不存在 `app/reminder_parser.py`。下文 §4.3 / §7 的 Intent Gate 描述请按"历史设计、未采用"阅读;
+> onboarding 的 pending-state 处理是 turn 链路里的独立子流程(见 §..onboarding 段),与 Intent Gate 无关。
+
 ## 1. 文档定位
 
 本文是 AI4ALL Phase 1 主对话场景的主技术设计，定义一条微信私聊入站消息如何被 Conversation Orchestrator 处理：身份解析、active session、messages、Intent Gate、Prompt/Context、Tool Use、LLM 回复、同步返回、after-turn 动作，以及与主动消息的接口。
@@ -117,6 +124,8 @@ P0 代码状态：
 
 ### 4.3 Intent Gate v0
 
+> **未采用（见文首校正）：** 规则式 Intent Gate 未落地;提醒走 LLM tool use。本节为历史设计。
+
 P0 不对每条消息额外调用一次 LLM 做总分类。
 
 执行顺序：
@@ -193,6 +202,9 @@ Inbound WeChat Message
 - 所有步骤必须带 `ai4all_account_id`。
 
 ## 7. Intent Gate
+
+> **未采用（见文首校正）：** 本节描述的规则式 Intent Gate 未实现。实际提醒走 LLM tool use,
+> 没有 LLM 之前的规则分流层。本节保留作历史设计参考。
 
 Intent Gate 位于限流和去重之后、LLM 主回复之前。
 
@@ -420,7 +432,7 @@ Phase 1 首批能力建议：
 | LLM 回复 | 同步主链路 | 已有 |
 | 当前日期时间 | 同步 runtime 注入或简单工具 | 待整理 |
 | 明确一次性提醒 | 规则链路，非 LLM tool | 已有基础 |
-| Web Search | LLM tool use，同步执行；超时/失败/复杂后台整理返回当前回合说明 | 部分实现 |
+| Web Search | LLM tool use，同步执行；超时/失败/复杂后台整理返回当前回合说明 | 已实现（多轮 tool loop + 多 provider 失效转移；默认开关关闭，5 贝壳计费未接入） |
 | 语音输入 | 上游转写文本进入普通 text turn；后端 ASR fallback 后置 | 已可复用 / 后置 |
 | 内容推送生成 | 后台候选 + proactive policy | 待实现 |
 | memory search/get | 后续工具，Phase 1 可先不开放给模型 | 待定 |

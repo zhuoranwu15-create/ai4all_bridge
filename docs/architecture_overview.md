@@ -18,8 +18,8 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 | --- | --- |
 | `docs/prd.md` | Phase 1 产品范围、需求和验收标准 |
 | `docs/product/README.md` | 产品专题 PRD 索引，对齐单项能力的详细产品需求 |
-| `docs/phase1/phase1_technical_design.md` | Phase 1 详细技术设计、数据模型和工作包 |
-| `docs/phase1/phase1_traceability_matrix.md` | 产品需求、技术设计、当前代码和开发缺口的追踪索引 |
+| `docs/STATUS.md` | 项目现状、重点方向、在途工作和已知大缺口（持续更新） |
+| `docs/system_design.md` | 详细技术设计、数据模型和工作包摘要（§7 工作包为 Phase 1 历史快照） |
 | `docs/tech_design/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
 | `docs/tech_design/proactive_messaging_design.md` | 主动消息、提醒、commitment 和 scheduler 专题 |
 | `docs/tech_design/agent_context_files.md` | Agent Context Files、daily notes、长期记忆和 Dreaming |
@@ -115,8 +115,8 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 │ 提供陪伴感、持续性、偏好和长期记忆                           │
 ├─────────────────────────────────────────────────────────────┤
 │ Proactive Scheduler & Outbound Layer                         │
-│ reminder / commitment / 账号主动检查 / content push / scheduler │
-│ 处理提醒、陪伴跟进、内容推送和发送幂等                       │
+│ reminder / commitment / 内容邀请 / reactivation 拉活 / 账号主动检查 │
+│ 处理提醒、陪伴跟进、内容邀请、拉活和发送幂等                 │
 ├─────────────────────────────────────────────────────────────┤
 │ Entitlement & Growth Layer                                   │
 │ wallet / ledger / usage metering / referral / pay deferred   │
@@ -157,12 +157,9 @@ POST /openclaw/turn
 └─────────┬──────────┘
           ▼
 ┌────────────────────┐
-│ Intent Gate         │  reminder / unsupported background request / normal chat
-└──────┬───────┬─────┘
-       │       │
-       │       ├───────────────► unsupported/failure explanation
-       │
-       ▼
+│ Special Cmd / Onboard │  #重置会话 / #状态；onboarding 状态子流程，其余进入普通聊天
+└─────────┬──────────┘
+          ▼
 ┌────────────────────┐
 │ Context Assembly    │  recent messages + context files + memory + runtime
 └─────────┬──────────┘
@@ -203,7 +200,7 @@ no task / no worker / no outbound result delivery
 主动提醒和内容推送走发送底座：
 
 ```text
-reminder / commitment / 账号主动检查 / content candidate
+reminder / commitment / 内容邀请 / reactivation 拉活 / 账号主动检查
         │
         ▼
 Scheduler due scan
@@ -341,4 +338,4 @@ Phase 1 的架构收口顺序：
 6. 权益和增长：内测赠送、扣减流水、拉新奖励、客服处理。
 7. 内测部署：PostgreSQL/Redis/scheduler worker、日志、告警、Admin UI。
 
-详细数据模型、工作包和实现缺口见 `docs/phase1/phase1_technical_design.md`。
+详细数据模型和工作包摘要见 `docs/system_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。

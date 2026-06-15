@@ -116,7 +116,7 @@ app/moderation/
   worker.py              # claim queued tasks，执行机器审核
   llm_review.py          # 独立审核 LLM OpenAI-compatible client
   image_review.py        # 图片安全模型/图片派生文本审核封装
-  admin.py               # admin/reviewer API helper，可先并入 main.py
+  # admin.py             # 未单独建文件:admin/reviewer API 已并入 app/main.py
   export.py              # 导出材料包
 ```
 

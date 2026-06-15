@@ -1,8 +1,8 @@
 # 技术开发方案：微信个人 AI 陪伴与生活助理 Phase 1
 
-> 状态说明：本文是早期技术方案草案，保留用于理解 Phase 1 的最初设计思路和模块拆分。部分实现细节已被当前代码、`docs/roadmap.md`、`docs/architecture_overview.md` 和 `docs/phase1/phase1_technical_design.md` 更新。
+> 状态说明：本文是早期技术方案草案，保留用于理解 Phase 1 的最初设计思路和模块拆分。部分实现细节已被当前代码、`docs/roadmap.md`、`docs/architecture_overview.md` 和 `docs/system_design.md` 更新。
 >
-> 重要命名修正：早期文档里的 `account_id`、`user`、`sender_id` 语义可能混杂。当前 Phase 1 架构以 `docs/architecture_overview.md`、`docs/phase1/phase1_technical_design.md` 和 `docs/tech_design/identity_model_and_wechat_binding.md` 为准：AI4ALL 的业务隔离主键是 `ai4all_account_id`；OpenClaw payload 里的 `account_id` 不应直接作为业务用户主键。
+> 重要命名修正：早期文档里的 `account_id`、`user`、`sender_id` 语义可能混杂。当前 Phase 1 架构以 `docs/architecture_overview.md`、`docs/system_design.md` 和 `docs/tech_design/identity_model_and_wechat_binding.md` 为准：AI4ALL 的业务隔离主键是 `ai4all_account_id`；OpenClaw payload 里的 `account_id` 不应直接作为业务用户主键。
 
 ## 1. 开发目标
 

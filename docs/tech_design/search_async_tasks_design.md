@@ -127,9 +127,9 @@ Provider 不支持的过滤条件应返回结构化错误，允许 fallback 或�
 
 ### 4.3 LLM tool loop
 
-当前 `generate_reply_with_tools()` 只支持一次工具调用。Web Search 接入后建议扩展为可配置循环：
+`generate_reply_with_tools()` **已实现**可配置多轮 tool loop(`app/llm.py:403`,轮数由 `llm_max_tool_rounds` 控制,默认 3、上限 8):
 
-- `max_tool_rounds = 3`。
+- `max_tool_rounds = 3`(`app/config.py:33`)。
 - 每轮可执行一个或多个 tool calls；Phase 1 可先串行执行。
 - 每次工具调用记录 tool name、args、result/error、latency。
 - 遇到 provider 结果时，继续调用 LLM 生成最终答案。
@@ -273,6 +273,11 @@ Phase 1 搜索不通过 OpenClaw Gateway send 补发结果，不写 `source=asyn
 Scheduler / due dispatcher 属于提醒、陪伴跟进、内容邀请等主动消息调度，不属于用户请求异步任务机制。搜索失败、超时或复杂后台整理请求必须在当前 turn 给出可理解说明。
 
 ## 9. 成本与贝壳
+
+> **实现现状（2026-06-15）：** 搜索 5 贝壳扣减**尚未接线**。当前 `web_search` 只写
+> `search_provider_runs` / `tool_invocations` trace,不调用任何扣费(无 `record_*_search_charge`);
+> 仅聊天 token 和图片理解有计费(`record_chat_usage_charge`/`record_image_understanding_charge`)。
+> 且 `web_search` 默认关闭(`web_search_enabled=False`)。下述为暂定规则,接线时再落地。
 
 Phase 1 暂定扣减规则：
 
