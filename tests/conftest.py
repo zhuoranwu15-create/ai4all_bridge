@@ -186,6 +186,11 @@ def fresh_db(test_settings):
     """Patch settings modules to use a temp SQLite/profile workspace."""
     patches = [
         patch("app.db.settings", test_settings),
+        # main.py 拆出的 router 包：各模块各自绑定 settings，需在此一并路由到临时配置。
+        patch("app.routers.deps.settings", test_settings),
+        patch("app.routers.serializers.settings", test_settings),
+        patch("app.routers.health.settings", test_settings),
+        patch("app.routers.bridge.settings", test_settings),
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
@@ -220,6 +225,10 @@ def client(fresh_db):
 
     patches = [
         patch("app.main.settings", fresh_db),
+        patch("app.routers.deps.settings", fresh_db),
+        patch("app.routers.serializers.settings", fresh_db),
+        patch("app.routers.health.settings", fresh_db),
+        patch("app.routers.bridge.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
         patch("app.proactive.messaging.settings", fresh_db),
         patch("app.moderation.policy.settings", fresh_db),
