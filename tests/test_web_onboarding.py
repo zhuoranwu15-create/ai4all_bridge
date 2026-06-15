@@ -1,3 +1,4 @@
+import json
 import re
 import shutil
 import subprocess
@@ -874,6 +875,357 @@ def test_referral_reward_retries_after_inviter_gets_active_account(client, fresh
     assert relationships[0]["status"] == "rewarded"
     assert relationships[0]["reward_ledger_id"]
     assert wallet["display"]["balance"] == "2000"
+
+
+def test_referral_reward_delays_after_weekly_soft_limit(client, fresh_db):
+    from app.db import (
+        connect,
+        get_binding_intent,
+        list_referral_relationships,
+        set_account_onboarding_state,
+    )
+    from app.main import _complete_binding_intent_from_wait_result
+
+    fresh_db.rate_limit_daily = 0
+    inviter_headers, inviter_login = _get_login_data("13800000400", client)
+    inviter_user = inviter_login["platform_user"]
+
+    code_res = client.get("/web/me/referral-code", headers=inviter_headers)
+    assert code_res.status_code == 200
+    invite_code = code_res.json()["referral_code"]["code"]
+
+    for idx in range(1, 6):
+        phone = f"1380000040{idx}"
+        res = client.post(
+            "/web/register",
+            json={
+                "phone": phone,
+                "display_name": f"invitee-{idx}",
+                "otp_token": _get_verified_token(phone),
+                "invite_code": invite_code,
+            },
+        )
+        assert res.status_code == 200
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.openclaw_gateway.start_weixin_qr_login",
+        return_value={
+            "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
+            "sessionKey": "referral-soft-limit-session",
+            "message": "scan",
+        },
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        invitee_res = client.post(
+            "/web/register-and-binding-intent",
+            json={
+                "phone": "13800000406",
+                "otp_token": _get_verified_token("13800000406"),
+                "invite_code": invite_code,
+            },
+        )
+    assert invitee_res.status_code == 200
+    invitee_data = invitee_res.json()
+
+    inviter_relationships = list_referral_relationships(
+        inviter_platform_user_id=inviter_user["id"],
+        limit=10,
+    )
+    assert len(inviter_relationships) == 6
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    relationship = relationships[0]
+    assert relationship["metadata"]["soft_review_required"] is True
+    assert relationship["metadata"]["inviter_recent_registration_count"] == 6
+
+    _complete_binding_intent_from_wait_result(
+        get_binding_intent(binding_intent_id=invitee_data["binding_intent"]["id"]),
+        {"connected": True, "accountId": "referral-soft-limit-bot@im.bot"},
+    )
+    set_account_onboarding_state(
+        account_id=invitee_data["account"]["id"],
+        state="complete",
+    )
+
+    payload_base = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "referral-soft-limit-bot@im.bot",
+        "account_id": "referral-soft-limit-bot@im.bot",
+        "session_key": "referral-soft-limit-session",
+        "sender_id": "peer-referral-soft-limit",
+        "chat_id": "chat-referral-soft-limit",
+        "chat_type": "private",
+        "message_type": "text",
+    }
+    for idx, text in enumerate(
+        [
+            "最近我想认真规划一下自己的学习节奏",
+            "我需要有人帮我拆解工作和生活优先级",
+            "这周我想形成一个可以坚持的运动安排",
+        ],
+        start=1,
+    ):
+        res = client.post(
+            "/openclaw/turn",
+            json={
+                **payload_base,
+                "message_id": f"referral-soft-limit-msg-{idx}",
+                "text": text,
+            },
+            headers=BRIDGE_HEADERS,
+        )
+        assert res.status_code == 200
+
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    relationship = relationships[0]
+    assert relationship["status"] == "qualified"
+    assert relationship["review_status"] == "pending"
+    assert relationship["reward_ledger_id"] is None
+    assert relationship["metadata"]["reward_pending_reason"] == "soft_review_delayed_release"
+    assert relationship["metadata"]["reward_release_after"]
+
+    wallet_before = client.get("/web/me/wallet", headers=inviter_headers).json()
+    assert wallet_before["wallet"]["display"]["balance"] == "1000"
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT metadata_json FROM referral_relationships WHERE id = ?",
+            (relationship["id"],),
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        metadata["reward_release_after"] = "2000-01-01 00:00:00"
+        conn.execute(
+            """
+            UPDATE referral_relationships
+            SET metadata_json = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (json.dumps(metadata, ensure_ascii=False), relationship["id"]),
+        )
+
+    release = client.post(
+        "/admin/referrals/release-due-rewards",
+        params={"limit": 10},
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert release.status_code == 200
+    assert release.json()["released_count"] == 1
+
+    wallet_after = client.get("/web/me/wallet", headers=inviter_headers).json()
+    assert wallet_after["wallet"]["display"]["balance"] == "2000"
+    reward_entries = [
+        item for item in wallet_after["ledger"]
+        if item["source_type"] == "referral_reward"
+    ]
+    assert len(reward_entries) == 1
+
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    assert relationships[0]["status"] == "rewarded"
+    assert relationships[0]["review_status"] == "passed"
+    assert relationships[0]["reward_ledger_id"] == reward_entries[0]["id"]
+
+
+def test_referral_delayed_release_tolerates_missing_review_account(client, fresh_db):
+    from app.db import (
+        connect,
+        create_or_get_platform_user_by_phone,
+        get_or_create_personal_referral_code_for_user,
+        list_referral_relationships,
+        release_due_referral_rewards,
+    )
+
+    inviter_headers, inviter_login = _get_login_data("13800000420", client)
+    inviter_user = inviter_login["platform_user"]
+    code = client.get("/web/me/referral-code", headers=inviter_headers).json()["referral_code"]
+    code_row = get_or_create_personal_referral_code_for_user(
+        platform_user_id=inviter_user["id"],
+    )
+    assert code_row["code"] == code["code"]
+    invitee = create_or_get_platform_user_by_phone(phone="13800000421")
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO referral_relationships(
+                id, inviter_platform_user_id, invitee_platform_user_id,
+                referral_code_id, status, meaningful_message_count,
+                review_status, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'qualified', 3, 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (
+                "refrel_missing_review_account",
+                inviter_user["id"],
+                invitee["id"],
+                code_row["id"],
+                json.dumps(
+                    {
+                        "soft_review_required": True,
+                        "reward_release_after": "2000-01-01 00:00:00",
+                        "candidate_message_ids": [101, 102, 103],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+    released = release_due_referral_rewards(limit=10)
+    assert len([item for item in released if item["source_type"] == "referral_reward"]) == 1
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee["id"],
+    )
+    assert relationships[0]["status"] == "rewarded"
+    assert relationships[0]["review_status"] == "passed"
+
+
+def test_referral_soft_limit_ignores_rejected_relationships(client, fresh_db):
+    from app.db import connect, list_referral_relationships
+
+    inviter_headers, inviter_login = _get_login_data("13800000430", client)
+    inviter_user = inviter_login["platform_user"]
+    invite_code = client.get(
+        "/web/me/referral-code",
+        headers=inviter_headers,
+    ).json()["referral_code"]["code"]
+
+    rejected_ids = []
+    for idx in range(1, 6):
+        phone = f"1380000043{idx}"
+        res = client.post(
+            "/web/register",
+            json={
+                "phone": phone,
+                "display_name": f"rejected-invitee-{idx}",
+                "otp_token": _get_verified_token(phone),
+                "invite_code": invite_code,
+            },
+        )
+        assert res.status_code == 200
+        relationship = list_referral_relationships(
+            invitee_platform_user_id=res.json()["platform_user"]["id"],
+        )[0]
+        rejected_ids.append(relationship["id"])
+
+    with connect() as conn:
+        for relationship_id in rejected_ids:
+            conn.execute(
+                """
+                UPDATE referral_relationships
+                SET status = 'rejected',
+                    review_status = 'failed',
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                """,
+                (relationship_id,),
+            )
+
+    res = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000436",
+            "display_name": "valid-invitee-after-rejections",
+            "otp_token": _get_verified_token("13800000436"),
+            "invite_code": invite_code,
+        },
+    )
+    assert res.status_code == 200
+    relationships = list_referral_relationships(
+        inviter_platform_user_id=inviter_user["id"],
+        limit=10,
+    )
+    latest = [
+        item for item in relationships
+        if item["invitee_platform_user_id"] == res.json()["platform_user"]["id"]
+    ][0]
+    assert latest["metadata"].get("soft_review_required") is not True
+
+
+def test_referral_soft_review_failed_status_is_not_overwritten(client, fresh_db):
+    from app.db import (
+        connect,
+        create_or_get_platform_user_by_phone,
+        get_or_create_default_ai4all_account_for_user,
+        get_or_create_personal_referral_code_for_user,
+        get_or_create_session,
+        insert_message,
+        list_referral_relationships,
+        process_referral_message_for_account,
+    )
+
+    inviter_headers, inviter_login = _get_login_data("13800000440", client)
+    inviter_user = inviter_login["platform_user"]
+    code = get_or_create_personal_referral_code_for_user(
+        platform_user_id=inviter_user["id"],
+    )
+    invitee = create_or_get_platform_user_by_phone(phone="13800000441")
+    invitee_account = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=invitee["id"],
+        display_name=None,
+        plan="free",
+    )["account"]
+    session = get_or_create_session(
+        account_id=invitee_account["id"],
+        channel="openclaw-weixin",
+        sender_id="manual-soft-review-sender",
+        sender_name=None,
+        chat_id="manual-soft-review-chat",
+        session_key="manual-soft-review-session",
+    )
+
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO referral_relationships(
+                id, inviter_platform_user_id, invitee_platform_user_id,
+                referral_code_id, status, meaningful_message_count,
+                review_status, metadata_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'qualified', 3, 'failed', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (
+                "refrel_soft_review_failed",
+                inviter_user["id"],
+                invitee["id"],
+                code["id"],
+                json.dumps(
+                    {
+                        "soft_review_required": True,
+                        "reward_release_after": "2000-01-01 00:00:00",
+                        "candidate_message_ids": [201, 202, 203],
+                        "bound_account_id": invitee_account["id"],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+
+    message_db_id = insert_message(
+        account_id=invitee_account["id"],
+        session_id=session["session"]["id"],
+        message_id="soft-review-failed-extra-message",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="我想继续补充一个真实的使用场景",
+    )
+    assert message_db_id is not None
+
+    process_referral_message_for_account(
+        account_id=invitee_account["id"],
+        message_db_id=message_db_id,
+    )
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee["id"],
+    )
+    assert relationships[0]["status"] == "qualified"
+    assert relationships[0]["review_status"] == "failed"
+    assert relationships[0]["reward_ledger_id"] is None
 
 
 def test_binding_wait_completion_binds_channel_account_to_precreated_account(client):

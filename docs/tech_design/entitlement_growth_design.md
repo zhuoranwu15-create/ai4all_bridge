@@ -53,6 +53,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 新用户注册赠送 1000 贝壳，并通过幂等键防重复发放。
 - 普通聊天成功后按估算 token 写成本事件和扣减流水。
 - `/web/me/wallet` 和 `/admin/accounts/{account_id}/wallet` 可查看余额和基础流水。
+- 个人邀请码、注册带入、邀请关系、3 条有意义消息启发式判定、邀请奖励和基础软风控已落地。
 
 当前缺口：
 
@@ -61,7 +62,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 搜索 provider 调用尚未按固定 5 贝壳写入扣减流水。
 - 运营补发和误扣回滚入口尚未完整产品化。
 - 无注册准入模式开关，无法在紧急情况下关闭非邀请码新手机号注册。
-- 无邀请码、邀请关系和拉新奖励。
+- 邀请奖励的运营人工复核 UI、风控原因分层和真实数据阈值调参仍需补齐。
 - 无支付订单和回调；该项已正式后置，不作为 Phase 1 内测首发缺口。
 
 因此，`daily_usage` 继续作为消息次数统计；贝壳余额和计费语义由 wallet / ledger / cost event 承担。
@@ -589,6 +590,10 @@ Phase 1 不支持用户请求后的异步任务结果补发；主动触达首条
 - `review_status=passed` 后发放邀请人 1000 贝壳，source_type=`referral_reward`。
 - 发奖必须校验邀请人 wallet active；如 wallet 缺失，先按账号隔离创建邀请人的 wallet。
 - 发奖成功后 `referral_relationship.status=rewarded`，写 `reward_ledger_id` 和 `rewarded_at`。
+- 个人邀请码不设默认总使用次数；活动码、种子码可通过 `max_uses` 控制。
+- 同一邀请人滚动 7 天内前 5 个成功注册关系按正常 3 条消息达标流程发奖；第 6 个起进入软风控延迟发放。
+- 软风控关系达成 3 条有意义消息后保持 `status=qualified`、`review_status=pending`，用户侧表现为奖励审核中/稍后到账；系统内部记录 `soft_review_required`、达标时间和 `reward_release_after`。
+- Phase 1 默认软风控释放窗口为达标后 3 天；到期后由后台重试/用户查询钱包等幂等入口释放奖励，后续可接人工或 AI 复核入口。
 - 如果 review 后被人工改判失败，已发奖励不自动删除；需要通过 `reversal` 冲正并保留原流水。
 - Phase 1 不建议自动给被邀请人额外奖励，避免注册赠送 + 邀请奖励叠加过快；如果要做，应作为独立 `grant_rule` 和 ledger source_type，避免混在 `referral_reward`。
 
@@ -597,7 +602,7 @@ Phase 1 不支持用户请求后的异步任务结果补发；主动触达首条
 - 不能邀请自己。
 - 同一个手机号或 `platform_user_id` 只能作为 invitee 成功一次。
 - 邀请奖励发放必须幂等。
-- 异常批量注册、重复设备、短时间同邀请码大量注册、同 IP/UA 集中注册、明显无意义消息刷量先记录到 metadata，Phase 1 可先走人工排查。
+- 异常批量注册、重复设备、短时间同邀请码大量注册、同 IP/UA 集中注册、明显无意义消息刷量先记录到 metadata；已落地的基础策略是同一邀请人 7 天内超过 5 个成功注册后延迟发放奖励，Phase 1 其他异常可先走人工排查。
 - 如果邀请码或邀请人被风控停用，新增关系不再创建；存量 pending 关系进入 `review_status=pending` 或人工复核，不自动发奖。
 
 ### 7.7 运营补发和误扣处理
@@ -680,6 +685,7 @@ PATCH /admin/growth/registration-access
 POST /admin/referral-codes
 PATCH /admin/referral-codes/{id}
 GET /admin/referrals
+POST /admin/referrals/release-due-rewards
 POST /admin/referrals/{id}/review
 ```
 

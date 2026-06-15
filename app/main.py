@@ -130,6 +130,7 @@ from app.db import (
     mark_referral_relationship_bound,
     preview_referral_code,
     register_platform_user_with_referral,
+    release_due_referral_rewards,
     unbind_account_channel,
     validate_referral_code,
     wipe_account_data,
@@ -3990,6 +3991,22 @@ def admin_referrals(
             inviter_platform_user_id=inviter_platform_user_id,
             invitee_platform_user_id=invitee_platform_user_id,
         ),
+        "redacted": True,
+    }
+
+
+@app.post("/admin/referrals/release-due-rewards")
+def admin_release_due_referral_rewards(
+    limit: int = 200,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    ledgers = release_due_referral_rewards(limit=limit)
+    return {
+        "status": "ok",
+        "released_count": len(ledgers),
+        "ledger": ledgers,
         "redacted": True,
     }
 

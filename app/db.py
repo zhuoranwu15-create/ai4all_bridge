@@ -24,6 +24,9 @@ NEW_USER_GRANT_SHELL_MICROS = NEW_USER_GRANT_SHELLS * SHELL_MICROS_PER_SHELL
 REFERRAL_REWARD_SHELLS = 1000
 REFERRAL_REWARD_SHELL_MICROS = REFERRAL_REWARD_SHELLS * SHELL_MICROS_PER_SHELL
 REFERRAL_QUALIFYING_MESSAGE_COUNT = 3
+REFERRAL_SOFT_REVIEW_WINDOW_DAYS = 7
+REFERRAL_SOFT_REVIEW_REGISTRATION_LIMIT = 5
+REFERRAL_SOFT_REVIEW_REWARD_DELAY_DAYS = 3
 _ACCOUNT_ID_RANDOM_MIN = 100_000_000
 _ACCOUNT_ID_RANDOM_SPACE = 900_000_000
 _ACCOUNT_ID_GENERATION_RETRIES = 20
@@ -4486,6 +4489,11 @@ def register_platform_user_with_referral(
                         ),
                     ),
                 )
+                _mark_referral_soft_review_if_needed_in_conn(
+                    conn,
+                    relationship_id=relationship_id,
+                    inviter_platform_user_id=inviter_platform_user_id,
+                )
             conn.execute(
                 """
                 UPDATE referral_codes
@@ -4838,6 +4846,251 @@ def _load_referral_metadata(row: sqlite3.Row) -> Dict[str, Any]:
         return {}
 
 
+def _beijing_timestamp_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    modifier: Optional[str] = None,
+) -> str:
+    modifiers = ["'+8 hours'"]
+    if modifier:
+        modifiers.append("?")
+    sql = (
+        "SELECT strftime('%Y-%m-%d %H:%M:%S', "
+        f"datetime('now', {', '.join(modifiers)}))"
+    )
+    params = (modifier,) if modifier else ()
+    return str(conn.execute(sql, params).fetchone()[0])
+
+
+def _mark_referral_soft_review_if_needed_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    relationship_id: str,
+    inviter_platform_user_id: str,
+) -> None:
+    recent_count = int(
+        conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM referral_relationships
+            WHERE inviter_platform_user_id = ?
+              AND status IN ('registered', 'bound', 'qualified', 'rewarded')
+              AND review_status != 'failed'
+              AND created_at >= datetime('now', '+8 hours', ?)
+            """,
+            (
+                inviter_platform_user_id,
+                f"-{REFERRAL_SOFT_REVIEW_WINDOW_DAYS} days",
+            ),
+        ).fetchone()[0]
+    )
+    if recent_count <= REFERRAL_SOFT_REVIEW_REGISTRATION_LIMIT:
+        return
+
+    row = conn.execute(
+        "SELECT * FROM referral_relationships WHERE id = ?",
+        (relationship_id,),
+    ).fetchone()
+    if row is None:
+        return
+    metadata = _load_referral_metadata(row)
+    metadata.update(
+        {
+            "soft_review_required": True,
+            "soft_review_reason": "inviter_recent_registration_limit",
+            "soft_review_window_days": REFERRAL_SOFT_REVIEW_WINDOW_DAYS,
+            "soft_review_registration_limit": REFERRAL_SOFT_REVIEW_REGISTRATION_LIMIT,
+            "inviter_recent_registration_count": recent_count,
+        }
+    )
+    conn.execute(
+        """
+        UPDATE referral_relationships
+        SET metadata_json = ?,
+            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        WHERE id = ?
+        """,
+        (json.dumps(metadata, ensure_ascii=False), relationship_id),
+    )
+
+
+def _ensure_referral_soft_review_hold_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    relationship: sqlite3.Row,
+    invitee_platform_user_id: str,
+    account_id: str,
+    candidate_ids: List[int],
+    review_row: Optional[sqlite3.Row],
+) -> sqlite3.Row:
+    if relationship["review_status"] != "pending":
+        return relationship
+
+    metadata = _load_referral_metadata(relationship)
+    now = _beijing_timestamp_in_conn(conn)
+    metadata.setdefault("qualified_at", now)
+    metadata.setdefault(
+        "reward_release_after",
+        _beijing_timestamp_in_conn(
+            conn,
+            modifier=f"+{REFERRAL_SOFT_REVIEW_REWARD_DELAY_DAYS} days",
+        ),
+    )
+    metadata["reward_delay_days"] = REFERRAL_SOFT_REVIEW_REWARD_DELAY_DAYS
+    metadata["reward_pending_reason"] = "soft_review_delayed_release"
+    conn.execute(
+        """
+        UPDATE referral_relationships
+        SET status = 'qualified',
+            review_status = 'pending',
+            metadata_json = ?,
+            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        WHERE id = ?
+          AND reward_ledger_id IS NULL
+        """,
+        (json.dumps(metadata, ensure_ascii=False), relationship["id"]),
+    )
+    if review_row is None:
+        review_id = _new_id("review")
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO meaningful_message_reviews(
+                id, referral_relationship_id, invitee_platform_user_id,
+                account_id, message_ids_json, reviewer_type, status,
+                reason, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, 'ai', 'pending', ?, ?)
+            """,
+            (
+                review_id,
+                relationship["id"],
+                invitee_platform_user_id,
+                account_id,
+                json.dumps(
+                    candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT],
+                    ensure_ascii=False,
+                ),
+                "soft review delayed referral reward release",
+                json.dumps(
+                    {
+                        "review_method": "phase1_heuristic",
+                        "soft_review_required": True,
+                        "reward_release_after": metadata["reward_release_after"],
+                    },
+                    ensure_ascii=False,
+                ),
+            ),
+        )
+    return conn.execute(
+        "SELECT * FROM referral_relationships WHERE id = ?",
+        (relationship["id"],),
+    ).fetchone()
+
+
+def _release_delayed_referral_reward_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    relationship_id: str,
+) -> Optional[sqlite3.Row]:
+    relationship = conn.execute(
+        "SELECT * FROM referral_relationships WHERE id = ?",
+        (relationship_id,),
+    ).fetchone()
+    if relationship is None or relationship["reward_ledger_id"]:
+        return None
+    if (
+        relationship["status"] != "qualified"
+        or relationship["review_status"] != "pending"
+    ):
+        return None
+
+    metadata = _load_referral_metadata(relationship)
+    if not metadata.get("soft_review_required"):
+        return None
+    release_after = _clean_text(metadata.get("reward_release_after"))
+    if not release_after or release_after > _beijing_timestamp_in_conn(conn):
+        return None
+
+    now = _beijing_timestamp_in_conn(conn)
+    metadata["soft_review_released_at"] = now
+    metadata["soft_review_release_method"] = "delay_elapsed"
+    conn.execute(
+        """
+        UPDATE referral_relationships
+        SET review_status = 'passed',
+            metadata_json = ?,
+            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        WHERE id = ?
+          AND reward_ledger_id IS NULL
+          AND review_status = 'pending'
+        """,
+        (json.dumps(metadata, ensure_ascii=False), relationship_id),
+    )
+    review_row = conn.execute(
+        """
+        SELECT *
+        FROM meaningful_message_reviews
+        WHERE referral_relationship_id = ?
+          AND reviewer_type = 'ai'
+        """,
+        (relationship_id,),
+    ).fetchone()
+    review_metadata = {
+        "review_method": "phase1_heuristic",
+        "soft_review_required": True,
+        "soft_review_released_at": now,
+    }
+    review_account_id = _clean_text(metadata.get("bound_account_id"))
+    if not review_account_id:
+        review_account_id = _first_rewardable_account_for_platform_user_in_conn(
+            conn,
+            platform_user_id=relationship["invitee_platform_user_id"],
+        )
+    if review_row is None and review_account_id:
+        conn.execute(
+            """
+            INSERT INTO meaningful_message_reviews(
+                id, referral_relationship_id, invitee_platform_user_id,
+                account_id, message_ids_json, reviewer_type, status,
+                reason, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+            """,
+            (
+                _new_id("review"),
+                relationship_id,
+                relationship["invitee_platform_user_id"],
+                review_account_id,
+                json.dumps(
+                    metadata.get("candidate_message_ids") or [],
+                    ensure_ascii=False,
+                ),
+                "soft review delay elapsed",
+                json.dumps(review_metadata, ensure_ascii=False),
+            ),
+        )
+    elif review_row is not None:
+        conn.execute(
+            """
+            UPDATE meaningful_message_reviews
+            SET status = 'passed',
+                reason = ?,
+                metadata_json = ?
+            WHERE id = ?
+            """,
+            (
+                "soft review delay elapsed",
+                json.dumps(review_metadata, ensure_ascii=False),
+                review_row["id"],
+            ),
+        )
+
+    return _apply_referral_reward_in_conn(
+        conn,
+        relationship_id=relationship_id,
+    )
+
+
 def _is_meaningful_referral_message(*, content: Optional[str], message_type: str) -> bool:
     if message_type not in {"text", "voice"}:
         return False
@@ -5019,6 +5272,10 @@ def _retry_qualified_referral_rewards_for_inviter_in_conn(
     *,
     inviter_platform_user_id: str,
 ) -> List[sqlite3.Row]:
+    ledgers = _release_due_delayed_referral_rewards_for_inviter_in_conn(
+        conn,
+        inviter_platform_user_id=inviter_platform_user_id,
+    )
     rows = conn.execute(
         """
         SELECT id
@@ -5031,12 +5288,48 @@ def _retry_qualified_referral_rewards_for_inviter_in_conn(
         """,
         (inviter_platform_user_id,),
     ).fetchall()
-    ledgers: List[sqlite3.Row] = []
     for row in rows:
         ledger_row = _apply_referral_reward_in_conn(
             conn,
             relationship_id=row["id"],
         )
+        if ledger_row is not None:
+            ledgers.append(ledger_row)
+    return ledgers
+
+
+def _release_due_delayed_referral_rewards_for_inviter_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    inviter_platform_user_id: str,
+    limit: int = 100,
+) -> List[sqlite3.Row]:
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM referral_relationships
+        WHERE inviter_platform_user_id = ?
+          AND status = 'qualified'
+          AND review_status = 'pending'
+          AND reward_ledger_id IS NULL
+        ORDER BY updated_at ASC, id ASC
+        LIMIT ?
+        """,
+        (inviter_platform_user_id, max(1, min(int(limit), 500))),
+    ).fetchall()
+    ledgers: List[sqlite3.Row] = []
+    for row in rows:
+        try:
+            ledger_row = _release_delayed_referral_reward_in_conn(
+                conn,
+                relationship_id=row["id"],
+            )
+        except Exception:
+            logger.exception(
+                "delayed referral reward release failed relationship=%s",
+                row["id"],
+            )
+            continue
         if ledger_row is not None:
             ledgers.append(ledger_row)
     return ledgers
@@ -5053,6 +5346,55 @@ def retry_qualified_referral_rewards_for_user(
             inviter_platform_user_id=platform_user_id,
         )
     return [_decode_ledger_row(row) for row in rows]
+
+
+def release_due_referral_rewards_for_user(
+    *,
+    platform_user_id: str,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    """Release delayed referral rewards whose soft-review hold has elapsed."""
+    with connect() as conn:
+        rows = _release_due_delayed_referral_rewards_for_inviter_in_conn(
+            conn,
+            inviter_platform_user_id=platform_user_id,
+            limit=limit,
+        )
+    return [_decode_ledger_row(row) for row in rows]
+
+
+def release_due_referral_rewards(limit: int = 200) -> List[Dict[str, Any]]:
+    """Release all delayed referral rewards that are due, for admin or scheduler runs."""
+    clean_limit = max(1, min(int(limit), 1000))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM referral_relationships
+            WHERE status = 'qualified'
+              AND review_status = 'pending'
+              AND reward_ledger_id IS NULL
+            ORDER BY updated_at ASC, id ASC
+            LIMIT ?
+            """,
+            (clean_limit,),
+        ).fetchall()
+        ledgers: List[sqlite3.Row] = []
+        for row in rows:
+            try:
+                ledger_row = _release_delayed_referral_reward_in_conn(
+                    conn,
+                    relationship_id=row["id"],
+                )
+            except Exception:
+                logger.exception(
+                    "delayed referral reward release failed relationship=%s",
+                    row["id"],
+                )
+                continue
+            if ledger_row is not None:
+                ledgers.append(ledger_row)
+    return [_decode_ledger_row(row) for row in ledgers]
 
 
 def process_referral_message_for_account(
@@ -5155,33 +5497,30 @@ def process_referral_message_for_account(
             ).fetchone()
 
         if int(relationship["meaningful_message_count"] or 0) >= REFERRAL_QUALIFYING_MESSAGE_COUNT:
-            if review_row is None:
-                review_id = _new_id("review")
-                conn.execute(
-                    """
-                    INSERT OR IGNORE INTO meaningful_message_reviews(
-                        id, referral_relationship_id, invitee_platform_user_id,
-                        account_id, message_ids_json, reviewer_type, status,
-                        reason, metadata_json
+            metadata = _load_referral_metadata(relationship)
+            if metadata.get("soft_review_required"):
+                if relationship["review_status"] == "passed":
+                    ledger_row = _apply_referral_reward_in_conn(
+                        conn,
+                        relationship_id=relationship["id"],
                     )
-                    VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
-                    """,
-                    (
-                        review_id,
-                        relationship["id"],
-                        invitee_platform_user_id,
-                        account_id,
-                        json.dumps(candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT], ensure_ascii=False),
-                        "phase1 heuristic accepted 3 meaningful inbound messages",
-                        json.dumps(
-                            {
-                                "review_method": "phase1_heuristic",
-                                "qualifying_message_count": REFERRAL_QUALIFYING_MESSAGE_COUNT,
-                            },
-                            ensure_ascii=False,
-                        ),
-                    ),
-                )
+                elif relationship["review_status"] == "pending":
+                    relationship = _ensure_referral_soft_review_hold_in_conn(
+                        conn,
+                        relationship=relationship,
+                        invitee_platform_user_id=invitee_platform_user_id,
+                        account_id=account_id,
+                        candidate_ids=candidate_ids,
+                        review_row=review_row,
+                    )
+                    ledger_row = _release_delayed_referral_reward_in_conn(
+                        conn,
+                        relationship_id=relationship["id"],
+                    )
+                relationship = conn.execute(
+                    "SELECT * FROM referral_relationships WHERE id = ?",
+                    (relationship["id"],),
+                ).fetchone()
                 review_row = conn.execute(
                     """
                     SELECT *
@@ -5191,26 +5530,63 @@ def process_referral_message_for_account(
                     """,
                     (relationship["id"],),
                 ).fetchone()
-            if review_row is not None and review_row["status"] == "passed":
-                conn.execute(
-                    """
-                    UPDATE referral_relationships
-                    SET status = 'qualified',
-                        review_status = 'passed',
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
-                    WHERE id = ?
-                      AND reward_ledger_id IS NULL
-                    """,
-                    (relationship["id"],),
-                )
-                ledger_row = _apply_referral_reward_in_conn(
-                    conn,
-                    relationship_id=relationship["id"],
-                )
-                relationship = conn.execute(
-                    "SELECT * FROM referral_relationships WHERE id = ?",
-                    (relationship["id"],),
-                ).fetchone()
+            else:
+                if review_row is None:
+                    review_id = _new_id("review")
+                    conn.execute(
+                        """
+                        INSERT OR IGNORE INTO meaningful_message_reviews(
+                            id, referral_relationship_id, invitee_platform_user_id,
+                            account_id, message_ids_json, reviewer_type, status,
+                            reason, metadata_json
+                        )
+                        VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+                        """,
+                        (
+                            review_id,
+                            relationship["id"],
+                            invitee_platform_user_id,
+                            account_id,
+                            json.dumps(candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT], ensure_ascii=False),
+                            "phase1 heuristic accepted 3 meaningful inbound messages",
+                            json.dumps(
+                                {
+                                    "review_method": "phase1_heuristic",
+                                    "qualifying_message_count": REFERRAL_QUALIFYING_MESSAGE_COUNT,
+                                },
+                                ensure_ascii=False,
+                            ),
+                        ),
+                    )
+                    review_row = conn.execute(
+                        """
+                        SELECT *
+                        FROM meaningful_message_reviews
+                        WHERE referral_relationship_id = ?
+                          AND reviewer_type = 'ai'
+                        """,
+                        (relationship["id"],),
+                    ).fetchone()
+                if review_row is not None and review_row["status"] == "passed":
+                    conn.execute(
+                        """
+                        UPDATE referral_relationships
+                        SET status = 'qualified',
+                            review_status = 'passed',
+                            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        WHERE id = ?
+                          AND reward_ledger_id IS NULL
+                        """,
+                        (relationship["id"],),
+                    )
+                    ledger_row = _apply_referral_reward_in_conn(
+                        conn,
+                        relationship_id=relationship["id"],
+                    )
+                    relationship = conn.execute(
+                        "SELECT * FROM referral_relationships WHERE id = ?",
+                        (relationship["id"],),
+                    ).fetchone()
 
         return {
             "relationship": _decode_referral_relationship_row(relationship),
