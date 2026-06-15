@@ -75,7 +75,40 @@
 
     </div>
 
-    <!-- 第二行：微信绑定 -->
+    <!-- 第二行：邀请好友 -->
+    <div class="card referral-card" style="margin-bottom:16px">
+      <div class="card-header">
+        <h3>邀请好友</h3>
+        <span class="invite-count" id="d-invite-count">—</span>
+      </div>
+      <p class="invite-copy">
+        把专属注册链接发给朋友。朋友通过链接注册并绑定微信后，邀请关系会自动记录。
+      </p>
+
+      <div class="invite-field">
+        <div class="card-label">我的邀请码</div>
+        <div class="invite-value-row">
+          <div class="invite-code-value mono" id="d-invite-code">加载中…</div>
+          <button class="btn btn-ghost btn-sm" id="btn-copy-invite-code" onclick="copyInviteCode()" disabled>复制邀请码</button>
+        </div>
+      </div>
+
+      <div class="invite-field">
+        <div class="card-label">注册链接</div>
+        <div class="invite-value-row">
+          <div class="invite-link-value" id="d-invite-link">加载中…</div>
+          <button class="btn btn-secondary btn-sm" id="btn-copy-invite-link" onclick="copyInviteLink()" disabled>复制链接</button>
+        </div>
+      </div>
+
+      <div class="invite-share-text" id="d-invite-text">正在生成分享文案…</div>
+      <div class="invite-actions">
+        <button class="btn btn-primary btn-sm" id="btn-copy-invite-text" onclick="copyInviteText()" disabled>复制分享文案</button>
+      </div>
+      <div id="d-invite-status" class="copy-status"></div>
+    </div>
+
+    <!-- 第三行：微信绑定 -->
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
         <h3>微信绑定</h3>
@@ -117,7 +150,7 @@
 
     <!-- 提示 -->
     <div style="text-align:center;font-size:.83rem;color:var(--text-hint);padding-bottom:32px">
-      更多功能（邀请好友、历史记录、通知设置）即将上线
+      更多功能（历史记录、通知设置）即将上线
     </div>
 
   </div><!-- /content -->
@@ -133,6 +166,9 @@ var S = {
   sessionToken: null,
   platformUser: null,
   account: null,
+  referralCode: null,
+  referralLink: null,
+  referralText: null,
   walletTimer: null,
 };
 
@@ -196,6 +232,79 @@ function renderWallet(wallet) {
   document.getElementById('d-wallet-balance').textContent = amount;
 }
 
+function inviteRegistrationUrl(code) {
+  return 'https://ai4company.top/?invite_code=' + encodeURIComponent(code);
+}
+
+function inviteShareText(code, link) {
+  return '我在用朝夕相伴，注册时用我的邀请码 ' + code +
+    '，一起体验微信专属 AI 陪伴：' + link;
+}
+
+function setInviteButtons(disabled) {
+  document.getElementById('btn-copy-invite-code').disabled = disabled;
+  document.getElementById('btn-copy-invite-link').disabled = disabled;
+  document.getElementById('btn-copy-invite-text').disabled = disabled;
+}
+
+function showCopyStatus(text, type) {
+  var el = document.getElementById('d-invite-status');
+  el.textContent = text;
+  el.className = 'copy-status show ' + (type || 'ok');
+}
+
+function fallbackCopyText(text) {
+  var textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.top = '-1000px';
+  textarea.style.left = '-1000px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  var ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch(e) {
+    ok = false;
+  }
+  document.body.removeChild(textarea);
+  return ok;
+}
+
+async function copyText(text, successText) {
+  if (!text) {
+    showCopyStatus('邀请信息还在加载，请稍后再试', 'err');
+    return;
+  }
+  var copied = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = true;
+    } catch(e) {
+      copied = false;
+    }
+  }
+  if (!copied) copied = fallbackCopyText(text);
+  showCopyStatus(
+    copied ? successText : '复制失败，请手动选择文本复制',
+    copied ? 'ok' : 'err'
+  );
+}
+
+function copyInviteCode() {
+  copyText(S.referralCode, '邀请码已复制');
+}
+
+function copyInviteLink() {
+  copyText(S.referralLink, '注册链接已复制');
+}
+
+function copyInviteText() {
+  copyText(S.referralText, '分享文案已复制');
+}
+
 // ── 启动时鉴权 ────────────────────────────────
 window.addEventListener('load', function() {
   S.sessionToken = localStorage.getItem('chaochao_session');
@@ -226,6 +335,7 @@ async function loadDashboard() {
 
     // 加载绑定信息
     loadBindings();
+    loadReferralCode();
     if (S.walletTimer) clearInterval(S.walletTimer);
     S.walletTimer = setInterval(refreshWallet, 15000);
   } catch(e) {
@@ -235,6 +345,33 @@ async function loadDashboard() {
     } else {
       document.getElementById('loading').textContent = '加载失败：' + e.message;
     }
+  }
+}
+
+async function loadReferralCode() {
+  try {
+    var data = await apiFetch('/web/me/referral-code');
+    var referral = data.referral_code || {};
+    var code = referral.code || '';
+    if (!code) throw new Error('未获取到邀请码');
+    var link = inviteRegistrationUrl(code);
+    var text = inviteShareText(code, link);
+    S.referralCode = code;
+    S.referralLink = link;
+    S.referralText = text;
+    document.getElementById('d-invite-code').textContent = code;
+    document.getElementById('d-invite-link').textContent = link;
+    document.getElementById('d-invite-text').textContent = text;
+    document.getElementById('d-invite-count').textContent =
+      '已邀请 ' + (referral.used_count || 0) + ' 人';
+    setInviteButtons(false);
+  } catch(e) {
+    document.getElementById('d-invite-code').textContent = '获取失败';
+    document.getElementById('d-invite-link').textContent = '请刷新后重试';
+    document.getElementById('d-invite-text').textContent = '暂时无法生成分享文案';
+    document.getElementById('d-invite-count').textContent = '不可用';
+    setInviteButtons(true);
+    showCopyStatus('邀请码加载失败：' + e.message, 'err');
   }
 }
 

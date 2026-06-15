@@ -26,7 +26,6 @@ from app.db import (
     clear_all_messages_for_account,
     cancel_proactive_commitment,
     claim_content_moderation_task,
-    consume_valid_verification_token,
     count_verifications_last_hour,
     create_ai4all_account_for_user,
     create_admin_plaintext_grant,
@@ -34,7 +33,6 @@ from app.db import (
     create_faq_message,
     create_search_provider_run,
     create_tool_invocation,
-    create_or_get_platform_user_by_phone,
     get_or_create_personal_referral_code_for_user,
     create_phone_verification,
     connect as db_connect,
@@ -306,8 +304,11 @@ if str(settings.app_env or "").lower() in _LOCAL_DEBUG_UI_ENVS:
     app.mount("/user", StaticFiles(directory="app/static", html=True), name="user_local")
 
     @app.get("/", include_in_schema=False)
-    async def _local_root() -> RedirectResponse:
-        return RedirectResponse("/ui/home.html")
+    async def _local_root(request: Request) -> RedirectResponse:
+        target = "/ui/home.html"
+        if request.url.query:
+            target = f"{target}?{request.url.query}"
+        return RedirectResponse(target)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -3429,6 +3430,7 @@ def _register_platform_user_with_otp(
     display_name: Optional[str],
     otp_token: str,
     invite_code: Optional[str] = None,
+    invalid_otp_detail: str = "注册凭证无效或已过期",
 ) -> dict:
     try:
         normalized_phone = normalize_phone(phone)
@@ -3454,7 +3456,7 @@ def _register_platform_user_with_otp(
     except ValueError as err:
         detail = str(err)
         if detail == "invalid_otp_token":
-            raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
+            raise HTTPException(status_code=400, detail=invalid_otp_detail)
         raise HTTPException(status_code=400, detail=detail)
 
 
@@ -3583,6 +3585,7 @@ def web_get_binding_intent(binding_intent_id: str) -> dict:
 class WebLoginRequest(BaseModel):
     verified_token: str
     phone: str
+    invite_code: Optional[str] = None
 
 
 @app.post("/web/login")
@@ -3595,21 +3598,12 @@ def web_login(payload: WebLoginRequest) -> dict:
     - If no active WeChat binding exists, also starts a new binding intent (QR).
     - Returns has_active_binding so the frontend can decide to show QR or go to dashboard.
     """
-    try:
-        normalized_phone = normalize_phone(payload.phone)
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-
-    verification = consume_valid_verification_token(
-        verified_token=payload.verified_token,
-        phone=normalized_phone,
-    )
-    if verification is None:
-        raise HTTPException(status_code=400, detail="验证凭证无效或已过期")
-
-    platform_user = create_or_get_platform_user_by_phone(
-        phone=normalized_phone,
+    platform_user = _register_platform_user_with_otp(
+        phone=payload.phone,
         display_name=None,
+        otp_token=payload.verified_token,
+        invite_code=payload.invite_code,
+        invalid_otp_detail="验证凭证无效或已过期",
     )
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],

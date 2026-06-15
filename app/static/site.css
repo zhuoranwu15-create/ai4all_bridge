@@ -223,6 +223,17 @@ body {
   margin-bottom: 24px;
   color: var(--text);
 }
+.invite-hint {
+  margin: -12px 0 20px;
+  padding: 9px 12px;
+  border: 1px solid #CFEAD7;
+  border-radius: 8px;
+  background: #EBF8EE;
+  color: var(--success);
+  font-size: .84rem;
+  line-height: 1.5;
+  word-break: break-all;
+}
 
 /* ── Dashboard ──────────────────────────────────── */
 .dashboard-wrap {
@@ -484,6 +495,76 @@ body {
 }
 .card-header h3 { font-size: 1rem; font-weight: 600; }
 
+.referral-card .card-header {
+  gap: 12px;
+}
+.invite-count {
+  flex-shrink: 0;
+  font-size: .82rem;
+  color: var(--text-hint);
+}
+.invite-copy {
+  color: var(--text-sub);
+  font-size: .9rem;
+  line-height: 1.7;
+  margin-top: -6px;
+}
+.invite-field {
+  margin-top: 16px;
+}
+.invite-value-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.invite-code-value,
+.invite-link-value {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: .9rem;
+  line-height: 1.45;
+  word-break: break-all;
+}
+.invite-code-value.mono {
+  font-family: "SF Mono", "Fira Code", monospace;
+  font-size: .92rem;
+}
+.invite-share-text {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #DDE7F3;
+  border-radius: 8px;
+  background: #F7FAFD;
+  color: var(--text-sub);
+  font-size: .88rem;
+  line-height: 1.7;
+  word-break: break-word;
+}
+.invite-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.copy-status {
+  display: none;
+  margin-top: 10px;
+  font-size: .82rem;
+}
+.copy-status.show {
+  display: block;
+}
+.copy-status.ok {
+  color: var(--success);
+}
+.copy-status.err {
+  color: var(--error);
+}
+
 .wallet-amount { font-size: 2rem; font-weight: 700; color: var(--brand); }
 .wallet-unit   { font-size: 1rem; color: var(--text-sub); margin-left: 4px; }
 .wallet-note   { font-size: .82rem; color: var(--text-hint); margin-top: 6px; }
@@ -520,4 +601,18 @@ body {
   .faq-form-actions { align-items: stretch; flex-direction: column; }
   .faq-form-actions .btn { width: 100%; }
   .faq-message-meta { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .referral-card .card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .invite-value-row {
+    flex-direction: column;
+  }
+  .invite-value-row .btn,
+  .invite-actions .btn {
+    width: 100%;
+  }
+  .invite-actions {
+    justify-content: stretch;
+  }
 }

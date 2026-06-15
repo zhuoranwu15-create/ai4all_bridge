@@ -115,6 +115,24 @@ for (const [input, expected] of cases) {
     assert res.returncode == 0, res.stderr
 
 
+def test_dashboard_exposes_referral_invite_entry():
+    html = Path("app/static/dashboard.html").read_text(encoding="utf-8")
+
+    assert "/web/me/referral-code" in html
+    assert "https://ai4company.top/?invite_code=" in html
+    assert "复制链接" in html
+    assert "复制分享文案" in html
+
+
+def test_home_carries_invite_code_to_login():
+    html = Path("app/static/home.html").read_text(encoding="utf-8")
+
+    assert "invite-hint" in html
+    assert "new URLSearchParams(window.location.search)" in html
+    assert "payload.invite_code = inviteCode" in html
+    assert "/web/login" in html
+
+
 def test_web_register_creates_and_reuses_platform_user(client):
     first = client.post(
         "/web/register",
@@ -247,6 +265,73 @@ def test_full_invite_code_does_not_consume_otp(client):
     )
     assert accepted.status_code == 200
     assert accepted.json()["platform_user"]["phone"] == "13800000304"
+
+
+def test_web_login_invalid_invite_code_does_not_consume_otp_or_create_user(client):
+    from app.db import get_platform_user_by_phone
+
+    token = _get_verified_token("13800000305")
+    rejected = client.post(
+        "/web/login",
+        json={
+            "phone": "13800000305",
+            "verified_token": token,
+            "invite_code": "BADCODE",
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "invalid_invite_code"
+    assert get_platform_user_by_phone(phone="13800000305") is None
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.openclaw_gateway.start_weixin_qr_login",
+        return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "login-token-reuse"},
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        accepted = client.post(
+            "/web/login",
+            json={"phone": "13800000305", "verified_token": token},
+        )
+    assert accepted.status_code == 200
+    assert accepted.json()["platform_user"]["phone"] == "13800000305"
+
+
+def test_web_login_with_invite_code_creates_referral_relationship(client):
+    from app.db import (
+        get_or_create_personal_referral_code_for_user,
+        list_referral_relationships,
+    )
+
+    inviter = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000306",
+            "otp_token": _get_verified_token("13800000306"),
+        },
+    ).json()["platform_user"]
+    code = get_or_create_personal_referral_code_for_user(
+        platform_user_id=inviter["id"],
+    )
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.openclaw_gateway.start_weixin_qr_login",
+        return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "login-invite"},
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        res = client.post(
+            "/web/login",
+            json={
+                "phone": "13800000307",
+                "verified_token": _get_verified_token("13800000307"),
+                "invite_code": code["code"].lower(),
+            },
+        )
+
+    assert res.status_code == 200
+    invitee = res.json()["platform_user"]
+    relationships = list_referral_relationships(invitee_platform_user_id=invitee["id"])
+    assert len(relationships) == 1
+    assert relationships[0]["inviter_platform_user_id"] == inviter["id"]
+    assert relationships[0]["status"] == "registered"
 
 
 def test_web_create_agent_creates_account_profile_owner_and_subscription(client):

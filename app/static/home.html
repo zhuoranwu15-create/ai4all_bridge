@@ -41,6 +41,7 @@
 <section class="register-section">
   <div class="card">
     <p class="card-title" id="card-title">手机号注册 / 登录</p>
+    <div class="invite-hint" id="invite-hint" style="display:none"></div>
 
     <!-- 步骤指示器 -->
     <div class="step-indicator" id="step-indicator">
@@ -117,6 +118,7 @@ var S = {
   verifiedToken: null,
   sessionToken: null,
   bindingIntent: null,
+  inviteCode: '',
   pollTimer: null,
   resendTimer: null,
 };
@@ -141,6 +143,19 @@ function setSendOtpButton(disabled, text) {
   var btn = document.getElementById('btn-send-otp');
   btn.disabled = disabled;
   btn.textContent = text || '获取验证码';
+}
+
+function normalizedInviteCode() {
+  return (S.inviteCode || '').trim();
+}
+
+function initInviteCode() {
+  var params = new URLSearchParams(window.location.search);
+  S.inviteCode = (params.get('invite_code') || '').trim();
+  if (!S.inviteCode) return;
+  var hint = document.getElementById('invite-hint');
+  hint.textContent = '已带入邀请码 ' + S.inviteCode.toUpperCase();
+  show('invite-hint');
 }
 
 async function apiFetch(path, opts) {
@@ -192,6 +207,8 @@ function initCaptcha(config) {
 
 // ── 启动时检查已有 session ────────────────────
 window.addEventListener('load', function() {
+  initInviteCode();
+
   var token = localStorage.getItem('chaochao_session');
   if (token) {
     S.sessionToken = token;
@@ -295,9 +312,12 @@ async function verifyOtp() {
 async function doLogin() {
   showMsg('msg-otp', '登录中…', 'info');
   try {
+    var payload = { phone: S.phone, verified_token: S.verifiedToken };
+    var inviteCode = normalizedInviteCode();
+    if (inviteCode) payload.invite_code = inviteCode;
     var data = await apiFetch('/web/login', {
       method: 'POST',
-      body: JSON.stringify({ phone: S.phone, verified_token: S.verifiedToken }),
+      body: JSON.stringify(payload),
     });
     saveSession(data.session_token);
     clearMsg('msg-otp');
