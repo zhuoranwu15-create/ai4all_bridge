@@ -327,7 +327,7 @@ def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path)
     )
     assert res.status_code == 200
 
-    with patch("app.main.date_cls") as mock_date, patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.routers.admin_dreaming.date_cls") as mock_date, patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
         mock_date.today.return_value.isoformat.return_value = TODAY
         res = client.post(
             f"/admin/accounts/{account_id}/dreaming?days=1",

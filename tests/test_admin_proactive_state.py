@@ -370,7 +370,7 @@ def test_admin_proactive_overview_redacts_task_text(client):
 
 def test_admin_lists_reactivation_candidates(fresh_db):
     from app.db import create_content_invitation, upsert_proactive_account_state
-    from app.main import admin_proactive_reactivation_candidates
+    from app.routers.admin_proactive import admin_proactive_reactivation_candidates
     from app.proactive.reactivation import upsert_reactivation_candidate
 
     _create_account("acc-admin-react-topic")
@@ -442,7 +442,8 @@ def test_admin_lists_reactivation_candidates(fresh_db):
 
 def test_admin_reactivation_candidates_render_beijing_timestamps(fresh_db):
     from app.db import create_content_invitation
-    from app.main import _beijing_display, admin_proactive_reactivation_candidates
+    from app.routers.serializers import _beijing_display
+    from app.routers.admin_proactive import admin_proactive_reactivation_candidates
     from app.proactive.reactivation import upsert_reactivation_candidate
 
     # All DB timestamps are now stored as naive Beijing-local strings; _beijing_display

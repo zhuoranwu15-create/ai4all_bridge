@@ -1,0 +1,260 @@
+"""Admin accounts 路由（/admin/...）。从 app.main 拆出，函数体逐字保留。
+settings 在本模块绑定，测试需 patch "app.routers.admin_accounts.settings"。"""
+import logging
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from app.routers.deps import get_admin_user, verify_admin_auth
+from app.routers.serializers import _binding_intent_for_view, _can_bypass_redaction_for_account, _debug_redaction_payload, _normalize_ts, _platform_user_for_view, _profile_for_view, _trace_for_view
+from app.routers.models import ProfileUpdateRequest
+from app.db import get_account, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, update_account, update_profile_for_account
+from app.user_profiles import ensure_user_profile, read_agent_context
+from datetime import date as date_cls
+from typing import Optional
+
+logger = logging.getLogger("ai4all")
+router = APIRouter()
+
+
+class AccountUpdateRequest(BaseModel):
+    display_name: Optional[str] = None
+    notes: Optional[str] = None
+    daily_limit: Optional[int] = None
+    rpm_limit: Optional[int] = None
+
+
+@router.get("/admin/me")
+def admin_me(admin_user: dict = Depends(get_admin_user)) -> dict:
+    return {"admin_user": admin_user}
+
+
+@router.get("/admin/accounts")
+def admin_accounts(_: None = Depends(verify_admin_auth)) -> dict:
+    return {"accounts": [_normalize_ts(a) for a in list_accounts()]}
+
+
+@router.get("/admin/accounts/{account_id}")
+def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    owner_bindings = list_account_owner_bindings_for_account(account_id=account_id)
+    active_owner = next((binding for binding in owner_bindings if binding.get("status") == "active"), None)
+    platform_user = (
+        get_platform_user(platform_user_id=str(active_owner["platform_user_id"]))
+        if active_owner else None
+    )
+    binding_intents = [
+        _binding_intent_for_view(intent, account_id=account_id)
+        for intent in list_binding_intents_for_account(account_id=account_id)
+    ]
+    recent_traces = list_debug_traces(account_id=account_id, limit=10)
+    return {
+        "account": _normalize_ts(account),
+        "platform_user": _platform_user_for_view(platform_user, account_id=account_id),
+        "owner_bindings": owner_bindings,
+        "binding_intents": binding_intents,
+        "channel_bindings": [_normalize_ts(b) for b in list_channel_bindings_for_account(account_id=account_id)],
+        "profile": _profile_for_view(
+            get_profile_for_account(account_id=account_id) or {},
+            account_id=account_id,
+        ),
+        "sessions": [_normalize_ts(s) for s in list_sessions_for_account(account_id=account_id)],
+        "recent_traces": [_trace_for_view(trace) for trace in recent_traces],
+        **(
+            _debug_redaction_payload(account_id=account_id)
+            if _can_bypass_redaction_for_account(account_id)
+            else {"redacted": True}
+        ),
+    }
+
+
+@router.patch("/admin/accounts/{account_id}")
+def admin_update_account(
+    account_id: str,
+    payload: AccountUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    updates = payload.model_dump(exclude_unset=True)
+    account = update_account(account_id=account_id, **updates)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
+
+
+@router.post("/admin/accounts/{account_id}/disable")
+def admin_disable_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = set_account_status(account_id=account_id, status="disabled")
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
+
+
+@router.post("/admin/accounts/{account_id}/enable")
+def admin_enable_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    account = set_account_status(account_id=account_id, status="active")
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"status": "ok", "account": account}
+
+
+@router.patch("/admin/accounts/{account_id}/profile")
+def admin_update_account_profile(
+    account_id: str,
+    payload: ProfileUpdateRequest,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    profile = update_profile_for_account(
+        account_id=account_id,
+        display_name=payload.display_name,
+        style=payload.style,
+        system_prompt=payload.system_prompt,
+        preferences=payload.preferences,
+    )
+    if profile is None:
+        raise HTTPException(status_code=404, detail="account/profile not found")
+    return {"status": "ok", "profile": profile}
+
+
+@router.get("/admin/accounts/{account_id}/sessions")
+def admin_account_sessions(
+    account_id: str,
+    limit: int = 50,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    return {"sessions": list_sessions_for_account(account_id=account_id, limit=limit)}
+
+
+@router.get("/admin/accounts/{account_id}/user-profile")
+def admin_get_user_profile(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    path = ensure_user_profile(account_id)
+    context = read_agent_context(account_id)
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    if _can_bypass_redaction_for_account(account_id):
+        return {
+            "account_id": account_id,
+            "path": str(path),
+            "content": content,
+            "agent_context": context.metadata(),
+            **_debug_redaction_payload(account_id=account_id),
+        }
+    return {
+        "account_id": account_id,
+        "path": str(path),
+        "content_redacted": True,
+        "content_chars": len(content),
+        "agent_context": context.metadata(),
+        "redacted": True,
+    }
+
+
+@router.get("/admin/accounts/{account_id}/context-files")
+def admin_get_context_files(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """返回账号的 SOUL/IDENTITY/USER/MEMORY 上下文文件正文，供运维调试人设与记忆。
+
+    这些是账号级 AI 上下文配置文件，对登录 admin 直接以明文返回（与原 AI 配置卡片
+    展示 system_prompt 的口径一致）。
+    """
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    context = read_agent_context(account_id)
+    targets = ("SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md")
+    files = []
+    for fname in targets:
+        key = fname[:-3]
+        meta = context.files.get(fname, {})
+        files.append(
+            {
+                "file": fname,
+                "key": key,
+                "path": meta.get("path"),
+                "exists": bool(meta.get("exists")),
+                "chars": int(meta.get("chars") or 0),
+                "content": context.blocks.get(key, ""),
+            }
+        )
+    return {"account_id": account_id, "files": files}
+
+
+@router.get("/admin/accounts/{account_id}/usage")
+def admin_account_usage(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    today = date_cls.today().isoformat()
+    return {
+        "account_id": account_id,
+        "today": {
+            "date": today,
+            "message_count": get_daily_usage(account_id=account_id, date=today),
+        },
+        "last_7_days": get_usage_last_7_days(account_id=account_id),
+    }
+
+
+@router.get("/admin/accounts/{account_id}/wallet")
+def admin_account_wallet(
+    account_id: str,
+    limit: int = 20,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    wallet = get_wallet_summary(
+        account_id=account_id,
+        ensure_grant=False,
+        create_if_missing=False,
+    )
+    return {
+        "account_id": account_id,
+        "wallet": wallet,
+        "ledger": list_wallet_ledger(account_id=account_id, limit=limit) if wallet else [],
+        "redacted": True,
+    }
+
+
+@router.get("/admin/referrals")
+def admin_referrals(
+    limit: int = 50,
+    inviter_platform_user_id: Optional[str] = None,
+    invitee_platform_user_id: Optional[str] = None,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    return {
+        "status": "ok",
+        "referrals": list_referral_relationships(
+            limit=limit,
+            inviter_platform_user_id=inviter_platform_user_id,
+            invitee_platform_user_id=invitee_platform_user_id,
+        ),
+        "redacted": True,
+    }
+
+
+@router.post("/admin/referrals/release-due-rewards")
+def admin_release_due_referral_rewards(
+    limit: int = 200,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    ledgers = release_due_referral_rewards(limit=limit)
+    return {
+        "status": "ok",
+        "released_count": len(ledgers),
+        "ledger": ledgers,
+        "redacted": True,
+    }
