@@ -1,6 +1,6 @@
 # 贝壳、增长与支付后置技术设计
 
-更新时间：2026-06-02
+更新时间：2026-06-15
 
 本文承接 [贝壳、增长与支付后置 PRD](../product/entitlement_growth_prd.md)，定义 Phase 1 内测所需的贝壳 wallet/ledger、用量计量、邀请奖励和客服补发技术设计。
 
@@ -11,6 +11,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 贝壳是 AI4ALL 内部权益额度，不是链上资产，不可提现，不承诺金融属性。
 - 钱包余额只能由账本流水推导或同步更新，不能无流水直接改余额。
 - 新用户注册默认赠送 1000 个贝壳。
+- 支持运营切换注册准入模式：默认开放注册，紧急情况下可切到仅邀请码注册；必要时也可临时关闭新手机号注册。
 - 邀请新用户注册绑定并发送 3 条有意义消息后，给邀请人暂定发放 1000 个贝壳。
 - 聊天按输入 token + 输出 token 计量，默认 `1000 deepseek v4-flash token = 1 贝壳`。
 - 其他模型按相对 `deepseek v4-flash` 的价格倍率折算。
@@ -25,6 +26,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 
 - wallet / ledger 数据模型。
 - 注册赠送、运营发放、补偿发放、邀请奖励。
+- 新手机号注册准入开关、邀请码必填策略和紧急关闭策略。
 - LLM token、Search tool/provider、outbound platform cost 的成本事件。
 - 成本事件到贝壳扣减流水的映射。
 - 邀请码、邀请关系、3 条有意义消息验收。
@@ -58,6 +60,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 - 模型价格倍率配置尚未产品化。
 - 搜索 provider 调用尚未按固定 5 贝壳写入扣减流水。
 - 运营补发和误扣回滚入口尚未完整产品化。
+- 无注册准入模式开关，无法在紧急情况下关闭非邀请码新手机号注册。
 - 无邀请码、邀请关系和拉新奖励。
 - 无支付订单和回调；该项已正式后置，不作为 Phase 1 内测首发缺口。
 
@@ -71,6 +74,7 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 | `entitlement_ledger` | 所有影响余额的发放、扣减、补偿和回滚流水；未来支付生效也必须进入 ledger |
 | `cost_event` | LLM、Search、outbound 等资源消耗记录，可映射为用户扣减或平台成本 |
 | `model_price_rule` | 模型相对基准模型的价格倍率 |
+| `registration_access_policy` | 全局注册准入策略，控制新手机号是否允许无邀请码注册 |
 | `referral_relationship` | 邀请人和被邀请人的拉新关系及奖励状态 |
 
 关键边界：
@@ -264,16 +268,28 @@ referral_codes
 - id
 - platform_user_id
 - code
+- code_type: personal | campaign | admin_seed
 - status: active | disabled
+- max_uses
+- used_count
+- expires_at
+- created_by_admin_user_id
+- disabled_reason
+- metadata_json
 - created_at
 - updated_at
 ```
 
 要求：
 
-- 一个用户至少有一个稳定邀请码。
+- 一个用户至少有一个稳定个人邀请码，`code_type=personal`。
+- 运营可以创建活动码或种子码，`code_type=campaign | admin_seed`，用于早期定向开放。
 - 注册链接中的邀请码自动填充到 onboarding 页面。
 - 非邀请链接进入的用户可以手动输入邀请码。
+- 邀请码展示建议使用短码，URL 参数统一为 `invite_code`，例如 `/onboarding?invite_code=ABC123`。
+- 个人邀请码默认长期有效；活动码和种子码必须支持有效期、最大使用次数和手工停用。
+- `used_count` 只在新手机号注册成功并创建有效邀请关系后增加；仅打开页面或校验邀请码不增加次数。
+- 停用邀请码不影响已创建的有效邀请关系，也不回滚已发放奖励。
 
 ### 6.7 referral_relationships
 
@@ -318,7 +334,50 @@ meaningful_message_reviews
 
 Phase 1 可以先由后台 AI 自动判断 3 条消息是否有意义，Admin 只提供查看和必要手工修正入口。
 
-### 6.9 orders / payments / refunds
+### 6.9 registration_access_settings
+
+Phase 1 建议先做全局单行配置，后续再扩展到渠道、活动或地区维度。
+
+```text
+registration_access_settings
+- id: global
+- mode: open | invite_only | closed
+- invite_required_for_new_phone: boolean
+- existing_user_login_allowed: boolean
+- message_for_blocked_registration
+- message_for_invite_required
+- updated_by_admin_user_id
+- updated_reason
+- created_at
+- updated_at
+```
+
+推荐默认值：
+
+```text
+mode = open
+invite_required_for_new_phone = false
+existing_user_login_allowed = true
+```
+
+模式语义：
+
+| mode | 新手机号无邀请码 | 新手机号有有效邀请码 | 已存在手机号继续登录/注册 |
+| --- | --- | --- | --- |
+| `open` | 允许 | 允许，并记录邀请关系 | 允许 |
+| `invite_only` | 拒绝 | 允许，并记录邀请关系 | 允许 |
+| `closed` | 拒绝 | 拒绝 | 允许，除非账号本身被禁用 |
+
+说明：
+
+- “新手机号”以标准化手机号查询 `platform_users.phone` 是否存在为准。
+- 该开关只控制新 `platform_user` 创建，不影响老用户登录、重新获取 session、已创建绑定意图或已绑定账号继续使用。
+- `closed` 是更强的事故开关，用于短信异常、恶意注册、成本异常或合规风险；日常定向内测优先使用 `invite_only`。
+- Phase 1 默认不做完整用户白名单；如必须临时放行，应通过独立 admin 调试入口或一次性种子码完成，并写审计日志。
+- 配置修改必须写操作日志，至少记录 admin、旧值、新值、原因和时间。
+- Web 前端应通过 `/web/config` 获取 `registration_mode`、`invite_required` 和用户侧提示文案；不要把内部事故原因暴露给普通用户。
+
+### 6.10 orders / payments / refunds
 
 支付和用户购买正式后置。Phase 1 内测不创建以下表、不暴露用户购买入口、不实现订单或回调。以下模型仅作为后续立项时的账本边界参考。
 
@@ -375,11 +434,17 @@ refunds
 
 ## 7. 核心流程
 
-### 7.1 注册赠送
+### 7.1 注册准入与注册赠送
 
 ```text
-手机号 OTP 注册成功
+手机号 + OTP + optional invite_code
+-> normalize phone
+-> check whether phone already has platform_user
+-> load registration_access_settings
+-> if new phone and mode requires invite: validate invite_code
+-> consume OTP token
 -> create / reuse platform_user
+-> if invite_code is valid and invitee is new: create referral_relationship
 -> create default ai4all_account
 -> create entitlement_wallet
 -> insert entitlement_ledger credit new_user_grant 1000 贝壳
@@ -388,9 +453,18 @@ refunds
 
 要求：
 
+- `/web/register` 和 `/web/register-and-binding-intent` 请求体都增加可选 `invite_code`。
+- `invite_code` 来源优先级：URL 自动填充值 > 用户手动输入值；提交前统一 trim 和大写标准化。
+- `mode=open` 时，无邀请码新手机号可注册；有有效邀请码则创建邀请关系。
+- `mode=invite_only` 时，新手机号必须携带有效邀请码才能注册；已存在手机号继续登录或重新发起绑定不需要邀请码。
+- `mode=closed` 时，新手机号默认无法注册；仅保留内部调试入口或一次性种子码放行，且必须写审计日志。
+- 邀请码无效、停用、过期或超过使用上限时，不创建 `platform_user`，不创建邀请关系，不消耗 `used_count`。
+- 推荐在邀请码校验通过后再消费 OTP token；如果实现上先消费 OTP，必须保证邀请码失败不会创建用户，且前端能重新获取 OTP。
 - 注册接口重试不能重复赠送。
 - 幂等键使用 `new-user-grant-{ai4all_account_id}`。
 - 如果老用户换手机号后重新注册，按新账号注册赠送处理；旧账号不会自动迁移贝壳。
+- 邀请关系创建、邀请码 `used_count` 增加、默认账号创建和注册赠送应尽量放在同一个事务边界内；如果拆成多步，必须有幂等修复脚本或后台重放入口。
+- 用户侧被拒文案只说明“当前仅限邀请码注册”或“暂未开放新注册”，不暴露风控、成本或事故细节。
 
 ### 7.2 普通聊天扣减
 
@@ -494,12 +568,37 @@ Phase 1 不支持用户请求后的异步任务结果补发；主动触达首条
 -> 发放 referral_reward 1000 贝壳给邀请人
 ```
 
+关系创建规则：
+
+- 只有新手机号注册时才创建新的邀请关系；已存在手机号补填邀请码不创建奖励关系。
+- 如果注册时携带多个来源的邀请码，只接受最终提交的一个标准化邀请码。
+- 如果邀请码归属的邀请人和被邀请人是同一个 `platform_user_id`，拒绝创建关系。
+- 活动码或种子码如果没有明确邀请人，可以只作为注册准入码，不触发个人邀请奖励；是否发放活动奖励由 `grant_rules` 单独配置。
+- 同一个 `invitee_platform_user_id` 只能存在一个可奖励的邀请关系；后续更换邀请码只允许记录操作日志，不改奖励归属。
+
+3 条有意义消息候选口径：
+
+- 只统计被邀请人在绑定后的入站用户消息，不统计系统消息、主动触达首条、模型回复、纯表情/图片占位或 OpenClaw 系统事件。
+- 同一 turn 内的重复消息、撤回/失败消息、明显复制粘贴刷量消息不计入候选。
+- 推荐每条候选消息至少满足基础启发式：去空白后长度达到最小阈值，且不是单字、纯寒暄、纯数字、纯链接或明显验证码/垃圾内容。
+- 满 3 条候选后触发一次 AI review；AI review 结果写 `meaningful_message_reviews`，并把 message ids、判断理由和模型信息写入 metadata。
+- AI review 超时或失败时保持 `review_status=pending`，后台可重试；不因失败自动发奖。
+
+奖励发放规则：
+
+- `review_status=passed` 后发放邀请人 1000 贝壳，source_type=`referral_reward`。
+- 发奖必须校验邀请人 wallet active；如 wallet 缺失，先按账号隔离创建邀请人的 wallet。
+- 发奖成功后 `referral_relationship.status=rewarded`，写 `reward_ledger_id` 和 `rewarded_at`。
+- 如果 review 后被人工改判失败，已发奖励不自动删除；需要通过 `reversal` 冲正并保留原流水。
+- Phase 1 不建议自动给被邀请人额外奖励，避免注册赠送 + 邀请奖励叠加过快；如果要做，应作为独立 `grant_rule` 和 ledger source_type，避免混在 `referral_reward`。
+
 反作弊基础约束：
 
 - 不能邀请自己。
 - 同一个手机号或 `platform_user_id` 只能作为 invitee 成功一次。
 - 邀请奖励发放必须幂等。
-- 异常批量注册、重复设备、明显无意义消息刷量先记录到 metadata，Phase 1 可先走人工排查。
+- 异常批量注册、重复设备、短时间同邀请码大量注册、同 IP/UA 集中注册、明显无意义消息刷量先记录到 metadata，Phase 1 可先走人工排查。
+- 如果邀请码或邀请人被风控停用，新增关系不再创建；存量 pending 关系进入 `review_status=pending` 或人工复核，不自动发奖。
 
 ### 7.7 运营补发和误扣处理
 
@@ -557,20 +656,40 @@ grant_shells(wallet_id: str, amount_shell_micros: int, source_type: str, source_
 record_cost_event(...) -> CostEvent
 charge_cost_event(cost_event_id: str, idempotency_key: str) -> LedgerEntry | None
 get_wallet_summary(account_id: str) -> WalletSummary
+get_registration_access_policy() -> RegistrationAccessPolicy
+validate_invite_code(code: str) -> InviteCodeValidationResult
+create_referral_relationship(inviter_id: str, invitee_id: str, code_id: str) -> ReferralRelationship
+maybe_review_referral_messages(invitee_id: str) -> MeaningfulMessageReview | None
 ```
 
 用户/客服可见 API：
 
 ```text
+GET /web/config
+POST /web/register                 # add optional invite_code
+POST /web/register-and-binding-intent # add optional invite_code
 GET /web/accounts/{account_id}/wallet
 GET /web/accounts/{account_id}/wallet/ledger
+GET /web/referral-codes/{code}/preview
 GET /admin/accounts/{account_id}/wallet
 GET /admin/accounts/{account_id}/wallet/ledger
 POST /admin/accounts/{account_id}/wallet/grants
 POST /admin/ledger/{ledger_id}/reverse
+GET /admin/growth/registration-access
+PATCH /admin/growth/registration-access
+POST /admin/referral-codes
+PATCH /admin/referral-codes/{id}
 GET /admin/referrals
 POST /admin/referrals/{id}/review
 ```
+
+API 约定：
+
+- `/web/config` 返回用户侧可见的 `registration_mode`、`invite_required`、captcha 配置和提示文案；不要返回 admin 操作原因或内部风控标签。
+- `/web/referral-codes/{code}/preview` 只返回是否可用和可展示的邀请人昵称/活动名；不要泄露手机号、platform user id 或使用次数明细。
+- `/web/register*` 在 `invite_only` 下对新手机号缺邀请码返回 403，detail 使用稳定错误码，例如 `invite_code_required`。
+- `/web/register*` 对无效邀请码返回 400，detail 使用稳定错误码，例如 `invalid_invite_code`。
+- Admin 切换 `registration_access_settings` 必须要求 `reason`，并记录到 `admin_access_events`。
 
 支付后置 API，Phase 1 不实现：
 
@@ -612,13 +731,19 @@ Admin 权限：
 5. Admin 增加 wallet summary、ledger list、手工补发和冲正。
 6. 搜索接入 cost events 和 5 贝壳固定扣减。
 7. 主动触达首条写平台成本事件，但不扣用户贝壳。
-8. 新增邀请码、邀请关系和 3 条有意义消息 AI review。
-9. 拉新通过后给邀请人发放 1000 贝壳。
-10. 支付后置；后续单独实现 payment products、orders、callbacks 和支付生效 ledger。
+8. 新增 `registration_access_settings`，并在 `/web/register*` 支持 `open | invite_only | closed`。
+9. 新增邀请码、邀请关系和注册页 `invite_code` 自动填充/手动输入。
+10. 接入 3 条有意义消息 AI review 和 Admin 人工复核。
+11. 拉新通过后给邀请人发放 1000 贝壳。
+12. 支付后置；后续单独实现 payment products、orders、callbacks 和支付生效 ledger。
 
 ## 11. 验收点
 
 - 新用户注册后得到 1000 个贝壳，重复请求不会重复赠送。
+- `mode=open` 时，新手机号无邀请码可注册；携带有效邀请码注册后能创建邀请关系。
+- `mode=invite_only` 时，新手机号无邀请码被拒绝；有效邀请码可注册；已存在手机号继续登录/重新绑定不受影响。
+- `mode=closed` 时，新手机号默认被拒绝；前端展示临时关闭文案；配置切换有 admin 操作日志。
+- 无效、停用、过期或超使用次数的邀请码不会创建用户、不会增加 `used_count`、不会创建邀请关系。
 - 钱包余额变化都有 `entitlement_ledger`，不存在无流水改余额。
 - 普通聊天能按输入 token + 输出 token 和模型倍率生成扣减流水。
 - `deepseek v4-flash` 以 `1000 token = 1 贝壳` 扣减。
@@ -629,6 +754,8 @@ Admin 权限：
 - 用户回复主动触达后的后续聊天或任务按普通规则扣减。
 - 邀请码链接自动填充，用户也可以手动输入邀请码。
 - 新用户注册绑定并发送 3 条有意义消息后，能给邀请人发放 1000 贝壳。
+- 活动码/种子码可只作为注册准入码，不触发个人邀请奖励。
+- AI meaningful review 失败或超时时不发奖；Admin 可查看和人工改判。
 - Admin 可以查看余额和流水，补发贝壳，冲正误扣，查看邀请关系。
 - 支付不作为 Phase 1 内测验收项；后续如果开启支付，支付成功后只能通过 ledger 发放贝壳，回调重复不会重复发放。
 
@@ -638,6 +765,9 @@ Admin 权限：
 - 小数贝壳的用户侧展示方式、最小展示粒度和四舍五入规则。
 - 已调用商业搜索 provider 但最终回答失败时的补偿或退回口径。
 - outbound delivery 成本如何折算为平台成本事件。
-- 拉新奖励是否也给被邀请人额外奖励。
-- “3 条有意义消息”的 AI 判断标准、阈值和人工复核边界。
+- 是否需要 `closed` 模式下的 admin 白名单；推荐 Phase 1 先不做完整用户白名单，只保留内部调试入口或一次性种子码。
+- 邀请码注册是否要默认开启；推荐 Phase 1 初始 `open`，出现成本/风控压力时切 `invite_only`。
+- 拉新奖励是否也给被邀请人额外奖励；推荐 Phase 1 暂不发额外奖励，只保留新用户注册赠送。
+- “3 条有意义消息”的 AI 判断标准、阈值和人工复核边界；推荐先用启发式筛候选，再由 AI 输出 passed/failed/reason。
+- 活动码/种子码是否需要独立奖励规则；推荐先只做注册准入，不做奖励。
 - 支付后续立项时的 provider、套餐结构、退款策略和合规边界。
