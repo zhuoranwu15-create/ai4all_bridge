@@ -225,7 +225,8 @@ from app.alerting import configure_error_log_alerting
 from app.app_runtime import set_background_loop, get_background_loop
 from app.routers.deps import *  # noqa: F401,F403 鉴权依赖（搬出后回引，供留存 handler 用）
 from app.routers.serializers import *  # noqa: F401,F403 序列化/脱敏 helper 回引
-from app.routers.health import _build_ready_status  # admin/ops 状态接口复用就绪检查
+from app.routers.health import _build_ready_status
+from app.routers.models import ProfileUpdateRequest  # admin/ops 状态接口复用就绪检查
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -242,7 +243,6 @@ _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/proactive_debug.html",
     "/ui/web_search_debug.html",
 }
-_WEB_SEARCH_DEBUG_PROVIDERS = {"aliyun", "baidu", "bing", "duckduckgo"}
 
 
 @app.middleware("http")
@@ -303,6 +303,8 @@ app.include_router(_health_router.router)
 app.include_router(_bridge_router.router)
 from app.routers import web as _web_router  # noqa: E402
 app.include_router(_web_router.router)
+from app.routers import debug as _debug_router  # noqa: E402
+app.include_router(_debug_router.router)
 
 # Local-dev convenience: production nginx serves the static frontend at "/" and
 # "/user/*" (the frontend hardcodes those absolute paths). Replicate that mapping
@@ -320,11 +322,6 @@ if str(settings.app_env or "").lower() in _LOCAL_DEBUG_UI_ENVS:
         return RedirectResponse(target)
 
 
-class ProfileUpdateRequest(BaseModel):
-    display_name: Optional[str] = None
-    style: Optional[str] = None
-    system_prompt: Optional[str] = None
-    preferences: Optional[dict] = Field(default=None)
 
 
 class AccountUpdateRequest(BaseModel):
@@ -389,18 +386,8 @@ class ModerationPolicyUpdateRequest(BaseModel):
 
 
 
-class PromptLabBuildRequest(BaseModel):
-    user_text: Optional[str] = Field(default="", max_length=8000)
-    session_id: Optional[int] = None
-    include_tool_instructions: bool = True
-    source_trace_id: Optional[str] = None
 
 
-class PromptLabReplayRequest(BaseModel):
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    session_id: Optional[int] = None
-    source_trace_id: Optional[str] = None
-    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 def _debug_trace_account_ids() -> set[str]:
@@ -990,995 +977,90 @@ def admin_moderation_update_policy(
 # Debug (admin auth required)
 # ---------------------------------------------------------------------------
 
-@app.get("/debug/sessions")
-def debug_sessions(limit: int = 50, _: None = Depends(verify_admin_auth)) -> dict:
-    return {"sessions": list_sessions(limit=limit)}
 
 
-@app.get("/debug/messages")
-def debug_messages(session_id: int, limit: int = 100, _: None = Depends(verify_admin_auth)) -> dict:
-    session = get_session(session_id=session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    account_id = session.get("account_id")
-    redacted = _redacted_flag_for_account(account_id)
-    return {
-        "session": _session_for_view(session),
-        "profile": _profile_for_view(
-            get_profile_for_session(session_id=session_id) or {},
-            account_id=account_id,
-        ),
-        "messages": [
-            _message_for_view(message, account_id=account_id)
-            for message in list_session_messages(session_id=session_id, limit=limit)
-        ],
-        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
-    }
 
 
-@app.get("/debug/messages/raw")
-def debug_recent_message_raw(limit: int = 20, _: None = Depends(verify_admin_auth)) -> dict:
-    messages = list_recent_message_raw(limit=limit)
-    return {
-        "messages": [
-            _message_for_view(message)
-            for message in messages
-        ],
-        "redacted": not any(_can_bypass_redaction_for_account(message.get("account_id")) for message in messages),
-    }
 
 
-@app.get("/debug/messages/{message_db_id}/raw")
-def debug_message_raw(message_db_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    message = get_message_raw(message_db_id=message_db_id)
-    if message is None:
-        raise HTTPException(status_code=404, detail="message not found")
-    account_id = message.get("account_id")
-    redacted = _redacted_flag_for_account(account_id)
-    return {
-        "message": _message_for_view(message),
-        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
-    }
 
 
-@app.get("/debug/traces")
-def debug_traces(
-    account_id: Optional[str] = None,
-    session_id: Optional[int] = None,
-    limit: int = 50,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    return {
-        "traces": [
-            _trace_for_view(t) for t in list_debug_traces(
-                account_id=account_id,
-                session_id=session_id,
-                limit=limit,
-            )
-        ]
-    }
 
 
-@app.get("/debug/traces/{trace_id}")
-def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    trace = get_debug_trace(trace_id=trace_id)
-    if trace is None:
-        raise HTTPException(status_code=404, detail="trace not found")
-    account_id = trace.get("account_id")
-    redacted = _redacted_flag_for_account(account_id)
-    return {
-        "trace": _trace_for_view(trace),
-        **(_debug_redaction_payload(account_id=account_id) if not redacted else {"redacted": True}),
-    }
 
 
-@app.get("/debug/accounts/{account_id}/prompt-preview")
-def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    """Show the assembled system prompt and per-block sizes for an account."""
-    from app.user_profiles import read_user_profile, read_agent_context
-    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    profile = get_profile_for_account(account_id=account_id) or {}
-    file_profile = read_user_profile(account_id)
-    _now_preview = beijing_now()
-    today = _now_preview.date().isoformat()
-    _current_time_preview = _now_preview.strftime("%H:%M")
-    soul = extract_section(file_profile, "Soul")
-    user_prefs = extract_section(file_profile, "User Preferences")
-    long_term_memory = extract_section(file_profile, "Long-term Memory")
-    agent_context = read_agent_context(
-        account_id,
-        display_name=account.get("display_name"),
-    )
-    onboarding_state = get_account_onboarding_state(account_id=account_id)
-    onboarding_context = ""
-    if is_onboarding_active(onboarding_state):
-        import re as _re
-        identity_text = agent_context.blocks.get("IDENTITY", "")
-        user_text = agent_context.blocks.get("USER", "")
-        _m = _re.search(r"AI 名字[:：]\s*(.+)", identity_text)
-        _ai_name = _m.group(1).strip() if _m else None
-        _m = _re.search(r"用户称呼[:：]\s*(.+)", user_text)
-        _user_name = _m.group(1).strip() if _m else None
-        onboarding_context = build_onboarding_prompt_context(
-            state=onboarding_state,
-            user_name=_user_name,
-            ai_name=_ai_name,
-            persona=None,
-            user_name_ask_count=0,
-            persona_ask_count=0,
-        )
-    builder = PromptBuilder()
-    prompt = builder.build(
-        display_name=account.get("display_name"),
-        soul=soul,
-        user_prefs=user_prefs,
-        long_term_memory=long_term_memory,
-        daily_notes=None,
-        system_prompt_override=profile.get("system_prompt"),
-        style=profile.get("style"),
-        agent_context=agent_context.blocks,
-        onboarding_context=onboarding_context,
-        today=today,
-        current_time=_current_time_preview,
-        model_name=settings.llm_model,
-    )
-    if _can_bypass_redaction_for_account(account_id):
-        return {
-            "account_id": account_id,
-            "today": today,
-            "total_chars": len(prompt),
-            "blocks": {
-                "soul_chars": len(soul),
-                "user_prefs_chars": len(user_prefs),
-                "long_term_memory_chars": len(long_term_memory),
-                "daily_notes_loaded": False,
-                "daily_notes_chars": 0,
-                "system_prompt_override": bool(profile.get("system_prompt")),
-                "style": profile.get("style"),
-                "display_name": account.get("display_name"),
-                "agent_context": agent_context.metadata(),
-            },
-            "prompt": prompt,
-            **_debug_redaction_payload(account_id=account_id),
-        }
-    return {
-        "account_id": account_id,
-        "today": today,
-        "total_chars": len(prompt),
-        "blocks": {
-            "soul_chars": len(soul),
-            "user_prefs_chars": len(user_prefs),
-            "long_term_memory_chars": len(long_term_memory),
-            "daily_notes_loaded": False,
-            "daily_notes_chars": 0,
-            "system_prompt_override": bool(profile.get("system_prompt")),
-            "style": profile.get("style"),
-            "display_name": account.get("display_name"),
-            "agent_context": agent_context.metadata(),
-        },
-        "prompt_redacted": True,
-        "prompt_chars": len(prompt),
-        "redacted": True,
-    }
 
 
-@app.get("/debug/accounts/{account_id}/user-profile")
-def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    path = ensure_user_profile(account_id)
-    context = read_agent_context(account_id)
-    content = path.read_text(encoding="utf-8") if path.exists() else ""
-    if _can_bypass_redaction_for_account(account_id):
-        return {
-            "account_id": account_id,
-            "path": str(path),
-            "content": content,
-            "agent_context": context.metadata(),
-            **_debug_redaction_payload(account_id=account_id),
-        }
-    return {
-        "account_id": account_id,
-        "path": str(path),
-        "content_redacted": True,
-        "content_chars": len(content),
-        "agent_context": context.metadata(),
-        "redacted": True,
-    }
 
 
-@app.get("/debug/prompt-lab/accounts/{account_id}/context-files")
-def debug_prompt_lab_context_files(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    """Return account context files for prompt-lab inspection."""
-    if get_account(account_id=account_id) is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    context = read_agent_context(account_id)
-    plaintext = _can_bypass_redaction_for_account(account_id)
-    files = []
-    for filename in CONTEXT_FILE_ORDER:
-        path = context_file_path(account_id, filename)
-        exists = path.exists()
-        content = path.read_text(encoding="utf-8") if exists else ""
-        item = {
-            "filename": filename,
-            "path": str(path),
-            "exists": exists,
-            "chars": len(content),
-        }
-        if plaintext:
-            item["content"] = content
-        else:
-            item["content_redacted"] = True
-        files.append(item)
-    return {
-        "account_id": account_id,
-        "agent_context": context.metadata(),
-        "files": files,
-        **(_debug_redaction_payload(account_id=account_id) if plaintext else {"redacted": True}),
-    }
 
 
-@app.get("/debug/prompt-lab/accounts/{account_id}/conversation")
-def debug_prompt_lab_conversation(
-    account_id: str,
-    session_id: Optional[int] = None,
-    limit: int = 80,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    """Return the selected account conversation and recent prompt traces."""
-    if get_account(account_id=account_id) is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    if limit < 1 or limit > 200:
-        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
-    session = _prompt_lab_session_for_account(account_id=account_id, session_id=session_id)
-    messages = list_session_messages(session_id=int(session["id"]), limit=limit)
-    traces = list_debug_traces(account_id=account_id, session_id=int(session["id"]), limit=20)
-    return {
-        "account_id": account_id,
-        "session": _session_for_view(session),
-        "messages": [_message_for_view(message, account_id=account_id) for message in messages],
-        "traces": [_trace_for_view(trace) for trace in traces],
-        **(_debug_redaction_payload(account_id=account_id) if _can_bypass_redaction_for_account(account_id) else {"redacted": True}),
-    }
 
 
-@app.post("/debug/prompt-lab/accounts/{account_id}/build")
-def debug_prompt_lab_build(
-    account_id: str,
-    payload: PromptLabBuildRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    """Build the full LLM message list for a dry-run prompt-lab turn."""
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    if payload.source_trace_id:
-        trace = get_debug_trace(trace_id=payload.source_trace_id)
-        if trace is None or trace.get("account_id") != account_id:
-            raise HTTPException(status_code=404, detail="trace not found")
-        messages = trace.get("messages") or []
-        metadata = trace.get("metadata") or {}
-        if not _can_bypass_redaction_for_account(account_id):
-            metadata = _redact_raw_payload(metadata)
-        return {
-            "account_id": account_id,
-            "source": "trace",
-            "source_trace_id": payload.source_trace_id,
-            "llm_model": trace.get("llm_model"),
-            "metadata": metadata,
-            **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
-        }
-
-    session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
-    profile = get_profile_for_account(account_id=account_id) or {}
-    _now_lab = beijing_now()
-    today = _now_lab.date().isoformat()
-    onboarding_state = get_account_onboarding_state(account_id=account_id)
-    llm_input = build_turn_llm_input(
-        account_id=account_id,
-        account=account,
-        session=session,
-        profile=profile,
-        text=payload.user_text or "",
-        today=today,
-        current_time=_now_lab.strftime("%H:%M"),
-        onboarding_state=onboarding_state,
-        onboarding_active=is_onboarding_active(onboarding_state),
-        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
-        include_tool_instructions=payload.include_tool_instructions,
-        debug_dry_run=True,
-    )
-    messages = llm_input["messages"]
-    return {
-        "account_id": account_id,
-        "source": "build",
-        "session": _session_for_view(session),
-        "today": today,
-        "llm_model": settings.llm_model,
-        "metadata": llm_input["metadata"],
-        **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
-    }
 
 
-@app.post("/debug/prompt-lab/accounts/{account_id}/replay")
-def debug_prompt_lab_replay(
-    account_id: str,
-    payload: PromptLabReplayRequest,
-    admin_user: dict = Depends(get_admin_user),
-) -> dict:
-    """Replay edited prompt-lab messages without writing normal chat state."""
-    if get_account(account_id=account_id) is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    grant = None
-    if not _can_bypass_redaction_for_account(account_id):
-        grant = _require_plaintext_access(
-            admin_user=admin_user,
-            account_id=account_id,
-            resource_type="debug_trace",
-        )
-    session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
-    messages = _validate_prompt_lab_messages(payload.messages)
-    started = time.monotonic()
-    reply = None
-    error = None
-    try:
-        reply = generate_completion(messages)
-    except Exception as err:
-        logger.exception("prompt lab replay failed account=%s error=%s", account_id, err)
-        error = str(err)
-    latency_ms = int((time.monotonic() - started) * 1000)
-    trace_id = f"prompt-lab-{uuid.uuid4()}"
-    insert_debug_trace(
-        trace_id=trace_id,
-        account_id=account_id,
-        session_id=int(session["id"]),
-        message_id=None,
-        source="prompt_lab",
-        llm_model=settings.llm_model,
-        system_prompt=messages[0]["content"],
-        messages=messages,
-        reply=reply,
-        metadata={
-            "trace_kind": "prompt_lab_replay",
-            "source_trace_id": payload.source_trace_id,
-            "admin_user_id": admin_user.get("id"),
-            "reason": payload.reason,
-            "side_effects": "llm_only_no_message_no_memory_no_outbound",
-        },
-        latency_ms=latency_ms,
-        error=error,
-    )
-    _audit_plaintext_access(
-        admin_user=admin_user,
-        action="prompt_lab_replay",
-        resource_type="debug_trace",
-        resource_id=trace_id,
-        account_id=account_id,
-        request_path=f"/debug/prompt-lab/accounts/{account_id}/replay",
-        reason=payload.reason or "prompt_lab_replay",
-        grant_id=int(grant["id"]) if grant else None,
-        metadata={"source_trace_id": payload.source_trace_id},
-    )
-    return {
-        "status": "error" if error else "ok",
-        "account_id": account_id,
-        "trace_id": trace_id,
-        "reply": reply,
-        "latency_ms": latency_ms,
-        "error": error,
-        "side_effects": "llm_only_no_message_no_memory_no_outbound",
-        "plaintext": True,
-    }
 
 
-@app.post("/debug/sessions/{session_id}/reset")
-def debug_reset_session(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    if get_session(session_id=session_id) is None:
-        raise HTTPException(status_code=404, detail="session not found")
-    deleted = clear_session_messages(session_id=session_id)
-    return {"status": "ok", "session_id": session_id, "deleted": deleted}
 
 
-@app.get("/debug/sessions/{session_id}/profile")
-def debug_get_profile(session_id: int, _: None = Depends(verify_admin_auth)) -> dict:
-    profile = get_profile_for_session(session_id=session_id)
-    if profile is None:
-        raise HTTPException(status_code=404, detail="profile not found")
-    return {"profile": profile}
 
 
-@app.get("/debug/accounts/{account_id}/onboarding")
-def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    """Return onboarding state and collected context file contents for an account."""
-    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
-    from app.user_profiles import read_agent_context, context_file_path, CONTEXT_FILE_ORDER
-    import re
-
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-
-    state = get_account_onboarding_state(account_id=account_id)
-    agent_ctx = read_agent_context(account_id)
-
-    identity_text = agent_ctx.blocks.get("IDENTITY", "")
-    user_text = agent_ctx.blocks.get("USER", "")
-    soul_text = agent_ctx.blocks.get("SOUL", "")
-
-    ai_name: Optional[str] = None
-    m = re.search(r"AI 名字[:：]\s*(.+)", identity_text)
-    if m:
-        ai_name = m.group(1).strip()
-
-    user_name: Optional[str] = None
-    m = re.search(r"用户称呼[:：]\s*(.+)", user_text)
-    if m:
-        user_name = m.group(1).strip()
-
-    prompt_ctx = build_onboarding_prompt_context(
-        state=state,
-        user_name=user_name,
-        ai_name=ai_name,
-        persona=None,
-        user_name_ask_count=0,
-        persona_ask_count=0,
-    )
-
-    return {
-        "account_id": account_id,
-        "onboarding_state": state,
-        "onboarding_active": is_onboarding_active(state),
-        "collected": {
-            "user_name": user_name,
-            "ai_name": ai_name,
-            "soul_chars": len(soul_text),
-            "soul_preview": soul_text[:200] if soul_text else None,
-        },
-        "context_files": {
-            filename: {
-                "exists": (context_file_path(account_id, filename)).exists(),
-                "chars": agent_ctx.files.get(filename, {}).get("chars", 0),
-            }
-            for filename in CONTEXT_FILE_ORDER
-        },
-        "prompt_context_preview": prompt_ctx[:500] if prompt_ctx else None,
-    }
 
 
-class OnboardingStateUpdateRequest(BaseModel):
-    state: str
 
 
-@app.patch("/debug/accounts/{account_id}/onboarding/state")
-def debug_set_onboarding_state(
-    account_id: str,
-    payload: OnboardingStateUpdateRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    """Manually set onboarding state — useful for testing specific steps."""
-    from app.onboarding import ONBOARDING_COMPLETE, ONBOARDING_TIMED_OUT
-    valid_states = {"pending", "step1_sent", "step2_sent", "step3_sent", "complete", "timed_out"}
-    if payload.state not in valid_states:
-        raise HTTPException(status_code=400, detail=f"invalid state, must be one of: {sorted(valid_states)}")
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    set_account_onboarding_state(account_id=account_id, state=payload.state)
-    return {"status": "ok", "account_id": account_id, "onboarding_state": payload.state}
 
 
-class DebugCreateAccountRequest(BaseModel):
-    account_id: Optional[str] = None
-    display_name: Optional[str] = None
 
 
-@app.post("/debug/accounts/create")
-def debug_create_account(
-    payload: DebugCreateAccountRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    """Create a bare test account directly (no turn, no LLM call, state stays pending)."""
-    from app.user_profiles import ensure_user_profile, ensure_agent_context_files
-    account_id = (payload.account_id or "").strip() or f"debug-{int(time.time())}"
-    get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id=f"debug-sender-{account_id}",
-        sender_name=payload.display_name or None,
-        chat_id=f"debug-sender-{account_id}",
-        session_key=f"openclaw-weixin:{account_id}:debug-sender-{account_id}",
-        business_day=date_cls.today().isoformat(),
-    )
-    ensure_user_profile(account_id)
-    ensure_agent_context_files(account_id, display_name=payload.display_name or None)
-    set_account_debug_flag(account_id=account_id, is_debug=True)
-    return {"account_id": account_id, "status": "created", "onboarding_state": "pending", "is_debug": True}
 
 
-class OnboardingResetRequest(BaseModel):
-    clear_context_files: bool = True
 
 
-@app.post("/debug/accounts/{account_id}/onboarding/reset")
-def debug_reset_onboarding(
-    account_id: str,
-    payload: OnboardingResetRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    """Reset onboarding to pending. Optionally wipe SOUL.md / IDENTITY.md / USER.md.
-
-    Safe to call multiple times. Useful for re-testing the full onboarding flow
-    without needing to re-bind a WeChat account.
-    """
-    import shutil
-    from app.user_profiles import account_profile_dir, context_file_path, ensure_agent_context_files
-
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-
-    set_account_onboarding_state(account_id=account_id, state="pending")
-
-    # Clear all session messages so LLM starts fresh without prior conversation history
-    cleared_messages = clear_all_messages_for_account(account_id=account_id)
-
-    cleared = []
-    if payload.clear_context_files:
-        for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
-            path = context_file_path(account_id, filename)
-            if path.exists():
-                path.unlink()
-                cleared.append(filename)
-        # Clear daily memory notes (memory/YYYY-MM-DD.md files)
-        memory_dir = account_profile_dir(account_id) / "memory"
-        if memory_dir.exists():
-            shutil.rmtree(memory_dir)
-            cleared.append("memory/")
-        # Re-create defaults
-        ensure_agent_context_files(account_id, display_name=account.get("display_name"))
-
-    return {
-        "status": "ok",
-        "account_id": account_id,
-        "onboarding_state": "pending",
-        "cleared_files": cleared,
-        "cleared_messages": cleared_messages,
-    }
 
 
-@app.post("/debug/accounts/{account_id}/mark-debug")
-def debug_mark_account_as_debug(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    """Mark an existing account as a debug account so its prompt is never redacted."""
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    set_account_debug_flag(account_id=account_id, is_debug=True)
-    return {"status": "ok", "account_id": account_id, "is_debug": True}
 
 
-@app.post("/debug/sessions/{session_id}/profile")
-def debug_update_profile(session_id: int, payload: ProfileUpdateRequest, _: None = Depends(verify_admin_auth)) -> dict:
-    profile = update_profile_for_session(
-        session_id=session_id,
-        display_name=payload.display_name,
-        style=payload.style,
-        system_prompt=payload.system_prompt,
-        preferences=payload.preferences,
-    )
-    if profile is None:
-        raise HTTPException(status_code=404, detail="profile not found")
-    return {"status": "ok", "profile": profile}
 
 
 # ---------------------------------------------------------------------------
 # Reminder debug routes
 # ---------------------------------------------------------------------------
 
-class ReminderDebugUpdateRequest(BaseModel):
-    text: Optional[str] = None
-    due_at: Optional[str] = None
-    recur_rule: Optional[str] = None
-    clear_recur_rule: bool = False
 
 
-@app.get("/debug/reminders/{account_id}")
-def debug_get_reminders(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    reminders = [
-        _normalize_ts(r, "due_at")
-        for r in list_reminders_for_account(account_id=account_id, limit=100)
-    ]
-    return {"account_id": account_id, "reminders": reminders}
 
 
-@app.patch("/debug/reminders/{reminder_id}")
-def debug_patch_reminder(
-    reminder_id: str,
-    payload: ReminderDebugUpdateRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    reminder = get_reminder(reminder_id=reminder_id)
-    if reminder is None:
-        raise HTTPException(status_code=404, detail="reminder not found")
-    if reminder["status"] != "pending":
-        raise HTTPException(status_code=400, detail="only pending reminders can be edited")
-    updated = update_reminder(
-        reminder_id=reminder_id,
-        text=payload.text,
-        due_at=payload.due_at,
-        recur_rule=payload.recur_rule,
-        clear_recur_rule=payload.clear_recur_rule,
-    )
-    return {"status": "ok", "reminder": updated}
 
 
-@app.delete("/debug/reminders/{reminder_id}")
-def debug_delete_reminder(reminder_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    reminder = get_reminder(reminder_id=reminder_id)
-    if reminder is None:
-        raise HTTPException(status_code=404, detail="reminder not found")
-    if reminder["status"] != "pending":
-        raise HTTPException(status_code=400, detail="only pending reminders can be cancelled")
-    cancelled = cancel_reminder(reminder_id=reminder_id)
-    return {"status": "ok", "reminder": cancelled}
 
 
 # ---------------------------------------------------------------------------
 # Web Search debug routes
 # ---------------------------------------------------------------------------
 
-class WebSearchDebugSimulationRequest(BaseModel):
-    query: str
-    provider: Optional[str] = None
-    status: str = "succeeded"
-    count: int = Field(default=3, ge=1, le=10)
-    latency_ms: Optional[int] = Field(default=None, ge=0)
-    error: Optional[str] = None
 
 
-class WebSearchDebugChatRequest(BaseModel):
-    text: str
-    force_web_search_enabled: bool = True
-    provider: Optional[str] = None
 
 
-class WebSearchDebugRunRequest(BaseModel):
-    query: str
-    provider: Optional[str] = None
-    count: int = Field(default=3, ge=1, le=10)
-    language: Optional[str] = None
-    country: Optional[str] = None
-    freshness: Optional[str] = None
-    date_after: Optional[str] = None
-    date_before: Optional[str] = None
 
 
-def _web_search_debug_capabilities() -> dict:
-    default_provider = getattr(settings, "web_search_default_provider", "duckduckgo")
-    provider_order = [
-        item.strip()
-        for item in str(getattr(settings, "web_search_provider_order", "") or default_provider).split(",")
-        if item.strip()
-    ]
-    configured_providers = {
-        "aliyun": bool(
-            getattr(settings, "aliyun_web_search_enabled", False)
-            and (
-                getattr(settings, "aliyun_web_search_api_key", "")
-                or getattr(settings, "dashscope_api_key", "")
-            )
-        ),
-        "baidu": bool(getattr(settings, "baidu_ai_search_enabled", False) and getattr(settings, "baidu_ai_search_api_key", "")),
-        "bing": True,
-        "duckduckgo": True,
-    }
-    return {
-        "tool_schema_defined": True,
-        "model_exposure_configured": bool(getattr(settings, "web_search_enabled", False)),
-        "currently_in_turn_tools": bool(getattr(settings, "web_search_enabled", False)),
-        "debug_chat_forces_tool_exposure": True,
-        "provider_adapter_ready": any(configured_providers.get(provider, False) for provider in provider_order),
-        "default_provider": default_provider,
-        "provider_order": provider_order,
-        "provider_failover": bool(getattr(settings, "web_search_provider_failover", True)),
-        "configured_providers": configured_providers,
-        "sync_timeout_seconds": getattr(settings, "web_search_sync_timeout_seconds", 8.0),
-        "max_results": getattr(settings, "web_search_max_results", 5),
-    }
 
 
-def _web_search_debug_conversation(account_id: str, *, limit: int = 100) -> dict:
-    sessions = list_sessions_for_account(account_id=account_id, limit=20)
-    active_session = next(
-        (session for session in sessions if session.get("session_key") == ACCOUNT_ACTIVE_SESSION_KEY),
-        None,
-    )
-    messages = []
-    if active_session is not None:
-        messages = list_session_messages(session_id=int(active_session["id"]), limit=limit)
-    return {
-        "session": active_session,
-        "messages": messages,
-    }
 
 
-def _fake_web_search_results(*, query: str, count: int) -> list[dict]:
-    return [
-        {
-            "title": f"Debug result {idx + 1}: {query}",
-            "url": f"https://example.com/search-debug/{idx + 1}",
-            "snippet": "This is a synthetic web_search debug result. No external provider was called.",
-            "site_name": "example.com",
-            "retrieved_at": datetime.now().isoformat(timespec="seconds"),
-            "score": round(1.0 - idx * 0.08, 2),
-        }
-        for idx in range(count)
-    ]
 
 
-def _debug_provider_override(provider: Optional[str]) -> Optional[list[str]]:
-    cleaned = str(provider or "").strip().lower()
-    if cleaned and cleaned not in _WEB_SEARCH_DEBUG_PROVIDERS:
-        raise HTTPException(status_code=400, detail=f"unsupported web_search provider: {cleaned}")
-    return [cleaned] if cleaned else None
 
 
-@app.get("/debug/web-search/{account_id}")
-def debug_get_web_search(
-    account_id: str,
-    limit: int = 50,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    return {
-        "account_id": account_id,
-        "capabilities": _web_search_debug_capabilities(),
-        "tool_schema": get_web_search_tools()[0],
-        "tool_invocations": list_tool_invocations(
-            account_id=account_id,
-            tool_name="web_search",
-            limit=limit,
-        ),
-        "provider_runs": list_search_provider_runs(
-            account_id=account_id,
-            limit=limit,
-        ),
-        "conversation": _web_search_debug_conversation(account_id),
-    }
 
 
-@app.get("/debug/web-search/invocations/{tool_invocation_id}")
-def debug_get_web_search_invocation(
-    tool_invocation_id: int,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    invocation = get_tool_invocation(tool_invocation_id=tool_invocation_id)
-    if invocation is None:
-        raise HTTPException(status_code=404, detail="tool invocation not found")
-    return {
-        "tool_invocation": invocation,
-        "provider_runs": list_search_provider_runs(
-            tool_invocation_id=tool_invocation_id,
-            limit=50,
-        ),
-    }
 
 
-@app.post("/debug/web-search/{account_id}/chat")
-def debug_chat_web_search(
-    account_id: str,
-    payload: WebSearchDebugChatRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    text = str(payload.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="text is required")
-
-    turn_payload = OpenClawTurnRequest(
-        message_id=f"debug-web-search-chat-{uuid.uuid4().hex[:12]}",
-        channel="debug-web-search",
-        channel_account_id=account_id,
-        account_id=account_id,
-        sender_id="web-search-debug",
-        sender_name="Web Search Debug",
-        chat_id=account_id,
-        chat_type="private",
-        session_key=account_id,
-        message_type="text",
-        text=text,
-        raw={
-            "source": "web_search_debug",
-            "web_search_provider_override": str(payload.provider or "").strip() or None,
-        },
-    )
-    with override_provider_order(_debug_provider_override(payload.provider)):
-        turn = handle_openclaw_turn(
-            turn_payload,
-            background_loop=_background_loop,
-            force_web_search_enabled=bool(payload.force_web_search_enabled),
-        )
-    return {
-        "status": "ok",
-        "provider_override": str(payload.provider or "").strip() or None,
-        "turn": turn.model_dump(),
-        "conversation": _web_search_debug_conversation(account_id),
-        "tool_invocations": list_tool_invocations(
-            account_id=account_id,
-            tool_name="web_search",
-            limit=50,
-        ),
-        "provider_runs": list_search_provider_runs(
-            account_id=account_id,
-            limit=50,
-        ),
-    }
 
 
-@app.post("/debug/web-search/{account_id}/run")
-def debug_run_web_search(
-    account_id: str,
-    payload: WebSearchDebugRunRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    query = str(payload.query or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="query is required")
-
-    provider_override = _debug_provider_override(payload.provider)
-    provider_override_name = str(payload.provider or "").strip() or None
-
-    session_bundle = get_or_create_session(
-        account_id=account_id,
-        channel="debug",
-        sender_id="web-search-debug",
-        sender_name="Web Search Debug",
-        chat_id=account_id,
-        session_key=f"debug-web-search-{account_id}",
-    )
-    session = session_bundle["session"]
-    tool_call_id = f"call_debug_web_search_run_{uuid.uuid4().hex[:12]}"
-    args = {
-        "query": query,
-        "count": payload.count,
-        "language": payload.language,
-        "country": payload.country,
-        "freshness": payload.freshness,
-        "date_after": payload.date_after,
-        "date_before": payload.date_before,
-    }
-    invocation = create_tool_invocation(
-        account_id=account_id,
-        session_id=int(session["id"]),
-        message_id=f"debug-web-search-run-{uuid.uuid4().hex[:12]}",
-        tool_call_id=tool_call_id,
-        tool_name="web_search",
-        args={**args, "provider_override": provider_override_name},
-        status="running",
-    )
-    ctx = SimpleNamespace(
-        account_id=account_id,
-        session=session,
-        message_id=f"debug-web-search-run-{uuid.uuid4().hex[:12]}",
-    )
-    started = datetime.now()
-    with override_provider_order(provider_override):
-        result = handle_web_search(
-            args,
-            ctx,
-            tool_call_id=tool_call_id,
-            tool_invocation_id=int(invocation["id"]),
-        )
-    latency_ms = int((datetime.now() - started).total_seconds() * 1000)
-    status_value = "failed" if result.get("status") == "failed" or result.get("error") else "succeeded"
-    updated_invocation = update_tool_invocation(
-        tool_invocation_id=int(invocation["id"]),
-        status=status_value,
-        result=result,
-        latency_ms=latency_ms,
-        error=result.get("error") if status_value == "failed" else None,
-        finished=True,
-    )
-    return {
-        "status": "ok",
-        "account_id": account_id,
-        "provider_override": provider_override_name,
-        "result": result,
-        "tool_invocation": updated_invocation,
-        "provider_runs": list_search_provider_runs(
-            tool_invocation_id=int(invocation["id"]),
-            limit=50,
-        ),
-    }
 
 
-@app.post("/debug/web-search/{account_id}/simulate")
-def debug_simulate_web_search(
-    account_id: str,
-    payload: WebSearchDebugSimulationRequest,
-    _: None = Depends(verify_admin_auth),
-) -> dict:
-    query = str(payload.query or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="query is required")
-    status_value = str(payload.status or "succeeded").strip().lower()
-    if status_value not in {"running", "queued", "succeeded", "failed"}:
-        raise HTTPException(
-            status_code=400,
-            detail="status must be one of: running, queued, succeeded, failed",
-        )
-
-    session_bundle = get_or_create_session(
-        account_id=account_id,
-        channel="debug",
-        sender_id="web-search-debug",
-        sender_name="Web Search Debug",
-        chat_id=account_id,
-        session_key=f"debug-web-search-{account_id}",
-    )
-    session_id = int(session_bundle["session"]["id"])
-    provider = (
-        str(payload.provider or "").strip()
-        or getattr(settings, "web_search_default_provider", "duckduckgo")
-    )
-    args = {"query": query, "count": payload.count}
-    finished = status_value in {"queued", "succeeded", "failed"}
-    if status_value == "queued":
-        result = {
-            "status": "queued",
-            "task_id": f"debug-task-{uuid.uuid4().hex[:12]}",
-            "query": query,
-        }
-    elif status_value == "failed":
-        result = {
-            "status": "failed",
-            "query": query,
-            "error": payload.error or "debug simulated provider failure",
-        }
-    elif status_value == "running":
-        result = {"status": "running", "query": query}
-    else:
-        result = {
-            "status": "succeeded",
-            "query": query,
-            "provider": provider,
-            "results": _fake_web_search_results(query=query, count=payload.count),
-        }
-
-    invocation = create_tool_invocation(
-        account_id=account_id,
-        session_id=session_id,
-        message_id=f"debug-web-search-{uuid.uuid4().hex[:12]}",
-        tool_call_id=f"call_debug_web_search_{uuid.uuid4().hex[:12]}",
-        tool_name="web_search",
-        args=args,
-        status=status_value,
-        result=result,
-        latency_ms=payload.latency_ms,
-        error=payload.error if status_value == "failed" else None,
-        finished=finished,
-    )
-
-    provider_run = None
-    if status_value != "queued":
-        provider_status = "failed" if status_value == "failed" else status_value
-        provider_run = create_search_provider_run(
-            account_id=account_id,
-            tool_invocation_id=int(invocation["id"]),
-            provider=provider,
-            attempt=1,
-            status=provider_status,
-            request=args,
-            response=result if status_value == "succeeded" else {},
-            latency_ms=payload.latency_ms,
-            error=payload.error if status_value == "failed" else None,
-            finished=status_value in {"succeeded", "failed"},
-        )
-
-    return {
-        "status": "ok",
-        "account_id": account_id,
-        "tool_invocation": invocation,
-        "provider_run": provider_run,
-    }
 
 
 # ---------------------------------------------------------------------------
