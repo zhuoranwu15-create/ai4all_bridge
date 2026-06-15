@@ -79,6 +79,8 @@
 
 | 模块 | 职责 |
 |---|---|
+| `main.py` | FastAPI app 装配：中间件、静态挂载、startup/shutdown、scheduler 接线、`include_router`。路由本身已拆到 `app/routers/*`，此文件不再含 handler |
+| `app/routers/*` | 按域拆分的 `APIRouter`：`bridge`(openclaw/node)、`health`、`web`(/web/*)、`debug`(/debug/*)、`admin_{moderation,accounts,proactive,dreaming,ops,security}`(/admin/*)。共享层：`deps`(鉴权依赖)、`serializers`(脱敏/视图 helper)、`models`(共享请求模型)。对外 URL 与拆分前一致。`app/app_runtime.py` 持有后台事件循环（startup 写入，router 请求时 `get_background_loop()` 读取） |
 | `turn_service.py` | 每条入站消息的入口 |
 | `prompt_builder.py` | 从所有来源组装 LLM 上下文 |
 | `user_profiles.py` | 账号级上下文文件：SOUL、IDENTITY、USER |
@@ -98,6 +100,8 @@
 `contacts` 表是历史模型，早期 DB 已迁移到账号级 schema；当前代码不再包含该迁移、也无 contacts 表。Admin 账号管理使用 `/admin/accounts/*`；不要再新增 `/admin/contacts/*` API 或依赖 contacts 表。
 
 数据库 schema 由 `PRAGMA user_version` 跟踪版本（`app/db/_core.py` 的 `_MIGRATIONS` 注册表，`init_db()` 顺序应用）。修改 schema 时**新增一个迁移函数并追加到 `_MIGRATIONS`**，不要再用启动期 `_ensure_column` 补丁。基线 m0001 是当前全量 schema 的幂等定义。
+
+新增路由请加到 `app/routers/` 对应域的模块（而非 `main.py`）；`main.py` 只负责 app 装配与 `include_router`。新增 router 模块若 `from app.config import settings`，需在 `tests/conftest.py` 的 `fresh_db`/`client` 两个 fixture 各补一行 `patch("app.routers.<模块>.settings", ...)`，否则测试会落到生产配置（per-module patch 约定）。测试 patch router 内部对象时遵循 "patch where it's used"（patch `app.routers.<模块>.X`，不是 `app.main.X`）。
 
 主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关（`DREAMING_SCHEDULER_ENABLED`）或 admin run-once 调试，避免多实例重复扫描。
 
