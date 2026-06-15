@@ -162,6 +162,93 @@ def test_web_register_normalizes_phone(client):
     assert res2.json()["platform_user"]["id"] == res1.json()["platform_user"]["id"]
 
 
+def test_invalid_invite_code_does_not_consume_otp_or_create_user(client):
+    from app.db import get_platform_user_by_phone
+
+    token = _get_verified_token("13800000301")
+    rejected = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000301",
+            "otp_token": token,
+            "invite_code": "BADCODE",
+        },
+    )
+
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "invalid_invite_code"
+    assert get_platform_user_by_phone(phone="13800000301") is None
+
+    accepted = client.post(
+        "/web/register",
+        json={"phone": "13800000301", "otp_token": token},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["platform_user"]["phone"] == "13800000301"
+
+
+def test_existing_phone_ignores_invalid_invite_code(client):
+    first = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000302",
+            "otp_token": _get_verified_token("13800000302"),
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000302",
+            "otp_token": _get_verified_token("13800000302"),
+            "invite_code": "BADCODE",
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.json()["platform_user"]["id"] == first.json()["platform_user"]["id"]
+
+
+def test_full_invite_code_does_not_consume_otp(client):
+    from app.db import connect, get_or_create_personal_referral_code_for_user
+
+    inviter = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000303",
+            "otp_token": _get_verified_token("13800000303"),
+        },
+    ).json()["platform_user"]
+    code = get_or_create_personal_referral_code_for_user(
+        platform_user_id=inviter["id"],
+    )
+    with connect() as conn:
+        conn.execute(
+            "UPDATE referral_codes SET max_uses = 1, used_count = 1 WHERE id = ?",
+            (code["id"],),
+        )
+
+    token = _get_verified_token("13800000304")
+    rejected = client.post(
+        "/web/register",
+        json={
+            "phone": "13800000304",
+            "otp_token": token,
+            "invite_code": code["code"],
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["detail"] == "invalid_invite_code"
+
+    accepted = client.post(
+        "/web/register",
+        json={"phone": "13800000304", "otp_token": token},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["platform_user"]["phone"] == "13800000304"
+
+
 def test_web_create_agent_creates_account_profile_owner_and_subscription(client):
     user = client.post(
         "/web/register",
@@ -490,6 +577,218 @@ def test_chat_turn_debits_wallet_balance_and_is_idempotent(client):
     assert len(usage_entries) == 1
     assert usage_entries[0]["entry_type"] == "debit"
     assert usage_entries[0]["amount_shells"].startswith("-")
+
+
+def test_referral_invite_rewards_inviter_after_three_meaningful_messages(client, fresh_db):
+    from app.db import (
+        connect,
+        get_binding_intent,
+        list_referral_relationships,
+        set_account_onboarding_state,
+    )
+    from app.main import _complete_binding_intent_from_wait_result
+
+    fresh_db.rate_limit_daily = 0
+    inviter_headers, inviter_login = _get_login_data("13800000310", client)
+    inviter_account = inviter_login["account"]
+
+    code_res = client.get("/web/me/referral-code", headers=inviter_headers)
+    assert code_res.status_code == 200
+    invite_code = code_res.json()["referral_code"]["code"]
+
+    preview = client.get(f"/web/referral-codes/{invite_code}/preview")
+    assert preview.status_code == 200
+    assert preview.json()["valid"] is True
+    assert preview.json()["code"] == invite_code
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.openclaw_gateway.start_weixin_qr_login",
+        return_value={
+            "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
+            "sessionKey": "referral-bind-session",
+            "message": "scan",
+        },
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        invitee_res = client.post(
+            "/web/register-and-binding-intent",
+            json={
+                "phone": "13800000311",
+                "otp_token": _get_verified_token("13800000311"),
+                "invite_code": invite_code.lower(),
+            },
+        )
+
+    assert invitee_res.status_code == 200
+    invitee_data = invitee_res.json()
+    invitee_account = invitee_data["account"]
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    assert len(relationships) == 1
+    assert relationships[0]["status"] == "registered"
+
+    with connect() as conn:
+        code_row = conn.execute(
+            "SELECT used_count FROM referral_codes WHERE code = ?",
+            (invite_code,),
+        ).fetchone()
+    assert code_row["used_count"] == 1
+
+    _complete_binding_intent_from_wait_result(
+        get_binding_intent(binding_intent_id=invitee_data["binding_intent"]["id"]),
+        {"connected": True, "accountId": "referral-bot@im.bot"},
+    )
+    set_account_onboarding_state(account_id=invitee_account["id"], state="complete")
+
+    payload_base = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "referral-bot@im.bot",
+        "account_id": "referral-bot@im.bot",
+        "session_key": "referral-bind-session",
+        "sender_id": "peer-referral",
+        "chat_id": "chat-referral",
+        "chat_type": "private",
+        "message_type": "text",
+    }
+    messages = [
+        "我今天想聊一下最近的工作压力和情绪",
+        "我希望你帮我制定一个学习计划",
+        "周末我想安排一次长跑训练并复盘",
+    ]
+    for idx, text in enumerate(messages, start=1):
+        payload = {
+            **payload_base,
+            "message_id": f"referral-msg-{idx}",
+            "text": text,
+        }
+        res = client.post("/openclaw/turn", json=payload, headers=BRIDGE_HEADERS)
+        assert res.status_code == 200
+
+    duplicate = client.post(
+        "/openclaw/turn",
+        json={**payload_base, "message_id": "referral-msg-3", "text": messages[-1]},
+        headers=BRIDGE_HEADERS,
+    )
+    assert duplicate.status_code == 200
+
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    assert relationships[0]["status"] == "rewarded"
+    assert relationships[0]["review_status"] == "passed"
+    assert relationships[0]["meaningful_message_count"] == 3
+    assert relationships[0]["reward_ledger_id"]
+
+    wallet = client.get("/web/me/wallet", headers=inviter_headers).json()
+    assert wallet["account_id"] == inviter_account["id"]
+    assert wallet["wallet"]["display"]["balance"] == "2000"
+    reward_entries = [
+        item for item in wallet["ledger"]
+        if item["source_type"] == "referral_reward"
+    ]
+    assert len(reward_entries) == 1
+    assert reward_entries[0]["amount_shells"] == "1000"
+
+    admin = client.get(
+        "/admin/referrals",
+        headers={"Authorization": "Bearer test-admin"},
+    )
+    assert admin.status_code == 200
+    assert admin.json()["referrals"][0]["id"] == relationships[0]["id"]
+
+
+def test_referral_reward_retries_after_inviter_gets_active_account(client, fresh_db):
+    from app.db import (
+        create_or_get_platform_user_by_phone,
+        get_binding_intent,
+        get_or_create_default_ai4all_account_for_user,
+        get_or_create_personal_referral_code_for_user,
+        get_wallet_summary,
+        list_referral_relationships,
+        set_account_onboarding_state,
+    )
+    from app.main import _complete_binding_intent_from_wait_result
+
+    fresh_db.rate_limit_daily = 0
+    inviter = create_or_get_platform_user_by_phone(phone="13800000320")
+    code = get_or_create_personal_referral_code_for_user(
+        platform_user_id=inviter["id"],
+    )
+
+    with patch("app.main._schedule_binding_wait"), patch(
+        "app.openclaw_gateway.start_weixin_qr_login",
+        return_value={
+            "qrDataUrl": "data:image/png;base64,ZmFrZQ==",
+            "sessionKey": "referral-retry-session",
+            "message": "scan",
+        },
+    ), patch("app.main.settings.openclaw_login_auto_start", True):
+        invitee_res = client.post(
+            "/web/register-and-binding-intent",
+            json={
+                "phone": "13800000321",
+                "otp_token": _get_verified_token("13800000321"),
+                "invite_code": code["code"],
+            },
+        )
+    assert invitee_res.status_code == 200
+    invitee_data = invitee_res.json()
+
+    _complete_binding_intent_from_wait_result(
+        get_binding_intent(binding_intent_id=invitee_data["binding_intent"]["id"]),
+        {"connected": True, "accountId": "referral-retry-bot@im.bot"},
+    )
+    set_account_onboarding_state(
+        account_id=invitee_data["account"]["id"],
+        state="complete",
+    )
+
+    payload_base = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "referral-retry-bot@im.bot",
+        "account_id": "referral-retry-bot@im.bot",
+        "session_key": "referral-retry-session",
+        "sender_id": "peer-referral-retry",
+        "chat_id": "chat-referral-retry",
+        "chat_type": "private",
+        "message_type": "text",
+    }
+    for idx, text in enumerate(
+        [
+            "我想让你帮我整理最近的计划安排",
+            "请帮我一起复盘一下今天的事情",
+            "我还想聊聊下一步怎么提高效率",
+        ],
+        start=1,
+    ):
+        res = client.post(
+            "/openclaw/turn",
+            json={
+                **payload_base,
+                "message_id": f"referral-retry-msg-{idx}",
+                "text": text,
+            },
+            headers=BRIDGE_HEADERS,
+        )
+        assert res.status_code == 200
+
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    assert relationships[0]["status"] == "qualified"
+    assert relationships[0]["review_status"] == "passed"
+    assert relationships[0]["reward_ledger_id"] is None
+
+    inviter_account = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=inviter["id"],
+    )["account"]
+    wallet = get_wallet_summary(account_id=inviter_account["id"])
+    relationships = list_referral_relationships(
+        invitee_platform_user_id=invitee_data["platform_user"]["id"],
+    )
+    assert relationships[0]["status"] == "rewarded"
+    assert relationships[0]["reward_ledger_id"]
+    assert wallet["display"]["balance"] == "2000"
 
 
 def test_binding_wait_completion_binds_channel_account_to_precreated_account(client):

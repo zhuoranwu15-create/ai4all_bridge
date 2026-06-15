@@ -22,6 +22,7 @@ from app.db import (
     insert_debug_trace,
     insert_message,
     list_recent_messages_for_account,
+    process_referral_message_for_account,
     record_chat_usage_charge,
     record_image_understanding_charge,
     resolve_account_id_for_inbound_channel_identity,
@@ -696,6 +697,19 @@ def handle_openclaw_turn(
     except Exception as err:
         logger.exception(
             "inbound moderation enqueue failed account=%s message_db_id=%s error=%s",
+            account_id,
+            inserted_id,
+            err,
+        )
+
+    try:
+        process_referral_message_for_account(
+            account_id=account_id,
+            message_db_id=int(inserted_id),
+        )
+    except Exception as err:
+        logger.exception(
+            "referral message processing failed account=%s message_db_id=%s error=%s",
             account_id,
             inserted_id,
             err,

@@ -35,6 +35,7 @@ from app.db import (
     create_search_provider_run,
     create_tool_invocation,
     create_or_get_platform_user_by_phone,
+    get_or_create_personal_referral_code_for_user,
     create_phone_verification,
     connect as db_connect,
     find_active_admin_plaintext_grant,
@@ -56,6 +57,7 @@ from app.db import (
     get_message_raw,
     get_or_create_default_ai4all_account_for_user,
     get_platform_user,
+    get_platform_user_by_phone,
     get_ops_metrics,
     get_profile_for_account,
     get_profile_for_session,
@@ -83,6 +85,7 @@ from app.db import (
     list_content_moderation_tasks,
     list_outbound_messages,
     list_reactivation_outbound_messages_admin,
+    list_referral_relationships,
     list_published_faq_messages,
     list_proactive_commitments_for_account,
     list_debug_traces,
@@ -126,7 +129,11 @@ from app.db import (
     list_tool_invocations,
     update_reminder,
     update_tool_invocation,
+    mark_referral_relationship_bound,
+    preview_referral_code,
+    register_platform_user_with_referral,
     unbind_account_channel,
+    validate_referral_code,
     wipe_account_data,
     unbind_and_wipe_account,
     reenable_proactive_after_rebind,
@@ -202,6 +209,7 @@ from app.turn_service import build_turn_llm_input, handle_openclaw_turn
 from app.moderation import export as moderation_export
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
+from app.rate_limiter import RateLimiter
 import shutil
 
 import httpx
@@ -221,6 +229,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("ai4all")
 
 _background_loop: Optional[asyncio.AbstractEventLoop] = None
+_referral_preview_rate_limiter = RateLimiter()
+_REFERRAL_PREVIEW_RPM = 60
 
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 
@@ -355,6 +365,7 @@ class WebRegisterRequest(BaseModel):
     phone: str
     display_name: Optional[str] = None
     otp_token: str
+    invite_code: Optional[str] = None
 
 
 class WebRegisterAndBindingIntentRequest(BaseModel):
@@ -362,6 +373,7 @@ class WebRegisterAndBindingIntentRequest(BaseModel):
     display_name: Optional[str] = None
     otp_token: str
     channel: Optional[str] = "openclaw-weixin"
+    invite_code: Optional[str] = None
 
 
 class SendOtpRequest(BaseModel):
@@ -548,6 +560,18 @@ def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict
                 "channel_account_id": channel_account_id,
             },
         )
+        try:
+            mark_referral_relationship_bound(
+                invitee_platform_user_id=binding_intent["platform_user_id"],
+                account_id=binding_intent["account_id"],
+            )
+        except Exception as err:
+            logger.warning(
+                "referral relationship bound update failed intent=%s account=%s error=%s",
+                binding_intent["id"],
+                binding_intent["account_id"],
+                err,
+            )
         reenable_proactive_after_rebind(account_id=binding_intent["account_id"])
         return
 
@@ -576,6 +600,18 @@ def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict
                 "already_connected": True,
             },
         )
+        try:
+            mark_referral_relationship_bound(
+                invitee_platform_user_id=binding_intent["platform_user_id"],
+                account_id=binding_intent["account_id"],
+            )
+        except Exception as err:
+            logger.warning(
+                "referral relationship bound update failed intent=%s account=%s error=%s",
+                binding_intent["id"],
+                binding_intent["account_id"],
+                err,
+            )
         reenable_proactive_after_rebind(account_id=binding_intent["account_id"])
         return
 
@@ -3229,6 +3265,34 @@ def web_config() -> dict:
             "prefix": captcha_prefix,
             "configured": bool(captcha_scene_id and captcha_prefix),
         },
+        "registration": {
+            "mode": "open",
+            "invite_required": False,
+            "invite_code_param": "invite_code",
+        },
+    }
+
+
+@app.get("/web/referral-codes/{code}/preview")
+def web_referral_code_preview(code: str, request: Request) -> dict:
+    client_host = request.client.host if request.client else "unknown"
+    if not _referral_preview_rate_limiter.check_rpm(
+        f"referral-preview:{client_host}",
+        _REFERRAL_PREVIEW_RPM,
+        window_seconds=60.0,
+    ):
+        raise HTTPException(status_code=429, detail="rate_limited")
+    preview = preview_referral_code(code=code)
+    if not preview.get("valid"):
+        return {
+            "valid": False,
+            "reason": preview.get("reason") or "invalid",
+        }
+    return {
+        "valid": True,
+        "code": preview["code"],
+        "code_type": preview.get("code_type"),
+        "inviter_display_name": preview.get("inviter_display_name"),
     }
 
 
@@ -3364,26 +3428,34 @@ def _register_platform_user_with_otp(
     phone: str,
     display_name: Optional[str],
     otp_token: str,
+    invite_code: Optional[str] = None,
 ) -> dict:
     try:
         normalized_phone = normalize_phone(phone)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
 
-    verification = consume_valid_verification_token(
-        verified_token=otp_token,
-        phone=normalized_phone,
-    )
-    if verification is None:
-        raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
+    cleaned_invite_code = invite_code.strip() if invite_code else None
+    cleaned_invite_code = cleaned_invite_code or None
+    existing_user = get_platform_user_by_phone(phone=normalized_phone)
+    if existing_user is None and cleaned_invite_code:
+        validation = validate_referral_code(code=cleaned_invite_code)
+        if not validation.get("valid"):
+            raise HTTPException(status_code=400, detail="invalid_invite_code")
 
     try:
-        return create_or_get_platform_user_by_phone(
+        result = register_platform_user_with_referral(
             phone=normalized_phone,
             display_name=display_name,
+            invite_code=cleaned_invite_code if existing_user is None else None,
+            verified_token=otp_token,
         )
+        return result["platform_user"]
     except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
+        detail = str(err)
+        if detail == "invalid_otp_token":
+            raise HTTPException(status_code=400, detail="注册凭证无效或已过期")
+        raise HTTPException(status_code=400, detail=detail)
 
 
 @app.post("/web/register")
@@ -3392,6 +3464,7 @@ def web_register(payload: WebRegisterRequest) -> dict:
         phone=payload.phone,
         display_name=payload.display_name,
         otp_token=payload.otp_token,
+        invite_code=payload.invite_code,
     )
     return {
         "status": "ok",
@@ -3410,6 +3483,7 @@ def web_register_and_binding_intent(
         phone=payload.phone,
         display_name=payload.display_name,
         otp_token=payload.otp_token,
+        invite_code=payload.invite_code,
     )
     try:
         account_result = get_or_create_default_ai4all_account_for_user(
@@ -3593,6 +3667,32 @@ def web_me(platform_user=Depends(_require_session)) -> dict:
         "account": account_result["account"],
         "subscription": account_result["subscription"],
         "wallet": wallet,
+    }
+
+
+@app.get("/web/me/referral-code")
+def web_me_referral_code(platform_user=Depends(_require_session)) -> dict:
+    account_result = get_or_create_default_ai4all_account_for_user(
+        platform_user_id=platform_user["id"],
+        display_name=None,
+        plan="free",
+    )
+    get_wallet_summary(
+        account_id=account_result["account"]["id"],
+        ensure_grant=True,
+    )
+    code = get_or_create_personal_referral_code_for_user(
+        platform_user_id=platform_user["id"],
+    )
+    return {
+        "status": "ok",
+        "referral_code": {
+            "code": code["code"],
+            "code_type": code["code_type"],
+            "status": code["status"],
+            "used_count": code["used_count"],
+            "invite_param": "invite_code",
+        },
     }
 
 
@@ -3876,6 +3976,26 @@ def admin_account_wallet(
         "account_id": account_id,
         "wallet": wallet,
         "ledger": list_wallet_ledger(account_id=account_id, limit=limit) if wallet else [],
+        "redacted": True,
+    }
+
+
+@app.get("/admin/referrals")
+def admin_referrals(
+    limit: int = 50,
+    inviter_platform_user_id: Optional[str] = None,
+    invitee_platform_user_id: Optional[str] = None,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
+    return {
+        "status": "ok",
+        "referrals": list_referral_relationships(
+            limit=limit,
+            inviter_platform_user_id=inviter_platform_user_id,
+            invitee_platform_user_id=invitee_platform_user_id,
+        ),
         "redacted": True,
     }
 

@@ -21,9 +21,13 @@ SHELL_MICROS_PER_SHELL = 1_000_000
 SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
 NEW_USER_GRANT_SHELLS = 1000
 NEW_USER_GRANT_SHELL_MICROS = NEW_USER_GRANT_SHELLS * SHELL_MICROS_PER_SHELL
+REFERRAL_REWARD_SHELLS = 1000
+REFERRAL_REWARD_SHELL_MICROS = REFERRAL_REWARD_SHELLS * SHELL_MICROS_PER_SHELL
+REFERRAL_QUALIFYING_MESSAGE_COUNT = 3
 _ACCOUNT_ID_RANDOM_MIN = 100_000_000
 _ACCOUNT_ID_RANDOM_SPACE = 900_000_000
 _ACCOUNT_ID_GENERATION_RETRIES = 20
+_REFERRAL_CODE_GENERATION_RETRIES = 20
 
 
 def _new_id(prefix: str) -> str:
@@ -39,6 +43,17 @@ def _clean_text(value: Optional[str]) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_referral_code(code: Optional[str]) -> Optional[str]:
+    cleaned = _clean_text(code)
+    if not cleaned:
+        return None
+    return re.sub(r"\s+", "", cleaned).upper()
+
+
+def _new_referral_code() -> str:
+    return uuid.uuid4().hex[:8].upper()
 
 
 def _clean_default_account_display_name(value: Optional[str]) -> Optional[str]:
@@ -380,6 +395,74 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS ix_account_owner_bindings_account
             ON account_owner_bindings(account_id);
+
+            CREATE TABLE IF NOT EXISTS referral_codes (
+                id TEXT PRIMARY KEY,
+                platform_user_id TEXT,
+                code TEXT NOT NULL UNIQUE,
+                code_type TEXT NOT NULL DEFAULT 'personal',
+                status TEXT NOT NULL DEFAULT 'active',
+                max_uses INTEGER,
+                used_count INTEGER NOT NULL DEFAULT 0,
+                expires_at TEXT,
+                created_by_admin_user_id TEXT,
+                disabled_reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_personal_user
+            ON referral_codes(platform_user_id, code_type)
+            WHERE code_type = 'personal' AND platform_user_id IS NOT NULL;
+
+            CREATE INDEX IF NOT EXISTS ix_referral_codes_user_status
+            ON referral_codes(platform_user_id, status);
+
+            CREATE TABLE IF NOT EXISTS referral_relationships (
+                id TEXT PRIMARY KEY,
+                inviter_platform_user_id TEXT NOT NULL,
+                invitee_platform_user_id TEXT NOT NULL UNIQUE,
+                referral_code_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'registered',
+                meaningful_message_count INTEGER NOT NULL DEFAULT 0,
+                review_status TEXT NOT NULL DEFAULT 'pending',
+                reward_ledger_id TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                rewarded_at TEXT,
+                FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
+                FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+                FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
+                FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_created
+            ON referral_relationships(inviter_platform_user_id, created_at);
+
+            CREATE INDEX IF NOT EXISTS ix_referral_relationships_status
+            ON referral_relationships(status, review_status);
+
+            CREATE TABLE IF NOT EXISTS meaningful_message_reviews (
+                id TEXT PRIMARY KEY,
+                referral_relationship_id TEXT NOT NULL,
+                invitee_platform_user_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                message_ids_json TEXT NOT NULL DEFAULT '[]',
+                reviewer_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reason TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
+                FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+                FOREIGN KEY(account_id) REFERENCES accounts(id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_meaningful_reviews_relationship_reviewer
+            ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
 
             CREATE TABLE IF NOT EXISTS binding_intents (
                 id TEXT PRIMARY KEY,
@@ -4070,6 +4153,378 @@ def get_platform_user(*, platform_user_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def get_platform_user_by_phone(*, phone: str) -> Optional[Dict[str, Any]]:
+    """Return a platform user by normalized phone without creating a new user."""
+    normalized_phone = _normalize_phone(phone)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, phone, display_name, status, created_at, updated_at
+            FROM platform_users
+            WHERE phone = ?
+            """,
+            (normalized_phone,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _decode_referral_code_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    item["used_count"] = int(item.get("used_count") or 0)
+    if item.get("max_uses") is not None:
+        item["max_uses"] = int(item["max_uses"])
+    try:
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _decode_referral_relationship_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    item["meaningful_message_count"] = int(item.get("meaningful_message_count") or 0)
+    try:
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _decode_meaningful_message_review_row(row: sqlite3.Row) -> Dict[str, Any]:
+    item = dict(row)
+    try:
+        item["message_ids"] = json.loads(item.pop("message_ids_json") or "[]")
+    except json.JSONDecodeError:
+        item["message_ids"] = []
+        item["message_ids_decode_error"] = True
+    try:
+        item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+        item["metadata_decode_error"] = True
+    return item
+
+
+def _referral_code_unavailable_reason(row: Optional[sqlite3.Row]) -> str:
+    if row is None:
+        return "invalid"
+    if row["status"] != "active":
+        return "disabled"
+    if row["max_uses"] is not None and int(row["used_count"] or 0) >= int(row["max_uses"]):
+        return "max_uses_exceeded"
+    return "invalid"
+
+
+def _get_usable_referral_code_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    code: str,
+) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT *
+        FROM referral_codes
+        WHERE code = ?
+          AND status = 'active'
+          AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
+          AND (max_uses IS NULL OR used_count < max_uses)
+        """,
+        (code,),
+    ).fetchone()
+
+
+def get_or_create_personal_referral_code_for_user(
+    *,
+    platform_user_id: str,
+) -> Dict[str, Any]:
+    """Return the stable personal invite code for a platform user, creating it if needed."""
+    with connect() as conn:
+        user = conn.execute(
+            "SELECT id FROM platform_users WHERE id = ?",
+            (platform_user_id,),
+        ).fetchone()
+        if user is None:
+            raise ValueError("platform_user not found")
+        existing = conn.execute(
+            """
+            SELECT *
+            FROM referral_codes
+            WHERE platform_user_id = ?
+              AND code_type = 'personal'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (platform_user_id,),
+        ).fetchone()
+        if existing is not None:
+            return _decode_referral_code_row(existing)
+
+        last_integrity_error = None
+        for _ in range(_REFERRAL_CODE_GENERATION_RETRIES):
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO referral_codes(
+                        id, platform_user_id, code, code_type, status, updated_at
+                    )
+                    VALUES (?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    """,
+                    (_new_id("refcode"), platform_user_id, _new_referral_code()),
+                )
+                break
+            except sqlite3.IntegrityError as err:
+                existing = conn.execute(
+                    """
+                    SELECT *
+                    FROM referral_codes
+                    WHERE platform_user_id = ?
+                      AND code_type = 'personal'
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """,
+                    (platform_user_id,),
+                ).fetchone()
+                if existing is not None:
+                    return _decode_referral_code_row(existing)
+                last_integrity_error = err
+        else:
+            raise RuntimeError("failed to generate a unique referral code") from last_integrity_error
+
+        row = conn.execute(
+            """
+            SELECT *
+            FROM referral_codes
+            WHERE platform_user_id = ?
+              AND code_type = 'personal'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (platform_user_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("referral_code was not created")
+    return _decode_referral_code_row(row)
+
+
+def validate_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
+    """Validate an invite code for registration without consuming its use count."""
+    normalized = _normalize_referral_code(code)
+    if not normalized:
+        return {"valid": False, "reason": "missing", "code": None}
+    with connect() as conn:
+        any_row = conn.execute(
+            "SELECT * FROM referral_codes WHERE code = ?",
+            (normalized,),
+        ).fetchone()
+        usable_row = _get_usable_referral_code_in_conn(conn, code=normalized)
+        if usable_row is None:
+            if any_row is not None and any_row["status"] != "active":
+                reason = "disabled"
+            elif any_row is not None and any_row["expires_at"]:
+                expired = conn.execute(
+                    "SELECT ? <= datetime('now', '+8 hours') AS expired",
+                    (any_row["expires_at"],),
+                ).fetchone()["expired"]
+                reason = "expired" if expired else _referral_code_unavailable_reason(any_row)
+            elif (
+                any_row is not None
+                and any_row["max_uses"] is not None
+                and int(any_row["used_count"] or 0) >= int(any_row["max_uses"])
+            ):
+                reason = "max_uses_exceeded"
+            else:
+                reason = "invalid"
+            return {"valid": False, "reason": reason, "code": normalized}
+    code_row = _decode_referral_code_row(usable_row)
+    return {
+        "valid": True,
+        "reason": None,
+        "code": normalized,
+        "referral_code": code_row,
+    }
+
+
+def preview_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
+    """Return a public, redacted preview of an invite code for the web onboarding page."""
+    validation = validate_referral_code(code=code)
+    if not validation.get("valid"):
+        return validation
+    code_row = validation["referral_code"]
+    inviter_name = None
+    if code_row.get("platform_user_id"):
+        with connect() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COALESCE(NULLIF(pu.display_name, ''), NULLIF(a.display_name, '')) AS display_name
+                FROM platform_users pu
+                LEFT JOIN account_owner_bindings b
+                  ON b.platform_user_id = pu.id AND b.status = 'active'
+                LEFT JOIN accounts a ON a.id = b.account_id
+                WHERE pu.id = ?
+                ORDER BY b.created_at ASC, b.id ASC
+                LIMIT 1
+                """,
+                (code_row["platform_user_id"],),
+            ).fetchone()
+            inviter_name = row["display_name"] if row else None
+    return {
+        "valid": True,
+        "code": code_row["code"],
+        "code_type": code_row["code_type"],
+        "inviter_display_name": inviter_name,
+    }
+
+
+def register_platform_user_with_referral(
+    *,
+    phone: str,
+    display_name: Optional[str] = None,
+    invite_code: Optional[str] = None,
+    verified_token: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create or update a platform user, creating a referral relationship for new users only.
+
+    When verified_token is provided, OTP consumption, user creation, referral
+    creation, and invite-code used_count consumption share one transaction.
+    """
+    normalized_phone = _normalize_phone(phone)
+    cleaned_display_name = _clean_text(display_name)
+    normalized_code = _normalize_referral_code(invite_code)
+    with connect() as conn:
+        existing = conn.execute(
+            """
+            SELECT id, phone, display_name, status, created_at, updated_at
+            FROM platform_users
+            WHERE phone = ?
+            """,
+            (normalized_phone,),
+        ).fetchone()
+
+        code_row = None
+        if existing is None and normalized_code:
+            code_row = _get_usable_referral_code_in_conn(conn, code=normalized_code)
+            if code_row is None:
+                raise ValueError("invalid_invite_code")
+
+        if verified_token is not None:
+            conn.execute(
+                """
+                UPDATE phone_verifications
+                SET token_consumed_at = datetime('now', '+8 hours')
+                WHERE verified_token = ?
+                  AND phone = ?
+                  AND token_consumed_at IS NULL
+                  AND token_expires_at > datetime('now', '+8 hours')
+                """,
+                (verified_token, normalized_phone),
+            )
+            if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                raise ValueError("invalid_otp_token")
+
+        if existing is not None:
+            conn.execute(
+                """
+                UPDATE platform_users
+                SET display_name = COALESCE(?, display_name),
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                """,
+                (cleaned_display_name, existing["id"]),
+            )
+            user_row = conn.execute(
+                """
+                SELECT id, phone, display_name, status, created_at, updated_at
+                FROM platform_users
+                WHERE id = ?
+                """,
+                (existing["id"],),
+            ).fetchone()
+            return {
+                "platform_user": dict(user_row),
+                "is_new_user": False,
+                "referral_relationship": None,
+            }
+
+        platform_user_id = _new_id("user")
+        conn.execute(
+            """
+            INSERT INTO platform_users(id, phone, display_name, updated_at)
+            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (platform_user_id, normalized_phone, cleaned_display_name),
+        )
+
+        relationship_row = None
+        if code_row is not None:
+            if code_row["platform_user_id"]:
+                inviter_platform_user_id = code_row["platform_user_id"]
+                if inviter_platform_user_id == platform_user_id:
+                    raise ValueError("cannot_self_invite")
+                relationship_id = _new_id("refrel")
+                conn.execute(
+                    """
+                    INSERT INTO referral_relationships(
+                        id, inviter_platform_user_id, invitee_platform_user_id,
+                        referral_code_id, status, review_status, metadata_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 'registered', 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    """,
+                    (
+                        relationship_id,
+                        inviter_platform_user_id,
+                        platform_user_id,
+                        code_row["id"],
+                        json.dumps(
+                            {
+                                "invite_code": normalized_code,
+                                "registration_phone_last4": normalized_phone[-4:],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+            conn.execute(
+                """
+                UPDATE referral_codes
+                SET used_count = used_count + 1,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                  AND status = 'active'
+                  AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
+                  AND (max_uses IS NULL OR used_count < max_uses)
+                """,
+                (code_row["id"],),
+            )
+            if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                raise ValueError("invalid_invite_code")
+            if code_row["platform_user_id"]:
+                relationship_row = conn.execute(
+                    "SELECT * FROM referral_relationships WHERE id = ?",
+                    (relationship_id,),
+                ).fetchone()
+
+        user_row = conn.execute(
+            """
+            SELECT id, phone, display_name, status, created_at, updated_at
+            FROM platform_users
+            WHERE id = ?
+            """,
+            (platform_user_id,),
+        ).fetchone()
+    return {
+        "platform_user": dict(user_row),
+        "is_new_user": True,
+        "referral_relationship": (
+            _decode_referral_relationship_row(relationship_row)
+            if relationship_row is not None
+            else None
+        ),
+    }
+
+
 def upsert_subscription_for_user(
     *,
     platform_user_id: str,
@@ -4374,6 +4829,425 @@ def grant_new_user_shells(
         idempotency_key=f"new-user-grant-{account_id}",
         metadata={"grant_shells": NEW_USER_GRANT_SHELLS},
     )
+
+
+def _load_referral_metadata(row: sqlite3.Row) -> Dict[str, Any]:
+    try:
+        return json.loads(row["metadata_json"] or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def _is_meaningful_referral_message(*, content: Optional[str], message_type: str) -> bool:
+    if message_type not in {"text", "voice"}:
+        return False
+    compact = re.sub(r"\s+", "", content or "")
+    if not compact:
+        return False
+    lowered = compact.lower()
+    if lowered in {
+        "[voice message]",
+        "[图片]",
+        "你好",
+        "您好",
+        "在吗",
+        "hello",
+        "hi",
+        "ok",
+        "好的",
+        "谢谢",
+        "哈哈",
+        "哈哈哈",
+    }:
+        return False
+    if len(compact) < 6:
+        return False
+    if lowered.startswith(("http://", "https://")):
+        return False
+    if re.fullmatch(r"\d+", compact):
+        return False
+    if not re.search(r"[A-Za-z\u4e00-\u9fff]", compact):
+        return False
+    if len(set(compact)) == 1:
+        return False
+    return True
+
+
+def _mark_referral_relationship_bound_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    invitee_platform_user_id: str,
+    account_id: str,
+) -> Optional[sqlite3.Row]:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM referral_relationships
+        WHERE invitee_platform_user_id = ?
+        """,
+        (invitee_platform_user_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] in {"pending_registration", "registered"}:
+        metadata = _load_referral_metadata(row)
+        metadata.setdefault("bound_account_id", account_id)
+        conn.execute(
+            """
+            UPDATE referral_relationships
+            SET status = 'bound',
+                metadata_json = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+              AND status IN ('pending_registration', 'registered')
+            """,
+            (json.dumps(metadata, ensure_ascii=False), row["id"]),
+        )
+        row = conn.execute(
+            "SELECT * FROM referral_relationships WHERE id = ?",
+            (row["id"],),
+        ).fetchone()
+    return row
+
+
+def mark_referral_relationship_bound(
+    *,
+    invitee_platform_user_id: str,
+    account_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Mark a new user's referral relationship as bound after WeChat QR completion."""
+    with connect() as conn:
+        row = _mark_referral_relationship_bound_in_conn(
+            conn,
+            invitee_platform_user_id=invitee_platform_user_id,
+            account_id=account_id,
+        )
+    return _decode_referral_relationship_row(row) if row else None
+
+
+def _first_rewardable_account_for_platform_user_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    platform_user_id: str,
+) -> Optional[str]:
+    row = conn.execute(
+        """
+        SELECT b.account_id
+        FROM account_owner_bindings b
+        JOIN accounts a ON a.id = b.account_id
+        WHERE b.platform_user_id = ?
+          AND b.status = 'active'
+          AND a.status = 'active'
+        ORDER BY b.created_at ASC, b.id ASC
+        LIMIT 1
+        """,
+        (platform_user_id,),
+    ).fetchone()
+    return str(row["account_id"]) if row else None
+
+
+def _apply_referral_reward_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    relationship_id: str,
+) -> Optional[sqlite3.Row]:
+    relationship = conn.execute(
+        """
+        SELECT *
+        FROM referral_relationships
+        WHERE id = ?
+        """,
+        (relationship_id,),
+    ).fetchone()
+    if relationship is None or relationship["reward_ledger_id"]:
+        return None
+
+    inviter_account_id = _first_rewardable_account_for_platform_user_in_conn(
+        conn,
+        platform_user_id=relationship["inviter_platform_user_id"],
+    )
+    if inviter_account_id is None:
+        metadata = _load_referral_metadata(relationship)
+        metadata["reward_blocked_reason"] = "inviter_has_no_active_account"
+        conn.execute(
+            """
+            UPDATE referral_relationships
+            SET status = 'qualified',
+                review_status = 'passed',
+                metadata_json = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+              AND reward_ledger_id IS NULL
+            """,
+            (json.dumps(metadata, ensure_ascii=False), relationship_id),
+        )
+        return None
+
+    ledger_row = _apply_wallet_ledger_in_conn(
+        conn,
+        account_id=inviter_account_id,
+        platform_user_id=relationship["inviter_platform_user_id"],
+        amount_shell_micros=REFERRAL_REWARD_SHELL_MICROS,
+        entry_type="credit",
+        source_type="referral_reward",
+        source_id=relationship_id,
+        idempotency_key=f"referral-reward-{relationship_id}",
+        metadata={
+            "referral_relationship_id": relationship_id,
+            "invitee_platform_user_id": relationship["invitee_platform_user_id"],
+            "grant_shells": REFERRAL_REWARD_SHELLS,
+        },
+    )
+    conn.execute(
+        """
+        UPDATE referral_relationships
+        SET status = 'rewarded',
+            review_status = 'passed',
+            reward_ledger_id = ?,
+            rewarded_at = COALESCE(rewarded_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        WHERE id = ?
+          AND reward_ledger_id IS NULL
+        """,
+        (ledger_row["id"], relationship_id),
+    )
+    return ledger_row
+
+
+def _retry_qualified_referral_rewards_for_inviter_in_conn(
+    conn: sqlite3.Connection,
+    *,
+    inviter_platform_user_id: str,
+) -> List[sqlite3.Row]:
+    rows = conn.execute(
+        """
+        SELECT id
+        FROM referral_relationships
+        WHERE inviter_platform_user_id = ?
+          AND status = 'qualified'
+          AND review_status = 'passed'
+          AND reward_ledger_id IS NULL
+        ORDER BY updated_at ASC, id ASC
+        """,
+        (inviter_platform_user_id,),
+    ).fetchall()
+    ledgers: List[sqlite3.Row] = []
+    for row in rows:
+        ledger_row = _apply_referral_reward_in_conn(
+            conn,
+            relationship_id=row["id"],
+        )
+        if ledger_row is not None:
+            ledgers.append(ledger_row)
+    return ledgers
+
+
+def retry_qualified_referral_rewards_for_user(
+    *,
+    platform_user_id: str,
+) -> List[Dict[str, Any]]:
+    """Retry already-qualified referral rewards once the inviter has an active account."""
+    with connect() as conn:
+        rows = _retry_qualified_referral_rewards_for_inviter_in_conn(
+            conn,
+            inviter_platform_user_id=platform_user_id,
+        )
+    return [_decode_ledger_row(row) for row in rows]
+
+
+def process_referral_message_for_account(
+    *,
+    account_id: str,
+    message_db_id: int,
+) -> Optional[Dict[str, Any]]:
+    """Count one bound invitee message and pay the inviter when the threshold is met."""
+    with connect() as conn:
+        owner = conn.execute(
+            """
+            SELECT platform_user_id
+            FROM account_owner_bindings
+            WHERE account_id = ?
+              AND status = 'active'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if owner is None:
+            return None
+        invitee_platform_user_id = owner["platform_user_id"]
+
+        relationship = _mark_referral_relationship_bound_in_conn(
+            conn,
+            invitee_platform_user_id=invitee_platform_user_id,
+            account_id=account_id,
+        )
+        if relationship is None:
+            return None
+
+        review_row = conn.execute(
+            """
+            SELECT *
+            FROM meaningful_message_reviews
+            WHERE referral_relationship_id = ?
+              AND reviewer_type = 'ai'
+            """,
+            (relationship["id"],),
+        ).fetchone()
+        ledger_row = None
+        if relationship["reward_ledger_id"]:
+            return {
+                "relationship": _decode_referral_relationship_row(relationship),
+                "review": _decode_meaningful_message_review_row(review_row) if review_row else None,
+                "ledger": None,
+            }
+
+        message = conn.execute(
+            """
+            SELECT id, account_id, direction, role, message_type, content
+            FROM messages
+            WHERE id = ?
+              AND account_id = ?
+              AND direction = 'inbound'
+              AND role = 'user'
+            """,
+            (message_db_id, account_id),
+        ).fetchone()
+        metadata = _load_referral_metadata(relationship)
+        candidate_ids = list(metadata.get("candidate_message_ids") or [])
+        candidate_id = int(message_db_id)
+        if (
+            message is not None
+            and relationship["status"] in {"bound", "qualified"}
+            and candidate_id not in candidate_ids
+            and _is_meaningful_referral_message(
+                content=message["content"],
+                message_type=message["message_type"],
+            )
+        ):
+            candidate_ids.append(candidate_id)
+            metadata["candidate_message_ids"] = candidate_ids
+            status = (
+                "qualified"
+                if len(candidate_ids) >= REFERRAL_QUALIFYING_MESSAGE_COUNT
+                else "bound"
+            )
+            conn.execute(
+                """
+                UPDATE referral_relationships
+                SET meaningful_message_count = ?,
+                    status = ?,
+                    metadata_json = ?,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                  AND reward_ledger_id IS NULL
+                """,
+                (
+                    len(candidate_ids),
+                    status,
+                    json.dumps(metadata, ensure_ascii=False),
+                    relationship["id"],
+                ),
+            )
+            relationship = conn.execute(
+                "SELECT * FROM referral_relationships WHERE id = ?",
+                (relationship["id"],),
+            ).fetchone()
+
+        if int(relationship["meaningful_message_count"] or 0) >= REFERRAL_QUALIFYING_MESSAGE_COUNT:
+            if review_row is None:
+                review_id = _new_id("review")
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO meaningful_message_reviews(
+                        id, referral_relationship_id, invitee_platform_user_id,
+                        account_id, message_ids_json, reviewer_type, status,
+                        reason, metadata_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+                    """,
+                    (
+                        review_id,
+                        relationship["id"],
+                        invitee_platform_user_id,
+                        account_id,
+                        json.dumps(candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT], ensure_ascii=False),
+                        "phase1 heuristic accepted 3 meaningful inbound messages",
+                        json.dumps(
+                            {
+                                "review_method": "phase1_heuristic",
+                                "qualifying_message_count": REFERRAL_QUALIFYING_MESSAGE_COUNT,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                )
+                review_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM meaningful_message_reviews
+                    WHERE referral_relationship_id = ?
+                      AND reviewer_type = 'ai'
+                    """,
+                    (relationship["id"],),
+                ).fetchone()
+            if review_row is not None and review_row["status"] == "passed":
+                conn.execute(
+                    """
+                    UPDATE referral_relationships
+                    SET status = 'qualified',
+                        review_status = 'passed',
+                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    WHERE id = ?
+                      AND reward_ledger_id IS NULL
+                    """,
+                    (relationship["id"],),
+                )
+                ledger_row = _apply_referral_reward_in_conn(
+                    conn,
+                    relationship_id=relationship["id"],
+                )
+                relationship = conn.execute(
+                    "SELECT * FROM referral_relationships WHERE id = ?",
+                    (relationship["id"],),
+                ).fetchone()
+
+        return {
+            "relationship": _decode_referral_relationship_row(relationship),
+            "review": _decode_meaningful_message_review_row(review_row) if review_row else None,
+            "ledger": _decode_ledger_row(ledger_row) if ledger_row else None,
+        }
+
+
+def list_referral_relationships(
+    *,
+    limit: int = 50,
+    inviter_platform_user_id: Optional[str] = None,
+    invitee_platform_user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List referral relationships for admin diagnostics without exposing phone numbers."""
+    clean_limit = max(1, min(int(limit), 200))
+    clauses = []
+    params: List[Any] = []
+    if inviter_platform_user_id:
+        clauses.append("inviter_platform_user_id = ?")
+        params.append(inviter_platform_user_id)
+    if invitee_platform_user_id:
+        clauses.append("invitee_platform_user_id = ?")
+        params.append(invitee_platform_user_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM referral_relationships
+            {where}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (*params, clean_limit),
+        ).fetchall()
+    return [_decode_referral_relationship_row(row) for row in rows]
 
 
 def _estimate_tokens_from_text(text: Optional[str]) -> int:
@@ -4875,6 +5749,7 @@ def create_ai4all_account_for_user(
         account_id=account_id,
         platform_user_id=platform_user_id,
     )
+    retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
     return {
         "account": get_account(account_id=account_id),
         "profile": get_profile_for_account(account_id=account_id),
@@ -4909,6 +5784,7 @@ def get_first_active_account_for_user(
         account_id=row["account_id"],
         platform_user_id=platform_user_id,
     )
+    retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
     return {
         "account": account,
         "profile": get_profile_for_account(account_id=row["account_id"]),
@@ -6415,6 +7291,12 @@ def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, An
             "UPDATE accounts SET status = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
             (status, account_id),
         )
+    if status == "active":
+        platform_user_id = get_platform_user_id_for_account(account_id=account_id)
+        if platform_user_id:
+            retry_qualified_referral_rewards_for_user(
+                platform_user_id=platform_user_id,
+            )
     return get_account(account_id=account_id)
 
 

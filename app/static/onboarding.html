@@ -25,6 +25,11 @@
             <label>手机号</label>
             <input type="text" id="phone" inputmode="tel" autocomplete="tel" placeholder="请输入手机号">
           </div>
+          <div class="form-row">
+            <label>邀请码</label>
+            <input type="text" id="invite-code" class="mono-input" autocomplete="off" placeholder="可选">
+            <span id="st-invite-code" class="status-msg"></span>
+          </div>
           <!-- 验证码 SDK 渲染容器（SDK 自动填充，保持空） -->
           <div id="captcha-element"></div>
           <div class="form-actions">
@@ -160,6 +165,9 @@
       btn.disabled = disabled;
       btn.textContent = text || '获取验证码';
     }
+    function normalizedInviteCode() {
+      return document.getElementById('invite-code').value.trim().toUpperCase();
+    }
 
     async function webFetch(path, options) {
       options = options || {};
@@ -220,6 +228,28 @@
       return webFetch('/web/config');
     }
 
+    async function previewInviteCode(code) {
+      if (!code) return;
+      try {
+        var data = await webFetch('/web/referral-codes/' + encodeURIComponent(code) + '/preview');
+        if (data.valid) {
+          setStatus('st-invite-code', '邀请码可用');
+        } else {
+          setStatus('st-invite-code', '邀请码不可用', true);
+        }
+      } catch (e) {
+        setStatus('st-invite-code', '邀请码校验失败', true);
+      }
+    }
+
+    function initInviteCodeFromUrl() {
+      var code = new URLSearchParams(location.search).get('invite_code') || '';
+      code = code.trim().toUpperCase();
+      if (!code) return;
+      document.getElementById('invite-code').value = code;
+      previewInviteCode(code);
+    }
+
     function initCaptcha(config) {
       var captcha = config && config.captcha;
       if (!captcha || !captcha.configured || !captcha.scene_id || !captcha.prefix) {
@@ -247,6 +277,7 @@
     }
 
     window.addEventListener('load', function() {
+      initInviteCodeFromUrl();
       loadWebConfig()
         .then(initCaptcha)
         .catch(function(e) {
@@ -323,6 +354,7 @@
             phone: document.getElementById('phone').value,
             otp_token: state.verifiedToken,
             channel: 'openclaw-weixin',
+            invite_code: normalizedInviteCode() || null,
           }),
         });
         state.platformUser = data.platform_user;
