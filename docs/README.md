@@ -51,6 +51,7 @@
 | [贝壳、增长与支付后置技术设计](tech_design/entitlement_growth_design.md) | wallet/ledger、成本事件、邀请奖励、客服补发和支付后置 |
 | [数据分析与指标基建设计](tech_design/analytics_foundation_design.md) | 增长活跃、主动消息、Dreaming、onboarding 漏斗和指标分层规划（口径事实源） |
 | [Nearline Analytics 工程实施方案](tech_design/ANALYTICS_PLAN.md) | facts/marts 双库、目录结构、ETL/基础表 schema、实施 phases（口径见上） |
+| [数据库与文件系统解耦调研](tech_design/database_filesystem_decoupling_research.md) | SQLite、PostgreSQL、OSS/NAS、文件画像/记忆在多服务器部署下的解耦路径 |
 | [OpenClaw Bridge 设计](tech_design/openclaw_bridge_design.md) | Bridge hook、payload、接口和失败策略 |
 | [OpenClaw 微信 QR 补丁](tech_design/openclaw_weixin_gateway_qr_patch.md) | `openclaw-weixin` Gateway QR login provider discovery 补丁说明 |
 | [图片理解技术设计](tech_design/image_understanding_design.md) | 微信图片 VL 多维描述 → 文本对话链路（草稿/待联调） |
