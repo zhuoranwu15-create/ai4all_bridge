@@ -8,7 +8,7 @@ class _FakeResponse:
 
 def test_faq_message_publishes_when_moderation_is_safe(client):
     with patch(
-        "app.main.generate_completion",
+        "app.routers.web.generate_completion",
         return_value='{"safe": true, "categories": [], "reason": "ok"}',
     ):
         res = client.post(
@@ -31,9 +31,9 @@ def test_faq_message_publishes_when_moderation_is_safe(client):
 def test_faq_message_sends_website_webhook_when_submitted(client, fresh_db):
     fresh_db.feishu_website_webhook_url = "https://example.test/website-hook"
     with patch(
-        "app.main.generate_completion",
+        "app.routers.web.generate_completion",
         return_value='{"safe": true, "categories": [], "reason": "ok"}',
-    ), patch("app.main.httpx.post", return_value=_FakeResponse()) as post:
+    ), patch("app.routers.web.httpx.post", return_value=_FakeResponse()) as post:
         res = client.post(
             "/web/faq/messages",
             json={"author_name": "Alice", "content": "我想了解怎么绑定微信。"},
@@ -50,7 +50,7 @@ def test_faq_message_sends_website_webhook_when_submitted(client, fresh_db):
 
 def test_faq_message_stays_pending_when_moderation_flags_risk(client):
     with patch(
-        "app.main.generate_completion",
+        "app.routers.web.generate_completion",
         return_value='{"safe": false, "categories": ["spam"], "reason": "ad"}',
     ):
         res = client.post(
@@ -69,9 +69,9 @@ def test_faq_message_stays_pending_when_moderation_flags_risk(client):
 def test_faq_pending_message_sends_review_webhook(client, fresh_db):
     fresh_db.feishu_website_webhook_url = "https://example.test/website-hook"
     with patch(
-        "app.main.generate_completion",
+        "app.routers.web.generate_completion",
         return_value='{"safe": false, "categories": ["spam"], "reason": "ad"}',
-    ), patch("app.main.httpx.post", return_value=_FakeResponse()) as post:
+    ), patch("app.routers.web.httpx.post", return_value=_FakeResponse()) as post:
         res = client.post(
             "/web/faq/messages",
             json={"author_name": "Bob", "content": "风险内容示例"},
@@ -90,7 +90,7 @@ def test_faq_pending_message_sends_review_webhook(client, fresh_db):
 
 def test_faq_replies_are_one_level_and_likes_increment(client):
     with patch(
-        "app.main.generate_completion",
+        "app.routers.web.generate_completion",
         return_value='{"safe": true, "categories": [], "reason": "ok"}',
     ):
         parent_res = client.post(

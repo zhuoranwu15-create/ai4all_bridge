@@ -80,6 +80,7 @@ def test_remote_logout_unsupported_not_misjudged_as_failed(monkeypatch, fresh_db
     """中心远程 logout 一个 openclaw 不支持 logout 的节点:_exec_post 必须把原始文案
     透出,使 main._cleanup 分类为 'unsupported'(修复前会因 httpx 错误串丢文案被误判 'failed')。"""
     from app import main, node_agent, node_gateway
+    from app.routers import web
     from app.db import upsert_access_node
 
     # 注册远程节点 base_url(fresh_db 已 patch app.db.settings + init_db)
@@ -110,10 +111,10 @@ def test_remote_logout_unsupported_not_misjudged_as_failed(monkeypatch, fresh_db
     monkeypatch.setattr(node_gateway.httpx, "post", _routed_post)
 
     # main._cleanup 读 settings.openclaw_gateway_call_timeout_ms
-    monkeypatch.setattr(main, "settings", Settings(openclaw_gateway_call_timeout_ms=5000))
+    monkeypatch.setattr(web, "settings", Settings(openclaw_gateway_call_timeout_ms=5000))
 
     bindings = [{"channel": "openclaw-weixin", "channel_account_id": "testacct-im-bot"}]
-    out = main._cleanup_openclaw_weixin_accounts(bindings, node_id="aliyun2")
+    out = web._cleanup_openclaw_weixin_accounts(bindings, node_id="aliyun2")
     assert out["status"] == "unsupported"
     assert out["attempts"][0]["status"] == "unsupported"
     assert "does not support logout" in out["attempts"][0]["error"]

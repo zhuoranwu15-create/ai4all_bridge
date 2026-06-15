@@ -11,7 +11,7 @@ def _create_completed_binding(*, phone: str, channel_account_id: str) -> dict:
         get_binding_intent,
         get_or_create_default_ai4all_account_for_user,
     )
-    from app.main import _complete_binding_intent_from_wait_result
+    from app.routers.web import _complete_binding_intent_from_wait_result
 
     user = create_or_get_platform_user_by_phone(phone=phone)
     account_bundle = get_or_create_default_ai4all_account_for_user(

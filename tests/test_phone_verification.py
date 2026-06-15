@@ -175,8 +175,8 @@ def test_get_valid_verification_by_token_rejects_consumed(fresh_db):
 
 def test_send_otp_rejects_invalid_phone(client):
     from unittest.mock import patch
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp"):
         res = client.post("/web/sms/send-otp", json={
             "phone": "123",
             "captcha_verify_param": "fake-param",
@@ -187,8 +187,8 @@ def test_send_otp_rejects_invalid_phone(client):
 
 def test_send_otp_rejects_failed_captcha(client):
     from unittest.mock import patch
-    with patch("app.main.verify_captcha", return_value=False), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.verify_captcha", return_value=False), \
+         patch("app.routers.web.send_otp"):
         res = client.post("/web/sms/send-otp", json={
             "phone": "13800000010",
             "captcha_verify_param": "bad-param",
@@ -200,8 +200,8 @@ def test_send_otp_rejects_failed_captcha(client):
 def test_send_otp_returns_ok_and_creates_record(client):
     from unittest.mock import patch
     from app.db import get_latest_active_verification
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp") as mock_sms:
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp") as mock_sms:
         res = client.post("/web/sms/send-otp", json={
             "phone": "13800000011",
             "captcha_verify_param": "ok-param",
@@ -216,8 +216,8 @@ def test_send_otp_returns_ok_and_creates_record(client):
 
 def test_send_otp_rate_limits_per_hour(client):
     from unittest.mock import patch
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp"):
         for _ in range(3):  # test_settings sets max=3
             res = client.post("/web/sms/send-otp", json={
                 "phone": "13800000012",
@@ -235,8 +235,8 @@ def test_send_otp_rate_limits_per_hour(client):
 def test_send_otp_invalidates_previous_record(client):
     from unittest.mock import patch
     from app.db import get_latest_active_verification
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp"):
         client.post("/web/sms/send-otp", json={
             "phone": "13800000013",
             "captcha_verify_param": "ok",
@@ -281,8 +281,8 @@ def test_send_otp_concurrent_requests_leave_one_active(client):
         )
 
     # Patch ONCE at module level so both threads share the same mock.
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp", side_effect=slow_send):
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp", side_effect=slow_send):
         with ThreadPoolExecutor(max_workers=2) as pool:
             fut_a = pool.submit(hit)
             assert in_send.wait(timeout=2.0), "first send did not reach send_otp"
@@ -343,18 +343,18 @@ def test_send_otp_failed_resend_keeps_previous_record_without_testclient(fresh_d
     from unittest.mock import patch
     from fastapi import HTTPException
     from app.db import get_latest_active_verification
-    from app.main import SendOtpRequest, web_send_otp
+    from app.routers.web import SendOtpRequest, web_send_otp
 
     payload = SendOtpRequest(phone="13800000016", captcha_verify_param="ok")
-    with patch("app.main.settings", fresh_db), \
-         patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.settings", fresh_db), \
+         patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp"):
         assert web_send_otp(payload) == {"status": "ok"}
     first = get_latest_active_verification("13800000016")
 
-    with patch("app.main.settings", fresh_db), \
-         patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp", side_effect=RuntimeError("minute flow control")):
+    with patch("app.routers.web.settings", fresh_db), \
+         patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp", side_effect=RuntimeError("minute flow control")):
         with pytest.raises(HTTPException) as exc_info:
             web_send_otp(payload)
 
@@ -370,8 +370,8 @@ def test_send_otp_failed_resend_keeps_previous_record_without_testclient(fresh_d
 def _send_otp_for(client, phone):
     from unittest.mock import patch
     from app.db import get_latest_active_verification
-    with patch("app.main.verify_captcha", return_value=True), \
-         patch("app.main.send_otp"):
+    with patch("app.routers.web.verify_captcha", return_value=True), \
+         patch("app.routers.web.send_otp"):
         client.post("/web/sms/send-otp", json={
             "phone": phone,
             "captcha_verify_param": "ok",
