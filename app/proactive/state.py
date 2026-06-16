@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from app.time_utils import beijing_naive_now
 from app.db import (
     claim_due_proactive_account_state,
     get_proactive_account_state as db_get_proactive_account_state,
@@ -68,7 +69,7 @@ def list_due_proactive_account_checks(
     now: Optional[datetime] = None,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     return list_due_proactive_account_states(
         now=format_state_time(current),
         limit=limit,
@@ -82,7 +83,7 @@ def claim_due_account_check(
     next_scan_at: Optional[datetime] = None,
     interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> Optional[Dict[str, Any]]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     next_scan = next_scan_at or (
         current + timedelta(seconds=max(int(interval_seconds), 1))
     )
@@ -100,7 +101,7 @@ def mark_account_checked(
     next_scan_at: Optional[datetime] = None,
     interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     next_scan = next_scan_at or (
         current + timedelta(seconds=max(int(interval_seconds), 1))
     )
@@ -119,7 +120,7 @@ def mark_account_proactive_sent(
     cooldown_seconds: Optional[int] = None,
     next_scan_at: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     if cooldown_until is None and cooldown_seconds is not None:
         cooldown_until = current + timedelta(seconds=max(int(cooldown_seconds), 1))
 
@@ -139,7 +140,7 @@ def mark_account_check_sent(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     state = get_account_state(account_id=account_id)
     metadata = (state or {}).get("metadata") or {}
     # Rename {account_check_candidate, heartbeat_candidate} → last_sent.
@@ -176,7 +177,7 @@ def scan_due_proactive_account_checks(
     we only (a) send a due companion-followup candidate, and (b) refresh the
     reactivation candidate — but never overwrite one that is already queued.
     """
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     due_accounts = list_due_proactive_account_checks(now=current, limit=limit)
     results: List[Dict[str, Any]] = []
     for item in due_accounts:

@@ -1,4 +1,9 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
+
+
+# 非生产环境集合：这些环境允许使用 dev 默认密钥，不触发启动 fail-fast。
+_NON_PRODUCTION_ENVS = {"local", "development", "test"}
 
 
 class Settings(BaseSettings):
@@ -228,6 +233,28 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+
+    @model_validator(mode="after")
+    def _enforce_production_secrets(self) -> "Settings":
+        """生产环境拒绝使用 dev 默认密钥/空密钥，启动即 fail-fast。
+
+        仅在 app_env 非 {local,development,test} 时生效，避免运维漏配时 dev-secret /
+        dev-admin-token 直接对外暴露 admin 全权限。health/ready 的软提示作为双保险保留。
+        """
+        env = str(self.app_env or "").strip().lower()
+        if env in _NON_PRODUCTION_ENVS:
+            return self
+        insecure = []
+        if not self.ai4all_bridge_secret or self.ai4all_bridge_secret == "dev-secret":
+            insecure.append("AI4ALL_BRIDGE_SECRET")
+        if not self.admin_token or self.admin_token == "dev-admin-token":
+            insecure.append("ADMIN_TOKEN")
+        if insecure:
+            raise ValueError(
+                f"app_env={self.app_env!r} 拒绝以不安全的默认/空密钥启动: "
+                f"{', '.join(insecure)}。请通过环境变量设置强随机值。"
+            )
+        return self
 
     @property
     def role_set(self) -> set:

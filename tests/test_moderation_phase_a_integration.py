@@ -127,6 +127,9 @@ def test_proactive_sync_guard_cancels_without_gateway_send(fresh_db):
             text="please send MODERATION_TEST_BLOCK",
             idempotency_key="proactive-mod-1",
             product_category="companion_followup",
+            # 本用例只验证 moderation sync guard,与静默时段无关;
+            # 显式 bypass 以避免依赖运行时墙钟(夜间会先被 quiet_hours 短路)。
+            bypass_quiet_hours=True,
         )
 
     tasks = list_content_moderation_tasks(account_id="acc-proactive-mod", limit=20)

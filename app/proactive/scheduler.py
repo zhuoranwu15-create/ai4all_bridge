@@ -12,6 +12,7 @@ from app.proactive.state import (
     scan_due_proactive_account_checks,
 )
 from app.db import record_scheduler_heartbeat
+from app.time_utils import beijing_naive_now
 
 
 DispatchDueReminders = Callable[..., List[Dict[str, Any]]]
@@ -69,7 +70,7 @@ class ProactiveScheduler:
         }
 
     async def run_once(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
-        started_at = datetime.now()
+        started_at = beijing_naive_now()
         current = now or started_at
         # 各步骤相互隔离：单个 dispatcher 抛错只记录并继续，不再让前面的步骤
         # （如 reminders）持续失败时把后面的 reactivation/commitment 发送整轮饿死。
@@ -116,7 +117,7 @@ class ProactiveScheduler:
             now=current,
             limit=self.batch_size,
         )
-        finished_at = datetime.now()
+        finished_at = beijing_naive_now()
         result = {
             "status": "ok" if not step_errors else "partial_error",
             "started_at": started_at.isoformat(timespec="seconds"),

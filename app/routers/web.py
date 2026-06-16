@@ -409,10 +409,16 @@ async def _send_onboarding_welcome_if_pending(
 
 
 def _schedule_binding_wait(binding_intent_id: str) -> None:
-    if get_background_loop() is None:
+    loop = get_background_loop()
+    if loop is None:
+        # 不再静默返回：无后台事件循环时绑定等待不会被调度，记 warning 便于排查。
+        logger.warning(
+            "binding wait not scheduled: no background loop binding_intent=%s",
+            binding_intent_id,
+        )
         return
-    get_background_loop().call_soon_threadsafe(
-        get_background_loop().create_task,
+    loop.call_soon_threadsafe(
+        loop.create_task,
         _wait_for_binding_intent(binding_intent_id),
     )
 

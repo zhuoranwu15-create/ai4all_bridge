@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
@@ -25,6 +25,7 @@ from app.proactive.settings import (
     is_in_allowed_window,
     next_allowed_window_start,
 )
+from app.time_utils import beijing_naive_now
 
 
 REACTIVATION_METADATA_KEY = "reactivation_candidate"
@@ -45,23 +46,6 @@ DedupeChecker = Callable[..., Dict[str, Any]]
 def format_reactivation_time(value: datetime) -> str:
     """Format reactivation timestamps consistently with proactive state metadata."""
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def local_to_utc_string(value: datetime) -> str:
-    """Format a naive local-time datetime as a UTC-naive SQLite-comparable string.
-
-    SQLite stores `created_at` via CURRENT_TIMESTAMP (UTC). Python's
-    datetime.now() returns server-local time. Comparing the two without
-    conversion skews windows by the local UTC offset. Aware datetimes are
-    converted directly; naive datetimes are assumed to be system local.
-    """
-    if value.tzinfo is None:
-        value = value.astimezone()
-    return (
-        value.astimezone(timezone.utc)
-        .replace(microsecond=0, tzinfo=None)
-        .strftime("%Y-%m-%d %H:%M:%S")
-    )
 
 
 def _clean_text(value: Any) -> str:
@@ -505,10 +489,11 @@ def rule_reactivation_dedupe_check(
     except (TypeError, ValueError):
         lookback_days = 3
     since = now - timedelta(days=max(lookback_days, 1))
-    # outbound_messages.created_at is UTC; convert local since -> UTC.
+    # outbound_messages.created_at 存北京时间，now 也是北京 naive 时间，直接按北京时间比较，
+    # 不做 UTC 转换（旧 local_to_utc_string 会把阈值偏移一个时区）。
     history = list_recent_reactivation_outbound_messages(
         account_id=account_id,
-        since=local_to_utc_string(since),
+        since=format_reactivation_time(since),
         limit=20,
     )
     if not history:
@@ -597,7 +582,7 @@ def plan_reactivation_candidate(
     Phase 3 wires the unified planning pass. The topic-followup LLM generator is
     intentionally injectable and still defaults to a no-op until Phase 4.
     """
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     allowed_windows = _account_allowed_windows(account_id)
     topic_result = (
         topic_followup_generator(account_id=account_id, now=current)
@@ -694,7 +679,7 @@ def dispatch_reactivation_candidate(
     去重改为生成时语义去重 + 发送时零成本精确兜底（`rule_reactivation_dedupe_check`），
     发送公共路径不再有 LLM 调用。
     """
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     allowed_windows = _account_allowed_windows(account_id)
     candidate = get_reactivation_candidate(account_id=account_id)
     if candidate is None:
@@ -900,7 +885,7 @@ def dispatch_due_reactivation_candidates(
     the account's next planning. Gated by reactivation_dispatch_enabled; defaults
     fail closed (disabled + dry-run) unless settings/caller opt in.
     """
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     if dispatch_enabled is None:
         dispatch_enabled = bool(getattr(settings, "reactivation_dispatch_enabled", False))
     if dry_run is None:

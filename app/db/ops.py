@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from app.config import settings
+from app.time_utils import beijing_naive_now
 from app.db._core import (
     _clean_text,
     _db_path,
@@ -36,7 +37,9 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 def _runtime_timestamp(value: Optional[datetime] = None) -> str:
-    return (value or datetime.now()).isoformat(timespec="seconds")
+    # scheduler 心跳落库 last_seen_at/last_success_at/last_error_at,与全库其余时间列
+    # 统一为北京墙钟 naive;消费端(monitor_health 陈旧度比较、serializers 展示)同口径。
+    return (value or beijing_naive_now()).isoformat(timespec="seconds")
 
 
 def record_scheduler_heartbeat(

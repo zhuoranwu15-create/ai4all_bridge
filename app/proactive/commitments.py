@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
+from app.time_utils import beijing_naive_now
 from app.db import (
     cancel_proactive_commitment,
     claim_due_proactive_commitment,
@@ -187,7 +188,7 @@ def extract_commitment_from_turn(
     source_reply_message_id: Optional[str],
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
 
     if not getattr(settings, "proactive_commitment_extraction_enabled", True):
         return _no_op(account_id=account_id, reason="commitment_extraction_disabled", now=current)
@@ -282,7 +283,7 @@ def dispatch_commitment(
     now: Optional[datetime] = None,
     bypass_quiet_hours: bool = False,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     claimed = claim_due_proactive_commitment(
         commitment_id=commitment_id,
         now=_format_time(current),
@@ -384,7 +385,7 @@ def dispatch_due_commitments(
     limit: int = 20,
     bypass_quiet_hours: bool = False,
 ) -> List[Dict[str, Any]]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     due = list_due_proactive_commitments(
         now=_format_time(current),
         limit=limit,

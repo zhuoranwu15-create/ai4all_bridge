@@ -58,7 +58,7 @@ def _fallback_close_summary(
 
     result = run_dreaming(
         account_id=account_id,
-        today=source_business_day or datetime.now().date().isoformat(),
+        today=source_business_day or beijing_now().date().isoformat(),
         days=1,
         source_type="max_turns_compression"
         if close_reason == "max_turns"

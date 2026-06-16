@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 
 from app.time_utils import beijing_now, beijing_daypart_str, beijing_weekday_str
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from app.config import settings
 from app.db import (
@@ -75,6 +77,37 @@ from app.user_profiles import (
 logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+
+# 检测用户是否在表达"更新主动消息设置"的意图。命中时主对话首轮强制对应工具，避免
+# DeepSeek 先反问确认。**仅供主对话 turn 路径调用**：通用 LLM 入口 generate_reply_with_tools
+# 不再内置此判定，主动消息生成路径也不调用它，从而不会把内嵌的历史聊天文本误判成当前
+# 意图（曾导致强制一个该路径 tools 不含的工具 → DeepSeek 400）。
+_PROACTIVE_COUNT_RE = r"(?:[0-9０-９]+|[一二两三四五六七八九十]+)"
+_PROACTIVE_UPDATE_RE = re.compile(
+    # frequency: "每天最多1条" / "总共2条" / "一周3次"
+    rf"(每天|每日|一天|总共|一周|每周)\s*(最多|最少|只|就)?\s*发?\s*{_PROACTIVE_COUNT_RE}\s*(条|次)"
+    # e.g. "条数改为3" / "上限设为2" / "改为3条"
+    rf"|(条数|上限|频次).{{0,6}}(改为|设为|调整为|改|设|调|限|调整).{{0,8}}{_PROACTIVE_COUNT_RE}"
+    rf"|(改为|设为|调整为|改成|设成).{{0,6}}{_PROACTIVE_COUNT_RE}.{{0,4}}(条|次)"
+    rf"|{_PROACTIVE_COUNT_RE}.{{0,5}}(条|次).{{0,8}}(就够|就行|为限|上限|够了)"
+    # on/off/mute
+    r"|别(再|继续)?(主动|发).{0,10}(消息|找|发)"
+    r"|(关掉?|开启?|暂停|停止|恢复).{0,6}主动"
+    # action verbs only (exclude noun "设置")
+    r"|主动消息.{0,10}(关闭|开启|暂停|停止|修改|调整|改为|设为|限制|减少|增加)"
+    r"|(?:主动消息|主动|找我|联系我).{0,8}(?:多|少)发.{0,4}(?:点|些|次|条)"
+    r"|(?:多|少)发.{0,4}(?:点|些|次|条).{0,8}(?:主动消息|主动找我|找我|联系我)"
+    r"|总(共|量).{0,8}(条数|上限|改为|设为|[0-9０-９])",
+    re.IGNORECASE,
+)
+
+
+def _infer_proactive_update_tool_choice(user_text: str) -> Any:
+    """命中"主动设置更新"意图时返回强制 tool_choice dict，否则返回 "auto"。"""
+    if _PROACTIVE_UPDATE_RE.search(str(user_text or "")):
+        logger.debug("proactive_update_intent detected, forcing tool_choice")
+        return {"type": "function", "function": {"name": "update_proactive_message_settings"}}
+    return "auto"
 
 
 def _ensure_pending_onboarding_question(reply: str) -> str:
@@ -215,8 +248,6 @@ def build_turn_llm_input(
         "soul_chars": len(soul),
         "user_prefs_chars": len(user_prefs),
         "long_term_memory_chars": len(long_term_memory),
-        "daily_notes_loaded": False,
-        "daily_notes_chars": 0,
         "agent_context": agent_context.metadata(),
         "system_prompt_override": bool(profile.get("system_prompt")),
         "style": profile.get("style"),
@@ -253,7 +284,7 @@ def build_turn_llm_input(
         )
 
     builder = PromptBuilder()
-    system_prompt = builder.build(
+    build_result = builder.assemble(
         display_name=account.get("display_name"),
         soul=soul,
         user_prefs=user_prefs,
@@ -275,6 +306,10 @@ def build_turn_llm_input(
             )
         ),
     )
+    system_prompt = build_result.prompt
+    # 由 builder 自产元数据，替代历史写死的僵尸字段（今后若 wire daily notes 自动正确）。
+    metadata["daily_notes_loaded"] = build_result.included("daily_notes")
+    metadata["daily_notes_chars"] = build_result.final_chars("daily_notes")
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     if debug_dry_run and text.strip():
@@ -371,33 +406,58 @@ def _openclaw_id_diagnostics(payload: OpenClawTurnRequest) -> dict:
     }
 
 
-def handle_openclaw_turn(
+@dataclass
+class _TurnSetup:
+    """阶段A（解析+守卫）的产物，下游 B/C/D 只读使用。"""
+    account_id: str
+    identity: Any
+    account: Dict[str, Any]
+    session: Dict[str, Any]
+    binding: Dict[str, Any]
+    profile: Dict[str, Any]
+    sender_id: Optional[str]
+    message_id: Optional[str]
+    openclaw_session_key: str
+    today: str
+    business_day: str
+    now: datetime
+    profile_path: Any
+    debug_trace_enabled: bool
+    onboarding_state: str
+    onboarding_active: bool
+
+
+@dataclass
+class _InboundResult:
+    """阶段B（入站持久化+筛查）的产物。inserted_id 必为非 None（去重已早返回）。"""
+    text: str
+    inserted_id: int
+    image_described: bool
+    image_understanding_failed: bool
+    inbound_screen: Any
+    inbound_blocked: bool
+
+
+@dataclass
+class _ReplyResult:
+    """阶段C（解析回复）的产物。debug_metadata 为跨 C/D 有意累积的可变态。"""
+    reply: str
+    generation_error: Optional[str]
+    normal_reply_generated: bool
+    onboarding_pre_extracted: Optional[dict]
+    system_prompt: Optional[str]
+    llm_messages: List[Any]
+    debug_metadata: Dict[str, Any]
+
+
+def _prepare_turn(
     payload: OpenClawTurnRequest,
     *,
-    background_loop: Optional[asyncio.AbstractEventLoop] = None,
-    force_web_search_enabled: Optional[bool] = None,
-) -> OpenClawTurnResponse:
-    started_at = time.monotonic()
-    id_diagnostics = _openclaw_id_diagnostics(payload)
-    # 入口只记 metadata，不记正文：未绑定/已解绑入站会在下方收口返回，
-    # 正文日志移到绑定校验通过后（见 disabled 检查之后）。
-    logger.info(
-        "openclaw_turn received channel=%s session=%s sender=%s type=%s "
-        "message_id=%s event_id=%s ctx_run_id=%s ctx_session_id=%s raw_keys=%s",
-        payload.channel,
-        payload.session_key,
-        payload.sender_id,
-        payload.message_type,
-        payload.message_id,
-        payload.event_id,
-        id_diagnostics.get("ctx_run_id"),
-        id_diagnostics.get("ctx_session_id"),
-        id_diagnostics.get("raw_keys"),
-    )
-
-    if payload.chat_type != "private":
-        return OpenClawTurnResponse(status="ignored", no_reply=True)
-
+    id_diagnostics: Dict[str, Any],
+    started_at: float,
+) -> Union[_TurnSetup, OpenClawTurnResponse]:
+    """阶段A：身份/账号解析、unbound 收口、session/binding 初始化、onboarding welcome、
+    disabled、限流、首次去重。命中守卫直接返回 OpenClawTurnResponse；否则返回 _TurnSetup。"""
     identity = resolve_openclaw_identity(
         channel=payload.channel,
         session_key=payload.session_key,
@@ -614,6 +674,41 @@ def handle_openclaw_turn(
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
+    return _TurnSetup(
+        account_id=account_id,
+        identity=identity,
+        account=account,
+        session=session,
+        binding=binding,
+        profile=session_state.get("profile") or {},
+        sender_id=sender_id,
+        message_id=message_id,
+        openclaw_session_key=openclaw_session_key,
+        today=today,
+        business_day=business_day,
+        now=now,
+        profile_path=profile_path,
+        debug_trace_enabled=debug_trace_enabled,
+        onboarding_state=onboarding_state,
+        onboarding_active=onboarding_active,
+    )
+
+
+def _persist_and_screen_inbound(
+    payload: OpenClawTurnRequest,
+    setup: _TurnSetup,
+    *,
+    started_at: float,
+) -> Union[_InboundResult, OpenClawTurnResponse]:
+    """阶段B：text 规范化+图片理解、插入入站消息(+插入后去重早返回)、入站审核 screen、
+    referral、图片计费。返回 _InboundResult；插入后去重命中则返回 OpenClawTurnResponse。"""
+    account_id = setup.account_id
+    identity = setup.identity
+    binding = setup.binding
+    session = setup.session
+    message_id = setup.message_id
+    today = setup.today
+
     text = (payload.text or "").strip()
     # 图片轮：调 VL 产出多维描述，合成进 user 历史（支撑图后追问 C 场景），
     # 再走主链路按人设接话；VL 失败/总开关关闭则走兜底，跳过主模型（红线：不瞎猜）。
@@ -756,6 +851,46 @@ def handle_openclaw_turn(
                 err,
             )
 
+    return _InboundResult(
+        text=text,
+        inserted_id=int(inserted_id),
+        image_described=image_described,
+        image_understanding_failed=image_understanding_failed,
+        inbound_screen=inbound_screen,
+        inbound_blocked=inbound_blocked,
+    )
+
+
+def _resolve_turn_reply(
+    payload: OpenClawTurnRequest,
+    setup: _TurnSetup,
+    inbound: _InboundResult,
+    *,
+    background_loop: Optional[asyncio.AbstractEventLoop],
+    force_web_search_enabled: Optional[bool],
+) -> _ReplyResult:
+    """阶段C：决定本轮回复来源（inbound_blocked / #重置 / #状态 / 图片失败 / 正常聊天）。
+    正常分支内做 onboarding 预抽取、build_turn_llm_input、构建 TurnContext 并调 LLM。"""
+    account_id = setup.account_id
+    account = setup.account
+    session = setup.session
+    binding = setup.binding
+    identity = setup.identity
+    sender_id = setup.sender_id
+    message_id = setup.message_id
+    openclaw_session_key = setup.openclaw_session_key
+    today = setup.today
+    business_day = setup.business_day
+    now = setup.now
+    profile = setup.profile
+    profile_path = setup.profile_path
+    debug_trace_enabled = setup.debug_trace_enabled
+    onboarding_state = setup.onboarding_state
+    onboarding_active = setup.onboarding_active
+    text = inbound.text
+    inbound_blocked = inbound.inbound_blocked
+    image_understanding_failed = inbound.image_understanding_failed
+
     generation_error = None
     normal_reply_generated = False
     onboarding_pre_extracted = None
@@ -805,7 +940,6 @@ def handle_openclaw_turn(
         reply = settings.image_understanding_fallback_text
     else:
         try:
-            profile = session_state.get("profile") or {}
             agent_context = read_agent_context(
                 account_id,
                 display_name=account.get("display_name"),
@@ -892,6 +1026,7 @@ def handle_openclaw_turn(
                     system_prompt=system_prompt,
                     tools=tools,
                     ctx=ctx,
+                    first_round_tool_choice=_infer_proactive_update_tool_choice(text),
                 )
             normal_reply_generated = True
         except Exception as err:
@@ -899,14 +1034,50 @@ def handle_openclaw_turn(
             generation_error = str(err)
             reply = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 
-    latency_ms = int((time.monotonic() - started_at) * 1000)
-    logger.info(
-        "openclaw_turn completed account=%s session=%s status=ok latency_ms=%s error=%s",
-        account_id,
-        openclaw_session_key,
-        latency_ms,
-        generation_error,
+    return _ReplyResult(
+        reply=reply,
+        generation_error=generation_error,
+        normal_reply_generated=normal_reply_generated,
+        onboarding_pre_extracted=onboarding_pre_extracted,
+        system_prompt=system_prompt,
+        llm_messages=llm_messages,
+        debug_metadata=debug_metadata,
     )
+
+
+def _finalize_turn(
+    payload: OpenClawTurnRequest,
+    setup: _TurnSetup,
+    inbound: _InboundResult,
+    result: _ReplyResult,
+    *,
+    latency_ms: int,
+    background_loop: Optional[asyncio.AbstractEventLoop],
+) -> OpenClawTurnResponse:
+    """阶段D：出站同步审核守卫（就地兜底覆写 reply）、debug trace、出站持久化+turn_count、
+    出站审核入队、计费、onboarding 状态推进、after-turn 派发、构建响应。"""
+    account_id = setup.account_id
+    identity = setup.identity
+    session = setup.session
+    binding = setup.binding
+    message_id = setup.message_id
+    openclaw_session_key = setup.openclaw_session_key
+    business_day = setup.business_day
+    profile_path = setup.profile_path
+    debug_trace_enabled = setup.debug_trace_enabled
+    onboarding_active = setup.onboarding_active
+    onboarding_state = setup.onboarding_state
+    inserted_id = inbound.inserted_id
+    inbound_blocked = inbound.inbound_blocked
+    inbound_screen = inbound.inbound_screen
+    text = inbound.text
+    reply = result.reply
+    generation_error = result.generation_error
+    normal_reply_generated = result.normal_reply_generated
+    onboarding_pre_extracted = result.onboarding_pre_extracted
+    system_prompt = result.system_prompt
+    llm_messages = result.llm_messages
+    debug_metadata = result.debug_metadata
 
     reply_message_id = f"reply-{uuid.uuid4()}"
     moderation_reply_metadata: Dict[str, Any] = {}
@@ -1112,13 +1283,21 @@ def handle_openclaw_turn(
             except Exception as err:
                 logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
 
-    if (
+    should_run_after_turn = (
         not generation_error
         and not inbound_blocked
         and text
         and text not in _SPECIAL_COMMANDS
-        and background_loop is not None
-    ):
+    )
+    if should_run_after_turn and background_loop is None:
+        # 不再静默吞掉：无后台事件循环时（独立进程/脚本/测试显式 None）after-turn
+        # 记忆写入与 commitment 抽取会被跳过，至少记一条 warning 让数据丢失可观测。
+        logger.warning(
+            "after-turn work skipped: no background loop "
+            "(daily memory + commitment extraction not run) account=%s",
+            account_id,
+        )
+    if should_run_after_turn and background_loop is not None:
         turns_for_memory = [
             {"role": "user", "content": text},
             {"role": "assistant", "content": reply},
@@ -1181,4 +1360,69 @@ def handle_openclaw_turn(
                 ),
             },
         },
+    )
+
+
+def handle_openclaw_turn(
+    payload: OpenClawTurnRequest,
+    *,
+    background_loop: Optional[asyncio.AbstractEventLoop] = None,
+    force_web_search_enabled: Optional[bool] = None,
+) -> OpenClawTurnResponse:
+    """每条入站微信消息的主入口。编排脊柱：解析+守卫 → 入站持久化+筛查 →
+    解析回复 → 终结。各阶段细节见对应 _prepare_turn/_persist_and_screen_inbound/
+    _resolve_turn_reply/_finalize_turn。"""
+    started_at = time.monotonic()
+    id_diagnostics = _openclaw_id_diagnostics(payload)
+    # 入口只记 metadata，不记正文：未绑定/已解绑入站会在下方收口返回，
+    # 正文日志移到绑定校验通过后（见 disabled 检查之后）。
+    logger.info(
+        "openclaw_turn received channel=%s session=%s sender=%s type=%s "
+        "message_id=%s event_id=%s ctx_run_id=%s ctx_session_id=%s raw_keys=%s",
+        payload.channel,
+        payload.session_key,
+        payload.sender_id,
+        payload.message_type,
+        payload.message_id,
+        payload.event_id,
+        id_diagnostics.get("ctx_run_id"),
+        id_diagnostics.get("ctx_session_id"),
+        id_diagnostics.get("raw_keys"),
+    )
+
+    if payload.chat_type != "private":
+        return OpenClawTurnResponse(status="ignored", no_reply=True)
+
+    setup = _prepare_turn(payload, id_diagnostics=id_diagnostics, started_at=started_at)
+    if isinstance(setup, OpenClawTurnResponse):
+        return setup
+
+    inbound = _persist_and_screen_inbound(payload, setup, started_at=started_at)
+    if isinstance(inbound, OpenClawTurnResponse):
+        return inbound
+
+    result = _resolve_turn_reply(
+        payload,
+        setup,
+        inbound,
+        background_loop=background_loop,
+        force_web_search_enabled=force_web_search_enabled,
+    )
+
+    latency_ms = int((time.monotonic() - started_at) * 1000)
+    logger.info(
+        "openclaw_turn completed account=%s session=%s status=ok latency_ms=%s error=%s",
+        setup.account_id,
+        setup.openclaw_session_key,
+        latency_ms,
+        result.generation_error,
+    )
+
+    return _finalize_turn(
+        payload,
+        setup,
+        inbound,
+        result,
+        latency_ms=latency_ms,
+        background_loop=background_loop,
     )

@@ -7,7 +7,7 @@ import time
 import uuid
 from datetime import date as date_cls, datetime, timedelta, timezone
 
-from app.time_utils import beijing_now, beijing_now_str
+from app.time_utils import beijing_now, beijing_now_str, verify_host_timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -403,6 +403,8 @@ def _is_debug_trace_account(account_id: str) -> bool:
 def startup() -> None:
     init_db()
     configure_error_log_alerting(settings)
+    # 宿主机时区第二层防御：非 UTC+8 时报警但兼容继续（详见 time_utils.verify_host_timezone）。
+    verify_host_timezone()
 
 
 @app.on_event("startup")

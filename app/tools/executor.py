@@ -1,5 +1,12 @@
 import logging
+from importlib import import_module
 from typing import Optional, TYPE_CHECKING
+
+from app.tools.registry import (
+    CALL_INVOCATION,
+    CALL_WEB_SEARCH,
+    get_spec,
+)
 
 if TYPE_CHECKING:
     from app.turn_context import TurnContext
@@ -15,72 +22,34 @@ def execute_tool_call(
     tool_call_id: Optional[str] = None,
     tool_invocation_id: Optional[int] = None,
 ) -> dict:
-    """Dispatch a tool call to the appropriate handler. Never raises — returns error dict on failure."""
-    from app.tools.reminder_handlers import (
-        handle_cancel_reminder,
-        handle_create_reminder,
-        handle_list_reminders,
-        handle_update_reminder,
-    )
-    from app.tools.content_invitation_handlers import (
-        handle_create_content_invitation_candidate,
-        handle_record_content_invitation_feedback,
-        handle_send_content_invitation_titles,
-        handle_skip_content_invitation,
-    )
-    from app.tools.session_status_handlers import handle_session_status
-    from app.tools.proactive_settings_handlers import (
-        handle_get_proactive_message_settings,
-        handle_update_proactive_message_settings,
-    )
-    handlers = {
-        "create_reminder": handle_create_reminder,
-        "list_reminders": handle_list_reminders,
-        "cancel_reminder": handle_cancel_reminder,
-        "update_reminder": handle_update_reminder,
-        "session_status": handle_session_status,
-        "create_content_invitation_candidate": handle_create_content_invitation_candidate,
-        "skip_content_invitation": handle_skip_content_invitation,
-        "get_proactive_message_settings": handle_get_proactive_message_settings,
-    }
-    # Handlers that need tool_invocation_id (for audit / linking back to the call).
-    invocation_aware_handlers = {
-        "send_content_invitation_titles": handle_send_content_invitation_titles,
-        "record_content_invitation_feedback": handle_record_content_invitation_feedback,
-        "update_proactive_message_settings": handle_update_proactive_message_settings,
-    }
-    if name == "web_search":
-        if not bool(getattr(ctx, "web_search_enabled", False)):
-            logger.warning("web_search tool called while disabled account=%s", getattr(ctx, "account_id", None))
-            return {"status": "failed", "error": "web_search is disabled"}
-        from app.tools.web_search_handlers import handle_web_search
+    """Dispatch a tool call to the appropriate handler. Never raises — returns error dict on failure.
 
-        try:
-            return handle_web_search(
+    分发完全由 app.tools.registry 驱动（schema↔handler 单一事实源）。handler 按需惰性
+    import，避免工具包加载期的循环导入。
+    """
+    spec = get_spec(name)
+    if spec is None:
+        logger.warning("execute_tool_call unknown tool: %s", name)
+        return {"error": f"未知工具: {name}"}
+
+    # 运行时开关：如 web_search 被禁用，拒绝执行并返回固定失败结果。
+    if spec.runtime_requires_flag and not bool(getattr(ctx, spec.runtime_requires_flag, False)):
+        logger.warning(
+            "%s tool called while disabled account=%s", name, getattr(ctx, "account_id", None)
+        )
+        return {"status": "failed", "error": f"{name} is disabled"}
+
+    try:
+        handler = getattr(import_module(spec.handler_module), spec.handler_attr)
+        if spec.call_style == CALL_WEB_SEARCH:
+            return handler(
                 args,
                 ctx,
                 tool_call_id=tool_call_id,
                 tool_invocation_id=tool_invocation_id,
             )
-        except Exception as err:
-            logger.exception("tool handler failed tool=%s error=%s", name, err)
-            return {"error": str(err)}
-
-    handler = handlers.get(name)
-    if name in invocation_aware_handlers:
-        try:
-            return invocation_aware_handlers[name](
-                args,
-                ctx,
-                tool_invocation_id=tool_invocation_id,
-            )
-        except Exception as err:
-            logger.exception("tool handler failed tool=%s error=%s", name, err)
-            return {"error": str(err)}
-    if handler is None:
-        logger.warning("execute_tool_call unknown tool: %s", name)
-        return {"error": f"未知工具: {name}"}
-    try:
+        if spec.call_style == CALL_INVOCATION:
+            return handler(args, ctx, tool_invocation_id=tool_invocation_id)
         return handler(args, ctx)
     except Exception as err:
         logger.exception("tool handler failed tool=%s error=%s", name, err)

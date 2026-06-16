@@ -16,7 +16,7 @@ def _create_account(account_id: str) -> None:
 
 
 def test_tools_registered_in_default_set():
-    from app.tools.definitions import get_default_tools
+    from app.tools import get_default_tools
 
     names = [t["function"]["name"] for t in get_default_tools()]
     assert "get_proactive_message_settings" in names

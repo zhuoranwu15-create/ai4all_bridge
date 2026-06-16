@@ -22,28 +22,6 @@ _DSML_PARAM_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
-# Patterns indicating the user wants to UPDATE proactive message settings (not just query).
-# Used to force tool_choice on the first LLM round so DeepSeek doesn't ask for confirmation.
-_PROACTIVE_COUNT_RE = r"(?:[0-9０-９]+|[一二两三四五六七八九十]+)"
-_PROACTIVE_UPDATE_RE = re.compile(
-    # frequency: "每天最多1条" / "总共2条" / "一周3次"
-    rf"(每天|每日|一天|总共|一周|每周)\s*(最多|最少|只|就)?\s*发?\s*{_PROACTIVE_COUNT_RE}\s*(条|次)"
-    # e.g. "条数改为3" / "上限设为2" / "改为3条"
-    rf"|(条数|上限|频次).{{0,6}}(改为|设为|调整为|改|设|调|限|调整).{{0,8}}{_PROACTIVE_COUNT_RE}"
-    rf"|(改为|设为|调整为|改成|设成).{{0,6}}{_PROACTIVE_COUNT_RE}.{{0,4}}(条|次)"
-    rf"|{_PROACTIVE_COUNT_RE}.{{0,5}}(条|次).{{0,8}}(就够|就行|为限|上限|够了)"
-    # on/off/mute
-    r"|别(再|继续)?(主动|发).{0,10}(消息|找|发)"
-    r"|(关掉?|开启?|暂停|停止|恢复).{0,6}主动"
-    # action verbs only (exclude noun "设置")
-    r"|主动消息.{0,10}(关闭|开启|暂停|停止|修改|调整|改为|设为|限制|减少|增加)"
-    r"|(?:主动消息|主动|找我|联系我).{0,8}(?:多|少)发.{0,4}(?:点|些|次|条)"
-    r"|(?:多|少)发.{0,4}(?:点|些|次|条).{0,8}(?:主动消息|主动找我|找我|联系我)"
-    r"|总(共|量).{0,8}(条数|上限|改为|设为|[0-9０-９])",
-    re.IGNORECASE,
-)
-
-
 def _parse_dsml_tool_call(content: str):
     """Return (tool_name, args_dict) if content contains a DSML tool call, else None."""
     m = _DSML_INVOKE_RE.search(content)
@@ -201,20 +179,6 @@ def generate_completion_with_usage(
         return "", None
     payload = _http_chat_payload(messages)
     return _extract_content(payload), _extract_usage(payload)
-
-
-def _infer_proactive_update_tool_choice(messages: List[Dict]) -> Any:
-    """Return a forced tool_choice dict if the last user message contains clear
-    proactive settings update intent, so DeepSeek doesn't ask for confirmation.
-    Returns "auto" otherwise."""
-    for msg in reversed(messages):
-        if msg.get("role") == "user":
-            content = str(msg.get("content") or "")
-            if _PROACTIVE_UPDATE_RE.search(content):
-                logger.debug("proactive_update_intent detected, forcing tool_choice")
-                return {"type": "function", "function": {"name": "update_proactive_message_settings"}}
-            break
-    return "auto"
 
 
 def _http_chat_with_tools(messages: List[Dict], tools: List[Dict], *, tool_choice: Any = "auto") -> Dict:
@@ -384,8 +348,13 @@ def generate_reply_with_tools(
     tools: List[Dict],
     ctx,
     max_tool_rounds: Optional[int] = None,
+    first_round_tool_choice: Any = "auto",
 ) -> tuple:
-    """LLM call with tool use support. Returns (reply_text, error_str | None)."""
+    """LLM call with tool use support. Returns (reply_text, error_str | None).
+
+    first_round_tool_choice 由调用方显式传入：第一轮的 tool_choice。默认 "auto"。
+    主对话 turn 路径在检测到"主动设置更新"意图时传入强制工具；主动消息生成等
+    其它调用方不传（默认 auto），因此不会被内嵌的历史聊天文本误判（曾导致 400）。"""
     if not settings.llm_api_key:
         return _fallback_reply(user_text), None
 
@@ -396,13 +365,10 @@ def generate_reply_with_tools(
         max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
     max_tool_rounds = max(1, min(int(max_tool_rounds), 8))
 
-    # On the very first round, detect proactive settings update intent and force
-    # the tool to avoid DeepSeek's "let me confirm first" behavior.
-    first_round_tool_choice = _infer_proactive_update_tool_choice(messages)
-    # 防御：被强制的工具必须确实出现在本次 tools 列表中才生效，否则降级为 "auto"。
-    # 否则 proactive 路径（如 content_invitation，其 user_prompt 内嵌历史聊天文本）
-    # 会被误判出主动设置更新意图，强制 update_proactive_message_settings——但该路径的
-    # tools 不含此工具，导致 deepseek 返回 400 "no function named ... in the tools parameter"。
+    # first_round_tool_choice 由调用方决定（见函数 docstring）。
+    # 防御：被强制的工具必须确实出现在本次 tools 列表中才生效，否则降级为 "auto"，
+    # 避免调用方误传一个本次 tools 不含的工具，导致 deepseek 返回 400
+    # "no function named ... in the tools parameter"。
     if isinstance(first_round_tool_choice, dict):
         forced_name = first_round_tool_choice.get("function", {}).get("name")
         available_tool_names = {

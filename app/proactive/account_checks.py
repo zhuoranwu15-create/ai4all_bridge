@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.time_utils import beijing_naive_now
 from app.db import (
     get_account,
     get_active_content_invitation,
@@ -21,7 +22,6 @@ from app.llm import generate_completion, generate_reply_with_tools
 from app.proactive.messaging import send_proactive_text
 from app.proactive.reactivation import (
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
-    local_to_utc_string,
 )
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
 from app.turn_context import TurnContext
@@ -425,7 +425,7 @@ def decide_account_check_action(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     current_text = _format_decision_time(current)
 
     account = get_account(account_id=account_id)
@@ -526,7 +526,7 @@ def generate_account_check_candidate_draft(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -611,7 +611,7 @@ def generate_topic_followup_candidate(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Generate one topic_followup reactivation candidate from recent account chat."""
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -640,14 +640,13 @@ def generate_topic_followup_candidate(
     except (TypeError, ValueError):
         context_limit = 100
 
-    # messages.created_at is UTC; convert local window to UTC for the SQL compare.
-    # Keep both representations so the diagnostic metadata still shows the local
-    # window operators expect to see.
+    # messages.created_at 存北京时间（insert 时 datetime('now','+8 hours')），current 也是
+    # 北京 naive 时间，直接按北京时间比较，**不做 UTC 转换**（旧 local_to_utc_string 会把
+    # 阈值偏移一个时区，导致窗口错位）。
     since_local = _format_decision_time(current - timedelta(hours=max(window_hours, 1)))
-    since_utc = local_to_utc_string(current - timedelta(hours=max(window_hours, 1)))
     history = list_recent_messages_for_account_since(
         account_id=account_id,
-        since=since_utc,
+        since=since_local,
         limit=max(1, context_limit),
     )
     if not history:
@@ -655,17 +654,18 @@ def generate_topic_followup_candidate(
             account_id=account_id,
             reason="no_recent_72h_history",
             now=current,
-            metadata={"since": since_local, "since_utc": since_utc},
+            metadata={"since": since_local},
         )
 
     try:
         dedupe_days = int(getattr(settings, "reactivation_dedupe_days", 3) or 3)
     except (TypeError, ValueError):
         dedupe_days = 3
-    since_dedupe_utc = local_to_utc_string(current - timedelta(days=max(dedupe_days, 1)))
+    # outbound_messages.created_at 同为北京时间，直接按北京时间比较，不做 UTC 转换。
+    since_dedupe = _format_decision_time(current - timedelta(days=max(dedupe_days, 1)))
     sent_history = list_recent_reactivation_outbound_messages(
         account_id=account_id,
-        since=since_dedupe_utc,
+        since=since_dedupe,
         limit=20,
     )
     recent_sent_topics = [
@@ -730,7 +730,7 @@ def generate_content_invitation_candidate(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Run an account proactive check pass that may create one content invitation candidate."""
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     current_text = _format_decision_time(current)
 
     account = get_account(account_id=account_id)
@@ -918,7 +918,7 @@ def promote_account_check_candidate_draft(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     state = get_proactive_account_state(account_id=account_id)
     if state is None:
         return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)
@@ -963,7 +963,7 @@ def clear_account_check_candidate_draft(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     state = get_proactive_account_state(account_id=account_id)
     if state is None:
         return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)

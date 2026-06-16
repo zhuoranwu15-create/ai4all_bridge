@@ -23,6 +23,7 @@ from app.db import (  # noqa: E402
     get_scheduler_heartbeat,
     init_db,
 )
+from app.time_utils import beijing_naive_now  # noqa: E402
 
 DEFAULT_STATE_FILE = "/tmp/ai4all_monitor_health_state.json"
 
@@ -84,7 +85,9 @@ def _check_scheduler(service: str, max_age_seconds: int) -> Optional[str]:
     last_seen_at = _parse_timestamp(heartbeat.get("last_seen_at"))
     if last_seen_at is None:
         return f"{service}: invalid last_seen_at={heartbeat.get('last_seen_at')}"
-    age_seconds = int((datetime.now() - last_seen_at).total_seconds())
+    # last_seen_at 为北京墙钟 naive(见 db.ops._runtime_timestamp),陈旧度比较须同口径,
+    # 否则非北京宿主机会误判心跳新鲜/陈旧。
+    age_seconds = int((beijing_naive_now() - last_seen_at).total_seconds())
     if age_seconds > max_age_seconds:
         return f"{service}: heartbeat stale age={age_seconds}s max={max_age_seconds}s"
     if heartbeat.get("status") in {"error", "failed"}:

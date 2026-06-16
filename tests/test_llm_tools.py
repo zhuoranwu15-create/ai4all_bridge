@@ -183,7 +183,8 @@ def test_generate_reply_with_tools_preserves_explicit_user_prompt_history():
     ]
 
 
-def test_generate_reply_with_tools_forces_proactive_update_from_user_text():
+def test_generate_reply_with_tools_forwards_caller_first_round_tool_choice():
+    """通用入口不再自行推断意图：调用方传入的 first_round_tool_choice 原样用于第一轮。"""
     from app.llm import generate_reply_with_tools
 
     settings_mock = MagicMock()
@@ -191,6 +192,7 @@ def test_generate_reply_with_tools_forces_proactive_update_from_user_text():
     settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_default_prompt = "你是助手"
 
+    forced = {"type": "function", "function": {"name": "update_proactive_message_settings"}}
     with patch("app.llm.settings", settings_mock):
         with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("已调整")) as mock_chat:
             reply, err = generate_reply_with_tools(
@@ -199,20 +201,17 @@ def test_generate_reply_with_tools_forces_proactive_update_from_user_text():
                 system_prompt="你是助手",
                 tools=[{"type": "function", "function": {"name": "update_proactive_message_settings"}}],
                 ctx=_make_ctx(),
+                first_round_tool_choice=forced,
             )
 
     assert err is None
     assert reply == "已调整"
     assert mock_chat.call_args.args[0][-1] == {"role": "user", "content": "以后每天最多1条主动消息"}
-    assert mock_chat.call_args.kwargs["tool_choice"] == {
-        "type": "function",
-        "function": {"name": "update_proactive_message_settings"},
-    }
+    assert mock_chat.call_args.kwargs["tool_choice"] == forced
 
 
-def test_generate_reply_with_tools_skips_force_when_tool_absent():
-    """proactive 路径 tools 不含 update_proactive_message_settings 时，即便历史文本
-    命中主动设置更新意图，也不得强制该工具（否则 deepseek 400）。应降级为 auto。"""
+def test_generate_reply_with_tools_downgrades_force_when_tool_absent():
+    """防御保留：调用方传入的强制工具不在本次 tools 中时降级为 auto（避免 deepseek 400）。"""
     from app.llm import generate_reply_with_tools
 
     settings_mock = MagicMock()
@@ -223,12 +222,12 @@ def test_generate_reply_with_tools_skips_force_when_tool_absent():
     with patch("app.llm.settings", settings_mock):
         with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
             reply, err = generate_reply_with_tools(
-                # 模拟 content_invitation：user_prompt 内嵌了用户历史聊天里的触发语
                 user_text="content_invitation_generation",
-                history=[{"role": "user", "content": "recent_chat:\n- user: 以后每天最多1条主动消息"}],
+                history=[],
                 system_prompt="你是助手",
                 tools=[{"type": "function", "function": {"name": "create_content_invitation"}}],
                 ctx=_make_ctx(),
+                first_round_tool_choice={"type": "function", "function": {"name": "update_proactive_message_settings"}},
             )
 
     assert err is None
@@ -236,7 +235,9 @@ def test_generate_reply_with_tools_skips_force_when_tool_absent():
     assert mock_chat.call_args.kwargs["tool_choice"] == "auto"
 
 
-def test_generate_reply_with_tools_does_not_force_unrelated_more_send_phrase():
+def test_generate_reply_with_tools_defaults_to_auto_and_does_not_infer():
+    """不传 first_round_tool_choice 时默认 auto；通用入口不再从内嵌历史文本推断意图
+    （主动消息生成路径正依赖这一点，避免历史里的触发语导致 400）。"""
     from app.llm import generate_reply_with_tools
 
     settings_mock = MagicMock()
@@ -247,10 +248,11 @@ def test_generate_reply_with_tools_does_not_force_unrelated_more_send_phrase():
     with patch("app.llm.settings", settings_mock):
         with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
             reply, err = generate_reply_with_tools(
-                user_text="帮我多发点资料给同学",
-                history=[],
+                # 内嵌历史里有触发语，但不传 first_round_tool_choice → 不应强制任何工具
+                user_text="content_invitation_generation",
+                history=[{"role": "user", "content": "recent_chat:\n- user: 以后每天最多1条主动消息"}],
                 system_prompt="你是助手",
-                tools=[{"type": "function", "function": {"name": "update_proactive_message_settings"}}],
+                tools=[{"type": "function", "function": {"name": "create_content_invitation"}}],
                 ctx=_make_ctx(),
             )
 

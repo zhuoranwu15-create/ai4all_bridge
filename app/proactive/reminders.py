@@ -10,6 +10,7 @@ from app.db import (
 )
 from app.proactive.messaging import dispatch_proactive_text
 from app.reminder_utils import compute_next_due_at
+from app.time_utils import beijing_naive_now
 
 
 def format_scheduler_time(value: datetime) -> str:
@@ -39,7 +40,7 @@ def dispatch_reminder(
     now: Optional[datetime] = None,
     bypass_quiet_hours: bool = False,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     claimed = claim_due_reminder(
         reminder_id=reminder_id,
         now=format_scheduler_time(current),
@@ -129,7 +130,7 @@ def dispatch_due_reminders(
     limit: int = 20,
     bypass_quiet_hours: bool = False,
 ) -> List[Dict[str, Any]]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     due = list_due_reminders(
         now=format_scheduler_time(current),
         limit=limit,

@@ -372,18 +372,3 @@ def get_proactive_message_settings_tools() -> list:
             },
         },
     ]
-
-
-def get_default_tools(
-    *,
-    web_search_enabled: bool = False,
-    content_invitation_response_enabled: bool = False,
-) -> list:
-    tools = list(get_reminder_tools())
-    tools.extend(get_session_status_tools())
-    tools.extend(get_proactive_message_settings_tools())
-    if web_search_enabled:
-        tools.extend(get_web_search_tools())
-    if content_invitation_response_enabled:
-        tools.extend(get_content_invitation_response_tools())
-    return tools

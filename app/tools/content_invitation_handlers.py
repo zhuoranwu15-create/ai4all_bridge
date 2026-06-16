@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from app.config import settings
+from app.time_utils import beijing_naive_now
 from app.db import (
     create_content_invitation,
     get_active_content_invitation,
@@ -49,13 +50,13 @@ def _sanitize_title_items(raw_items: Any, *, max_items: int = 10) -> List[Dict[s
                     "source_name": _clean_text(item.get("source_name")),
                     "url": _clean_text(item.get("url")),
                     "published_at": _clean_text(item.get("published_at")),
-                    "retrieved_at": _format_time(datetime.now()),
+                    "retrieved_at": _format_time(beijing_naive_now()),
                 }
             )
         else:
             title = _clean_text(item)
             if title:
-                items.append({"title": title[:200], "retrieved_at": _format_time(datetime.now())})
+                items.append({"title": title[:200], "retrieved_at": _format_time(beijing_naive_now())})
     return items
 
 
@@ -68,7 +69,7 @@ def _active_invitation_for_args(args: dict, ctx: "TurnContext") -> Optional[Dict
         return None
     return get_active_content_invitation(
         account_id=ctx.account_id,
-        now=_format_time(datetime.now()),
+        now=_format_time(beijing_naive_now()),
     )
 
 
@@ -87,7 +88,7 @@ def handle_create_content_invitation_candidate(args: dict, ctx: "TurnContext") -
     if len(title_items) < 3:
         return {"error": "title_items 至少需要 3 条标题"}
 
-    current = datetime.now()
+    current = beijing_naive_now()
     expire_hours = int(getattr(settings, "content_invitation_expire_hours", 24) or 24)
     invitation = create_content_invitation(
         account_id=ctx.account_id,
@@ -136,7 +137,7 @@ def handle_send_content_invitation_titles(
     if invitation["status"] != "invited":
         return {"error": f"该内容邀请状态为 {invitation['status']}，无法发送标题"}
     expires_at = _clean_text(invitation.get("expires_at"))
-    now = datetime.now()
+    now = beijing_naive_now()
     if expires_at and datetime.fromisoformat(expires_at.replace(" ", "T")) <= now:
         return {"error": "内容邀请已过期"}
 
@@ -181,7 +182,7 @@ def handle_record_content_invitation_feedback(
     if not topic:
         return {"error": "topic 不能为空"}
     note = _clean_text(args.get("note"))
-    now = datetime.now()
+    now = beijing_naive_now()
 
     invitation_status = "declined" if feedback_type in {"decline", "block_topic", "less_like_this"} else "accepted"
     if invitation is not None:

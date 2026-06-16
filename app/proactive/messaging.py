@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.time_utils import beijing_naive_now
 from app.db import (
     claim_pending_outbound_message,
     create_outbound_message,
@@ -46,7 +47,7 @@ def enqueue_proactive_text(
     node_id: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     # 多机出站:解析归属节点写入 outbound_messages.node_id,供节点按 node 认领。
     # 显式 node_id 优先;否则查账号归属;再回落 default_node_id(迁移期=aliyun1)。
     # standalone 下 default_node_id 通常为空 → node_id=None,send_proactive_text 仍按 id 直发,行为不变。
@@ -362,7 +363,7 @@ def enqueue_onboarding_welcome(
     欢迎语是固定安全常量,**不过** proactive 政策/配额闸门,保「必发」语义与今天一致。
     `idempotency_key` 取账号维度常量,outbound_messages 的 UNIQUE 约束天然去重,避免重复欢迎。
     """
-    current = now or datetime.now()
+    current = now or beijing_naive_now()
     effective_node_id = resolve_node_for_account(account_id) or (
         getattr(settings, "default_node_id", "") or None
     )

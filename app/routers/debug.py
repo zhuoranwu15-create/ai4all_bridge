@@ -171,7 +171,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
             persona_ask_count=0,
         )
     builder = PromptBuilder()
-    prompt = builder.build(
+    build_result = builder.assemble(
         display_name=account.get("display_name"),
         soul=soul,
         user_prefs=user_prefs,
@@ -185,6 +185,7 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         current_time=_current_time_preview,
         model_name=settings.llm_model,
     )
+    prompt = build_result.prompt
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,
@@ -194,8 +195,9 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
                 "soul_chars": len(soul),
                 "user_prefs_chars": len(user_prefs),
                 "long_term_memory_chars": len(long_term_memory),
-                "daily_notes_loaded": False,
-                "daily_notes_chars": 0,
+                "daily_notes_loaded": build_result.included("daily_notes"),
+                "daily_notes_chars": build_result.final_chars("daily_notes"),
+                "block_metrics": build_result.as_dict(),
                 "system_prompt_override": bool(profile.get("system_prompt")),
                 "style": profile.get("style"),
                 "display_name": account.get("display_name"),
