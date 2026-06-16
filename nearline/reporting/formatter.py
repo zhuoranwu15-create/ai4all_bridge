@@ -92,6 +92,38 @@ def _onboarding_section(m: Dict) -> list:
     ]
 
 
+def render_feishu_summary(sections: Dict,
+                          quality_notes: Optional[List[str]] = None) -> str:
+    """渲染推送飞书群的精简纯文本摘要（四域核心数字）。
+
+    飞书自定义机器人 webhook 用 msg_type=text，不渲染 Markdown，故输出纯文本；
+    完整 Markdown 日报仍落 nearline/data/reports/。
+    """
+    u = sections["users"]
+    p = sections["proactive"]
+    d = sections["dreaming"]
+    o = sections["onboarding"]
+    lines = [
+        f"AI4ALL 每日运营报告 — {u['date']}",
+        "【用户增长】"
+        f"新注册 {u['new_users']} | DAU {u['dau']} | 入站 {u['inbound_messages']} "
+        f"| D1留存 {_retention_line(u)}",
+        "【主动消息】"
+        f"发送 {p['total_sent']} | 覆盖账号 {p['covered_accounts']} | 策略拦截 {p['blocked_count']} "
+        f"| 整体回复率 {_pct(p['reply_rate_overall'])}（{p['replied_total']}/{p['resolved_sent']}）",
+        "【Dreaming】"
+        f"运行 {d['runs_total']}（成功 {d['runs_succeeded']}/partial {d['runs_partial']}/失败 "
+        f"{d['runs_failed']}）| 记忆 {d['items_generated']} 条（应用率 {_pct(d['items_applied_rate'])}）"
+        f"| 调度 {d.get('scheduler_status') or '未知'}",
+        "【Onboarding】"
+        f"complete {o['cnt_complete']}/pending {o['cnt_pending']} | 完成率 {_pct(o['completion_rate'])} "
+        f"| 当日注册 cohort {o['cohort_registered']}（完成 {o['cohort_completed']}）",
+    ]
+    if quality_notes:
+        lines.append("【数据质量提示】" + "；".join(quality_notes))
+    return "\n".join(lines)
+
+
 def render_daily(sections: Dict, quality_notes: Optional[List[str]] = None,
                  quality_skipped: bool = False) -> str:
     """把四个域的指标 dict 组合渲染成完整 Markdown 日报。
