@@ -14,6 +14,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.config import settings
+from app.app_runtime import get_background_loop
 from app.routers.deps import _require_session
 from app import node_gateway
 from app.captcha import verify_captcha
