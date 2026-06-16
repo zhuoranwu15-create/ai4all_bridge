@@ -8,5 +8,5 @@
 
 FEISHU_WEBSITE_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_ME
 
-# 每天 02:17 跑前一天日报（错开整点 / dreaming 04:00 / 备份时段）
-17 2 * * * cd /home/jack/workspace/ai4all_bridge && .venv/bin/python nearline/run_daily.py --yesterday >> nearline/data/cron.log 2>&1
+# 每天 04:17 跑前一天日报（错开整点；在 dreaming 04:00 / 备份时段之后，昨天数据已齐）
+17 4 * * * cd /home/jack/workspace/ai4all_bridge && .venv/bin/python nearline/run_daily.py --yesterday >> nearline/data/cron.log 2>&1
