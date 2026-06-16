@@ -8,7 +8,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from app.config import settings
 from app.db._core import (
@@ -23,6 +23,7 @@ __all__ = [
     'get_account_water_level',
     'get_database_storage_stats',
     'get_faq_message',
+    'get_inbound_message_rate',
     'get_ops_metrics',
     'get_scheduler_heartbeat',
     'like_faq_message',
@@ -429,6 +430,41 @@ def get_account_water_level(*, active_windows_minutes=(15, 60, 1440)) -> Dict[st
         },
         "active_accounts": active,
     }
+
+
+def get_inbound_message_rate(
+    *, windows_minutes: Iterable[int] = (10, 60)
+) -> List[Dict[str, int]]:
+    """统计各时间窗口内的入站消息数（实时入站监控用）。
+
+    单条 SQL 用条件 SUM 一次算出所有窗口，避免逐窗口扫表。`created_at` 存北京时间，
+    与 `datetime('now','+8 hours')` 比较，与 get_ops_metrics 时区约定一致。
+    返回按窗口升序排列的 ``[{"minutes": N, "count": M}, ...]``。
+    """
+    # 去重 + 过滤非正数，按窗口升序，保证查询列与返回顺序稳定
+    windows = sorted({int(m) for m in windows_minutes if int(m) > 0})
+    if not windows:
+        return []
+    # 为每个窗口生成一个条件 SUM；最大窗口用于 WHERE 预过滤减少扫描
+    select_exprs = ", ".join(
+        f"SUM(CASE WHEN created_at >= datetime('now', '+8 hours', '-{m} minutes') "
+        f"THEN 1 ELSE 0 END) AS w{m}"
+        for m in windows
+    )
+    max_window = windows[-1]
+    with connect() as conn:
+        row = conn.execute(
+            f"""
+            SELECT {select_exprs}
+            FROM messages
+            WHERE direction = 'inbound'
+              AND created_at >= datetime('now', '+8 hours', '-{max_window} minutes')
+            """
+        ).fetchone()
+    return [
+        {"minutes": m, "count": int((row[f"w{m}"] if row else 0) or 0)}
+        for m in windows
+    ]
 
 
 def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:

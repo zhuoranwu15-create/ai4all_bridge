@@ -300,7 +300,7 @@ server {
         proxy_set_header X-Forwarded-Proto https;
     }
 
-    location ~ ^/ops/(index|ops|account|reminder_debug|onboarding_debug|proactive_debug|web_search_debug)\.html$ {
+    location ~ ^/ops/(index|ops|account|realtime_inbound|reminder_debug|onboarding_debug|proactive_debug|web_search_debug)\.html$ {
         allow <your-office-ip>;
         deny all;
         rewrite ^/ops/(.*)$ /ui/$1 break;
