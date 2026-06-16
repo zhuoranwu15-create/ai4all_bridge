@@ -210,6 +210,32 @@ def test_generate_reply_with_tools_forces_proactive_update_from_user_text():
     }
 
 
+def test_generate_reply_with_tools_skips_force_when_tool_absent():
+    """proactive 路径 tools 不含 update_proactive_message_settings 时，即便历史文本
+    命中主动设置更新意图，也不得强制该工具（否则 deepseek 400）。应降级为 auto。"""
+    from app.llm import generate_reply_with_tools
+
+    settings_mock = MagicMock()
+    settings_mock.llm_api_key = "test-key"
+    settings_mock.llm_max_tool_rounds = 3
+    settings_mock.llm_default_prompt = "你是助手"
+
+    with patch("app.llm.settings", settings_mock):
+        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
+            reply, err = generate_reply_with_tools(
+                # 模拟 content_invitation：user_prompt 内嵌了用户历史聊天里的触发语
+                user_text="content_invitation_generation",
+                history=[{"role": "user", "content": "recent_chat:\n- user: 以后每天最多1条主动消息"}],
+                system_prompt="你是助手",
+                tools=[{"type": "function", "function": {"name": "create_content_invitation"}}],
+                ctx=_make_ctx(),
+            )
+
+    assert err is None
+    assert reply == "好"
+    assert mock_chat.call_args.kwargs["tool_choice"] == "auto"
+
+
 def test_generate_reply_with_tools_does_not_force_unrelated_more_send_phrase():
     from app.llm import generate_reply_with_tools
 

@@ -399,6 +399,20 @@ def generate_reply_with_tools(
     # On the very first round, detect proactive settings update intent and force
     # the tool to avoid DeepSeek's "let me confirm first" behavior.
     first_round_tool_choice = _infer_proactive_update_tool_choice(messages)
+    # 防御：被强制的工具必须确实出现在本次 tools 列表中才生效，否则降级为 "auto"。
+    # 否则 proactive 路径（如 content_invitation，其 user_prompt 内嵌历史聊天文本）
+    # 会被误判出主动设置更新意图，强制 update_proactive_message_settings——但该路径的
+    # tools 不含此工具，导致 deepseek 返回 400 "no function named ... in the tools parameter"。
+    if isinstance(first_round_tool_choice, dict):
+        forced_name = first_round_tool_choice.get("function", {}).get("name")
+        available_tool_names = {
+            t.get("function", {}).get("name") for t in (tools or [])
+        }
+        if forced_name not in available_tool_names:
+            logger.debug(
+                "forced tool_choice=%s not in tools, downgrading to auto", forced_name
+            )
+            first_round_tool_choice = "auto"
 
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
