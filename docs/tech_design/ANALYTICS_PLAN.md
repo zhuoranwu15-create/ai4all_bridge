@@ -337,20 +337,23 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
 - 校验（2026-06-05）：proactive 分类 ci4/rci1/rtf4 与源一致；回复归因 sent 10:01:32→msg#581(18:18:39)=29827s 与独立查询一致；dreaming 14 runs、记忆 24/2 与源一致；归因状态 39 resolved/4 pending/1 n/a；ETL 重跑全增量 0；备份含 facts.sqlite3（integrity ok）
 - 已知限制：coverage 仅出覆盖账号分子（eligible 分母待 `proactive_account_state`/`channel_bindings` 接入）；onboarding 中间里程碑历史值空（待 `onboarding_events`）；dreaming token 当前源全 NULL
 
-### Phase 2：编排、回溯与质量门禁 ✅ 已完成（2026-06-08，调度暂只出脚本不接）
+### Phase 2：编排、回溯与质量门禁 ✅ 已完成（2026-06-08；2026-06-16 接 cron + 日报飞书群推送）
 
 - [x] `run_etl.py`：一次性增量刷新全部 `dim_`/`fct_`（含归因回填）
 - [x] `run_daily.py` 支持 `--yesterday`/`--date`/`--no-write`/`--skip-quality`；ETL → 质量门禁 → 四域 agg → 报告 → `run_state.json`（供监控检测陈旧）
 - [x] `run_backfill.py --from --to [--write-reports]`：先重建 fct_/dim_，再逐日重算 agg_（软质量只打印不阻断；明确回溯填不回历史里程碑/未捕捉归因）
 - [x] **数据质量门禁**（foundation §7）`analytics/quality.py`：5 项硬检查（账号外键 / direction-role / sent 有 sent_at / 回复外键 / memory-run 外键）+ 2 项软检查（DAU 跨层对账 / daily_usage 差异）。硬失败→飞书告警（复用 `app.alerting`）+ 非零退出 + 不出报告；软失败→报告"数据质量提示"段
-- [x] 调度模板（**只出不装**，二选一）：`nearline/deploy/ai4all-nearline.{service,timer}`（systemd，推荐）+ `crontab.example`；均每日 02:17 跑 `--yesterday`，独立进程不挂 FastAPI/dreaming_scheduler
+  - H4「回复外键」（2026-06-16 增量）：facts 为 append-only 基线，账号被解绑清空（`wipe_account_data`）后历史归因到的 `reply_message_id` 会从源 messages 消失，属预期。改为只对"账号源库仍有存活消息"的孤儿硬失败，已清空账号豁免并在 detail 注明，避免误阻断 `run_daily`。
+- [x] 调度模板：`nearline/deploy/ai4all-nearline.{service,timer}`（systemd，推荐）+ `crontab.example`；独立进程不挂 FastAPI/dreaming_scheduler
+- [x] **每日日报飞书群推送**（2026-06-16 增量）：`run_daily` 成功出报告后，把四域核心数字的纯文本摘要（`formatter.render_feishu_summary`）推送到运营飞书群（`FEISHU_WEBSITE_WEBHOOK_URL`，经 `alerting.send_report`，区别于运维群告警 `FEISHU_ALERT_WEBHOOK_URL`）；`--no-feishu` 可关闭，`run_state.json` 记录 `feishu_pushed`，best-effort 失败不影响日报产出
+- [x] 已接 cron：每日定时跑 `--yesterday`（`crontab.example` 提供模板；cron 不读 `.env`，需在 crontab 内显式提供 `FEISHU_WEBSITE_WEBHOOK_URL`）
 - 校验：7 检查全过（DAU 对账 facts=源=14）；注入孤儿行→硬检查 FAIL 且软对账独立命中→报告阻断 exit 1；清理后恢复 exit 0；backfill 06-04..06-06 逐日重算正常；`run_state.json` 落盘
 
 ### Phase 3：扩展（视需求）
 
 - [ ] 周活跃（WAU）、7日留存（数据积累后启用）
 - [ ] `fct_cost_event` + 贝壳消耗趋势
-- [ ] 飞书文档推送（对接 lark-doc）
+- [ ] 飞书**文档**推送（对接 lark-doc，富文本归档；区别于 Phase 2 已上线的飞书群纯文本摘要推送）
 - [ ] Jupyter notebook 探索性分析
 - [ ] 话题挖掘（热门候选话题，单独模块）
 - [ ] 推动 app 侧补 `onboarding_events`/`analytics_events` 结构化埋点（foundation §4.4），解锁人设分布与精确漏斗耗时
@@ -365,7 +368,7 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
 |---|---|---|
 | Phase 0：基建骨架 + 用户增长域 | ✅ 完成 | 端到端 source→fct→agg→report 跑通 |
 | Phase 1：四域事实表 + 三个指标域 | ✅ 完成 | dreaming / proactive / onboarding 报告可出 |
-| Phase 2：run_daily / backfill / 质量门禁 | ✅ 完成 | 调度模板已出，暂不接 cron |
+| Phase 2：run_daily / backfill / 质量门禁 | ✅ 完成 | 已接 cron（每日 `--yesterday`）；报告摘要推送运营飞书群；H4 豁免已清空账号 |
 | A1：dreaming token 写库 | ✅ 完成 | `app/llm.py` + `app/dreaming.py`；新 run 起才有数据 |
 | A2：onboarding 状态变更埋点 | ✅ 完成（半闭合） | `analytics_events` 表已建；nearline 消费侧未接 |
 
