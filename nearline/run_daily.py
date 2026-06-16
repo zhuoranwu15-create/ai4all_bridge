@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from nearline.alerting import send_alert  # noqa: E402
+from nearline.alerting import send_alert, send_report  # noqa: E402
 from nearline.analytics import quality  # noqa: E402
 from nearline.analytics.metrics import daily_users, dreaming, onboarding, proactive  # noqa: E402
 from nearline.analytics.warehouse import etl  # noqa: E402
@@ -49,6 +49,8 @@ def main(argv=None) -> int:
                         help="覆盖 facts 库路径（配合 --source-db 使用，避免污染生产 facts）")
     parser.add_argument("--no-write", action="store_true", help="只打印，不落报告文件")
     parser.add_argument("--skip-quality", action="store_true", help="跳过质量门禁（应急）")
+    parser.add_argument("--no-feishu", action="store_true",
+                        help="不推送飞书（手动/测试时使用；默认成功后推送运营群）")
     args = parser.parse_args(argv)
 
     target = (
@@ -105,6 +107,13 @@ def main(argv=None) -> int:
         written = str(out)
         print(f"[report] written {written}", file=sys.stderr)
 
+    # 推送精简摘要到运营飞书群（best-effort，失败不影响日报产出）。
+    pushed = False
+    if not args.no_feishu:
+        summary = formatter.render_feishu_summary(sections, quality_notes=soft_notes)
+        pushed = send_report(summary)
+        print(f"[feishu] pushed={pushed}", file=sys.stderr)
+
     _save_state({
         "last_success_at": datetime.now().isoformat(timespec="seconds"),
         "target_date": target,
@@ -112,6 +121,7 @@ def main(argv=None) -> int:
         "etl": stats,
         "soft_warnings": soft_notes,
         "report": written,
+        "feishu_pushed": pushed,
     })
     return 0
 

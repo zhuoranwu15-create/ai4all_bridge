@@ -56,14 +56,17 @@ def run_checks(target_date: str, source_db_override: Optional[str] = None,
             f"{n} 条 sent 主动消息缺 sent_at"))
 
         # H4：归因到的 reply_message_id 必须在源 messages 存在。
-        reply_ids = [
-            r["reply_message_id"]
-            for r in facts.execute(
-                "SELECT reply_message_id FROM fct_proactive_message "
-                "WHERE replied = 1 AND reply_message_id IS NOT NULL"
-            ).fetchall()
-        ]
-        missing = 0
+        # 注意：facts 是 append-only 持久基线，可比源行活得更久——账号被解绑清空
+        # （wipe_account_data）后，其历史归因到的 reply_message_id 会从源 messages 消失，
+        # 这是预期的，不应硬阻断。因此只对“账号在源库仍有存活消息”的孤儿硬失败，
+        # 已清空账号的孤儿降级豁免（仅记入 detail）。
+        reply_rows = facts.execute(
+            "SELECT reply_message_id, account_id FROM fct_proactive_message "
+            "WHERE replied = 1 AND reply_message_id IS NOT NULL"
+        ).fetchall()
+        reply_ids = [r["reply_message_id"] for r in reply_rows]
+        hard_missing = 0
+        exempt_missing = 0
         if reply_ids:
             placeholders = ",".join("?" * len(reply_ids))
             present = {
@@ -72,10 +75,27 @@ def run_checks(target_date: str, source_db_override: Optional[str] = None,
                     f"SELECT id FROM messages WHERE id IN ({placeholders})", reply_ids
                 ).fetchall()
             }
-            missing = sum(1 for i in reply_ids if i not in present)
+            # 缓存每个账号在源库是否仍有消息，避免重复查询。
+            account_has_messages: dict = {}
+            for row in reply_rows:
+                mid = row["reply_message_id"]
+                if mid in present:
+                    continue
+                aid = row["account_id"]
+                if aid not in account_has_messages:
+                    cnt = source.execute(
+                        "SELECT COUNT(*) AS c FROM messages WHERE account_id = ?", (aid,)
+                    ).fetchone()["c"]
+                    account_has_messages[aid] = cnt > 0
+                if account_has_messages[aid]:
+                    hard_missing += 1  # 账号仍存活却缺消息 → 真实归因外键 bug
+                else:
+                    exempt_missing += 1  # 账号已清空/解绑 → 预期，豁免
+        detail = f"{hard_missing} 个 reply_message_id 在源 messages 缺失（活跃账号）"
+        if exempt_missing:
+            detail += f"；另 {exempt_missing} 条属已清空账号，已豁免"
         results.append(QualityResult(
-            "proactive_reply_fk", "hard", missing == 0,
-            f"{missing} 个 reply_message_id 在源 messages 缺失"))
+            "proactive_reply_fk", "hard", hard_missing == 0, detail))
 
         # H5：memory item 的 dreaming_run_id 关联 run 且 account 一致。
         n = facts.execute(

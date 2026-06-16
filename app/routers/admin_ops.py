@@ -6,7 +6,7 @@ from app.config import settings
 from app.routers.deps import verify_admin_auth
 from app.routers.serializers import _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _profile_for_view, _redacted_flag_for_account, _session_for_view, _trace_for_view
 from app.routers.health import _build_ready_status
-from app.db import clear_session_messages, get_debug_trace, get_message_raw, get_ops_metrics, get_profile_for_session, get_session, list_debug_traces, list_recent_message_raw, list_scheduler_heartbeats, list_session_messages, list_sessions
+from app.db import clear_session_messages, get_debug_trace, get_inbound_message_rate, get_message_raw, get_ops_metrics, get_profile_for_session, get_session, list_debug_traces, list_recent_message_raw, list_scheduler_heartbeats, list_session_messages, list_sessions
 from datetime import datetime
 from typing import Optional
 
@@ -43,6 +43,17 @@ def admin_ops_status(
             "heartbeats": list_scheduler_heartbeats(),
         },
         "metrics": get_ops_metrics(window_minutes=window_minutes),
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/admin/ops/inbound-rate")
+def admin_ops_inbound_rate(
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """实时入站消息数：返回过去 10 分钟、1 小时的入站计数，供后台实时监控页轮询。"""
+    return {
+        "windows": get_inbound_message_rate(windows_minutes=(10, 60)),
         "checked_at": datetime.now().isoformat(timespec="seconds"),
     }
 

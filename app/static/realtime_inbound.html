@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>实时入站 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>实时入站</h1>
+      <p class="page-subtitle">观察近期入站消息量。每 10 秒自动刷新，当前量级较小，用于建立体感。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div id="err" style="display:none" class="status-msg error"></div>
+  <div id="content" style="display:none">
+    <section class="metric-grid" aria-label="入站概览">
+      <div class="metric-tile">
+        <span class="metric-label">近 10 分钟</span>
+        <strong id="metric-w10" style="font-size:2.2em">—</strong>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">近 1 小时</span>
+        <strong id="metric-w60" style="font-size:2.2em">—</strong>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">更新时间</span>
+        <strong id="metric-checked" class="small">—</strong>
+      </div>
+    </section>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h2>说明</h2>
+        <button onclick="loadInbound()">立即刷新</button>
+      </div>
+      <div class="empty-note">仅统计入站（用户发来的）消息，时间窗口为滚动窗口（相对当前时刻）。</div>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    var REFRESH_MS = 10000;
+    var timer = null;
+
+    loadInbound();
+
+    function showErr(msg) {
+      var el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    async function loadInbound() {
+      try {
+        await loadAdminMe();
+        var data = await apiFetch('/admin/ops/inbound-rate');
+        renderInbound(data);
+        document.getElementById('content').style.display = '';
+        document.getElementById('err').style.display = 'none';
+      } catch (e) {
+        showErr(e.message);
+      } finally {
+        // 单一定时器，避免手动刷新叠加多个 interval
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(loadInbound, REFRESH_MS);
+      }
+    }
+
+    function renderInbound(data) {
+      var windows = {};
+      (data.windows || []).forEach(function(w) { windows[w.minutes] = w.count; });
+      document.getElementById('metric-w10').textContent = windows[10] == null ? '—' : windows[10];
+      document.getElementById('metric-w60').textContent = windows[60] == null ? '—' : windows[60];
+      document.getElementById('metric-checked').textContent = formatDateTime(data.checked_at);
+    }
+  </script>
+</body>
+</html>
