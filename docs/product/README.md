@@ -1,6 +1,6 @@
 # 产品专题 PRD 导航
 
-更新时间：2026-06-02
+更新时间：2026-06-15
 
 本文档索引 Phase 1 的产品专题 PRD。总 PRD 见 [../prd.md](../prd.md)，用于定义产品定位、Phase 1 范围、优先级和总体验收；专题 PRD 用于展开单个能力的用户流程、策略规则和验收细节。
 
@@ -13,6 +13,7 @@
 | [陪伴式聊天](companion_chat_prd.md) | 微信私聊、陪伴体验、默认 Soul、安全边界 | [Conversation Orchestrator 主对话场景技术设计](../tech_design/conversation_orchestrator_design.md) |
 | [记忆与上下文](memory_prd.md) | short-term context、daily notes、Dreaming、记忆管理 | [Agent Context Files](../tech_design/agent_context_files.md) |
 | [主动消息与提醒](proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | [主动消息与提醒设计](../tech_design/proactive_messaging_design.md) |
+| [用户标签与元属性建设](user_meta_attributes_prd.md) | 生命周期、活跃强度、陪伴类型、安全风险、主动触达反馈、权益增长画像 | 待补充 |
 | [Web Search 同步工具调用](search_and_async_tasks_prd.md) | Web Search 同步工具调用、失败和复杂任务不支持说明 | [Web Search 同步工具调用技术设计](../tech_design/search_async_tasks_design.md) |
 | [语音输入](voice_prd.md) | 微信语音、上游转写后文本回复 | [语音输入技术设计](../tech_design/voice_input_design.md) |
 | [内容审核与人工复核](content_moderation_prd.md) | 文本/图片审核、异步机器审核、人工复核、导出材料、角色权限 | [内容审核与人工复核技术设计](../tech_design/content_moderation_design.md) |
