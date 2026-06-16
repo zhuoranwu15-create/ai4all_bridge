@@ -152,6 +152,31 @@ class Settings(BaseSettings):
     moderation_export_dir: str = "data/moderation_exports"
     moderation_safe_fallback_text: str = "这条内容我不能继续发送，我们换个安全的话题吧。"
     moderation_blocked_placeholder: str = "[blocked by moderation]"
+    # ===== 第二阶段：入站用户内容阿里云云审核（同步）=====
+    # 入站阿里云文本审核 PLUS 总开关；关闭则入站回退第一阶段本地规则异步审核。
+    moderation_aliyun_enabled: bool = False
+    # 入站同步筛查开关；关闭则即使云审核开启也不在主链路同步拦截（仅异步记录）。
+    moderation_aliyun_inbound_sync_enabled: bool = True
+    # 阿里云内容安全 endpoint（默认北京节点）。
+    moderation_aliyun_endpoint: str = "green-cip.cn-beijing.aliyuncs.com"
+    # 文本审核 PLUS service 场景码。
+    moderation_aliyun_service: str = "chat_detection_pro"
+    # 阿里云调用 connect/read 超时（毫秒）；超时按降级本地规则处理。
+    moderation_aliyun_timeout_ms: int = 1000
+    # 入站命中风险、停止本轮回复时返回给用户的固定安全话术。
+    moderation_inbound_blocked_reply_text: str = "这个话题我不太方便继续，我们换个轻松点的聊聊吧～"
+    # 阿里云审核失败率告警（复用 feishu_alert_webhook_url）。
+    moderation_aliyun_alert_enabled: bool = True
+    # 失败率统计滑动窗口（秒）。
+    moderation_aliyun_alert_window_seconds: int = 300
+    # 窗口内失败率超过该比例即告警（0~1）。
+    moderation_aliyun_alert_failure_rate: float = 0.2
+    # 失败率告警的最小样本量，避免极少量调用误报。
+    moderation_aliyun_alert_min_samples: int = 5
+    # 连续失败次数达到该值即告警。
+    moderation_aliyun_alert_consecutive: int = 3
+    # 告警冷却时间（秒），避免持续抖动刷屏。
+    moderation_aliyun_alert_cooldown_seconds: int = 300
 
     aliyun_web_search_api_key: str = ""
     aliyun_web_search_enabled: bool = False

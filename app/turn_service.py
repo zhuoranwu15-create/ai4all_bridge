@@ -22,6 +22,7 @@ from app.db import (
     insert_debug_trace,
     insert_message,
     list_recent_messages_for_account,
+    mark_message_moderation_blocked,
     process_referral_message_for_account,
     record_chat_usage_charge,
     record_image_understanding_charge,
@@ -38,6 +39,7 @@ from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import (
     create_sync_block_task,
     enqueue_message_for_moderation,
+    screen_inbound_message_sync,
 )
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
@@ -677,13 +679,15 @@ def handle_openclaw_turn(
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
+    # 入站内容同步筛查（阿里云云审核为主 + 本地红线补充）。命中即停止本轮回复并进入人工队列。
+    # 阿里云未开启时内部回退第一阶段异步审核并放行；筛查自身异常时 fail-open（放行本轮回复）。
+    inbound_screen = None
     try:
         inbound_content_kind = "voice_transcript" if payload.message_type == "voice" else payload.message_type
-        enqueue_message_for_moderation(
+        inbound_screen = screen_inbound_message_sync(
             message_db_id=int(inserted_id),
             account_id=account_id,
             session_id=int(session["id"]),
-            direction="inbound",
             content_kind=inbound_content_kind,
             text=text,
             media=payload.media,
@@ -696,11 +700,27 @@ def handle_openclaw_turn(
         )
     except Exception as err:
         logger.exception(
-            "inbound moderation enqueue failed account=%s message_db_id=%s error=%s",
+            "inbound moderation screen failed account=%s message_db_id=%s error=%s",
             account_id,
             inserted_id,
             err,
         )
+        inbound_screen = None
+    inbound_blocked = bool(inbound_screen is not None and not inbound_screen.allowed)
+    if inbound_blocked:
+        # 命中风险的入站原文打审核标记：从后续所有 LLM 上下文/记忆/turn 计数中剔除，避免下一轮被重新喂给模型。
+        try:
+            mark_message_moderation_blocked(
+                message_db_id=int(inserted_id),
+                account_id=account_id,
+            )
+        except Exception as err:
+            logger.exception(
+                "mark inbound moderation blocked failed account=%s message_db_id=%s error=%s",
+                account_id,
+                inserted_id,
+                err,
+            )
 
     try:
         process_referral_message_for_account(
@@ -765,7 +785,13 @@ def handle_openclaw_turn(
         "session_turn_count": session.get("turn_count"),
         "session_carryover_chars": len(session.get("carryover_summary") or ""),
     }
-    if text == "#重置会话":
+    if inbound_blocked:
+        # 入站命中风险：不调用主模型，返回固定安全话术；本轮不计费、不推进 onboarding。
+        reply = str(
+            getattr(settings, "moderation_inbound_blocked_reply_text", "")
+            or "这个话题我不太方便继续，我们换个轻松点的聊聊吧～"
+        )
+    elif text == "#重置会话":
         clear_session_messages(session_id=session["id"])
         reply = "已重置当前会话。"
     elif text == "#状态":
@@ -926,6 +952,19 @@ def handle_openclaw_turn(
         }
         debug_metadata.update(moderation_reply_metadata)
 
+    # 入站被拦截：在出站消息上标注入站审核信息，便于排查与审计（任务已由同步筛查创建）。
+    if inbound_blocked and inbound_screen is not None:
+        moderation_reply_metadata.update(
+            {
+                "moderation_inbound_blocked": True,
+                "moderation_task_id": inbound_screen.task_id,
+                "moderation_risk_level": inbound_screen.level,
+                "moderation_categories": inbound_screen.categories,
+                "moderation_degraded": inbound_screen.degraded,
+            }
+        )
+        debug_metadata.update(moderation_reply_metadata)
+
     trace_id = None
     outbound_inserted_id = None
     with db_connect() as conn:
@@ -973,7 +1012,7 @@ def handle_openclaw_turn(
             conn=conn,
         )
 
-        if not generation_error and text and text not in _SPECIAL_COMMANDS:
+        if not generation_error and not inbound_blocked and text and text not in _SPECIAL_COMMANDS:
             increment_session_turn_count(session_id=int(session["id"]), conn=conn)
 
     if debug_trace_enabled:
@@ -989,7 +1028,11 @@ def handle_openclaw_turn(
 
     # 已被同步红线拦截的回复，原文已由 create_sync_block_task 记录成审核任务；
     # 此时 reply 只是安全兜底文案，无需再为它创建一条 machine_passed 任务，避免队列里同一条回复出现两个 task。
-    if outbound_inserted_id is not None and not moderation_reply_metadata.get("moderation_blocked"):
+    if (
+        outbound_inserted_id is not None
+        and not moderation_reply_metadata.get("moderation_blocked")
+        and not inbound_blocked
+    ):
         try:
             enqueue_message_for_moderation(
                 message_db_id=int(outbound_inserted_id),
@@ -1069,7 +1112,13 @@ def handle_openclaw_turn(
             except Exception as err:
                 logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
 
-    if not generation_error and text and text not in _SPECIAL_COMMANDS and background_loop is not None:
+    if (
+        not generation_error
+        and not inbound_blocked
+        and text
+        and text not in _SPECIAL_COMMANDS
+        and background_loop is not None
+    ):
         turns_for_memory = [
             {"role": "user", "content": text},
             {"role": "assistant", "content": reply},

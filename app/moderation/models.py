@@ -38,6 +38,18 @@ class SyncModerationDecision:
 
 
 @dataclass(frozen=True)
+class InboundScreenDecision:
+    """Synchronous inbound screening result that gates the current turn's reply."""
+
+    allowed: bool
+    level: str = "pass"
+    categories: List[str] = field(default_factory=list)
+    task_id: Optional[str] = None
+    reason: str = ""
+    degraded: bool = False  # True 表示阿里云调用失败、已降级为本地规则判定
+
+
+@dataclass(frozen=True)
 class SamplingDecision:
     """Records whether a task is selected for asynchronous LLM review."""
 

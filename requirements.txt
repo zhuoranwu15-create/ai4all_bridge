@@ -7,3 +7,4 @@ qrcode[pil]==8.0
 alibabacloud_dysmsapi20170525
 alibabacloud_captcha20230305
 alibabacloud_tea_openapi
+alibabacloud_green20220302

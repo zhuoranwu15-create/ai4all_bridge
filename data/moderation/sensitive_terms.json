@@ -1,5 +1,6 @@
 {
   "version": "test_terms_v2",
+  "_todo": "第二阶段：入站主审核已切换为阿里云文本审核 PLUS，本地词库应收敛为阿里云未覆盖的陪伴红线（自杀自残方法/鼓励、未成年陪伴诱导等，level=escalate），并移除 MODERATION_TEST_* 测试哨兵。生产红线清单待产品/合规确认后补充。",
   "terms": [
     {
       "id": "test_block",

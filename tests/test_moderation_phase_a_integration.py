@@ -64,6 +64,53 @@ def test_turn_sync_guard_blocks_original_reply(monkeypatch, fresh_db):
     assert outbound_reply_tasks == []
 
 
+def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
+    """入站云审核命中：不调用主模型，返回固定安全话术，入站任务进 needs_review。"""
+
+    from app.db import list_content_moderation_tasks, list_recent_messages_for_account
+    from app.moderation.models import MachineReviewResult
+    from app.rate_limiter import RateLimiter
+
+    fresh_db.moderation_aliyun_enabled = True
+    monkeypatch.setattr(turn_service, "settings", fresh_db)
+    monkeypatch.setattr(turn_service, "rate_limiter", RateLimiter())
+
+    def _must_not_call(**_):
+        raise AssertionError("generate_reply_with_tools should not run when inbound is blocked")
+
+    monkeypatch.setattr(turn_service, "generate_reply_with_tools", _must_not_call)
+
+    cloud_block = MachineReviewResult(
+        reviewer_type="cloud",
+        engine="aliyun_text_moderation_plus",
+        engine_version="chat_detection_pro",
+        level="block",
+        categories=["cloud:pornographic_adult", "cat:sexual_content"],
+    )
+    monkeypatch.setattr(
+        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        lambda **_: cloud_block,
+    )
+
+    risky_text = "一条命中云审核的入站内容"
+    res = turn_service.handle_openclaw_turn(
+        OpenClawTurnRequest(**_turn_payload("mod-inbound-block-1", text=risky_text))
+    )
+    account_id = res.metadata["account_id"]
+    tasks = list_content_moderation_tasks(account_id=account_id, limit=20)
+    inbound_tasks = [t for t in tasks if t["direction"] == "inbound" and t["source_type"] == "message"]
+
+    assert res.reply == fresh_db.moderation_inbound_blocked_reply_text
+    assert inbound_tasks
+    assert inbound_tasks[0]["status"] == "needs_review"
+    assert inbound_tasks[0]["risk_level"] == "block"
+    assert "cat:sexual_content" in inbound_tasks[0]["risk_categories"]
+
+    # 命中原文已打审核标记：不应再进入后续 LLM 上下文（避免下一轮被重新喂给模型）。
+    context = list_recent_messages_for_account(account_id=account_id, limit=20)
+    assert all(risky_text not in (m["content"] or "") for m in context)
+
+
 def test_proactive_sync_guard_cancels_without_gateway_send(fresh_db):
     from app.db import list_content_moderation_tasks
     from app.proactive.messaging import send_proactive_text

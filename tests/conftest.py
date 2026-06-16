@@ -112,6 +112,19 @@ def test_settings(tmp_path):
     s.moderation_export_dir = str(tmp_path / "moderation_exports")
     s.moderation_safe_fallback_text = "这条内容我不能继续发送，我们换个安全的话题吧。"
     s.moderation_blocked_placeholder = "[blocked by moderation]"
+    # 第二阶段入站阿里云云审核：默认关闭，保证既有测试走第一阶段异步路径、行为不变。
+    s.moderation_aliyun_enabled = False
+    s.moderation_aliyun_inbound_sync_enabled = True
+    s.moderation_aliyun_endpoint = "green-cip.cn-beijing.aliyuncs.com"
+    s.moderation_aliyun_service = "chat_detection_pro"
+    s.moderation_aliyun_timeout_ms = 1000
+    s.moderation_inbound_blocked_reply_text = "这个话题我不太方便继续，我们换个轻松点的聊聊吧～"
+    s.moderation_aliyun_alert_enabled = True
+    s.moderation_aliyun_alert_window_seconds = 300
+    s.moderation_aliyun_alert_failure_rate = 0.2
+    s.moderation_aliyun_alert_min_samples = 5
+    s.moderation_aliyun_alert_consecutive = 3
+    s.moderation_aliyun_alert_cooldown_seconds = 300
     s.aliyun_web_search_api_key = ""
     s.aliyun_web_search_enabled = False
     s.aliyun_web_search_base_url = "https://cloud-iqs.aliyuncs.com/search/unified"
@@ -209,12 +222,21 @@ def fresh_db(test_settings):
         patch("app.moderation.worker.settings", test_settings),
         patch("app.moderation.llm_review.settings", test_settings),
         patch("app.moderation.image_review.settings", test_settings),
+        patch("app.moderation.aliyun_review.settings", test_settings),
+        patch("app.moderation.aliyun_alerting.settings", test_settings),
         patch("app.moderation.export.settings", test_settings),
     ]
     for p in patches:
         p.start()
     try:
         from app.db import init_db
+        from app.db._core import _db_path
+        # 护栏：确认 db 层确实路由到临时库，绝不落到生产库 data/ai4all.sqlite3。
+        # （拆包后 settings 绑定若失效会静默回落生产库；此断言可第一时间拦截。）
+        resolved = str(_db_path())
+        assert resolved == str(test_settings.database_path), (
+            f"测试 DB 未隔离，疑似指向生产库: {resolved}"
+        )
         init_db()
         yield test_settings
     finally:
@@ -249,6 +271,8 @@ def client(fresh_db):
         patch("app.moderation.worker.settings", fresh_db),
         patch("app.moderation.llm_review.settings", fresh_db),
         patch("app.moderation.image_review.settings", fresh_db),
+        patch("app.moderation.aliyun_review.settings", fresh_db),
+        patch("app.moderation.aliyun_alerting.settings", fresh_db),
         patch("app.moderation.export.settings", fresh_db),
         patch("app.dreaming.settings", fresh_db),
         patch("app.session_lifecycle.settings", fresh_db),

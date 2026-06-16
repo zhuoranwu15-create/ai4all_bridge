@@ -1,6 +1,6 @@
 # 内容审核与人工复核技术设计
 
-更新时间：2026-06-11
+更新时间：2026-06-15
 
 本文承接 [内容审核与人工复核 PRD](../product/content_moderation_prd.md)，定义文本、图片、语音转写文本、AI 出站回复、主动消息和记忆产物的审核技术方案。
 
@@ -890,3 +890,209 @@ http://127.0.0.1:8180/ops/moderation_admin.html
 - daily notes 风险内容是只过滤装载，还是物理清理 Markdown。
 - 主管部门报告材料格式是否需要固定模板。
 - reviewer 是否需要多人分配、超时回收和绩效统计。
+
+## 21. 第二阶段：入站阿里云云审核同步化（2026-06-15）
+
+承接 PRD §3.2、§6.4、§7.1。本阶段只改造**入站用户内容**的审核引擎与时序，出站红线同步拦截（§8）、worker（§11）、人工后台（§13）和数据模型（§6）整体复用，不破坏现有契约。
+
+### 21.1 目标与边界
+
+- 入站用户文本/语音转写文本的主审核引擎切换为阿里云文本审核 PLUS（`green20220302.text_moderation_plus`）。
+- 入站审核从“异步抽检、不阻塞回复”改为“主链路同步检测、命中即停回复 + 进入人工队列”。
+- 同步云审核仅作用于文本类内容（`content_kind in {text, voice_transcript}`）。图片等非文本入站**暂不接入审核**：尚未接入图片安全模型，直接放行且不创建审核任务（不退回第一阶段异步图片审核），避免堆积无法处理的队列任务；接入图片模型后再恢复。该跳过在阿里云开关任意状态下都生效。
+- 出站 AI 回复、主动消息仍走第一阶段本地 `check_sync_guard`，本阶段不改。
+- 本地敏感词库降级为“陪伴特有红线补充”（自杀自残、未成年陪伴诱导等阿里云未覆盖项），仍 100% 同步执行，并作为阿里云失败时的降级判定。
+- 复用既有 `content_moderation_tasks`/`content_moderation_results` schema 与 `account_id` 隔离、明文审计约束，不新增审核表。
+
+### 21.2 新增模块
+
+```text
+app/moderation/aliyun_review.py
+```
+
+职责：封装阿里云客户端初始化、`text_moderation_plus` 调用、结果解析与归一，返回统一的 `MachineReviewResult`（`reviewer_type="cloud"`，`engine="aliyun_text_moderation_plus"`）。解析逻辑移植自 `test_tools/test_content_detect.py` 的 `parse_moderation_data()`，兼容 SDK snake_case 与 `to_map()` PascalCase。
+
+主要接口：
+
+```python
+def review_text_with_aliyun(
+    *,
+    account_id: str,
+    text: str,
+    data_id: str,
+) -> MachineReviewResult:
+    """同步调用阿里云文本审核 PLUS，返回归一结果；调用失败返回 level='error'。"""
+```
+
+要点：
+
+- 客户端按 `(ak, sk, endpoint)` 进程级缓存（`functools.lru_cache` 或模块级单例），避免每条消息重建连接。
+- `service_parameters` 传 `content/dataId/userId`，`userId` 用 `account_id`，`dataId` 用 message 维度唯一值，满足账号隔离与可追溯。
+- `RiskLevel`/`label` 归一：见 §21.4 映射表；阿里云 `label` 写入 `categories`（含原始 label 与内部大类），原始响应经 `_redact_response()` 脱敏（去掉 `accountId` 等）后写入 `raw_result`，不落 ak/sk。
+- 超时使用 `read_timeout`/`connect_timeout`，由配置 `moderation_aliyun_timeout_ms` 控制；异常/超时返回 `level="error"`，由上层降级。
+- 日志只记录 `account_id`、`risk_level`、命中大类、`latency_ms`、`error`，不打印正文与原始片段。
+
+### 21.3 service 层新增同步入站筛查
+
+在 `app/moderation/service.py` 新增：
+
+```python
+def screen_inbound_message_sync(
+    *,
+    message_db_id: int,
+    account_id: str,
+    session_id: Optional[int],
+    content_kind: str,
+    text: Optional[str],
+    media: Optional[Any] = None,
+    source_message_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> InboundScreenDecision:
+    ...
+```
+
+流程：
+
+1. `moderation_enabled` 或 `moderation_aliyun_inbound_sync_enabled` 关闭：回退到第一阶段 `enqueue_message_for_moderation()` 异步行为，返回 `allowed=True`（保证本地开发/测试零回归）。
+2. 复用 `idempotency_key = f"message:{account_id}:{message_db_id}:inbound"`，已存在任务直接返回其决策，避免重复任务。
+3. 本地补充红线：`check_text_rules()` 始终执行（`reviewer_type="rule"`）。
+4. 阿里云：`moderation_aliyun_enabled` 为真时调用 `review_text_with_aliyun()`（`reviewer_type="cloud"`）。
+5. 聚合：`final_level = max_risk_level([rule.level, cloud.level])`。
+   - 阿里云 `level="error"`（超时/失败）时**降级**：以本地规则结果为准（PRD §3.2 失败处理）。
+   - `categories` 合并去重（阿里云大类 + 本地大类）。
+6. 落库：`create_content_moderation_task()` 一次，`status = needs_review`（命中）或 `machine_passed`（放行）；逐条写 `content_moderation_results`（rule + cloud）。
+7. 返回 `InboundScreenDecision(allowed, level, categories, task_id, reason, degraded)`。
+
+新增 dataclass（`app/moderation/models.py`）：
+
+```python
+@dataclass(frozen=True)
+class InboundScreenDecision:
+    allowed: bool
+    level: str = "pass"
+    categories: List[str] = field(default_factory=list)
+    task_id: Optional[str] = None
+    reason: str = ""
+    degraded: bool = False  # 阿里云失败降级本地规则
+```
+
+`allowed = final_level in {"pass"}`；`review/block/escalate` 均视为不放行（PRD 现阶段统一“命中即停回复”）。
+
+### 21.4 RiskLevel / label 映射
+
+```text
+RiskLevel -> 内部 level
+  none   -> pass
+  low    -> review
+  medium -> review
+  high   -> block
+本地补充红线命中 -> escalate
+阿里云 error 且本地未命中 -> error（按放行处理，保留降级记录）
+```
+
+label 大类归一（落 categories，前缀区分来源）：
+
+```text
+cloud:<label>            # 保留阿里云原始 label，便于回溯与控制台对齐
+cat:<内部大类>           # sexual_content/political/violence_terror/contraband/
+                         # inappropriate/privacy/religion/promotion/customized
+```
+
+聚合 `risk_level` 仅用于队列分级展示与后续策略；现阶段不据此区分处置。
+
+### 21.5 turn_service 挂点改造
+
+位置：`app/turn_service.py` 入站 `insert_message(direction="inbound")` 成功后，原 `enqueue_message_for_moderation(...)` 调用处。
+
+改造：
+
+1. 用 `screen_inbound_message_sync(...)` 替换原入站 `enqueue_message_for_moderation(...)`。
+2. 决策 `allowed=False` 时，设置 `inbound_blocked=True`，**不进入主模型生成分支**（复用现有 `image_understanding_failed` 的“跳过生成、走兜底文案”模式）：
+   - `reply = settings.moderation_inbound_blocked_reply_text`。
+   - 出站 `messages.raw_json.metadata` 写 `moderation_inbound_blocked=true`、`moderation_task_id`、`moderation_risk_level`、`moderation_categories`。
+   - 跳过本轮 `record_chat_usage_charge`（无主模型调用，不计费）。
+   - 跳过 onboarding 状态推进、跳过工具链。
+   - 命中原文清理：对该入站 `messages` 行调用 `mark_message_moderation_blocked(...)`，在 `messages.error` 写入 `moderation_blocked` 标记；所有 LLM 上下文读取路径（`list_recent_messages`、`list_recent_messages_for_account`、`list_recent_messages_for_account_since`、`_build_session_carryover_summary`、`count_context_messages_for_session`）统一加 `error != 'moderation_blocked'` 过滤，避免下一轮把被拦截内容重新喂给模型。同时跳过本轮 `write_memory` 与 `increment_session_turn_count`，防止污染长期记忆与 session 轮转计数。原文仍保留在 `messages.content` 供管理端排查，审核任务另有独立 `snapshot_text`。
+3. `allowed=True`：维持现有正常生成回复流程。
+
+注意：
+
+- 出站 `check_sync_guard()` 逻辑保持不变；被入站拦截的兜底文案本身是安全文案，可跳过出站审核任务创建（参考现有 `moderation_blocked` 跳过逻辑）。
+- 同步调用置于 `db_connect()` 写入之外，控制事务范围；阿里云 SDK 为阻塞 IO，与现有 `app/sms.py`、`app/captcha.py` 同步调用阿里云的模式一致。
+
+### 21.6 配置项
+
+`.env.example` 与 `app/config.py` 新增（复用既有 `ALIYUN_ACCESS_KEY_ID/SECRET`）：
+
+```text
+MODERATION_ALIYUN_ENABLED=false                 # 入站阿里云云审核总开关
+MODERATION_ALIYUN_INBOUND_SYNC_ENABLED=true     # 入站同步筛查开关（关闭则回退异步）
+MODERATION_ALIYUN_ENDPOINT=green-cip.cn-beijing.aliyuncs.com
+MODERATION_ALIYUN_SERVICE=chat_detection_pro    # 文本审核 PLUS service 场景码
+MODERATION_ALIYUN_TIMEOUT_MS=1000               # connect/read 超时
+MODERATION_INBOUND_BLOCKED_REPLY_TEXT=这个话题我不太方便继续，我们换个轻松点的聊聊吧～
+```
+
+说明：
+
+- `MODERATION_ALIYUN_ENABLED=false` 时不调用云端，仅跑本地规则，行为与第一阶段一致。
+- ak/sk 复用 `aliyun_access_key_id`/`aliyun_access_key_secret`，不新增凭证变量，禁止硬编码。
+
+### 21.7 依赖
+
+`requirements.txt` 新增：
+
+```text
+alibabacloud_green20220302
+```
+
+`alibabacloud_tea_openapi` 已在依赖中（SMS/Captcha 复用）。
+
+### 21.8 本地补充红线词库
+
+`data/moderation/sensitive_terms.json` 生产词库收敛为“阿里云未覆盖的陪伴红线”：自杀自残方法/鼓励、未成年陪伴诱导等，`level=escalate`，`scopes` 含 `inbound`。现有测试用 `MODERATION_TEST_*` 词与色情类词建议迁移到测试夹具或保留供测试，生产开关下不影响阿里云主判定。
+
+### 21.9 测试方案
+
+聚焦测试（新增/调整）：
+
+```bash
+.venv/bin/pytest tests/test_moderation_service.py -v
+.venv/bin/pytest tests/test_turn_service.py -v
+```
+
+需要覆盖（阿里云客户端全程 mock，不发真实请求）：
+
+- `review_text_with_aliyun()` 解析：`none` 放行；返回 `label`/`RiskLevel=high` 时 `level` 与大类归一正确；`accountId` 在 `raw_result` 中被脱敏。
+- `screen_inbound_message_sync()`：命中 → `needs_review` + `allowed=False` + 单条 task；放行 → `machine_passed` + `allowed=True`；阿里云 `error` → 降级本地规则、`degraded=True`、本地命中按风险、未命中按放行。
+- 幂等：同一 `message_db_id` 重复调用只创建一个 task。
+- turn_service：入站命中时不调用主模型、返回固定安全话术、不计费、`raw_json.metadata` 带 `moderation_inbound_blocked`。
+- `account_id` 隔离：task/result 不串账号。
+- 开关关闭（`MODERATION_ALIYUN_ENABLED=false`）时回退异步、行为零回归。
+
+集成回归（触及 `turn_service` 与 service 契约）：
+
+```bash
+.venv/bin/pytest tests/ -v
+```
+
+### 21.10 风险与遗留
+
+- **延迟与成本**：每条入站消息新增一次阿里云同步调用，增加主链路 RT 与按量成本；超时默认 1000ms，可按体验调参。
+- **上下文盲区**：阿里云仅审单条文本，跨多轮诱导/分段绕过可能漏判；本地红线与后续会话级审核为补充方向。
+- **第三方数据出域**：用户聊天正文发送至阿里云内容安全，需在隐私政策口径中确认（PRD §17）。
+- **降级期风险敞口**：阿里云不可用时仅靠本地红线，覆盖面下降；失败率告警见 §21.11。
+- **Referral 计数边界**：入站命中后原文会从 LLM 上下文、记忆和 session 计数中过滤，但本阶段暂不改 referral 有效消息计数逻辑；被拦截的入站消息仍可能按现有增长规则计入 `meaningful_message_count`。后续需结合增长反作弊与审核结论再决定是否过滤或回滚。
+- 出站与图片仍用旧引擎，入站/出站审核口径暂不统一，后续阶段再收敛。
+
+## 22. 阿里云审核失败率告警
+
+模块 `app/moderation/aliyun_alerting.py`，复用 `app/alerting.py` 的飞书发送与脱敏能力（`FEISHU_ALERT_WEBHOOK_URL`）。
+
+- 采集点：`aliyun_review.review_text_with_aliyun()` 在运行时调用结束后上报成功/失败；`not_configured`（凭证缺失）不计入失败率，避免误配长期刷屏。
+- 触发条件（满足其一，受冷却限制）：
+  - 连续失败次数 ≥ `MODERATION_ALIYUN_ALERT_CONSECUTIVE`（默认 3）。
+  - `MODERATION_ALIYUN_ALERT_WINDOW_SECONDS`（默认 300s）滑动窗口内失败率 > `MODERATION_ALIYUN_ALERT_FAILURE_RATE`（默认 0.2），且样本量 ≥ `MODERATION_ALIYUN_ALERT_MIN_SAMPLES`（默认 5）。
+- 冷却：`MODERATION_ALIYUN_ALERT_COOLDOWN_SECONDS`（默认 300s），避免抖动刷屏。
+- 发送：异步线程发送，脱敏后投递；未配 webhook 或 `MODERATION_ALIYUN_ALERT_ENABLED=false` 时不发送。告警失败不影响主链路。
+- 监控只保存进程内状态（滑动窗口 + 连续失败计数 + 上次告警时间），多 worker/多实例各自独立统计。
