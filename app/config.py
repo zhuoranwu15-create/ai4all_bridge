@@ -113,7 +113,7 @@ class Settings(BaseSettings):
     web_search_default_provider: str = "duckduckgo"
     web_search_provider_order: str = "duckduckgo,bing"
     web_search_provider_failover: bool = True
-    web_search_sync_timeout_seconds: float = 8.0
+    web_search_sync_timeout_seconds: float = 3.0
     web_search_max_results: int = 5
     web_search_trace_raw_response: bool = False
 

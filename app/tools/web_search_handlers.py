@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -191,7 +192,35 @@ def _execute_provider(provider: str, *, query: str, count: int, args: Dict[str, 
         raise AliyunSearchError("aliyun web search is disabled")
     if provider == "baidu" and not bool(getattr(settings, "baidu_ai_search_enabled", False)):
         raise BaiduSearchError("baidu ai search is disabled")
-    return providers[provider]()
+
+    # TODO(web-search): 核对各供应商（aliyun/baidu/bing/duckduckgo）的稳定性/SLA 承诺与
+    # 实际超时表现，据此校准 web_search_sync_timeout_seconds 与 provider_order/failover 策略。
+
+    # 每次供应商调用都打点延时日志：定位"带搜索的轮次为何变慢/超时"用，成功失败都记。
+    started = time.monotonic()
+    try:
+        result = providers[provider]()
+    except Exception as err:
+        elapsed_ms = int((time.monotonic() - started) * 1000)
+        logger.warning(
+            "web_search call provider=%s status=failed latency_ms=%s timeout_s=%s query=%r error=%s",
+            provider,
+            elapsed_ms,
+            timeout_seconds,
+            query[:80],
+            err,
+        )
+        raise
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    logger.info(
+        "web_search call provider=%s status=ok latency_ms=%s timeout_s=%s results=%s query=%r",
+        provider,
+        elapsed_ms,
+        timeout_seconds,
+        len(result.get("results") or []),
+        query[:80],
+    )
+    return result
 
 
 def _failed_result(*, query: str, provider: str, error: str, attempts: List[Dict[str, Any]]) -> Dict[str, Any]:
