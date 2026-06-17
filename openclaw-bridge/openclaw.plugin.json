@@ -15,7 +15,7 @@
       },
       "timeoutMs": {
         "type": "integer",
-        "default": 8000,
+        "default": 15000,
         "minimum": 1000,
         "maximum": 30000
       },

@@ -3,7 +3,10 @@ import { readFileSync, statSync } from "node:fs";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_SECRET = "dev-secret";
-const DEFAULT_TIMEOUT_MS = 8000;
+// 同步调 /openclaw/turn 的超时（毫秒），同时用作 hook 执行预算（见文件末尾各 api.on 注册）。
+// 带 web_search 的轮次后端延迟常达 9~14s，8s 会被截断 → 用户收到桥侧"卡住了"兜底而真实回复被丢弃。
+// 调到 15s 留足头寸；env AI4ALL_BRIDGE_TIMEOUT_MS / 插件配置 timeoutMs 仍可覆盖 fetch 超时。
+const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_ONLY_CHANNEL = "openclaw-weixin";
 // 多机：读图片本地字节内联进 turn（base64），让中心无需访问 node 本地路径即可理解图片。
 // 上限须 <= 中心 image_max_bytes 且 <= nginx client_max_body_size（见部署文档）。
