@@ -523,16 +523,24 @@ function toggleSysPrompt() {
 async function fetchAndShowSysPrompt() {
   if (!currentAccountId) return;
   try {
-    const data = await api('GET', `/debug/accounts/${currentAccountId}/prompt-preview`);
+    let data;
+    try {
+      data = await api('POST', `/debug/prompt-lab/accounts/${currentAccountId}/build`, {
+        include_tool_instructions: true,
+      });
+    } catch (_buildErr) {
+      data = await api('GET', `/debug/accounts/${currentAccountId}/prompt-preview`);
+    }
     const panel = document.getElementById('sysPromptPanel');
     const text = document.getElementById('sysPromptText');
     if (!panel || !text) return;
     const flagRow = document.getElementById('debugFlagRow');
     if (data.redacted) {
-      text.textContent = `[Prompt 已脱敏，共 ${data.prompt_chars} 字符]\n\n点击左侧"加入 debug 名单"按钮后刷新即可查看。`;
+      const chars = data.system_prompt_chars || data.prompt_chars || data.total_chars || 0;
+      text.textContent = `[Prompt 已脱敏，共 ${chars} 字符]\n\n点击左侧"加入 debug 名单"按钮后刷新即可查看。`;
       if (flagRow) flagRow.style.display = 'block';
     } else {
-      text.textContent = data.prompt || '(空)';
+      text.textContent = data.system_prompt || data.prompt || '(空)';
       if (flagRow) flagRow.style.display = 'none';
     }
     panel.style.display = 'block';

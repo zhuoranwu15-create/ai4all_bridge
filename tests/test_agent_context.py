@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
@@ -45,8 +46,35 @@ def test_agent_context_user_files_created_from_blank_template(tmp_path):
         # System blocks are populated from data/system/
         assert context.blocks["AGENTS"] != ""
         assert context.blocks["TOOLS"] != ""
+        assert "session_status" in context.blocks["TOOLS"]
         assert "web_search" in context.blocks["TOOLS"]
         assert "如网络搜索" not in context.blocks["TOOLS"]
+
+
+def test_checked_in_system_tools_file_matches_default_template():
+    from app.user_profiles import _default_system_templates
+
+    repo_root = Path(__file__).resolve().parents[1]
+    checked_in = (repo_root / "data" / "system" / "TOOLS.md").read_text(encoding="utf-8")
+
+    assert checked_in.strip() == _default_system_templates()["TOOLS.md"].strip()
+
+
+def test_default_tools_template_mentions_default_chat_tools():
+    from app.tools import get_default_tools
+    from app.user_profiles import _default_system_templates
+
+    tools_text = _default_system_templates()["TOOLS.md"]
+    tool_names = {
+        tool["function"]["name"]
+        for tool in get_default_tools(
+            web_search_enabled=True,
+            content_invitation_response_enabled=True,
+        )
+    }
+
+    missing = sorted(name for name in tool_names if name not in tools_text)
+    assert missing == []
 
 
 def test_agent_context_ignores_legacy_user_profile_when_creating_files(tmp_path):
@@ -93,6 +121,29 @@ def test_agent_context_does_not_overwrite_existing_user_files(tmp_path):
         assert context.blocks["SOUL"] == "custom soul"
         assert context.files["SOUL.md"]["created"] is False
         assert context.files["IDENTITY.md"]["created"] is True
+
+
+def test_ensure_agent_context_files_skips_default_render_when_files_exist(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import (
+            USER_CONTEXT_FILE_ORDER,
+            account_profile_dir,
+            ensure_agent_context_files,
+        )
+
+        profile_dir = account_profile_dir("acc-existing-all")
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        for filename in USER_CONTEXT_FILE_ORDER:
+            (profile_dir / filename).write_text(f"# {filename}\n\ncustom\n", encoding="utf-8")
+
+        with patch(
+            "app.user_profiles._default_user_context_templates",
+            side_effect=AssertionError("default templates should not be rendered"),
+        ):
+            created = ensure_agent_context_files("acc-existing-all", display_name="测试助手")
+
+    assert created == {filename: False for filename in USER_CONTEXT_FILE_ORDER}
 
 
 def test_agent_context_repairs_empty_soul_file_with_blank_template(tmp_path):
@@ -232,5 +283,47 @@ def test_legacy_default_tools_file_is_upgraded(tmp_path):
 
         updated = tools_path.read_text(encoding="utf-8")
         assert created["TOOLS.md"] is False
+        assert "session_status" in updated
         assert "web_search" in updated
         assert "如网络搜索" not in updated
+
+
+def test_previous_default_tools_file_without_session_status_is_upgraded(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import (
+            _RELATIONSHIP_STATUS_TOOLS_SECTION,
+            _default_system_templates,
+            ensure_system_context_files,
+        )
+
+        system_dir = tmp_path / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        tools_path = system_dir / "TOOLS.md"
+        previous_default = _default_system_templates()["TOOLS.md"].replace(
+            _RELATIONSHIP_STATUS_TOOLS_SECTION + "\n", ""
+        )
+        tools_path.write_text(previous_default.strip() + "\n", encoding="utf-8")
+
+        created = ensure_system_context_files()
+
+        updated = tools_path.read_text(encoding="utf-8")
+        assert created["TOOLS.md"] is False
+        assert updated.strip() == _default_system_templates()["TOOLS.md"].strip()
+
+
+def test_custom_system_tools_file_is_not_overwritten(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import ensure_system_context_files
+
+        system_dir = tmp_path / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        tools_path = system_dir / "TOOLS.md"
+        custom = "# TOOLS\n\n- custom operator note"
+        tools_path.write_text(custom + "\n", encoding="utf-8")
+
+        created = ensure_system_context_files()
+
+        assert created["TOOLS.md"] is False
+        assert tools_path.read_text(encoding="utf-8").strip() == custom

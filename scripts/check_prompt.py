@@ -28,28 +28,49 @@ def main() -> None:
     headers = {}
     if args.token:
         headers["Authorization"] = f"Bearer {args.token}"
+    build_body = json.dumps({"include_tool_instructions": True}).encode("utf-8")
     req = urllib.request.Request(
-        f"{base_url}/debug/accounts/{args.account}/prompt-preview",
-        headers=headers,
+        f"{base_url}/debug/prompt-lab/accounts/{args.account}/build",
+        data=build_body,
+        headers={**headers, "Content-Type": "application/json"},
+        method="POST",
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        d = json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        # Accounts without any session still support the compatibility wrapper,
+        # which now uses the same backend prompt builder.
+        req = urllib.request.Request(
+            f"{base_url}/debug/accounts/{args.account}/prompt-preview",
+            headers=headers,
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read().decode("utf-8"))
 
-    b = d["blocks"]
+    metadata = d.get("metadata") or {}
+    b = d.get("blocks") or metadata
+    prompt = d.get("prompt") or d.get("system_prompt")
+    total_chars = d.get(
+        "total_chars",
+        d.get("system_prompt_chars", len(prompt or "")),
+    )
     print(f"account    : {d['account_id']}")
     print(f"today      : {d['today']}")
-    print(f"total_chars: {d['total_chars']}")
+    print(f"total_chars: {total_chars}")
     print(f"--- blocks ---")
-    print(f"  soul            : {b['soul_chars']} chars")
-    print(f"  user_prefs      : {b['user_prefs_chars']} chars")
-    print(f"  long_term_memory: {b['long_term_memory_chars']} chars")
-    print(f"  daily_notes     : {b['daily_notes_chars']} chars")
-    print(f"  style           : {b['style']}")
-    print(f"  display_name    : {b['display_name']}")
-    print(f"  override        : {b['system_prompt_override']}")
+    print(f"  soul            : {b.get('soul_chars', 0)} chars")
+    print(f"  user_prefs      : {b.get('user_prefs_chars', 0)} chars")
+    print(f"  long_term_memory: {b.get('long_term_memory_chars', 0)} chars")
+    print(f"  daily_notes     : {b.get('daily_notes_chars', 0)} chars")
+    print(f"  style           : {b.get('style')}")
+    print(f"  display_name    : {b.get('display_name')}")
+    print(f"  override        : {b.get('system_prompt_override')}")
+    tooling = d.get("tooling") or metadata.get("tooling") or {}
+    if tooling:
+        print(f"  tools           : {', '.join(tooling.get('available_tool_names') or [])}")
     print()
     print("=" * 60)
-    prompt = d.get("prompt") or d.get("system_prompt")
     if prompt is None:
         prompt_chars = d.get("prompt_chars", d.get("system_prompt_chars", d.get("total_chars")))
         print(f"[prompt redacted; chars={prompt_chars}]")

@@ -18,13 +18,12 @@ from app.routers.models import ProfileUpdateRequest
 from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
 from app.llm import generate_completion
 from app.onboarding import is_onboarding_active
-from app.prompt_builder import PromptBuilder, extract_section
 from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
-from app.user_profiles import CONTEXT_FILE_ORDER, account_profile_dir, context_file_path, ensure_user_profile, read_agent_context, read_user_profile
+from app.user_profiles import CONTEXT_FILE_ORDER, account_profile_dir, context_file_path, ensure_user_profile, read_agent_context
 from datetime import date as date_cls, datetime
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -48,6 +47,144 @@ class PromptLabReplayRequest(BaseModel):
     session_id: Optional[int] = None
     source_trace_id: Optional[str] = None
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+def _preview_session_for_account(account_id: str) -> dict:
+    """Return an existing account session for preview, or a side-effect-free stub."""
+    sessions = list_sessions_for_account(account_id=account_id, limit=20)
+    active = [
+        session for session in sessions
+        if session.get("session_key") == ACCOUNT_ACTIVE_SESSION_KEY and session.get("status") == "active"
+    ]
+    if active:
+        return active[0]
+    if sessions:
+        return sessions[0]
+    return {
+        "id": 0,
+        "account_id": account_id,
+        "session_key": ACCOUNT_ACTIVE_SESSION_KEY,
+        "status": "preview",
+        "turn_count": 0,
+        "business_day": None,
+        "carryover_summary": None,
+    }
+
+
+def _build_prompt_lab_envelope(
+    *,
+    account_id: str,
+    session_id: Optional[int],
+    user_text: str,
+    include_tool_instructions: bool,
+    debug_dry_run: bool,
+    allow_missing_session: bool = False,
+) -> dict:
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    session = (
+        _preview_session_for_account(account_id)
+        if allow_missing_session
+        else _prompt_lab_session_for_account(account_id=account_id, session_id=session_id)
+    )
+    profile = get_profile_for_account(account_id=account_id) or {}
+    current = beijing_now()
+    today = current.date().isoformat()
+    onboarding_state = get_account_onboarding_state(account_id=account_id)
+    llm_input = build_turn_llm_input(
+        account_id=account_id,
+        account=account,
+        session=session,
+        profile=profile,
+        text=user_text or "",
+        today=today,
+        current_time=current.strftime("%H:%M"),
+        onboarding_state=onboarding_state,
+        onboarding_active=is_onboarding_active(onboarding_state),
+        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        include_tool_instructions=include_tool_instructions,
+        debug_dry_run=debug_dry_run,
+    )
+    return {
+        "account": account,
+        "session": session,
+        "today": today,
+        "llm_input": llm_input,
+    }
+
+
+def _trace_messages_for_prompt_lab(trace: dict) -> list[dict[str, Any]]:
+    """Return trace messages, falling back to a system-only prompt for legacy traces."""
+    messages = trace.get("messages") or []
+    if messages:
+        return messages
+    system_prompt = str(trace.get("system_prompt") or "")
+    if system_prompt:
+        return [{"role": "system", "content": system_prompt}]
+    return []
+
+
+def _trace_observability_for_prompt_lab(trace: dict, messages: list[dict[str, Any]]) -> dict:
+    """Build display metadata for trace loads that lack full prompt-build observability."""
+    metadata = dict(trace.get("metadata") or {})
+    system_prompt = str(
+        (messages[0].get("content") if messages and isinstance(messages[0], dict) else None)
+        or trace.get("system_prompt")
+        or ""
+    )
+    metadata.setdefault("messages_count", len(messages))
+    metadata.setdefault("history_count", max(len(messages) - 1, 0))
+    metadata.setdefault("system_prompt_chars", len(system_prompt))
+    metadata.setdefault("trace_source", trace.get("source"))
+    metadata.setdefault("trace_created_at", trace.get("created_at"))
+
+    prompt_blocks = metadata.get("block_metrics") or metadata.get("prompt_blocks") or {}
+    if not prompt_blocks and system_prompt:
+        prompt_blocks = {
+            "trace_system_prompt": {
+                "included": True,
+                "section": "trace",
+                "chars": len(system_prompt),
+            }
+        }
+
+    tooling = metadata.get("tooling") or {}
+    if not tooling:
+        tooling = {
+            "mode": "trace",
+            "available_tool_names": [],
+            "available_tools": [],
+            "disabled_tools": [],
+            "first_round_tool_choice": None,
+        }
+
+    history_metadata = metadata.get("history") or {}
+    if not history_metadata:
+        history_messages = []
+        for index, message in enumerate(messages[1:], start=1):
+            content = str((message or {}).get("content") or "")
+            history_messages.append(
+                {
+                    "index": index,
+                    "role": (message or {}).get("role"),
+                    "chars": len(content),
+                }
+            )
+        history_metadata = {
+            "count": len(history_messages),
+            "session_count": 1 if history_messages else 0,
+            "messages": history_messages,
+        }
+
+    carryover = metadata.get("carryover") or {"included": False, "suppressed_by_history": False}
+    return {
+        "metadata": metadata,
+        "prompt_blocks": prompt_blocks,
+        "tooling": tooling,
+        "history_metadata": history_metadata,
+        "carryover": carryover,
+    }
 
 
 @router.get("/debug/sessions")
@@ -134,75 +271,49 @@ def debug_trace(trace_id: str, _: None = Depends(verify_admin_auth)) -> dict:
 
 @router.get("/debug/accounts/{account_id}/prompt-preview")
 def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    """Show the assembled system prompt and per-block sizes for an account."""
-    from app.user_profiles import read_user_profile, read_agent_context
-    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
-    account = get_account(account_id=account_id)
-    if account is None:
-        raise HTTPException(status_code=404, detail="account not found")
-    profile = get_profile_for_account(account_id=account_id) or {}
-    file_profile = read_user_profile(account_id)
-    _now_preview = beijing_now()
-    today = _now_preview.date().isoformat()
-    _current_time_preview = _now_preview.strftime("%H:%M")
-    soul = extract_section(file_profile, "Soul")
-    user_prefs = extract_section(file_profile, "User Preferences")
-    long_term_memory = extract_section(file_profile, "Long-term Memory")
-    agent_context = read_agent_context(
-        account_id,
-        display_name=account.get("display_name"),
+    """Compatibility wrapper over Prompt Lab's unified LLM input builder."""
+    built = _build_prompt_lab_envelope(
+        account_id=account_id,
+        session_id=None,
+        user_text="",
+        include_tool_instructions=True,
+        debug_dry_run=False,
+        allow_missing_session=True,
     )
-    onboarding_state = get_account_onboarding_state(account_id=account_id)
-    onboarding_context = ""
-    if is_onboarding_active(onboarding_state):
-        import re as _re
-        identity_text = agent_context.blocks.get("IDENTITY", "")
-        user_text = agent_context.blocks.get("USER", "")
-        _m = _re.search(r"AI 名字[:：]\s*(.+)", identity_text)
-        _ai_name = _m.group(1).strip() if _m else None
-        _m = _re.search(r"用户称呼[:：]\s*(.+)", user_text)
-        _user_name = _m.group(1).strip() if _m else None
-        onboarding_context = build_onboarding_prompt_context(
-            state=onboarding_state,
-            user_name=_user_name,
-            ai_name=_ai_name,
-            persona=None,
-            user_name_ask_count=0,
-            persona_ask_count=0,
-        )
-    builder = PromptBuilder()
-    build_result = builder.assemble(
-        display_name=account.get("display_name"),
-        soul=soul,
-        user_prefs=user_prefs,
-        long_term_memory=long_term_memory,
-        daily_notes=None,
-        system_prompt_override=profile.get("system_prompt"),
-        style=profile.get("style"),
-        agent_context=agent_context.blocks,
-        onboarding_context=onboarding_context,
-        today=today,
-        current_time=_current_time_preview,
-        model_name=settings.llm_model,
-    )
-    prompt = build_result.prompt
+    today = built["today"]
+    llm_input = built["llm_input"]
+    metadata = llm_input["metadata"]
+    prompt = llm_input["system_prompt"]
+    blocks = {
+        "soul_chars": metadata.get("soul_chars", 0),
+        "user_prefs_chars": metadata.get("user_prefs_chars", 0),
+        "long_term_memory_chars": metadata.get("long_term_memory_chars", 0),
+        "daily_notes_loaded": metadata.get("daily_notes_loaded", False),
+        "daily_notes_chars": metadata.get("daily_notes_chars", 0),
+        "block_metrics": llm_input.get("prompt_blocks") or {},
+        "system_prompt_override": metadata.get("system_prompt_override", False),
+        "style": metadata.get("style"),
+        "display_name": metadata.get("display_name"),
+        "agent_context": metadata.get("agent_context") or {},
+        "tooling": {
+            key: value
+            for key, value in (llm_input.get("tooling") or {}).items()
+            if key != "tools"
+        },
+        "history": llm_input.get("history_metadata") or {},
+        "carryover": llm_input.get("carryover") or {},
+    }
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,
             "today": today,
             "total_chars": len(prompt),
-            "blocks": {
-                "soul_chars": len(soul),
-                "user_prefs_chars": len(user_prefs),
-                "long_term_memory_chars": len(long_term_memory),
-                "daily_notes_loaded": build_result.included("daily_notes"),
-                "daily_notes_chars": build_result.final_chars("daily_notes"),
-                "block_metrics": build_result.as_dict(),
-                "system_prompt_override": bool(profile.get("system_prompt")),
-                "style": profile.get("style"),
-                "display_name": account.get("display_name"),
-                "agent_context": agent_context.metadata(),
-            },
+            "blocks": blocks,
+            "metadata": metadata,
+            "prompt_blocks": llm_input.get("prompt_blocks") or {},
+            "tooling": blocks["tooling"],
+            "history_metadata": blocks["history"],
+            "carryover": blocks["carryover"],
             "prompt": prompt,
             **_debug_redaction_payload(account_id=account_id),
         }
@@ -210,17 +321,12 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
         "account_id": account_id,
         "today": today,
         "total_chars": len(prompt),
-        "blocks": {
-            "soul_chars": len(soul),
-            "user_prefs_chars": len(user_prefs),
-            "long_term_memory_chars": len(long_term_memory),
-            "daily_notes_loaded": False,
-            "daily_notes_chars": 0,
-            "system_prompt_override": bool(profile.get("system_prompt")),
-            "style": profile.get("style"),
-            "display_name": account.get("display_name"),
-            "agent_context": agent_context.metadata(),
-        },
+        "blocks": blocks,
+        "metadata": metadata,
+        "prompt_blocks": llm_input.get("prompt_blocks") or {},
+        "tooling": blocks["tooling"],
+        "history_metadata": blocks["history"],
+        "carryover": blocks["carryover"],
         "prompt_redacted": True,
         "prompt_chars": len(prompt),
         "redacted": True,
@@ -319,8 +425,9 @@ def debug_prompt_lab_build(
         trace = get_debug_trace(trace_id=payload.source_trace_id)
         if trace is None or trace.get("account_id") != account_id:
             raise HTTPException(status_code=404, detail="trace not found")
-        messages = trace.get("messages") or []
-        metadata = trace.get("metadata") or {}
+        messages = _trace_messages_for_prompt_lab(trace)
+        observability = _trace_observability_for_prompt_lab(trace, messages)
+        metadata = observability["metadata"]
         if not _can_bypass_redaction_for_account(account_id):
             metadata = _redact_raw_payload(metadata)
         return {
@@ -329,29 +436,30 @@ def debug_prompt_lab_build(
             "source_trace_id": payload.source_trace_id,
             "llm_model": trace.get("llm_model"),
             "metadata": metadata,
+            "prompt_blocks": observability["prompt_blocks"],
+            "tooling": observability["tooling"],
+            "history_metadata": observability["history_metadata"],
+            "carryover": observability["carryover"],
             **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
         }
 
-    session = _prompt_lab_session_for_account(account_id=account_id, session_id=payload.session_id)
-    profile = get_profile_for_account(account_id=account_id) or {}
-    _now_lab = beijing_now()
-    today = _now_lab.date().isoformat()
-    onboarding_state = get_account_onboarding_state(account_id=account_id)
-    llm_input = build_turn_llm_input(
+    built = _build_prompt_lab_envelope(
         account_id=account_id,
-        account=account,
-        session=session,
-        profile=profile,
-        text=payload.user_text or "",
-        today=today,
-        current_time=_now_lab.strftime("%H:%M"),
-        onboarding_state=onboarding_state,
-        onboarding_active=is_onboarding_active(onboarding_state),
-        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        session_id=payload.session_id,
+        user_text=payload.user_text or "",
         include_tool_instructions=payload.include_tool_instructions,
         debug_dry_run=True,
+        allow_missing_session=payload.session_id is None,
     )
+    session = built["session"]
+    today = built["today"]
+    llm_input = built["llm_input"]
     messages = llm_input["messages"]
+    tooling = {
+        key: value
+        for key, value in (llm_input.get("tooling") or {}).items()
+        if key != "tools"
+    }
     return {
         "account_id": account_id,
         "source": "build",
@@ -359,6 +467,10 @@ def debug_prompt_lab_build(
         "today": today,
         "llm_model": settings.llm_model,
         "metadata": llm_input["metadata"],
+        "prompt_blocks": llm_input.get("prompt_blocks") or {},
+        "tooling": tooling,
+        "history_metadata": llm_input.get("history_metadata") or {},
+        "carryover": llm_input.get("carryover") or {},
         **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
     }
 

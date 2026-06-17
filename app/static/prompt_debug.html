@@ -65,6 +65,18 @@
       border-radius: 6px;
       padding: 8px;
     }
+    .conversation-toggle {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      border: 1px dashed #d8dee8;
+      border-radius: 6px;
+      color: #516070;
+      font-size: 12px;
+      background: #fbfcfe;
+    }
     .split {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -88,6 +100,44 @@
       margin-bottom: 4px;
     }
     .meta-tile strong { font-size: 14px; }
+    .observability-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin: 12px 0;
+    }
+    .debug-panel {
+      border: 1px solid #e1e7f0;
+      border-radius: 6px;
+      padding: 10px;
+      background: #fbfcfe;
+      min-width: 0;
+    }
+    .debug-panel h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #344054;
+    }
+    .debug-list { display: grid; gap: 6px; max-height: 220px; overflow: auto; }
+    .debug-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: baseline;
+      font-size: 12px;
+      color: #394150;
+    }
+    .debug-row small {
+      display: block;
+      color: #768195;
+      margin-top: 2px;
+      line-height: 1.35;
+    }
+    .debug-row code {
+      word-break: break-all;
+      font-size: 11px;
+      color: #475467;
+    }
     .field-meter {
       margin-top: 4px;
       color: #687386;
@@ -97,6 +147,7 @@
     @media (max-width: 980px) {
       .lab-shell, .split { grid-template-columns: 1fr; }
       .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .observability-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -153,6 +204,20 @@
           <span id="buildStatus" class="card-note">未构建</span>
         </div>
         <div class="meta-grid" id="metaGrid"></div>
+        <div class="observability-grid">
+          <div class="debug-panel">
+            <h3>Prompt Blocks</h3>
+            <div id="promptBlocks" class="debug-list">未构建</div>
+          </div>
+          <div class="debug-panel">
+            <h3>Tools</h3>
+            <div id="toolingPanel" class="debug-list">未构建</div>
+          </div>
+          <div class="debug-panel">
+            <h3>History & Carryover</h3>
+            <div id="historyPanel" class="debug-list">未构建</div>
+          </div>
+        </div>
         <div class="split">
           <div>
             <h3>System Prompt</h3>
@@ -183,9 +248,12 @@
 
   <script src="admin.js"></script>
   <script>
+    var CONVERSATION_COLLAPSED_LIMIT = 4;
     var currentAccountId = null;
     var currentSessionId = null;
     var currentSourceTraceId = null;
+    var currentConversationMessages = [];
+    var conversationExpanded = false;
 
     (async function init() {
       await loadAdminMe();
@@ -218,6 +286,7 @@
       if (preferred) select.value = preferred;
       select.onchange = function() {
         currentAccountId = select.value;
+        conversationExpanded = false;
         reloadCurrent();
       };
       currentAccountId = select.value;
@@ -254,13 +323,40 @@
         currentSessionId = data.session && data.session.id;
         document.getElementById('sessionLabel').textContent = currentSessionId ? ('session #' + currentSessionId) : '—';
         var messages = data.messages || [];
-        el.innerHTML = messages.length ? messages.map(renderMessage).join('') : '<div class="status-msg">暂无消息</div>';
+        currentConversationMessages = messages;
+        renderConversation();
         var traces = data.traces || [];
         traceEl.innerHTML = traces.length ? traces.map(renderTrace).join('') : '<div class="status-msg">暂无 trace</div>';
       } catch (e) {
         el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
         traceEl.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
       }
+    }
+
+    function renderConversation() {
+      var el = document.getElementById('conversation');
+      var messages = currentConversationMessages || [];
+      if (!messages.length) {
+        el.innerHTML = '<div class="status-msg">暂无消息</div>';
+        return;
+      }
+      var hiddenCount = Math.max(messages.length - CONVERSATION_COLLAPSED_LIMIT, 0);
+      var visibleMessages = conversationExpanded || hiddenCount === 0
+        ? messages
+        : messages.slice(-CONVERSATION_COLLAPSED_LIMIT);
+      var controls = '';
+      if (hiddenCount > 0) {
+        controls = '<div class="conversation-toggle">'
+          + '<span>' + (conversationExpanded ? ('已显示全部 ' + messages.length + ' 条') : ('已折叠 ' + hiddenCount + ' 条旧消息')) + '</span>'
+          + '<button onclick="toggleConversation()">' + (conversationExpanded ? '收起到最新 4 条' : '展开全部') + '</button>'
+          + '</div>';
+      }
+      el.innerHTML = controls + visibleMessages.map(renderMessage).join('');
+    }
+
+    function toggleConversation() {
+      conversationExpanded = !conversationExpanded;
+      renderConversation();
     }
 
     function renderMessage(m) {
@@ -311,7 +407,9 @@
         });
         currentSourceTraceId = traceId;
         applyBuildResult(data);
-        status.textContent = '已载入 trace';
+        var messages = data.messages || [];
+        var systemPrompt = data.system_prompt || (messages[0] && messages[0].content) || '';
+        status.textContent = '已载入 trace · ' + messages.length + ' messages · ' + systemPrompt.length + ' chars';
       } catch (e) {
         status.textContent = e.message;
       }
@@ -322,10 +420,17 @@
         throw new Error('当前账号 prompt/messages 已脱敏；请使用本地明文开关、allowlist 或明文授权。');
       }
       var messages = data.messages || [];
+      if (!messages.length && data.system_prompt) {
+        messages = [{ role: 'system', content: data.system_prompt }];
+      }
+      if (!messages.length) {
+        throw new Error('该 trace 没有保存 messages 或 system_prompt，无法载入 LLM Input。');
+      }
       document.getElementById('systemPrompt').value = data.system_prompt || (messages[0] && messages[0].content) || '';
       document.getElementById('messagesJson').value = JSON.stringify(messages, null, 2);
       updateLengthMeters();
       renderMeta(data.metadata || {});
+      renderObservability(data);
     }
 
     function renderMeta(meta) {
@@ -342,6 +447,48 @@
       document.getElementById('metaGrid').innerHTML = items.map(function(item) {
         return '<div class="meta-tile"><span>' + esc(item[0]) + '</span><strong>' + esc(String(item[1] == null ? '—' : item[1])) + '</strong></div>';
       }).join('');
+    }
+
+    function renderObservability(data) {
+      renderPromptBlocks(data.prompt_blocks || (data.metadata && (data.metadata.block_metrics || data.metadata.prompt_blocks)) || {});
+      renderTooling(data.tooling || (data.metadata && data.metadata.tooling) || {});
+      renderHistory(data.history_metadata || (data.metadata && data.metadata.history) || {}, data.carryover || (data.metadata && data.metadata.carryover) || {});
+    }
+
+    function renderPromptBlocks(blocks) {
+      var rows = Object.keys(blocks || {}).map(function(name) {
+        var b = blocks[name] || {};
+        var status = b.included === false ? 'dropped' : 'included';
+        return '<div class="debug-row"><div><strong>' + esc(name) + '</strong><small>' + esc(b.section || '—') + ' · ' + esc(status) + '</small></div><code>' + esc(String(b.chars || 0)) + ' chars</code></div>';
+      });
+      document.getElementById('promptBlocks').innerHTML = rows.length ? rows.join('') : '<span class="card-note">暂无 block 数据</span>';
+    }
+
+    function renderTooling(tooling) {
+      var available = tooling.available_tools || [];
+      var disabled = tooling.disabled_tools || [];
+      var rows = [
+        '<div class="debug-row"><div><strong>mode</strong><small>first choice: ' + esc(JSON.stringify(tooling.first_round_tool_choice == null ? '—' : tooling.first_round_tool_choice)) + '</small></div><code>' + esc(tooling.mode || '—') + '</code></div>'
+      ];
+      rows = rows.concat(available.map(function(tool) {
+        return '<div class="debug-row"><div><strong>' + esc(tool.name) + '</strong><small>' + esc(tool.group || '') + ' · ' + esc(tool.reason || 'enabled') + '</small></div><code>enabled</code></div>';
+      }));
+      rows = rows.concat(disabled.map(function(tool) {
+        return '<div class="debug-row"><div><strong>' + esc(tool.name) + '</strong><small>' + esc(tool.group || '') + '</small></div><code>' + esc(tool.reason || 'disabled') + '</code></div>';
+      }));
+      document.getElementById('toolingPanel').innerHTML = rows.join('');
+    }
+
+    function renderHistory(history, carryover) {
+      var rows = [
+        '<div class="debug-row"><div><strong>history</strong><small>sessions: ' + esc(String(history.session_count || 0)) + '</small></div><code>' + esc(String(history.count || 0)) + ' msgs</code></div>',
+        '<div class="debug-row"><div><strong>carryover</strong><small>suppressed: ' + esc(String(!!carryover.suppressed_by_history)) + '</small></div><code>' + esc(carryover.included ? 'included' : 'not included') + '</code></div>'
+      ];
+      rows = rows.concat((history.messages || []).slice(-12).map(function(m) {
+        var label = m.message_id || (m.id != null ? ('#' + m.id) : (m.index != null ? ('#' + m.index) : '—'));
+        return '<div class="debug-row"><div><strong>' + esc(m.role || '—') + '</strong><small>session ' + esc(String(m.session_id == null ? '—' : m.session_id)) + ' · ' + esc(label) + '</small></div><code>' + esc(String(m.chars || 0)) + ' chars</code></div>';
+      }));
+      document.getElementById('historyPanel').innerHTML = rows.join('');
     }
 
     function syncSystemIntoMessages() {

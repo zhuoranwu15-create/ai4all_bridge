@@ -155,7 +155,7 @@ OpenClaw 对 AI4ALL 有价值的部分：
 
 - Agent loop：输入、context assembly、tool use、LLM、memory、after-turn action 的清晰分层。
 - Prompt block：稳定系统规则、Project Context、runtime metadata、output directives 分区。
-- Workspace files：AGENTS、SOUL、IDENTITY、USER、TOOLS、MEMORY。
+- Workspace files：AGENTS、TOOLS、SOUL、IDENTITY、USER、MEMORY。
 - Memory：daily notes、长期记忆和 Dreaming。
 - Tool schema：工具名称、参数、权限、失败结果和 trace。
 - Cron/账号主动检查：状态可恢复、低打扰、可跳过的主动循环。
@@ -394,7 +394,7 @@ onboarding trace 至少记录：
 | Execution bias | 回复纪律和任务完成偏好 | 稳定 |
 | Safety | 全局安全边界 | 稳定 |
 | Skills / product capability | 产品能力摘要 | 低频变化 |
-| Project Context | AGENTS、SOUL、IDENTITY、USER、TOOLS、MEMORY | 账号级变化 |
+| Project Context | AGENTS、TOOLS、SOUL、IDENTITY、USER、MEMORY | 账号级变化 |
 | Daily notes | 今天/昨天或检索结果 | turn 级变化 |
 | Override | 运营临时覆盖 | 账号级变化 |
 | Output directives | 微信文本格式和风格 | 低频变化 |

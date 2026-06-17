@@ -10,6 +10,7 @@ from app.config import settings
 
 
 logger = logging.getLogger("ai4all.llm")
+_MOCK_FALLBACK_ENVS = {"local", "development", "test"}
 
 # DeepSeek sometimes emits tool calls as DSML text (finish_reason="stop") instead of
 # the standard tool_calls JSON field.  These patterns parse that fallback format.
@@ -32,8 +33,56 @@ def _parse_dsml_tool_call(content: str):
     return tool_name, args
 
 
-def _fallback_reply(text: str) -> str:
-    return f"AI4ALL mock 已收到：{text or '空消息'}"
+def _settings_app_env() -> str:
+    env = getattr(settings, "app_env", "local")
+    if not isinstance(env, str):
+        return "local"
+    return env.strip().lower() or "local"
+
+
+def _llm_api_key() -> str:
+    return str(getattr(settings, "llm_api_key", "") or "").strip()
+
+
+def _message_text_for_mock_fallback(
+    user_text: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Pick the user-visible text for local mock mode without exposing system prompt."""
+    for message in reversed(messages or []):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+        if isinstance(content, list):
+            text_parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    part = item.get("text") or item.get("content")
+                    if isinstance(part, str) and part.strip():
+                        text_parts.append(part.strip())
+            if text_parts:
+                return "\n".join(text_parts)
+    return (user_text or "").strip()
+
+
+def _fallback_reply(
+    text: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    fallback_text = _message_text_for_mock_fallback(text, messages)
+    return f"AI4ALL mock 已收到：{fallback_text or '空消息'}"
+
+
+def _missing_api_key_reply(
+    user_text: str,
+    messages: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    if _settings_app_env() in _MOCK_FALLBACK_ENVS:
+        return _fallback_reply(user_text, messages)
+    logger.error("llm_api_key missing in env=%s", _settings_app_env())
+    raise RuntimeError("LLM API key is missing")
 
 
 def _chat_timeout() -> httpx.Timeout:
@@ -152,13 +201,16 @@ def generate_reply(
     user_text: str,
     history: List[Dict[str, str]],
     system_prompt: Optional[str] = None,
+    messages: Optional[List[Dict[str, str]]] = None,
 ) -> str:
-    if not settings.llm_api_key:
-        return _fallback_reply(user_text)
+    if not _llm_api_key():
+        return _missing_api_key_reply(user_text, messages)
+    if messages is not None:
+        return _http_chat(messages)
     prompt = system_prompt or settings.llm_default_prompt
-    messages = [{"role": "system", "content": prompt}]
-    messages.extend(_history_with_current_user(history, user_text))
-    return _http_chat(messages)
+    built_messages = [{"role": "system", "content": prompt}]
+    built_messages.extend(_history_with_current_user(history, user_text))
+    return _http_chat(built_messages)
 
 
 def generate_completion(messages: List[Dict[str, str]]) -> str:
@@ -349,18 +401,25 @@ def generate_reply_with_tools(
     ctx,
     max_tool_rounds: Optional[int] = None,
     first_round_tool_choice: Any = "auto",
+    messages: Optional[List[Dict]] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None).
 
     first_round_tool_choice 由调用方显式传入：第一轮的 tool_choice。默认 "auto"。
     主对话 turn 路径在检测到"主动设置更新"意图时传入强制工具；主动消息生成等
     其它调用方不传（默认 auto），因此不会被内嵌的历史聊天文本误判（曾导致 400）。"""
-    if not settings.llm_api_key:
-        return _fallback_reply(user_text), None
+    if not _llm_api_key():
+        try:
+            return _missing_api_key_reply(user_text, messages), None
+        except RuntimeError as err:
+            return "", str(err)
 
-    prompt = system_prompt or settings.llm_default_prompt
-    messages: List[Dict] = [{"role": "system", "content": prompt}]
-    messages.extend(_history_with_current_user(history, user_text))
+    if messages is None:
+        prompt = system_prompt or settings.llm_default_prompt
+        tool_messages: List[Dict] = [{"role": "system", "content": prompt}]
+        tool_messages.extend(_history_with_current_user(history, user_text))
+    else:
+        tool_messages = list(messages)
     if max_tool_rounds is None:
         max_tool_rounds = int(getattr(settings, "llm_max_tool_rounds", 3) or 3)
     max_tool_rounds = max(1, min(int(max_tool_rounds), 8))
@@ -383,7 +442,7 @@ def generate_reply_with_tools(
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
         try:
-            response = _http_chat_with_tools(messages, tools, tool_choice=tc)
+            response = _http_chat_with_tools(tool_messages, tools, tool_choice=tc)
         except RuntimeError as err:
             return "", str(err)
 
@@ -412,7 +471,7 @@ def generate_reply_with_tools(
                 logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
                 fake_tool_call = _fake_dsml_tool_call(tool_name, tool_args, round_index)
                 tool_result = _execute_and_record_tool_call(fake_tool_call, ctx)
-                messages.extend(
+                tool_messages.extend(
                     [
                         {"role": "assistant", "tool_calls": [fake_tool_call]},
                         {
@@ -438,10 +497,10 @@ def generate_reply_with_tools(
             }
             if message.get("content") is not None:
                 assistant_message["content"] = message.get("content")
-            messages.append(assistant_message)
+            tool_messages.append(assistant_message)
             for tool_call in tool_calls:
                 tool_result = _execute_and_record_tool_call(tool_call, ctx)
-                messages.append(
+                tool_messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.get("id", "call_0"),

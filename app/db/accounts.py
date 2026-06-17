@@ -358,7 +358,7 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT session_id, role, content FROM messages
+            SELECT id, session_id, message_id, role, content FROM messages
             WHERE account_id = ?
               AND content IS NOT NULL
               AND content != ''
@@ -379,7 +379,9 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
         ).fetchall()
     return [
         {
+            "id": row["id"],
             "session_id": row["session_id"],
+            "message_id": row["message_id"],
             "role": row["role"],
             "content": row["content"],
         }
@@ -1460,5 +1462,3 @@ def consume_valid_verification_token(
             (verified_token, normalized),
         ).fetchone()
     return dict(row) if row else None
-
-

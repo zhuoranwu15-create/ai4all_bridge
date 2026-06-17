@@ -575,7 +575,7 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
     set_account_onboarding_state(account_id=session_key, state="step2_sent")
     captured = {}
 
-    def fake_generate_reply(*, user_text, history, system_prompt):
+    def fake_generate_reply(*, user_text, history, system_prompt, **_kwargs):
         captured["system_prompt"] = system_prompt
         return "好，那我就是小满了。我们慢慢来。"
 

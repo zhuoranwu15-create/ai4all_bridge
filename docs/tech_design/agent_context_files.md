@@ -63,7 +63,7 @@ Phase 1 至少需要做到：
 
 - `app/user_profiles.py` 可创建和读取 `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、`USER.md`、`TOOLS.md`、`MEMORY.md`。
 - 旧 `user_profile.md` 兼容迁移仍可保留作为过渡。
-- `app/prompt_builder.py` 已按 `AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY` 注入 `Project Context`。
+- `app/prompt_builder.py` 已按 `AGENTS/TOOLS/SOUL/IDENTITY/USER/MEMORY` 注入 `Project Context`。
 - 普通聊天 prompt 不注入账号级 `HEARTBEAT.md`。
 - 普通聊天 prompt P0 不默认读取或注入 daily notes。
 - `app/memory_writer.py` 已改为在普通聊天回复成功后异步追加 raw daily notes，不再做 LLM extraction。
@@ -226,10 +226,10 @@ AI:
 
 ```text
 AGENTS.md
+TOOLS.md
 SOUL.md
 IDENTITY.md
 USER.md
-TOOLS.md
 MEMORY.md
 ```
 

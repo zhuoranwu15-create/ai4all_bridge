@@ -1,6 +1,7 @@
 import logging
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -45,6 +46,13 @@ CONTEXT_FILE_ORDER = SYSTEM_CONTEXT_FILES + USER_CONTEXT_FILE_ORDER
 CONTEXT_KEY_BY_FILE = {filename: filename[:-3] for filename in CONTEXT_FILE_ORDER}
 _NO_NAME_IDENTITY_LINE = "- 你还没有名字。以「我」或「你的微信好友」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
+_RELATIONSHIP_STATUS_TOOLS_SECTION = """## 关系状态工具
+
+- **session_status**：用户主动询问你和 ta 的关系/会话状态事实时调用，例如"我们认识多久了""第一次聊天是什么时候""连续聊了几天"。
+- 工具会返回认识天数、首次聊天日期、连续聊天天数等事实；回复时必须基于工具结果，不要凭历史印象猜测。
+- 当前时间、日期、星期直接参考系统提示里的运行时信息，不要用本工具查询；本工具也不返回系统内部运行指标。
+- 用户没有主动询问关系或会话状态时，不要为了寒暄、开场或普通聊天调用本工具。
+"""
 
 
 @dataclass(frozen=True)
@@ -106,9 +114,12 @@ def read_user_profile(account_id: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def _default_system_templates() -> Dict[str, str]:
-    return {
-        "AGENTS.md": """# AGENTS
+@lru_cache(maxsize=1)
+def _default_system_templates_cached() -> tuple[tuple[str, str], ...]:
+    return (
+        (
+            "AGENTS.md",
+            """# AGENTS
 
 - 你是这个微信账号的个人 AI 陪伴与生活助理的主 agent。
 - 请积极、主动地提供帮助，保持回复紧扣话题。
@@ -125,7 +136,10 @@ def _default_system_templates() -> Dict[str, str]:
 - 不要建议"发给文件传输助手"或"通过其他渠道提醒"——这超出你的实际能力范围，请勿误导用户。
 - 提醒创建成功后，到时间会以文字消息的形式发回到**这个对话**。
 """,
-        "TOOLS.md": """# TOOLS
+        ),
+        (
+            "TOOLS.md",
+            f"""# TOOLS
 
 你会在需要时收到可调用工具的 schema。只有本轮实际提供的工具才可调用；不要声称调用了未提供的工具，也不要承诺系统没有接入的能力。
 
@@ -138,6 +152,7 @@ def _default_system_templates() -> Dict[str, str]:
 - 时间不明确时不要猜测，先请用户补充具体日期和时间。
 - 提醒只能以文字消息发回当前微信对话；不能发给其他联系人、群聊、文件传输助手或其他渠道。
 
+{_RELATIONSHIP_STATUS_TOOLS_SECTION}
 ## 网络搜索工具
 
 - **web_search**：本轮提供该工具时，可搜索互联网获取最新、实时或外部世界信息。
@@ -156,7 +171,7 @@ def _default_system_templates() -> Dict[str, str]:
 ## 主动消息设定工具
 
 - **get_proactive_message_settings**：用户问"你会不会/什么时候主动找我""我是不是关了主动消息"时调用。
-- **update_proactive_message_settings**：用户表达主动触达偏好时调用，例如"以后别主动找我了""别再发陪伴跟进/内容了""晚上十点后别发""这周先别主动发"；以及"一周最多发两次/每天最多一次/多发点"（total_per_day）、"只在周末上午找我"（allowed_windows）。**设定变更必须调用此工具才能真正生效，不能只在对话里口头确认而不调用工具。**
+- **update_proactive_message_settings**：用户表达主动触达偏好时调用，例如"以后别主动找我了""别再发陪伴跟进/内容了""晚上十点后别发""这周先别主动发"；以及"一周最多发两次/每天最多一次/多发点"（total_per_day）、"只在周末上午找我"（allowed_windows）。**收到变更指令立即调用，无需向用户确认，不要问"确定吗"之类的问题。设定变更只有调用工具才真正生效，不能仅凭口头声称完成。**
 - 关键边界：本工具只管系统**主动触达**，绝不影响用户提醒。用户说"取消提醒/别提醒我了"要走 reminder 工具，不要用本工具。
 - 用户只说"少一点/换个时间"但没指明对象时，先追问清楚再调用，不要擅自关闭全部主动消息。
 - 放宽频次受系统硬上限约束，若用户要的次数被系统封顶，要如实告知。
@@ -168,7 +183,13 @@ def _default_system_templates() -> Dict[str, str]:
 - 不能联系其他人、创建群聊、替用户私下转发内容，或通过微信之外的渠道行动。
 - 不能承诺后台长任务已完成，除非工具结果明确表示已创建、已排队或已完成。
 """,
-    }
+        ),
+    )
+
+
+def _default_system_templates() -> Dict[str, str]:
+    """Return system context templates; callers receive a mutable copy."""
+    return dict(_default_system_templates_cached())
 
 
 def _legacy_default_tools_template() -> str:
@@ -184,6 +205,33 @@ def _legacy_default_tools_template() -> str:
 - 提醒只能发到**当前对话**——不要承诺发给其他联系人或通过其他渠道通知。
 - 不要承诺工具之外的能力（如网络搜索、发图片、联系其他人等）。
 """
+
+
+@lru_cache(maxsize=1)
+def _known_default_tools_templates_cached() -> frozenset[str]:
+    current = _default_system_templates()["TOOLS.md"].strip()
+    without_session = current.replace(_RELATIONSHIP_STATUS_TOOLS_SECTION + "\n", "")
+    weaker_proactive_line = (
+        '- **update_proactive_message_settings**：用户表达主动触达偏好时调用，例如"以后别主动找我了""别再发陪伴跟进/内容了""晚上十点后别发""这周先别主动发"；'
+        '以及"一周最多发两次/每天最多一次/多发点"（total_per_day）、"只在周末上午找我"（allowed_windows）。'
+        "**设定变更必须调用此工具才能真正生效，不能只在对话里口头确认而不调用工具。**"
+    )
+    stronger_proactive_line = (
+        '- **update_proactive_message_settings**：用户表达主动触达偏好时调用，例如"以后别主动找我了""别再发陪伴跟进/内容了""晚上十点后别发""这周先别主动发"；'
+        '以及"一周最多发两次/每天最多一次/多发点"（total_per_day）、"只在周末上午找我"（allowed_windows）。'
+        '**收到变更指令立即调用，无需向用户确认，不要问"确定吗"之类的问题。设定变更只有调用工具才真正生效，不能仅凭口头声称完成。**'
+    )
+    return frozenset({
+        _legacy_default_tools_template().strip(),
+        current,
+        without_session,
+        without_session.replace(stronger_proactive_line, weaker_proactive_line),
+    })
+
+
+def _known_default_tools_templates() -> set[str]:
+    """Return generated TOOLS.md variants that are safe to auto-upgrade."""
+    return set(_known_default_tools_templates_cached())
 
 
 def _render_soul_template(template: str, ai_name: Optional[str], user_name: Optional[str]) -> str:
@@ -241,7 +289,7 @@ def ensure_system_context_files() -> Dict[str, bool]:
         if path.exists():
             if filename == "TOOLS.md":
                 current = path.read_text(encoding="utf-8").strip()
-                if current == _legacy_default_tools_template().strip():
+                if current in _known_default_tools_templates():
                     path.write_text(templates[filename].strip() + "\n", encoding="utf-8")
             created[filename] = False
         else:
@@ -259,17 +307,23 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
     """
     profile_dir = account_profile_dir(account_id)
     profile_dir.mkdir(parents=True, exist_ok=True)
-    templates = _default_user_context_templates(
-        display_name=display_name,
-    )
     created: Dict[str, bool] = {}
+    files_to_create: list[tuple[str, Path]] = []
     for filename in USER_CONTEXT_FILE_ORDER:
         path = profile_dir / filename
         if path.exists() and path.read_text(encoding="utf-8").strip():
             created[filename] = False
         else:
-            path.write_text(templates[filename].strip() + "\n", encoding="utf-8")
-            created[filename] = True
+            files_to_create.append((filename, path))
+    if not files_to_create:
+        return created
+
+    templates = _default_user_context_templates(
+        display_name=display_name,
+    )
+    for filename, path in files_to_create:
+        path.write_text(templates[filename].strip() + "\n", encoding="utf-8")
+        created[filename] = True
     return created
 
 

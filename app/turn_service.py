@@ -48,7 +48,7 @@ from app.proactive.commitments import extract_commitment_from_turn
 from app.proactive.state import ensure_account_state
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
-from app.tools import get_default_tools
+from app.tools import get_default_tools, iter_specs
 from app.turn_context import TurnContext
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
 from app.onboarding import (
@@ -77,6 +77,7 @@ from app.user_profiles import (
 logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+_GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 
 # 检测用户是否在表达"更新主动消息设置"的意图。命中时主对话首轮强制对应工具，避免
 # DeepSeek 先反问确认。**仅供主对话 turn 路径调用**：通用 LLM 入口 generate_reply_with_tools
@@ -193,6 +194,110 @@ def _history_covers_previous_session(
     return total > 0 and included_by_session[previous_session_id] >= total
 
 
+def _tool_name(schema: Dict[str, Any]) -> str:
+    return str((schema.get("function") or {}).get("name") or "")
+
+
+def _summarize_history_rows(history_rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    session_ids = [
+        int(row["session_id"])
+        for row in history_rows
+        if row.get("session_id") is not None
+    ]
+    return {
+        "count": len(history_rows),
+        "session_count": len(set(session_ids)),
+        "messages": [
+            {
+                "id": row.get("id"),
+                "message_id": row.get("message_id"),
+                "session_id": row.get("session_id"),
+                "role": row.get("role"),
+                "chars": len(str(row.get("content") or "")),
+            }
+            for row in history_rows
+        ],
+    }
+
+
+def _build_tooling_envelope(
+    *,
+    onboarding_active: bool,
+    web_search_enabled: bool,
+    active_content_invitation: Optional[dict],
+    text: str,
+    include_tool_instructions: bool,
+) -> Dict[str, Any]:
+    """Return tool schemas plus debug metadata for the main chat tool set."""
+    content_invitation_enabled = bool(active_content_invitation)
+    tools: List[Dict[str, Any]] = []
+    available: List[Dict[str, Any]] = []
+    disabled: List[Dict[str, Any]] = []
+    enabled_names: set[str] = set()
+
+    if not onboarding_active:
+        tools = get_default_tools(
+            web_search_enabled=web_search_enabled,
+            content_invitation_response_enabled=content_invitation_enabled,
+        )
+        enabled_names = {_tool_name(schema) for schema in tools}
+
+    for spec in iter_specs():
+        if spec.default_when_flag == "never":
+            continue
+        if onboarding_active:
+            disabled.append(
+                {
+                    "name": spec.name,
+                    "group": spec.group,
+                    "reason": "onboarding_active",
+                }
+            )
+            continue
+        if spec.name in enabled_names:
+            reason = "default"
+            if spec.default_when_flag == "web_search_enabled":
+                reason = "web_search_enabled"
+            elif spec.default_when_flag == "content_invitation_response_enabled":
+                reason = "active_content_invitation"
+            available.append(
+                {
+                    "name": spec.name,
+                    "group": spec.group,
+                    "reason": reason,
+                    "schema": spec.schema,
+                }
+            )
+            continue
+        reason = "disabled"
+        if spec.default_when_flag == "web_search_enabled":
+            reason = "web_search_disabled"
+        elif spec.default_when_flag == "content_invitation_response_enabled":
+            reason = "no_active_content_invitation"
+        disabled.append(
+            {
+                "name": spec.name,
+                "group": spec.group,
+                "reason": reason,
+            }
+        )
+
+    first_round_tool_choice: Any = "none" if onboarding_active else _infer_proactive_update_tool_choice(text)
+    return {
+        "mode": "plain" if onboarding_active else "tools",
+        "tools": tools,
+        "available_tools": available,
+        "disabled_tools": disabled,
+        "available_tool_names": [_tool_name(schema) for schema in tools],
+        "first_round_tool_choice": first_round_tool_choice,
+        "max_tool_rounds": int(getattr(settings, "llm_max_tool_rounds", 3) or 3),
+        "include_tool_instructions": bool(include_tool_instructions and not onboarding_active),
+        "web_search_enabled": web_search_enabled,
+        "content_invitation_response_enabled": content_invitation_enabled,
+        "active_content_invitation_id": active_content_invitation.get("id") if active_content_invitation else None,
+    }
+
+
 def build_turn_llm_input(
     *,
     account_id: str,
@@ -240,11 +345,18 @@ def build_turn_llm_input(
         history_rows=history_rows,
     )
     carryover_summary = None if suppress_carryover else session.get("carryover_summary")
+    history_metadata = _summarize_history_rows(history_rows)
+    carryover_metadata = {
+        "source_chars": len(session.get("carryover_summary") or ""),
+        "included": bool(carryover_summary),
+        "suppressed_by_history": suppress_carryover,
+    }
 
     metadata: Dict[str, Any] = {
         "history_count": len(history),
         "history_cross_session": True,
-        "history_session_count": len({int(row["session_id"]) for row in history_rows if row.get("session_id") is not None}),
+        "history_session_count": history_metadata["session_count"],
+        "history": history_metadata,
         "soul_chars": len(soul),
         "user_prefs_chars": len(user_prefs),
         "long_term_memory_chars": len(long_term_memory),
@@ -257,6 +369,7 @@ def build_turn_llm_input(
         "onboarding_state": onboarding_state,
         "carryover_summary_included": bool(carryover_summary),
         "carryover_summary_suppressed_by_history": suppress_carryover,
+        "carryover": carryover_metadata,
     }
     if debug_dry_run:
         metadata["debug_dry_run"] = True
@@ -270,6 +383,13 @@ def build_turn_llm_input(
         metadata["active_content_invitation_id"] = (
             active_content_invitation["id"] if active_content_invitation else None
         )
+    tooling = _build_tooling_envelope(
+        onboarding_active=onboarding_active,
+        web_search_enabled=web_search_enabled,
+        active_content_invitation=active_content_invitation,
+        text=text,
+        include_tool_instructions=include_tool_instructions,
+    )
 
     onboarding_ctx = ""
     if onboarding_active:
@@ -310,6 +430,14 @@ def build_turn_llm_input(
     # 由 builder 自产元数据，替代历史写死的僵尸字段（今后若 wire daily notes 自动正确）。
     metadata["daily_notes_loaded"] = build_result.included("daily_notes")
     metadata["daily_notes_chars"] = build_result.final_chars("daily_notes")
+    prompt_blocks = build_result.as_dict()
+    metadata["prompt_blocks"] = prompt_blocks
+    metadata["block_metrics"] = prompt_blocks
+    metadata["tooling"] = {
+        key: value
+        for key, value in tooling.items()
+        if key != "tools"
+    }
     messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
     if debug_dry_run and text.strip():
@@ -325,6 +453,11 @@ def build_turn_llm_input(
         "system_prompt": system_prompt,
         "messages": messages,
         "metadata": metadata,
+        "prompt_blocks": prompt_blocks,
+        "history_metadata": history_metadata,
+        "carryover": carryover_metadata,
+        "tooling": tooling,
+        "tools": tooling["tools"],
         "active_content_invitation": active_content_invitation,
         "agent_context": agent_context,
     }
@@ -985,7 +1118,7 @@ def _resolve_turn_reply(
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
             llm_messages = llm_input["messages"]
-            active_content_invitation = llm_input["active_content_invitation"]
+            tooling = llm_input["tooling"]
             debug_metadata.update(llm_input["metadata"])
 
             ctx = TurnContext(
@@ -1012,27 +1145,27 @@ def _resolve_turn_reply(
                     user_text=text,
                     history=history,
                     system_prompt=system_prompt,
+                    messages=llm_messages,
                 )
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
             else:
-                tools = get_default_tools(
-                    web_search_enabled=web_search_enabled_for_turn,
-                    content_invitation_response_enabled=bool(active_content_invitation),
-                )
                 reply, generation_error = generate_reply_with_tools(
                     user_text=text,
                     history=history,
                     system_prompt=system_prompt,
-                    tools=tools,
+                    tools=llm_input["tools"],
                     ctx=ctx,
-                    first_round_tool_choice=_infer_proactive_update_tool_choice(text),
+                    first_round_tool_choice=tooling["first_round_tool_choice"],
+                    messages=llm_messages,
                 )
-            normal_reply_generated = True
+            if generation_error and not reply:
+                reply = _GENERATION_ERROR_REPLY
+            normal_reply_generated = generation_error is None
         except Exception as err:
             logger.exception("reply generation failed: %s", err)
             generation_error = str(err)
-            reply = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+            reply = _GENERATION_ERROR_REPLY
 
     return _ReplyResult(
         reply=reply,

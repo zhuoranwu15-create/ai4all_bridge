@@ -42,7 +42,7 @@ ADMIN_STAFF_TOKEN=
 | Reminder Debug | 通过模拟聊天创建提醒，查看/编辑/取消测试提醒 | `/ui/reminder_debug.html` |
 | Proactive Debug | 触发 scheduler、账号主动检查、account check draft 和内容邀请生成 | `/ui/proactive_debug.html` |
 | Web Search Debug | 查看 `web_search` schema、模拟 tool invocation 和 provider run trace | `/ui/web_search_debug.html` |
-| Prompt Lab Debug | 查看账号 context files、构建完整 LLM messages、编辑后无副作用重放 | `/ui/prompt_debug.html` |
+| Prompt Lab Debug | 查看账号 context files、构建真实 LLM input envelope、观测 blocks/history/tools/carryover、编辑后无副作用重放 | `/ui/prompt_debug.html` |
 | Swagger UI | 直接调用 Admin/Debug API | `/docs` |
 
 ### 开发期明文策略
@@ -101,11 +101,13 @@ ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=86f866663cf9-im-bot,aid_123456789
 ## 查看 Prompt 组装结果
 
 ```bash
-curl -s "http://localhost:8180/debug/accounts/86f866663cf9-im-bot/prompt-preview" \
-  -H "Authorization: Bearer dev-admin-token" | jq .blocks
+curl -s -X POST "http://localhost:8180/debug/prompt-lab/accounts/86f866663cf9-im-bot/build" \
+  -H "Authorization: Bearer dev-admin-token" \
+  -H "Content-Type: application/json" \
+  -d '{"include_tool_instructions": true}' | jq '{prompt_blocks, tooling, history_metadata, carryover}'
 ```
 
-返回各 block 的字符数（soul / identity / user prefs / memory / daily notes）。
+返回本轮统一 LLM input envelope 的观测信息：prompt blocks、可用/禁用工具、历史消息来源和 carryover 注入状态。`/debug/accounts/{account_id}/prompt-preview` 仍保留为兼容 wrapper，但不再单独组装 prompt。
 
 也可以用脚本查看，`--token` 默认读取环境变量 `ADMIN_TOKEN`，未设置时使用本地默认 `dev-admin-token`：
 

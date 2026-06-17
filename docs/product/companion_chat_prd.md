@@ -94,8 +94,8 @@ Phase 1 的陪伴式聊天不仅是“用户发一句、模型回一句”，还
 | 2 | Execution Bias | 要求积极回应、必要时澄清、不要无故拒绝 |
 | 3 | Safety | 全局安全围栏，不允许被账号级设置覆盖 |
 | 4 | Skills / 产品能力 | 当前产品能力摘要，避免承诺未上线能力 |
-| 5 | Project Context | 注入账号级 `AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY` |
-| 6 | Daily Notes | 注入近期 daily notes，当前以今天/昨天为主 |
+| 5 | Project Context | 注入账号级 `AGENTS/TOOLS/SOUL/IDENTITY/USER/MEMORY` |
+| 6 | Daily Notes | 普通聊天不默认注入；未来只按检索、压缩或特定任务场景装载 |
 | 7 | System Prompt Override | 运营侧临时覆盖，用于内测排障或风格调整 |
 | 8 | Output Directives | 微信纯文本、回复长度、当前风格偏好 |
 | 9 | Runtime | 当前日期、模型等运行时信息 |
@@ -104,7 +104,7 @@ LLM 输入还包括最近 N 轮 conversation messages。短期上下文负责连
 
 Prompt 不是把所有信息每轮全量拼进去，而是由 Backend 按账号、场景、任务和 token 预算动态装载：
 
-- 普通聊天默认装载最近 N 轮对话、账号级 Context Files、必要的 daily notes 和长期记忆摘要。
+- 普通聊天默认装载最近 N 轮对话、账号级 Context Files 和长期记忆摘要；不默认读取或注入 raw daily notes。
 - 新用户 onboarding 场景额外装载默认角色设定、已完成/未完成的设置项和候选设置问题。
 - 用户明确修改称呼、人设或偏好时，额外装载相关 context update 规则，生成更新候选或直接写入低风险偏好。
 - 触发提醒、语音或其他状态型能力时，按状态机、规则和必要确认分流；搜索采用 OpenClaw 风格的 `web_search` tool schema，由模型在本轮自然决定是否调用。

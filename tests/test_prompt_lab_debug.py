@@ -32,9 +32,15 @@ def test_prompt_lab_build_and_replay_are_side_effect_free(client, fresh_db):
     )
     assert res.status_code == 200
 
-    from app.db import get_debug_trace, list_session_messages, list_sessions_for_account
+    from app.db import (
+        get_debug_trace,
+        list_session_messages,
+        list_sessions_for_account,
+        set_account_onboarding_state,
+    )
 
     session = list_sessions_for_account(account_id=account_id)[0]
+    set_account_onboarding_state(account_id=account_id, state="complete")
     before_messages = list_session_messages(session_id=session["id"], limit=100)
 
     res = client.get(
@@ -57,6 +63,14 @@ def test_prompt_lab_build_and_replay_are_side_effect_free(client, fresh_db):
     assert "### SOUL.md" in built["system_prompt"]
     assert built["messages"][-1] == {"role": "user", "content": "second dry run"}
     assert built["metadata"]["debug_dry_run"] is True
+    assert built["prompt_blocks"]["project_context"]["included"] is True
+    assert "create_reminder" in built["tooling"]["available_tool_names"]
+    assert any(
+        item["name"] == "web_search" and item["reason"] == "web_search_disabled"
+        for item in built["tooling"]["disabled_tools"]
+    )
+    assert built["history_metadata"]["count"] >= 1
+    assert built["carryover"]["included"] is False
 
     after_build_messages = list_session_messages(session_id=session["id"], limit=100)
     assert after_build_messages == before_messages
@@ -85,6 +99,21 @@ def test_prompt_lab_build_and_replay_are_side_effect_free(client, fresh_db):
     assert trace["metadata"]["trace_kind"] == "prompt_lab_replay"
     assert trace["reply"] == "edited prompt reply"
 
+    res = client.post(
+        f"/debug/prompt-lab/accounts/{account_id}/build",
+        json={"source_trace_id": replay["trace_id"]},
+        headers=ADMIN_HEADERS,
+    )
+    assert res.status_code == 200
+    loaded = res.json()
+    assert loaded["source"] == "trace"
+    assert loaded["system_prompt"] == built["system_prompt"]
+    assert loaded["messages"] == built["messages"]
+    assert loaded["metadata"]["messages_count"] == len(built["messages"])
+    assert loaded["metadata"]["system_prompt_chars"] == len(built["system_prompt"])
+    assert loaded["prompt_blocks"]["trace_system_prompt"]["chars"] == len(built["system_prompt"])
+    assert loaded["history_metadata"]["count"] == len(built["messages"]) - 1
+
 
 def test_prompt_lab_build_redacts_messages_by_default(client):
     account_id = ai4all_account_id("prompt-lab-redacted")
@@ -111,6 +140,49 @@ def test_prompt_lab_build_redacts_messages_by_default(client):
     assert "system_prompt" not in data
 
 
+def test_prompt_lab_loads_legacy_trace_with_system_prompt_only(client, fresh_db):
+    account_id = ai4all_account_id("prompt-lab-legacy-trace")
+    fresh_db.admin_debug_plaintext_account_allowlist = account_id
+
+    res = client.post(
+        "/openclaw/turn",
+        json=make_payload("prompt-lab-legacy-trace", "m-prompt-lab-legacy", "first"),
+        headers=BRIDGE_HEADERS,
+    )
+    assert res.status_code == 200
+
+    from app.db import insert_debug_trace, list_sessions_for_account
+
+    session = list_sessions_for_account(account_id=account_id)[0]
+    trace_id = "legacy-system-prompt-only"
+    system_prompt = "legacy system prompt"
+    insert_debug_trace(
+        trace_id=trace_id,
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id=None,
+        source="ai4all",
+        llm_model="test-model",
+        system_prompt=system_prompt,
+        messages=[],
+        reply="legacy reply",
+        metadata={},
+    )
+
+    res = client.post(
+        f"/debug/prompt-lab/accounts/{account_id}/build",
+        json={"source_trace_id": trace_id},
+        headers=ADMIN_HEADERS,
+    )
+
+    assert res.status_code == 200
+    loaded = res.json()
+    assert loaded["system_prompt"] == system_prompt
+    assert loaded["messages"] == [{"role": "system", "content": system_prompt}]
+    assert loaded["metadata"]["messages_count"] == 1
+    assert loaded["prompt_blocks"]["trace_system_prompt"]["chars"] == len(system_prompt)
+
+
 def test_prompt_lab_page_shows_prompt_and_messages_lengths():
     from pathlib import Path
 
@@ -118,4 +190,11 @@ def test_prompt_lab_page_shows_prompt_and_messages_lengths():
 
     assert 'id="systemPromptLength"' in html
     assert 'id="messagesJsonLength"' in html
+    assert 'id="promptBlocks"' in html
+    assert 'id="toolingPanel"' in html
+    assert 'id="historyPanel"' in html
+    assert "CONVERSATION_COLLAPSED_LIMIT = 4" in html
     assert "function updateLengthMeters()" in html
+    assert "function renderConversation()" in html
+    assert "function toggleConversation()" in html
+    assert "function renderObservability(data)" in html
