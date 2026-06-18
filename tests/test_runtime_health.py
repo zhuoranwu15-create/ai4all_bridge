@@ -127,6 +127,171 @@ def test_ops_metrics_counts_recent_message_and_outbound_errors(fresh_db):
     assert metrics["recent_errors"]["outbound_messages"][0]["error"] == "send failed"
 
 
+def test_inbound_rate_counts_messages_and_unique_accounts(fresh_db):
+    from app.db import connect, get_inbound_message_rate, get_or_create_session, insert_message
+
+    def add_message(account_id: str, message_id: str, created_at_expr: str) -> None:
+        session_state = get_or_create_session(
+            account_id=account_id,
+            channel="openclaw-weixin",
+            sender_id="sender",
+            sender_name=None,
+            chat_id="chat",
+            session_key=f"session-{account_id}",
+        )
+        row_id = insert_message(
+            account_id=account_id,
+            session_id=int(session_state["session"]["id"]),
+            message_id=message_id,
+            reply_to_message_id=None,
+            direction="inbound",
+            role="user",
+            message_type="text",
+            content="hello",
+        )
+        with connect() as conn:
+            conn.execute(
+                f"UPDATE messages SET created_at = {created_at_expr} WHERE id = ?",
+                (row_id,),
+            )
+
+    add_message("acc-rate-a", "rate-a-1", "datetime('now', '+8 hours', '-5 minutes')")
+    add_message("acc-rate-a", "rate-a-2", "datetime('now', '+8 hours', '-2 minutes')")
+    add_message("acc-rate-b", "rate-b-1", "datetime('now', '+8 hours', '-30 minutes')")
+    add_message("acc-rate-c", "rate-c-old", "datetime('now', '+8 hours', '-2 hours')")
+
+    rates = {item["minutes"]: item for item in get_inbound_message_rate(windows_minutes=(10, 60))}
+
+    assert rates[10]["count"] == 2
+    assert rates[10]["unique_accounts"] == 1
+    assert rates[60]["count"] == 3
+    assert rates[60]["unique_accounts"] == 2
+
+
+def test_today_inbound_rate_counts_from_beijing_midnight(fresh_db):
+    from app.db import connect, get_or_create_session, get_today_inbound_message_rate, insert_message
+
+    def add_message(
+        account_id: str,
+        message_id: str,
+        *,
+        direction: str = "inbound",
+        role: str = "user",
+        created_at_expr: str = "datetime('now', '+8 hours')",
+    ) -> None:
+        session_state = get_or_create_session(
+            account_id=account_id,
+            channel="openclaw-weixin",
+            sender_id="sender",
+            sender_name=None,
+            chat_id="chat",
+            session_key=f"session-{account_id}",
+        )
+        row_id = insert_message(
+            account_id=account_id,
+            session_id=int(session_state["session"]["id"]),
+            message_id=message_id,
+            reply_to_message_id=None,
+            direction=direction,
+            role=role,
+            message_type="text",
+            content="hello",
+        )
+        with connect() as conn:
+            conn.execute(
+                f"UPDATE messages SET created_at = {created_at_expr} WHERE id = ?",
+                (row_id,),
+            )
+
+    add_message("acc-today-a", "today-a-1")
+    add_message("acc-today-a", "today-a-2")
+    add_message("acc-today-b", "today-b-1")
+    add_message(
+        "acc-today-c",
+        "today-c-old",
+        created_at_expr="datetime('now', '+8 hours', '-1 day')",
+    )
+    add_message("acc-today-a", "today-outbound", direction="outbound", role="assistant")
+
+    today = get_today_inbound_message_rate()
+
+    assert today["count"] == 3
+    assert today["unique_accounts"] == 2
+    assert today["since"].endswith(" 00:00:00")
+
+
+def test_recent_reply_latencies_link_previous_user_message(fresh_db):
+    from app.db import connect, get_or_create_session, get_recent_reply_latencies, insert_message
+
+    session_state = get_or_create_session(
+        account_id="acc-latency",
+        channel="openclaw-weixin",
+        sender_id="sender",
+        sender_name=None,
+        chat_id="chat",
+        session_key="latency-session",
+    )
+    session_id = int(session_state["session"]["id"])
+
+    older_inbound_id = insert_message(
+        account_id="acc-latency",
+        session_id=session_id,
+        message_id="lat-in-1",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="first",
+    )
+    older_reply_id = insert_message(
+        account_id="acc-latency",
+        session_id=session_id,
+        message_id="lat-out-1",
+        reply_to_message_id="lat-in-1",
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content="reply 1",
+        latency_ms=1250,
+    )
+    newer_inbound_id = insert_message(
+        account_id="acc-latency",
+        session_id=session_id,
+        message_id="lat-in-2",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="second",
+    )
+    newer_reply_id = insert_message(
+        account_id="acc-latency",
+        session_id=session_id,
+        message_id="lat-out-2",
+        reply_to_message_id="lat-in-2",
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content="reply 2",
+    )
+    with connect() as conn:
+        conn.execute("UPDATE messages SET created_at = '2026-06-18 10:00:00' WHERE id = ?", (older_inbound_id,))
+        conn.execute("UPDATE messages SET created_at = '2026-06-18 10:00:02' WHERE id = ?", (older_reply_id,))
+        conn.execute("UPDATE messages SET created_at = '2026-06-18 10:01:00' WHERE id = ?", (newer_inbound_id,))
+        conn.execute("UPDATE messages SET created_at = '2026-06-18 10:01:03' WHERE id = ?", (newer_reply_id,))
+
+    rows = get_recent_reply_latencies(limit=10)
+
+    assert [row["reply_message_id"] for row in rows[:2]] == ["lat-out-2", "lat-out-1"]
+    assert rows[0]["inbound_message_id"] == "lat-in-2"
+    assert rows[0]["latency_ms"] == 3000
+    assert rows[0]["latency_source"] == "created_at_delta"
+    assert rows[1]["inbound_message_id"] == "lat-in-1"
+    assert rows[1]["latency_ms"] == 1250
+    assert rows[1]["created_at_delta_ms"] == 2000
+    assert rows[1]["latency_source"] == "recorded_latency_ms"
+
+
 def test_account_water_level_counts_distinct_active(fresh_db):
     from app.db import connect, get_account_water_level, upsert_channel_binding
 

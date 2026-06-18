@@ -6,7 +6,22 @@ from app.config import settings
 from app.routers.deps import require_admin_user, verify_admin_auth
 from app.routers.serializers import _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _profile_for_view, _redacted_flag_for_account, _session_for_view, _trace_for_view
 from app.routers.health import _build_ready_status
-from app.db import clear_session_messages, get_debug_trace, get_inbound_message_rate, get_message_raw, get_ops_metrics, get_profile_for_session, get_session, list_debug_traces, list_recent_message_raw, list_scheduler_heartbeats, list_session_messages, list_sessions
+from app.db import (
+    clear_session_messages,
+    get_debug_trace,
+    get_inbound_message_rate,
+    get_message_raw,
+    get_ops_metrics,
+    get_profile_for_session,
+    get_recent_reply_latencies,
+    get_session,
+    get_today_inbound_message_rate,
+    list_debug_traces,
+    list_recent_message_raw,
+    list_scheduler_heartbeats,
+    list_session_messages,
+    list_sessions,
+)
 from app.user_meta_scheduler import get_user_meta_scheduler, run_user_meta_scheduler_once
 from datetime import datetime
 from typing import Optional
@@ -63,9 +78,11 @@ def admin_ops_status(
 def admin_ops_inbound_rate(
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    """实时入站消息数：返回过去 10 分钟、1 小时的入站计数，供后台实时监控页轮询。"""
+    """实时入站监控：返回滚动窗口、今日窗口和最近回复延时，供后台页面轮询。"""
     return {
         "windows": get_inbound_message_rate(windows_minutes=(10, 60)),
+        "today": get_today_inbound_message_rate(),
+        "recent_reply_latencies": get_recent_reply_latencies(limit=10),
         "checked_at": datetime.now().isoformat(timespec="seconds"),
     }
 

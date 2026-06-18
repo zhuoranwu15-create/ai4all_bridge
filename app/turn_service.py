@@ -80,6 +80,42 @@ logger = logging.getLogger("ai4all.turn_service")
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
 _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def _record_timing(timings: Dict[str, int], key: str, started_at: float) -> int:
+    value = _elapsed_ms(started_at)
+    timings[key] = value
+    return value
+
+
+def _log_turn_timing(
+    *,
+    payload: OpenClawTurnRequest,
+    timings: Dict[str, int],
+    started_at: float,
+    status: str,
+    account_id: Optional[str] = None,
+    session: Optional[str] = None,
+    message_id: Optional[str] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Emit one structured-enough timing line per inbound turn without message text."""
+    logger.info(
+        "openclaw_turn timing account=%s session=%s message_id=%s status=%s "
+        "total_ms=%s reply_ready_ms=%s timings=%s error=%s",
+        account_id,
+        session or payload.session_key,
+        message_id or payload.message_id or payload.event_id,
+        status,
+        _elapsed_ms(started_at),
+        timings.get("reply_ready_ms"),
+        timings,
+        error,
+    )
+
 # 检测用户是否在表达"更新主动消息设置"的意图。命中时主对话首轮强制对应工具，避免
 # DeepSeek 先反问确认。**仅供主对话 turn 路径调用**：通用 LLM 入口 generate_reply_with_tools
 # 不再内置此判定，主动消息生成路径也不调用它，从而不会把内嵌的历史聊天文本误判成当前
@@ -838,6 +874,7 @@ def _persist_and_screen_inbound(
     setup: _TurnSetup,
     *,
     started_at: float,
+    timings: Dict[str, int],
 ) -> Union[_InboundResult, OpenClawTurnResponse]:
     """阶段B：text 规范化+图片理解、插入入站消息(+插入后去重早返回)、入站审核 screen、
     referral、图片计费。返回 _InboundResult；插入后去重命中则返回 OpenClawTurnResponse。"""
@@ -854,6 +891,7 @@ def _persist_and_screen_inbound(
     image_described = False
     image_understanding_failed = False
     if payload.message_type == "image":
+        image_started = time.monotonic()
         caption = text
         description = None
         if settings.image_understanding_enabled:
@@ -873,9 +911,11 @@ def _persist_and_screen_inbound(
         else:
             image_understanding_failed = True
             text = caption or "[图片]"
+        _record_timing(timings, "image_understanding_ms", image_started)
     elif not text and payload.message_type == "voice":
         text = "[voice message]"
 
+    inbound_db_started = time.monotonic()
     with db_connect() as conn:
         inserted_id = insert_message(
             account_id=account_id,
@@ -901,12 +941,13 @@ def _persist_and_screen_inbound(
         )
         if inserted_id is not None:
             increment_daily_usage(account_id=account_id, date=today, conn=conn)
+    _record_timing(timings, "inbound_db_ms", inbound_db_started)
     if inserted_id is None:
         duplicate_reply = get_duplicate_reply(
             account_id=account_id,
             reply_to_message_id=message_id,
         )
-        latency_ms = int((time.monotonic() - started_at) * 1000)
+        latency_ms = _elapsed_ms(started_at)
         return OpenClawTurnResponse(
             status="duplicate",
             reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
@@ -916,6 +957,7 @@ def _persist_and_screen_inbound(
     # 入站内容同步筛查（阿里云云审核为主 + 本地红线补充）。命中即停止本轮回复并进入人工队列。
     # 阿里云未开启时内部回退第一阶段异步审核并放行；筛查自身异常时 fail-open（放行本轮回复）。
     inbound_screen = None
+    inbound_moderation_started = time.monotonic()
     try:
         inbound_content_kind = "voice_transcript" if payload.message_type == "voice" else payload.message_type
         inbound_screen = screen_inbound_message_sync(
@@ -940,6 +982,8 @@ def _persist_and_screen_inbound(
             err,
         )
         inbound_screen = None
+    finally:
+        _record_timing(timings, "inbound_moderation_ms", inbound_moderation_started)
     inbound_blocked = bool(inbound_screen is not None and not inbound_screen.allowed)
     if inbound_blocked:
         # 命中风险的入站原文打审核标记：从后续所有 LLM 上下文/记忆/turn 计数中剔除，避免下一轮被重新喂给模型。
@@ -956,6 +1000,7 @@ def _persist_and_screen_inbound(
                 err,
             )
 
+    referral_started = time.monotonic()
     try:
         process_referral_message_for_account(
             account_id=account_id,
@@ -968,9 +1013,12 @@ def _persist_and_screen_inbound(
             inserted_id,
             err,
         )
+    finally:
+        _record_timing(timings, "referral_ms", referral_started)
 
     # VL 成功后记一次独立的图片理解成本事件（固定贝壳，带总开关，与 chat 扣费相互独立）。
     if image_described:
+        image_charge_started = time.monotonic()
         try:
             record_image_understanding_charge(
                 account_id=account_id,
@@ -989,6 +1037,8 @@ def _persist_and_screen_inbound(
                 message_id,
                 err,
             )
+        finally:
+            _record_timing(timings, "image_charge_ms", image_charge_started)
 
     return _InboundResult(
         text=text,
@@ -1007,6 +1057,7 @@ def _resolve_turn_reply(
     *,
     background_loop: Optional[asyncio.AbstractEventLoop],
     force_web_search_enabled: Optional[bool],
+    timings: Dict[str, int],
 ) -> _ReplyResult:
     """阶段C：决定本轮回复来源（inbound_blocked / #重置 / #状态 / 图片失败 / 正常聊天）。
     正常分支内做 onboarding 预抽取、build_turn_llm_input、构建 TurnContext 并调 LLM。"""
@@ -1080,6 +1131,7 @@ def _resolve_turn_reply(
         reply = settings.image_understanding_fallback_text
     else:
         try:
+            prompt_started = time.monotonic()
             agent_context = read_agent_context(
                 account_id,
                 display_name=account.get("display_name"),
@@ -1147,28 +1199,36 @@ def _resolve_turn_reply(
                 background_loop=background_loop,
                 web_search_enabled=web_search_enabled_for_turn,
             )
+            _record_timing(timings, "prompt_build_ms", prompt_started)
 
+            generation_started = time.monotonic()
             if onboarding_active:
-                reply = generate_reply(
-                    user_text=text,
-                    history=history,
-                    system_prompt=system_prompt,
-                    messages=llm_messages,
-                    provider=llm_provider,
-                )
+                try:
+                    reply = generate_reply(
+                        user_text=text,
+                        history=history,
+                        system_prompt=system_prompt,
+                        messages=llm_messages,
+                        provider=llm_provider,
+                    )
+                finally:
+                    _record_timing(timings, "reply_generation_ms", generation_started)
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
             else:
-                reply, generation_error = generate_reply_with_tools(
-                    user_text=text,
-                    history=history,
-                    system_prompt=system_prompt,
-                    tools=llm_input["tools"],
-                    ctx=ctx,
-                    first_round_tool_choice=tooling["first_round_tool_choice"],
-                    messages=llm_messages,
-                    provider=llm_provider,
-                )
+                try:
+                    reply, generation_error = generate_reply_with_tools(
+                        user_text=text,
+                        history=history,
+                        system_prompt=system_prompt,
+                        tools=llm_input["tools"],
+                        ctx=ctx,
+                        first_round_tool_choice=tooling["first_round_tool_choice"],
+                        messages=llm_messages,
+                        provider=llm_provider,
+                    )
+                finally:
+                    _record_timing(timings, "reply_generation_ms", generation_started)
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
             normal_reply_generated = generation_error is None
@@ -1197,6 +1257,7 @@ def _finalize_turn(
     *,
     latency_ms: int,
     background_loop: Optional[asyncio.AbstractEventLoop],
+    timings: Dict[str, int],
 ) -> OpenClawTurnResponse:
     """阶段D：出站同步审核守卫（就地兜底覆写 reply）、debug trace、出站持久化+turn_count、
     出站审核入队、计费、onboarding 状态推进、after-turn 派发、构建响应。"""
@@ -1231,6 +1292,7 @@ def _finalize_turn(
     debug_metadata.setdefault("llm_provider_id", active_llm_provider.get("id"))
     debug_metadata.setdefault("llm_protocol", active_llm_provider.get("protocol"))
 
+    outbound_guard_started = time.monotonic()
     reply_message_id = f"reply-{uuid.uuid4()}"
     moderation_reply_metadata: Dict[str, Any] = {}
     sync_decision = check_sync_guard(
@@ -1287,9 +1349,11 @@ def _finalize_turn(
             }
         )
         debug_metadata.update(moderation_reply_metadata)
+    _record_timing(timings, "outbound_sync_guard_ms", outbound_guard_started)
 
     trace_id = None
     outbound_inserted_id = None
+    outbound_db_started = time.monotonic()
     with db_connect() as conn:
         if debug_trace_enabled:
             trace_id = f"trace-{uuid.uuid4()}"
@@ -1337,6 +1401,7 @@ def _finalize_turn(
 
         if not generation_error and not inbound_blocked and text and text not in _SPECIAL_COMMANDS:
             increment_session_turn_count(session_id=int(session["id"]), conn=conn)
+    _record_timing(timings, "outbound_db_ms", outbound_db_started)
 
     if debug_trace_enabled:
         logger.info(
@@ -1356,6 +1421,7 @@ def _finalize_turn(
         and not moderation_reply_metadata.get("moderation_blocked")
         and not inbound_blocked
     ):
+        outbound_moderation_started = time.monotonic()
         try:
             enqueue_message_for_moderation(
                 message_db_id=int(outbound_inserted_id),
@@ -1377,9 +1443,12 @@ def _finalize_turn(
                 outbound_inserted_id,
                 err,
             )
+        finally:
+            _record_timing(timings, "outbound_moderation_enqueue_ms", outbound_moderation_started)
 
     billing_result = None
     if not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS:
+        billing_started = time.monotonic()
         try:
             billing_result = record_chat_usage_charge(
                 account_id=account_id,
@@ -1398,10 +1467,13 @@ def _finalize_turn(
             )
         except Exception as err:
             logger.exception("chat usage charge failed account=%s reply=%s error=%s", account_id, reply_message_id, err)
+        finally:
+            _record_timing(timings, "billing_ms", billing_started)
 
     # Advance onboarding state synchronously after reply so onboarding completion
     # does not depend on the after-turn background loop.
     if not generation_error and normal_reply_generated and onboarding_active:
+        onboarding_advance_started = time.monotonic()
         if onboarding_state == "pending":
             try:
                 set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
@@ -1434,6 +1506,7 @@ def _finalize_turn(
                     )
             except Exception as err:
                 logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
+        _record_timing(timings, "onboarding_advance_ms", onboarding_advance_started)
 
     should_run_after_turn = (
         not generation_error
@@ -1441,6 +1514,7 @@ def _finalize_turn(
         and text
         and text not in _SPECIAL_COMMANDS
     )
+    after_turn_enqueue_started = time.monotonic()
     if should_run_after_turn and background_loop is None:
         # 不再静默吞掉：无后台事件循环时（独立进程/脚本/测试显式 None）after-turn
         # 记忆写入与 commitment 抽取会被跳过，至少记一条 warning 让数据丢失可观测。
@@ -1485,6 +1559,8 @@ def _finalize_turn(
                     source_reply_message_id=reply_message_id,
                 ),
             )
+    if should_run_after_turn:
+        _record_timing(timings, "after_turn_enqueue_ms", after_turn_enqueue_started)
 
     return OpenClawTurnResponse(
         status="ok",
@@ -1525,6 +1601,7 @@ def handle_openclaw_turn(
     解析回复 → 终结。各阶段细节见对应 _prepare_turn/_persist_and_screen_inbound/
     _resolve_turn_reply/_finalize_turn。"""
     started_at = time.monotonic()
+    timings: Dict[str, int] = {}
     id_diagnostics = _openclaw_id_diagnostics(payload)
     # 入口只记 metadata，不记正文：未绑定/已解绑入站会在下方收口返回，
     # 正文日志移到绑定校验通过后（见 disabled 检查之后）。
@@ -1543,38 +1620,86 @@ def handle_openclaw_turn(
     )
 
     if payload.chat_type != "private":
+        timings["reply_ready_ms"] = _elapsed_ms(started_at)
+        _log_turn_timing(
+            payload=payload,
+            timings=timings,
+            started_at=started_at,
+            status="ignored_non_private",
+        )
         return OpenClawTurnResponse(status="ignored", no_reply=True)
 
+    prepare_started = time.monotonic()
     setup = _prepare_turn(payload, id_diagnostics=id_diagnostics, started_at=started_at)
+    _record_timing(timings, "prepare_ms", prepare_started)
     if isinstance(setup, OpenClawTurnResponse):
+        timings["reply_ready_ms"] = _elapsed_ms(started_at)
+        setup_metadata = setup.metadata or {}
+        _log_turn_timing(
+            payload=payload,
+            timings=timings,
+            started_at=started_at,
+            status=setup.status,
+            account_id=setup_metadata.get("account_id") or setup_metadata.get("ai4all_account_id"),
+            session=setup_metadata.get("session_key") or payload.session_key,
+            message_id=payload.message_id or payload.event_id,
+        )
         return setup
 
-    inbound = _persist_and_screen_inbound(payload, setup, started_at=started_at)
+    inbound_started = time.monotonic()
+    inbound = _persist_and_screen_inbound(
+        payload,
+        setup,
+        started_at=started_at,
+        timings=timings,
+    )
+    _record_timing(timings, "inbound_total_ms", inbound_started)
     if isinstance(inbound, OpenClawTurnResponse):
+        timings["reply_ready_ms"] = _elapsed_ms(started_at)
+        _log_turn_timing(
+            payload=payload,
+            timings=timings,
+            started_at=started_at,
+            status=inbound.status,
+            account_id=setup.account_id,
+            session=setup.openclaw_session_key,
+            message_id=setup.message_id,
+        )
         return inbound
 
+    reply_started = time.monotonic()
     result = _resolve_turn_reply(
         payload,
         setup,
         inbound,
         background_loop=background_loop,
         force_web_search_enabled=force_web_search_enabled,
+        timings=timings,
     )
+    _record_timing(timings, "reply_total_ms", reply_started)
 
-    latency_ms = int((time.monotonic() - started_at) * 1000)
-    logger.info(
-        "openclaw_turn completed account=%s session=%s status=ok latency_ms=%s error=%s",
-        setup.account_id,
-        setup.openclaw_session_key,
-        latency_ms,
-        result.generation_error,
-    )
+    latency_ms = _elapsed_ms(started_at)
+    timings["reply_ready_ms"] = latency_ms
 
-    return _finalize_turn(
+    finalize_started = time.monotonic()
+    response = _finalize_turn(
         payload,
         setup,
         inbound,
         result,
         latency_ms=latency_ms,
         background_loop=background_loop,
+        timings=timings,
     )
+    _record_timing(timings, "finalize_total_ms", finalize_started)
+    _log_turn_timing(
+        payload=payload,
+        timings=timings,
+        started_at=started_at,
+        status=response.status,
+        account_id=setup.account_id,
+        session=setup.openclaw_session_key,
+        message_id=setup.message_id,
+        error=result.generation_error,
+    )
+    return response

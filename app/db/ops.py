@@ -25,6 +25,8 @@ __all__ = [
     'get_database_storage_stats',
     'get_faq_message',
     'get_inbound_message_rate',
+    'get_recent_reply_latencies',
+    'get_today_inbound_message_rate',
     'get_ops_metrics',
     'get_scheduler_heartbeat',
     'like_faq_message',
@@ -437,12 +439,12 @@ def get_account_water_level(*, active_windows_minutes=(15, 60, 1440)) -> Dict[st
 
 def get_inbound_message_rate(
     *, windows_minutes: Iterable[int] = (10, 60)
-) -> List[Dict[str, int]]:
-    """统计各时间窗口内的入站消息数（实时入站监控用）。
+) -> List[Dict[str, Any]]:
+    """统计各滚动时间窗口内的入站消息数与去重账号数（实时入站监控用）。
 
     单条 SQL 用条件 SUM 一次算出所有窗口，避免逐窗口扫表。`created_at` 存北京时间，
     与 `datetime('now','+8 hours')` 比较，与 get_ops_metrics 时区约定一致。
-    返回按窗口升序排列的 ``[{"minutes": N, "count": M}, ...]``。
+    返回按窗口升序排列的 ``[{"minutes": N, "count": M, "unique_accounts": U}, ...]``。
     """
     # 去重 + 过滤非正数，按窗口升序，保证查询列与返回顺序稳定
     windows = sorted({int(m) for m in windows_minutes if int(m) > 0})
@@ -451,7 +453,10 @@ def get_inbound_message_rate(
     # 为每个窗口生成一个条件 SUM；最大窗口用于 WHERE 预过滤减少扫描
     select_exprs = ", ".join(
         f"SUM(CASE WHEN created_at >= datetime('now', '+8 hours', '-{m} minutes') "
-        f"THEN 1 ELSE 0 END) AS w{m}"
+        f"THEN 1 ELSE 0 END) AS w{m}_count, "
+        f"COUNT(DISTINCT CASE WHEN created_at >= datetime('now', '+8 hours', '-{m} minutes') "
+        f"THEN account_id ELSE NULL END) AS w{m}_unique_accounts, "
+        f"datetime('now', '+8 hours', '-{m} minutes') AS w{m}_since"
         for m in windows
     )
     max_window = windows[-1]
@@ -461,13 +466,121 @@ def get_inbound_message_rate(
             SELECT {select_exprs}
             FROM messages
             WHERE direction = 'inbound'
+              AND role = 'user'
               AND created_at >= datetime('now', '+8 hours', '-{max_window} minutes')
+              AND created_at <= datetime('now', '+8 hours')
             """
         ).fetchone()
     return [
-        {"minutes": m, "count": int((row[f"w{m}"] if row else 0) or 0)}
+        {
+            "minutes": m,
+            "count": int((row[f"w{m}_count"] if row else 0) or 0),
+            "unique_accounts": int((row[f"w{m}_unique_accounts"] if row else 0) or 0),
+            "since": row[f"w{m}_since"] if row else None,
+        }
         for m in windows
     ]
+
+
+def get_today_inbound_message_rate() -> Dict[str, Any]:
+    """统计北京时间今日 0 点以来的入站消息数与去重账号数。"""
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS count,
+                COUNT(DISTINCT account_id) AS unique_accounts,
+                date('now', '+8 hours') || ' 00:00:00' AS since
+            FROM messages
+            WHERE direction = 'inbound'
+              AND role = 'user'
+              AND created_at >= date('now', '+8 hours') || ' 00:00:00'
+              AND created_at <= datetime('now', '+8 hours')
+            """
+        ).fetchone()
+    return {
+        "key": "today",
+        "count": int((row["count"] if row else 0) or 0),
+        "unique_accounts": int((row["unique_accounts"] if row else 0) or 0),
+        "since": row["since"] if row else None,
+    }
+
+
+def get_recent_reply_latencies(*, limit: int = 10) -> List[Dict[str, Any]]:
+    """返回最近若干条同步回复相对上一条用户入站消息的延时。"""
+    safe_limit = max(1, min(int(limit), 100))
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            WITH recent_replies AS (
+                SELECT
+                    id, account_id, session_id, message_id, reply_to_message_id,
+                    latency_ms, created_at
+                FROM messages
+                WHERE direction = 'outbound'
+                  AND role = 'assistant'
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+            )
+            SELECT
+                r.id AS reply_id,
+                r.account_id AS account_id,
+                r.session_id AS session_id,
+                r.message_id AS reply_message_id,
+                r.reply_to_message_id AS reply_to_message_id,
+                r.created_at AS reply_created_at,
+                r.latency_ms AS recorded_latency_ms,
+                u.id AS inbound_id,
+                u.message_id AS inbound_message_id,
+                u.created_at AS inbound_created_at,
+                CASE
+                    WHEN u.id IS NULL THEN NULL
+                    WHEN r.latency_ms IS NOT NULL THEN r.latency_ms
+                    ELSE CAST(ROUND((julianday(r.created_at) - julianday(u.created_at)) * 86400000) AS INTEGER)
+                END AS latency_ms,
+                CASE
+                    WHEN u.id IS NULL THEN NULL
+                    ELSE CAST(ROUND((julianday(r.created_at) - julianday(u.created_at)) * 86400000) AS INTEGER)
+                END AS created_at_delta_ms,
+                CASE
+                    WHEN u.id IS NULL THEN 'missing_inbound'
+                    WHEN r.latency_ms IS NOT NULL THEN 'recorded_latency_ms'
+                    ELSE 'created_at_delta'
+                END AS latency_source
+            FROM recent_replies r
+            LEFT JOIN messages u ON u.id = COALESCE(
+                (
+                    SELECT m.id
+                    FROM messages m
+                    WHERE m.account_id = r.account_id
+                      AND m.direction = 'inbound'
+                      AND m.role = 'user'
+                      AND r.reply_to_message_id IS NOT NULL
+                      AND r.reply_to_message_id != ''
+                      AND m.message_id = r.reply_to_message_id
+                    ORDER BY m.id DESC
+                    LIMIT 1
+                ),
+                (
+                    SELECT m.id
+                    FROM messages m
+                    WHERE m.account_id = r.account_id
+                      AND m.session_id = r.session_id
+                      AND m.direction = 'inbound'
+                      AND m.role = 'user'
+                      AND (
+                          m.created_at < r.created_at
+                          OR (m.created_at = r.created_at AND m.id < r.id)
+                      )
+                    ORDER BY m.created_at DESC, m.id DESC
+                    LIMIT 1
+                )
+            )
+            ORDER BY r.created_at DESC, r.id DESC
+            """,
+            (safe_limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
@@ -575,5 +688,3 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
         },
         "database": get_database_storage_stats(),
     }
-
-

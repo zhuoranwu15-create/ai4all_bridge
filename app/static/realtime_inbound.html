@@ -21,11 +21,18 @@
     <section class="metric-grid" aria-label="入站概览">
       <div class="metric-tile">
         <span class="metric-label">近 10 分钟</span>
-        <strong id="metric-w10" style="font-size:2.2em">—</strong>
+        <strong id="metric-w10-count" class="metric-primary">—</strong>
+        <span id="metric-w10-users" class="metric-secondary">uniq 用户 —</span>
       </div>
       <div class="metric-tile">
         <span class="metric-label">近 1 小时</span>
-        <strong id="metric-w60" style="font-size:2.2em">—</strong>
+        <strong id="metric-w60-count" class="metric-primary">—</strong>
+        <span id="metric-w60-users" class="metric-secondary">uniq 用户 —</span>
+      </div>
+      <div class="metric-tile">
+        <span class="metric-label">今日 0 点以来</span>
+        <strong id="metric-today-count" class="metric-primary">—</strong>
+        <span id="metric-today-users" class="metric-secondary">uniq 用户 —</span>
       </div>
       <div class="metric-tile">
         <span class="metric-label">更新时间</span>
@@ -38,7 +45,29 @@
         <h2>说明</h2>
         <button onclick="loadInbound()">立即刷新</button>
       </div>
-      <div class="empty-note">仅统计入站（用户发来的）消息，时间窗口为滚动窗口（相对当前时刻）。</div>
+      <div class="empty-note">仅统计用户入站消息；滚动窗口相对当前时刻，今日窗口按北京时间 0 点起算。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title-row">
+        <h2>过去 10 次回复延时</h2>
+        <span class="card-note">同步 AI 回复，不含主动消息</span>
+      </div>
+      <div class="compact-table">
+        <table>
+          <thead>
+            <tr>
+              <th>回复时间</th>
+              <th>账号</th>
+              <th>上一条用户消息</th>
+              <th>延时</th>
+            </tr>
+          </thead>
+          <tbody id="latency-body">
+            <tr><td colspan="4" class="empty-note">暂无数据</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 
@@ -73,10 +102,48 @@
 
     function renderInbound(data) {
       var windows = {};
-      (data.windows || []).forEach(function(w) { windows[w.minutes] = w.count; });
-      document.getElementById('metric-w10').textContent = windows[10] == null ? '—' : windows[10];
-      document.getElementById('metric-w60').textContent = windows[60] == null ? '—' : windows[60];
-      document.getElementById('metric-checked').textContent = formatDateTime(data.checked_at);
+      (data.windows || []).forEach(function(w) { windows[w.minutes] = w; });
+      renderMetric('metric-w10', windows[10]);
+      renderMetric('metric-w60', windows[60]);
+      renderMetric('metric-today', data.today || null);
+      document.getElementById('metric-checked').textContent = formatRealtimeTime(data.checked_at);
+      renderLatencies(data.recent_reply_latencies || []);
+    }
+
+    function renderMetric(prefix, item) {
+      document.getElementById(prefix + '-count').textContent = item && item.count != null ? item.count : '—';
+      document.getElementById(prefix + '-users').textContent = 'uniq 用户 ' + (
+        item && item.unique_accounts != null ? item.unique_accounts : '—'
+      );
+    }
+
+    function formatLatency(ms) {
+      if (ms == null || isNaN(Number(ms))) return '—';
+      var value = Number(ms);
+      if (value < 1000) return Math.round(value) + ' ms';
+      if (value < 60000) return (value / 1000).toFixed(1) + ' s';
+      return (value / 60000).toFixed(1) + ' min';
+    }
+
+    function formatRealtimeTime(value) {
+      if (!value) return '—';
+      return String(value).replace('T', ' ').slice(0, 16);
+    }
+
+    function renderLatencies(items) {
+      var body = document.getElementById('latency-body');
+      if (!items.length) {
+        body.innerHTML = '<tr><td colspan="4" class="empty-note">暂无数据</td></tr>';
+        return;
+      }
+      body.innerHTML = items.map(function(item) {
+        return '<tr>'
+          + '<td>' + esc(formatRealtimeTime(item.reply_created_at)) + '</td>'
+          + '<td class="mono wrap">' + esc(item.account_id || '—') + '</td>'
+          + '<td>' + esc(formatRealtimeTime(item.inbound_created_at)) + '</td>'
+          + '<td class="mono">' + esc(formatLatency(item.latency_ms)) + '</td>'
+          + '</tr>';
+      }).join('');
     }
   </script>
 </body>

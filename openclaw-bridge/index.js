@@ -565,6 +565,7 @@ export default definePluginEntry({
         },
       };
 
+      let backendTurnStartedAt = 0;
       try {
         if (voiceDebugSummary) {
           api.logger.info(
@@ -577,7 +578,15 @@ export default definePluginEntry({
           `messageId=${payload.message_id || ""} ids=${JSON.stringify(idDiagnostics)} ` +
           `candidates=${JSON.stringify(accountCandidates)}`
         );
+        backendTurnStartedAt = Date.now();
         const result = await postTurn(config, payload);
+        const backendRoundtripMs = Date.now() - backendTurnStartedAt;
+        api.logger.info(
+          `ai4all bridge turn result channel=${payload.channel} session=${payload.session_key || ""} ` +
+          `messageId=${payload.message_id || ""} status=${result?.status || "unknown"} ` +
+          `noReply=${Boolean(result?.no_reply)} backendRoundtripMs=${backendRoundtripMs} ` +
+          `backendLatencyMs=${result?.metadata?.latency_ms ?? ""} replyChars=${typeof result?.reply === "string" ? result.reply.length : 0}`
+        );
         if (shadowTrace) {
           const state = {
             channelAccountId,
@@ -628,7 +637,10 @@ export default definePluginEntry({
           reason: `ai4all_${result?.status || "ok"}`,
         };
       } catch (err) {
-        api.logger.error(`ai4all bridge failed: ${err instanceof Error ? err.message : String(err)}`);
+        const backendRoundtripMs = backendTurnStartedAt ? Date.now() - backendTurnStartedAt : 0;
+        api.logger.error(
+          `ai4all bridge failed after ${backendRoundtripMs}ms: ${err instanceof Error ? err.message : String(err)}`
+        );
         return {
           handled: true,
           reply: { text: "我这边刚刚有点卡住了，你可以稍后再发我一次。" },
