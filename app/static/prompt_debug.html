@@ -335,8 +335,9 @@
         status.textContent = '加载中';
         var data = await apiFetch('/admin/llm/providers');
         llmProviders = data.providers || [];
-        renderLlmProviderSelect(data.active_provider_id);
-        status.textContent = data.active_provider_id || '—';
+        var effectiveId = data.effective_provider_id || data.active_provider_id;
+        renderLlmProviderSelect(effectiveId);
+        status.textContent = effectiveId || '—';
       } catch (e) {
         status.textContent = '加载失败';
         detail.textContent = e.message;
@@ -377,6 +378,8 @@
         'base_url: ' + (provider.base_url || '—'),
         'api_key: ' + (provider.configured ? 'configured' : 'missing ' + (provider.api_key_env || 'env')),
         'status: ' + providerLlmStatus(provider),
+        'settings_default: ' + (provider.settings_default ? 'yes' : 'no'),
+        'runtime_override: ' + (provider.runtime_override ? 'yes' : 'no'),
       ];
       lines.forEach(function(line) {
         var item = document.createElement('div');

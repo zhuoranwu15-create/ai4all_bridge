@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"
     llm_model: str = "deepseek-v4-flash"
-    llm_default_provider_id: str = "deepseek"
+    llm_default_provider_id: str = "deepseek-v4-pro"
     llm_providers_json: str = ""
     llm_openai_base_url: str = "https://api.openai.com"
     llm_openai_model: str = "gpt-4o-mini"

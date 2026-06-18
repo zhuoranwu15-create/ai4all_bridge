@@ -169,18 +169,17 @@ def _provider_from_dict(
 
 
 def _legacy_provider(settings_obj: Any) -> LLMProviderConfig:
-    provider_id = _clean_str(_safe_get(settings_obj, "llm_default_provider_id", ""), _DEFAULT_PROVIDER_ID)
     base_url = _clean_str(_safe_get(settings_obj, "llm_base_url", ""), "https://api.deepseek.com")
     model = _clean_str(_safe_get(settings_obj, "llm_model", ""), _DEFAULT_DEEPSEEK_MODEL)
     label = (
         "DeepSeek V4 Flash"
-        if provider_id == _DEFAULT_PROVIDER_ID and model == _DEFAULT_DEEPSEEK_MODEL
+        if model == _DEFAULT_DEEPSEEK_MODEL
         else "DeepSeek"
         if "deepseek" in (base_url + " " + model).lower()
         else "Default LLM"
     )
     return LLMProviderConfig(
-        id=provider_id,
+        id=_DEFAULT_PROVIDER_ID,
         label=label,
         protocol="openai_chat",
         base_url=base_url,

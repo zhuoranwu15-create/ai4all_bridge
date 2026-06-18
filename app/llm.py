@@ -52,20 +52,25 @@ def _is_mock_settings() -> bool:
     return type(settings).__module__.startswith("unittest.mock")
 
 
-def _stored_active_provider_id() -> Optional[str]:
+def _stored_provider_override_id() -> Optional[str]:
     if _is_mock_settings():
         return None
     try:
-        from app.db import get_active_llm_provider_id
+        from app.db import get_llm_provider_override_id
 
-        return get_active_llm_provider_id()
+        return get_llm_provider_override_id()
     except Exception as err:
-        logger.debug("active llm provider lookup skipped error=%s", err)
+        logger.debug("llm provider override lookup skipped error=%s", err)
         return None
 
 
+def _stored_active_provider_id() -> Optional[str]:
+    """Backward-compatible alias for the stored runtime provider override."""
+    return _stored_provider_override_id()
+
+
 def _active_llm_provider(provider_id: Optional[str] = None) -> LLMProviderConfig:
-    selected_id = provider_id or _stored_active_provider_id()
+    selected_id = provider_id or _stored_provider_override_id()
     try:
         provider = get_llm_provider(selected_id, settings_obj=settings)
     except ValueError as err:

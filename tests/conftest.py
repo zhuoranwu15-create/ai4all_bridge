@@ -24,7 +24,7 @@ def test_settings(tmp_path):
     s.llm_api_key = ""
     s.llm_base_url = "http://fake-llm"
     s.llm_model = "test-model"
-    s.llm_default_provider_id = "deepseek"
+    s.llm_default_provider_id = "deepseek-v4-pro"
     s.llm_providers_json = ""
     s.llm_openai_base_url = "https://api.openai.com"
     s.llm_openai_model = "gpt-4o-mini"

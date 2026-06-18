@@ -5,7 +5,7 @@ ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 
 
 def test_admin_llm_lists_and_switches_active_provider(client, fresh_db):
-    from app.db import get_active_llm_provider_id
+    from app.db import get_llm_provider_override_id
 
     fresh_db.llm_api_key = "deepseek-key"
     fresh_db.llm_openai_api_key = "openai-key"
@@ -25,7 +25,10 @@ def test_admin_llm_lists_and_switches_active_provider(client, fresh_db):
     res = client.get("/admin/llm/providers", headers=ADMIN_HEADERS)
     assert res.status_code == 200
     body = res.json()
-    assert body["active_provider_id"] == "deepseek"
+    assert body["active_provider_id"] == "deepseek-v4-pro"
+    assert body["effective_provider_id"] == "deepseek-v4-pro"
+    assert body["settings_default_provider_id"] == "deepseek-v4-pro"
+    assert body["runtime_override_provider_id"] is None
     assert {provider["id"] for provider in body["providers"]} == {
         "deepseek",
         "deepseek-v4-pro",
@@ -41,7 +44,14 @@ def test_admin_llm_lists_and_switches_active_provider(client, fresh_db):
     )
     assert res.status_code == 200
     assert res.json()["active_provider_id"] == "chatgpt"
-    assert get_active_llm_provider_id() == "chatgpt"
+    assert res.json()["runtime_override_provider_id"] == "chatgpt"
+    assert get_llm_provider_override_id() == "chatgpt"
+
+    res = client.delete("/admin/llm/active-provider", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    assert res.json()["active_provider_id"] == "deepseek-v4-pro"
+    assert res.json()["runtime_override_provider_id"] is None
+    assert get_llm_provider_override_id() is None
 
 
 def test_admin_llm_rejects_unconfigured_provider(client, fresh_db):
@@ -76,3 +86,14 @@ def test_admin_llm_probe_rejects_oversized_message(client):
     )
 
     assert res.status_code == 422
+
+
+def test_admin_llm_page_shows_runtime_override_controls():
+    from pathlib import Path
+
+    html = Path("app/static/llm.html").read_text(encoding="utf-8")
+
+    assert "Settings Default" in html
+    assert "Runtime Override" in html
+    assert 'id="clear-override"' in html
+    assert "method: 'DELETE'" in html

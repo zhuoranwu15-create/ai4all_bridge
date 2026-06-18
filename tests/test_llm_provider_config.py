@@ -10,7 +10,7 @@ def _settings(**overrides):
         "llm_api_key": "legacy-key",
         "llm_base_url": "https://api.deepseek.com",
         "llm_model": "deepseek-v4-flash",
-        "llm_default_provider_id": "deepseek",
+        "llm_default_provider_id": "deepseek-v4-pro",
         "llm_providers_json": "",
         "llm_openai_base_url": "https://api.openai.com",
         "llm_openai_model": "gpt-4o-mini",
@@ -82,6 +82,15 @@ def test_builtin_provider_templates_use_provider_specific_keys_and_models():
     assert providers["claude"].model == "claude-custom"
     assert providers["claude"].api_key == "anthropic-key"
     assert providers["claude"].api_key_env == "LLM_ANTHROPIC_API_KEY"
+
+
+def test_settings_default_provider_can_select_builtin_model_variant():
+    from app.llm_providers import get_llm_provider
+
+    provider = get_llm_provider(None, settings_obj=_settings())
+
+    assert provider.id == "deepseek-v4-pro"
+    assert provider.model == "deepseek-v4-pro"
 
 
 def test_json_providers_resolve_provider_specific_keys():
@@ -172,7 +181,7 @@ def test_runtime_provider_resolution_falls_back_to_legacy_when_json_is_invalid()
         llm_providers_json="{not valid json",
     )
 
-    with patch("app.llm.settings", settings), patch("app.llm._stored_active_provider_id", return_value=None):
+    with patch("app.llm.settings", settings), patch("app.llm._stored_provider_override_id", return_value=None):
         provider = resolve_active_llm_provider()
 
     assert provider.id == "deepseek"

@@ -11,7 +11,7 @@
   <header class="admin-header">
     <div>
       <h1>LLM Provider 管理</h1>
-      <p class="page-subtitle">选择全局底层模型提供者。当前只影响服务级默认模型，会话内切换后续单独接入。</p>
+      <p class="page-subtitle">Settings 提供默认模型；后台切换只写运行时 override，可随时恢复默认。</p>
     </div>
     <span id="admin-user" class="pill">—</span>
   </header>
@@ -22,6 +22,9 @@
       <span id="status" class="status-msg"></span>
     </div>
     <div id="active-provider" class="empty-note">加载中…</div>
+    <div class="toolbar-row">
+      <button id="clear-override" disabled>恢复 settings 默认</button>
+    </div>
   </div>
 
   <div class="card">
@@ -75,19 +78,25 @@
       return span;
     }
 
-    function renderActive(provider) {
+    function renderActive(data) {
+      var provider = data.effective_provider || data.active_provider;
       var el = document.getElementById('active-provider');
+      var overrideId = data.runtime_override_provider_id || data.stored_active_provider_id || '';
+      var defaultId = data.settings_default_provider_id || data.default_provider_id || '';
       el.innerHTML = '<div class="binding-grid">'
-        + '<div><label>ID</label><div class="mono">' + esc(provider.id) + '</div></div>'
+        + '<div><label>Effective ID</label><div class="mono">' + esc(provider.id) + '</div></div>'
         + '<div><label>模型</label><div class="mono">' + esc(provider.model) + '</div></div>'
         + '<div><label>协议</label><div class="mono">' + esc(provider.protocol) + '</div></div>'
         + '<div><label>密钥</label><div>' + (provider.configured ? '已配置' : '未配置') + '</div></div>'
+        + '<div><label>Settings Default</label><div class="mono">' + esc(defaultId || '—') + '</div></div>'
+        + '<div><label>Runtime Override</label><div class="mono">' + esc(overrideId || '—') + '</div></div>'
         + '</div>';
+      document.getElementById('clear-override').disabled = !overrideId;
     }
 
     function renderProviders(data) {
       providerState = data;
-      renderActive(data.active_provider);
+      renderActive(data);
       var tbody = document.getElementById('providers');
       var providers = data.providers || [];
       tbody.textContent = '';
@@ -111,7 +120,10 @@
         idText.textContent = provider.id || '';
         var labelText = document.createElement('div');
         labelText.className = 'empty-note';
-        labelText.textContent = provider.label || '';
+        var badges = [];
+        if (provider.settings_default) badges.push('settings default');
+        if (provider.runtime_override) badges.push('runtime override');
+        labelText.textContent = (provider.label || '') + (badges.length ? ' · ' + badges.join(' · ') : '');
         idCell.appendChild(idText);
         idCell.appendChild(labelText);
         row.appendChild(idCell);
@@ -185,6 +197,17 @@
       }
     }
 
+    async function clearOverride() {
+      var status = document.getElementById('status');
+      try {
+        await apiFetch('/admin/llm/active-provider', { method: 'DELETE' });
+        showStatus(status, '已恢复 settings 默认', false);
+        await loadProviders();
+      } catch (e) {
+        showStatus(status, e.message, true);
+      }
+    }
+
     async function probeProvider(id) {
       var status = document.getElementById('status');
       try {
@@ -198,6 +221,8 @@
         showStatus(status, e.message, true);
       }
     }
+
+    document.getElementById('clear-override').addEventListener('click', clearOverride);
   </script>
 </body>
 </html>

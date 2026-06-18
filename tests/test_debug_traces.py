@@ -44,7 +44,7 @@ def test_debug_trace_records_only_configured_accounts(client, fresh_db):
     trace = res.json()["trace"]
     assert trace["account_id"] == "sk-acc-debug-a"
     assert trace["source"] == "ai4all"
-    assert trace["llm_model"] == "test-model"
+    assert trace["llm_model"] == "deepseek-v4-pro"
     assert trace["reply_redacted"] is True
     assert trace["reply_chars"] == len("debug reply")
     assert trace["messages_redacted"] is True
@@ -110,7 +110,7 @@ def test_turn_debug_trace_uses_provider_snapshot_when_active_provider_changes(cl
         active_provider_id["value"] = "deepseek"
         return "snapshot reply", None
 
-    with patch("app.llm._stored_active_provider_id", side_effect=lambda: active_provider_id["value"]):
+    with patch("app.llm._stored_provider_override_id", side_effect=lambda: active_provider_id["value"]):
         with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate):
             res = client.post(
                 "/openclaw/turn",

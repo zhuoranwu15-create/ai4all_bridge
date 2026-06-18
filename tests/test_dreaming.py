@@ -240,7 +240,7 @@ def test_session_lifecycle_uses_llm_carryover_when_available(fresh_db, tmp_path)
     assert second["id"] != first["id"]
     assert "继续承接" in second["carryover_summary"]
     closed = next(item for item in list_sessions_for_account(account_id=account_id) if item["id"] == first["id"])
-    assert closed["summary_model"] == "test-model"
+    assert closed["summary_model"] == "deepseek-v4-pro"
     assert closed["summary_prompt_version"] == "dreaming_v1"
 
 
