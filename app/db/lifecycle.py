@@ -148,6 +148,14 @@ def wipe_account_data(
             "DELETE FROM moderation_account_risk_state WHERE account_id = ?",
             (account_id,),
         ).rowcount
+        account_user_meta_daily = conn.execute(
+            "DELETE FROM account_user_meta_daily WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
+        account_user_meta = conn.execute(
+            "DELETE FROM account_user_meta WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
         outbound = conn.execute(
             "DELETE FROM outbound_messages WHERE account_id = ?",
             (account_id,),
@@ -234,6 +242,8 @@ def wipe_account_data(
         "moderation_actions_deleted": moderation_deleted["moderation_actions_deleted"],
         "moderation_exports_deleted": moderation_deleted["moderation_exports_deleted"],
         "moderation_risk_state_deleted": moderation_risk_state,
+        "account_user_meta_deleted": account_user_meta,
+        "account_user_meta_daily_deleted": account_user_meta_daily,
         "cost_events_deleted": cost_events,
         "entitlement_ledger_deleted": ledger,
         "entitlement_wallets_deleted": wallets,
@@ -275,4 +285,3 @@ def reenable_proactive_after_rebind(*, account_id: str) -> None:
             """,
             (account_id,),
         )
-

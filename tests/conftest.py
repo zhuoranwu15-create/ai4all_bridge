@@ -50,6 +50,10 @@ def test_settings(tmp_path):
     s.dreaming_scheduler_enabled = False
     s.dreaming_scheduler_interval_seconds = 300.0
     s.dreaming_scheduler_batch_size = 100
+    s.user_meta_scheduler_enabled = False
+    s.user_meta_scheduler_hour = 3
+    s.user_meta_scheduler_page_size = 100
+    s.user_meta_scheduler_inter_account_sleep = 0.0
     s.openclaw_login_auto_start = False
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
@@ -240,6 +244,7 @@ def fresh_db(test_settings):
         patch("app.moderation.aliyun_review.settings", test_settings),
         patch("app.moderation.aliyun_alerting.settings", test_settings),
         patch("app.moderation.export.settings", test_settings),
+        patch("app.user_meta_scheduler.settings", test_settings),
     ]
     for p in patches:
         p.start()
@@ -292,6 +297,7 @@ def client(fresh_db):
         patch("app.moderation.aliyun_alerting.settings", fresh_db),
         patch("app.moderation.export.settings", fresh_db),
         patch("app.dreaming.settings", fresh_db),
+        patch("app.user_meta_scheduler.settings", fresh_db),
         patch("app.session_lifecycle.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch("app.turn_service.rate_limiter", RateLimiter()),

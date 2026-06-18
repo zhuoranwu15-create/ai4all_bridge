@@ -150,6 +150,10 @@ from app.dreaming_scheduler import (
     start_dreaming_scheduler,
     stop_dreaming_scheduler,
 )
+from app.user_meta_scheduler import (
+    start_user_meta_scheduler,
+    stop_user_meta_scheduler,
+)
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.scheduler import (
     get_proactive_scheduler,
@@ -440,6 +444,18 @@ async def startup_dreaming_scheduler() -> None:
     logger.info("dreaming scheduler started: %s", scheduler.status())
 
 
+@app.on_event("startup")
+async def startup_user_meta_scheduler() -> None:
+    if not getattr(settings, "user_meta_scheduler_enabled", False):
+        return
+    scheduler = start_user_meta_scheduler(
+        page_size=settings.user_meta_scheduler_page_size,
+        inter_account_sleep=settings.user_meta_scheduler_inter_account_sleep,
+        start_hour=settings.user_meta_scheduler_hour,
+    )
+    logger.info("user meta scheduler started: %s", scheduler.status())
+
+
 @app.on_event("shutdown")
 async def shutdown_proactive_scheduler() -> None:
     await stop_proactive_scheduler()
@@ -448,6 +464,11 @@ async def shutdown_proactive_scheduler() -> None:
 @app.on_event("shutdown")
 async def shutdown_dreaming_scheduler() -> None:
     await stop_dreaming_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_user_meta_scheduler() -> None:
+    await stop_user_meta_scheduler()
 
 
 

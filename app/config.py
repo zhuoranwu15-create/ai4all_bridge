@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     conversation_session_business_day_start_hour: int = 4
     dreaming_scheduler_enabled: bool = False
     dreaming_scheduler_batch_size: int = 100
+    user_meta_scheduler_enabled: bool = False
+    user_meta_scheduler_hour: int = 3
+    user_meta_scheduler_page_size: int = 100
+    user_meta_scheduler_inter_account_sleep: float = 0.5
 
     openclaw_login_auto_start: bool = True
     openclaw_login_start_timeout_ms: int = 35000

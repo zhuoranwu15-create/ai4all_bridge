@@ -3,10 +3,11 @@ settings 在本模块绑定，测试需 patch "app.routers.admin_ops.settings"�
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from app.config import settings
-from app.routers.deps import verify_admin_auth
+from app.routers.deps import require_admin_user, verify_admin_auth
 from app.routers.serializers import _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _profile_for_view, _redacted_flag_for_account, _session_for_view, _trace_for_view
 from app.routers.health import _build_ready_status
 from app.db import clear_session_messages, get_debug_trace, get_inbound_message_rate, get_message_raw, get_ops_metrics, get_profile_for_session, get_session, list_debug_traces, list_recent_message_raw, list_scheduler_heartbeats, list_session_messages, list_sessions
+from app.user_meta_scheduler import get_user_meta_scheduler, run_user_meta_scheduler_once
 from datetime import datetime
 from typing import Optional
 
@@ -39,6 +40,17 @@ def admin_ops_status(
                     "interval_seconds": settings.dreaming_scheduler_interval_seconds,
                     "batch_size": settings.dreaming_scheduler_batch_size,
                 },
+                "user_meta": {
+                    "enabled": settings.user_meta_scheduler_enabled,
+                    "hour": settings.user_meta_scheduler_hour,
+                    "page_size": settings.user_meta_scheduler_page_size,
+                    "inter_account_sleep": settings.user_meta_scheduler_inter_account_sleep,
+                    "scheduler": (
+                        get_user_meta_scheduler().status()
+                        if get_user_meta_scheduler()
+                        else None
+                    ),
+                },
             },
             "heartbeats": list_scheduler_heartbeats(),
         },
@@ -56,6 +68,29 @@ def admin_ops_inbound_rate(
         "windows": get_inbound_message_rate(windows_minutes=(10, 60)),
         "checked_at": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+@router.post("/admin/ops/user-meta/run-once")
+async def admin_user_meta_run_once(
+    page_size: Optional[int] = None,
+    inter_account_sleep: Optional[float] = None,
+    _: dict = Depends(require_admin_user),
+) -> dict:
+    effective_page_size = page_size or settings.user_meta_scheduler_page_size
+    if effective_page_size < 1 or effective_page_size > 1000:
+        raise HTTPException(status_code=400, detail="page_size must be between 1 and 1000")
+    effective_sleep = (
+        settings.user_meta_scheduler_inter_account_sleep
+        if inter_account_sleep is None
+        else inter_account_sleep
+    )
+    if effective_sleep < 0 or effective_sleep > 60:
+        raise HTTPException(status_code=400, detail="inter_account_sleep must be between 0 and 60")
+    result = await run_user_meta_scheduler_once(
+        page_size=effective_page_size,
+        inter_account_sleep=effective_sleep,
+    )
+    return {"status": "ok", "run": result}
 
 
 @router.get("/admin/sessions")

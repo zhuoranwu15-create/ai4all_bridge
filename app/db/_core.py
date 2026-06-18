@@ -1388,9 +1388,58 @@ def _migration_0002_llm_runtime_config(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_0003_user_meta(conn: sqlite3.Connection) -> None:
+    """Add account-level user meta current and daily snapshot tables."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS account_user_meta (
+            account_id TEXT PRIMARY KEY,
+            registered_at TEXT NOT NULL,
+            message_intensity_level INTEGER NOT NULL DEFAULT 0,
+            companion_primary_type TEXT,
+            companion_secondary_types TEXT NOT NULL DEFAULT '[]',
+            companion_type_confidence REAL,
+            companion_type_last_evaluated_at TEXT,
+            companion_type_source TEXT NOT NULL DEFAULT 'auto',
+            companion_type_expires_at TEXT,
+            companion_type_reasoning TEXT,
+            safety_risk_trigger_count_30d INTEGER NOT NULL DEFAULT 0,
+            last_evaluated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS account_user_meta_daily (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            registered_at TEXT NOT NULL,
+            message_intensity_level INTEGER NOT NULL DEFAULT 0,
+            companion_primary_type TEXT,
+            companion_secondary_types TEXT NOT NULL DEFAULT '[]',
+            companion_type_confidence REAL,
+            companion_type_last_evaluated_at TEXT,
+            companion_type_source TEXT NOT NULL DEFAULT 'auto',
+            companion_type_expires_at TEXT,
+            companion_type_reasoning TEXT,
+            safety_risk_trigger_count_30d INTEGER NOT NULL DEFAULT 0,
+            last_evaluated_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(account_id, snapshot_date),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_account_user_meta_daily_account_date
+        ON account_user_meta_daily(account_id, snapshot_date DESC);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
+    (3, _migration_0003_user_meta),
 ]
 
 

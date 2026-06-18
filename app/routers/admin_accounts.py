@@ -3,12 +3,14 @@ settings 在本模块绑定，测试需 patch "app.routers.admin_accounts.settin
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.routers.deps import get_admin_user, verify_admin_auth
+from app.routers.deps import get_admin_user, require_admin_user, verify_admin_auth
 from app.routers.serializers import _binding_intent_for_view, _can_bypass_redaction_for_account, _debug_redaction_payload, _normalize_ts, _platform_user_for_view, _profile_for_view, _trace_for_view
 from app.routers.models import ProfileUpdateRequest
-from app.db import get_account, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, update_account, update_profile_for_account
+from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
+from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
+from app.time_utils import beijing_now_str
 from app.user_profiles import ensure_user_profile, read_agent_context
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime
 from typing import Optional
 
 logger = logging.getLogger("ai4all")
@@ -20,6 +22,39 @@ class AccountUpdateRequest(BaseModel):
     notes: Optional[str] = None
     daily_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+
+
+class CompanionTypeManualRequest(BaseModel):
+    primary_type: str
+    secondary_types: list[str] = []
+    confidence: float = 1.0
+    expires_at: Optional[str] = None
+    reason: Optional[str] = None
+
+
+def _validate_companion_payload(payload: CompanionTypeManualRequest) -> None:
+    if payload.primary_type not in COMPANION_TYPE_ENUM:
+        raise HTTPException(status_code=400, detail="invalid primary_type")
+    if payload.confidence < 0.0 or payload.confidence > 1.0:
+        raise HTTPException(status_code=400, detail="confidence must be between 0 and 1")
+    secondary = []
+    for item in payload.secondary_types or []:
+        if item not in COMPANION_TYPE_ENUM:
+            raise HTTPException(status_code=400, detail="invalid secondary_type")
+        if item == payload.primary_type:
+            raise HTTPException(status_code=400, detail="secondary_types cannot include primary_type")
+        if item not in secondary:
+            secondary.append(item)
+    if len(secondary) > 3:
+        raise HTTPException(status_code=400, detail="secondary_types can contain at most 3 items")
+    if payload.expires_at:
+        try:
+            datetime.strptime(payload.expires_at[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError as err:
+            raise HTTPException(
+                status_code=400,
+                detail="expires_at must be YYYY-MM-DD HH:MM:SS",
+            ) from err
 
 
 @router.get("/admin/me")
@@ -66,6 +101,35 @@ def admin_account(account_id: str, _: None = Depends(verify_admin_auth)) -> dict
             else {"redacted": True}
         ),
     }
+
+
+@router.get("/admin/accounts/{account_id}/meta")
+def admin_account_meta(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    meta = get_account_user_meta(account_id=account_id)
+    return {"meta": meta}
+
+
+@router.patch("/admin/accounts/{account_id}/meta/companion")
+def admin_update_account_companion_meta(
+    account_id: str,
+    payload: CompanionTypeManualRequest,
+    _: dict = Depends(require_admin_user),
+) -> dict:
+    if get_account(account_id=account_id) is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    _validate_companion_payload(payload)
+    set_companion_type_manual(
+        account_id=account_id,
+        primary_type=payload.primary_type,
+        secondary_types=list(dict.fromkeys(payload.secondary_types or [])),
+        confidence=payload.confidence,
+        expires_at=payload.expires_at,
+        reasoning=payload.reason,
+        now=beijing_now_str(),
+    )
+    return {"status": "ok", "meta": get_account_user_meta(account_id=account_id)}
 
 
 @router.patch("/admin/accounts/{account_id}")
