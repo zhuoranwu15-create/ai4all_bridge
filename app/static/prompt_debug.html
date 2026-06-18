@@ -144,6 +144,17 @@
       font-size: 12px;
       text-align: right;
     }
+    .provider-detail {
+      display: grid;
+      gap: 4px;
+      margin-top: 8px;
+      color: #516070;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .provider-panel {
+      margin-top: 10px;
+    }
     @media (max-width: 980px) {
       .lab-shell, .split { grid-template-columns: 1fr; }
       .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -232,6 +243,17 @@
               <button onclick="syncSystemIntoMessages()">同步 system 到 messages</button>
               <button class="primary" onclick="replayPrompt()">Replay</button>
             </div>
+            <div class="debug-panel provider-panel">
+              <div class="card-title-row">
+                <h3>LLM Provider</h3>
+                <span id="llmProviderStatus" class="card-note">加载中</span>
+              </div>
+              <div class="toolbar-row">
+                <select id="llmProviderSelect"></select>
+                <button id="llmProviderSwitchBtn">切换</button>
+              </div>
+              <div id="llmProviderDetail" class="provider-detail">加载中...</div>
+            </div>
           </div>
         </div>
       </section>
@@ -254,12 +276,19 @@
     var currentSourceTraceId = null;
     var currentConversationMessages = [];
     var conversationExpanded = false;
+    var llmProviders = [];
 
     (async function init() {
       await loadAdminMe();
-      await loadAccounts();
+      bindLlmProviderControls();
+      await Promise.all([loadAccounts(), loadLlmProviders()]);
       bindLengthMeters();
     })();
+
+    function bindLlmProviderControls() {
+      document.getElementById('llmProviderSelect').addEventListener('change', updateLlmProviderDetail);
+      document.getElementById('llmProviderSwitchBtn').addEventListener('click', switchLlmProvider);
+    }
 
     function bindLengthMeters() {
       document.getElementById('systemPrompt').addEventListener('input', updateLengthMeters);
@@ -297,6 +326,88 @@
       if (!currentAccountId) return;
       document.getElementById('accountStatus').textContent = currentAccountId;
       await Promise.all([loadContextFiles(), loadConversation()]);
+    }
+
+    async function loadLlmProviders() {
+      var status = document.getElementById('llmProviderStatus');
+      var detail = document.getElementById('llmProviderDetail');
+      try {
+        status.textContent = '加载中';
+        var data = await apiFetch('/admin/llm/providers');
+        llmProviders = data.providers || [];
+        renderLlmProviderSelect(data.active_provider_id);
+        status.textContent = data.active_provider_id || '—';
+      } catch (e) {
+        status.textContent = '加载失败';
+        detail.textContent = e.message;
+      }
+    }
+
+    function renderLlmProviderSelect(activeProviderId) {
+      var select = document.getElementById('llmProviderSelect');
+      select.textContent = '';
+      llmProviders.forEach(function(provider) {
+        var option = document.createElement('option');
+        option.value = provider.id;
+        option.textContent = provider.id + ' · ' + provider.model + (provider.configured ? '' : ' · 未配置 key');
+        if (provider.id === activeProviderId) option.selected = true;
+        select.appendChild(option);
+      });
+      updateLlmProviderDetail();
+    }
+
+    function selectedLlmProvider() {
+      var selectedId = document.getElementById('llmProviderSelect').value;
+      return (llmProviders || []).find(function(provider) { return provider.id === selectedId; }) || null;
+    }
+
+    function updateLlmProviderDetail() {
+      var provider = selectedLlmProvider();
+      var detail = document.getElementById('llmProviderDetail');
+      var button = document.getElementById('llmProviderSwitchBtn');
+      detail.textContent = '';
+      if (!provider) {
+        detail.textContent = '暂无可选 provider';
+        button.disabled = true;
+        return;
+      }
+      var lines = [
+        'model: ' + (provider.model || '—'),
+        'protocol: ' + (provider.protocol || '—'),
+        'base_url: ' + (provider.base_url || '—'),
+        'api_key: ' + (provider.configured ? 'configured' : 'missing ' + (provider.api_key_env || 'env')),
+        'status: ' + providerLlmStatus(provider),
+      ];
+      lines.forEach(function(line) {
+        var item = document.createElement('div');
+        item.textContent = line;
+        detail.appendChild(item);
+      });
+      button.disabled = provider.active || !provider.enabled || !provider.configured;
+    }
+
+    function providerLlmStatus(provider) {
+      if (!provider.enabled) return 'disabled';
+      if (!provider.configured) return 'unavailable';
+      if (provider.active) return 'active';
+      return 'ready';
+    }
+
+    async function switchLlmProvider() {
+      var provider = selectedLlmProvider();
+      var status = document.getElementById('llmProviderStatus');
+      if (!provider) return;
+      try {
+        status.textContent = '切换中...';
+        await apiFetch('/admin/llm/active-provider', {
+          method: 'PATCH',
+          body: JSON.stringify({ provider_id: provider.id }),
+        });
+        await loadLlmProviders();
+        status.textContent = '已切换到 ' + provider.id;
+      } catch (e) {
+        status.textContent = e.message;
+      }
     }
 
     async function loadContextFiles() {
@@ -503,6 +614,15 @@
     async function replayPrompt() {
       var status = document.getElementById('replayStatus');
       var box = document.getElementById('replyBox');
+      var provider = selectedLlmProvider();
+      if (!provider) {
+        status.textContent = '请选择 LLM Provider';
+        return;
+      }
+      if (!provider.enabled || !provider.configured) {
+        status.textContent = '当前 provider 不可用：' + providerLlmStatus(provider);
+        return;
+      }
       status.textContent = '调用中...';
       try {
         syncSystemIntoMessages();
@@ -513,10 +633,11 @@
             messages: messages,
             session_id: currentSessionId,
             source_trace_id: currentSourceTraceId,
+            provider_id: provider.id,
             reason: 'prompt_lab_debug',
           }),
         });
-        status.textContent = data.status + ' · ' + data.latency_ms + 'ms · ' + data.trace_id;
+        status.textContent = data.status + ' · ' + (data.llm_provider_id || provider.id) + ' · ' + data.latency_ms + 'ms · ' + data.trace_id;
         box.textContent = data.error || data.reply || '';
         await loadConversation();
       } catch (e) {

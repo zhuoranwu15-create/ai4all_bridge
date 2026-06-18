@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.db import connect as db_connect
+from app.llm import is_llm_configured
 
 router = APIRouter()
 
@@ -38,8 +39,8 @@ def _check_runtime_config() -> dict:
     if env in {"local", "development", "test"}:
         return {"status": "ok", "mode": "local"}
     missing = []
-    if not getattr(settings, "llm_api_key", ""):
-        missing.append("LLM_API_KEY")
+    if not is_llm_configured():
+        missing.append("LLM_PROVIDER_API_KEY")
     if not getattr(settings, "ai4all_bridge_secret", "") or settings.ai4all_bridge_secret == "dev-secret":
         missing.append("AI4ALL_BRIDGE_SECRET")
     if not getattr(settings, "admin_token", "") or settings.admin_token == "dev-admin-token":

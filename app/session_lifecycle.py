@@ -70,12 +70,14 @@ def _fallback_close_summary(
         allow_fallback=True,
     )
     summary = result.get("session_summary") or {}
+    from app.llm import get_active_llm_model
+
     return {
         "session_summary": str(summary.get("rough_summary") or ""),
         "carryover_summary": str(summary.get("carryover_summary") or ""),
         "summary_model": "deterministic_fallback"
         if result.get("reason") == "fallback_used"
-        else settings.llm_model,
+        else get_active_llm_model(),
         "summary_prompt_version": DREAMING_PROMPT_VERSION,
         "dreaming_result": result,
     }

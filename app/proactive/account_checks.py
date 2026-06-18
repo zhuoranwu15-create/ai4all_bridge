@@ -18,7 +18,7 @@ from app.db import (
     list_sessions_for_account,
     upsert_proactive_account_state,
 )
-from app.llm import generate_completion, generate_reply_with_tools
+from app.llm import generate_completion, generate_reply_with_tools, is_llm_configured
 from app.proactive.messaging import send_proactive_text
 from app.proactive.reactivation import (
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
@@ -540,7 +540,7 @@ def generate_account_check_candidate_draft(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not getattr(settings, "llm_api_key", ""):
+    if not is_llm_configured():
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     if _select_route(account_id) is None:
@@ -625,7 +625,7 @@ def generate_topic_followup_candidate(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not getattr(settings, "llm_api_key", ""):
+    if not is_llm_configured():
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     if _select_route(account_id) is None:
@@ -745,7 +745,7 @@ def generate_content_invitation_candidate(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not getattr(settings, "llm_api_key", ""):
+    if not is_llm_configured():
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     route = _select_route(account_id)

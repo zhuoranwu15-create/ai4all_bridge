@@ -16,7 +16,7 @@ from app.db import (
     get_profile_for_account,
     list_sessions_for_account,
 )
-from app.llm import generate_completion
+from app.llm import generate_completion, get_active_llm_model
 from app.onboarding import is_onboarding_active
 from app.time_utils import beijing_now
 from app.turn_service import build_turn_llm_input
@@ -70,7 +70,7 @@ def main() -> int:
     print(f"account_id   = {account_id}")
     print(f"session_id   = {session['id']}")
     print(f"历史条数      = {llm_input['metadata'].get('history_count')}")
-    print(f"llm_model    = {settings.llm_model}")
+    print(f"llm_model    = {get_active_llm_model()}")
     print(f"测试输入      = {user_text!r}")
     print("=" * 50)
     reply = generate_completion(messages)

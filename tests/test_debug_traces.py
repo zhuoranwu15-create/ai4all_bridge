@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 
@@ -83,6 +84,48 @@ def test_debug_trace_records_only_configured_accounts(client, fresh_db):
     traces = res.json()["traces"]
     assert len(traces) == 1
     assert traces[0]["account_id"] == "sk-acc-debug-a"
+
+
+def test_turn_debug_trace_uses_provider_snapshot_when_active_provider_changes(client, fresh_db):
+    account_id = ai4all_account_id("acc-debug-provider")
+    fresh_db.debug_trace_account_ids = account_id
+    fresh_db.llm_api_key = "deepseek-key"
+    fresh_db.llm_openai_api_key = "openai-key"
+    fresh_db.llm_providers_json = json.dumps(
+        [
+            {
+                "id": "chatgpt",
+                "label": "ChatGPT",
+                "protocol": "openai_responses",
+                "base_url": "https://api.openai.com",
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "gpt-snapshot",
+            }
+        ]
+    )
+    active_provider_id = {"value": "chatgpt"}
+
+    def fake_generate(**kwargs):
+        assert kwargs["provider"].id == "chatgpt"
+        active_provider_id["value"] = "deepseek"
+        return "snapshot reply", None
+
+    with patch("app.llm._stored_active_provider_id", side_effect=lambda: active_provider_id["value"]):
+        with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate):
+            res = client.post(
+                "/openclaw/turn",
+                json=make_payload("acc-debug-provider", "m-debug-provider"),
+                headers=BRIDGE_HEADERS,
+            )
+
+    assert res.status_code == 200
+    trace_id = res.json()["metadata"]["debug_trace_id"]
+    res = client.get(f"/admin/debug/traces/{trace_id}", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    trace = res.json()["trace"]
+    assert trace["llm_model"] == "gpt-snapshot"
+    assert trace["metadata"]["llm_provider_id"] == "chatgpt"
+    assert trace["metadata"]["llm_protocol"] == "openai_responses"
 
 
 def test_debug_trace_supports_multiple_accounts(client, fresh_db):

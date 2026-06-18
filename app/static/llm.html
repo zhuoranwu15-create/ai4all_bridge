@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Provider 管理</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>LLM Provider 管理</h1>
+      <p class="page-subtitle">选择全局底层模型提供者。当前只影响服务级默认模型，会话内切换后续单独接入。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div class="card">
+    <div class="card-title-row">
+      <h2>当前 Provider</h2>
+      <span id="status" class="status-msg"></span>
+    </div>
+    <div id="active-provider" class="empty-note">加载中…</div>
+  </div>
+
+  <div class="card">
+    <div class="card-title-row">
+      <h2>可选 Provider</h2>
+      <span class="card-note">密钥只显示是否已配置。</span>
+    </div>
+    <div class="compact-table">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>模型</th>
+            <th>协议</th>
+            <th>状态</th>
+            <th>Base URL</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="providers">
+          <tr><td colspan="6">加载中…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    var providerState = null;
+
+    (async function init() {
+      await loadAdminMe();
+      await loadProviders();
+    })();
+
+    function providerStatus(provider) {
+      var span = document.createElement('span');
+      span.className = 'status-pill';
+      if (!provider.enabled) {
+        span.className += ' status-pill-disabled';
+        span.textContent = 'disabled';
+      } else if (!provider.configured) {
+        span.className += ' status-pill-missing';
+        span.textContent = 'missing key';
+      } else if (provider.active) {
+        span.className += ' status-pill-active';
+        span.textContent = 'active';
+      } else {
+        span.textContent = 'ready';
+      }
+      return span;
+    }
+
+    function renderActive(provider) {
+      var el = document.getElementById('active-provider');
+      el.innerHTML = '<div class="binding-grid">'
+        + '<div><label>ID</label><div class="mono">' + esc(provider.id) + '</div></div>'
+        + '<div><label>模型</label><div class="mono">' + esc(provider.model) + '</div></div>'
+        + '<div><label>协议</label><div class="mono">' + esc(provider.protocol) + '</div></div>'
+        + '<div><label>密钥</label><div>' + (provider.configured ? '已配置' : '未配置') + '</div></div>'
+        + '</div>';
+    }
+
+    function renderProviders(data) {
+      providerState = data;
+      renderActive(data.active_provider);
+      var tbody = document.getElementById('providers');
+      var providers = data.providers || [];
+      tbody.textContent = '';
+      if (!providers.length) {
+        var emptyRow = document.createElement('tr');
+        var emptyCell = document.createElement('td');
+        emptyCell.colSpan = 6;
+        emptyCell.textContent = '暂无 provider';
+        emptyRow.appendChild(emptyCell);
+        tbody.appendChild(emptyRow);
+        return;
+      }
+      providers.forEach(function(provider) {
+        var canSwitch = provider.enabled && provider.configured && !provider.active;
+        var canProbe = provider.enabled && provider.configured;
+        var row = document.createElement('tr');
+
+        var idCell = document.createElement('td');
+        var idText = document.createElement('strong');
+        idText.className = 'mono';
+        idText.textContent = provider.id || '';
+        var labelText = document.createElement('div');
+        labelText.className = 'empty-note';
+        labelText.textContent = provider.label || '';
+        idCell.appendChild(idText);
+        idCell.appendChild(labelText);
+        row.appendChild(idCell);
+
+        ['model', 'protocol'].forEach(function(key) {
+          var cell = document.createElement('td');
+          cell.className = 'mono';
+          cell.textContent = provider[key] || '';
+          row.appendChild(cell);
+        });
+
+        var statusCell = document.createElement('td');
+        statusCell.appendChild(providerStatus(provider));
+        var keyEnv = document.createElement('div');
+        keyEnv.className = 'empty-note';
+        keyEnv.textContent = provider.api_key_env || '—';
+        statusCell.appendChild(keyEnv);
+        row.appendChild(statusCell);
+
+        var baseUrlCell = document.createElement('td');
+        baseUrlCell.className = 'mono wrap';
+        baseUrlCell.textContent = provider.base_url || '';
+        row.appendChild(baseUrlCell);
+
+        var actionCell = document.createElement('td');
+        if (canSwitch) {
+          var switchButton = document.createElement('button');
+          switchButton.className = 'primary';
+          switchButton.textContent = '切换';
+          switchButton.addEventListener('click', function() {
+            switchProvider(provider.id);
+          });
+          actionCell.appendChild(switchButton);
+          actionCell.appendChild(document.createTextNode(' '));
+        }
+        if (canProbe) {
+          var probeButton = document.createElement('button');
+          probeButton.textContent = '测试';
+          probeButton.addEventListener('click', function() {
+            probeProvider(provider.id);
+          });
+          actionCell.appendChild(probeButton);
+        }
+        row.appendChild(actionCell);
+        tbody.appendChild(row);
+      });
+    }
+
+    async function loadProviders() {
+      var status = document.getElementById('status');
+      try {
+        var data = await apiFetch('/admin/llm/providers');
+        renderProviders(data);
+        showStatus(status, '已加载', false);
+      } catch (e) {
+        showStatus(status, e.message, true);
+      }
+    }
+
+    async function switchProvider(id) {
+      var status = document.getElementById('status');
+      try {
+        await apiFetch('/admin/llm/active-provider', {
+          method: 'PATCH',
+          body: JSON.stringify({ provider_id: id }),
+        });
+        showStatus(status, '已切换到 ' + id, false);
+        await loadProviders();
+      } catch (e) {
+        showStatus(status, e.message, true);
+      }
+    }
+
+    async function probeProvider(id) {
+      var status = document.getElementById('status');
+      try {
+        showStatus(status, '测试中…', false);
+        var data = await apiFetch('/admin/llm/providers/' + encodeURIComponent(id) + '/probe', {
+          method: 'POST',
+          body: JSON.stringify({ message: '你好，测试一下连通性。' }),
+        });
+        showStatus(status, '测试成功：' + (data.reply || '').slice(0, 80), false);
+      } catch (e) {
+        showStatus(status, e.message, true);
+      }
+    }
+  </script>
+</body>
+</html>

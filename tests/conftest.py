@@ -22,7 +22,20 @@ def test_settings(tmp_path):
     s.feishu_error_log_alert_max_chars = 3500
     s.app_env = "test"
     s.llm_api_key = ""
+    s.llm_base_url = "http://fake-llm"
     s.llm_model = "test-model"
+    s.llm_default_provider_id = "deepseek"
+    s.llm_providers_json = ""
+    s.llm_openai_base_url = "https://api.openai.com"
+    s.llm_openai_model = "gpt-4o-mini"
+    s.llm_openai_api_key = ""
+    s.llm_anthropic_base_url = "https://api.anthropic.com"
+    s.llm_anthropic_model = "claude-sonnet-4-6"
+    s.llm_anthropic_api_key = ""
+    s.llm_timeout_seconds = 30.0
+    s.llm_connect_timeout_seconds = 5.0
+    s.llm_max_retries = 0
+    s.llm_force_ipv4 = False
     s.llm_context_messages = 100
     s.llm_default_prompt = "你是测试助手"
     s.llm_max_tool_rounds = 3
@@ -210,6 +223,8 @@ def fresh_db(test_settings):
         patch("app.routers.admin_proactive.settings", test_settings),
         patch("app.routers.admin_dreaming.settings", test_settings),
         patch("app.routers.admin_ops.settings", test_settings),
+        patch("app.routers.admin_llm.settings", test_settings),
+        patch("app.llm.settings", test_settings),
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
@@ -263,6 +278,8 @@ def client(fresh_db):
         patch("app.routers.admin_proactive.settings", fresh_db),
         patch("app.routers.admin_dreaming.settings", fresh_db),
         patch("app.routers.admin_ops.settings", fresh_db),
+        patch("app.routers.admin_llm.settings", fresh_db),
+        patch("app.llm.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
         patch("app.proactive.messaging.settings", fresh_db),
         patch("app.moderation.policy.settings", fresh_db),

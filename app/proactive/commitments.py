@@ -16,7 +16,7 @@ from app.db import (
     mark_proactive_commitment_failed,
     mark_proactive_commitment_sent,
 )
-from app.llm import generate_completion
+from app.llm import generate_completion, is_llm_configured
 from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.state import mark_account_proactive_sent
 
@@ -205,7 +205,7 @@ def extract_commitment_from_turn(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not getattr(settings, "llm_api_key", ""):
+    if not is_llm_configured():
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     if _select_route(account_id) is None:

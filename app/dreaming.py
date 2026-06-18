@@ -406,9 +406,9 @@ def _call_dreaming_llm(
     session_messages: str,
     daily_notes: str,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Optional[int]]]]:
-    from app.llm import generate_completion_with_usage
+    from app.llm import generate_completion_with_usage, is_llm_configured
 
-    if not settings.llm_api_key:
+    if not is_llm_configured():
         raise RuntimeError("llm_disabled")
 
     messages = [
@@ -737,8 +737,11 @@ def run_dreaming(
     allow_fallback: bool = False,
 ) -> Dict[str, object]:
     """Run LLM Dreaming for one account and auto-apply eligible memory items."""
+    from app.llm import get_active_llm_model
+
     today = today or date.today().isoformat()
     days = max(1, min(days, 30))
+    active_llm_model = get_active_llm_model()
 
     (
         session_metadata,
@@ -766,7 +769,7 @@ def run_dreaming(
             source_business_day=source_business_day,
             status="succeeded",
             prompt_version=DREAMING_PROMPT_VERSION,
-            llm_model=settings.llm_model,
+            llm_model=active_llm_model,
             input_hash=None,
             actor_type=actor_type,
             actor_id=actor_id,
@@ -820,7 +823,7 @@ def run_dreaming(
         source_business_day=source_business_day,
         status="running",
         prompt_version=DREAMING_PROMPT_VERSION,
-        llm_model=settings.llm_model,
+        llm_model=active_llm_model,
         input_hash=input_hash,
         actor_type=actor_type,
         actor_id=actor_id,
@@ -869,7 +872,7 @@ def run_dreaming(
             session_id=source_session_id,
             session_summary=summary.get("rough_summary"),
             carryover_summary=summary.get("carryover_summary"),
-            summary_model=(settings.llm_model if not used_fallback else "deterministic_fallback"),
+            summary_model=(active_llm_model if not used_fallback else "deterministic_fallback"),
             summary_prompt_version=DREAMING_PROMPT_VERSION,
         )
 

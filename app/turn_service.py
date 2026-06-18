@@ -35,7 +35,8 @@ from app.db import (
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
-from app.llm import generate_reply, generate_reply_with_tools
+from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.llm_providers import LLMProviderConfig
 from app.memory_writer import write_memory
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import (
@@ -316,6 +317,7 @@ def build_turn_llm_input(
     now: Optional[datetime] = None,
     include_tool_instructions: bool = True,
     debug_dry_run: bool = False,
+    llm_provider: Optional[LLMProviderConfig] = None,
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
@@ -323,6 +325,7 @@ def build_turn_llm_input(
     pre-writes or message insertion must do that before invoking it.
     """
     _now = now or beijing_now()
+    selected_llm_provider = llm_provider or resolve_active_llm_provider()
     current_session_id = int(session["id"])
     history_rows = list_recent_messages_for_account(
         account_id=account_id,
@@ -419,7 +422,7 @@ def build_turn_llm_input(
         current_time=current_time,
         weekday=beijing_weekday_str(_now),
         daypart=beijing_daypart_str(_now),
-        model_name=settings.llm_model,
+        model_name=selected_llm_provider.model,
         tool_instructions=(
             None if onboarding_active or not include_tool_instructions else _tool_instructions(
                 active_content_invitation=active_content_invitation,
@@ -558,6 +561,7 @@ class _TurnSetup:
     debug_trace_enabled: bool
     onboarding_state: str
     onboarding_active: bool
+    llm_provider: LLMProviderConfig
 
 
 @dataclass
@@ -581,6 +585,7 @@ class _ReplyResult:
     system_prompt: Optional[str]
     llm_messages: List[Any]
     debug_metadata: Dict[str, Any]
+    llm_provider: Optional[LLMProviderConfig]
 
 
 def _prepare_turn(
@@ -824,6 +829,7 @@ def _prepare_turn(
         debug_trace_enabled=debug_trace_enabled,
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
+        llm_provider=resolve_active_llm_provider(),
     )
 
 
@@ -1020,6 +1026,7 @@ def _resolve_turn_reply(
     debug_trace_enabled = setup.debug_trace_enabled
     onboarding_state = setup.onboarding_state
     onboarding_active = setup.onboarding_active
+    llm_provider = setup.llm_provider
     text = inbound.text
     inbound_blocked = inbound.inbound_blocked
     image_understanding_failed = inbound.image_understanding_failed
@@ -1114,6 +1121,7 @@ def _resolve_turn_reply(
                 web_search_enabled=web_search_enabled_for_turn,
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
+                llm_provider=llm_provider,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
@@ -1146,6 +1154,7 @@ def _resolve_turn_reply(
                     history=history,
                     system_prompt=system_prompt,
                     messages=llm_messages,
+                    provider=llm_provider,
                 )
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
@@ -1158,6 +1167,7 @@ def _resolve_turn_reply(
                     ctx=ctx,
                     first_round_tool_choice=tooling["first_round_tool_choice"],
                     messages=llm_messages,
+                    provider=llm_provider,
                 )
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
@@ -1175,6 +1185,7 @@ def _resolve_turn_reply(
         system_prompt=system_prompt,
         llm_messages=llm_messages,
         debug_metadata=debug_metadata,
+        llm_provider=llm_provider,
     )
 
 
@@ -1211,6 +1222,14 @@ def _finalize_turn(
     system_prompt = result.system_prompt
     llm_messages = result.llm_messages
     debug_metadata = result.debug_metadata
+    active_llm_provider = (
+        result.llm_provider.redacted()
+        if result.llm_provider is not None
+        else resolve_active_llm_provider().redacted()
+    )
+    active_llm_model = str(active_llm_provider.get("model") or "")
+    debug_metadata.setdefault("llm_provider_id", active_llm_provider.get("id"))
+    debug_metadata.setdefault("llm_protocol", active_llm_provider.get("protocol"))
 
     reply_message_id = f"reply-{uuid.uuid4()}"
     moderation_reply_metadata: Dict[str, Any] = {}
@@ -1280,7 +1299,7 @@ def _finalize_turn(
                 session_id=session["id"],
                 message_id=message_id,
                 source="ai4all",
-                llm_model=settings.llm_model,
+                llm_model=active_llm_model,
                 system_prompt=system_prompt,
                 messages=llm_messages,
                 reply=reply,
@@ -1364,7 +1383,7 @@ def _finalize_turn(
         try:
             billing_result = record_chat_usage_charge(
                 account_id=account_id,
-                model=settings.llm_model,
+                model=active_llm_model,
                 messages=llm_messages,
                 reply=reply,
                 source_type="chat_turn",

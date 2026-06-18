@@ -30,8 +30,16 @@ class Settings(BaseSettings):
     backup_rsync_target: str = ""             # 异地 rsync 目标（如 user@host:/path）；空=不启用异地
 
     llm_api_key: str = ""
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
+    llm_base_url: str = "https://api.deepseek.com"
+    llm_model: str = "deepseek-v4-flash"
+    llm_default_provider_id: str = "deepseek"
+    llm_providers_json: str = ""
+    llm_openai_base_url: str = "https://api.openai.com"
+    llm_openai_model: str = "gpt-4o-mini"
+    llm_openai_api_key: str = ""
+    llm_anthropic_base_url: str = "https://api.anthropic.com"
+    llm_anthropic_model: str = "claude-sonnet-4-6"
+    llm_anthropic_api_key: str = ""
     llm_timeout_seconds: float = 40.0
     llm_connect_timeout_seconds: float = 5.0
     llm_max_retries: int = 1

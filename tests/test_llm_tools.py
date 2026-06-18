@@ -131,6 +131,43 @@ def test_generate_reply_with_tools_tool_call():
     assert reply == final_text
 
 
+def test_generate_reply_with_tools_reuses_provider_snapshot_across_tool_rounds():
+    from app.llm import generate_reply_with_tools
+    from app.llm_providers import LLMProviderConfig
+
+    provider = LLMProviderConfig(
+        id="snapshot-provider",
+        label="Snapshot",
+        protocol="openai_chat",
+        base_url="https://provider.test",
+        model="snapshot-model",
+        api_key="snapshot-key",
+    )
+    tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
+    final_text = "已设置提醒。"
+
+    with patch("app.llm._active_llm_provider") as mock_active:
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp, _direct_text_response(final_text)],
+        ) as mock_chat:
+            with patch("app.tools.executor.execute_tool_call", return_value={"status": "created"}):
+                reply, err = generate_reply_with_tools(
+                    user_text="提醒我开会",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                    max_tool_rounds=3,
+                    provider=provider,
+                )
+
+    assert err is None
+    assert reply == final_text
+    mock_active.assert_not_called()
+    assert [call.kwargs["provider"] for call in mock_chat.call_args_list] == [provider, provider]
+
+
 def test_generate_reply_with_tools_does_not_duplicate_current_history():
     from app.llm import generate_reply_with_tools
 
@@ -360,7 +397,7 @@ def test_http_chat_with_tools_rejects_invalid_json():
     settings_mock.llm_force_ipv4 = False
 
     with patch("app.llm.settings", settings_mock):
-        with patch("app.llm.httpx.Client", return_value=FakeClient()):
+        with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
             with pytest.raises(RuntimeError, match="LLM returned invalid JSON"):
                 _http_chat_with_tools([{"role": "user", "content": "hi"}], [])
 

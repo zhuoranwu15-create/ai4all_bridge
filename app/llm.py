@@ -4,9 +4,9 @@ import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-import httpx
-
 from app.config import settings
+from app.llm_adapters import chat_completion
+from app.llm_providers import LLMProviderConfig, get_legacy_llm_provider, get_llm_provider
 
 
 logger = logging.getLogger("ai4all.llm")
@@ -40,8 +40,69 @@ def _settings_app_env() -> str:
     return env.strip().lower() or "local"
 
 
-def _llm_api_key() -> str:
-    return str(getattr(settings, "llm_api_key", "") or "").strip()
+def _llm_api_key(provider: Optional[LLMProviderConfig] = None) -> str:
+    try:
+        selected_provider = provider or _active_llm_provider()
+        return selected_provider.api_key.strip()
+    except Exception:
+        return str(getattr(settings, "llm_api_key", "") or "").strip()
+
+
+def _is_mock_settings() -> bool:
+    return type(settings).__module__.startswith("unittest.mock")
+
+
+def _stored_active_provider_id() -> Optional[str]:
+    if _is_mock_settings():
+        return None
+    try:
+        from app.db import get_active_llm_provider_id
+
+        return get_active_llm_provider_id()
+    except Exception as err:
+        logger.debug("active llm provider lookup skipped error=%s", err)
+        return None
+
+
+def _active_llm_provider(provider_id: Optional[str] = None) -> LLMProviderConfig:
+    selected_id = provider_id or _stored_active_provider_id()
+    try:
+        provider = get_llm_provider(selected_id, settings_obj=settings)
+    except ValueError as err:
+        logger.warning("active llm provider invalid provider_id=%s error=%s", selected_id, err)
+        try:
+            provider = get_llm_provider(None, settings_obj=settings)
+        except ValueError as fallback_err:
+            logger.error(
+                "default llm provider invalid; falling back to legacy provider error=%s",
+                fallback_err,
+            )
+            provider = get_legacy_llm_provider(settings_obj=settings)
+    return provider
+
+
+def resolve_active_llm_provider(provider_id: Optional[str] = None) -> LLMProviderConfig:
+    """Resolve the active provider once so callers can reuse a request-level snapshot."""
+    return _active_llm_provider(provider_id)
+
+
+def get_active_llm_provider_metadata(provider_id: Optional[str] = None) -> Dict[str, Any]:
+    """Return active provider metadata without exposing API keys."""
+    return _active_llm_provider(provider_id).redacted()
+
+
+def get_active_llm_model(provider_id: Optional[str] = None) -> str:
+    """Return the model name for the currently active LLM provider."""
+    return _active_llm_provider(provider_id).model
+
+
+def is_llm_configured(provider_id: Optional[str] = None) -> bool:
+    """Return whether the selected provider can be called by runtime code."""
+    try:
+        provider = _active_llm_provider(provider_id)
+        return bool(provider.enabled and provider.api_key)
+    except Exception:
+        return False
 
 
 def _message_text_for_mock_fallback(
@@ -85,69 +146,16 @@ def _missing_api_key_reply(
     raise RuntimeError("LLM API key is missing")
 
 
-def _chat_timeout() -> httpx.Timeout:
-    return httpx.Timeout(
-        settings.llm_timeout_seconds,
-        connect=settings.llm_connect_timeout_seconds,
-    )
-
-
-def _chat_transport() -> httpx.HTTPTransport:
-    local_address = "0.0.0.0" if settings.llm_force_ipv4 else None
-    return httpx.HTTPTransport(
-        retries=max(0, int(settings.llm_max_retries)),
-        local_address=local_address,
-    )
-
-
-def _http_chat_payload(messages: List[Dict[str, str]]) -> Dict[str, Any]:
+def _http_chat_payload(
+    messages: List[Dict[str, str]],
+    *,
+    provider: Optional[LLMProviderConfig] = None,
+) -> Dict[str, Any]:
     """POST messages 到 LLM，返回解析后的 JSON payload（含 choices/usage），带重试。"""
-    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
-    body = {
-        "model": settings.llm_model,
-        "messages": messages,
-        "temperature": 0.7,
-    }
-    max_attempts = max(1, int(settings.llm_max_retries) + 1)
-    last_request_error: Optional[httpx.RequestError] = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            with httpx.Client(
-                timeout=_chat_timeout(),
-                trust_env=False,
-                transport=_chat_transport(),
-            ) as client:
-                response = client.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {settings.llm_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-                response.raise_for_status()
-                payload = response.json()
-            return payload
-        except httpx.HTTPStatusError as err:
-            detail = err.response.text
-            status_code = err.response.status_code
-            logger.error("llm http error status=%s body=%s", status_code, detail[:500])
-            raise RuntimeError(f"LLM HTTP error: {status_code}") from err
-        except httpx.RequestError as err:
-            last_request_error = err
-            logger.warning(
-                "llm request failed attempt=%s/%s error=%s",
-                attempt,
-                max_attempts,
-                err,
-            )
-            if attempt >= max_attempts:
-                raise RuntimeError("LLM request failed") from err
-            time.sleep(min(0.2 * attempt, 1.0))
-        except json.JSONDecodeError as err:
-            logger.error("llm invalid json response: %s", err)
-            raise RuntimeError("LLM returned invalid JSON") from err
-    raise RuntimeError("LLM request failed") from last_request_error
+    selected_provider = provider or _active_llm_provider()
+    if not selected_provider.enabled:
+        raise RuntimeError("LLM provider is disabled")
+    return chat_completion(selected_provider, messages)
 
 
 def _extract_content(payload: Dict[str, Any]) -> str:
@@ -176,9 +184,13 @@ def _extract_usage(payload: Dict[str, Any]) -> Optional[Dict[str, Optional[int]]
         return None
 
 
-def _http_chat(messages: List[Dict[str, str]]) -> str:
+def _http_chat(
+    messages: List[Dict[str, str]],
+    *,
+    provider: Optional[LLMProviderConfig] = None,
+) -> str:
     """Send a messages list to the LLM and return the reply content."""
-    return _extract_content(_http_chat_payload(messages))
+    return _extract_content(_http_chat_payload(messages, provider=provider))
 
 
 def _history_with_current_user(
@@ -202,79 +214,61 @@ def generate_reply(
     history: List[Dict[str, str]],
     system_prompt: Optional[str] = None,
     messages: Optional[List[Dict[str, str]]] = None,
+    provider: Optional[LLMProviderConfig] = None,
 ) -> str:
-    if not _llm_api_key():
+    selected_provider = provider or _active_llm_provider()
+    if not _llm_api_key(selected_provider):
         return _missing_api_key_reply(user_text, messages)
     if messages is not None:
-        return _http_chat(messages)
+        return _http_chat(messages, provider=selected_provider)
     prompt = system_prompt or settings.llm_default_prompt
     built_messages = [{"role": "system", "content": prompt}]
     built_messages.extend(_history_with_current_user(history, user_text))
-    return _http_chat(built_messages)
+    return _http_chat(built_messages, provider=selected_provider)
 
 
-def generate_completion(messages: List[Dict[str, str]]) -> str:
+def generate_completion(
+    messages: List[Dict[str, str]],
+    *,
+    provider: Optional[LLMProviderConfig] = None,
+) -> str:
     """One-shot LLM call with an explicit messages list. Returns '' if no API key."""
-    if not settings.llm_api_key:
+    selected_provider = provider or _active_llm_provider()
+    if not _llm_api_key(selected_provider):
         return ""
-    return _http_chat(messages)
+    return _http_chat(messages, provider=selected_provider)
 
 
 def generate_completion_with_usage(
     messages: List[Dict[str, str]],
+    *,
+    provider: Optional[LLMProviderConfig] = None,
 ) -> Tuple[str, Optional[Dict[str, Optional[int]]]]:
     """同 generate_completion，但额外返回 token 用量 {'input','output'}（缺失为 None）。
 
     无 API key 时返回 ('', None)。供需要计量 token 的旁路（如 dreaming）使用。
     """
-    if not settings.llm_api_key:
+    selected_provider = provider or _active_llm_provider()
+    if not _llm_api_key(selected_provider):
         return "", None
-    payload = _http_chat_payload(messages)
+    payload = _http_chat_payload(messages, provider=selected_provider)
     return _extract_content(payload), _extract_usage(payload)
 
 
-def _http_chat_with_tools(messages: List[Dict], tools: List[Dict], *, tool_choice: Any = "auto") -> Dict:
+def _http_chat_with_tools(
+    messages: List[Dict],
+    tools: List[Dict],
+    *,
+    tool_choice: Any = "auto",
+    provider: Optional[LLMProviderConfig] = None,
+) -> Dict:
     """LLM call with tool definitions. Returns raw response dict."""
-    url = settings.llm_base_url.rstrip("/") + "/chat/completions"
-    body = {
-        "model": settings.llm_model,
-        "messages": messages,
-        "temperature": 0.7,
-        "tools": tools,
-        "tool_choice": tool_choice,
-    }
-    max_attempts = max(1, int(settings.llm_max_retries) + 1)
-    last_request_error: Optional[httpx.RequestError] = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            with httpx.Client(
-                timeout=_chat_timeout(),
-                trust_env=False,
-                transport=_chat_transport(),
-            ) as client:
-                response = client.post(
-                    url,
-                    headers={
-                        "Authorization": f"Bearer {settings.llm_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json=body,
-                )
-                response.raise_for_status()
-                return response.json()
-        except httpx.HTTPStatusError as err:
-            logger.error("llm http error status=%s body=%s", err.response.status_code, err.response.text[:500])
-            raise RuntimeError(f"LLM HTTP error: {err.response.status_code}") from err
-        except json.JSONDecodeError as err:
-            logger.error("llm invalid json response: %s", err)
-            raise RuntimeError("LLM returned invalid JSON") from err
-        except httpx.RequestError as err:
-            last_request_error = err
-            logger.warning("llm request failed attempt=%s/%s error=%s", attempt, max_attempts, err)
-            if attempt >= max_attempts:
-                raise RuntimeError("LLM request failed") from err
-            time.sleep(min(0.2 * attempt, 1.0))
-    raise RuntimeError("LLM request failed") from last_request_error
+    selected_provider = provider or _active_llm_provider()
+    if not selected_provider.enabled:
+        raise RuntimeError("LLM provider is disabled")
+    if not selected_provider.supports_tools:
+        raise RuntimeError("LLM provider does not support tools")
+    return chat_completion(selected_provider, messages, tools=tools, tool_choice=tool_choice)
 
 
 def _tool_result_status(result: Any) -> str:
@@ -402,13 +396,15 @@ def generate_reply_with_tools(
     max_tool_rounds: Optional[int] = None,
     first_round_tool_choice: Any = "auto",
     messages: Optional[List[Dict]] = None,
+    provider: Optional[LLMProviderConfig] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None).
 
     first_round_tool_choice 由调用方显式传入：第一轮的 tool_choice。默认 "auto"。
     主对话 turn 路径在检测到"主动设置更新"意图时传入强制工具；主动消息生成等
     其它调用方不传（默认 auto），因此不会被内嵌的历史聊天文本误判（曾导致 400）。"""
-    if not _llm_api_key():
+    selected_provider = provider or _active_llm_provider()
+    if not _llm_api_key(selected_provider):
         try:
             return _missing_api_key_reply(user_text, messages), None
         except RuntimeError as err:
@@ -442,7 +438,12 @@ def generate_reply_with_tools(
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
         try:
-            response = _http_chat_with_tools(tool_messages, tools, tool_choice=tc)
+            response = _http_chat_with_tools(
+                tool_messages,
+                tools,
+                tool_choice=tc,
+                provider=selected_provider,
+            )
         except RuntimeError as err:
             return "", str(err)
 
@@ -495,6 +496,8 @@ def generate_reply_with_tools(
                 "role": "assistant",
                 "tool_calls": tool_calls,
             }
+            if response.get("_provider_protocol") == "openai_responses" and response.get("id"):
+                assistant_message["_provider_response_id"] = response.get("id")
             if message.get("content") is not None:
                 assistant_message["content"] = message.get("content")
             tool_messages.append(assistant_message)

@@ -315,6 +315,8 @@ from app.routers import admin_dreaming as _admin_dreaming_router  # noqa: E402
 app.include_router(_admin_dreaming_router.router)
 from app.routers import admin_ops as _admin_ops_router  # noqa: E402
 app.include_router(_admin_ops_router.router)
+from app.routers import admin_llm as _admin_llm_router  # noqa: E402
+app.include_router(_admin_llm_router.router)
 from app.routers import admin_security as _admin_security_router  # noqa: E402
 app.include_router(_admin_security_router.router)
 
@@ -775,4 +777,3 @@ async def shutdown_dreaming_scheduler() -> None:
 # ---------------------------------------------------------------------------
 # Bridge endpoint
 # ---------------------------------------------------------------------------
-

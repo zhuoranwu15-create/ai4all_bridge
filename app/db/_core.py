@@ -744,6 +744,14 @@ def _migration_0001_baseline(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
         ON proactive_account_state(enabled, next_scan_at, cooldown_until);
 
+        CREATE TABLE IF NOT EXISTS llm_runtime_config (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_by TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
         -- 账号级主动消息偏好（source of truth）。稀疏存储：未显式设置的
         -- override 列为 NULL / 空容器，读取层 merge 全局配置后才是有效值，
         -- 以此区分"未设置=继承全局"与"用户显式设置"。
@@ -1365,8 +1373,24 @@ def _migration_0001_baseline(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_0002_llm_runtime_config(conn: sqlite3.Connection) -> None:
+    """Add global runtime LLM provider selection storage."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_runtime_config (
+            key TEXT PRIMARY KEY,
+            value TEXT,
+            updated_by TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        )
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
+    (2, _migration_0002_llm_runtime_config),
 ]
 
 
@@ -1388,5 +1412,3 @@ def _decode_json_field(
         item[target_field] = default
         item[f"{target_field}_decode_error"] = True
     return item
-
-
