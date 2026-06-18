@@ -468,3 +468,133 @@ def test_generate_reply_with_tools_no_api_key_production_returns_error():
 
     assert reply == ""
     assert err == "LLM API key is missing"
+
+
+# ---------------------------------------------------------------------------
+# on_tool_detected callback tests
+# ---------------------------------------------------------------------------
+
+def _settings_mock_for_tool_thinking():
+    s = MagicMock()
+    s.llm_api_key = "test-key"
+    s.llm_max_tool_rounds = 3
+    s.llm_default_prompt = "你是助手"
+    return s
+
+
+def test_on_tool_detected_not_called_for_direct_response():
+    """直接回复路径不触发 callback。"""
+    from app.llm import generate_reply_with_tools
+
+    callback = MagicMock()
+    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的")):
+            reply, err = generate_reply_with_tools(
+                user_text="你好",
+                history=[],
+                system_prompt="你是助手",
+                tools=[],
+                ctx=_make_ctx(),
+                on_tool_detected=callback,
+            )
+
+    assert err is None
+    assert reply == "好的"
+    callback.assert_not_called()
+
+
+def test_on_tool_detected_called_once_even_across_multiple_tool_rounds():
+    """多轮工具调用时 callback 只在第一轮触发一次，且传入工具名列表。"""
+    from app.llm import generate_reply_with_tools
+
+    callback = MagicMock()
+    tool_resp_1 = _tool_call_response("web_search", {"query": "今天天气"})
+    tool_resp_2 = _tool_call_response("create_reminder", {"text": "提醒"})
+    final = _direct_text_response("搜完了")
+
+    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp_1, tool_resp_2, final],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value={"result": "ok"}):
+                reply, err = generate_reply_with_tools(
+                    user_text="查天气再提醒我",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[
+                        {"type": "function", "function": {"name": "web_search"}},
+                        {"type": "function", "function": {"name": "create_reminder"}},
+                    ],
+                    ctx=_make_ctx(),
+                    on_tool_detected=callback,
+                )
+
+    assert err is None
+    assert reply == "搜完了"
+    callback.assert_called_once()
+    assert callback.call_args.args[0] == ["web_search"]
+
+
+def test_on_tool_detected_called_for_dsml_tool_call():
+    """DSML 格式的工具调用同样触发 callback 一次。"""
+    from app.llm import generate_reply_with_tools
+
+    dsml_content = (
+        "<||DSML||invoke name='web_search'>"
+        "<||DSML||parameter name='query'>今日新闻</||DSML||parameter>"
+        "</||DSML||invoke>"
+    )
+    dsml_resp = {
+        "choices": [{"message": {"role": "assistant", "content": dsml_content}, "finish_reason": "stop"}]
+    }
+    callback = MagicMock()
+
+    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[dsml_resp, _direct_text_response("新闻已找到")],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value={"result": "ok"}):
+                reply, err = generate_reply_with_tools(
+                    user_text="帮我找新闻",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "web_search"}}],
+                    ctx=_make_ctx(),
+                    on_tool_detected=callback,
+                )
+
+    assert err is None
+    assert reply == "新闻已找到"
+    callback.assert_called_once()
+    assert callback.call_args.args[0] == ["web_search"]
+
+
+def test_on_tool_detected_exception_does_not_affect_reply():
+    """callback 抛异常不影响工具执行和最终回复。"""
+    from app.llm import generate_reply_with_tools
+
+    def exploding_callback(tool_names):
+        raise RuntimeError("callback 炸了")
+
+    tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
+    final_text = "已帮你设置提醒。"
+
+    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp, _direct_text_response(final_text)],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value={"status": "created"}):
+                reply, err = generate_reply_with_tools(
+                    user_text="提醒我开会",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                    on_tool_detected=exploding_callback,
+                )
+
+    assert err is None
+    assert reply == final_text

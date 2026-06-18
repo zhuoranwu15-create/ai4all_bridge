@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.llm_adapters import chat_completion
@@ -402,6 +402,7 @@ def generate_reply_with_tools(
     first_round_tool_choice: Any = "auto",
     messages: Optional[List[Dict]] = None,
     provider: Optional[LLMProviderConfig] = None,
+    on_tool_detected: Optional[Callable[[List[str]], None]] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None).
 
@@ -440,6 +441,8 @@ def generate_reply_with_tools(
             )
             first_round_tool_choice = "auto"
 
+    _tool_notified = False
+
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
         try:
@@ -475,6 +478,12 @@ def generate_reply_with_tools(
                     return "", "tool_round_limit_exceeded"
                 tool_name, tool_args = dsml
                 logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
+                if not _tool_notified and on_tool_detected is not None:
+                    _tool_notified = True
+                    try:
+                        on_tool_detected([tool_name])
+                    except Exception as _cb_err:
+                        logger.warning("on_tool_detected callback failed: %s", _cb_err)
                 fake_tool_call = _fake_dsml_tool_call(tool_name, tool_args, round_index)
                 tool_result = _execute_and_record_tool_call(fake_tool_call, ctx)
                 tool_messages.extend(
@@ -497,6 +506,13 @@ def generate_reply_with_tools(
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 return "", "tool_calls_missing"
+            if not _tool_notified and on_tool_detected is not None:
+                _tool_notified = True
+                try:
+                    tool_names = [tc.get("function", {}).get("name", "") for tc in tool_calls]
+                    on_tool_detected(tool_names)
+                except Exception as _cb_err:
+                    logger.warning("on_tool_detected callback failed: %s", _cb_err)
             assistant_message = {
                 "role": "assistant",
                 "tool_calls": tool_calls,

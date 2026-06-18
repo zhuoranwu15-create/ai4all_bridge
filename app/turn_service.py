@@ -1,6 +1,8 @@
 import asyncio
 import logging
+import random
 import re
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -79,6 +81,62 @@ logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
 _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+
+_TOOL_THINKING_MSGS_SEARCH = [
+    "稍等，我查一下~",
+    "我去找找，马上回来~",
+    "让我搜索一下，你别着急~",
+]
+_TOOL_THINKING_MSGS_DEFAULT = [
+    "稍等，我想想~",
+    "让我想一想，你别急~",
+    "嗯，我考虑一下~",
+]
+
+
+def _make_tool_thinking_sender(
+    *,
+    identity,
+    account_id: str,
+    openclaw_session_key: str,
+) -> Optional[Any]:
+    """返回一个 fire-and-forget 闭包：当 LLM 首次触发工具调用时，先发一条"思考中"消息给用户。
+
+    best-effort，仅限 inline dispatch 节点。中心节点/远程账号不持有 WeChat 会话，
+    无法直接发送，此处静默跳过（不走队列：临时提示不值得新增调度路径）。
+    """
+    to_user_id = (identity.chat_id or identity.sender_id or "").strip()
+    if not to_user_id:
+        return None
+    if not should_inline_dispatch_for_account(account_id, settings):
+        return None
+
+    def _send(tool_names: List[str]) -> None:
+        is_search = any("search" in (n or "").lower() for n in tool_names)
+        pool = _TOOL_THINKING_MSGS_SEARCH if is_search else _TOOL_THINKING_MSGS_DEFAULT
+        msg = random.choice(pool)
+
+        def _do_send() -> None:
+            # 纯 UX 暂态提示：不落 messages 表，不进审计/计费链路，不出现在 LLM 对话历史中。
+            try:
+                send_weixin_text(
+                    to_user_id=to_user_id,
+                    text=msg,
+                    gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                    account_id=identity.channel_account_id,
+                    session_key=openclaw_session_key,
+                    channel=identity.channel,
+                )
+                logger.info(
+                    "tool_thinking_sent account=%s tools=%s msg=%r",
+                    account_id, tool_names, msg,
+                )
+            except Exception as _err:
+                logger.warning("tool_thinking send failed account=%s error=%s", account_id, _err)
+
+        threading.Thread(target=_do_send, daemon=True).start()
+
+    return _send
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -1226,6 +1284,11 @@ def _resolve_turn_reply(
                         first_round_tool_choice=tooling["first_round_tool_choice"],
                         messages=llm_messages,
                         provider=llm_provider,
+                        on_tool_detected=_make_tool_thinking_sender(
+                            identity=identity,
+                            account_id=account_id,
+                            openclaw_session_key=openclaw_session_key,
+                        ),
                     )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
