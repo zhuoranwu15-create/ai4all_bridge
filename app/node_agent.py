@@ -59,6 +59,17 @@ class NodeExecLogoutRequest(BaseModel):
     timeout_ms: int
 
 
+class NodeExecSendTextRequest(BaseModel):
+    # 字段对齐 openclaw_gateway.send_weixin_text 签名；account_id 即 channel_account_id。
+    to_user_id: str
+    text: str
+    gateway_timeout_ms: int
+    account_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    session_key: Optional[str] = None
+    channel: str = DEFAULT_WEIXIN_CHANNEL
+
+
 def create_node_agent_app() -> FastAPI:
     """构建节点 agent 的 exec FastAPI app(登录 start/wait/logout + health)。"""
     app = FastAPI(title="ai4all-node-agent")
@@ -112,6 +123,26 @@ def create_node_agent_app() -> FastAPI:
             )
         except OpenClawGatewayError as err:
             # 关键:openclaw "does not support logout" 经此进 body,中心据原文案判 unsupported。
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(err))
+
+    @app.post("/node/exec/send/text")
+    def exec_send_text(
+        payload: NodeExecSendTextRequest,
+        _: None = Depends(_verify_bridge_auth),
+    ) -> Dict[str, Any]:
+        # 中心 push 一条前台同步消息(暂态/欢迎语)给本节点持有的会话,本机调 openclaw 即时发。
+        try:
+            return openclaw_gateway.send_weixin_text(
+                to_user_id=payload.to_user_id,
+                text=payload.text,
+                gateway_timeout_ms=payload.gateway_timeout_ms,
+                account_id=payload.account_id,
+                idempotency_key=payload.idempotency_key,
+                session_key=payload.session_key,
+                channel=payload.channel,
+            )
+        except OpenClawGatewayError as err:
+            # 含 OpenClawRateLimited 子类;原始文案进 body 供中心透出/分类。
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(err))
 
     return app

@@ -269,3 +269,108 @@ def test_enqueue_onboarding_welcome_routes_to_assigned_node(fresh_db):
     )
     assert again["id"] == out["id"]
     assert get_outbound_message(outbound_message_id=out["id"])["status"] == "pending"
+
+
+# ===== send/text:节点 exec 端点 + 中心 node_send_text 本机/远程对称 =====
+
+def test_exec_send_text_requires_bearer_and_surfaces_error(monkeypatch):
+    """/node/exec/send/text:缺 bearer→401;openclaw 报错→502 且 body 含原始文案。"""
+    from app import node_agent
+
+    monkeypatch.setattr(
+        node_agent, "settings", Settings(ai4all_bridge_secret="test-secret", node_id="aliyun2")
+    )
+    tc = TestClient(node_agent.create_node_agent_app())
+
+    body = {"to_user_id": "u", "text": "hi", "gateway_timeout_ms": 5000}
+    assert tc.post("/node/exec/send/text", json=body).status_code == 401
+
+    # 成功:转调本机 openclaw send,回传结果
+    monkeypatch.setattr(
+        node_agent.openclaw_gateway, "send_weixin_text", lambda **kw: {"messageId": "m-1"}
+    )
+    r = tc.post("/node/exec/send/text", json=body, headers=_BEARER)
+    assert r.status_code == 200 and r.json()["messageId"] == "m-1"
+
+    # openclaw 报错 → 502 透出文案
+    monkeypatch.setattr(
+        node_agent.openclaw_gateway,
+        "send_weixin_text",
+        _raise(OpenClawGatewayError("session not found")),
+    )
+    r = tc.post("/node/exec/send/text", json=body, headers=_BEARER)
+    assert r.status_code == 502
+    assert "session not found" in r.text
+
+
+def test_node_send_text_local_direct_call(monkeypatch):
+    """standalone/本机账号:node_send_text 直调本机 openclaw,不走 HTTP。"""
+    from app import node_gateway
+
+    monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="standalone"))
+    captured = {}
+    monkeypatch.setattr(
+        node_gateway.openclaw_gateway,
+        "send_weixin_text",
+        lambda **kw: captured.update(kw) or {"messageId": "local-1"},
+    )
+    # 远程路径若被误走会调 httpx.post,这里设成抛错确保未走
+    monkeypatch.setattr(node_gateway.httpx, "post", _raise(AssertionError("should not POST")))
+
+    out = node_gateway.node_send_text(
+        node_id=None,
+        to_user_id="u",
+        text="hi",
+        gateway_timeout_ms=5000,
+        account_id="bot-1",
+        channel="openclaw-weixin",
+    )
+    assert out["messageId"] == "local-1"
+    assert captured["to_user_id"] == "u" and captured["account_id"] == "bot-1"
+
+
+def test_node_send_text_remote_pushes_to_owning_node(monkeypatch, fresh_db):
+    """远程账号:node_send_text HTTP push 到归属节点 /node/exec/send/text,节点本机发。"""
+    from app import node_agent, node_gateway
+    from app.db import upsert_access_node
+
+    upsert_access_node(node_id="aliyun2", base_url="http://aliyun2")
+
+    # 节点 agent:openclaw send 回 messageId
+    monkeypatch.setattr(
+        node_agent, "settings", Settings(ai4all_bridge_secret="test-secret", node_id="aliyun2")
+    )
+    sent = {}
+    monkeypatch.setattr(
+        node_agent.openclaw_gateway,
+        "send_weixin_text",
+        lambda **kw: sent.update(kw) or {"messageId": "remote-1"},
+    )
+    agent_client = TestClient(node_agent.create_node_agent_app())
+
+    # 中心:central 角色(aliyun2 远程),secret 对齐;httpx.post 路由到 agent app
+    monkeypatch.setattr(
+        node_gateway,
+        "settings",
+        Settings(ai4all_role="central", node_id="aliyun1", ai4all_bridge_secret="test-secret"),
+    )
+
+    def _routed_post(url, *, json=None, headers=None, timeout=None):
+        return agent_client.post(urlsplit(url).path, json=json, headers=headers)
+
+    monkeypatch.setattr(node_gateway.httpx, "post", _routed_post)
+
+    out = node_gateway.node_send_text(
+        node_id="aliyun2",
+        to_user_id="user@im.wechat",
+        text="稍等，我查一下~",
+        gateway_timeout_ms=5000,
+        account_id="bot-1",
+        session_key="sk-1",
+        channel="openclaw-weixin",
+    )
+    assert out["messageId"] == "remote-1"
+    # 节点本机确实收到了 push 的参数
+    assert sent["to_user_id"] == "user@im.wechat"
+    assert sent["text"] == "稍等，我查一下~"
+    assert sent["session_key"] == "sk-1"

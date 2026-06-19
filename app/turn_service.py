@@ -31,8 +31,8 @@ from app.db import (
     record_chat_usage_charge,
     record_image_understanding_charge,
     resolve_account_id_for_inbound_channel_identity,
+    resolve_node_for_account,
     set_account_onboarding_state,
-    should_inline_dispatch_for_account,
     upsert_channel_binding,
 )
 from app.identity import identity_response_metadata, resolve_openclaw_identity
@@ -67,8 +67,7 @@ from app.onboarding import (
     ONBOARDING_STEP3_SENT,
     ONBOARDING_WELCOME_TEXT,
 )
-from app.openclaw_gateway import send_weixin_text
-from app.proactive.messaging import enqueue_onboarding_welcome
+from app import node_gateway
 from app.user_profiles import (
     ensure_agent_context_files,
     ensure_user_profile,
@@ -102,13 +101,12 @@ def _make_tool_thinking_sender(
 ) -> Optional[Any]:
     """返回一个 fire-and-forget 闭包：当 LLM 首次触发工具调用时，先发一条"思考中"消息给用户。
 
-    best-effort，仅限 inline dispatch 节点。中心节点/远程账号不持有 WeChat 会话，
-    无法直接发送，此处静默跳过（不走队列：临时提示不值得新增调度路径）。
+    best-effort。统一经 node_gateway.node_send_text 按账号归属节点发送：本机账号直调 openclaw，
+    远程账号 HTTP push 到归属节点即时发（不再因「非本机」静默跳过，local/remote 行为一致）。
+    远程不可达等异常静默丢弃（暂态提示可丢，不进队列、不落库、不进审计/计费）。
     """
     to_user_id = (identity.chat_id or identity.sender_id or "").strip()
     if not to_user_id:
-        return None
-    if not should_inline_dispatch_for_account(account_id, settings):
         return None
 
     def _send(tool_names: List[str]) -> None:
@@ -119,7 +117,9 @@ def _make_tool_thinking_sender(
         def _do_send() -> None:
             # 纯 UX 暂态提示：不落 messages 表，不进审计/计费链路，不出现在 LLM 对话历史中。
             try:
-                send_weixin_text(
+                node_gateway.node_send_text(
+                    # 归属解析与 enqueue 一致:账号归属 > default_node_id;空 → 本机兜底。
+                    node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
                     to_user_id=to_user_id,
                     text=msg,
                     gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
@@ -786,26 +786,19 @@ def _prepare_turn(
     welcome_to_user_id = identity.chat_id or sender_id
     if onboarding_channel_enabled and onboarding_state == ONBOARDING_PENDING and welcome_to_user_id:
         try:
-            # 多机:本机账号 inline 直发(standalone/本机归属);远程账号或 central 非 inline
-            # 入队由归属节点发(turn 在中心跑,中心不持有远程会话,不能直接 send)。
-            if should_inline_dispatch_for_account(account_id, settings):
-                send_weixin_text(
-                    to_user_id=welcome_to_user_id,
-                    text=ONBOARDING_WELCOME_TEXT,
-                    gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-                    account_id=identity.channel_account_id,
-                    session_key=openclaw_session_key,
-                    channel=identity.channel,
-                )
-            else:
-                enqueue_onboarding_welcome(
-                    account_id=account_id,
-                    channel=identity.channel,
-                    channel_account_id=identity.channel_account_id,
-                    to_user_id=welcome_to_user_id,
-                    session_key=openclaw_session_key,
-                    text=ONBOARDING_WELCOME_TEXT,
-                )
+            # 多机:统一经 node_send_text 按归属节点即时发(本机直调/远程 push)。
+            # 发送失败由下方 except 捕获 → fall through 正常处理本条消息(状态仍 pending,下条再触发)。
+            node_gateway.node_send_text(
+                node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
+                to_user_id=welcome_to_user_id,
+                text=ONBOARDING_WELCOME_TEXT,
+                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+                account_id=identity.channel_account_id,
+                # 固定幂等键:与 binding-timer welcome 共用,网关去重防并发重复欢迎。
+                idempotency_key=f"onboarding-welcome-{account_id}",
+                session_key=openclaw_session_key,
+                channel=identity.channel,
+            )
             set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
             logger.info(
                 "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",

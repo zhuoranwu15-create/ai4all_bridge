@@ -519,7 +519,7 @@ def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_
     }
 
     with patch(
-        "app.turn_service.send_weixin_text",
+        "app.turn_service.node_gateway.node_send_text",
         return_value={"messageId": "welcome-1"},
     ) as mock_send:
         res = client.post(
@@ -545,7 +545,7 @@ def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db
 
     session_key = "onboard-welcome-fallback"
 
-    with patch("app.turn_service.send_weixin_text", side_effect=RuntimeError("send failed")), \
+    with patch("app.turn_service.node_gateway.node_send_text", side_effect=RuntimeError("send failed")), \
          patch("app.turn_service.generate_reply", return_value="你好呀！很高兴认识你。"):
         res = client.post(
             "/openclaw/turn",
@@ -565,7 +565,7 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
 
     session_key = "onboard-step2-combined"
 
-    with patch("app.turn_service.send_weixin_text", return_value={"messageId": "welcome"}):
+    with patch("app.turn_service.node_gateway.node_send_text", return_value={"messageId": "welcome"}):
         client.post(
             "/openclaw/turn",
             json=_turn_payload(session_key, session_key, "你好", "msg-init"),

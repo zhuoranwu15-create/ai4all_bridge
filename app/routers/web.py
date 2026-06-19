@@ -18,11 +18,9 @@ from app.app_runtime import get_background_loop
 from app.routers.deps import _require_session
 from app import node_gateway
 from app.captcha import verify_captcha
-from app.db import count_verifications_last_hour, create_ai4all_account_for_user, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, should_inline_dispatch_for_account, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
+from app.db import count_verifications_last_hour, create_ai4all_account_for_user, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
-from app.openclaw_gateway import send_weixin_text
-from app.proactive.messaging import enqueue_onboarding_welcome
 from app.rate_limiter import RateLimiter
 from app.sms import generate_otp, send_otp
 from app.user_profiles import account_profile_dir
@@ -373,28 +371,20 @@ async def _send_onboarding_welcome_if_pending(
             )
             return
 
-        # 多机:本机账号 inline 直发(standalone/本机归属);远程账号或 central 非 inline
-        # 入队由归属节点发(中心不持有远程账号会话)。
-        if should_inline_dispatch_for_account(account_id, settings):
-            await asyncio.to_thread(
-                send_weixin_text,
-                to_user_id=to_user_id,
-                text=_ONBOARDING_WELCOME_TEXT,
-                gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-                account_id=channel_account_id,
-                session_key=resolved_session_key,
-                channel=channel,
-            )
-        else:
-            await asyncio.to_thread(
-                enqueue_onboarding_welcome,
-                account_id=account_id,
-                channel=channel,
-                channel_account_id=channel_account_id,
-                to_user_id=to_user_id,
-                session_key=resolved_session_key,
-                text=_ONBOARDING_WELCOME_TEXT,
-            )
+        # 多机:统一经 node_send_text 按归属节点即时发(本机直调/远程 push)。
+        # best-effort:push 失败由外层 except 记录并跳过(状态不置 step1_sent,首条入站再触发)。
+        await asyncio.to_thread(
+            node_gateway.node_send_text,
+            node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
+            to_user_id=to_user_id,
+            text=_ONBOARDING_WELCOME_TEXT,
+            gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+            account_id=channel_account_id,
+            # 固定幂等键:与首条入站 welcome 共用,网关去重防并发重复欢迎。
+            idempotency_key=f"onboarding-welcome-{account_id}",
+            session_key=resolved_session_key,
+            channel=channel,
+        )
         await asyncio.to_thread(
             set_account_onboarding_state, account_id=account_id, state=ONBOARDING_STEP1_SENT
         )

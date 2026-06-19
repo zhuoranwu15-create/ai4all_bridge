@@ -16,7 +16,7 @@ import httpx
 from app import openclaw_gateway
 from app.config import settings
 from app.db import get_access_node
-from app.openclaw_gateway import OpenClawGatewayError
+from app.openclaw_gateway import DEFAULT_WEIXIN_CHANNEL, OpenClawGatewayError
 
 logger = logging.getLogger("ai4all.node_gateway")
 
@@ -150,4 +150,48 @@ def node_logout(
             "timeout_ms": timeout_ms,
         },
         timeout=timeout_ms / 1000 + 5,
+    )
+
+
+def node_send_text(
+    *,
+    node_id: Optional[str],
+    to_user_id: str,
+    text: str,
+    gateway_timeout_ms: int,
+    account_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    session_key: Optional[str] = None,
+    channel: str = DEFAULT_WEIXIN_CHANNEL,
+) -> Dict[str, Any]:
+    """按账号归属节点发一条前台同步消息(暂态/欢迎语)。
+
+    与 node_logout 同构:本机账号直调 openclaw,远程账号 HTTP push 到归属节点
+    `/node/exec/send/text`(中心不持有远程会话,不能直接 send)。远程不可达/未登记一律抛
+    OpenClawGatewayError,由调用方决定丢弃(暂态)或回落 enqueue(欢迎语)。
+    """
+    if _is_local_node(node_id):
+        return openclaw_gateway.send_weixin_text(
+            to_user_id=to_user_id,
+            text=text,
+            gateway_timeout_ms=gateway_timeout_ms,
+            account_id=account_id,
+            idempotency_key=idempotency_key,
+            session_key=session_key,
+            channel=channel,
+        )
+    base = _resolve_node_base_url(node_id)
+    return _exec_post(
+        path="/node/exec/send/text",
+        base_url=base,
+        payload={
+            "to_user_id": to_user_id,
+            "text": text,
+            "gateway_timeout_ms": gateway_timeout_ms,
+            "account_id": account_id,
+            "idempotency_key": idempotency_key,
+            "session_key": session_key,
+            "channel": channel,
+        },
+        timeout=gateway_timeout_ms / 1000 + 5,
     )

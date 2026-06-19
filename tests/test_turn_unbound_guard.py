@@ -34,7 +34,7 @@ def test_unbound_inbound_no_reply_and_no_account_created(client, fresh_db):
     fresh_db.openclaw_inbound_require_binding = True
     session_key = "agent:main:openclaw-weixin:bot-unbound:direct:peer-x@im.wechat"
 
-    with patch("app.turn_service.send_weixin_text") as mock_send, \
+    with patch("app.turn_service.node_gateway.node_send_text") as mock_send, \
          patch("app.turn_service.generate_reply", return_value="不该被调用") as mock_reply:
         res = client.post(
             "/openclaw/turn",
@@ -62,7 +62,7 @@ def test_unbound_inbound_falls_back_when_guard_disabled(client, fresh_db):
     fresh_db.openclaw_inbound_require_binding = False
     session_key = "agent:main:openclaw-weixin:bot-unbound:direct:peer-y@im.wechat"
 
-    with patch("app.turn_service.send_weixin_text", return_value={"messageId": "m1"}):
+    with patch("app.turn_service.node_gateway.node_send_text", return_value={"messageId": "m1"}):
         res = client.post(
             "/openclaw/turn",
             json=_unbound_payload(session_key),
