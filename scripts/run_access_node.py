@@ -6,6 +6,7 @@
 启动前置(.env,见 runbook B Part 2):AI4ALL_ROLE=node、NODE_ID、CENTRAL_URL、
 NODE_BASE_URL、AI4ALL_BRIDGE_SECRET(须与中心一致)。
 """
+import logging
 import signal
 import sys
 import threading
@@ -27,6 +28,12 @@ from app.node_agent import (  # noqa: E402
 
 
 def main() -> None:
+    # 节点进程默认无 handler,ai4all.node_agent 的 INFO 会被丢弃(只有 uvicorn 自带 logger 输出)。
+    # 配置 root handler 使应用日志(含 node_send_text 计时)落 journald。
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     if not settings.has_node_role:
         print(
             "AI4ALL_ROLE 不含 node 能力(当前=%s);本进程仅用于 node-only 机,退出。"
