@@ -3,9 +3,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from app.config import settings
+from app.llm import generate_completion, get_active_llm_model
 from app.moderation.models import MachineReviewResult, normalize_risk_level
 
 logger = logging.getLogger("ai4all.moderation.llm_review")
@@ -68,18 +67,7 @@ def review_text_with_llm(
 
     if not bool(getattr(settings, "moderation_llm_enabled", False)):
         return None
-    base_url = str(getattr(settings, "moderation_llm_base_url", "") or "").strip()
-    api_key = str(getattr(settings, "moderation_llm_api_key", "") or "").strip()
-    model = str(getattr(settings, "moderation_llm_model", "") or "").strip()
-    if not base_url or not api_key or not model:
-        return MachineReviewResult(
-            reviewer_type="llm",
-            engine="openai_compatible",
-            engine_version=model,
-            level="error",
-            reason="moderation LLM is enabled but not configured",
-            error="moderation_llm_not_configured",
-        )
+    model = get_active_llm_model()
 
     user_payload = {
         "account_id": account_id,
@@ -89,66 +77,32 @@ def review_text_with_llm(
         "source_id": source_id,
         "text": text,
     }
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-        ],
-        "temperature": 0,
-        "stream": False,
-    }
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+    ]
     started = time.monotonic()
     try:
-        with httpx.Client(
-            timeout=float(getattr(settings, "moderation_llm_timeout_seconds", 20.0)),
-            trust_env=False,
-        ) as client:
-            response = client.post(
-                base_url.rstrip("/") + "/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.HTTPStatusError as err:
-        status_code = err.response.status_code
-        logger.warning("moderation llm http error status=%s", status_code)
-        return MachineReviewResult(
-            reviewer_type="llm",
-            engine="openai_compatible",
-            engine_version=model,
-            level="error",
-            latency_ms=int((time.monotonic() - started) * 1000),
-            error=f"moderation_llm_http_{status_code}",
-            raw_result={"status_code": status_code, "body": err.response.text[:1000]},
-        )
-    except (httpx.HTTPError, json.JSONDecodeError, KeyError, IndexError, TypeError) as err:
+        content = generate_completion(messages)
+    except Exception as err:  # noqa: BLE001 - moderation worker records machine-review errors
         logger.warning("moderation llm request/parse failed error=%s", err)
         return MachineReviewResult(
             reviewer_type="llm",
-            engine="openai_compatible",
+            engine="default_llm_provider",
             engine_version=model,
             level="error",
             latency_ms=int((time.monotonic() - started) * 1000),
             error="moderation_llm_request_failed",
             raw_result={"error": str(err)[:1000]},
         )
-
-    try:
-        content = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as err:
+    if not str(content or "").strip():
         return MachineReviewResult(
             reviewer_type="llm",
-            engine="openai_compatible",
+            engine="default_llm_provider",
             engine_version=model,
             level="error",
             latency_ms=int((time.monotonic() - started) * 1000),
-            error="moderation_llm_response_invalid",
-            raw_result={"error": str(err)[:1000]},
+            error="moderation_llm_empty_response",
         )
 
     try:
@@ -156,7 +110,7 @@ def review_text_with_llm(
     except (json.JSONDecodeError, ValueError) as err:
         return MachineReviewResult(
             reviewer_type="llm",
-            engine="openai_compatible",
+            engine="default_llm_provider",
             engine_version=model,
             level="error",
             latency_ms=int((time.monotonic() - started) * 1000),
@@ -168,7 +122,7 @@ def review_text_with_llm(
     if raw_level not in {"pass", "review", "block", "escalate"}:
         return MachineReviewResult(
             reviewer_type="llm",
-            engine="openai_compatible",
+            engine="default_llm_provider",
             engine_version=model,
             level="error",
             latency_ms=int((time.monotonic() - started) * 1000),
@@ -178,7 +132,7 @@ def review_text_with_llm(
 
     return MachineReviewResult(
         reviewer_type="llm",
-        engine="openai_compatible",
+        engine="default_llm_provider",
         engine_version=model,
         level=normalize_risk_level(raw_level),
         categories=_as_categories(parsed.get("categories")),

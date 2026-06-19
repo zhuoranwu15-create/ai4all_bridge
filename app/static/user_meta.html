@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>用户标签 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .filters { display: grid; grid-template-columns: minmax(220px, 1fr) 190px 150px auto; gap: 12px; align-items: end; }
+    .tag-table th, .tag-table td { vertical-align: top; white-space: nowrap; }
+    .tag-table .reasoning { min-width: 260px; max-width: 420px; white-space: normal; word-break: break-word; color: #4b5563; }
+    .tag-table .account-cell { min-width: 190px; }
+    .type-cell { min-width: 150px; }
+    .empty-value { color: #9ca3af; }
+    @media (max-width: 860px) {
+      .filters { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>用户标签</h1>
+      <p class="page-subtitle">账号级当前标签快照，一行一个用户。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div id="err" style="display:none" class="status-msg error"></div>
+
+  <section class="metric-grid" aria-label="用户标签概览">
+    <div class="metric-tile">
+      <span class="metric-label">账号行数</span>
+      <strong id="metric-total">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">已生成</span>
+      <strong id="metric-ready">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">已分类</span>
+      <strong id="metric-classified">—</strong>
+    </div>
+    <div class="metric-tile">
+      <span class="metric-label">高风险触发</span>
+      <strong id="metric-risk">—</strong>
+    </div>
+  </section>
+
+  <div class="card">
+    <div class="filters">
+      <div>
+        <label for="q">搜索</label>
+        <input id="q" type="text" placeholder="Account ID / 显示名">
+      </div>
+      <div>
+        <label for="primaryType">陪伴主类</label>
+        <select id="primaryType"></select>
+      </div>
+      <div>
+        <label for="source">来源</label>
+        <select id="source">
+          <option value="">全部</option>
+          <option value="auto">auto</option>
+          <option value="manual">manual</option>
+        </select>
+      </div>
+      <button class="primary" onclick="loadUserMeta()">刷新</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title-row">
+      <h2>标签列表</h2>
+      <span id="updated-at" class="card-note">—</span>
+    </div>
+    <div id="table-panel">加载中…</div>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    var COMPANION_TYPES = [
+      ['', '全部'],
+      ['emotional_support', 'emotional_support'],
+      ['life_reflection', 'life_reflection'],
+      ['romance_roleplay', 'romance_roleplay'],
+      ['practical_assistant', 'practical_assistant'],
+      ['learning_growth', 'learning_growth'],
+      ['work_career', 'work_career'],
+      ['parenting_family', 'parenting_family'],
+      ['daily_chat', 'daily_chat'],
+      ['content_explorer', 'content_explorer'],
+      ['creative_expression', 'creative_expression'],
+    ];
+
+    initFilters();
+    loadUserMeta();
+
+    function initFilters() {
+      document.getElementById('primaryType').innerHTML = COMPANION_TYPES.map(function(item) {
+        return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';
+      }).join('');
+      document.getElementById('q').addEventListener('keydown', function(ev) {
+        if (ev.key === 'Enter') loadUserMeta();
+      });
+    }
+
+    function showErr(msg) {
+      var el = document.getElementById('err');
+      el.textContent = msg;
+      el.style.display = '';
+    }
+
+    async function loadUserMeta() {
+      try {
+        await loadAdminMe();
+        var params = new URLSearchParams();
+        var q = document.getElementById('q').value.trim();
+        var primaryType = document.getElementById('primaryType').value;
+        var source = document.getElementById('source').value;
+        if (q) params.set('q', q);
+        if (primaryType) params.set('primary_type', primaryType);
+        if (source) params.set('source', source);
+        params.set('limit', '1000');
+        var data = await apiFetch('/admin/user-meta?' + params.toString());
+        renderUserMeta(data.items || []);
+        document.getElementById('err').style.display = 'none';
+      } catch (e) {
+        showErr(e.message);
+      }
+    }
+
+    function renderUserMeta(items) {
+      var generated = items.filter(function(item) { return item.last_evaluated_at; }).length;
+      var classified = items.filter(function(item) { return item.companion_primary_type; }).length;
+      var risky = items.filter(function(item) { return Number(item.safety_risk_trigger_count_30d || 0) > 0; }).length;
+      document.getElementById('metric-total').textContent = items.length;
+      document.getElementById('metric-ready').textContent = generated;
+      document.getElementById('metric-classified').textContent = classified;
+      document.getElementById('metric-risk').textContent = risky;
+      document.getElementById('updated-at').textContent = '更新时间 ' + formatDateTime(new Date().toISOString());
+      renderTable(items);
+    }
+
+    function renderTable(items) {
+      var panel = document.getElementById('table-panel');
+      if (!items.length) {
+        panel.innerHTML = '<div class="empty-note">暂无匹配账号</div>';
+        return;
+      }
+      panel.innerHTML = '<div class="compact-table"><table class="tag-table"><thead><tr>'
+        + '<th>用户</th>'
+        + '<th>状态</th>'
+        + '<th>消息强度</th>'
+        + '<th>陪伴主类</th>'
+        + '<th>陪伴次类</th>'
+        + '<th>置信度</th>'
+        + '<th>来源</th>'
+        + '<th>风险 30d</th>'
+        + '<th>最后活跃</th>'
+        + '<th>标签更新时间</th>'
+        + '<th>Reasoning</th>'
+        + '</tr></thead><tbody>'
+        + items.map(renderRow).join('')
+        + '</tbody></table></div>';
+    }
+
+    function renderRow(item) {
+      return '<tr>'
+        + '<td class="account-cell">'
+        + '<a class="mono" href="account.html?id=' + encodeURIComponent(item.account_id) + '">' + esc(item.account_id) + '</a>'
+        + '<div class="empty-note" style="padding:4px 0 0">' + esc(item.display_name || item.channel || '—') + '</div>'
+        + '</td>'
+        + '<td>' + statusPill(item.status || 'unknown') + '</td>'
+        + '<td class="mono">' + value(item.message_intensity_level) + '</td>'
+        + '<td class="type-cell">' + tag(item.companion_primary_type) + '</td>'
+        + '<td>' + listValue(item.companion_secondary_types) + '</td>'
+        + '<td class="mono">' + confidence(item.companion_type_confidence) + '</td>'
+        + '<td>' + tag(item.companion_type_source) + '</td>'
+        + '<td class="mono">' + value(item.safety_risk_trigger_count_30d) + '</td>'
+        + '<td>' + esc(formatDateTime(item.last_active_at)) + '</td>'
+        + '<td>' + esc(formatDateTime(item.last_evaluated_at)) + '</td>'
+        + '<td class="reasoning">' + esc(item.companion_type_reasoning || '—') + '</td>'
+        + '</tr>';
+    }
+
+    function value(v) {
+      if (v == null || v === '') return '<span class="empty-value">—</span>';
+      return esc(v);
+    }
+
+    function tag(v) {
+      if (!v) return '<span class="empty-value">—</span>';
+      return statusPill(v);
+    }
+
+    function listValue(values) {
+      if (!values || !values.length) return '<span class="empty-value">—</span>';
+      return values.map(function(v) { return statusPill(v); }).join(' ');
+    }
+
+    function confidence(v) {
+      if (v == null || v === '') return '<span class="empty-value">—</span>';
+      var pct = Math.round(Number(v) * 100);
+      return isNaN(pct) ? esc(v) : pct + '%';
+    }
+
+    function statusPill(status) {
+      var text = status || 'unknown';
+      var cls = 'status-pill status-pill-' + String(text).replace(/[^a-zA-Z0-9_-]/g, '-');
+      return '<span class="' + cls + '">' + esc(text) + '</span>';
+    }
+  </script>
+</body>
+</html>

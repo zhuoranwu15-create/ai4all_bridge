@@ -159,6 +159,7 @@ class Settings(BaseSettings):
     moderation_outbound_sample_percent: int = 30
     moderation_proactive_sample_percent: int = 100
     moderation_llm_enabled: bool = False
+    # 审核 LLM 开启后复用全局 active provider；以下 moderation_llm_* provider 字段仅保留旧配置兼容。
     moderation_llm_base_url: str = ""
     moderation_llm_api_key: str = ""
     moderation_llm_model: str = ""

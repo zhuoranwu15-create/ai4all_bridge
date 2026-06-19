@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from app.routers.deps import get_admin_user, require_admin_user, verify_admin_auth
 from app.routers.serializers import _binding_intent_for_view, _can_bypass_redaction_for_account, _debug_redaction_payload, _normalize_ts, _platform_user_for_view, _profile_for_view, _trace_for_view
 from app.routers.models import ProfileUpdateRequest
-from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
+from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_account_user_meta_current, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
 from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
 from app.time_utils import beijing_now_str
 from app.user_profiles import ensure_user_profile, read_agent_context
@@ -65,6 +65,40 @@ def admin_me(admin_user: dict = Depends(get_admin_user)) -> dict:
 @router.get("/admin/accounts")
 def admin_accounts(_: None = Depends(verify_admin_auth)) -> dict:
     return {"accounts": [_normalize_ts(a) for a in list_accounts()]}
+
+
+@router.get("/admin/user-meta")
+def admin_user_meta(
+    q: Optional[str] = None,
+    primary_type: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = 500,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    items = list_account_user_meta_current(
+        q=q,
+        primary_type=primary_type,
+        source=source,
+        limit=limit,
+    )
+    return {
+        "items": [
+            _normalize_ts(
+                item,
+                "account_created_at",
+                "last_active_at",
+                "registered_at",
+                "companion_type_last_evaluated_at",
+                "companion_type_expires_at",
+                "last_evaluated_at",
+                "meta_created_at",
+                "meta_updated_at",
+            )
+            for item in items
+        ],
+    }
 
 
 @router.get("/admin/accounts/{account_id}")

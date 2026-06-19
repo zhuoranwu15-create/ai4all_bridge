@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.config import settings
+from app.config import settings  # kept for existing test/settings patching conventions
 from app.db import (
     compute_message_intensity,
     compute_safety_risk_count_30d,
@@ -17,7 +17,6 @@ from app.db import (
     upsert_account_user_meta,
 )
 from app.llm import generate_completion
-from app.llm_providers import LLMProviderConfig
 from app.prompts.user_meta_companion_type import (
     COMPANION_TYPE_ENUM,
     build_companion_classify_prompt,
@@ -27,7 +26,6 @@ from app.time_utils import BEIJING_TZ, beijing_naive_now
 
 logger = logging.getLogger("ai4all.user_meta.scheduler")
 
-USER_META_COMPANION_MODEL = "claude-haiku-4-5-20251001"
 _MIN_SLEEP_SECONDS = 60.0
 _IDLE_HEARTBEAT_INTERVAL_SECONDS = 300.0
 
@@ -120,36 +118,12 @@ def _normalize_companion_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _batch_companion_provider() -> LLMProviderConfig:
-    return LLMProviderConfig(
-        id="user-meta-companion-classifier",
-        label="User Meta Companion Classifier",
-        protocol="anthropic_messages",
-        base_url=str(settings.llm_anthropic_base_url or "https://api.anthropic.com"),
-        model=USER_META_COMPANION_MODEL,
-        api_key=str(settings.llm_anthropic_api_key or ""),
-        api_key_env="LLM_ANTHROPIC_API_KEY",
-        enabled=True,
-        supports_tools=False,
-        timeout_seconds=max(1.0, float(settings.llm_timeout_seconds)),
-        connect_timeout_seconds=max(0.1, float(settings.llm_connect_timeout_seconds)),
-        max_retries=max(0, int(settings.llm_max_retries)),
-        force_ipv4=bool(settings.llm_force_ipv4),
-        temperature=0.0,
-        max_output_tokens=128,
-        source="user_meta_batch",
-    )
-
-
 def classify_companion_type(*, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Call the batch LLM and return a normalized companion type payload."""
+    """Call the configured default LLM and return a normalized companion type payload."""
     if not messages:
         raise ValueError("messages are required")
     prompt = build_companion_classify_prompt(messages=messages)
-    raw = generate_completion(
-        [{"role": "user", "content": prompt}],
-        provider=_batch_companion_provider(),
-    )
+    raw = generate_completion([{"role": "user", "content": prompt}])
     return _normalize_companion_payload(_extract_json_object(raw))
 
 

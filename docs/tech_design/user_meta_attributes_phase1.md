@@ -213,10 +213,9 @@ WHERE account_id  = :account_id
 
 #### LLM 调用规格
 
-- 模型：`claude-haiku-4-5-20251001`（独立于 runtime config，batch 专用廉价模型）
-- Temperature：0（分类任务）
-- max_tokens：128（JSON 输出极短）
-- 调用方式：复用项目统一 LLM provider 抽象，不直接引入 Anthropic SDK。构造 batch 专用 `LLMProviderConfig(protocol='anthropic_messages')`，复用 `settings.llm_anthropic_base_url`、`settings.llm_anthropic_api_key`、timeout/retry 配置，model 固定为 `claude-haiku-4-5-20251001`，通过 `asyncio.to_thread(generate_completion, messages, provider=batch_provider)` 调用
+- 模型：复用运行时默认 LLM provider（由 `LLM_DEFAULT_PROVIDER_ID` 和后台 runtime override 决定，当前生产为 `deepseek-v4-pro`）
+- Temperature / max_tokens：沿用默认 provider 配置
+- 调用方式：通过 `generate_completion(messages)` 调用项目统一 LLM 入口，不构造 batch 专用 provider，不绕过 runtime config
 - 失败处理：LLM 调用失败或输出解析失败时，保留现有 `companion_*` 字段不变，记录错误到调度器摘要
 
 ### 3.4 `registered_at`
@@ -547,7 +546,7 @@ def test_patch_companion_requires_admin():     # staff token → 403
 
 脚本职责：
 - 读取指定账号最近入站文本/语音消息，复用生产过滤逻辑（含审核拦截过滤）
-- 打印 prompt 摘要、调用 batch 专用 Claude provider、解析 JSON
+- 打印 prompt 摘要、调用运行时默认 LLM provider、解析 JSON
 - 校验 `primary_type` / `secondary_types` 均在 `COMPANION_TYPE_ENUM` 内，`confidence` 在 0.0-1.0
 - 支持 `--dry-run` 只构造 prompt，不调用 LLM，便于无 key 环境验证格式
 

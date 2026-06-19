@@ -11,6 +11,7 @@ __all__ = [
     "fetch_recent_inbound_messages",
     "get_account_user_meta",
     "insert_account_user_meta_daily",
+    "list_account_user_meta_current",
     "list_accounts_for_meta_refresh",
     "set_companion_type_manual",
     "upsert_account_user_meta",
@@ -289,6 +290,71 @@ def get_account_user_meta(*, account_id: str) -> Optional[Dict[str, Any]]:
             (cleaned_account_id,),
         ).fetchone()
     return _decode_meta_row(row)
+
+
+def list_account_user_meta_current(
+    *,
+    q: Optional[str] = None,
+    primary_type: Optional[str] = None,
+    source: Optional[str] = None,
+    limit: int = 500,
+) -> List[Dict[str, Any]]:
+    """返回账号当前元属性列表，包含未生成 meta 的账号，供 Admin 表格展示。"""
+    safe_limit = max(1, min(int(limit or 500), 1000))
+    filters = []
+    params: List[Any] = []
+    search = _clean_text(q)
+    if search:
+        filters.append("(a.id LIKE ? OR COALESCE(a.display_name, '') LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
+    cleaned_primary = _clean_text(primary_type)
+    if cleaned_primary:
+        filters.append("m.companion_primary_type = ?")
+        params.append(cleaned_primary)
+    cleaned_source = _clean_text(source)
+    if cleaned_source:
+        filters.append("m.companion_type_source = ?")
+        params.append(cleaned_source)
+    where_sql = f"WHERE {' AND '.join(filters)}" if filters else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT
+                a.id AS account_id,
+                a.display_name,
+                a.status,
+                a.channel,
+                a.created_at AS account_created_at,
+                MAX(msg.created_at) AS last_active_at,
+                m.registered_at,
+                m.message_intensity_level,
+                m.companion_primary_type,
+                m.companion_secondary_types,
+                m.companion_type_confidence,
+                m.companion_type_last_evaluated_at,
+                m.companion_type_source,
+                m.companion_type_expires_at,
+                m.companion_type_reasoning,
+                m.safety_risk_trigger_count_30d,
+                m.last_evaluated_at,
+                m.created_at AS meta_created_at,
+                m.updated_at AS meta_updated_at
+            FROM accounts a
+            LEFT JOIN account_user_meta m ON m.account_id = a.id
+            LEFT JOIN messages msg ON msg.account_id = a.id
+            {where_sql}
+            GROUP BY a.id
+            ORDER BY
+                CASE WHEN m.last_evaluated_at IS NULL THEN 1 ELSE 0 END,
+                m.last_evaluated_at DESC,
+                last_active_at DESC,
+                a.created_at DESC
+            LIMIT ?
+            """,
+            (*params, safe_limit),
+        ).fetchall()
+    return [_decode_meta_row(row) or {} for row in rows]
 
 
 def list_accounts_for_meta_refresh(

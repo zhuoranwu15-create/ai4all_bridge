@@ -630,6 +630,71 @@ def test_admin_get_meta_null_when_not_evaluated(client, fresh_db):
     assert res.json() == {"meta": None}
 
 
+def test_admin_list_user_meta_returns_account_rows(client, fresh_db):
+    from app.db import upsert_account_user_meta
+
+    _create_account("acc-meta-list-ready")
+    _create_account("acc-meta-list-missing")
+    upsert_account_user_meta(
+        account_id="acc-meta-list-ready",
+        registered_at="2026-06-01 10:00:00",
+        message_intensity_level=3,
+        companion_primary_type="work_career",
+        companion_secondary_types=["practical_assistant"],
+        companion_type_confidence=0.91,
+        companion_type_last_evaluated_at="2026-06-18 03:00:00",
+        companion_type_source="auto",
+        companion_type_expires_at=None,
+        companion_type_reasoning="用户主要讨论工作事项",
+        safety_risk_trigger_count_30d=0,
+        last_evaluated_at="2026-06-18 03:00:00",
+    )
+
+    res = client.get("/admin/user-meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    items = res.json()["items"]
+    by_id = {item["account_id"]: item for item in items}
+    assert by_id["acc-meta-list-ready"]["companion_primary_type"] == "work_career"
+    assert by_id["acc-meta-list-ready"]["companion_secondary_types"] == ["practical_assistant"]
+    assert by_id["acc-meta-list-missing"]["last_evaluated_at"] is None
+
+
+def test_admin_list_user_meta_filters_primary_type(client, fresh_db):
+    from app.db import upsert_account_user_meta
+
+    _create_account("acc-meta-filter-work")
+    _create_account("acc-meta-filter-chat")
+    for account_id, primary_type in (
+        ("acc-meta-filter-work", "work_career"),
+        ("acc-meta-filter-chat", "daily_chat"),
+    ):
+        upsert_account_user_meta(
+            account_id=account_id,
+            registered_at="2026-06-01 10:00:00",
+            message_intensity_level=3,
+            companion_primary_type=primary_type,
+            companion_secondary_types=[],
+            companion_type_confidence=0.8,
+            companion_type_last_evaluated_at="2026-06-18 03:00:00",
+            companion_type_source="auto",
+            companion_type_expires_at=None,
+            companion_type_reasoning="测试",
+            safety_risk_trigger_count_30d=0,
+            last_evaluated_at="2026-06-18 03:00:00",
+        )
+
+    res = client.get(
+        "/admin/user-meta?primary_type=work_career",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert res.status_code == 200
+    ids = {item["account_id"] for item in res.json()["items"]}
+    assert "acc-meta-filter-work" in ids
+    assert "acc-meta-filter-chat" not in ids
+
+
 def test_admin_patch_companion_sets_manual_source(client, fresh_db):
     _create_account("acc-admin-patch")
 
