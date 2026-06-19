@@ -11,6 +11,7 @@
 """
 import logging
 import threading
+import time
 from typing import Any, Dict, Optional
 
 import httpx
@@ -131,8 +132,11 @@ def create_node_agent_app() -> FastAPI:
         _: None = Depends(_verify_bridge_auth),
     ) -> Dict[str, Any]:
         # 中心 push 一条前台同步消息(暂态/欢迎语)给本节点持有的会话,本机调 openclaw 即时发。
+        # 计时:收到请求 → openclaw 发送返回,用于定位跨机延迟到底卡在网络跳还是 openclaw 子进程。
+        logger.info("node_send_text received to=%s account=%s", payload.to_user_id, payload.account_id)
+        _t0 = time.monotonic()
         try:
-            return openclaw_gateway.send_weixin_text(
+            result = openclaw_gateway.send_weixin_text(
                 to_user_id=payload.to_user_id,
                 text=payload.text,
                 gateway_timeout_ms=payload.gateway_timeout_ms,
@@ -141,6 +145,11 @@ def create_node_agent_app() -> FastAPI:
                 session_key=payload.session_key,
                 channel=payload.channel,
             )
+            logger.info(
+                "node_send_text done to=%s openclaw_ms=%d",
+                payload.to_user_id, int((time.monotonic() - _t0) * 1000),
+            )
+            return result
         except OpenClawGatewayError as err:
             # 含 OpenClawRateLimited 子类;原始文案进 body 供中心透出/分类。
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(err))

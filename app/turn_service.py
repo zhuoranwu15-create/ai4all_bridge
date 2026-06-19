@@ -113,6 +113,9 @@ def _make_tool_thinking_sender(
         is_search = any("search" in (n or "").lower() for n in tool_names)
         pool = _TOOL_THINKING_MSGS_SEARCH if is_search else _TOOL_THINKING_MSGS_DEFAULT
         msg = random.choice(pool)
+        # 计时锚点:回调触发(=工具检测)时刻,用于和 tool_thinking_sent 的 elapsed_ms 对比拆解延迟。
+        logger.info("tool_thinking_dispatch account=%s tools=%s", account_id, tool_names)
+        _dispatch_at = time.monotonic()
 
         def _do_send() -> None:
             # 纯 UX 暂态提示：不落 messages 表，不进审计/计费链路，不出现在 LLM 对话历史中。
@@ -128,8 +131,8 @@ def _make_tool_thinking_sender(
                     channel=identity.channel,
                 )
                 logger.info(
-                    "tool_thinking_sent account=%s tools=%s msg=%r",
-                    account_id, tool_names, msg,
+                    "tool_thinking_sent account=%s tools=%s msg=%r elapsed_ms=%d",
+                    account_id, tool_names, msg, int((time.monotonic() - _dispatch_at) * 1000),
                 )
             except Exception as _err:
                 logger.warning("tool_thinking send failed account=%s error=%s", account_id, _err)
