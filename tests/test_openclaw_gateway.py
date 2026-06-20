@@ -21,9 +21,11 @@ def _params_from_call(mock_run):
     return json.loads(cmd[cmd.index("--params") + 1])
 
 
-def test_send_weixin_text_calls_gateway_send_with_explicit_route():
+def test_send_weixin_text_calls_gateway_send_with_explicit_route(monkeypatch):
+    from app import openclaw_gateway
     from app.openclaw_gateway import send_weixin_text
 
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
     with patch("app.openclaw_gateway.subprocess.run", return_value=_Completed()) as mock_run:
         result = send_weixin_text(
             to_user_id="peer@im.wechat",
@@ -49,9 +51,11 @@ def test_send_weixin_text_calls_gateway_send_with_explicit_route():
     }
 
 
-def test_send_weixin_text_generates_idempotency_key_when_missing():
+def test_send_weixin_text_generates_idempotency_key_when_missing(monkeypatch):
+    from app import openclaw_gateway
     from app.openclaw_gateway import send_weixin_text
 
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
     with patch("app.openclaw_gateway.subprocess.run", return_value=_Completed()) as mock_run:
         send_weixin_text(
             to_user_id="peer@im.wechat",
@@ -82,9 +86,12 @@ def test_send_weixin_text_rejects_missing_required_fields(to_user_id, text, mess
         )
 
 
-def test_send_weixin_text_raises_rate_limited_on_ret_minus_2():
+def test_send_weixin_text_raises_rate_limited_on_ret_minus_2(monkeypatch):
     """CLI 退出码 0 但返回体带 ret=-2 → 抛 OpenClawRateLimited（不再静默标 sent）。"""
+    from app import openclaw_gateway
     from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
 
     class RateLimited:
         returncode = 0
@@ -101,9 +108,12 @@ def test_send_weixin_text_raises_rate_limited_on_ret_minus_2():
     assert exc_info.value.ret == -2
 
 
-def test_send_weixin_text_raises_rate_limited_on_errmsg_only():
+def test_send_weixin_text_raises_rate_limited_on_errmsg_only(monkeypatch):
     """无业务码、仅 errmsg 含 rate limit 也应识别为限速。"""
+    from app import openclaw_gateway
     from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
 
     class RateLimited:
         returncode = 0
@@ -115,9 +125,12 @@ def test_send_weixin_text_raises_rate_limited_on_errmsg_only():
             send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
 
 
-def test_send_weixin_text_raises_gateway_error_on_nonzero_ret():
+def test_send_weixin_text_raises_gateway_error_on_nonzero_ret(monkeypatch):
     """非限速的非零业务码 → 抛普通 OpenClawGatewayError（非限速，不退避）。"""
+    from app import openclaw_gateway
     from app.openclaw_gateway import OpenClawGatewayError, OpenClawRateLimited, send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
 
     class Failed:
         returncode = 0
@@ -131,9 +144,12 @@ def test_send_weixin_text_raises_gateway_error_on_nonzero_ret():
     assert not isinstance(exc_info.value, OpenClawRateLimited)
 
 
-def test_send_weixin_text_success_with_messageid_not_treated_as_error():
+def test_send_weixin_text_success_with_messageid_not_treated_as_error(monkeypatch):
     """有 messageId 即成功，即使返回体里同时带 ret=0 也不误判。"""
+    from app import openclaw_gateway
     from app.openclaw_gateway import send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
 
     class Ok:
         returncode = 0
@@ -143,6 +159,122 @@ def test_send_weixin_text_success_with_messageid_not_treated_as_error():
     with patch("app.openclaw_gateway.subprocess.run", return_value=Ok()):
         result = send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
     assert result["messageId"] == "m-ok"
+
+
+def test_send_weixin_text_uses_ws_when_enabled(monkeypatch):
+    from app import openclaw_gateway
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = []
+
+        def call(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"messageId": "ws-1"}
+
+    fake = FakeClient()
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", True)
+    monkeypatch.setattr(
+        openclaw_gateway.settings, "openclaw_gateway_ws_fallback_to_cli", True
+    )
+    monkeypatch.setattr(openclaw_gateway, "_persistent_gateway_client", lambda: fake)
+    with patch("app.openclaw_gateway.subprocess.run") as mock_run:
+        result = openclaw_gateway.send_weixin_text(
+            to_user_id="peer@im.wechat",
+            text="hello",
+            account_id="bot-account",
+            session_key="session-1",
+            idempotency_key="idem-ws",
+            gateway_timeout_ms=1234,
+        )
+
+    assert result["messageId"] == "ws-1"
+    assert not mock_run.called
+    assert fake.calls == [
+        {
+            "method": "send",
+            "params": {
+                "channel": "openclaw-weixin",
+                "to": "peer@im.wechat",
+                "message": "hello",
+                "accountId": "bot-account",
+                "sessionKey": "session-1",
+                "idempotencyKey": "idem-ws",
+            },
+            "timeout_ms": 1234,
+        }
+    ]
+
+
+def test_send_weixin_text_falls_back_to_cli_on_ws_error(monkeypatch):
+    from app import openclaw_gateway
+    from app.openclaw_gateway import OpenClawGatewayError
+
+    class FakeClient:
+        def call(self, **_kwargs):
+            raise OpenClawGatewayError("ws closed")
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", True)
+    monkeypatch.setattr(
+        openclaw_gateway.settings, "openclaw_gateway_ws_fallback_to_cli", True
+    )
+    monkeypatch.setattr(openclaw_gateway, "_persistent_gateway_client", lambda: FakeClient())
+    with patch("app.openclaw_gateway.subprocess.run", return_value=_Completed()) as mock_run:
+        result = openclaw_gateway.send_weixin_text(
+            to_user_id="peer@im.wechat",
+            text="hello",
+            idempotency_key="idem-fallback",
+            gateway_timeout_ms=1234,
+        )
+
+    assert result["messageId"] == "msg-1"
+    params = _params_from_call(mock_run)
+    assert params["idempotencyKey"] == "idem-fallback"
+
+
+def test_send_weixin_text_raises_ws_error_when_fallback_disabled(monkeypatch):
+    from app import openclaw_gateway
+    from app.openclaw_gateway import OpenClawGatewayError
+
+    class FakeClient:
+        def call(self, **_kwargs):
+            raise OpenClawGatewayError("ws auth failed")
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", True)
+    monkeypatch.setattr(
+        openclaw_gateway.settings, "openclaw_gateway_ws_fallback_to_cli", False
+    )
+    monkeypatch.setattr(openclaw_gateway, "_persistent_gateway_client", lambda: FakeClient())
+    with patch("app.openclaw_gateway.subprocess.run") as mock_run:
+        with pytest.raises(OpenClawGatewayError, match="ws auth failed"):
+            openclaw_gateway.send_weixin_text(
+                to_user_id="peer@im.wechat",
+                text="hello",
+                gateway_timeout_ms=1234,
+            )
+
+    assert not mock_run.called
+
+
+def test_send_weixin_text_preserves_rate_limit_semantics_for_ws(monkeypatch):
+    from app import openclaw_gateway
+    from app.openclaw_gateway import OpenClawRateLimited
+
+    class FakeClient:
+        def call(self, **_kwargs):
+            return {"ret": -2, "errmsg": "rate limited"}
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", True)
+    monkeypatch.setattr(openclaw_gateway, "_persistent_gateway_client", lambda: FakeClient())
+    with patch("app.openclaw_gateway.subprocess.run") as mock_run:
+        with pytest.raises(OpenClawRateLimited):
+            openclaw_gateway.send_weixin_text(
+                to_user_id="peer@im.wechat",
+                text="hello",
+                gateway_timeout_ms=1234,
+            )
+
+    assert not mock_run.called
 
 
 def test_logout_weixin_account_calls_openclaw_channels_logout():

@@ -589,6 +589,30 @@ def _turn_message_raw(
     return metadata
 
 
+def _send_tool_final_reply(
+    *,
+    identity,
+    account_id: str,
+    openclaw_session_key: str,
+    reply: str,
+    reply_message_id: str,
+) -> Dict[str, Any]:
+    """Send a tool-turn final reply out of band, bypassing OpenClaw's sync reply timeout."""
+    to_user_id = (identity.chat_id or identity.sender_id or "").strip()
+    if not to_user_id:
+        raise ValueError("tool final reply target is empty")
+    return node_gateway.node_send_text(
+        node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
+        to_user_id=to_user_id,
+        text=reply,
+        gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
+        account_id=identity.channel_account_id,
+        session_key=openclaw_session_key,
+        idempotency_key=f"tool-final-{account_id}-{reply_message_id}",
+        channel=identity.channel,
+    )
+
+
 def _debug_trace_account_ids() -> set[str]:
     raw = getattr(settings, "debug_trace_account_ids", "") or ""
     return {item.strip() for item in raw.split(",") if item.strip()}
@@ -678,6 +702,7 @@ class _ReplyResult:
     reply: str
     generation_error: Optional[str]
     normal_reply_generated: bool
+    tool_names: List[str]
     onboarding_pre_extracted: Optional[dict]
     system_prompt: Optional[str]
     llm_messages: List[Any]
@@ -1138,6 +1163,7 @@ def _resolve_turn_reply(
 
     generation_error = None
     normal_reply_generated = False
+    tool_names_used: List[str] = []
     onboarding_pre_extracted = None
     system_prompt = None
     llm_messages = []
@@ -1270,6 +1296,23 @@ def _resolve_turn_reply(
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
             else:
+                tool_thinking_sender = _make_tool_thinking_sender(
+                    identity=identity,
+                    account_id=account_id,
+                    openclaw_session_key=openclaw_session_key,
+                )
+
+                def _on_tool_detected(tool_names: List[str]) -> None:
+                    cleaned = [
+                        str(name).strip()
+                        for name in (tool_names or [])
+                        if str(name or "").strip()
+                    ]
+                    if cleaned:
+                        tool_names_used.extend(cleaned)
+                    if tool_thinking_sender is not None:
+                        tool_thinking_sender(tool_names)
+
                 try:
                     reply, generation_error = generate_reply_with_tools(
                         user_text=text,
@@ -1280,17 +1323,15 @@ def _resolve_turn_reply(
                         first_round_tool_choice=tooling["first_round_tool_choice"],
                         messages=llm_messages,
                         provider=llm_provider,
-                        on_tool_detected=_make_tool_thinking_sender(
-                            identity=identity,
-                            account_id=account_id,
-                            openclaw_session_key=openclaw_session_key,
-                        ),
+                        on_tool_detected=_on_tool_detected,
                     )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
             normal_reply_generated = generation_error is None
+            if tool_names_used:
+                debug_metadata["tool_names_used"] = tool_names_used
         except Exception as err:
             logger.exception("reply generation failed: %s", err)
             generation_error = str(err)
@@ -1300,6 +1341,7 @@ def _resolve_turn_reply(
         reply=reply,
         generation_error=generation_error,
         normal_reply_generated=normal_reply_generated,
+        tool_names=tool_names_used,
         onboarding_pre_extracted=onboarding_pre_extracted,
         system_prompt=system_prompt,
         llm_messages=llm_messages,
@@ -1338,6 +1380,7 @@ def _finalize_turn(
     reply = result.reply
     generation_error = result.generation_error
     normal_reply_generated = result.normal_reply_generated
+    tool_names = result.tool_names
     onboarding_pre_extracted = result.onboarding_pre_extracted
     system_prompt = result.system_prompt
     llm_messages = result.llm_messages
@@ -1436,6 +1479,9 @@ def _finalize_turn(
             "message_id": reply_message_id,
             "reply_to_message_id": message_id,
         }
+        if tool_names:
+            outbound_raw_extra["tool_names_used"] = tool_names
+            outbound_raw_extra["delivery_mode"] = "out_of_band_tool_final"
         outbound_raw_extra.update(moderation_reply_metadata)
         outbound_inserted_id = insert_message(
             account_id=account_id,
@@ -1621,32 +1667,70 @@ def _finalize_turn(
     if should_run_after_turn:
         _record_timing(timings, "after_turn_enqueue_ms", after_turn_enqueue_started)
 
+    response_metadata = {
+        **identity_response_metadata(identity, account_id),
+        "channel_binding_id": binding["id"],
+        "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
+        "message_type": payload.message_type,
+        "latency_ms": latency_ms,
+        "user_profile_path": str(profile_path),
+        "debug_trace_id": trace_id,
+        "billing": {
+            "charged": bool(billing_result and billing_result.get("ledger")),
+            "estimated": True,
+            "amount_shells": (
+                billing_result["ledger"]["amount_shells"]
+                if billing_result and billing_result.get("ledger")
+                else None
+            ),
+            "balance_shells": (
+                billing_result["wallet"]["balance_shells"]
+                if billing_result and billing_result.get("wallet")
+                else None
+            ),
+        },
+    }
+    if tool_names:
+        response_metadata["tool_names_used"] = tool_names
+        try:
+            send_result = _send_tool_final_reply(
+                identity=identity,
+                account_id=account_id,
+                openclaw_session_key=openclaw_session_key,
+                reply=reply,
+                reply_message_id=reply_message_id,
+            )
+            response_metadata["delivery_mode"] = "out_of_band_tool_final"
+            response_metadata["gateway_message_id"] = (
+                send_result.get("messageId") or send_result.get("message_id")
+            )
+            logger.info(
+                "tool_final_reply_sent account=%s tools=%s reply_message_id=%s gateway_message_id=%s",
+                account_id,
+                tool_names,
+                reply_message_id,
+                response_metadata["gateway_message_id"],
+            )
+            return OpenClawTurnResponse(
+                status="ok",
+                no_reply=True,
+                metadata=response_metadata,
+            )
+        except Exception as err:
+            response_metadata["delivery_mode"] = "sync_response_fallback"
+            response_metadata["tool_final_send_error"] = str(err)
+            logger.warning(
+                "tool_final_reply send failed account=%s tools=%s reply_message_id=%s error=%s",
+                account_id,
+                tool_names,
+                reply_message_id,
+                err,
+            )
+
     return OpenClawTurnResponse(
         status="ok",
         reply=reply,
-        metadata={
-            **identity_response_metadata(identity, account_id),
-            "channel_binding_id": binding["id"],
-            "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
-            "message_type": payload.message_type,
-            "latency_ms": latency_ms,
-            "user_profile_path": str(profile_path),
-            "debug_trace_id": trace_id,
-            "billing": {
-                "charged": bool(billing_result and billing_result.get("ledger")),
-                "estimated": True,
-                "amount_shells": (
-                    billing_result["ledger"]["amount_shells"]
-                    if billing_result and billing_result.get("ledger")
-                    else None
-                ),
-                "balance_shells": (
-                    billing_result["wallet"]["balance_shells"]
-                    if billing_result and billing_result.get("wallet")
-                    else None
-                ),
-            },
-        },
+        metadata=response_metadata,
     )
 
 

@@ -72,6 +72,17 @@ class Settings(BaseSettings):
     openclaw_login_wait_timeout_ms: int = 480000
     openclaw_gateway_call_timeout_ms: int = 60000
     openclaw_cli_path: str = "openclaw"             # openclaw CLI 名或绝对路径;不在服务 PATH 时填绝对路径(见 .env.example)
+    openclaw_gateway_ws_enabled: bool = False
+    openclaw_gateway_ws_url: str = ""
+    openclaw_gateway_ws_token: str = ""
+    openclaw_gateway_ws_password: str = ""
+    openclaw_gateway_ws_config_path: str = "~/.openclaw/openclaw.json"
+    openclaw_gateway_ws_read_openclaw_config: bool = True
+    openclaw_gateway_ws_fallback_to_cli: bool = True
+    openclaw_gateway_ws_connect_timeout_ms: int = 3000
+    openclaw_gateway_ws_request_timeout_ms: int = 5000
+    openclaw_gateway_ws_protocol_version: int = 4
+    openclaw_gateway_ws_warmup_on_startup: bool = False
     # 主动消息发送被限速（ret=-2 / rate limited）时的退避重试：仅作用于后台主动消息链路，
     # 不影响用户同步回复。max_retries=0 表示不重试，限速即落 failed。
     proactive_send_rate_limit_max_retries: int = 2

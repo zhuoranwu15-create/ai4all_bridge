@@ -19,12 +19,16 @@ if str(ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402
 
+from app import openclaw_gateway  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.node_agent import (  # noqa: E402
     create_node_agent_app,
     run_heartbeat_loop,
     run_pull_loop,
 )
+
+
+logger = logging.getLogger("ai4all.run_access_node")
 
 
 def main() -> None:
@@ -80,6 +84,10 @@ def main() -> None:
         server.run()  # 阻塞至 should_exit
     finally:
         stop_event.set()  # 通知后台循环收敛(daemon 线程随进程退出)
+        try:
+            openclaw_gateway.close_persistent_gateway_client()
+        except Exception as err:
+            logger.warning("persistent OpenClaw Gateway close failed: %s", err)
 
 
 if __name__ == "__main__":

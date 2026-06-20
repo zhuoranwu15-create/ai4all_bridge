@@ -1,14 +1,19 @@
 import base64
 import io
 import json
+import logging
 import re
 import subprocess
+import threading
 from typing import Any, Dict, Optional, Tuple
 from uuid import uuid4
 
 import qrcode
 
 from app.config import settings
+
+
+logger = logging.getLogger("ai4all.openclaw_gateway")
 
 
 class OpenClawGatewayError(RuntimeError):
@@ -33,6 +38,40 @@ DEFAULT_WEIXIN_CHANNEL = "openclaw-weixin"
 _RATE_LIMIT_PATTERN = re.compile(r"rate.?limit", re.IGNORECASE)
 # iLink 限速的业务返回码。
 _RATE_LIMIT_RET = -2
+
+_gateway_ws_client: Optional[Any] = None
+_gateway_ws_client_lock = threading.Lock()
+
+
+def _setting_bool(name: str, default: bool) -> bool:
+    value = getattr(settings, name, default)
+    return value if isinstance(value, bool) else default
+
+
+def _persistent_gateway_client() -> Any:
+    """Return the process-wide persistent OpenClaw Gateway WS client."""
+    global _gateway_ws_client
+    with _gateway_ws_client_lock:
+        if _gateway_ws_client is None:
+            from app.openclaw_gateway_ws import OpenClawPersistentGatewayClient
+
+            _gateway_ws_client = OpenClawPersistentGatewayClient(settings)
+        return _gateway_ws_client
+
+
+def close_persistent_gateway_client() -> None:
+    """Close the process-wide persistent OpenClaw Gateway WS client if it exists."""
+    global _gateway_ws_client
+    with _gateway_ws_client_lock:
+        client = _gateway_ws_client
+        _gateway_ws_client = None
+    if client is not None:
+        client.close()
+
+
+def warmup_persistent_gateway_client() -> None:
+    """Open the process-wide persistent OpenClaw Gateway WS client if enabled."""
+    _persistent_gateway_client().warmup()
 
 
 def _extract_send_result_error(result: Dict[str, Any]) -> Optional[Tuple[Optional[int], str]]:
@@ -232,6 +271,21 @@ def logout_weixin_account(
     }
 
 
+def _run_send_gateway_call(*, params: Dict[str, Any], timeout_ms: int) -> Dict[str, Any]:
+    if _setting_bool("openclaw_gateway_ws_enabled", False):
+        try:
+            return _persistent_gateway_client().call(
+                method="send",
+                params=params,
+                timeout_ms=timeout_ms,
+            )
+        except OpenClawGatewayError:
+            if not _setting_bool("openclaw_gateway_ws_fallback_to_cli", True):
+                raise
+            logger.warning("persistent OpenClaw Gateway send failed; falling back to CLI")
+    return _run_gateway_call(method="send", params=params, timeout_ms=timeout_ms)
+
+
 def send_weixin_text(
     *,
     to_user_id: str,
@@ -267,11 +321,7 @@ def send_weixin_text(
     if session_key and session_key.strip():
         params["sessionKey"] = session_key.strip()
 
-    result = _run_gateway_call(
-        method="send",
-        params=params,
-        timeout_ms=gateway_timeout_ms,
-    )
+    result = _run_send_gateway_call(params=params, timeout_ms=gateway_timeout_ms)
     # CLI 退出码为 0 不代表发送成功：iLink 可能在返回体里带业务错误（如限速 ret=-2）。
     # 识别后抛出，避免被上层误标为已发送。限速单独抛 OpenClawRateLimited 以便退避重试。
     send_error = _extract_send_result_error(result)

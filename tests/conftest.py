@@ -58,6 +58,18 @@ def test_settings(tmp_path):
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
     s.openclaw_gateway_call_timeout_ms = 5000
+    s.openclaw_cli_path = "openclaw"
+    s.openclaw_gateway_ws_enabled = False
+    s.openclaw_gateway_ws_url = ""
+    s.openclaw_gateway_ws_token = ""
+    s.openclaw_gateway_ws_password = ""
+    s.openclaw_gateway_ws_config_path = str(tmp_path / "openclaw.json")
+    s.openclaw_gateway_ws_read_openclaw_config = False
+    s.openclaw_gateway_ws_fallback_to_cli = True
+    s.openclaw_gateway_ws_connect_timeout_ms = 3000
+    s.openclaw_gateway_ws_request_timeout_ms = 5000
+    s.openclaw_gateway_ws_protocol_version = 4
+    s.openclaw_gateway_ws_warmup_on_startup = False
     # 默认关闭入站收口，保留现有测试依赖的 session_key 兜底；收口路径由专门测试显式开启。
     s.openclaw_inbound_require_binding = False
     s.proactive_outbound_enabled = True

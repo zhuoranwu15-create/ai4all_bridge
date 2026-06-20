@@ -4,6 +4,7 @@ pydantic-settings==2.7.1
 pytest==8.3.4
 httpx==0.28.1
 qrcode[pil]==8.0
+websockets==15.0.1
 alibabacloud_dysmsapi20170525
 alibabacloud_captcha20230305
 alibabacloud_tea_openapi

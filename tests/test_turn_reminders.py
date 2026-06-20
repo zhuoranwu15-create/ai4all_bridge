@@ -138,6 +138,100 @@ def test_turn_gates_web_search_tool_registration(client, fresh_db):
     assert "web_search" in tool_names
 
 
+def test_tool_turn_final_reply_is_sent_out_of_band(client, fresh_db):
+    """工具回合最终回复主动发送，避免 OpenClaw 同步 response 超时后丢最终答案。"""
+    from unittest.mock import patch as _patch
+    from app.db import get_or_create_session, set_account_onboarding_state
+
+    with _patch("app.db.settings", fresh_db):
+        get_or_create_session(
+            account_id="tool-final-session",
+            channel="openclaw-weixin",
+            sender_id="user-1",
+            sender_name=None,
+            chat_id="chat-1",
+            session_key="tool-final-session",
+        )
+        set_account_onboarding_state(account_id="tool-final-session", state="complete")
+
+    def fake_generate(**kwargs):
+        kwargs["on_tool_detected"](["web_search"])
+        return "搜索后的最终答案", None
+
+    with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate), \
+        patch("app.turn_service._make_tool_thinking_sender", return_value=lambda _names: None), \
+        patch("app.turn_service.node_gateway.node_send_text", return_value={"messageId": "gw-final"}) as mock_send:
+        resp = client.post(
+            "/openclaw/turn",
+            headers={"Authorization": "Bearer test-secret"},
+            json={
+                "session_key": "tool-final-session",
+                "channel": "openclaw-weixin",
+                "channel_account_id": "bot-1",
+                "sender_id": "user-1",
+                "chat_id": "chat-1",
+                "message_type": "text",
+                "text": "帮我搜索一下今天新闻",
+                "chat_type": "private",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["no_reply"] is True
+    assert data["reply"] is None
+    assert data["metadata"]["delivery_mode"] == "out_of_band_tool_final"
+    assert data["metadata"]["gateway_message_id"] == "gw-final"
+    mock_send.assert_called_once()
+    send_kwargs = mock_send.call_args.kwargs
+    assert send_kwargs["text"] == "搜索后的最终答案"
+    assert send_kwargs["to_user_id"] == "chat-1"
+    assert send_kwargs["account_id"] == "bot-1"
+    assert send_kwargs["idempotency_key"].startswith("tool-final-tool-final-session-reply-")
+
+
+def test_plain_turn_final_reply_stays_sync(client, fresh_db):
+    """没有实际触发工具时，普通聊天仍用同步 reply 返回，不额外主动发送。"""
+    from unittest.mock import patch as _patch
+    from app.db import get_or_create_session, set_account_onboarding_state
+
+    with _patch("app.db.settings", fresh_db):
+        get_or_create_session(
+            account_id="plain-final-session",
+            channel="openclaw-weixin",
+            sender_id="user-1",
+            sender_name=None,
+            chat_id="chat-1",
+            session_key="plain-final-session",
+        )
+        set_account_onboarding_state(account_id="plain-final-session", state="complete")
+
+    with patch("app.turn_service.generate_reply_with_tools", return_value=("普通答案", None)), \
+        patch("app.turn_service.node_gateway.node_send_text") as mock_send:
+        resp = client.post(
+            "/openclaw/turn",
+            headers={"Authorization": "Bearer test-secret"},
+            json={
+                "session_key": "plain-final-session",
+                "channel": "openclaw-weixin",
+                "channel_account_id": "bot-1",
+                "sender_id": "user-1",
+                "chat_id": "chat-1",
+                "message_type": "text",
+                "text": "普通聊天",
+                "chat_type": "private",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["no_reply"] is False
+    assert data["reply"] == "普通答案"
+    mock_send.assert_not_called()
+
+
 def test_turn_forwards_proactive_update_tool_choice(client, fresh_db):
     """主对话 turn 路径：命中主动设置更新意图时向 LLM 显式传入强制 tool_choice；否则 auto。
     锁定 P1-5 的接线（意图判定已从通用 LLM 入口移回 turn 路径）。"""

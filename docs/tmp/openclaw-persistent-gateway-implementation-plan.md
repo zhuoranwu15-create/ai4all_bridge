@@ -112,7 +112,7 @@ send_weixin_text()
 |---|---|
 | `app/config.py` | 增加持久 WS transport 配置项 |
 | `.env.example` | 说明新配置和灰度开关 |
-| `requirements.txt` | 显式增加 `websockets==16.0` |
+| `requirements.txt` | 显式增加已验证的 `websockets` 版本 |
 | `app/openclaw_gateway.py` | 接入 WS transport，保留 CLI fallback 与错误解析 |
 | `app/openclaw_gateway_ws.py`（建议新增） | 持久 Gateway WS client、配置解析、握手、请求发送、关闭连接 |
 | `app/main.py` | 可选：startup warmup，shutdown close |
@@ -152,10 +152,18 @@ openclaw_gateway_ws_warmup_on_startup: bool = False
 2. 若 `OPENCLAW_GATEWAY_WS_READ_OPENCLAW_CONFIG=true`，读取 `OPENCLAW_GATEWAY_WS_CONFIG_PATH`：
    - `gateway.tls.enabled=true` → `wss://127.0.0.1:<gateway.port>`；
    - 否则 → `ws://127.0.0.1:<gateway.port>`；
-   - `gateway.port` 缺失时才使用 OpenClaw 默认端口。
+   - 端口解析与 OpenClaw CLI 对齐：`OPENCLAW_GATEWAY_PORT` > `gateway.port` > OpenClaw 默认端口 `18789`。
 3. 不建议直接读取 `OPENCLAW_GATEWAY_URL`，避免与 OpenClaw CLI 的远程模式语义混淆；如要复用，应在文档里明确。
 
 当前本机配置里 Gateway 端口不是 OpenClaw client 默认值，所以实现不能硬编码端口。
+
+实现细节：
+
+- `OPENCLAW_GATEWAY_WS_CONFIG_PATH` 默认 `~/.openclaw/openclaw.json`，读取前必须 `os.path.expanduser()`。
+- 如果 OpenClaw config 文件不存在、JSON 非法，或读取到的字段类型不符合预期，WS transport 应抛
+  `OpenClawGatewayError` 并由 fallback 兜底，不应影响 CLI path。
+- 第一版只解析明文 token/password；如果 OpenClaw config 使用 SecretRef，Python 端不自行解析 SecretRef，应记录脱敏
+  warning 并 fallback CLI。
 
 ### 5.3 鉴权信息解析优先级
 
@@ -164,7 +172,9 @@ openclaw_gateway_ws_warmup_on_startup: bool = False
    - `gateway.auth.mode == "token"` 读取 `gateway.auth.token`；
    - `gateway.auth.mode == "password"` 读取 `gateway.auth.password`；
    - `gateway.auth.mode == "none"` 不传 auth。
-3. 任何日志、异常、测试快照都必须脱敏 token/password。
+3. 若 token/password 都有值，显式配置优先；若同一来源同时出现 token 与 password，应优先遵循
+   `gateway.auth.mode`，无法判断时抛 `OpenClawGatewayError` 并 fallback CLI。
+4. 任何日志、异常、测试快照都必须脱敏 token/password。
 
 ### 5.4 `.env.example` 文案
 
@@ -174,10 +184,12 @@ openclaw_gateway_ws_warmup_on_startup: bool = False
 # OPENCLAW_GATEWAY_WS_ENABLED=false # true 时 send_weixin_text 优先复用本机 Gateway WS 长连接；默认 false 保持 CLI 行为
 # OPENCLAW_GATEWAY_WS_URL=ws://127.0.0.1:18790 # 留空则读取 ~/.openclaw/openclaw.json 的 gateway.port
 # OPENCLAW_GATEWAY_WS_TOKEN= # 可显式配置；留空且 READ_OPENCLAW_CONFIG=true 时读取 OpenClaw gateway.auth.token
+# OPENCLAW_GATEWAY_WS_PASSWORD= # password auth 模式；留空且 READ_OPENCLAW_CONFIG=true 时读取 OpenClaw gateway.auth.password
 # OPENCLAW_GATEWAY_WS_READ_OPENCLAW_CONFIG=true # 是否允许读取 ~/.openclaw/openclaw.json 的 gateway.port/auth
 # OPENCLAW_GATEWAY_WS_FALLBACK_TO_CLI=true # WS 失败时回落 openclaw gateway call send，便于灰度回滚
 # OPENCLAW_GATEWAY_WS_CONNECT_TIMEOUT_MS=3000
 # OPENCLAW_GATEWAY_WS_REQUEST_TIMEOUT_MS=5000
+# OPENCLAW_GATEWAY_WS_PROTOCOL_VERSION=4
 # OPENCLAW_GATEWAY_WS_WARMUP_ON_STARTUP=false
 ```
 
@@ -198,6 +210,13 @@ OpenClaw protocol v4 的 WebSocket 帧：
 ```json
 {"type":"event","event":"connect.challenge","payload":{"nonce":"..."}}
 ```
+
+client 必须先消费 `connect.challenge`，拿到非空 `payload.nonce` 后再发 `connect` request；未收到 challenge、nonce
+为空或超时，都视为协议错误，关闭 socket 并 fallback CLI。
+
+当前 OpenClaw `gateway-client/backend` + shared token/password 的 loopback path 不需要把 nonce 放进
+`auth.nonce`，也不应自造不存在的 `auth.nonce` 字段。nonce 只在 device auth 路径进入 `device.nonce` 并参与签名；
+第一版不实现 device auth。
 
 client 随后发 `connect` request：
 
@@ -225,6 +244,16 @@ client 随后发 `connect` request：
 }
 ```
 
+鉴权 params 形态：
+
+```json
+{"auth":{"token":"<redacted>"}}
+{"auth":{"password":"<redacted>"}}
+{"auth":{}}
+```
+
+`auth none` 时可省略 `auth` 或传空对象；实现应保持一种固定写法，便于测试。
+
 握手成功时 `connect` response payload 是 `hello-ok`，需要校验：
 
 - `payload.type == "hello-ok"`；
@@ -248,11 +277,15 @@ client 随后发 `connect` request：
 
 ### 7.1 依赖
 
-`.venv` 当前已有 `websockets==16.0`，但 `requirements.txt` 没显式声明。实现时应加入：
+`requirements.txt` 当前未声明 `websockets`；本地 `.venv` 实测为 `websockets==15.0.1`。实现时应显式加入已验证
+版本：
 
 ```text
-websockets==16.0
+websockets==15.0.1
 ```
+
+如实现前决定升级到 `websockets==16.0`，必须先验证 `websockets.sync.client.connect` API、超时行为和 fake socket
+测试，避免依赖升级与业务改动混在一起。
 
 建议使用 `websockets.sync.client.connect`，原因：
 
@@ -288,6 +321,24 @@ def warmup_persistent_gateway_client() -> None:
 ```
 
 便于 `main.py` 和 node 进程生命周期调用。
+
+同文件内增加模块级单例工厂：
+
+```python
+_gateway_ws_client: Optional[OpenClawPersistentGatewayClient] = None
+_gateway_ws_client_lock = threading.Lock()
+
+
+def _persistent_gateway_client() -> OpenClawPersistentGatewayClient:
+    global _gateway_ws_client
+    with _gateway_ws_client_lock:
+        if _gateway_ws_client is None:
+            _gateway_ws_client = OpenClawPersistentGatewayClient(settings)
+        return _gateway_ws_client
+```
+
+这个工厂锁只保护懒初始化；`OpenClawPersistentGatewayClient` 内部 `RLock` 保护 socket 生命周期和 request/response
+串行，两者是不同锁。
 
 ### 7.3 并发模型
 
@@ -330,10 +381,14 @@ def warmup_persistent_gateway_client() -> None:
 8. 任意 socket/JSON/protocol/timeout 错误：
    - close 当前 socket；
    - 记录脱敏 warning；
+   - 统一转换为 `OpenClawGatewayError`；
    - 若 fallback enabled，走 CLI；
    - 否则抛 `OpenClawGatewayError`。
 
-### 7.5 安全限制
+重要：`call()` 不应把 `ConnectionRefusedError`、`OSError`、`TimeoutError`、`websockets` 底层异常、
+JSON decode 异常或协议校验异常裸抛给 `send_weixin_text()`；否则 `_run_send_gateway_call()` 无法触发 CLI fallback。
+
+### 7.5 TLS 与安全限制
 
 第一版建议在 URL 校验上保守：
 
@@ -341,6 +396,13 @@ def warmup_persistent_gateway_client() -> None:
 - `wss://...` 允许；
 - 非 loopback 的 `ws://` 默认拒绝；
 - 如未来要支持内网明文，需要单独 break-glass 配置，不在第一版默认打开。
+
+如果读取到 `gateway.tls.enabled=true` 并生成本机 `wss://127.0.0.1:<port>`，需要二选一明确实现：
+
+1. 首版实现最小 TLS 兼容：读取 OpenClaw gateway TLS cert，做 pinned fingerprint/自签证书校验；
+2. 首版暂不支持 local TLS：检测到 local `wss://` 后抛 `OpenClawGatewayError` 并 fallback CLI。
+
+不能直接用 Python 默认 TLS 校验硬连本机自签 `wss://`，否则灰度时会表现为 WS 总是失败。
 
 ---
 
@@ -397,6 +459,8 @@ def _run_send_gateway_call(*, params: Dict[str, Any], timeout_ms: int) -> Dict[s
 
 - startup：
   - 若 `openclaw_gateway_ws_warmup_on_startup=true`，调用 `warmup_persistent_gateway_client()`；
+  - 因 `websockets.sync.client.connect()` 会阻塞，必须在 async startup hook 中用
+    `await asyncio.get_running_loop().run_in_executor(None, warmup_persistent_gateway_client)` 包裹；
   - warmup 失败只 warning，不阻止服务启动，因为 CLI fallback 可用。
 - shutdown：
   - 调用 `close_persistent_gateway_client()`。
@@ -411,6 +475,8 @@ node-only 由 `scripts/run_access_node.py` 启动，当前 `create_node_agent_ap
 - 或在 `scripts/run_access_node.py` 的 `finally` 中调用 `openclaw_gateway.close_persistent_gateway_client()`。
 
 推荐后者，改动小，并覆盖 pull loop 与 exec app 共用的同一进程。
+
+`scripts/run_access_node.py` 已有 `finally`，实现时只需在其中补关闭调用；关闭失败只 warning，不应阻止进程退出。
 
 ---
 
@@ -448,7 +514,10 @@ node-only 由 `scripts/run_access_node.py` 启动，当前 `create_node_agent_ap
 新增 `tests/test_openclaw_gateway_ws.py`，优先用 fake socket 对象测试，不依赖真实 OpenClaw：
 
 - 收到 `connect.challenge` 后发送 `connect` frame；
+- `connect.challenge.payload.nonce` 必须被消费：缺失、空值或超时应关闭 socket 并抛 `OpenClawGatewayError`；
 - `connect` params 包含 `gateway-client/backend/operator.write/protocol=4`；
+- `connect` params 的 `minProtocol/maxProtocol` 使用 `openclaw_gateway_ws_protocol_version`；
+- token/password/none 三种 auth params 形态都覆盖；
 - `hello-ok` 缺 `operator.write` 时失败；
 - `features.methods` 不含 `send` 时失败；
 - `send` response `ok=true` 返回 payload；
@@ -487,7 +556,14 @@ node-only 由 `scripts/run_access_node.py` 启动，当前 `create_node_agent_ap
    - `tool_thinking_dispatch` 到 `tool_thinking_sent`；
    - `node_send_text received` 到 `node_send_text done`；
    - 新增 WS transport 日志。
-5. 预期：
+5. live smoke 时额外打印一次 WS `send` 原始 response payload，并用同一 params 跑一次 CLI：
+
+   ```bash
+   openclaw gateway call send --json --params '<same-json>'
+   ```
+
+   对比 `messageId`、`ret`、`errmsg`、`error` 等字段是否与 `_extract_send_result_error()` 兼容。
+6. 预期：
    - 暂态消息先于最终搜索结果；
    - `openclaw_ms` 从约 10,000ms 降到约 100-300ms；
    - 无 fallback warning。
@@ -563,9 +639,11 @@ OPENCLAW_GATEWAY_WS_FALLBACK_TO_CLI=true
 | 鉴权 scope 被降级 | `send` 被拒绝 | 必须使用 `gateway-client/backend` + loopback；校验 `operator.write`，否则不进入发送 |
 | Gateway 重启 | socket 断开，本轮发送失败 | close socket，fallback CLI；下次 call 重连 |
 | token 轮换 | 持久连接继续可用但新连接失败 | 失败时重新读取 config/env；记录脱敏错误；运维重启进程可刷新 |
+| SecretRef 鉴权配置 | Python 端无法解析 OpenClaw SecretRef | 第一版只解析明文/env；SecretRef 命中时脱敏 warning 并 fallback CLI |
+| local TLS / 自签证书 | Python 默认 TLS 校验失败，WS 总是 fallback | 首版明确支持 pinned cert/fingerprint，或检测 local `wss://` 后直接 fallback CLI |
 | 并发发送 | 单 socket 多线程读写错乱 | 第一版用全局 lock 串行 request/response |
 | proactive QPS 上升 | 串行发送可能成为瓶颈 | 第二版引入 receiver thread + pending map |
-| 生产环境依赖缺失 | import websockets 失败 | requirements 显式 pin `websockets==16.0`，启动/测试覆盖 |
+| 生产环境依赖缺失 | import websockets 失败 | requirements 显式 pin 已验证版本 `websockets==15.0.1`，启动/测试覆盖 |
 | 非 loopback 明文 WS | 凭证和消息可能泄露 | 默认拒绝，远程只允许 wss 或后续单独 break-glass |
 
 ---
@@ -588,6 +666,9 @@ OPENCLAW_GATEWAY_WS_FALLBACK_TO_CLI=true
    # 使用测试账号/测试 peer，避免误发真实用户。
    PY
    ```
+
+   live smoke 必须保留一次 WS 原始 payload 与 CLI `openclaw gateway call send --json --params '<same-json>'`
+   的字段比对结果，确认 `messageId`、`ret`、`errmsg`、`error` 等字段仍被现有错误识别逻辑覆盖。
 
 10. aliyun2 灰度，观察日志与消息顺序。
 

@@ -141,7 +141,9 @@ from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
 from app.openclaw_gateway import (
+    close_persistent_gateway_client,
     send_weixin_text,
+    warmup_persistent_gateway_client,
 )
 from app.proactive.messaging import enqueue_onboarding_welcome
 from app.dreaming_scheduler import (
@@ -421,6 +423,17 @@ async def capture_event_loop() -> None:
 
 
 @app.on_event("startup")
+async def startup_persistent_gateway_client() -> None:
+    if not getattr(settings, "openclaw_gateway_ws_warmup_on_startup", False):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, warmup_persistent_gateway_client)
+    except Exception as err:
+        logger.warning("persistent OpenClaw Gateway warmup failed: %s", err)
+
+
+@app.on_event("startup")
 async def startup_proactive_scheduler() -> None:
     if not getattr(settings, "proactive_scheduler_enabled", False):
         return
@@ -469,6 +482,14 @@ async def shutdown_dreaming_scheduler() -> None:
 @app.on_event("shutdown")
 async def shutdown_user_meta_scheduler() -> None:
     await stop_user_meta_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_persistent_gateway_client() -> None:
+    try:
+        close_persistent_gateway_client()
+    except Exception as err:
+        logger.warning("persistent OpenClaw Gateway close failed: %s", err)
 
 
 
