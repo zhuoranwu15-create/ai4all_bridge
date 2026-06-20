@@ -1,0 +1,343 @@
+"""app.db._backend 垫片层单测。
+
+覆盖：
+- 占位符翻译器（纯函数，PG 路径的核心、最高复用风险点）。
+- 后端选择（database_url 空 → SQLite）。
+- SQLite 默认路径经垫片仍能正常连接、读写、提交/回滚，行为不变。
+
+PG 真实连接需 psycopg + 活动 PG 实例，本机不具备，故 PG 部分仅测纯逻辑（翻译器）。
+"""
+import sqlite3
+import types
+
+import pytest
+
+from app.db import _backend
+
+
+# ---------------------------------------------------------------------------
+# 占位符翻译器
+# ---------------------------------------------------------------------------
+
+def test_translate_basic_placeholders():
+    sql = "SELECT * FROM t WHERE a = ? AND b = ?"
+    assert _backend.translate_placeholders(sql) == "SELECT * FROM t WHERE a = %s AND b = %s"
+
+
+def test_translate_skips_question_mark_inside_string_literal():
+    sql = "SELECT 'a?b' AS x FROM t WHERE c = ?"
+    # 字面量内的 ? 保留，仅 WHERE 的 ? 翻译
+    assert _backend.translate_placeholders(sql) == "SELECT 'a?b' AS x FROM t WHERE c = %s"
+
+
+def test_translate_escapes_literal_percent():
+    sql = "SELECT * FROM t WHERE name LIKE '%foo%' AND a = ?"
+    assert (
+        _backend.translate_placeholders(sql)
+        == "SELECT * FROM t WHERE name LIKE '%%foo%%' AND a = %s"
+    )
+
+
+def test_translate_handles_escaped_single_quote():
+    # '' 是字符串内的转义单引号，不应翻转内/外状态；其后的 ? 仍在串内、不翻译
+    sql = "SELECT 'it''s ok? yes' AS x, c = ?"
+    out = _backend.translate_placeholders(sql)
+    assert "'it''s ok? yes'" in out
+    assert out.endswith("c = %s")
+
+
+def test_translate_noop_when_no_placeholder():
+    sql = "SELECT 1"
+    assert _backend.translate_placeholders(sql) == "SELECT 1"
+
+
+# ---------------------------------------------------------------------------
+# 语句方言翻译（DDL + DML 共用）
+# ---------------------------------------------------------------------------
+
+def test_translate_statement_autoincrement():
+    out = _backend.translate_statement("id INTEGER PRIMARY KEY AUTOINCREMENT,")
+    assert out == "id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,"
+
+
+def test_translate_statement_strftime_default():
+    sql = "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))"
+    out = _backend.translate_statement(sql)
+    assert "strftime" not in out
+    assert "to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD HH24:MI:SS')" in out
+
+
+def test_translate_statement_strftime_in_dml_values():
+    # DML 路径（INSERT VALUES 内的 now-北京默认值）也必须翻译，否则 PG 报错
+    sql = (
+        "INSERT INTO messages(account_id, created_at) "
+        "VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))"
+    )
+    out = _backend.translate_statement(sql)
+    assert "strftime" not in out
+    assert "to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD HH24:MI:SS')" in out
+    # 占位符 ? 在本层不动（由 translate_placeholders 负责）
+    assert "VALUES (?," in out
+
+
+def test_translate_statement_insert_or_ignore():
+    sql = "INSERT OR IGNORE INTO access_nodes(node_id, status) VALUES (?, ?)"
+    out = _backend.translate_statement(sql)
+    assert out == "INSERT INTO access_nodes(node_id, status) VALUES (?, ?) ON CONFLICT DO NOTHING"
+
+
+def test_translate_statement_insert_or_ignore_strips_trailing_semicolon():
+    sql = "INSERT OR IGNORE INTO t(a) VALUES (?);"
+    out = _backend.translate_statement(sql)
+    assert out == "INSERT INTO t(a) VALUES (?) ON CONFLICT DO NOTHING"
+
+
+def test_translate_statement_strips_foreign_keys_and_dangling_comma():
+    sql = (
+        "CREATE TABLE t (\n"
+        "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "    account_id TEXT NOT NULL,\n"
+        "    session_id INTEGER NOT NULL,\n"
+        "    FOREIGN KEY(account_id) REFERENCES accounts(id),\n"
+        "    FOREIGN KEY(session_id) REFERENCES sessions(id)\n"
+        ")"
+    )
+    out = _backend.translate_statement(sql)
+    assert "FOREIGN KEY" not in out
+    assert "REFERENCES" not in out
+    # 末列后不应残留悬挂逗号
+    import re as _re
+
+    assert _re.search(r",\s*\)", out) is None
+    assert "BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY" in out
+
+
+def test_translate_statement_no_fk_keeps_inline_comma_paren():
+    # 不含 FOREIGN 的普通 DML 不应触发悬挂逗号清理，`, )` 这类序列原样保留
+    sql = "INSERT INTO t(a, b) VALUES (1, )"
+    assert _backend.translate_statement(sql) == sql
+
+
+def test_translate_statement_fast_path_noop():
+    sql = "SELECT a, b FROM t WHERE c = 1"
+    assert _backend.translate_statement(sql) is sql
+
+
+# ---------------------------------------------------------------------------
+# 查询体日期函数翻译（1d.2）
+# ---------------------------------------------------------------------------
+
+_TO_CHAR_TS = "to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD HH24:MI:SS')"
+
+
+def test_translate_bare_datetime_now_bj():
+    out = _backend.translate_statement(
+        "SELECT 1 WHERE expires_at > datetime('now', '+8 hours')"
+    )
+    assert out == "SELECT 1 WHERE expires_at > " + _TO_CHAR_TS
+
+
+def test_translate_datetime_with_literal_modifier():
+    out = _backend.translate_statement(
+        "WHERE created_at > datetime('now', '+8 hours', '-1 hour')"
+    )
+    assert out == (
+        "WHERE created_at > to_char((now() AT TIME ZONE 'Asia/Shanghai') "
+        "+ ('-1 hour')::interval,'YYYY-MM-DD HH24:MI:SS')"
+    )
+
+
+def test_translate_datetime_with_param_modifier():
+    # ? 修饰符（参数本身是完整 SQLite 修饰符串，如 '-30 minutes'）
+    out = _backend.translate_statement(
+        "WHERE created_at >= datetime('now', '+8 hours', ?)"
+    )
+    assert "+ (?)::interval" in out
+    assert "datetime" not in out
+
+
+def test_translate_datetime_with_concat_param_modifier():
+    out = _backend.translate_statement(
+        "SET token_expires_at = datetime('now', '+8 hours', ? || ' minutes')"
+    )
+    assert out == (
+        "SET token_expires_at = to_char((now() AT TIME ZONE 'Asia/Shanghai') "
+        "+ (? || ' minutes')::interval,'YYYY-MM-DD HH24:MI:SS')"
+    )
+
+
+def test_translate_strftime_wrapped_modifier():
+    # moderation/proactive 里 strftime 包裹带修饰符的 datetime
+    out = _backend.translate_statement(
+        "AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))"
+    )
+    assert "strftime" not in out
+    assert "datetime" not in out
+    assert "+ (?)::interval" in out
+
+
+def test_translate_date_now_bj():
+    out = _backend.translate_statement(
+        "SELECT date('now', '+8 hours') || ' 00:00:00' AS since"
+    )
+    assert out == (
+        "SELECT to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD') "
+        "|| ' 00:00:00' AS since"
+    )
+
+
+def test_translate_julianday_ms_diff():
+    out = _backend.translate_statement(
+        "CAST(ROUND((julianday(r.created_at) - julianday(u.created_at)) * 86400000) AS INTEGER)"
+    )
+    assert "julianday" not in out
+    assert (
+        "EXTRACT(EPOCH FROM ((r.created_at)::timestamp - (u.created_at)::timestamp)) * 1000"
+        in out
+    )
+
+
+# ---------------------------------------------------------------------------
+# JSON 函数翻译
+# ---------------------------------------------------------------------------
+
+def test_translate_json_extract_single_key():
+    out = _backend.translate_statement(
+        "SELECT json_extract(metadata_json, '$.reactivation') FROM t"
+    )
+    # 原始调用形式消失，替换为 safe_json_extract_text
+    assert "json_extract(metadata_json" not in out
+    assert "safe_json_extract_text(metadata_json, ARRAY['reactivation'])" in out
+
+
+def test_translate_json_extract_nested_path():
+    out = _backend.translate_statement(
+        "AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') <= ?"
+    )
+    assert "json_extract(s.metadata_json" not in out
+    assert (
+        "safe_json_extract_text(s.metadata_json, ARRAY['reactivation_candidate', 'scheduled_at'])"
+        in out
+    )
+
+
+def test_translate_json_valid_passthrough():
+    # json_valid 不再被垫片层翻译；直接透传给 PG 调用注册的同名函数
+    sql = "WHERE json_valid(metadata_json)"
+    out = _backend.translate_statement(sql)
+    assert out == sql
+    assert "IS JSON" not in out
+
+
+def test_translate_mixed_modifier_and_plain_in_one_statement():
+    # 同一语句里既有带修饰符 datetime 又有 strftime 无修饰符，互不干扰
+    sql = (
+        "VALUES (datetime('now', '+8 hours', ? || ' minutes'), "
+        "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))"
+    )
+    out = _backend.translate_statement(sql)
+    assert "datetime" not in out
+    assert "strftime" not in out
+    assert "+ (? || ' minutes')::interval" in out
+    # 无修饰符部分仍翻成普通 to_char
+    assert out.count(_TO_CHAR_TS) == 1
+
+
+def test_split_sql_statements_strips_comments_and_splits():
+    script = "CREATE TABLE a (x INT);  -- 注释\nCREATE INDEX i ON a(x);\n"
+    assert _backend.split_sql_statements(script) == [
+        "CREATE TABLE a (x INT)",
+        "CREATE INDEX i ON a(x)",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 后端选择
+# ---------------------------------------------------------------------------
+
+def _fake_settings(**kw):
+    s = types.SimpleNamespace()
+    s.database_path = kw.get("database_path", "data/ai4all.sqlite3")
+    s.database_url = kw.get("database_url", "")
+    return s
+
+
+def test_is_postgres_false_by_default(monkeypatch):
+    monkeypatch.setattr(_backend, "_settings", lambda: _fake_settings())
+    assert _backend.is_postgres() is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:p@h:5432/db",
+        "postgres://u:p@h/db",
+        "POSTGRESQL://u@h/db",
+    ],
+)
+def test_is_postgres_true_for_pg_urls(monkeypatch, url):
+    monkeypatch.setattr(_backend, "_settings", lambda: _fake_settings(database_url=url))
+    assert _backend.is_postgres() is True
+
+
+# ---------------------------------------------------------------------------
+# SQLite 默认路径经垫片端到端
+# ---------------------------------------------------------------------------
+
+def test_sqlite_connect_raw_roundtrip(monkeypatch, tmp_path):
+    db = tmp_path / "t.sqlite3"
+    monkeypatch.setattr(
+        _backend, "_settings", lambda: _fake_settings(database_path=str(db))
+    )
+    # _connect_sqlite 经 _core._db_path 解析路径，需把 _core 的 settings 也指向同一处
+    from app.db import _core
+
+    monkeypatch.setattr(_core, "_settings", lambda: _fake_settings(database_path=str(db)))
+
+    conn = _backend.connect_raw()
+    try:
+        assert isinstance(conn, sqlite3.Connection)
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
+        conn.execute("INSERT INTO t (name) VALUES (?)", ("hello",))
+        row = conn.execute("SELECT name FROM t WHERE id = ?", (1,)).fetchone()
+        # row_factory=Row：dict 与 index 双访问
+        assert row["name"] == "hello"
+        assert row[0] == "hello"
+        # PRAGMA foreign_keys 已开启
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_connect_contextmanager_commits_and_rolls_back(monkeypatch, tmp_path):
+    db = tmp_path / "t.sqlite3"
+    fake = lambda: _fake_settings(database_path=str(db))
+    from app.db import _core
+
+    monkeypatch.setattr(_backend, "_settings", fake)
+    monkeypatch.setattr(_core, "_settings", fake)
+
+    # 成功路径提交
+    with _core.connect() as conn:
+        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+        conn.execute("INSERT INTO t (v) VALUES (?)", ("a",))
+    with _core.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+
+    # 异常路径回滚
+    with pytest.raises(RuntimeError):
+        with _core.connect() as conn:
+            conn.execute("INSERT INTO t (v) VALUES (?)", ("b",))
+            raise RuntimeError("boom")
+    with _core.connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+
+
+def test_integrity_error_alias_includes_sqlite():
+    assert sqlite3.IntegrityError in _backend.IntegrityError
+    # except 元组语义：能捕获 sqlite3.IntegrityError
+    try:
+        raise sqlite3.IntegrityError("x")
+    except _backend.IntegrityError:
+        caught = True
+    assert caught

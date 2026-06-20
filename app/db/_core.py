@@ -2,7 +2,6 @@ import json
 import logging
 import math
 import re
-import sqlite3
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -10,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
+from app.db._backend import Connection, is_postgres
+from app.time_utils import beijing_now_str
 
 logger = logging.getLogger("ai4all.db")
 
@@ -131,18 +132,16 @@ def _db_path() -> Path:
 
 
 @contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
-    """Open a SQLite connection with bridge-wide pragmas and commit on success."""
-    conn = sqlite3.connect(_db_path(), timeout=5.0)
-    conn.row_factory = sqlite3.Row
+def connect() -> Iterator[Connection]:
+    """打开 DB 连接（后端由 settings.database_url 决定），成功提交、异常回滚。
+
+    连接的获取/方言差异收敛在 app.db._backend；本函数只负责事务边界，两套后端
+    （SQLite 默认 / PostgreSQL）共用同一套 commit/rollback/close 语义。
+    """
+    from app.db import _backend
+
+    conn = _backend.connect_raw()
     try:
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        # WAL 的标准搭档：commit 不再每次 fsync，仅在 checkpoint 时落盘。
-        # 最坏情况（OS 崩溃/断电）只丢断电前最后几条已提交事务，绝不损坏库；
-        # 对陪伴 bot 可接受，写延迟约砍半。
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA foreign_keys = ON")
         yield conn
     except Exception:
         try:
@@ -157,7 +156,7 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 
 @contextmanager
-def _tx(conn: Optional[sqlite3.Connection]) -> Iterator[sqlite3.Connection]:
+def _tx(conn: Optional[Connection]) -> Iterator[Connection]:
     """复用调用方事务（传入 conn，由调用方负责提交/回滚）或自开一个独立事务。
 
     用于让 unbind/wipe 既能各自独立调用，又能被 unbind_and_wipe_account 串进
@@ -170,36 +169,184 @@ def _tx(conn: Optional[sqlite3.Connection]) -> Iterator[sqlite3.Connection]:
         yield own
 
 
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+@contextmanager
+def _savepoint(conn: Connection, name: str = "sp") -> Iterator[None]:
+    """子事务保存点：把可能触发唯一冲突的语句隔离起来，冲突时只回滚到保存点而非整笔事务。
+
+    PG 在任一语句报错后会中止整个事务，后续语句一律 InFailedSqlTransaction；因此
+    「INSERT 失败 → 捕获 IntegrityError → 同一连接继续重试/查询」的模式在 PG 必须靠
+    SAVEPOINT 才能继续（SQLite 同样支持 SAVEPOINT，两后端行为一致）。
+    """
+    conn.execute(f"SAVEPOINT {name}")
+    try:
+        yield
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+        raise
+    else:
+        conn.execute(f"RELEASE SAVEPOINT {name}")
+
+
+def _table_exists(conn: Connection, table: str) -> bool:
+    if is_postgres():
+        row = conn.execute("SELECT to_regclass(?) AS r", (table,)).fetchone()
+        return row is not None and row["r"] is not None
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
     ).fetchone()
     return row is not None
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
-    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-    if column not in existing:
+def _ensure_column(conn: Connection, table: str, column: str, definition: str) -> None:
+    if is_postgres():
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = ? AND column_name = ?",
+            (table, column),
+        ).fetchone()
+        exists = row is not None
+    else:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        exists = column in existing
+    if not exists:
+        # ALTER 无参数，PG 路径经垫片自动方言翻译（definition 多为简单类型，无需翻译）
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
+# 应用级事务 advisory lock ID，用于串行化多节点并发启动时的 PG 迁移
+_PG_MIGRATION_LOCK_ID = 7_483_920
+
+
 def init_db() -> None:
-    """应用所有待执行的 schema 迁移（版本由 PRAGMA user_version 跟踪）。"""
+    """应用所有待执行的 schema 迁移（版本由 schema_migrations 表跟踪）。
+
+    PG 后端：用事务级 advisory lock 防止多节点同时 DDL。持锁节点完成迁移后提交释放，
+    后续节点持锁时迁移已全部应用，幂等跳过。SQLite 路径不受影响。
+    """
     with connect() as conn:
+        if is_postgres():
+            conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
         _run_migrations(conn)
+        if is_postgres():
+            _ensure_pg_functions(conn)
 
 
-def _run_migrations(conn: sqlite3.Connection) -> None:
-    """按 user_version 顺序应用未执行迁移；在调用方事务内运行，整体提交/回滚。"""
-    current = conn.execute("PRAGMA user_version").fetchone()[0]
+# SQLite 内置 json_patch（RFC 7396 JSON Merge Patch）；PG 无内置实现。这里建一个同名
+# 递归函数，严格保留「patch 值为 null 即删除该键、对象递归合并」语义——浅 || 合并做不到。
+# 垫片层把 json_patch(A, ?) 翻成 json_patch(A::jsonb, (?)::jsonb)::text 调用本函数。
+_PG_JSON_PATCH_FN = """
+CREATE OR REPLACE FUNCTION json_patch(target jsonb, patch jsonb)
+RETURNS jsonb AS $$
+DECLARE
+    result jsonb;
+    k text;
+    v jsonb;
+BEGIN
+    IF patch IS NULL OR jsonb_typeof(patch) <> 'object' THEN
+        RETURN patch;
+    END IF;
+    IF target IS NULL OR jsonb_typeof(target) <> 'object' THEN
+        result := '{}'::jsonb;
+    ELSE
+        result := target;
+    END IF;
+    FOR k, v IN SELECT * FROM jsonb_each(patch) LOOP
+        IF v = 'null'::jsonb THEN
+            result := result - k;
+        ELSE
+            result := result || jsonb_build_object(k, json_patch(result -> k, v));
+        END IF;
+    END LOOP;
+    RETURN result;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+"""
+
+
+_PG_JSON_VALID_FN = """
+CREATE OR REPLACE FUNCTION json_valid(val text)
+RETURNS boolean AS $$
+BEGIN
+    IF val IS NULL THEN RETURN false; END IF;
+    PERFORM val::jsonb;
+    RETURN true;
+EXCEPTION WHEN OTHERS THEN
+    RETURN false;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+"""
+
+# safe_json_extract_text: SQLite json_extract(col, '$.a.b') 的 PG 安全替代。
+# 脏 JSON 时返回 NULL 而非抛异常（::jsonb 强转遇非法 JSON 会直接报错）。
+_PG_SAFE_JSON_EXTRACT_FN = """
+CREATE OR REPLACE FUNCTION safe_json_extract_text(val text, path text[])
+RETURNS text AS $$
+BEGIN
+    RETURN val::jsonb #>> path;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+"""
+
+
+def _ensure_pg_functions(conn: Connection) -> None:
+    """在 PG 后端建立 SQLite 专有但本仓 SQL 依赖的函数（幂等 CREATE OR REPLACE）。"""
+    conn.execute(_PG_JSON_PATCH_FN)
+    conn.execute(_PG_JSON_VALID_FN)
+    conn.execute(_PG_SAFE_JSON_EXTRACT_FN)
+
+
+def _ensure_schema_migrations_table(conn: Connection) -> None:
+    """建立跨后端通用的迁移版本表（取代 SQLite 专属的 PRAGMA user_version）。
+
+    applied_at 由 Python 侧写入北京时间串，避免在引导表上引入方言默认值。
+    """
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+    )
+
+
+def _applied_schema_version(conn: Connection) -> int:
+    """返回已应用的最大迁移版本。
+
+    历史 SQLite 库用 PRAGMA user_version 记录版本，schema_migrations 表为空；
+    首次升级时把旧 user_version 回填进新表，避免幂等迁移被重复执行。
+    """
+    row = conn.execute(
+        "SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations"
+    ).fetchone()
+    current = (row["v"] if row is not None else 0) or 0
+    if current == 0 and not is_postgres():
+        legacy = conn.execute("PRAGMA user_version").fetchone()[0]
+        if legacy and int(legacy) > 0:
+            now = beijing_now_str()
+            for ver in range(1, int(legacy) + 1):
+                conn.execute(
+                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at) "
+                    "VALUES (?, ?)",
+                    (ver, now),
+                )
+            current = int(legacy)
+    return int(current)
+
+
+def _run_migrations(conn: Connection) -> None:
+    """按版本顺序应用未执行迁移；在调用方事务内运行，整体提交/回滚。"""
+    _ensure_schema_migrations_table(conn)
+    current = _applied_schema_version(conn)
     for version, apply in _MIGRATIONS:
         if version > current:
             logger.info("db migration applying version=%s", version)
             apply(conn)
-            conn.execute(f"PRAGMA user_version = {version}")
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                (version, beijing_now_str()),
+            )
 
 
-def _migration_0001_baseline(conn: sqlite3.Connection) -> None:
+def _migration_0001_baseline(conn: Connection) -> None:
     """基线迁移：建立当前全量 schema（幂等，可在已有库上重复执行）。"""
     conn.executescript(
         """
@@ -1373,7 +1520,7 @@ def _migration_0001_baseline(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_0002_llm_runtime_config(conn: sqlite3.Connection) -> None:
+def _migration_0002_llm_runtime_config(conn: Connection) -> None:
     """Add global runtime LLM provider selection storage."""
     conn.execute(
         """
@@ -1388,7 +1535,7 @@ def _migration_0002_llm_runtime_config(conn: sqlite3.Connection) -> None:
     )
 
 
-def _migration_0003_user_meta(conn: sqlite3.Connection) -> None:
+def _migration_0003_user_meta(conn: Connection) -> None:
     """Add account-level user meta current and daily snapshot tables."""
     conn.executescript(
         """
@@ -1436,10 +1583,35 @@ def _migration_0003_user_meta(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_0004_account_profile_files(conn: Connection) -> None:
+    """账号级 profile 文件内容入库（厚节点改造 P2，见 thick_node_postgres_refactor.md §5）。
+
+    把 SOUL/IDENTITY/USER/MEMORY/legacy user_profile.md 及 memory/YYYY-MM-DD.md daily notes
+    的内容从本地文件系统收敛进此表，作为唯一真相、供多节点共享读取。filename 为账号 profile
+    目录内的相对路径（如 'SOUL.md'、'memory/2026-06-20.md'），(account_id, filename) 为主键，
+    其前缀天然覆盖 account_id 范围扫描（列举/wipe 用），无需额外索引。不设 DB 级 FK：账号隔离
+    由 app 层 WHERE account_id 保证，且本表为无子表的叶子表，省去建表/删除顺序约束。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS account_profile_files (
+            account_id TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY (account_id, filename)
+        );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
     (3, _migration_0003_user_meta),
+    (4, _migration_0004_account_profile_files),
 ]
 
 
