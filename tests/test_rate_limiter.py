@@ -1,5 +1,16 @@
-from app.rate_limiter import RateLimiter
+from app.rate_limiter import RateLimiter, _advisory_key
 from app.db._core import _tx
+
+
+def test_advisory_key_is_stable_and_in_int64_range():
+    """advisory 锁键须跨进程稳定且落在 PG bigint(int64) 范围内。"""
+    k1 = _advisory_key("acc")
+    k2 = _advisory_key("acc")
+    assert k1 == k2  # 确定性
+    assert _advisory_key("acc_a") != _advisory_key("acc_b")  # 不同账号不同键
+    lo, hi = -(2 ** 63), 2 ** 63 - 1
+    for acc in ("acc", "aid_265610123", "x" * 200, "中文账号"):
+        assert lo <= _advisory_key(acc) <= hi
 
 
 def test_allows_requests_under_limit(fresh_db):
