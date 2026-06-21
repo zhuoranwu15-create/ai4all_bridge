@@ -69,7 +69,7 @@
 | B10 | `DREAMING_SCHEDULER_ENABLED` | **`true`**（进程内开） | `false` | 见 §3 |
 | B11 | 端口 | backend :8180（+ PG :5432、nginx :80） | backend :8180 + access-node :8190 | 必然差异 |
 | B12 | openclaw-bridge `backendUrl`（**openclaw 插件配置**） | `http://127.0.0.1:8180` | `http://127.0.0.1:8180` | **一致**（均本地处理 inbound） |
-| B13 | `BRIDGE_SECRET` | 64 字符 | 与 aliyun1 逐字符对齐 | 必须一致 |
+| B13 | `AI4ALL_BRIDGE_SECRET` | 64 字符 | 与 aliyun1 逐字符对齐 | 必须一致（真实 env key，非简写 `BRIDGE_SECRET`） |
 | B14 | `OPENCLAW_CLI_PATH` | 默认 | `/home/.../.npm-global/bin/openclaw`（绝对路径，因 S3） | 历史差异 |
 | B15 | `NO_PROXY` | — | 须含 `aliyun1` / 内网段（机器有 clash 代理） | 环境差异 |
 
@@ -128,12 +128,12 @@ Dreaming 有两条触发路径，机制与 proactive 不同：
 
 | # | 优先级 | 问题 | 现状证据 | 建议 |
 |---|---|---|---|---|
-| O1 | **P0** | **aliyun1 的「账号检查」主动消息对 aliyun2 账号发不出** | aliyun1 跑已提交 HEAD，`account_checks.py` 仍用 `send_proactive_text`（旧）；扫到 aliyun2 账号时在 aliyun1 本机直发，但微信号在 aliyun2 → 失败且抢占 pending 行，aliyun2 pull 不到 | 已有修复（`account_checks.py` send→`dispatch_proactive_text`，在 aliyun2 工作区未提交）→ **提交并部署到 aliyun1**。reminders/commitment/reactivation 已是 dispatch 版，不受影响 |
-| O2 | **P0** | **连接池改动未提交、仅在 aliyun2 工作区** | aliyun1 HEAD 无池代码；aliyun2 重启后池已生效但**未提交**，任何 `git pull`/reset 会丢 | **提交** `_backend.py`+`_core.py`+`main.py`（含 shutdown 关池）；aliyun1 也部署（本地 socket 收益小但保持一致+幂等耐久） |
+| O1 | ✅ **已修** | **aliyun1 的「账号检查」主动消息对 aliyun2 账号发不出** | （原）`account_checks.py` 用 `send_proactive_text`，扫到 aliyun2 账号在本机直发但微信号在 aliyun2 → 失败且抢占 pending 行 | **已修**（commit `6e7aba3`）：`account_checks.py:499` 改 `dispatch_proactive_text`，远程账号仅 enqueue 由归属节点 pull。reminders/commitment/reactivation 早已是 dispatch 版 |
+| O2 | ✅ **已修** | **PG 连接池缺失** | （原）每 turn 跨内网多次 `connect` 付 ~17ms 建连，浪费 0.5~1.4s | **已修**（commit `6e7aba3`）：`_backend.py:479 _get_pg_pool` + `518 close_pg_pool`，`main.py` shutdown 优雅关池；含纯 node 误配 `PROACTIVE_SCHEDULER_ENABLED=true` 的 central 守卫 |
 | O3 | ✅ **已修** | **每日 dreaming 扫描漏掉 aliyun2 的 14 账号** | （原）`main.py` 用 `node_id=settings.node_id`(aliyun1) 起 DreamingScheduler，只扫 61 | **已修**：`startup_dreaming_scheduler` 改为「中心机扫全量 `node_id=None`、纯 node 才分片」，aliyun1 现每日扫全 75。dreaming 节点无关（不发 openclaw）故中心代扫合法。竞态见 §3.2 注 |
 | O4 | P2 | aliyun2 出站绕远：已直连 PG 却仍走 HTTP pull（:8190→中心 `/node/outbound/claim`） | 瘦节点时代产物 | 可让 aliyun2 直接从 PG `claim_pending_outbound_by_node` 认领，去掉对中心 HTTP 的出站依赖（降耦合/延迟）。非紧急 |
 | O5 | P2 | 主动消息 pull 延迟 | `outbound_pull_interval_seconds=2.0` | 嫌慢可调 1.0/0.5，零风险 |
 | O6 | P2 | PG 单点无 HA | 单实例，无 standby | 参考 runbook §10 配流复制热备 + `pg_dump` PITR |
 | O7 | P3 | PG `max_connections` 余量核对 | 现 100，活动连接仅 2 | 加池后 Σ(各节点 `db_pool_max`)+中心+timer 需 ≤100，账号扩容前复核 |
 | O8 | P3 | OpenClaw 版本/补丁漂移 | aliyun1 v5.28 / aliyun2 v6.5 + 4 补丁 | aliyun1 升 6.x 时随 `patch_openclaw_accountid.sh` 一并补（见 S4/S5） |
-| O9 | P3 | `restart_runtime.sh` 按角色分流改动未提交 | aliyun2 工作区 `M` | 与 O1/O2 一并提交 |
+| O9 | ✅ **已修** | `restart_runtime.sh` 按角色分流改动未提交 | （原）aliyun2 工作区 `M` | **已修**（commit `6e7aba3`）：`detect_ai4all_role` 按 `AI4ALL_ROLE` 分流 central(sudo 系统级)/node(`systemctl --user`)，已在 HEAD |

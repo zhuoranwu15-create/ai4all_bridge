@@ -4,7 +4,7 @@
 
 状态：技术评估稿。结论基于对当前代码的核对，可作为容量规划与改造排期的输入。
 
-配套阅读：[`100k_dau_scaling_discussion_draft.md`](100k_dau_scaling_discussion_draft.md)（更早的讨论稿）、[`production_stability_prd.md`](../tech_design/production_stability_prd.md)。
+配套阅读：[`100k_dau_scaling_discussion_draft.md`](../archive/backlog/100k_dau_scaling_discussion_draft.md)（更早的讨论稿，已归档）、[`production_stability_prd.md`](../tech_design/production_stability_prd.md)。
 
 ---
 

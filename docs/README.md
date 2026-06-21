@@ -1,6 +1,6 @@
 # AI4ALL 文档导航
 
-更新时间：2026-06-07
+更新时间：2026-06-21
 
 ## 当前权威文档
 
@@ -54,8 +54,8 @@
 | [数据库与文件系统解耦调研](tech_design/database_filesystem_decoupling_research.md) | SQLite、PostgreSQL、OSS/NAS、文件画像/记忆在多服务器部署下的解耦路径 |
 | [OpenClaw Bridge 设计](tech_design/openclaw_bridge_design.md) | Bridge hook、payload、接口和失败策略 |
 | [OpenClaw 微信 QR 补丁](tech_design/openclaw_weixin_gateway_qr_patch.md) | `openclaw-weixin` Gateway QR login provider discovery 补丁说明 |
-| [图片理解技术设计](tech_design/image_understanding_design.md) | 微信图片 VL 多维描述 → 文本对话链路（草稿/待联调） |
-| [OpenClaw 补丁与部署机制](tech_design/openclaw_patches_maintenance.md) | 两个 OpenClaw patch 的用途、部署方式和升级回归清单（临时草稿） |
+| [图片理解技术设计](tech_design/image_understanding_design.md) | 微信图片 VL 多维描述 → 文本对话链路（已上线） |
+| [OpenClaw 补丁与部署机制](tech_design/openclaw_patches_maintenance.md) | OpenClaw patch 的用途、部署方式和升级回归清单（现行维护文档） |
 
 ## 流程设计
 
@@ -71,13 +71,12 @@
 | [后台管理说明](guides/admin_guide.md) | Admin API / UI、排查和主动消息管理 |
 | [调试指南](guides/debugging.md) | 技术 Debug 页面、Debug API、开发期明文策略和常用排障命令 |
 
-## 未来 backlog
-
-非 Phase 1 范围、留待后续阶段评估的前瞻性草稿。不作为当前设计依据。
+## Backlog（待办与未来扩展）
 
 | 路径 | 内容 |
 | --- | --- |
-| `backlog/` | 100k DAU 扩展讨论稿与评审等未来扩展性草稿 |
+| [工程 Backlog 清单](backlog/BACKLOG.md) | **轻量待办入口**：不阻塞线上、影响可控的工程改进项（部署/基础设施 + 架构基线）；单行条目，详情指回来源 |
+| [100k DAU 架构评估](backlog/100k_dau_scaling_review.md) | 容量规划与改造排期输入（前瞻性，非当前设计依据） |
 
 ## 历史归档
 
@@ -89,6 +88,8 @@
 | `archive/superpowers/plans/` | 一次性 agent 实施计划 |
 | `archive/superpowers/specs/` | 已落地功能的早期设计草案 |
 | `archive/phase1/` | Phase 1 里程碑冻结快照：[收尾总结](archive/phase1/phase1_closeout_summary.md)、[需求追踪矩阵](archive/phase1/phase1_traceability_matrix.md)、已完成的一次性计划（如时区统一重构） |
+| `archive/investigations/` | 已闭合的一次性排查/实施记录（如暂态消息延迟排查、持久 Gateway WS 实施方案——方案已上线） |
+| `archive/backlog/` | 被取代的早期讨论稿（如 100k DAU 更早讨论稿） |
 
 ## 维护规则
 

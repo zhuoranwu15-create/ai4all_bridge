@@ -153,7 +153,7 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 | 查询体 `date('now','+8 hours')` | `to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD')`（当日零点边界 `\|\| ' 00:00:00'` 原样可用） |
 | `(julianday(A)-julianday(B))*86400000`（毫秒差，analytics） | `EXTRACT(EPOCH FROM ((A)::timestamp-(B)::timestamp))*1000` |
 | `executescript("…多条…")` | 翻译后按 `;` 切分逐条 `execute`（`_backend.split_sql_statements`，确定性优于依赖 psycopg 多语句） |
-| 内联 `FOREIGN KEY(...) REFERENCES ...`（SQLite 不校验建表顺序） | **PG 建表时剥离**（`_backend.translate_ddl`）。本仓 baseline 存在前向外键引用（如 `tool_invocations` 被先定义的表引用），PG 建表要求引用表已存在。账号隔离由 app 层 `WHERE account_id` 保证、不依赖 DB 级 FK；剥离后建表顺序无关。**后续如需 DB 级 FK，用建表后 `ALTER TABLE ADD CONSTRAINT` 延迟补**（可选优化）。 |
+| 内联 `FOREIGN KEY(...) REFERENCES ...`（SQLite 不校验建表顺序） | **PG 建表时剥离**（`_backend.translate_statement`，DDL/DML 合一翻译器）。本仓 baseline 存在前向外键引用（如 `tool_invocations` 被先定义的表引用），PG 建表要求引用表已存在。账号隔离由 app 层 `WHERE account_id` 保证、不依赖 DB 级 FK；剥离后建表顺序无关。**后续如需 DB 级 FK，用建表后 `ALTER TABLE ADD CONSTRAINT` 延迟补**（可选优化）。 |
 | 布尔存 `INTEGER 0/1` | **保持** `INTEGER`（不改成 boolean，最小改动；业务读写 0/1 不变） |
 | `metadata_json TEXT` | **保持** `TEXT`（不改 jsonb，最小改动） |
 | 时间戳列 `TEXT` 北京时间串 | **保持** `TEXT`（不改 timestamptz，最小改动；排序/比较语义不变） |
@@ -162,7 +162,7 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 
 > 原则：**类型与语义尽量不动**（TEXT 时间戳、INTEGER 布尔、TEXT json 全保留），只解决"跑不起来"的硬方言差异。把"顺手优化成 jsonb/timestamptz"留到改造稳定之后，避免回归面爆炸。
 
-时间戳默认值收敛：新增 `_now_bj_sql()` 返回 dialect 对应的 now-北京 SQL 片段，DDL 构造统一引用；查询体内出现的 `strftime`（少量）改用 `app/time_utils.py` 在 Python 侧生成时间戳传入，去除对 DB now() 的依赖。
+时间戳默认值（实际落地＝方案 A，见 §7）：DDL **保留** SQLite 的 `strftime/datetime` 字面，由 `_backend.translate_statement` 在 PG 执行前统一翻译为上表 PG 片段，**不**在 DDL 侧引入独立 helper（早期设想的 `_now_bj_sql()` 未实现，已废弃）。查询体内少量 `strftime/now`（WHERE 条件/计算列）同样由垫片翻译；个别确需 Python 侧生成的时间戳走 `app/time_utils.py`。
 
 ### 4.5 数据迁移（SQLite → PG）（**已落地**）
 
@@ -201,7 +201,7 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 
 ## 5. 后续阶段提要（P2–P5，细化留各自小节）
 
-- **P2 profile 进 PG**：新表 `account_profile_files(account_id, filename, content TEXT, version, updated_at)`；`user_profiles.py`/`memory_writer.py` 的 `read_text/write_text` 换成 storage 接口（**签名不变**）；存量目录一次性导入；wipe 改为删行（不再删目录）。
+- **P2 profile 进 PG**：新表 `account_profile_files(account_id, filename, content TEXT, version, updated_at)`；`user_profiles.py`/`memory_writer.py` 的文件读写换成 `app/profile_storage.py` 接口（`read_file/write_file/append_file/delete_file/list_filenames/delete_account`，调用点签名不变、按 `account_id` 隔离、接受可选 `conn`）；存量目录一次性导入；wipe 改为删行（不再删目录）。
 - **P3 RPM 共享化**：进程内 deque → 中心共享（Redis 滑动窗口，或 PG 计数表）；`daily_usage` 已在 PG，天然共享。
 - **P4 计算下沉**：节点 `AI4ALL_ROLE=node` 跑完整 app 直连 PG；入站改本地 `/openclaw/turn`；proactive/dreaming 调度下沉 + 扫描加 `assigned_node_id` 过滤；中心停跑业务调度。
 - **P5 灰度**：aliyun1 先 standalone→PG；aliyun2 转 node 直连 PG，挑少量账号 `assigned_node_id` 指过去灰度；全绿逐步铺开，保留回滚到一期中心处理的开关。

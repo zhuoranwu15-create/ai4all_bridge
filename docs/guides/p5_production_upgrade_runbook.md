@@ -334,4 +334,5 @@ postgresql://ai4all:pwd@aliyun1-internal:5432,standby-internal:5432/ai4all?targe
 | 行数对拍 | 已内建于 `migrate_sqlite_to_pg.py` 主流程（复制后自动逐表对拍，`--no-reconcile` 才关闭）；无独立 reconcile-only 模式 |
 | 服务健康 | `curl http://<host>:8180/health` |
 | 一条 turn 走通 | `scripts/send_mock_turn.py --text "test"` |
+| 迁移后只读冒烟（PG 读路径 + 与源 SQLite 对拍、账号隔离） | `scripts/pg_smoke_check.py --pg <DATABASE_URL> --sqlite data/ai4all.sqlite3 --account <账号>`（不写库、不改 .env、不重启） |
 | 飞书无新报警 | 飞书群 ai4all-alerts 观察 |
