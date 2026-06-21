@@ -22,6 +22,7 @@ from app.captcha import verify_captcha
 from app.sms import generate_otp, send_otp
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
+    close_pg_pool,
     clear_session_messages,
     clear_all_messages_for_account,
     cancel_proactive_commitment,
@@ -448,6 +449,15 @@ async def startup_persistent_gateway_client() -> None:
 async def startup_proactive_scheduler() -> None:
     if not getattr(settings, "proactive_scheduler_enabled", False):
         return
+    # 角色守卫(防御纵深):主动调度只在具备中心能力的机器跑。纯 node 上 dispatch 会把
+    # 远程账号 enqueue 成 pending,而 reminders/commitments/reactivation 会把 pending
+    # 当 failed/blocked 处理 → 误判。即便 node 误配 PROACTIVE_SCHEDULER_ENABLED=true 也不起。
+    if not settings.has_central_role:
+        logger.warning(
+            "proactive scheduler skipped: AI4ALL_ROLE=%r 非 central/standalone,纯 node 不调度",
+            settings.ai4all_role,
+        )
+        return
     scheduler = start_proactive_scheduler(
         interval_seconds=settings.proactive_scheduler_interval_seconds,
         batch_size=settings.proactive_scheduler_batch_size,
@@ -503,6 +513,15 @@ async def shutdown_persistent_gateway_client() -> None:
         close_persistent_gateway_client()
     except Exception as err:
         logger.warning("persistent OpenClaw Gateway close failed: %s", err)
+
+
+@app.on_event("shutdown")
+async def shutdown_db_pool() -> None:
+    # 优雅关闭 PG 连接池（SQLite 部署为 no-op），避免重启时 PG 侧残留连接告警。
+    try:
+        close_pg_pool()
+    except Exception as err:
+        logger.warning("PG connection pool close failed: %s", err)
 
 
 

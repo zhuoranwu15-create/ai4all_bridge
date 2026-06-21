@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection, close_pg_pool, is_postgres
 from app.time_utils import beijing_now_str
 
 logger = logging.getLogger("ai4all.db")

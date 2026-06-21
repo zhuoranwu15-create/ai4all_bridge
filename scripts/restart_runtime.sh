@@ -12,6 +12,12 @@ BACKUP_TIMER="${AI4ALL_BACKUP_TIMER:-ai4all-backup.timer}"
 READY_URL="${AI4ALL_READY_URL:-http://127.0.0.1:8180/health/ready}"
 MONITOR_SCHEDULERS_VALUE="${MONITOR_SCHEDULERS:-proactive_scheduler:90,dreaming_scheduler:900}"
 
+# node-only(厚节点,如 aliyun2)用户级单元:backend(:8180,直连中心 PG 跑 turn)+ access node(:8190 exec/pull/心跳)。
+# 这些是 systemctl --user 单元,无需 sudo;无 nginx / 无系统级 monitor/backup timer / 无 proactive-scheduler。
+NODE_BACKEND_SERVICE="${AI4ALL_NODE_BACKEND_SERVICE:-ai4all-weixin-backend}"
+NODE_AGENT_SERVICE="${AI4ALL_NODE_AGENT_SERVICE:-ai4all-weixin-node}"
+NODE_AGENT_READY_URL="${AI4ALL_NODE_AGENT_READY_URL:-http://127.0.0.1:8190/health/live}"
+
 INSTALL_DEPS=0
 RESTART_OPENCLAW=0
 SKIP_NGINX=0
@@ -25,10 +31,12 @@ Usage: scripts/restart_runtime.sh [options]
 
 Restart the AI4ALL runtime after code has already been pulled.
 
-仅用于具备 central 能力的机器(.env AI4ALL_ROLE 含 central 或 standalone,
-镜像 app/config.py has_central_role)。node-only 机请改用:
-  systemctl --user restart ai4all-weixin-node
-如确需在非 central 机执行,设 AI4ALL_ALLOW_NON_CENTRAL=1 跳过该守卫。
+按 .env 的 AI4ALL_ROLE 自动分流(镜像 app/config.py has_central_role):
+  central / standalone → 系统级 sudo systemctl 重启 backend+proactive-scheduler、
+                          nginx reload、enable monitor/backup timer、:8180 health。
+  node-only(如 aliyun2)→ 用户级 systemctl --user 重启 backend(:8180)+access-node(:8190),
+                          无 sudo / 无 nginx / 无系统 timer;健康检查覆盖两端口。
+设 AI4ALL_ALLOW_NON_CENTRAL=1 可强制走 central 路径(用于特殊场景)。
 
 Options:
   --install-deps      Run .venv/bin/python -m pip install -r requirements.txt first.
@@ -109,10 +117,8 @@ require_file ".env"
 require_file ".venv/bin/python"
 require_file "requirements.txt"
 
-# central 角色守卫:本脚本重启的是中心服务(backend / proactive-scheduler / 系统级 systemctl /
-# :8180 health),只适用于具备 central 能力的机器。node-only 机(如 aliyun2)跑的是
-# systemctl --user ai4all-weixin-node、端口 8190,无这些 unit,误跑会在 systemctl restart 处失败。
-# 逻辑镜像 app/config.py has_central_role:AI4ALL_ROLE 含 central 或 standalone(默认)即放行。
+# 按角色分流:central/standalone 走系统级 sudo 路径;node-only 走用户级 systemctl --user 路径。
+# 逻辑镜像 app/config.py has_central_role:AI4ALL_ROLE 含 central 或 standalone(默认)即 central。
 detect_ai4all_role() {
   # 从 .env 取最后一条未注释的 AI4ALL_ROLE;键缺失则回落 standalone(与 config 默认一致)。
   local line raw
@@ -127,15 +133,15 @@ detect_ai4all_role() {
   echo "${raw,,}"            # 转小写
 }
 
-if [[ "${AI4ALL_ALLOW_NON_CENTRAL:-0}" != "1" ]]; then
-  _role="$(detect_ai4all_role)"
-  if [[ ",${_role}," != *",central,"* && ",${_role}," != *",standalone,"* ]]; then
-    echo "拒绝:本脚本仅用于具备 central 能力的机器(当前 .env AI4ALL_ROLE='${_role:-<空>}')。" >&2
-    echo "node-only 机请改用:systemctl --user restart ai4all-weixin-node" >&2
-    echo "如确需在本机执行,设 AI4ALL_ALLOW_NON_CENTRAL=1 跳过该守卫。" >&2
-    exit 4
-  fi
+# RUNTIME_MODE = central | node。AI4ALL_ALLOW_NON_CENTRAL=1 强制 central(特殊场景兜底)。
+_role="$(detect_ai4all_role)"
+if [[ "${AI4ALL_ALLOW_NON_CENTRAL:-0}" == "1" ]] \
+   || [[ ",${_role}," == *",central,"* ]] || [[ ",${_role}," == *",standalone,"* ]]; then
+  RUNTIME_MODE="central"
+else
+  RUNTIME_MODE="node"
 fi
+echo "runtime mode: ${RUNTIME_MODE} (AI4ALL_ROLE='${_role:-<空>}')"
 
 # 全局 gateway restart = 该机所有微信账号同时重连，风控高危（见 production_runbook 规模化运维红线）。
 # 在执行任何重启前就地确认/拦截，避免拒绝时已经重启了 backend/nginx。
@@ -158,6 +164,29 @@ if [[ "${INSTALL_DEPS}" == "1" ]]; then
   run .venv/bin/python -m pip install -r requirements.txt
 fi
 
+# ===== node-only(厚节点):用户级单元,无 sudo / 无 nginx / 无系统 timer / 无 proactive-scheduler =====
+if [[ "${RUNTIME_MODE}" == "node" ]]; then
+  run systemctl --user restart "${NODE_BACKEND_SERVICE}"
+  run systemctl --user restart "${NODE_AGENT_SERVICE}"
+
+  if [[ "${RESTART_OPENCLAW}" == "1" ]]; then
+    run openclaw gateway restart
+  fi
+
+  if [[ "${DRY_RUN}" == "0" ]]; then
+    sleep "${WAIT_SECONDS}"
+  fi
+
+  run curl -fsS "${READY_URL}"               # 厚节点 backend :8180
+  run curl -fsS "${NODE_AGENT_READY_URL}"    # access node :8190/health/live
+  run systemctl --user is-active --quiet "${NODE_BACKEND_SERVICE}"
+  run systemctl --user is-active --quiet "${NODE_AGENT_SERVICE}"
+
+  echo "restart complete (node)"
+  exit 0
+fi
+
+# ===== central / standalone:系统级 sudo 路径 =====
 if [[ "${SKIP_NGINX}" == "0" ]]; then
   run sudo nginx -t
 fi

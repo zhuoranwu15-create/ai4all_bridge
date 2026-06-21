@@ -19,7 +19,7 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.llm import generate_completion, generate_reply_with_tools, is_llm_configured
-from app.proactive.messaging import send_proactive_text
+from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.reactivation import (
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
 )
@@ -494,7 +494,9 @@ def execute_account_check_decision(
         }
 
     route = decision.get("route") or {}
-    outbound = send_proactive_text(
+    # 多机:走 dispatch 而非直接 send,远程账号会 enqueue 由归属节点 pull 发送,
+    # 避免中心(或非归属节点)对远程会话本机误发失败(见 dispatch_proactive_text 文档)。
+    outbound = dispatch_proactive_text(
         account_id=decision["account_id"],
         channel=route["channel"],
         channel_account_id=route.get("channel_account_id"),

@@ -15,6 +15,7 @@ SQLite 部署与测试。
 """
 import re
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Any, Iterator, List, Optional, Sequence, Tuple
 
@@ -430,8 +431,10 @@ class _PgConnection:
     `conn.cursor()`、`conn.commit()/rollback()/close()`。
     """
 
-    def __init__(self, conn) -> None:
+    def __init__(self, conn, pool=None) -> None:
         self._conn = conn
+        # 来自连接池则 close() 归还而非物理关闭;无池(理论兜底)时退化为直接关闭。
+        self._pool = pool
 
     def execute(self, sql: str, params: Optional[Sequence[Any]] = None) -> _PgCursor:
         cur = _PgCursor(self._conn.cursor())
@@ -453,21 +456,78 @@ class _PgConnection:
         self._conn.rollback()
 
     def close(self) -> None:
-        self._conn.close()
+        # 池连接归还(池内部会 reset/rollback 还原干净状态);非池连接物理关闭。
+        if self._pool is not None:
+            self._pool.putconn(self._conn)
+        else:
+            self._conn.close()
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
 
 
-def _connect_postgres() -> "_PgConnection":
-    import psycopg  # 惰性：仅 PG 部署需要
+# ---------------------------------------------------------------------------
+# PG 连接池（厚节点每轮 turn 跨机访问 PG，连接复用避免 connect churn / 降延迟 /
+# 限 PG 连接数：Σ(各节点 db_pool_max_size)+中心 ≤ PG max_connections）。
+# 仅 PG 部署构建；SQLite 路径完全不触达本段。
+# ---------------------------------------------------------------------------
+_pg_pool = None
+_pg_pool_conninfo: Optional[str] = None
+_pg_pool_lock = threading.Lock()
 
-    conn = psycopg.connect(
-        database_url(),
-        autocommit=False,
-        row_factory=_hybrid_row_factory,
-    )
-    return _PgConnection(conn)
+
+def _get_pg_pool():
+    """惰性构建并复用全局 PG 连接池。
+
+    - 池大小取 settings.db_pool_min_size / db_pool_max_size；每条连接的 autocommit /
+      row_factory 与单连接旧实现一致，借出/归还对上层透明，行为不变。
+    - 线程安全：psycopg_pool 自身线程安全，这里仅用锁保证「只构建一次」。
+    - conninfo 变化（理论上仅重配/测试）时重建并关闭旧池，避免连到旧库或句柄泄漏。
+    """
+    global _pg_pool, _pg_pool_conninfo
+    from psycopg_pool import ConnectionPool  # 惰性：仅 PG 部署需要
+
+    conninfo = database_url()
+    if _pg_pool is not None and _pg_pool_conninfo == conninfo:
+        return _pg_pool
+    with _pg_pool_lock:
+        if _pg_pool is not None and _pg_pool_conninfo == conninfo:
+            return _pg_pool
+        s = _settings()
+        min_size = max(1, int(getattr(s, "db_pool_min_size", 1) or 1))
+        max_size = max(min_size, int(getattr(s, "db_pool_max_size", 8) or 8))
+        pool = ConnectionPool(
+            conninfo,
+            min_size=min_size,
+            max_size=max_size,
+            kwargs={"autocommit": False, "row_factory": _hybrid_row_factory},
+            open=False,
+            name="ai4all-pg",
+        )
+        pool.open()
+        old = _pg_pool
+        _pg_pool, _pg_pool_conninfo = pool, conninfo
+    if old is not None:  # 锁外关旧池，避免与归还路径互等
+        try:
+            old.close()
+        except Exception:
+            pass
+    return _pg_pool
+
+
+def close_pg_pool() -> None:
+    """关闭全局 PG 连接池（进程优雅退出时调用；无池则 no-op）。"""
+    global _pg_pool, _pg_pool_conninfo
+    with _pg_pool_lock:
+        pool, _pg_pool, _pg_pool_conninfo = _pg_pool, None, None
+    if pool is not None:
+        pool.close()
+
+
+def _connect_postgres() -> "_PgConnection":
+    pool = _get_pg_pool()
+    conn = pool.getconn()  # 从池借出；上层 _PgConnection.close() 负责归还
+    return _PgConnection(conn, pool=pool)
 
 
 # ---------------------------------------------------------------------------
