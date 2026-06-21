@@ -2,7 +2,8 @@
 
 每日由 systemd ai4all-backup.timer 触发，产出一份带完整性校验的本地快照：
   data/backups/ai4all_<时间戳>/
-    ├── db.sqlite3           SQLite 在线一致快照（非文件直拷）
+    ├── db.sqlite3 / db.dump SQLite 在线一致快照（非文件直拷）；PG 模式则为
+    │                        pg_dump -Fc 自定义格式快照（文件名 db.dump）
     │                        含 account_profile_files（P2 后账号 profile 的真相所在）
     ├── user_profiles.tar.gz 磁盘 user_profiles 目录（P2 后为存量副本，不含最新 profile 数据；
     │                        真实数据在 db.sqlite3 的 account_profile_files 表）
@@ -25,6 +26,7 @@ import tarfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,6 +111,94 @@ def _table_counts(db_path: Path) -> Dict[str, Optional[int]]:
     return counts
 
 
+def _pg_env_from_url(database_url: str) -> Dict[str, str]:
+    """把 postgresql:// URL 解析成 libpq 连接环境变量。
+
+    口令经 PGPASSWORD 传入子进程，**绝不出现在命令行**（避免 ps/日志泄露）。
+    返回值由调用方 merge 进 os.environ 副本后传给 pg_dump/psql。
+    """
+    parsed = urlparse(database_url)
+    env: Dict[str, str] = {}
+    if parsed.hostname:
+        env["PGHOST"] = parsed.hostname
+    if parsed.port:
+        env["PGPORT"] = str(parsed.port)
+    if parsed.username:
+        env["PGUSER"] = unquote(parsed.username)
+    if parsed.password:
+        env["PGPASSWORD"] = unquote(parsed.password)
+    dbname = (parsed.path or "").lstrip("/")
+    if dbname:
+        env["PGDATABASE"] = dbname
+    return env
+
+
+def _backup_postgres(database_url: str, dest_path: Path) -> None:
+    """用 pg_dump -Fc（自定义格式，压缩 + 可选择性恢复）导出一致快照到 dest_path。
+
+    pg_dump 在单事务快照中导出，并发写下仍得一致镜像（等价 SQLite 在线备份）。
+    --no-owner/--no-privileges 让 dump 可恢复到任意角色，降低跨环境恢复摩擦。
+    """
+    env = dict(os.environ)
+    env.update(_pg_env_from_url(database_url))
+    completed = subprocess.run(
+        ["pg_dump", "-Fc", "--no-owner", "--no-privileges", "-f", str(dest_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=1800,
+        env=env,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[:800]
+        raise BackupError(f"pg_dump failed rc={completed.returncode}: {detail}")
+    if not dest_path.exists() or dest_path.stat().st_size == 0:
+        raise BackupError("pg_dump produced empty file")
+
+
+def _pg_dump_integrity(dump_path: Path) -> str:
+    """用 pg_restore --list 校验 dump 可解析（未截断/未损坏）；成功返回 'ok'。"""
+    completed = subprocess.run(
+        ["pg_restore", "--list", str(dump_path)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[:500]
+        return f"pg_restore list failed rc={completed.returncode}: {detail}"
+    return "ok"
+
+
+def _pg_table_counts(database_url: str) -> Dict[str, Optional[int]]:
+    """对活库统计关键表行数写入 manifest；缺表/查询失败记 None。
+
+    读活库而非 dump（dump 行数不便直接统计），仅作完整性参考，轻微时间偏移可接受。
+    _COUNTED_TABLES 全为受信常量，无注入面。
+    """
+    env = dict(os.environ)
+    env.update(_pg_env_from_url(database_url))
+    counts: Dict[str, Optional[int]] = {}
+    for table in _COUNTED_TABLES:
+        completed = subprocess.run(
+            ["psql", "-tAXqc", f"SELECT COUNT(*) FROM {table}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+        if completed.returncode == 0:
+            try:
+                counts[table] = int((completed.stdout or "").strip())
+            except ValueError:
+                counts[table] = None
+        else:
+            counts[table] = None
+    return counts
+
+
 def _archive_dir(src_dir: Path, dest_tar_gz: Path) -> int:
     """把目录打成 .tar.gz，返回归档文件字节数；源目录不存在则建空档。"""
     with tarfile.open(dest_tar_gz, "w:gz") as tar:
@@ -188,14 +278,19 @@ def run_backup(
     dry_run: bool,
     state_file: str,
 ) -> Dict:
-    """执行一次完整备份，返回 manifest dict；失败抛 BackupError。"""
-    # PG 模式下此脚本无法备份 PG 数据库，必须用 pg_dump/PITR；快速失败优于静默备份错库。
-    if is_postgres():
-        raise BackupError(
-            "database_url 已配置为 PostgreSQL，此脚本只支持 SQLite 备份。"
-            "PG 数据库请改用 pg_dump / PITR 方案。"
-        )
-    db_path = ROOT / settings.database_path if not os.path.isabs(settings.database_path) else Path(settings.database_path)
+    """执行一次完整备份，返回 manifest dict；失败抛 BackupError。
+
+    DB 快照按后端分支：SQLite 走在线 backup API + integrity_check；PostgreSQL 走
+    pg_dump -Fc + pg_restore --list 校验。其余产物（profiles/system/env）与轮转/
+    异地/告警/state 逻辑两后端共用。
+    """
+    pg_mode = is_postgres()
+    db_path: Optional[Path] = None
+    if pg_mode:
+        db_source_desc = "PostgreSQL(pg_dump -Fc)"
+    else:
+        db_path = ROOT / settings.database_path if not os.path.isabs(settings.database_path) else Path(settings.database_path)
+        db_source_desc = str(db_path)
     profiles_dir = Path(settings.user_profiles_dir)
     if not profiles_dir.is_absolute():
         profiles_dir = ROOT / profiles_dir
@@ -207,7 +302,7 @@ def run_backup(
     target_dir = backups_dir / f"{BACKUP_PREFIX}{stamp}"
 
     if dry_run:
-        print(f"[dry-run] would back up:\n  db={db_path}\n  profiles={profiles_dir}\n  system={system_dir}")
+        print(f"[dry-run] would back up:\n  db={db_source_desc}\n  profiles={profiles_dir}\n  system={system_dir}")
         print(f"[dry-run] target dir: {target_dir}")
         print(f"[dry-run] retention={retention} rsync_target={'<set>' if rsync_target else '<none>'}")
         return {"dry_run": True, "target_dir": str(target_dir)}
@@ -217,12 +312,23 @@ def run_backup(
         raise BackupError(f"backup dir already exists: {target_dir}")
     target_dir.mkdir(parents=True)
 
-    # 1) SQLite 在线一致快照 + 完整性校验
-    db_dest = target_dir / "db.sqlite3"
-    _backup_sqlite(db_path, db_dest)
-    integrity = _integrity_check(db_dest)
-    if integrity != "ok":
-        raise BackupError(f"integrity_check failed: {integrity[:500]}")
+    # 1) DB 一致快照 + 完整性校验（按后端分支）
+    if pg_mode:
+        db_artifact_name = "db.dump"
+        db_dest = target_dir / db_artifact_name
+        _backup_postgres(settings.database_url, db_dest)
+        integrity = _pg_dump_integrity(db_dest)
+        if integrity != "ok":
+            raise BackupError(f"pg_dump integrity check failed: {integrity[:500]}")
+        db_counts = _pg_table_counts(settings.database_url)
+    else:
+        db_artifact_name = "db.sqlite3"
+        db_dest = target_dir / db_artifact_name
+        _backup_sqlite(db_path, db_dest)  # db_path 非 None（SQLite 分支已赋值）
+        integrity = _integrity_check(db_dest)
+        if integrity != "ok":
+            raise BackupError(f"integrity_check failed: {integrity[:500]}")
+        db_counts = _table_counts(db_dest)
 
     # 1b) nearline facts.sqlite3（分析事实基线，存在才备份；marts 可重建不入备份）
     facts_src = ROOT / "nearline" / "data" / "facts.sqlite3"
@@ -247,9 +353,9 @@ def run_backup(
         "git_commit": _git_commit(),
         "integrity_check": integrity,
         "facts_integrity_check": facts_integrity,
-        "table_counts": _table_counts(db_dest),
+        "table_counts": db_counts,
         "artifacts": {
-            "db.sqlite3": db_dest.stat().st_size,
+            db_artifact_name: db_dest.stat().st_size,
             "facts.sqlite3": facts_size,
             "user_profiles.tar.gz": profiles_size,
             "system.tar.gz": system_size,

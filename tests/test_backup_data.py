@@ -33,6 +33,9 @@ def env(tmp_path, monkeypatch):
     (system / "TOOLS.md").write_text("tools", encoding="utf-8")
     _make_sqlite(db)
 
+    # 强制 SQLite 后端：清空 database_url，使测试不受运行环境 .env（可能配 PG）影响，
+    # 确定性地走 SQLite 备份分支（这些用例针对的就是 SQLite 路径）。
+    monkeypatch.setattr(backup_data.settings, "database_url", "", raising=False)
     monkeypatch.setattr(backup_data.settings, "database_path", str(db), raising=False)
     monkeypatch.setattr(backup_data.settings, "user_profiles_dir", str(profiles), raising=False)
     monkeypatch.setattr(backup_data.settings, "system_dir", str(system), raising=False)
@@ -109,6 +112,23 @@ def test_failure_triggers_alert_and_nonzero_exit(env, tmp_path, monkeypatch):
     assert rc == 1
     assert len(alerts) == 1
     assert "备份失败" in alerts[0]
+
+
+def test_pg_env_from_url_parses_and_keeps_password_out_of_argv():
+    """PG DSN 正确拆成 libpq 环境变量；含转义字符的口令/用户名正确 unquote。"""
+    from scripts.backup_data import _pg_env_from_url
+
+    env = _pg_env_from_url("postgresql://ai4all:p%40ss%3Aword@172.24.16.141:5432/ai4all")
+    assert env == {
+        "PGHOST": "172.24.16.141",
+        "PGPORT": "5432",
+        "PGUSER": "ai4all",
+        "PGPASSWORD": "p@ss:word",
+        "PGDATABASE": "ai4all",
+    }
+    # 缺省端口/无口令时不产出对应键（让 libpq 用默认）
+    sparse = _pg_env_from_url("postgresql://u@host/db")
+    assert sparse == {"PGHOST": "host", "PGUSER": "u", "PGDATABASE": "db"}
 
 
 def test_restore_dry_run_validates(env, tmp_path):
