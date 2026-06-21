@@ -298,10 +298,10 @@ AI4ALL Backend API
 
 为突破「单一出口 IP 挂大量微信号」触发风控的瓶颈，接入层可横向扩展到多机。一套代码按 `AI4ALL_ROLE` 选能力，**central（中心大脑）与 node（瘦接入节点）可独立、也可同机共存**：
 
-| 角色 | 跑什么 | 碰 SQLite? |
+| 角色 | 跑什么 | 碰中心 DB? |
 | --- | --- | --- |
 | `standalone`（默认） | = 今天单机形态，全部 + openclaw 本机直发 | 是（本机） |
-| `central` | FastAPI 大脑、SQLite（唯一写者）、画像、三调度器、审核台、admin、节点面向 API | 是（本机） |
+| `central` | FastAPI 大脑、中心 DB（唯一写者）、画像、三调度器、审核台、admin、节点面向 API | 是（本机） |
 | `node` | openclaw + 微信会话、节点 agent（入站转发 + 出站轮询 + 登录 exec） | **否，一律走 HTTP 与中心通信** |
 
 生产落地（aliyun1+aliyun2 双机 MVP）：
@@ -314,15 +314,18 @@ AI4ALL Backend API
 │ openclaw+会话   │                      │ central + node 同机  │
 │ node-agent     │  ① 入站转发(HTTP→中心) │ openclaw+会话         │
 │                │  ② 登录 push(中心拨节点)│ FastAPI 大脑 + 调度   │
-│                │  ③ 出站 pull 认领       │ SQLite(唯一写者)      │
+│                │  ③ 出站 pull 认领       │ PostgreSQL(唯一写者)  │
 └────────────────┘  ④ 结果回报            └─────────────────────┘
 ```
 
-- **不变量**：只有 central 进程读写 `data/ai4all.sqlite3`；节点永不直连 SQLite。`node_id` 只是路由属性，不参与账号隔离判定。
-- **入站**：节点 openclaw 把 `/openclaw/turn` POST 到中心；**被动回复内联在 HTTP 响应里原路返回**，零跨机。
+> **中心存储后端**：2026-06-21 起 aliyun1 中心库由 SQLite 切换为本机 **PostgreSQL**（厚节点改造 P1，见 [`tech_design/thick_node_postgres_refactor.md`](tech_design/thick_node_postgres_refactor.md) 与切换记忆 [[pg-migration-cutover-state]]）。**这对节点与拓扑完全透明**：节点本就永不直连 DB，无论中心是 SQLite 还是 PG，节点只经 HTTP `/openclaw/turn`、`/node/*` 与中心通信，路由/归属/账号隔离逻辑一字未改。
+
+- **不变量**：只有 central 进程读写中心库（现为 aliyun1 本机 PostgreSQL，仅监听 localhost）；节点永不直连 DB。`node_id` 只是路由属性，不参与账号隔离判定。
+- **核心业务在哪台机器处理（重要）**：**openclaw 通道层固定**——账号注册/登录时定在 aliyun1 或 aliyun2 的 openclaw 上，此后不迁移、不切换。但通道之后的**全部核心业务（turn 处理：prompt 组装、LLM、记忆、计费、DB 读写）一律在 aliyun1 中心进程执行**。因此**归属 aliyun2 的微信用户，其每条消息都会被转发到 aliyun1 后端处理**（见下「入站」）。这一集中式形态自 2026-06-14 多机上线即如此，**PG 切换没有改变它**——PG 只是把 aliyun1 中心进程的存储从 SQLite 换成了 PG。aliyun2 上没有 turn 处理后端（node-agent 仅暴露 `exec/*`+`outbound/claim`+`heartbeat`+`health`，无 `/openclaw/turn`）。
+- **入站**：节点 openclaw 把 `/openclaw/turn` POST 到中心（aliyun2 的 bridge 插件 `AI4ALL_BACKEND_URL=http://aliyun1`）；**被动回复内联在 HTTP 响应里原路返回**由本节点 openclaw 发出，零跨机。
 - **出站混合**：登录/登出/扫码走 **push**（中心按 `access_nodes.base_url` 直拨目标节点 agent，二维码低延迟同步回传）；主动消息走 **pull**（节点轮询 `/node/outbound/claim` 认领，复用 `outbound_messages` 抢占式 claim，节点掉线消息留队列可续传）。
 - **节点 → 中心**走「稳定指纹地址」`CENTRAL_URL`（MVP=内网 hosts 别名），切换中心只改该指向，节点零改配。
-- **中心可切换 aliyun1↔aliyun2**：中心状态 = SQLite + 画像目录 + system 目录，复用既有 `backup_data.py` 快照 + rsync；切换后原中心机降为 node，**微信会话不重扫码**。
+- **中心可切换 aliyun1↔aliyun2**：中心状态 = 中心库（现为 PostgreSQL，含 `account_profile_files` 画像表，P2 起画像已入库）+ system 目录；切换需迁移 PG 数据（`scripts/migrate_sqlite_to_pg.py` 同类思路）+ rsync system 目录；切换后原中心机降为 node，**微信会话不重扫码**。一键化/热备留二期。
 
 `standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/tech_design/multi_node_access_refactor.md`](tech_design/multi_node_access_refactor.md)。
 

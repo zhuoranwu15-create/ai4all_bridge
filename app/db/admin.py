@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from app.config import settings
 from app.db._core import (
     ACCOUNT_ACTIVE_SESSION_KEY,
+    _clean_text,
     _decode_json_field,
     connect,
 )

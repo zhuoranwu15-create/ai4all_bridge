@@ -191,9 +191,40 @@ sudo journalctl -u ai4all -f
 - 不挂载 `/web`、`/admin` 路由（节点不需要）
 - 挂载 `/health` 和 `/openclaw` 路由
 
+> 此时 allyun2 backend 已起、能连 PG，但**还没有任何真实流量进来**——allyun2 的 openclaw 仍把 inbound 转发到 allyun1（一期形态）。下面 6.4 先做不切流量的本地验证，6.5 才正式把 inbound 切到本地。
+
+### 6.4 本地验证（不切真实流量，可反复做、零风险）
+
+```bash
+# 在 allyun2 上直接打本地 backend，验证 turn 在本地处理 + 读写 allyun1 PG。
+# 选一个 allyun2 归属账号；此调用绕过 openclaw，不影响线上真实消息。
+.venv/bin/python scripts/send_mock_turn.py \
+    --url http://127.0.0.1:8180 \
+    --text "节点本地直连验证" \
+    --account <allyun2归属账号>
+```
+
+预期：allyun2 日志显示 turn 本地完成；在 allyun1 用 psql 能看到该账号新 message/usage 落 PG。期间真实 inbound 仍走 allyun1，互不影响。
+
+### 6.5 重指向 allyun2 的 openclaw-bridge 到本地后端 ⚠️（关键步骤，缺这步 inbound 永远回中心）
+
+inbound 的处理位置由 **openclaw-bridge 插件的 `AI4ALL_BACKEND_URL`** 决定（每台机一个设置），**不是**账号级的 `assigned_node_id`——`turn_service` 收到 turn 即无条件本地处理，代码内没有"按归属节点转发 inbound"的逻辑。因此：
+
+```text
+# allyun2 的 openclaw-bridge 插件配置（见 openclaw 插件 env / 安装副本）：
+AI4ALL_BACKEND_URL: http://aliyun1   →   http://127.0.0.1:8180
+# 改完重启 openclaw gateway 使插件重载。
+```
+
+> **⚠️ 这是机器级、非逐账号的切换**：一旦重指向，**allyun2 openclaw 上承载的全部账号会同时切到本地处理**（当前约 14 个 `assigned_node_id=allyun2` 的账号）。这是真正的 inbound cutover 时刻，需重点盯。
+> **回滚**：把 `AI4ALL_BACKEND_URL` 指回 `http://aliyun1` 并重启 gateway，即刻退回一期（inbound 重新回中心处理），无数据迁移。
+> **灰度单元**：因为是机器级，inbound 的最小灰度单元 = "allyun2 这台机的全部账号"。要更细只能靠"先只把少量账号登录/分配到 allyun2"来缩小这台机承载量，不能在同机内逐账号切 inbound。
+
 ---
 
-## 7. 灰度：分配测试账号到 allyun2 节点
+## 7. 灰度：assigned_node_id 的作用范围（调度 + 出站，**不含 inbound**）
+
+> **重要**：`assigned_node_id` 控制的是 ①节点调度器扫描范围（proactive/dreaming 各自只扫 `assigned_node_id=本节点`）②主动消息出站归属（`resolve_node_for_account`）。它**不**决定 inbound turn 在哪台机处理——inbound 已在 §6.5 由 bridge 指向机器级切换。正常情况下账号在哪台 openclaw 登录、其 `assigned_node_id` 就该等于哪台机（登录时 `pick_node` 一并写入），两者保持一致。下面的分配操作用于核对/纠正这层一致性，以及在开启节点调度器前确认扫描范围正确。
 
 ### 7.1 选一个低风险账号，写入 assigned_node_id
 
