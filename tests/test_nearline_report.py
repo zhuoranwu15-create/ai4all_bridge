@@ -69,6 +69,60 @@ def _seed_facts(path, *, proactive_rows):
     conn.close()
 
 
+def _make_source_with_content(path, rows):
+    """构造带 content 的最小源库（供 S3 重投监测测试）。rows: [(id, account_id, content, created_at)]。"""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(
+        """
+        CREATE TABLE messages(
+            id INTEGER PRIMARY KEY, account_id TEXT, direction TEXT,
+            role TEXT, content TEXT, created_at TEXT
+        );
+        CREATE TABLE daily_usage(date TEXT, message_count INTEGER);
+        """
+    )
+    for mid, aid, content, ts in rows:
+        conn.execute(
+            "INSERT INTO messages(id, account_id, direction, role, content, created_at) "
+            "VALUES (?, ?, 'inbound', 'user', ?, ?)",
+            (mid, aid, content, ts),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_s3_flags_sub2s_same_content_redelivery(tmp_path):
+    """同账号同文 1s 内再次入站 → S3 软检查标记（n≥1，passed=False）。"""
+    facts = tmp_path / "facts.sqlite3"
+    source = tmp_path / "source.sqlite3"
+    init_facts(str(facts))
+    _make_source_with_content(source, [
+        (1, "aid_x", "在吗", "2026-06-15 10:00:00"),
+        (2, "aid_x", "在吗", "2026-06-15 10:00:01"),  # 1s 后同文 → 疑似重投
+    ])
+    results = quality.run_checks(
+        "2026-06-15", source_db_override=str(source), facts_db_override=str(facts)
+    )
+    r = _result(results, "inbound_redelivery_suspect")
+    assert not r.passed
+    assert r.detail.startswith("1 ")
+
+
+def test_s3_ignores_same_content_far_apart(tmp_path):
+    """同文但间隔 5 分钟（用户正常重发）→ S3 不标记。"""
+    facts = tmp_path / "facts.sqlite3"
+    source = tmp_path / "source.sqlite3"
+    init_facts(str(facts))
+    _make_source_with_content(source, [
+        (1, "aid_x", "在吗", "2026-06-15 10:00:00"),
+        (2, "aid_x", "在吗", "2026-06-15 10:05:00"),  # 5min 后 → 正常重发，不算重投
+    ])
+    results = quality.run_checks(
+        "2026-06-15", source_db_override=str(source), facts_db_override=str(facts)
+    )
+    assert _result(results, "inbound_redelivery_suspect").passed
+
+
 def test_h4_exempts_wiped_account_orphan(tmp_path):
     """孤儿 reply_message_id 属已清空账号（源库无任何消息）→ H4 豁免，硬检查通过。"""
     facts = tmp_path / "facts.sqlite3"

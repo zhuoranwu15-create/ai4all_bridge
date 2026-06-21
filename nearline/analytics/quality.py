@@ -141,6 +141,38 @@ def run_checks(target_date: str, source_db_override: Optional[str] = None,
             results.append(QualityResult(
                 "daily_usage_vs_inbound", "soft", True, f"跳过（daily_usage 不可读：{err}）"))
 
+        # S3（soft，防御性监测）：疑似入站「<2s 同文重投」。
+        # 背景：openclaw bridge 在 before_agent_reply 不暴露 per-message id（message_id 恒空），
+        # 故入站去重/幂等当前失效（详见 thick_node 排查记录）。真重投的指纹 = 同账号同文在
+        # 极短间隔内再次入站。基线极低（全历史仅个位数）。此项只统计目标日、记软提示、不阻断；
+        # 一旦该数明显抬头，说明确有通道级重投，届时再投入 core patch 透传微信 newMsgId。
+        try:
+            n = source.execute(
+                """
+                WITH inb AS (
+                    SELECT
+                        (julianday(created_at) - julianday(
+                            LAG(created_at) OVER (
+                                PARTITION BY account_id, content ORDER BY created_at, id
+                            )
+                        )) * 86400.0 AS gap_s
+                    FROM messages
+                    WHERE direction = 'inbound' AND role = 'user'
+                      AND content IS NOT NULL AND content != ''
+                      AND DATE(created_at) = ?
+                )
+                SELECT COUNT(*) AS c FROM inb
+                WHERE gap_s IS NOT NULL AND gap_s >= 0 AND gap_s < 2
+                """,
+                (target_date,),
+            ).fetchone()["c"]
+            results.append(QualityResult(
+                "inbound_redelivery_suspect", "soft", n == 0,
+                f"{n} 条疑似 <2s 同文重投（message_id 缺失致去重失效的观测指标，基线≈0）"))
+        except Exception as err:
+            results.append(QualityResult(
+                "inbound_redelivery_suspect", "soft", True, f"跳过（重投监测查询失败：{err}）"))
+
         return results
     finally:
         facts.close()
