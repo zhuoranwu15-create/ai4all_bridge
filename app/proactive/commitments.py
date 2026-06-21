@@ -384,11 +384,13 @@ def dispatch_due_commitments(
     now: Optional[datetime] = None,
     limit: int = 20,
     bypass_quiet_hours: bool = False,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     current = now or beijing_naive_now()
     due = list_due_proactive_commitments(
         now=_format_time(current),
         limit=limit,
+        node_id=node_id,
     )
     results: List[Dict[str, Any]] = []
     for item in due:

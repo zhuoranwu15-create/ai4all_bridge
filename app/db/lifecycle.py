@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Connection
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -26,7 +26,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 def unbind_account_channel(
-    *, account_id: str, conn: Optional[sqlite3.Connection] = None
+    *, account_id: str, conn: Optional[Connection] = None
 ) -> Dict[str, Any]:
     """Path A: disconnect WeChat channel, cancel reminders & proactive.
 
@@ -95,13 +95,16 @@ def unbind_account_channel(
 
 
 def wipe_account_data(
-    *, account_id: str, conn: Optional[sqlite3.Connection] = None
+    *, account_id: str, conn: Optional[Connection] = None
 ) -> Dict[str, Any]:
     """Path B: hard-delete all account data after unbind_account_channel().
 
-    Removes sessions, messages, dreaming data, profile row, and the
-    account_owner_binding.  Sets account status to 'deactivated'.
-    Does NOT touch the filesystem — caller must remove user_profiles dir.
+    Removes sessions, messages, dreaming data, profile row, account-level
+    profile files (account_profile_files), and the account_owner_binding.
+    Sets account status to 'deactivated'.
+
+    P2 后账号 profile 文件已入库，此处在同一事务内一并删行；不再有需调用方清理的
+    磁盘目录（旧 caller 的 user_profiles 目录清理已移除）。
 
     传入 conn 时复用调用方事务（供 unbind_and_wipe_account 单事务编排）。
     """
@@ -215,6 +218,9 @@ def wipe_account_data(
             "DELETE FROM profiles WHERE account_id = ?",
             (account_id,),
         ).rowcount
+        # P2：账号 profile 文件内容入库后，wipe 在同一事务内删行（原子，不再删磁盘目录）。
+        from app import profile_storage  # noqa: PLC0415  延迟导入避开 app.db 包初始化期循环
+        profile_files = profile_storage.delete_account(account_id, conn=conn)
         account_owner_bindings = conn.execute(
             "DELETE FROM account_owner_bindings WHERE account_id = ?",
             (account_id,),
@@ -255,6 +261,7 @@ def wipe_account_data(
         "analytics_events_deleted": analytics_events,
         "binding_intents_deleted": binding_intents,
         "profiles_deleted": profiles,
+        "profile_files_deleted": profile_files,
         "proactive_account_state_deleted": proactive_account_state,
         "account_owner_bindings_deleted": account_owner_bindings,
     }

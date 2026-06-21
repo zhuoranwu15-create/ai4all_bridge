@@ -1,11 +1,73 @@
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 
 
+# ---------------------------------------------------------------------------
+# 测试后端开关（1e）：默认 SQLite；AI4ALL_TEST_DB=postgres 时整套跑临时 PG。
+# PG 档由 pytest-postgresql 提供：postgresql_proc 起一个 session 级 PG 进程，
+# postgresql_db 为每个测试 create/drop 一个独立库（与 SQLite 的 tmp_path 每测试隔离对等）。
+# ---------------------------------------------------------------------------
+_PG_MODE = os.environ.get("AI4ALL_TEST_DB", "").strip().lower() in (
+    "pg", "postgres", "postgresql",
+)
+
+if _PG_MODE:  # 仅 PG 档注册，SQLite 档完全不引入 pytest-postgresql
+    from pytest_postgresql import factories as _pg_factories
+
+    postgresql_proc = _pg_factories.postgresql_proc()
+    postgresql_db = _pg_factories.postgresql("postgresql_proc")
+
+
+# PG 档下应跳过的「SQLite 专有基础设施」测试（按测试函数名匹配）：
+# - 临时 DB 文件拷贝隔离（依赖 sqlite 文件 + shutil.copy）
+# - WAL checkpoint 截断（依赖 -wal 文件）
+# - 迁移用 PRAGMA table_info 内省列（PG 无 PRAGMA）
+_SQLITE_ONLY_TESTS = frozenset({
+    "test_temporary_database_copy_isolates_candidate_writes",
+    "test_temporary_database_copy_isolates_invitation_writes",
+    "test_checkpoint_wal_truncates_after_writes",
+    "test_migration_adds_node_columns_table_index_idempotent",
+})
+
+
+def pytest_collection_modifyitems(config, items):
+    """PG 档下自动跳过验证 SQLite 专有基础设施的测试（WAL/文件拷贝/PRAGMA 内省）。"""
+    if not _PG_MODE:
+        return
+    skip = pytest.mark.skip(reason="SQLite 专有基础设施，PG 档不适用")
+    for item in items:
+        if item.originalname in _SQLITE_ONLY_TESTS or item.name in _SQLITE_ONLY_TESTS:
+            item.add_marker(skip)
+
+
+def _dsn_from_conn(conn) -> str:
+    """从 pytest-postgresql 的连接推出 URL 形式 DSN（供 is_postgres 识别 + 业务层直连）。"""
+    info = conn.info
+    if info.host and info.host.startswith("/"):
+        # 本地 unix socket：host 放进 query，URL 主体留空 host
+        return f"postgresql://{info.user}@/{info.dbname}?host={info.host}&port={info.port}"
+    return f"postgresql://{info.user}@{info.host}:{info.port}/{info.dbname}"
+
+
 @pytest.fixture
-def test_settings(tmp_path):
+def db_dsn(request):
+    """SQLite 档返回空串（→ 走 database_path）；PG 档返回本测试独立临时库的 DSN。"""
+    if not _PG_MODE:
+        return ""
+    conn = request.getfixturevalue("postgresql_db")
+    return _dsn_from_conn(conn)
+
+
+@pytest.fixture
+def test_settings(tmp_path, db_dsn):
     s = MagicMock()
     s.database_path = str(tmp_path / "test.db")
+    # database_url 必须显式赋值：SQLite 档为空串（→ database_path）；PG 档为临时库 DSN。
+    # 否则 MagicMock 自动属性会让 is_postgres() 误判为 True。
+    s.database_url = db_dsn
+    s.db_pool_min_size = 1
+    s.db_pool_max_size = 8
     s.user_profiles_dir = str(tmp_path / "profiles")
     s.system_dir = str(tmp_path / "system")
     s.ai4all_bridge_secret = "test-secret"
@@ -262,13 +324,18 @@ def fresh_db(test_settings):
         p.start()
     try:
         from app.db import init_db
+        from app.db._backend import is_postgres
         from app.db._core import _db_path
-        # 护栏：确认 db 层确实路由到临时库，绝不落到生产库 data/ai4all.sqlite3。
+        # 护栏：确认 db 层确实路由到临时库，绝不落到生产库。
         # （拆包后 settings 绑定若失效会静默回落生产库；此断言可第一时间拦截。）
-        resolved = str(_db_path())
-        assert resolved == str(test_settings.database_path), (
-            f"测试 DB 未隔离，疑似指向生产库: {resolved}"
-        )
+        if is_postgres():
+            # PG 档：临时库由 pytest-postgresql 每测试 create/drop 隔离，DSN 非空即可。
+            assert test_settings.database_url, "PG 档下 database_url 不应为空"
+        else:
+            resolved = str(_db_path())
+            assert resolved == str(test_settings.database_path), (
+                f"测试 DB 未隔离，疑似指向生产库: {resolved}"
+            )
         init_db()
         yield test_settings
     finally:

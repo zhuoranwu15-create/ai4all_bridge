@@ -1,7 +1,11 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic-settings==2.7.1
+# 数据库后端：PG（厚节点改造）。SQLite 为 stdlib，无需依赖；psycopg 惰性 import，纯 SQLite 部署不加载。
+psycopg[binary]==3.2.13
+psycopg-pool==3.2.8
 pytest==8.3.4
+pytest-postgresql==7.0.2
 httpx==0.28.1
 qrcode[pil]==8.0
 websockets==15.0.1

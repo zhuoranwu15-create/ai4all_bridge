@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -98,7 +98,7 @@ def list_admin_users(*, limit: int = 100) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _decode_admin_plaintext_grant(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_admin_plaintext_grant(row: Row) -> Dict[str, Any]:
     item = dict(row)
     for source_field, target_field in (
         ("account_scope_json", "account_scope"),
@@ -840,25 +840,43 @@ def list_active_sessions_for_business_day_before(
     *,
     business_day: str,
     limit: int = 100,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    """node_id 非空时只返回归属该节点的账号的会话（厚节点改造 P4 调度分片）。"""
+    node_filter = _clean_text(node_id) if node_id else None
+    safe_limit = max(1, min(int(limit), 500))
     with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM sessions
-            WHERE session_key = ?
-              AND status = 'active'
-              AND business_day IS NOT NULL
-              AND business_day != ''
-              AND business_day < ?
-            ORDER BY updated_at ASC, id ASC
-            LIMIT ?
-            """,
-            (
-                ACCOUNT_ACTIVE_SESSION_KEY,
-                business_day,
-                max(1, min(int(limit), 500)),
-            ),
-        ).fetchall()
+        if node_filter:
+            rows = conn.execute(
+                """
+                SELECT s.*
+                FROM sessions s
+                JOIN accounts a ON a.id = s.account_id
+                WHERE s.session_key = ?
+                  AND s.status = 'active'
+                  AND s.business_day IS NOT NULL
+                  AND s.business_day != ''
+                  AND s.business_day < ?
+                  AND a.assigned_node_id = ?
+                ORDER BY s.updated_at ASC, s.id ASC
+                LIMIT ?
+                """,
+                (ACCOUNT_ACTIVE_SESSION_KEY, business_day, node_filter, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM sessions
+                WHERE session_key = ?
+                  AND status = 'active'
+                  AND business_day IS NOT NULL
+                  AND business_day != ''
+                  AND business_day < ?
+                ORDER BY updated_at ASC, id ASC
+                LIMIT ?
+                """,
+                (ACCOUNT_ACTIVE_SESSION_KEY, business_day, safe_limit),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 

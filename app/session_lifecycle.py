@@ -164,8 +164,12 @@ def run_daily_dreaming_scan(
     *,
     now: Optional[datetime] = None,
     limit: int = 100,
+    node_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Scan active sessions from previous business days and rotate them."""
+    """Scan active sessions from previous business days and rotate them.
+
+    node_id 非空时只处理归属该节点的账号（厚节点改造 P4 调度分片）。
+    """
     current = now or beijing_now()
     current_business_day = business_day_for(
         current,
@@ -174,6 +178,7 @@ def run_daily_dreaming_scan(
     sessions = list_active_sessions_for_business_day_before(
         business_day=current_business_day,
         limit=limit,
+        node_id=node_id,
     )
     results = []
     for session in sessions:

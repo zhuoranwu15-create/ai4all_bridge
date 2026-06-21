@@ -9,7 +9,6 @@ import hashlib
 import threading
 import asyncio
 import httpx
-import shutil
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -23,7 +22,6 @@ from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.rate_limiter import RateLimiter
 from app.sms import generate_otp, send_otp
-from app.user_profiles import account_profile_dir
 from typing import Any, Optional
 
 logger = logging.getLogger("ai4all")
@@ -1113,21 +1111,9 @@ def web_me_unbind(
         stats = unbind_account_channel(account_id=account_id)
     else:
         # 单事务原子完成 unbind + wipe：失败则整体回滚（干净可重试），不再留半成品。
+        # P2 后 profile 文件已入库，由 wipe 事务内 delete_account 一并删行（见 stats.profile_files_deleted），
+        # 不再有独立的磁盘目录清理。
         stats = unbind_and_wipe_account(account_id=account_id)
-        # profile 目录在 DB 事务之外，提交后单独清理；失败不致命（库已清，残留目录无害）。
-        profile_removed = False
-        try:
-            profile_dir = account_profile_dir(account_id)
-            if profile_dir.exists():
-                shutil.rmtree(profile_dir)
-            profile_removed = True
-        except Exception as err:
-            logger.warning(
-                "web_me_unbind profile_dir cleanup failed account=%s error=%s",
-                account_id,
-                err,
-            )
-        stats["profile_dir_removed"] = profile_removed
 
     return {
         "status": "ok",

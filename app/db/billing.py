@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Connection, IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -33,6 +33,7 @@ from app.db._core import (
     _format_shell_amount,
     _new_account_id,
     _new_id,
+    _savepoint,
     _new_referral_code,
     _normalize_phone,
     _normalize_referral_code,
@@ -143,7 +144,7 @@ def get_platform_user_by_phone(*, phone: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def _decode_referral_code_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_referral_code_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     item["used_count"] = int(item.get("used_count") or 0)
     if item.get("max_uses") is not None:
@@ -156,7 +157,7 @@ def _decode_referral_code_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_referral_relationship_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_referral_relationship_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     item["meaningful_message_count"] = int(item.get("meaningful_message_count") or 0)
     try:
@@ -167,7 +168,7 @@ def _decode_referral_relationship_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_meaningful_message_review_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_meaningful_message_review_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     try:
         item["message_ids"] = json.loads(item.pop("message_ids_json") or "[]")
@@ -182,7 +183,7 @@ def _decode_meaningful_message_review_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _referral_code_unavailable_reason(row: Optional[sqlite3.Row]) -> str:
+def _referral_code_unavailable_reason(row: Optional[Row]) -> str:
     if row is None:
         return "invalid"
     if row["status"] != "active":
@@ -193,10 +194,10 @@ def _referral_code_unavailable_reason(row: Optional[sqlite3.Row]) -> str:
 
 
 def _get_usable_referral_code_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     code: str,
-) -> Optional[sqlite3.Row]:
+) -> Optional[Row]:
     return conn.execute(
         """
         SELECT *
@@ -239,17 +240,19 @@ def get_or_create_personal_referral_code_for_user(
         last_integrity_error = None
         for _ in range(_REFERRAL_CODE_GENERATION_RETRIES):
             try:
-                conn.execute(
-                    """
-                    INSERT INTO referral_codes(
-                        id, platform_user_id, code, code_type, status, updated_at
+                # 保存点隔离唯一冲突：PG 下冲突会中止整笔事务，需回滚到保存点才能继续重试/查询
+                with _savepoint(conn, "refcode_ins"):
+                    conn.execute(
+                        """
+                        INSERT INTO referral_codes(
+                            id, platform_user_id, code, code_type, status, updated_at
+                        )
+                        VALUES (?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        """,
+                        (_new_id("refcode"), platform_user_id, _new_referral_code()),
                     )
-                    VALUES (?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-                    """,
-                    (_new_id("refcode"), platform_user_id, _new_referral_code()),
-                )
                 break
-            except sqlite3.IntegrityError as err:
+            except IntegrityError as err:
                 existing = conn.execute(
                     """
                     SELECT *
@@ -385,7 +388,7 @@ def register_platform_user_with_referral(
                 raise ValueError("invalid_invite_code")
 
         if verified_token is not None:
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE phone_verifications
                 SET token_consumed_at = datetime('now', '+8 hours')
@@ -396,7 +399,8 @@ def register_platform_user_with_referral(
                 """,
                 (verified_token, normalized_phone),
             )
-            if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            # rowcount 替代 SQLite 专有 changes()（两后端一致）
+            if cursor.rowcount == 0:
                 raise ValueError("invalid_otp_token")
 
         if existing is not None:
@@ -466,7 +470,7 @@ def register_platform_user_with_referral(
                     relationship_id=relationship_id,
                     inviter_platform_user_id=inviter_platform_user_id,
                 )
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE referral_codes
                 SET used_count = used_count + 1,
@@ -478,7 +482,8 @@ def register_platform_user_with_referral(
                 """,
                 (code_row["id"],),
             )
-            if conn.execute("SELECT changes()").fetchone()[0] == 0:
+            # rowcount 替代 SQLite 专有 changes()（两后端一致）
+            if cursor.rowcount == 0:
                 raise ValueError("invalid_invite_code")
             if code_row["platform_user_id"]:
                 relationship_row = conn.execute(
@@ -577,7 +582,7 @@ def get_latest_subscription_for_user(
     return dict(row) if row else None
 
 
-def _decode_wallet_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_wallet_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     balance_shell_micros = int(item["balance_shell_micros"])
     item["balance_shell_micros"] = balance_shell_micros
@@ -585,7 +590,7 @@ def _decode_wallet_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_ledger_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_ledger_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     amount_shell_micros = int(item["amount_shell_micros"])
     balance_after_shell_micros = int(item["balance_after_shell_micros"])
@@ -601,7 +606,7 @@ def _decode_ledger_row(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_cost_event_row(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_cost_event_row(row: Row) -> Dict[str, Any]:
     item = dict(row)
     item["billable_to_user"] = bool(item["billable_to_user"])
     item["computed_shell_micros"] = int(item["computed_shell_micros"] or 0)
@@ -618,11 +623,11 @@ def _decode_cost_event_row(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 def _ensure_wallet_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     account_id: str,
     platform_user_id: str,
-) -> sqlite3.Row:
+) -> Row:
     account = conn.execute(
         "SELECT id FROM accounts WHERE id = ?",
         (account_id,),
@@ -681,7 +686,7 @@ def ensure_wallet(
 
 
 def _apply_wallet_ledger_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     account_id: str,
     platform_user_id: str,
@@ -691,7 +696,7 @@ def _apply_wallet_ledger_in_conn(
     source_id: Optional[str],
     idempotency_key: str,
     metadata: Optional[Dict[str, Any]] = None,
-) -> sqlite3.Row:
+) -> Row:
     if amount_shell_micros == 0:
         raise ValueError("amount_shell_micros must not be zero")
     cleaned_entry_type = _clean_text(entry_type)
@@ -811,7 +816,7 @@ def grant_new_user_shells(
     )
 
 
-def _load_referral_metadata(row: sqlite3.Row) -> Dict[str, Any]:
+def _load_referral_metadata(row: Row) -> Dict[str, Any]:
     try:
         return json.loads(row["metadata_json"] or "{}")
     except json.JSONDecodeError:
@@ -819,7 +824,7 @@ def _load_referral_metadata(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 def _beijing_timestamp_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     modifier: Optional[str] = None,
 ) -> str:
@@ -835,7 +840,7 @@ def _beijing_timestamp_in_conn(
 
 
 def _mark_referral_soft_review_if_needed_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     relationship_id: str,
     inviter_platform_user_id: str,
@@ -887,14 +892,14 @@ def _mark_referral_soft_review_if_needed_in_conn(
 
 
 def _ensure_referral_soft_review_hold_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
-    relationship: sqlite3.Row,
+    relationship: Row,
     invitee_platform_user_id: str,
     account_id: str,
     candidate_ids: List[int],
-    review_row: Optional[sqlite3.Row],
-) -> sqlite3.Row:
+    review_row: Optional[Row],
+) -> Row:
     if relationship["review_status"] != "pending":
         return relationship
 
@@ -960,10 +965,10 @@ def _ensure_referral_soft_review_hold_in_conn(
 
 
 def _release_delayed_referral_reward_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     relationship_id: str,
-) -> Optional[sqlite3.Row]:
+) -> Optional[Row]:
     relationship = conn.execute(
         "SELECT * FROM referral_relationships WHERE id = ?",
         (relationship_id,),
@@ -1110,11 +1115,11 @@ def _is_meaningful_referral_message(*, content: Optional[str], message_type: str
 
 
 def _mark_referral_relationship_bound_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     invitee_platform_user_id: str,
     account_id: str,
-) -> Optional[sqlite3.Row]:
+) -> Optional[Row]:
     row = conn.execute(
         """
         SELECT *
@@ -1162,7 +1167,7 @@ def mark_referral_relationship_bound(
 
 
 def _first_rewardable_account_for_platform_user_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     platform_user_id: str,
 ) -> Optional[str]:
@@ -1183,10 +1188,10 @@ def _first_rewardable_account_for_platform_user_in_conn(
 
 
 def _apply_referral_reward_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     relationship_id: str,
-) -> Optional[sqlite3.Row]:
+) -> Optional[Row]:
     relationship = conn.execute(
         """
         SELECT *
@@ -1251,10 +1256,10 @@ def _apply_referral_reward_in_conn(
 
 
 def _retry_qualified_referral_rewards_for_inviter_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     inviter_platform_user_id: str,
-) -> List[sqlite3.Row]:
+) -> List[Row]:
     ledgers = _release_due_delayed_referral_rewards_for_inviter_in_conn(
         conn,
         inviter_platform_user_id=inviter_platform_user_id,
@@ -1282,11 +1287,11 @@ def _retry_qualified_referral_rewards_for_inviter_in_conn(
 
 
 def _release_due_delayed_referral_rewards_for_inviter_in_conn(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     inviter_platform_user_id: str,
     limit: int = 100,
-) -> List[sqlite3.Row]:
+) -> List[Row]:
     rows = conn.execute(
         """
         SELECT id
@@ -1300,7 +1305,7 @@ def _release_due_delayed_referral_rewards_for_inviter_in_conn(
         """,
         (inviter_platform_user_id, max(1, min(int(limit), 500))),
     ).fetchall()
-    ledgers: List[sqlite3.Row] = []
+    ledgers: List[Row] = []
     for row in rows:
         try:
             ledger_row = _release_delayed_referral_reward_in_conn(
@@ -1362,7 +1367,7 @@ def release_due_referral_rewards(limit: int = 200) -> List[Dict[str, Any]]:
             """,
             (clean_limit,),
         ).fetchall()
-        ledgers: List[sqlite3.Row] = []
+        ledgers: List[Row] = []
         for row in rows:
             try:
                 ledger_row = _release_delayed_referral_reward_in_conn(
@@ -2069,15 +2074,17 @@ def create_ai4all_account_for_user(
         for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
             account_id = _new_account_id()
             try:
-                conn.execute(
-                    """
-                    INSERT INTO accounts(id, channel, display_name, updated_at)
-                    VALUES (?, 'openclaw-weixin', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-                    """,
-                    (account_id, cleaned_display_name),
-                )
+                # 保存点隔离 id 冲突：PG 下冲突会中止整笔事务，需回滚到保存点才能继续换 id 重试
+                with _savepoint(conn, "account_ins"):
+                    conn.execute(
+                        """
+                        INSERT INTO accounts(id, channel, display_name, updated_at)
+                        VALUES (?, 'openclaw-weixin', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        """,
+                        (account_id, cleaned_display_name),
+                    )
                 break
-            except sqlite3.IntegrityError as err:
+            except IntegrityError as err:
                 if "accounts.id" not in str(err):
                     raise
                 last_integrity_error = err
@@ -2812,7 +2819,7 @@ def _active_session_rotation_reason(
 
 
 def _build_session_carryover_summary(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     session_id: int,
     limit: int = 8,
@@ -2858,7 +2865,7 @@ def increment_session_turn_count(
     *,
     session_id: int,
     count: int = 1,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[Connection] = None,
 ) -> Optional[Dict[str, Any]]:
     count = max(1, int(count))
     with _tx(conn) as tx:

@@ -877,6 +877,7 @@ def dispatch_due_reactivation_candidates(
     limit: int = 20,
     dispatch_enabled: Optional[bool] = None,
     dry_run: Optional[bool] = None,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Send any reactivation candidates whose slot time has arrived.
 
@@ -884,6 +885,7 @@ def dispatch_due_reactivation_candidates(
     candidate fires at its scheduled slot (plus jitter) rather than waiting for
     the account's next planning. Gated by reactivation_dispatch_enabled; defaults
     fail closed (disabled + dry-run) unless settings/caller opt in.
+    node_id 非空时只处理归属该节点的账号（厚节点改造 P4 调度分片）。
     """
     current = now or beijing_naive_now()
     if dispatch_enabled is None:
@@ -895,6 +897,7 @@ def dispatch_due_reactivation_candidates(
     due_accounts = list_due_reactivation_candidate_accounts(
         now=format_reactivation_time(current),
         limit=limit,
+        node_id=node_id,
     )
     results: List[Dict[str, Any]] = []
     for account_id in due_accounts:

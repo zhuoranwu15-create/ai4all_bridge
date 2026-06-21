@@ -83,12 +83,13 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert result["account_check_count"] == 1
     assert result["reactivation_count"] == 1
     assert result["expired_content_invitation_count"] == 1
-    assert reactivation_calls == [{"now": now, "limit": 5}]
+    assert reactivation_calls == [{"now": now, "limit": 5, "node_id": None}]
     assert reminder_calls == [
         {
             "now": now,
             "limit": 5,
             "bypass_quiet_hours": True,
+            "node_id": None,
         }
     ]
     assert commitment_calls == [
@@ -96,6 +97,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
             "now": now,
             "limit": 5,
             "bypass_quiet_hours": True,
+            "node_id": None,
         }
     ]
     assert account_calls == [
@@ -103,6 +105,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
             "now": now,
             "limit": 5,
             "planning_interval_seconds": 1800,
+            "node_id": None,
         }
     ]
     assert expired_content_calls == [

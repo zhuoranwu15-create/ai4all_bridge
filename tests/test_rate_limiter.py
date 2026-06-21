@@ -1,56 +1,55 @@
-import time
 from app.rate_limiter import RateLimiter
+from app.db._core import _tx
 
 
-def test_allows_requests_under_limit():
+def test_allows_requests_under_limit(fresh_db):
     rl = RateLimiter()
     for _ in range(5):
         assert rl.check_rpm("acc", 5) is True
 
 
-def test_blocks_at_limit():
+def test_blocks_at_limit(fresh_db):
     rl = RateLimiter()
     for _ in range(5):
         rl.check_rpm("acc", 5)
     assert rl.check_rpm("acc", 5) is False
 
 
-def test_denied_request_not_recorded():
+def test_denied_request_not_recorded(fresh_db):
     rl = RateLimiter()
     for _ in range(3):
         rl.check_rpm("acc", 3)
-    # At limit — denied, should not advance the window
+    # At limit — two more denied calls should not increment the stored count
     rl.check_rpm("acc", 3)
     rl.check_rpm("acc", 3)
-    # Still exactly 3 recorded
-    assert len(rl._windows["acc"]) == 3
+    with _tx(None) as tx:
+        row = tx.execute(
+            "SELECT COUNT(*) AS cnt FROM rpm_hits WHERE account_id = ?", ("acc",)
+        ).fetchone()
+    assert row["cnt"] == 3
 
 
-def test_accounts_are_isolated():
+def test_accounts_are_isolated(fresh_db):
     rl = RateLimiter()
     for _ in range(3):
         rl.check_rpm("acc_a", 3)
-    # acc_a is at limit
     assert rl.check_rpm("acc_a", 3) is False
-    # acc_b is unaffected
     assert rl.check_rpm("acc_b", 3) is True
 
 
-def test_zero_limit_means_no_limit():
+def test_zero_limit_means_no_limit(fresh_db):
     rl = RateLimiter()
     for _ in range(1000):
         assert rl.check_rpm("acc", 0) is True
 
 
-def test_window_slides_after_configured_window(monkeypatch):
-    import time as time_module
+def test_window_slides_after_configured_window(fresh_db):
     rl = RateLimiter()
-    now = [0.0]
-    monkeypatch.setattr(time_module, "monotonic", lambda: now[0])
+    t0 = 1_000_000.0  # fixed reference epoch, avoids wall-clock dependency
 
-    for _ in range(3):
-        rl.check_rpm("acc", 3, window_seconds=30)
-    assert rl.check_rpm("acc", 3, window_seconds=30) is False  # at limit
+    for i in range(3):
+        rl.check_rpm("acc", 3, window_seconds=30, _now=t0 + i)
+    assert rl.check_rpm("acc", 3, window_seconds=30, _now=t0 + 3) is False  # at limit
 
-    now[0] = 31.0  # advance past the configured 30s window
-    assert rl.check_rpm("acc", 3, window_seconds=30) is True  # old entries expired
+    # 35s after t0 — all previous hits fall outside the 30s window
+    assert rl.check_rpm("acc", 3, window_seconds=30, _now=t0 + 35) is True

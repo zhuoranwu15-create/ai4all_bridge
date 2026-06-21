@@ -5,6 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
+from app import profile_storage
 from app.config import settings
 
 logger = logging.getLogger("ai4all.user_profiles")
@@ -89,6 +90,12 @@ def user_profile_path(account_id: str) -> Path:
 
 
 def context_file_path(account_id: str, filename: str) -> Path:
+    """返回上下文文件的**逻辑路径**（仅供展示/调试元数据，如 debug `path` 字段）。
+
+    厚节点改造 P2 后，账号级文件内容已入库（profile_storage），此处返回的路径
+    不再对应真实磁盘文件；账号文件的读写删请走 read/write/delete_context_file。
+    system 级（AGENTS/TOOLS）仍是真实磁盘路径。
+    """
     if filename not in CONTEXT_FILE_ORDER:
         raise ValueError(f"unsupported context file: {filename}")
     if filename in SYSTEM_CONTEXT_FILES:
@@ -96,22 +103,63 @@ def context_file_path(account_id: str, filename: str) -> Path:
     return account_profile_dir(account_id) / filename
 
 
+def _is_system_context_file(filename: str) -> bool:
+    return filename in SYSTEM_CONTEXT_FILES
+
+
+def read_context_file(account_id: str, filename: str) -> Optional[str]:
+    """读取一个上下文文件内容；文件缺失返回 None（区分「空内容」与「缺失」）。
+
+    system 级（AGENTS/TOOLS）走 system_dir 磁盘；账号级（SOUL/IDENTITY/USER/MEMORY/
+    user_profile.md/memory/*.md）走 profile_storage（按 account_id 隔离）。
+    """
+    if _is_system_context_file(filename):
+        path = Path(settings.system_dir) / filename
+        return path.read_text(encoding="utf-8") if path.exists() else None
+    return profile_storage.read_file(account_id, filename)
+
+
+def write_context_file(account_id: str, filename: str, content: str) -> None:
+    """整文件写入一个上下文文件：system 级落 system_dir 磁盘，账号级 upsert 入库。"""
+    if _is_system_context_file(filename):
+        path = Path(settings.system_dir) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return
+    profile_storage.write_file(account_id, filename, content)
+
+
+def context_file_exists(account_id: str, filename: str) -> bool:
+    """上下文文件是否存在（system 级查磁盘，账号级查库）。"""
+    if _is_system_context_file(filename):
+        return (Path(settings.system_dir) / filename).exists()
+    return profile_storage.exists(account_id, filename)
+
+
+def delete_context_file(account_id: str, filename: str) -> bool:
+    """删除一个上下文文件；返回是否删到（system 级删磁盘文件，账号级删库行）。"""
+    if _is_system_context_file(filename):
+        path = Path(settings.system_dir) / filename
+        if path.exists():
+            path.unlink()
+            return True
+        return False
+    return profile_storage.delete_file(account_id, filename)
+
+
 def ensure_user_profile(account_id: str) -> Path:
-    """返回 legacy user_profile.md 路径并确保账号目录存在。
+    """返回 legacy user_profile.md 的**逻辑路径**。
 
     历史遗留单文件。新版上下文已拆分为 SOUL/IDENTITY/USER/MEMORY，新账号不再
-    生成该文件，仅保留路径解析以兼容历史账号与既有只读端点。已存在的文件不动。
+    生成该文件。P2 后内容（如有）随账号 profile 一并入库（profile_storage），
+    此处不再创建磁盘文件/目录，仅保留路径解析以兼容历史只读端点与展示。
     """
-    path = user_profile_path(account_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
+    return user_profile_path(account_id)
 
 
 def read_user_profile(account_id: str) -> str:
-    path = ensure_user_profile(account_id)
-    if not path.exists():
-        return ""
-    return path.read_text(encoding="utf-8").strip()
+    content = profile_storage.read_file(account_id, "user_profile.md")
+    return (content or "").strip()
 
 
 @lru_cache(maxsize=1)
@@ -305,24 +353,22 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
     system-level and live in data/system/ — see ensure_system_context_files().
     Existing non-empty files are never overwritten.
     """
-    profile_dir = account_profile_dir(account_id)
-    profile_dir.mkdir(parents=True, exist_ok=True)
     created: Dict[str, bool] = {}
-    files_to_create: list[tuple[str, Path]] = []
+    files_to_create: list[str] = []
     for filename in USER_CONTEXT_FILE_ORDER:
-        path = profile_dir / filename
-        if path.exists() and path.read_text(encoding="utf-8").strip():
+        existing = profile_storage.read_file(account_id, filename)
+        if existing is not None and existing.strip():
             created[filename] = False
         else:
-            files_to_create.append((filename, path))
+            files_to_create.append(filename)
     if not files_to_create:
         return created
 
     templates = _default_user_context_templates(
         display_name=display_name,
     )
-    for filename, path in files_to_create:
-        path.write_text(templates[filename].strip() + "\n", encoding="utf-8")
+    for filename in files_to_create:
+        profile_storage.write_file(account_id, filename, templates[filename].strip() + "\n")
         created[filename] = True
     return created
 
@@ -336,13 +382,20 @@ def read_agent_context(account_id: str, display_name: Optional[str] = None) -> A
     files: Dict[str, Dict[str, object]] = {}
     for filename in CONTEXT_FILE_ORDER:
         key = CONTEXT_KEY_BY_FILE[filename]
-        path = (system_dir if filename in SYSTEM_CONTEXT_FILES else base) / filename
-        text = path.read_text(encoding="utf-8").strip() if path.exists() else ""
+        # system 级读磁盘真实文件；账号级读 storage（path 仅作展示用逻辑路径）。
+        if filename in SYSTEM_CONTEXT_FILES:
+            disk_path = system_dir / filename
+            raw = disk_path.read_text(encoding="utf-8") if disk_path.exists() else None
+            logical_path = str(disk_path)
+        else:
+            raw = profile_storage.read_file(account_id, filename)
+            logical_path = str(base / filename)
+        text = (raw or "").strip()
         blocks[key] = text
         files[filename] = {
             "key": key,
-            "path": str(path),
-            "exists": path.exists(),
+            "path": logical_path,
+            "exists": raw is not None,
             "created": bool(user_created.get(filename)),
             "chars": len(text),
         }
@@ -370,10 +423,8 @@ def apply_soul_preset(
         preset_name=preset_name,
         custom_description=custom_description,
     )
-    soul_path = context_file_path(account_id, "SOUL.md")
-    soul_path.parent.mkdir(parents=True, exist_ok=True)
-    soul_path.write_text(content, encoding="utf-8")
-    return soul_path
+    write_context_file(account_id, "SOUL.md", content)
+    return context_file_path(account_id, "SOUL.md")
 
 
 def render_soul_preset(
@@ -384,20 +435,18 @@ def render_soul_preset(
 ) -> str:
     """Render a SOUL.md preset for an account without writing the file."""
     template = _SOUL_TEMPLATES.get(preset_name, _SOUL_TEMPLATES["blank"])
-    identity_path = context_file_path(account_id, "IDENTITY.md")
+    identity_text = read_context_file(account_id, "IDENTITY.md")
     ai_name: Optional[str] = None
-    if identity_path.exists():
-        identity_text = identity_path.read_text(encoding="utf-8")
+    if identity_text:
         m = re.search(r"AI 名字[:：]\s*(.+)", identity_text)
         if not m:
             m = re.search(r"你的对外身份是\s*(.+?)[\s。\n]", identity_text)
         if m:
             ai_name = m.group(1).strip()
 
-    user_path = context_file_path(account_id, "USER.md")
+    user_text = read_context_file(account_id, "USER.md")
     user_name: Optional[str] = None
-    if user_path.exists():
-        user_text = user_path.read_text(encoding="utf-8")
+    if user_text:
         m = re.search(r"用户称呼[:：]\s*(.+)", user_text)
         if m:
             user_name = m.group(1).strip()
@@ -419,10 +468,8 @@ def write_ai_name_to_identity(account_id: str, name: str) -> Path:
 - 你是用户在微信里的专属 AI 陪伴。
 - 用"{name}"自称，不要把自己称为 OpenClaw 或声称运行在 OpenClaw 内部。
 """
-    identity_path = context_file_path(account_id, "IDENTITY.md")
-    identity_path.parent.mkdir(parents=True, exist_ok=True)
-    identity_path.write_text(content, encoding="utf-8")
-    return identity_path
+    write_context_file(account_id, "IDENTITY.md", content)
+    return context_file_path(account_id, "IDENTITY.md")
 
 
 # USER.md 用户称呼行：兼容旧格式（无 bullet）与新格式（"- " bullet），便于原地更新。
@@ -440,25 +487,23 @@ def write_user_name(account_id: str, name: str) -> Path:
     绝不整文件覆盖，避免抹掉 dreaming 已写入 USER.md 的长期记忆。
     """
     name = name.strip()
-    user_path = context_file_path(account_id, "USER.md")
-    user_path.parent.mkdir(parents=True, exist_ok=True)
     name_line = f"- 用户称呼：{name}"
+    existing = read_context_file(account_id, "USER.md")
 
-    if user_path.exists():
-        existing = user_path.read_text(encoding="utf-8")
+    if existing is not None:
         if _USER_NAME_LINE_RE.search(existing):
             updated = _USER_NAME_LINE_RE.sub(name_line, existing, count=1).rstrip() + "\n"
-            user_path.write_text(updated, encoding="utf-8")
-            return user_path
+            write_context_file(account_id, "USER.md", updated)
+            return context_file_path(account_id, "USER.md")
         # 无用户称呼行：保留既有内容并追加，顺带清掉占位符
         kept = [ln for ln in existing.splitlines() if ln.strip() != "- 暂无"]
         stripped = "\n".join(kept).rstrip()
         if stripped and stripped != "# USER":
-            user_path.write_text(f"{stripped}\n{name_line}\n", encoding="utf-8")
-            return user_path
+            write_context_file(account_id, "USER.md", f"{stripped}\n{name_line}\n")
+            return context_file_path(account_id, "USER.md")
 
-    user_path.write_text(f"# USER\n\n{name_line}\n", encoding="utf-8")
-    return user_path
+    write_context_file(account_id, "USER.md", f"# USER\n\n{name_line}\n")
+    return context_file_path(account_id, "USER.md")
 
 
 def read_daily_notes(account_id: str, today: str) -> str:
@@ -468,12 +513,11 @@ def read_daily_notes(account_id: str, today: str) -> str:
     today_date = date.fromisoformat(today)
     yesterday_str = (today_date - timedelta(days=1)).isoformat()
 
-    base = account_profile_dir(account_id) / "memory"
     parts = []
     for date_str in [today, yesterday_str]:
-        p = base / f"{date_str}.md"
-        if p.exists():
-            text = p.read_text(encoding="utf-8").strip()
+        raw = profile_storage.read_file(account_id, f"memory/{date_str}.md")
+        if raw:
+            text = raw.strip()
             if text:
                 parts.append(text)
     return "\n\n".join(parts)

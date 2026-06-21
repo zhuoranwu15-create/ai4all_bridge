@@ -289,7 +289,8 @@ def _list_reactivation_candidate_admin_items(
             FROM proactive_account_state s
             JOIN accounts a ON a.id = s.account_id
             LEFT JOIN messages m ON m.account_id = a.id
-            GROUP BY s.account_id
+            -- 含 a.id（accounts 主键）：PG 据此放行所选 a.* 列的函数依赖（s.account_id 已覆盖 s.*）
+            GROUP BY s.account_id, a.id
             ORDER BY s.updated_at DESC, a.updated_at DESC
             LIMIT ?
             """,

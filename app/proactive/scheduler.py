@@ -34,6 +34,7 @@ class ProactiveScheduler:
         batch_size: int,
         bypass_quiet_hours: bool = False,
         planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+        node_id: Optional[str] = None,
         dispatch_reminders: DispatchDueReminders = dispatch_due_reminders,
         dispatch_commitments: DispatchDueCommitments = dispatch_due_commitments,
         dispatch_reactivation: DispatchDueReactivation = dispatch_due_reactivation_candidates,
@@ -44,6 +45,8 @@ class ProactiveScheduler:
         self.batch_size = max(int(batch_size), 1)
         self.bypass_quiet_hours = bypass_quiet_hours
         self.planning_interval_seconds = max(int(planning_interval_seconds), 1)
+        # 厚节点改造 P4：节点角色时只扫本节点账号（assigned_node_id = node_id）
+        self.node_id: Optional[str] = node_id or None
         self._dispatch_reminders = dispatch_reminders
         self._dispatch_commitments = dispatch_commitments
         self._dispatch_reactivation = dispatch_reactivation
@@ -90,6 +93,7 @@ class ProactiveScheduler:
             now=current,
             limit=self.batch_size,
             bypass_quiet_hours=self.bypass_quiet_hours,
+            node_id=self.node_id,
         )
         commitment_results = await _step(
             "commitments",
@@ -97,6 +101,7 @@ class ProactiveScheduler:
             now=current,
             limit=self.batch_size,
             bypass_quiet_hours=self.bypass_quiet_hours,
+            node_id=self.node_id,
         )
         account_results = await _step(
             "account_checks",
@@ -104,12 +109,14 @@ class ProactiveScheduler:
             now=current,
             limit=self.batch_size,
             planning_interval_seconds=self.planning_interval_seconds,
+            node_id=self.node_id,
         )
         reactivation_results = await _step(
             "reactivation",
             self._dispatch_reactivation,
             now=current,
             limit=self.batch_size,
+            node_id=self.node_id,
         )
         expired_content_results = await _step(
             "expire_content_invitations",
@@ -222,6 +229,7 @@ def start_proactive_scheduler(
     batch_size: int,
     bypass_quiet_hours: bool = False,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    node_id: Optional[str] = None,
 ) -> ProactiveScheduler:
     global _scheduler
     if _scheduler is None:
@@ -230,6 +238,7 @@ def start_proactive_scheduler(
             batch_size=batch_size,
             bypass_quiet_hours=bypass_quiet_hours,
             planning_interval_seconds=planning_interval_seconds,
+            node_id=node_id,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -249,6 +258,7 @@ async def run_proactive_scheduler_once(
     batch_size: int,
     bypass_quiet_hours: bool = False,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    node_id: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     scheduler = ProactiveScheduler(
@@ -256,5 +266,6 @@ async def run_proactive_scheduler_once(
         batch_size=batch_size,
         bypass_quiet_hours=bypass_quiet_hours,
         planning_interval_seconds=planning_interval_seconds,
+        node_id=node_id,
     )
     return await scheduler.run_once(now=now)

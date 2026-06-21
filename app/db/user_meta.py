@@ -344,7 +344,8 @@ def list_account_user_meta_current(
             LEFT JOIN account_user_meta m ON m.account_id = a.id
             LEFT JOIN messages msg ON msg.account_id = a.id
             {where_sql}
-            GROUP BY a.id
+            -- 含 m.account_id（account_user_meta 主键）：PG 据此放行所选 m.* 列的函数依赖
+            GROUP BY a.id, m.account_id
             ORDER BY
                 CASE WHEN m.last_evaluated_at IS NULL THEN 1 ELSE 0 END,
                 m.last_evaluated_at DESC,

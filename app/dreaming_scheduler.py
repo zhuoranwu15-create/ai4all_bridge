@@ -38,9 +38,12 @@ class DreamingScheduler:
         *,
         batch_size: int = 100,
         start_hour: int = 4,
+        node_id: Optional[str] = None,
     ) -> None:
         self.batch_size = max(int(batch_size), 1)
         self.start_hour = max(0, min(int(start_hour), 23))
+        # 厚节点改造 P4：节点角色时只扫本节点账号
+        self.node_id: Optional[str] = node_id or None
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -68,6 +71,7 @@ class DreamingScheduler:
             run_daily_dreaming_scan,
             now=now,
             limit=self.batch_size,
+            node_id=self.node_id,
         )
         self.last_run = result
         self.last_error = None
@@ -169,12 +173,14 @@ def start_dreaming_scheduler(
     *,
     batch_size: int,
     start_hour: int = 4,
+    node_id: Optional[str] = None,
 ) -> DreamingScheduler:
     global _scheduler
     if _scheduler is None:
         _scheduler = DreamingScheduler(
             batch_size=batch_size,
             start_hour=start_hour,
+            node_id=node_id,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -192,7 +198,8 @@ async def stop_dreaming_scheduler() -> None:
 async def run_dreaming_scheduler_once(
     *,
     batch_size: int,
+    node_id: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    scheduler = DreamingScheduler(batch_size=batch_size)
+    scheduler = DreamingScheduler(batch_size=batch_size, node_id=node_id)
     return await scheduler.run_once(now=now)

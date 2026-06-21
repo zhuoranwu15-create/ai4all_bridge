@@ -10,19 +10,11 @@ ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 
 
-def _write_daily(base: Path, account_id: str, date_str: str, content: str) -> Path:
-    from app.user_profiles import _safe_account_dir_name
+def _write_daily(base: Path, account_id: str, date_str: str, content: str) -> None:
+    """写一条 daily-notes 记录（P2 后入库；base 仅保留以兼容调用方签名）。"""
+    from app import profile_storage
 
-    path = (
-        base
-        / "profiles"
-        / _safe_account_dir_name(account_id)
-        / "memory"
-        / f"{date_str}.md"
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return path
+    profile_storage.write_file(account_id, f"memory/{date_str}.md", content)
 
 
 def _llm_payload(*, items: Optional[List[dict]] = None) -> str:
@@ -284,18 +276,13 @@ def test_session_lifecycle_falls_back_when_llm_fails(fresh_db, tmp_path):
 
 
 def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path):
-    from app.user_profiles import _safe_account_dir_name
+    from app import profile_storage
 
     fresh_db.llm_api_key = "fake-key"
     account_id = "sk-admin-dream"
-    memory_dir = (
-        tmp_path
-        / "profiles"
-        / _safe_account_dir_name(account_id)
-        / "memory"
+    profile_storage.write_file(
+        account_id, f"memory/{TODAY}.md", "# 2026-05-18\n\n- 用户手机号 13800138000"
     )
-    memory_dir.mkdir(parents=True, exist_ok=True)
-    (memory_dir / f"{TODAY}.md").write_text("# 2026-05-18\n\n- 用户手机号 13800138000", encoding="utf-8")
 
     payload = _llm_payload(
         items=[
@@ -377,9 +364,9 @@ def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, t
     assert items[0]["sensitivity"] == "normal"
     assert items[0]["apply_status"] == "applied"
     # USER.md 落地（read_long_term_memory 读 MEMORY.md，这里直接读 USER.md）
-    from app.user_profiles import context_file_path
+    from app import profile_storage
 
-    assert "二哥" in context_file_path(account_id, "USER.md").read_text(encoding="utf-8")
+    assert "二哥" in profile_storage.read_file(account_id, "USER.md")
 
 
 def _insert_skipped_sensitive_item(account_id, *, memory_text, importance="high", confidence=0.95):

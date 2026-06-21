@@ -1607,11 +1607,31 @@ def _migration_0004_account_profile_files(conn: Connection) -> None:
     )
 
 
+def _migration_0005_rpm_hits(conn: Connection) -> None:
+    """RPM 滑动窗口命中记录表（厚节点改造 P3，见 thick_node_postgres_refactor.md §5）。
+
+    hit_at 存 Unix epoch 秒（REAL），方便在 Python 侧与 time.time() 直接做算术比较。
+    check_rpm 在单一事务内清过期行、计数、未达限则插入，无进程内 deque，
+    多节点共享同一 PG 库时天然隔离正确。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS rpm_hits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            hit_at REAL NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_rpm_hits_account_hit ON rpm_hits(account_id, hit_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
     (3, _migration_0003_user_meta),
     (4, _migration_0004_account_profile_files),
+    (5, _migration_0005_rpm_hits),
 ]
 
 

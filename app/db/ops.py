@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import IntegrityError, Row, is_postgres
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -144,7 +144,7 @@ _FAQ_MESSAGE_STATUSES = {"pending", "published", "rejected"}
 _FAQ_MODERATION_STATUSES = {"safe", "needs_review", "failed"}
 
 
-def _decode_faq_message(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_faq_message(row: Row) -> Dict[str, Any]:
     item = dict(row)
     item["moderation_categories"] = json.loads(
         item.pop("moderation_categories_json") or "[]"
@@ -302,18 +302,16 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
         ).fetchone()
         if message is None:
             return None
-        liked = False
-        try:
-            conn.execute(
-                """
-                INSERT INTO faq_message_likes(id, message_id, voter_key)
-                VALUES (?, ?, ?)
-                """,
-                (_new_id("fqlike"), cleaned_id, cleaned_voter_key),
-            )
-            liked = True
-        except sqlite3.IntegrityError:
-            liked = False
+        # INSERT OR IGNORE + rowcount 判断是否新点赞：避免「捕获 IntegrityError 后继续用连接」，
+        # 该模式在 PG 下会因唯一冲突中止整个事务（SQLite 可继续，PG 不行）。
+        like_cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO faq_message_likes(id, message_id, voter_key)
+            VALUES (?, ?, ?)
+            """,
+            (_new_id("fqlike"), cleaned_id, cleaned_voter_key),
+        )
+        liked = like_cursor.rowcount == 1
         if liked:
             conn.execute(
                 """
@@ -349,6 +347,20 @@ def get_database_storage_stats() -> Dict[str, Any]:
     重点观测 ``-wal`` 文件大小：WAL 模式下若有长生命周期读连接（如独立调度器进程）
     压住 checkpoint，``-wal`` 会持续增长。这里只读取、不主动 checkpoint。
     """
+    if is_postgres():
+        # PG 后端无 WAL 文件/PRAGMA 概念：返回库大小，其余 SQLite 专有字段置空。
+        with connect() as conn:
+            size_row = conn.execute(
+                "SELECT pg_database_size(current_database()) AS db_bytes"
+            ).fetchone()
+        return {
+            "db_bytes": int(size_row["db_bytes"]) if size_row and size_row["db_bytes"] is not None else None,
+            "wal_bytes": None,
+            "shm_bytes": None,
+            "journal_mode": None,
+            "synchronous": None,
+            "wal_autocheckpoint_pages": None,
+        }
     db_path = _db_path()
     wal_path = db_path.with_name(db_path.name + "-wal")
     shm_path = db_path.with_name(db_path.name + "-shm")
@@ -379,6 +391,15 @@ def checkpoint_wal(*, mode: str = "TRUNCATE") -> Dict[str, Any]:
     mode = (mode or "TRUNCATE").upper()
     if mode not in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"):
         raise ValueError(f"unsupported wal_checkpoint mode: {mode}")
+    if is_postgres():
+        # PG 无应用级 WAL checkpoint（属服务端职责）：返回 no-op 结果，结构对齐。
+        return {
+            "mode": mode,
+            "busy": None,
+            "log_frames": None,
+            "checkpointed_frames": None,
+            "wal_bytes_after": None,
+        }
     with connect() as conn:
         # 返回单行 (busy, log_frames, checkpointed_frames)
         row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
@@ -652,7 +673,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
             """
         ).fetchall()
 
-    def _row_count(row: sqlite3.Row, key: str) -> int:
+    def _row_count(row: Row, key: str) -> int:
         return int(row[key] or 0) if row else 0
 
     avg_latency = message_row["avg_latency_ms"] if message_row else None

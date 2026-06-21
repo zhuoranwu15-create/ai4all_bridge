@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import settings
 from app.db import list_accounts
-from app.user_profiles import apply_soul_preset, context_file_path, render_soul_preset
+from app.user_profiles import apply_soul_preset, context_file_path, read_context_file, render_soul_preset
 
 
 OLD_DEFAULT_SOUL_BODY = (
@@ -67,14 +67,14 @@ def reset_reason_for_soul_text(text: str) -> Optional[str]:
 
 def plan_account_reset(*, account_id: str, include_missing: bool = False) -> Optional[SoulResetCandidate]:
     """Build a reset candidate for one account without writing files."""
-    path = context_file_path(account_id, "SOUL.md")
-    if not path.exists():
+    path = context_file_path(account_id, "SOUL.md")  # 逻辑路径，仅供展示/diff 标题
+    before = read_context_file(account_id, "SOUL.md")  # P2 后从 storage 读，缺失返回 None
+    if before is None:
         if not include_missing:
             return None
         before = ""
         reason = "missing"
     else:
-        before = path.read_text(encoding="utf-8")
         reason = reset_reason_for_soul_text(before)
         if reason is None:
             return None

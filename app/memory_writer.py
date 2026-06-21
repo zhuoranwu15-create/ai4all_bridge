@@ -6,6 +6,7 @@ from app.time_utils import beijing_now_str
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from app import profile_storage
 from app.config import settings
 from app.user_profiles import _safe_account_dir_name
 
@@ -13,7 +14,11 @@ logger = logging.getLogger("ai4all.memory_writer")
 
 
 def memory_file_path(account_id: str, date_str: str) -> Path:
-    """Return path to memory/YYYY-MM-DD.md for given account and date."""
+    """Return the **logical** path to memory/YYYY-MM-DD.md (display/logging only).
+
+    P2 后 daily notes 内容入库（profile_storage，filename=``memory/{date}.md``）；
+    此路径不再对应真实磁盘文件，仅供日志/调试展示。
+    """
     return (
         Path(settings.user_profiles_dir)
         / _safe_account_dir_name(account_id)
@@ -97,14 +102,18 @@ def _format_daily_note_block(
     return "\n".join(parts).rstrip() + "\n"
 
 
-def _append_to_memory(path: Path, content: str, date_str: str) -> None:
-    """Create or append to the memory file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if not path.exists():
-        path.write_text(f"# {date_str}\n\n{content}", encoding="utf-8")
-    else:
-        with path.open("a", encoding="utf-8") as f:
-            f.write("\n" + content)
+def _append_to_memory(account_id: str, date_str: str, content: str) -> None:
+    """Create or append to the account daily-notes file (now backed by profile_storage).
+
+    Behavior matches the old file append exactly: a brand-new note is written as
+    ``# {date_str}\n\n{content}``; an existing note gets ``"\n" + content`` appended.
+    """
+    profile_storage.append_file(
+        account_id,
+        f"memory/{date_str}.md",
+        content,
+        new_file_prefix=f"# {date_str}\n\n",
+    )
 
 
 async def write_memory(
@@ -133,9 +142,13 @@ async def write_memory(
         if not content:
             return
 
-        path = memory_file_path(account_id, today)
-        await asyncio.to_thread(_append_to_memory, path, content, today)
-        logger.debug("memory_writer: wrote %d chars to %s", len(content), path)
+        # DB I/O 放到线程池，避免阻塞事件循环（与旧文件写一致的 off-loop 语义）。
+        await asyncio.to_thread(_append_to_memory, account_id, today, content)
+        logger.debug(
+            "memory_writer: wrote %d chars to %s",
+            len(content),
+            memory_file_path(account_id, today),
+        )
 
     except Exception as exc:
         logger.exception("memory_writer: unexpected error: %s", exc)

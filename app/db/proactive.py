@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -88,7 +88,7 @@ __all__ = [
 OUTBOUND_QUOTA_STATUSES = ("pending", "sending", "sent", "failed")
 
 
-def _decode_outbound_message(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_outbound_message(row: Row) -> Dict[str, Any]:
     item = dict(row)
     metadata_json = item.pop("metadata_json", None)
     try:
@@ -334,7 +334,7 @@ def count_reactivation_outbound_in_window(
                 OR (
                   product_category IN ({legacy_placeholders})
                   AND json_valid(metadata_json)
-                  AND json_extract(metadata_json, '$.reactivation') = 1
+                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
                 )
               )
             """,
@@ -772,7 +772,7 @@ def cancel_outbound_message(
 # Reminders
 # ---------------------------------------------------------------------------
 
-def _decode_reminder(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_reminder(row: Row) -> Dict[str, Any]:
     item = dict(row)
     metadata_json = item.pop("metadata_json", None)
     try:
@@ -853,19 +853,38 @@ def get_reminder(*, reminder_id: str) -> Optional[Dict[str, Any]]:
     return _decode_reminder(row) if row else None
 
 
-def list_due_reminders(*, now: str, limit: int = 20) -> List[Dict[str, Any]]:
+def list_due_reminders(
+    *, now: str, limit: int = 20, node_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """node_id 非空时只返回归属该节点的账号的提醒（厚节点改造 P4 调度分片）。"""
+    node_filter = _clean_text(node_id) if node_id else None
     with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM reminders
-            WHERE status = 'pending'
-              AND due_at <= ?
-            ORDER BY due_at ASC, created_at ASC
-            LIMIT ?
-            """,
-            (now, limit),
-        ).fetchall()
+        if node_filter:
+            rows = conn.execute(
+                """
+                SELECT r.*
+                FROM reminders r
+                JOIN accounts a ON a.id = r.account_id
+                WHERE r.status = 'pending'
+                  AND r.due_at <= ?
+                  AND a.assigned_node_id = ?
+                ORDER BY r.due_at ASC, r.created_at ASC
+                LIMIT ?
+                """,
+                (now, node_filter, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM reminders
+                WHERE status = 'pending'
+                  AND due_at <= ?
+                ORDER BY due_at ASC, created_at ASC
+                LIMIT ?
+                """,
+                (now, limit),
+            ).fetchall()
     return [_decode_reminder(row) for row in rows]
 
 
@@ -1061,7 +1080,7 @@ def update_reminder(
 # Proactive commitments
 # ---------------------------------------------------------------------------
 
-def _decode_proactive_commitment(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_proactive_commitment(row: Row) -> Dict[str, Any]:
     item = dict(row)
     metadata_json = item.pop("metadata_json", None)
     try:
@@ -1169,10 +1188,15 @@ def list_due_proactive_commitments(
     *,
     now: str,
     limit: int = 20,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    """node_id 非空时只返回归属该节点的账号的承诺（厚节点改造 P4 调度分片）。"""
+    node_filter = _clean_text(node_id) if node_id else None
+    node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
+    params: list = [now, now] + ([node_filter] if node_filter else []) + [limit]
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT c.*
             FROM proactive_commitments c
             JOIN accounts a ON a.id = c.account_id
@@ -1182,10 +1206,11 @@ def list_due_proactive_commitments(
               AND a.status = 'active'
               AND s.enabled = 1
               AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
+              {node_clause}
             ORDER BY c.due_at ASC, c.created_at ASC
             LIMIT ?
             """,
-            (now, now, limit),
+            params,
         ).fetchall()
     return [_decode_proactive_commitment(row) for row in rows]
 
@@ -1320,7 +1345,7 @@ def cancel_proactive_commitment(
 # Proactive account state
 # ---------------------------------------------------------------------------
 
-def _decode_proactive_account_state(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_proactive_account_state(row: Row) -> Dict[str, Any]:
     item = dict(row)
     metadata_json = item.pop("metadata_json", None)
     try:
@@ -1499,7 +1524,7 @@ def upsert_proactive_account_state(
 # Proactive message settings（账号级主动消息偏好 + 审计）
 # ---------------------------------------------------------------------------
 
-def _decode_proactive_message_settings(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_proactive_message_settings(row: Row) -> Dict[str, Any]:
     """Decode a proactive_message_settings row.
 
     quiet_hours 为 None 表示该列为 NULL（继承全局），调用方据此区分
@@ -1719,10 +1744,15 @@ def list_due_proactive_account_states(
     *,
     now: str,
     limit: int = 20,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
+    """node_id 非空时只返回归属该节点的账号状态（厚节点改造 P4 调度分片）。"""
+    node_filter = _clean_text(node_id) if node_id else None
+    node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
+    params: list = [now, now] + ([node_filter] if node_filter else []) + [limit]
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.*, a.status AS account_status
             FROM proactive_account_state s
             JOIN accounts a ON a.id = s.account_id
@@ -1730,31 +1760,35 @@ def list_due_proactive_account_states(
               AND a.status = 'active'
               AND (s.next_scan_at IS NULL OR s.next_scan_at <= ?)
               AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
+              {node_clause}
             ORDER BY COALESCE(s.next_scan_at, '0000-01-01 00:00:00') ASC,
                      s.updated_at ASC
             LIMIT ?
             """,
-            (now, now, limit),
+            params,
         ).fetchall()
     return [_decode_proactive_account_state(row) for row in rows]
 
 
-def list_due_reactivation_candidate_accounts(*, now: str, limit: int = 20) -> List[str]:
+def list_due_reactivation_candidate_accounts(
+    *, now: str, limit: int = 20, node_id: Optional[str] = None
+) -> List[str]:
     """Accounts whose queued reactivation candidate is due to send (scheduled_at<=now).
 
-    Independent of the planning cadence (next_scan_at): the dispatch sweep runs
-    every scheduler tick so a candidate fires at its slot time, not at the next
-    hourly planning pass. scheduled_at is app-written local time, same basis as
-    `now`, so no timezone conversion is needed here.
+    node_id 非空时只返回归属该节点的账号（厚节点改造 P4 调度分片）。
     """
+    node_filter = _clean_text(node_id) if node_id else None
+    node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
+    params: list = ([node_filter] if node_filter else []) + [now, limit]
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT s.account_id
             FROM proactive_account_state s
             JOIN accounts a ON a.id = s.account_id
             WHERE s.enabled = 1
               AND a.status = 'active'
+              {node_clause}
               AND json_valid(s.metadata_json)
               AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') IS NOT NULL
               AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') <= ?
@@ -1762,7 +1796,7 @@ def list_due_reactivation_candidate_accounts(*, now: str, limit: int = 20) -> Li
                      s.updated_at ASC
             LIMIT ?
             """,
-            (now, limit),
+            params,
         ).fetchall()
     return [row["account_id"] for row in rows]
 
@@ -1855,7 +1889,7 @@ def _normalize_title_items(title_items: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
-def _decode_content_invitation(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_invitation(row: Row) -> Dict[str, Any]:
     item = dict(row)
     title_items_json = item.pop("title_items_json", None)
     metadata_json = item.pop("metadata_json", None)
@@ -1872,7 +1906,7 @@ def _decode_content_invitation(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_content_invitation_preference(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_invitation_preference(row: Row) -> Dict[str, Any]:
     item = dict(row)
     metadata_json = item.pop("metadata_json", None)
     try:

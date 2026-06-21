@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Connection, IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -20,6 +20,7 @@ from app.db._core import (
     _clean_text,
     _new_id,
     _normalize_phone,
+    _savepoint,
     _tx,
     connect,
     logger,
@@ -198,35 +199,37 @@ def insert_message(
     raw: Optional[Dict[str, Any]] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[Connection] = None,
 ) -> Optional[int]:
     try:
         with _tx(conn) as tx:
-            cursor = tx.execute(
-                """
-                INSERT INTO messages(
-                    account_id, session_id, message_id, reply_to_message_id,
-                    direction, role, message_type, content, raw_json, latency_ms, error,
-                    created_at
+            # _savepoint 保证 IntegrityError 只回滚到保存点，不污染外部事务（PG 下必须）。
+            with _savepoint(tx, "insert_msg"):
+                cursor = tx.execute(
+                    """
+                    INSERT INTO messages(
+                        account_id, session_id, message_id, reply_to_message_id,
+                        direction, role, message_type, content, raw_json, latency_ms, error,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    """,
+                    (
+                        account_id,
+                        session_id,
+                        message_id,
+                        reply_to_message_id,
+                        direction,
+                        role,
+                        message_type,
+                        content,
+                        json.dumps(raw or {}, ensure_ascii=False),
+                        latency_ms,
+                        error,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-                """,
-                (
-                    account_id,
-                    session_id,
-                    message_id,
-                    reply_to_message_id,
-                    direction,
-                    role,
-                    message_type,
-                    content,
-                    json.dumps(raw or {}, ensure_ascii=False),
-                    latency_ms,
-                    error,
-                ),
-            )
-            return int(cursor.lastrowid)
-    except sqlite3.IntegrityError:
+                return int(cursor.lastrowid)
+    except IntegrityError:
         return None
 
 
@@ -234,7 +237,7 @@ def mark_message_moderation_blocked(
     *,
     message_db_id: int,
     account_id: str,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[Connection] = None,
 ) -> bool:
     """将入站命中消息标记为审核拦截，使其从所有 LLM 上下文/记忆路径中被过滤。
 
@@ -530,7 +533,7 @@ def list_recent_reactivation_outbound_messages(
                 OR (
                   product_category IN ({legacy_placeholders})
                   AND json_valid(metadata_json)
-                  AND json_extract(metadata_json, '$.reactivation') = 1
+                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
                 )
               )
             ORDER BY id DESC
@@ -574,7 +577,7 @@ def count_reactivation_outbound_for_quota_date(
                 OR (
                   product_category IN ({legacy_placeholders})
                   AND json_valid(metadata_json)
-                  AND json_extract(metadata_json, '$.reactivation') = 1
+                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
                 )
               )
             """,
@@ -628,7 +631,7 @@ def list_reactivation_outbound_messages_admin(
                 OR (
                   o.product_category IN ({legacy_placeholders})
                   AND json_valid(o.metadata_json)
-                  AND json_extract(o.metadata_json, '$.reactivation') = 1
+                  AND CAST(json_extract(o.metadata_json, '$.reactivation') AS INTEGER) = 1
                 )
               )
             ORDER BY o.id DESC
@@ -782,7 +785,7 @@ def get_message_raw(*, message_db_id: int) -> Optional[Dict[str, Any]]:
     return _decode_raw_message(row) if row else None
 
 
-def _decode_raw_message(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_raw_message(row: Row) -> Dict[str, Any]:
     item = dict(row)
     raw_json = item.pop("raw_json", None)
     try:
@@ -826,8 +829,11 @@ def list_sessions(*, limit: int = 50) -> List[Dict[str, Any]]:
             FROM sessions s
             LEFT JOIN profiles p ON p.account_id = s.account_id
             LEFT JOIN messages m ON m.session_id = s.id
-            GROUP BY s.id
-            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
+            -- GROUP BY 含 p.* 列：PG 仅对「按主键分组的同表列」放行函数依赖，跨表
+            -- profiles 列须显式入组（1:1 关系，结果不变）；ORDER BY 用底层聚合表达式
+            -- 而非 SELECT 别名（PG 不允许别名出现在 ORDER BY 表达式内）。
+            GROUP BY s.id, p.style, p.display_name
+            ORDER BY COALESCE(MAX(m.created_at), s.updated_at) DESC
             LIMIT ?
             """,
             (limit,),
@@ -873,7 +879,8 @@ def list_sessions_for_account(*, account_id: str, limit: int = 50) -> List[Dict[
             LEFT JOIN messages m ON m.session_id = s.id
             WHERE s.account_id = ?
             GROUP BY s.id
-            ORDER BY COALESCE(last_message_at, s.updated_at) DESC
+            -- ORDER BY 用底层聚合表达式而非 SELECT 别名（PG 不允许别名出现在表达式内）
+            ORDER BY COALESCE(MAX(m.created_at), s.updated_at) DESC
             LIMIT ?
             """,
             (account_id, limit),
@@ -1080,7 +1087,7 @@ def increment_daily_usage(
     *,
     account_id: str,
     date: str,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[Connection] = None,
 ) -> int:
     with _tx(conn) as tx:
         tx.execute(
@@ -1088,7 +1095,8 @@ def increment_daily_usage(
             INSERT INTO daily_usage(account_id, date, message_count, updated_at)
             VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(account_id, date) DO UPDATE SET
-                message_count = message_count + 1,
+                -- 限定表名：PG 的 DO UPDATE 里 excluded 也在作用域，裸 message_count 会歧义
+                message_count = daily_usage.message_count + 1,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, date),
@@ -1444,7 +1452,8 @@ def consume_valid_verification_token(
     """Atomically consume a verified token. Returns the row if it was valid and not yet consumed, None otherwise."""
     normalized = _normalize_phone(phone)
     with connect() as conn:
-        conn.execute(
+        # rowcount 取本次 UPDATE 影响行数（sqlite3/psycopg 一致），替代 SQLite 专有 changes()
+        cursor = conn.execute(
             """
             UPDATE phone_verifications
             SET token_consumed_at = datetime('now', '+8 hours')
@@ -1455,7 +1464,7 @@ def consume_valid_verification_token(
             """,
             (verified_token, normalized),
         )
-        if conn.execute("SELECT changes()").fetchone()[0] == 0:
+        if cursor.rowcount == 0:
             return None
         row = conn.execute(
             "SELECT * FROM phone_verifications WHERE verified_token = ? AND phone = ?",

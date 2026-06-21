@@ -301,30 +301,34 @@ class _ApiPrefixStripMiddleware:
 app.add_middleware(_ApiPrefixStripMiddleware)
 
 
-app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
-app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
-
+# 所有角色都需要：健康检查 + bridge（接收 OpenClaw/节点 turn）
 from app.routers import health as _health_router, bridge as _bridge_router  # noqa: E402
 app.include_router(_health_router.router)
 app.include_router(_bridge_router.router)
-from app.routers import web as _web_router  # noqa: E402
-app.include_router(_web_router.router)
-from app.routers import debug as _debug_router  # noqa: E402
-app.include_router(_debug_router.router)
-from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
-app.include_router(_admin_moderation_router.router)
-from app.routers import admin_accounts as _admin_accounts_router  # noqa: E402
-app.include_router(_admin_accounts_router.router)
-from app.routers import admin_proactive as _admin_proactive_router  # noqa: E402
-app.include_router(_admin_proactive_router.router)
-from app.routers import admin_dreaming as _admin_dreaming_router  # noqa: E402
-app.include_router(_admin_dreaming_router.router)
-from app.routers import admin_ops as _admin_ops_router  # noqa: E402
-app.include_router(_admin_ops_router.router)
-from app.routers import admin_llm as _admin_llm_router  # noqa: E402
-app.include_router(_admin_llm_router.router)
-from app.routers import admin_security as _admin_security_router  # noqa: E402
-app.include_router(_admin_security_router.router)
+
+# 中心/standalone 独有：静态前端、Web 注册、管理台、审核台等控制面路由
+# 纯节点（AI4ALL_ROLE=node）不挂载，减少启动依赖与暴露面
+if settings.has_central_role:
+    app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
+    app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
+    from app.routers import web as _web_router  # noqa: E402
+    app.include_router(_web_router.router)
+    from app.routers import debug as _debug_router  # noqa: E402
+    app.include_router(_debug_router.router)
+    from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
+    app.include_router(_admin_moderation_router.router)
+    from app.routers import admin_accounts as _admin_accounts_router  # noqa: E402
+    app.include_router(_admin_accounts_router.router)
+    from app.routers import admin_proactive as _admin_proactive_router  # noqa: E402
+    app.include_router(_admin_proactive_router.router)
+    from app.routers import admin_dreaming as _admin_dreaming_router  # noqa: E402
+    app.include_router(_admin_dreaming_router.router)
+    from app.routers import admin_ops as _admin_ops_router  # noqa: E402
+    app.include_router(_admin_ops_router.router)
+    from app.routers import admin_llm as _admin_llm_router  # noqa: E402
+    app.include_router(_admin_llm_router.router)
+    from app.routers import admin_security as _admin_security_router  # noqa: E402
+    app.include_router(_admin_security_router.router)
 
 # Local-dev convenience: production nginx serves the static frontend at "/" and
 # "/user/*" (the frontend hardcodes those absolute paths). Replicate that mapping
@@ -409,7 +413,14 @@ def _is_debug_trace_account(account_id: str) -> bool:
 
 @app.on_event("startup")
 def startup() -> None:
-    init_db()
+    if settings.has_central_role:
+        # standalone / central：运行完整 DDL 迁移
+        init_db()
+    else:
+        # 纯节点：仅验证 DB 连接可用，DDL 由中心执行，节点不重复跑迁移
+        from app.db._core import connect
+        with connect() as _conn:
+            _conn.execute("SELECT 1")
     configure_error_log_alerting(settings)
     # 宿主机时区第二层防御：非 UTC+8 时报警但兼容继续（详见 time_utils.verify_host_timezone）。
     verify_host_timezone()
@@ -442,6 +453,7 @@ async def startup_proactive_scheduler() -> None:
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
         planning_interval_seconds=settings.proactive_planning_interval_seconds,
+        node_id=settings.node_id or None,
     )
     logger.info("proactive scheduler started: %s", scheduler.status())
 
@@ -453,6 +465,7 @@ async def startup_dreaming_scheduler() -> None:
     scheduler = start_dreaming_scheduler(
         batch_size=settings.dreaming_scheduler_batch_size,
         start_hour=settings.conversation_session_business_day_start_hour,
+        node_id=settings.node_id or None,
     )
     logger.info("dreaming scheduler started: %s", scheduler.status())
 

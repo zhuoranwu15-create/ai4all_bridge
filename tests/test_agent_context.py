@@ -2,6 +2,8 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from app import profile_storage
+
 
 def _settings(tmp_path):
     s = MagicMock()
@@ -10,8 +12,8 @@ def _settings(tmp_path):
     return s
 
 
-def test_agent_context_user_files_created_from_blank_template(tmp_path):
-    s = _settings(tmp_path)
+def test_agent_context_user_files_created_from_blank_template(fresh_db, tmp_path):
+    s = fresh_db  # 提供隔离 DB（含 account_profile_files 表）+ 同 tmp_path 的 dirs
     with patch("app.user_profiles.settings", s):
         from app.user_profiles import (
             SYSTEM_CONTEXT_FILES,
@@ -21,16 +23,15 @@ def test_agent_context_user_files_created_from_blank_template(tmp_path):
         )
 
         context = read_agent_context("acc-context", display_name="测试助手")
-        profile_dir = account_profile_dir("acc-context")
 
-        # User-level files live in account directory
+        # User-level files 入库（profile_storage），不再落账号磁盘目录
         for filename in USER_CONTEXT_FILE_ORDER:
-            assert (profile_dir / filename).exists()
+            assert profile_storage.exists("acc-context", filename)
             assert context.files[filename]["created"] is True
 
-        # System-level files live in system directory, not account directory
+        # System-level files 仍落 system_dir 磁盘，不入账号 storage
         for filename in SYSTEM_CONTEXT_FILES:
-            assert not (profile_dir / filename).exists()
+            assert not profile_storage.exists("acc-context", filename)
             assert (tmp_path / "system" / filename).exists()
 
         assert "HEARTBEAT.md" not in context.files
@@ -77,14 +78,14 @@ def test_default_tools_template_mentions_default_chat_tools():
     assert missing == []
 
 
-def test_agent_context_ignores_legacy_user_profile_when_creating_files(tmp_path):
-    s = _settings(tmp_path)
+def test_agent_context_ignores_legacy_user_profile_when_creating_files(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context, user_profile_path
+        from app.user_profiles import read_agent_context
 
-        profile_path = user_profile_path("acc-legacy-ignored")
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        profile_path.write_text(
+        profile_storage.write_file(
+            "acc-legacy-ignored",
+            "user_profile.md",
             """# User Profile
 
 ## Soul
@@ -96,7 +97,6 @@ def test_agent_context_ignores_legacy_user_profile_when_creating_files(tmp_path)
 ## Long-term Memory
 - 用户是工程师
 """,
-            encoding="utf-8",
         )
 
         context = read_agent_context("acc-legacy-ignored", display_name="测试助手")
@@ -107,14 +107,12 @@ def test_agent_context_ignores_legacy_user_profile_when_creating_files(tmp_path)
         assert "专属的陪伴" in context.blocks["SOUL"]
 
 
-def test_agent_context_does_not_overwrite_existing_user_files(tmp_path):
-    s = _settings(tmp_path)
+def test_agent_context_does_not_overwrite_existing_user_files(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
-        from app.user_profiles import account_profile_dir, read_agent_context
+        from app.user_profiles import read_agent_context
 
-        profile_dir = account_profile_dir("acc-existing")
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        (profile_dir / "SOUL.md").write_text("custom soul", encoding="utf-8")
+        profile_storage.write_file("acc-existing", "SOUL.md", "custom soul")
 
         context = read_agent_context("acc-existing")
 
@@ -123,19 +121,16 @@ def test_agent_context_does_not_overwrite_existing_user_files(tmp_path):
         assert context.files["IDENTITY.md"]["created"] is True
 
 
-def test_ensure_agent_context_files_skips_default_render_when_files_exist(tmp_path):
-    s = _settings(tmp_path)
+def test_ensure_agent_context_files_skips_default_render_when_files_exist(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
         from app.user_profiles import (
             USER_CONTEXT_FILE_ORDER,
-            account_profile_dir,
             ensure_agent_context_files,
         )
 
-        profile_dir = account_profile_dir("acc-existing-all")
-        profile_dir.mkdir(parents=True, exist_ok=True)
         for filename in USER_CONTEXT_FILE_ORDER:
-            (profile_dir / filename).write_text(f"# {filename}\n\ncustom\n", encoding="utf-8")
+            profile_storage.write_file("acc-existing-all", filename, f"# {filename}\n\ncustom\n")
 
         with patch(
             "app.user_profiles._default_user_context_templates",
@@ -146,14 +141,12 @@ def test_ensure_agent_context_files_skips_default_render_when_files_exist(tmp_pa
     assert created == {filename: False for filename in USER_CONTEXT_FILE_ORDER}
 
 
-def test_agent_context_repairs_empty_soul_file_with_blank_template(tmp_path):
-    s = _settings(tmp_path)
+def test_agent_context_repairs_empty_soul_file_with_blank_template(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
-        from app.user_profiles import account_profile_dir, read_agent_context
+        from app.user_profiles import read_agent_context
 
-        profile_dir = account_profile_dir("acc-empty-soul")
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        (profile_dir / "SOUL.md").write_text("\n  \n", encoding="utf-8")
+        profile_storage.write_file("acc-empty-soul", "SOUL.md", "\n  \n")
 
         context = read_agent_context("acc-empty-soul")
 
@@ -163,8 +156,8 @@ def test_agent_context_repairs_empty_soul_file_with_blank_template(tmp_path):
         assert "{user_clause}" not in context.blocks["SOUL"]
 
 
-def test_agent_context_default_assistant_name_not_written_to_soul(tmp_path):
-    s = _settings(tmp_path)
+def test_agent_context_default_assistant_name_not_written_to_soul(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
         from app.user_profiles import read_agent_context
 
@@ -190,21 +183,18 @@ def test_missing_blank_soul_template_logs_error_and_falls_back(tmp_path, caplog)
     assert any("soul template load failed name=blank" in record.message for record in caplog.records)
 
 
-def test_existing_account_heartbeat_file_is_preserved_but_not_returned(tmp_path):
-    s = _settings(tmp_path)
+def test_existing_account_heartbeat_file_is_preserved_but_not_returned(fresh_db, tmp_path):
+    s = fresh_db
     with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context, user_profile_path
+        from app.user_profiles import read_agent_context
 
-        profile_path = user_profile_path("acc-old-heartbeat")
-        profile_path.parent.mkdir(parents=True, exist_ok=True)
-        profile_path.write_text("# User Profile\n", encoding="utf-8")
-        heartbeat_path = profile_path.parent / "HEARTBEAT.md"
-        heartbeat_path.write_text("# HEARTBEAT\n旧账号备注", encoding="utf-8")
+        # 非受管的额外文件（如历史 HEARTBEAT.md）入库后不应被 read_agent_context 返回，也不被删
+        profile_storage.write_file("acc-old-heartbeat", "user_profile.md", "# User Profile\n")
+        profile_storage.write_file("acc-old-heartbeat", "HEARTBEAT.md", "# HEARTBEAT\n旧账号备注")
 
         context = read_agent_context("acc-old-heartbeat")
 
-        assert heartbeat_path.exists()
-        assert heartbeat_path.read_text(encoding="utf-8") == "# HEARTBEAT\n旧账号备注"
+        assert profile_storage.read_file("acc-old-heartbeat", "HEARTBEAT.md") == "# HEARTBEAT\n旧账号备注"
         assert "HEARTBEAT.md" not in context.files
         assert "HEARTBEAT" not in context.blocks
 

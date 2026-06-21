@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 
+    # ===== 数据库后端（厚节点改造，见 docs/tech_design/thick_node_postgres_refactor.md）=====
+    # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。
+    database_url: str = ""
+    db_pool_min_size: int = 1            # PG 连接池下限(仅 database_url 为 PG 时生效)
+    db_pool_max_size: int = 8            # PG 连接池上限；Σ(各节点上限)+中心自身 ≤ PG max_connections
+
     # ===== 数据备份（scripts/backup_data.py）=====
     backup_dir: str = "data/backups"          # 备份产物根目录
     backup_retention_count: int = 14          # 保留最新份数，更旧的自动轮转删除

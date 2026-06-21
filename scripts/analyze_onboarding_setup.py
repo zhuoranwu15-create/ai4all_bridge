@@ -25,6 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
+    from app import profile_storage
     from app.config import settings
     from app.user_profiles import _safe_account_dir_name
 except ModuleNotFoundError as exc:
@@ -256,9 +257,10 @@ def analyze_account(
     registered_date = registered_at[:10]
     profile_dir = profiles_root / _safe_account_dir_name(account_id)
 
-    soul_text = _read_text(profile_dir / "SOUL.md")
-    identity_text = _read_text(profile_dir / "IDENTITY.md")
-    user_text = _read_text(profile_dir / "USER.md")
+    # P2 后从 storage 读（account_profile_files），profile_dir 仅保留为元数据展示字段。
+    soul_text = (profile_storage.read_file(account_id, "SOUL.md") or "").strip()
+    identity_text = (profile_storage.read_file(account_id, "IDENTITY.md") or "").strip()
+    user_text = (profile_storage.read_file(account_id, "USER.md") or "").strip()
 
     user_name = _extract_first(_USER_NAME_RE, user_text)
     ai_name = _extract_first(_AI_NAME_RE, identity_text)

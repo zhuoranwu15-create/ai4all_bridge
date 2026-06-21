@@ -21,10 +21,13 @@ from app.db import (
     update_dreaming_run,
     update_session_summary,
 )
+from app import profile_storage
 from app.user_profiles import (
     account_profile_dir,
     context_file_path,
     ensure_agent_context_files,
+    read_context_file,
+    write_context_file,
 )
 
 
@@ -266,16 +269,16 @@ def list_recent_daily_memory(
     records: List[Dict[str, object]] = []
     for offset in range(days - 1, -1, -1):
         date_str = (today_date - timedelta(days=offset)).isoformat()
-        path = base / f"{date_str}.md"
-        if not path.exists():
+        raw = profile_storage.read_file(account_id, f"memory/{date_str}.md")
+        if raw is None:
             continue
-        content = path.read_text(encoding="utf-8").strip()
+        content = raw.strip()
         if not content:
             continue
         records.append(
             {
                 "date": date_str,
-                "path": str(path),
+                "path": str(base / f"{date_str}.md"),  # 逻辑路径，仅展示
                 "chars": len(content),
                 "content": content,
             }
@@ -315,30 +318,28 @@ def _strip_memory_heading(text: str) -> str:
 
 def read_long_term_memory(account_id: str) -> str:
     ensure_agent_context_files(account_id)
-    path = context_file_path(account_id, "MEMORY.md")
-    if not path.exists():
+    raw = read_context_file(account_id, "MEMORY.md")
+    if raw is None:
         return ""
-    return _strip_memory_heading(path.read_text(encoding="utf-8"))
+    return _strip_memory_heading(raw)
 
 
 def write_long_term_memory(account_id: str, memory_body: str) -> Path:
     ensure_agent_context_files(account_id)
-    path = context_file_path(account_id, "MEMORY.md")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# MEMORY\n\n" + memory_body.strip() + "\n", encoding="utf-8")
-    return path
+    write_context_file(account_id, "MEMORY.md", "# MEMORY\n\n" + memory_body.strip() + "\n")
+    return context_file_path(account_id, "MEMORY.md")
 
 
 def _read_context_file(account_id: str, target_file: str) -> str:
     ensure_agent_context_files(account_id)
-    return context_file_path(account_id, target_file).read_text(encoding="utf-8")
+    # ensure_agent_context_files 保证目标文件已存在；缺失兜底成空串。
+    return read_context_file(account_id, target_file) or ""
 
 
 def _write_context_file(account_id: str, target_file: str, content: str) -> Path:
     ensure_agent_context_files(account_id)
-    path = context_file_path(account_id, target_file)
-    path.write_text(content.rstrip() + "\n", encoding="utf-8")
-    return path
+    write_context_file(account_id, target_file, content.rstrip() + "\n")
+    return context_file_path(account_id, target_file)
 
 
 def _build_dreaming_prompt(

@@ -2,6 +2,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
+from app import profile_storage
+
 
 # ---------------------------------------------------------------------------
 # State machine helpers
@@ -291,9 +293,8 @@ def test_write_user_name_creates_user_md(tmp_path, fresh_db):
     account_id = "test-write-user-name"
     write_user_name(account_id, "小晨")
 
-    path = context_file_path(account_id, "USER.md")
-    assert path.exists()
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "USER.md")
+    assert content is not None
     assert "小晨" in content
     assert "用户称呼" in content
 
@@ -305,8 +306,7 @@ def test_write_user_name_updates_existing(tmp_path, fresh_db):
     write_user_name(account_id, "小晨")
     write_user_name(account_id, "阿晨")
 
-    path = context_file_path(account_id, "USER.md")
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "USER.md")
     assert "阿晨" in content
     assert "小晨" not in content
 
@@ -317,9 +317,8 @@ def test_write_ai_name_to_identity(tmp_path, fresh_db):
     account_id = "test-ai-name"
     write_ai_name_to_identity(account_id, "星星")
 
-    path = context_file_path(account_id, "IDENTITY.md")
-    assert path.exists()
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "IDENTITY.md")
+    assert content is not None
     assert "星星" in content
 
 
@@ -329,9 +328,8 @@ def test_apply_soul_preset_blank(tmp_path, fresh_db):
     account_id = "test-soul-blank"
     apply_soul_preset(account_id, "blank")
 
-    path = context_file_path(account_id, "SOUL.md")
-    assert path.exists()
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "SOUL.md")
+    assert content is not None
     assert "SOUL" in content
     assert "温柔" in content
 
@@ -343,7 +341,7 @@ def test_apply_soul_preset_xiaotaiyang(tmp_path, fresh_db):
     write_ai_name_to_identity(account_id, "小太阳")
     apply_soul_preset(account_id, "xiaotaiyang")
 
-    content = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "SOUL.md")
     assert "小太阳" in content
     assert "小精灵" in content
 
@@ -355,7 +353,7 @@ def test_apply_soul_preset_with_ai_name(tmp_path, fresh_db):
     write_ai_name_to_identity(account_id, "星星")
     apply_soul_preset(account_id, "blank")
 
-    content = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "SOUL.md")
     assert "星星" in content
 
 
@@ -372,8 +370,8 @@ def test_persona_preset_preserves_existing_ai_name(tmp_path, fresh_db):
         current_state="step3_sent",
     )
 
-    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
-    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    identity = profile_storage.read_file(account_id, "IDENTITY.md")
+    soul = profile_storage.read_file(account_id, "SOUL.md")
     assert written["persona"] == "ju"
     assert "AI 名字：小A" in identity
     assert "AI 名字：橘" not in identity
@@ -398,8 +396,8 @@ def test_step2_modified_preset_writes_custom_ai_name_and_preset_soul(tmp_path, f
         current_state="step2_sent",
     )
 
-    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
-    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    identity = profile_storage.read_file(account_id, "IDENTITY.md")
+    soul = profile_storage.read_file(account_id, "SOUL.md")
     assert written["ai_name"] == "小满"
     assert written["persona"] == "xiaotaiyang"
     assert "AI 名字：小满" in identity
@@ -420,9 +418,8 @@ def test_step2_blank_does_not_fix_ai_name(tmp_path, fresh_db):
     )
 
     assert written["persona"] == "blank"
-    identity = context_file_path(account_id, "IDENTITY.md")
-    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
-    assert not identity.exists()
+    soul = profile_storage.read_file(account_id, "SOUL.md")
+    assert not profile_storage.exists(account_id, "IDENTITY.md")
     assert "温柔" in soul
 
 
@@ -444,8 +441,8 @@ def test_step2_custom_persona_writes_summary(tmp_path, fresh_db):
         current_state="step2_sent",
     )
 
-    identity = context_file_path(account_id, "IDENTITY.md").read_text(encoding="utf-8")
-    soul = context_file_path(account_id, "SOUL.md").read_text(encoding="utf-8")
+    identity = profile_storage.read_file(account_id, "IDENTITY.md")
+    soul = profile_storage.read_file(account_id, "SOUL.md")
     assert written["ai_name"] == "岚"
     assert written["persona"] == "custom"
     assert "AI 名字：岚" in identity
@@ -535,7 +532,7 @@ def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_
     assert data["metadata"]["onboarding_welcome_to_user_id"] == "peer-a@im.wechat"
     mock_send.assert_called_once()
     assert mock_send.call_args.kwargs["to_user_id"] == "peer-a@im.wechat"
-    soul = context_file_path(session_key, "SOUL.md").read_text(encoding="utf-8")
+    soul = profile_storage.read_file(session_key, "SOUL.md")
     assert "专属的陪伴" in soul
     assert "个人 AI 陪伴与生活助理" not in soul
 
@@ -590,8 +587,8 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
         )
 
     assert res.status_code == 200
-    identity = context_file_path(session_key, "IDENTITY.md").read_text(encoding="utf-8")
-    soul = context_file_path(session_key, "SOUL.md").read_text(encoding="utf-8")
+    identity = profile_storage.read_file(session_key, "IDENTITY.md")
+    soul = profile_storage.read_file(session_key, "SOUL.md")
     assert "AI 名字：小满" in identity
     assert "小满" in soul
     assert "小精灵" in soul
@@ -636,13 +633,11 @@ def test_write_user_name_preserves_existing_memory(tmp_path, fresh_db):
     from app.user_profiles import write_user_name, context_file_path
 
     account_id = "test-preserve-mem"
-    path = context_file_path(account_id, "USER.md")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# USER\n\n- 用户自称冲哥。\n- 用户是马刺球迷。\n", encoding="utf-8")
+    profile_storage.write_file(account_id, "USER.md", "# USER\n\n- 用户自称冲哥。\n- 用户是马刺球迷。\n")
 
     write_user_name(account_id, "冲哥")
 
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "USER.md")
     assert "用户是马刺球迷" in content          # 既有记忆保留
     assert "- 用户称呼：冲哥" in content         # 新名字以 bullet 追加
     assert content.count("用户称呼") == 1
@@ -656,7 +651,7 @@ def test_write_user_name_uses_bullet_and_clears_placeholder(tmp_path, fresh_db):
     ensure_agent_context_files(account_id)  # 生成 '# USER\n\n- 暂无'
     write_user_name(account_id, "二哥")
 
-    content = context_file_path(account_id, "USER.md").read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "USER.md")
     assert "暂无" not in content
     assert "- 用户称呼：二哥" in content
 
@@ -666,13 +661,11 @@ def test_write_user_name_migrates_legacy_format_in_place(tmp_path, fresh_db):
     from app.user_profiles import write_user_name, context_file_path
 
     account_id = "test-migrate-fmt"
-    path = context_file_path(account_id, "USER.md")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("# USER\n\n用户称呼：老薛\n- 用户是球迷。\n", encoding="utf-8")
+    profile_storage.write_file(account_id, "USER.md", "# USER\n\n用户称呼：老薛\n- 用户是球迷。\n")
 
     write_user_name(account_id, "薛哥")
 
-    content = path.read_text(encoding="utf-8")
+    content = profile_storage.read_file(account_id, "USER.md")
     assert "- 用户称呼：薛哥" in content
     assert "老薛" not in content
     assert "用户是球迷" in content

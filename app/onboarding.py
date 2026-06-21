@@ -306,7 +306,7 @@ def apply_extracted_onboarding_info(
     """
     from app.user_profiles import (  # noqa: PLC0415
         apply_soul_preset,
-        context_file_path,
+        read_context_file,
         write_ai_name_to_identity,
         write_user_name,
     )
@@ -336,10 +336,8 @@ def apply_extracted_onboarding_info(
 
         # If user chose a named preset but never gave the AI a name, use the preset name
         if preset in _PRESET_DEFAULT_NAMES and "ai_name" not in written:
-            identity_path = context_file_path(account_id, "IDENTITY.md")
-            has_name = (
-                identity_path.exists() and "AI 名字" in identity_path.read_text(encoding="utf-8")
-            )
+            identity_text = read_context_file(account_id, "IDENTITY.md")
+            has_name = bool(identity_text) and "AI 名字" in identity_text
             if not has_name:
                 try:
                     write_ai_name_to_identity(account_id=account_id, name=_PRESET_DEFAULT_NAMES[preset])

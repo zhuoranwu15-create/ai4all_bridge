@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Connection, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -41,7 +41,7 @@ __all__ = [
 # Content moderation
 # ---------------------------------------------------------------------------
 
-def _decode_content_moderation_task(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_moderation_task(row: Row) -> Dict[str, Any]:
     item = dict(row)
     for source_field, target_field, default in (
         ("risk_categories_json", "risk_categories", []),
@@ -57,7 +57,7 @@ def _decode_content_moderation_task(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_content_moderation_result(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_moderation_result(row: Row) -> Dict[str, Any]:
     item = dict(row)
     for source_field, target_field, default in (
         ("categories_json", "categories", []),
@@ -73,7 +73,7 @@ def _decode_content_moderation_result(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_content_moderation_action(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_moderation_action(row: Row) -> Dict[str, Any]:
     return _decode_json_field(
         dict(row),
         source_field="metadata_json",
@@ -82,7 +82,7 @@ def _decode_content_moderation_action(row: sqlite3.Row) -> Dict[str, Any]:
     )
 
 
-def _decode_content_moderation_export(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_content_moderation_export(row: Row) -> Dict[str, Any]:
     return _decode_json_field(
         dict(row),
         source_field="artifact_json",
@@ -727,7 +727,7 @@ def get_content_moderation_stats(*, account_id: Optional[str] = None) -> Dict[st
     }
 
 
-def _decode_moderation_account_risk_state(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_moderation_account_risk_state(row: Row) -> Dict[str, Any]:
     return _decode_json_field(
         dict(row),
         source_field="metadata_json",
@@ -854,7 +854,7 @@ def update_moderation_account_risk_controls(
 
 
 def _delete_content_moderation_tasks_where(
-    conn: sqlite3.Connection,
+    conn: Connection,
     where_sql: str,
     params: tuple,
 ) -> Dict[str, int]:

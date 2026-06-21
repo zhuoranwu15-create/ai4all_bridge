@@ -9,7 +9,7 @@ from app.routers.models import ProfileUpdateRequest
 from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_account_user_meta_current, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
 from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
 from app.time_utils import beijing_now_str
-from app.user_profiles import ensure_user_profile, read_agent_context
+from app.user_profiles import ensure_user_profile, read_agent_context, read_user_profile
 from datetime import date as date_cls, datetime
 from typing import Optional
 
@@ -231,7 +231,8 @@ def admin_get_user_profile(
 ) -> dict:
     path = ensure_user_profile(account_id)
     context = read_agent_context(account_id)
-    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    # P2 后 user_profile.md 真相在 account_profile_files，不再读磁盘。
+    content = read_user_profile(account_id)
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,

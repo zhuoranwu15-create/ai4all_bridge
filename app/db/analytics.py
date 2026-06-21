@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-import sqlite3
+from app.db._backend import Connection, IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from app.config import settings
 from app.db._core import (
     _clean_text,
+    _savepoint,
     _tx,
     connect,
 )
@@ -45,36 +46,38 @@ def insert_debug_trace(
     metadata: Optional[Dict[str, Any]] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
-    conn: Optional[sqlite3.Connection] = None,
+    conn: Optional[Connection] = None,
 ) -> Optional[int]:
     try:
         with _tx(conn) as tx:
-            cursor = tx.execute(
-                """
-                INSERT INTO debug_traces(
-                    trace_id, account_id, session_id, message_id, source,
-                    llm_model, system_prompt, messages_json, reply,
-                    metadata_json, latency_ms, error
+            # _savepoint 保证 IntegrityError 只回滚到保存点，不污染外部事务（PG 下必须）。
+            with _savepoint(tx, "insert_trace"):
+                cursor = tx.execute(
+                    """
+                    INSERT INTO debug_traces(
+                        trace_id, account_id, session_id, message_id, source,
+                        llm_model, system_prompt, messages_json, reply,
+                        metadata_json, latency_ms, error
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        trace_id,
+                        account_id,
+                        session_id,
+                        message_id,
+                        source,
+                        llm_model,
+                        system_prompt,
+                        json.dumps(messages, ensure_ascii=False),
+                        reply,
+                        json.dumps(metadata or {}, ensure_ascii=False),
+                        latency_ms,
+                        error,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    trace_id,
-                    account_id,
-                    session_id,
-                    message_id,
-                    source,
-                    llm_model,
-                    system_prompt,
-                    json.dumps(messages, ensure_ascii=False),
-                    reply,
-                    json.dumps(metadata or {}, ensure_ascii=False),
-                    latency_ms,
-                    error,
-                ),
-            )
-            return int(cursor.lastrowid)
-    except sqlite3.IntegrityError:
+                return int(cursor.lastrowid)
+    except IntegrityError:
         return None
 
 
@@ -143,7 +146,7 @@ def get_debug_trace(*, trace_id: str) -> Optional[Dict[str, Any]]:
 # Tool invocations / search provider runs
 # ---------------------------------------------------------------------------
 
-def _decode_tool_invocation(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_tool_invocation(row: Row) -> Dict[str, Any]:
     item = dict(row)
     for source_field, target_field, default in (
         ("args_json", "args", {}),
@@ -159,7 +162,7 @@ def _decode_tool_invocation(row: sqlite3.Row) -> Dict[str, Any]:
     return item
 
 
-def _decode_search_provider_run(row: sqlite3.Row) -> Dict[str, Any]:
+def _decode_search_provider_run(row: Row) -> Dict[str, Any]:
     item = dict(row)
     for source_field, target_field, default in (
         ("request_json", "request", {}),

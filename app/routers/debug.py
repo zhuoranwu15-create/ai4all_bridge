@@ -6,7 +6,6 @@
 import uuid
 import time
 import re
-import shutil
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -24,7 +23,7 @@ from app.time_utils import beijing_now
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
-from app.user_profiles import CONTEXT_FILE_ORDER, account_profile_dir, context_file_path, ensure_user_profile, read_agent_context
+from app.user_profiles import CONTEXT_FILE_ORDER, context_file_exists, context_file_path, ensure_user_profile, read_agent_context, read_context_file
 from datetime import date as date_cls, datetime
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -337,9 +336,9 @@ def debug_prompt_preview(account_id: str, _: None = Depends(verify_admin_auth)) 
 
 @router.get("/debug/accounts/{account_id}/user-profile")
 def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
-    path = ensure_user_profile(account_id)
+    path = ensure_user_profile(account_id)  # 逻辑路径，仅展示
     context = read_agent_context(account_id)
-    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    content = read_context_file(account_id, "user_profile.md") or ""
     if _can_bypass_redaction_for_account(account_id):
         return {
             "account_id": account_id,
@@ -367,9 +366,10 @@ def debug_prompt_lab_context_files(account_id: str, _: None = Depends(verify_adm
     plaintext = _can_bypass_redaction_for_account(account_id)
     files = []
     for filename in CONTEXT_FILE_ORDER:
-        path = context_file_path(account_id, filename)
-        exists = path.exists()
-        content = path.read_text(encoding="utf-8") if exists else ""
+        path = context_file_path(account_id, filename)  # 逻辑路径，仅展示
+        raw = read_context_file(account_id, filename)
+        exists = raw is not None
+        content = raw or ""
         item = {
             "filename": filename,
             "path": str(path),
@@ -588,7 +588,7 @@ def debug_get_profile(session_id: int, _: None = Depends(verify_admin_auth)) -> 
 def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     """Return onboarding state and collected context file contents for an account."""
     from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
-    from app.user_profiles import read_agent_context, context_file_path, CONTEXT_FILE_ORDER
+    from app.user_profiles import read_agent_context, context_file_exists, CONTEXT_FILE_ORDER
     import re
 
     account = get_account(account_id=account_id)
@@ -633,7 +633,7 @@ def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) 
         },
         "context_files": {
             filename: {
-                "exists": (context_file_path(account_id, filename)).exists(),
+                "exists": context_file_exists(account_id, filename),
                 "chars": agent_ctx.files.get(filename, {}).get("chars", 0),
             }
             for filename in CONTEXT_FILE_ORDER
@@ -707,8 +707,8 @@ def debug_reset_onboarding(
     Safe to call multiple times. Useful for re-testing the full onboarding flow
     without needing to re-bind a WeChat account.
     """
-    import shutil
-    from app.user_profiles import account_profile_dir, context_file_path, ensure_agent_context_files
+    from app import profile_storage
+    from app.user_profiles import delete_context_file, ensure_agent_context_files
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -722,14 +722,13 @@ def debug_reset_onboarding(
     cleared = []
     if payload.clear_context_files:
         for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
-            path = context_file_path(account_id, filename)
-            if path.exists():
-                path.unlink()
+            if delete_context_file(account_id, filename):
                 cleared.append(filename)
-        # Clear daily memory notes (memory/YYYY-MM-DD.md files)
-        memory_dir = account_profile_dir(account_id) / "memory"
-        if memory_dir.exists():
-            shutil.rmtree(memory_dir)
+        # Clear daily memory notes (memory/YYYY-MM-DD.md rows)
+        memory_files = profile_storage.list_filenames(account_id, prefix="memory/")
+        if memory_files:
+            for fn in memory_files:
+                profile_storage.delete_file(account_id, fn)
             cleared.append("memory/")
         # Re-create defaults
         ensure_agent_context_files(account_id, display_name=account.get("display_name"))

@@ -68,11 +68,13 @@ def list_due_proactive_account_checks(
     *,
     now: Optional[datetime] = None,
     limit: int = 20,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     current = now or beijing_naive_now()
     return list_due_proactive_account_states(
         now=format_state_time(current),
         limit=limit,
+        node_id=node_id,
     )
 
 
@@ -168,6 +170,7 @@ def scan_due_proactive_account_checks(
     now: Optional[datetime] = None,
     limit: int = 20,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Per-account planning pass (companion followup + reactivation candidate).
 
@@ -176,9 +179,10 @@ def scan_due_proactive_account_checks(
     time, so a candidate fires at its slot rather than at this hourly pass. Here
     we only (a) send a due companion-followup candidate, and (b) refresh the
     reactivation candidate — but never overwrite one that is already queued.
+    node_id 非空时只处理归属该节点的账号（厚节点改造 P4 调度分片）。
     """
     current = now or beijing_naive_now()
-    due_accounts = list_due_proactive_account_checks(now=current, limit=limit)
+    due_accounts = list_due_proactive_account_checks(now=current, limit=limit, node_id=node_id)
     results: List[Dict[str, Any]] = []
     for item in due_accounts:
         claimed = claim_due_account_check(

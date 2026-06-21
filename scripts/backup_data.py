@@ -3,8 +3,10 @@
 每日由 systemd ai4all-backup.timer 触发，产出一份带完整性校验的本地快照：
   data/backups/ai4all_<时间戳>/
     ├── db.sqlite3           SQLite 在线一致快照（非文件直拷）
-    ├── user_profiles.tar.gz 每账号 SOUL/IDENTITY/USER 磁盘文件
-    ├── system.tar.gz        data/system 下系统文件
+    │                        含 account_profile_files（P2 后账号 profile 的真相所在）
+    ├── user_profiles.tar.gz 磁盘 user_profiles 目录（P2 后为存量副本，不含最新 profile 数据；
+    │                        真实数据在 db.sqlite3 的 account_profile_files 表）
+    ├── system.tar.gz        data/system 下系统文件（AGENTS.md/TOOLS.md 仍为磁盘文件）
     ├── env.bak              .env（含凭证，chmod 600）
     └── manifest.json        校验结果、各产物大小、关键表行数、git commit
 
@@ -30,11 +32,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import settings  # noqa: E402
+from app.db._backend import is_postgres  # noqa: E402
 
 DEFAULT_STATE_FILE = "/tmp/ai4all_backup_state.json"
 BACKUP_PREFIX = "ai4all_"
 # manifest 里记录行数的关键表（不存在则记 None，不报错）。
-_COUNTED_TABLES = ("accounts", "platform_users", "messages", "outbound_messages")
+# account_profile_files：P2 后账号 profile 真相在此表，加入行数可验证备份完整性。
+_COUNTED_TABLES = ("accounts", "platform_users", "messages", "outbound_messages", "account_profile_files")
 
 
 class BackupError(Exception):
@@ -185,6 +189,12 @@ def run_backup(
     state_file: str,
 ) -> Dict:
     """执行一次完整备份，返回 manifest dict；失败抛 BackupError。"""
+    # PG 模式下此脚本无法备份 PG 数据库，必须用 pg_dump/PITR；快速失败优于静默备份错库。
+    if is_postgres():
+        raise BackupError(
+            "database_url 已配置为 PostgreSQL，此脚本只支持 SQLite 备份。"
+            "PG 数据库请改用 pg_dump / PITR 方案。"
+        )
     db_path = ROOT / settings.database_path if not os.path.isabs(settings.database_path) else Path(settings.database_path)
     profiles_dir = Path(settings.user_profiles_dir)
     if not profiles_dir.is_absolute():
