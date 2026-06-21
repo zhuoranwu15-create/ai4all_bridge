@@ -472,10 +472,16 @@ async def startup_proactive_scheduler() -> None:
 async def startup_dreaming_scheduler() -> None:
     if not getattr(settings, "dreaming_scheduler_enabled", False):
         return
+    # 覆盖范围:dreaming 只压缩记忆、不发 openclaw → 节点无关,任何能连 PG 的机器都能
+    # 为任意账号 dream。故具备中心能力的机器(standalone / central[,node])承担**全队列**
+    # 每日扫描(node_id=None 扫全部账号),避免远程节点账号(如 aliyun2 归属的)漏扫;
+    # 纯 node 才按 P4 分片只扫自身(assigned_node_id=本节点)。
+    # ⚠️ 中心扫全量时各节点不要再单独开 dreaming 调度器,否则同账号会被两边重复扫描。
+    daily_scan_node_id = None if settings.has_central_role else (settings.node_id or None)
     scheduler = start_dreaming_scheduler(
         batch_size=settings.dreaming_scheduler_batch_size,
         start_hour=settings.conversation_session_business_day_start_hour,
-        node_id=settings.node_id or None,
+        node_id=daily_scan_node_id,
     )
     logger.info("dreaming scheduler started: %s", scheduler.status())
 

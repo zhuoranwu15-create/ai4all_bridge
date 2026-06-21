@@ -107,7 +107,9 @@ Dreaming 有两条触发路径，机制与 proactive 不同：
 1. **turn 内惰性 dreaming**（`get_or_create_account_active_session_with_dreaming`）：session 轮转时就地触发，**跑在处理该 turn 的机器上**。aliyun2 账号的 turn 在 aliyun2 本地处理 → dreaming 也在 aliyun2 跑（读写 aliyun1 PG）。dreaming 只压缩记忆、**不经 openclaw 发送**，故任何有 PG 访问的机器都能为任意账号 dream，无「归属节点」约束。
 2. **每日定时 dreaming 扫描**（`DreamingScheduler` → `run_daily_dreaming_scan`）：**仅 aliyun1 进程内开**（`DREAMING_SCHEDULER_ENABLED=true`），且 `main.py` 用 `node_id=settings.node_id`（=aliyun1）启动 → **只扫 `assigned_node_id=aliyun1` 的 61 个**。
 
-> ⚠️ **覆盖盲区**：与 proactive 独立进程「不传 node_id 扫全 75」不同，每日 dreaming 扫描带了 `node_id=aliyun1`，**aliyun2 的 14 个账号不被任何每日扫描覆盖**——它们只能靠路径①（下次来消息时惰性 dream）。活跃账号无碍；**长时间不发消息的 aliyun2 账号，其最后一个 session 的 dreaming 会被延迟**到用户回来才补。修补见 §5。
+> ✅ **已修（O3，2026-06-21）**：`startup_dreaming_scheduler` 改为「具备中心能力的机器扫全量 `node_id=None`、纯 node 才按 P4 分片只扫自身」。aliyun1 现每日扫全 75（含 aliyun2 的 14），盲区消除。dreaming 节点无关（不发 openclaw），中心代扫合法。
+>
+> ⚠️ **竞态说明（已评估，可接受）**：中心每日扫描 + aliyun2 turn 内惰性 dreaming 可能跨机并发触发同一 session（`close_session` 无 `status='active'` CAS 守卫）。但此竞态**本就存在于 aliyun1 自身 61 账号**（每日扫描 task 与请求处理并发，同样无锁），靠「凌晨扫描窗口窄 + 低流量」容忍，生产未见问题；扩到 aliyun2 的 14 个属同类、非新增风险。**各节点不要再单开 dreaming 调度器**（会与中心全量扫重复）。
 
 ---
 
@@ -128,7 +130,7 @@ Dreaming 有两条触发路径，机制与 proactive 不同：
 |---|---|---|---|---|
 | O1 | **P0** | **aliyun1 的「账号检查」主动消息对 aliyun2 账号发不出** | aliyun1 跑已提交 HEAD，`account_checks.py` 仍用 `send_proactive_text`（旧）；扫到 aliyun2 账号时在 aliyun1 本机直发，但微信号在 aliyun2 → 失败且抢占 pending 行，aliyun2 pull 不到 | 已有修复（`account_checks.py` send→`dispatch_proactive_text`，在 aliyun2 工作区未提交）→ **提交并部署到 aliyun1**。reminders/commitment/reactivation 已是 dispatch 版，不受影响 |
 | O2 | **P0** | **连接池改动未提交、仅在 aliyun2 工作区** | aliyun1 HEAD 无池代码；aliyun2 重启后池已生效但**未提交**，任何 `git pull`/reset 会丢 | **提交** `_backend.py`+`_core.py`+`main.py`（含 shutdown 关池）；aliyun1 也部署（本地 socket 收益小但保持一致+幂等耐久） |
-| O3 | P1 | **每日 dreaming 扫描漏掉 aliyun2 的 14 账号** | `main.py` 用 `node_id=settings.node_id`(aliyun1) 起 DreamingScheduler，只扫 61；aliyun2 不开 | dreaming 无 openclaw 发送、节点无关 → 让中心每日扫描**扫全量**（`node_id=None`）最简洁正确；或 aliyun2 单开 `node_id=aliyun2` 扫自己。详见 §3.2 |
+| O3 | ✅ **已修** | **每日 dreaming 扫描漏掉 aliyun2 的 14 账号** | （原）`main.py` 用 `node_id=settings.node_id`(aliyun1) 起 DreamingScheduler，只扫 61 | **已修**：`startup_dreaming_scheduler` 改为「中心机扫全量 `node_id=None`、纯 node 才分片」，aliyun1 现每日扫全 75。dreaming 节点无关（不发 openclaw）故中心代扫合法。竞态见 §3.2 注 |
 | O4 | P2 | aliyun2 出站绕远：已直连 PG 却仍走 HTTP pull（:8190→中心 `/node/outbound/claim`） | 瘦节点时代产物 | 可让 aliyun2 直接从 PG `claim_pending_outbound_by_node` 认领，去掉对中心 HTTP 的出站依赖（降耦合/延迟）。非紧急 |
 | O5 | P2 | 主动消息 pull 延迟 | `outbound_pull_interval_seconds=2.0` | 嫌慢可调 1.0/0.5，零风险 |
 | O6 | P2 | PG 单点无 HA | 单实例，无 standby | 参考 runbook §10 配流复制热备 + `pg_dump` PITR |
