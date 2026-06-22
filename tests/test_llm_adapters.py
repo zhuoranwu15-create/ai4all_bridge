@@ -226,3 +226,62 @@ def test_anthropic_adapter_converts_system_tools_and_tool_results():
     assert choice["finish_reason"] == "tool_calls"
     assert choice["message"]["tool_calls"][0]["id"] == "call_2"
     assert payload["usage"] == {"prompt_tokens": 12, "completion_tokens": 8}
+
+
+def test_openai_chat_dsml_tool_call_normalized():
+    """_normalize_openai_chat_payload 将 DeepSeek DSML 格式转换为标准 tool_calls。"""
+    from app.llm_adapters import _normalize_openai_chat_payload
+
+    dsml_content = (
+        "<||DSML||invoke name='web_search'>"
+        "<||DSML||parameter name='query'>今日新闻</||DSML||parameter>"
+        "</||DSML||invoke>"
+    )
+    payload = {
+        "choices": [
+            {"message": {"role": "assistant", "content": dsml_content}, "finish_reason": "stop"}
+        ]
+    }
+
+    result = _normalize_openai_chat_payload(payload)
+
+    choice = result["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
+    tool_calls = choice["message"]["tool_calls"]
+    assert len(tool_calls) == 1
+    assert tool_calls[0]["function"]["name"] == "web_search"
+    import json
+    args = json.loads(tool_calls[0]["function"]["arguments"])
+    assert args["query"] == "今日新闻"
+
+
+def test_openai_chat_dsml_not_triggered_for_normal_stop():
+    """finish_reason=stop 但内容无 DSML 标记时不修改 payload。"""
+    from app.llm_adapters import _normalize_openai_chat_payload
+
+    payload = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "普通回复"}, "finish_reason": "stop"}
+        ]
+    }
+    result = _normalize_openai_chat_payload(payload)
+    assert result["choices"][0]["finish_reason"] == "stop"
+    assert result["choices"][0]["message"].get("tool_calls") is None
+
+
+def test_openai_chat_dsml_not_triggered_when_tool_calls_already_present():
+    """已有标准 tool_calls 字段时不覆盖。"""
+    from app.llm_adapters import _normalize_openai_chat_payload
+
+    existing_tc = [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]
+    payload = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": None, "tool_calls": existing_tc},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    result = _normalize_openai_chat_payload(payload)
+    assert result["choices"][0]["message"]["tool_calls"] is existing_tc

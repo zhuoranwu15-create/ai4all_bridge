@@ -470,6 +470,64 @@ def _normalize_anthropic_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+# DeepSeek sometimes emits tool calls as DSML text (finish_reason="stop") instead of
+# the standard tool_calls JSON field. These patterns parse that fallback format.
+_DSML_INVOKE_RE = re.compile(
+    r'<[｜|]{2}DSML[｜|]{2}invoke\s+name=["\']([^"\']+)["\']>',
+    re.IGNORECASE,
+)
+_DSML_PARAM_RE = re.compile(
+    r'<[｜|]{2}DSML[｜|]{2}parameter\s+name=["\']([^"\']+)["\'][^>]*>(.*?)</[｜|]{2}DSML[｜|]{2}parameter>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_dsml_tool_call(content: str):
+    """Return (tool_name, args_dict) if content contains a DSML tool call, else None."""
+    m = _DSML_INVOKE_RE.search(content)
+    if not m:
+        return None
+    tool_name = m.group(1)
+    args = {pm.group(1): pm.group(2).strip() for pm in _DSML_PARAM_RE.finditer(content)}
+    return tool_name, args
+
+
+def _normalize_openai_chat_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize openai_chat response, handling DeepSeek DSML tool-call fallback.
+
+    Converts DSML-encoded tool calls to the standard tool_calls JSON field so the
+    orchestration layer stays provider-agnostic.
+    """
+    try:
+        choice = payload["choices"][0]
+    except (KeyError, IndexError):
+        return payload
+    if choice.get("finish_reason") != "stop":
+        return payload
+    message = choice.get("message", {})
+    if message.get("tool_calls"):
+        return payload
+    content = (message.get("content") or "").strip()
+    dsml = _parse_dsml_tool_call(content)
+    if not dsml:
+        return payload
+    tool_name, tool_args = dsml
+    logger.info("dsml_tool_call detected in adapter tool=%s", tool_name)
+    message["tool_calls"] = [
+        {
+            "id": "call_dsml_0",
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps(tool_args, ensure_ascii=False),
+            },
+        }
+    ]
+    message["content"] = None
+    choice["finish_reason"] = "tool_calls"
+    return payload
+
+
 def chat_completion(
     provider: LLMProviderConfig,
     messages: List[Dict[str, Any]],
@@ -486,7 +544,7 @@ def chat_completion(
             body=_openai_chat_payload(provider, messages, tools=tools, tool_choice=tool_choice),
         )
         payload["_provider_protocol"] = "openai_chat"
-        return payload
+        return _normalize_openai_chat_payload(payload)
     if provider.protocol == "openai_responses":
         payload = _post_json(
             provider=provider,

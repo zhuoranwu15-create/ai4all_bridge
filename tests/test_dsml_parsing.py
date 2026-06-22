@@ -2,7 +2,7 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from app.llm import _parse_dsml_tool_call
+from app.llm_adapters import _parse_dsml_tool_call
 
 
 DSML_SAMPLE = (

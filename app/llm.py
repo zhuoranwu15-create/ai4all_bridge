@@ -1,6 +1,5 @@
 import json
 import logging
-import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -11,27 +10,6 @@ from app.llm_providers import LLMProviderConfig, get_legacy_llm_provider, get_ll
 
 logger = logging.getLogger("ai4all.llm")
 _MOCK_FALLBACK_ENVS = {"local", "development", "test"}
-
-# DeepSeek sometimes emits tool calls as DSML text (finish_reason="stop") instead of
-# the standard tool_calls JSON field.  These patterns parse that fallback format.
-_DSML_INVOKE_RE = re.compile(
-    r'<[｜|]{2}DSML[｜|]{2}invoke\s+name=["\']([^"\']+)["\']>',
-    re.IGNORECASE,
-)
-_DSML_PARAM_RE = re.compile(
-    r'<[｜|]{2}DSML[｜|]{2}parameter\s+name=["\']([^"\']+)["\'][^>]*>(.*?)</[｜|]{2}DSML[｜|]{2}parameter>',
-    re.DOTALL | re.IGNORECASE,
-)
-
-def _parse_dsml_tool_call(content: str):
-    """Return (tool_name, args_dict) if content contains a DSML tool call, else None."""
-    m = _DSML_INVOKE_RE.search(content)
-    if not m:
-        return None
-    tool_name = m.group(1)
-    args = {pm.group(1): pm.group(2).strip() for pm in _DSML_PARAM_RE.finditer(content)}
-    return tool_name, args
-
 
 def _settings_app_env() -> str:
     env = getattr(settings, "app_env", "local")
@@ -380,17 +358,6 @@ def _execute_and_record_tool_call(tool_call: Dict[str, Any], ctx) -> Dict[str, A
     return tool_result if isinstance(tool_result, dict) else {"result": tool_result}
 
 
-def _fake_dsml_tool_call(tool_name: str, tool_args: Dict[str, Any], index: int) -> Dict[str, Any]:
-    return {
-        "id": f"call_dsml_{index}",
-        "type": "function",
-        "function": {
-            "name": tool_name,
-            "arguments": json.dumps(tool_args, ensure_ascii=False),
-        },
-    }
-
-
 def generate_reply_with_tools(
     *,
     user_text: str,
@@ -470,33 +437,6 @@ def generate_reply_with_tools(
             content = (message.get("content") or "").strip()
             if not content:
                 return "", "llm_empty_response"
-
-            # DeepSeek fallback: tool call encoded as DSML text instead of the standard field.
-            dsml = _parse_dsml_tool_call(content)
-            if dsml:
-                if round_index >= max_tool_rounds:
-                    return "", "tool_round_limit_exceeded"
-                tool_name, tool_args = dsml
-                logger.info("dsml_tool_call detected tool=%s args=%s", tool_name, tool_args)
-                if not _tool_notified and on_tool_detected is not None:
-                    _tool_notified = True
-                    try:
-                        on_tool_detected([tool_name])
-                    except Exception as _cb_err:
-                        logger.warning("on_tool_detected callback failed: %s", _cb_err)
-                fake_tool_call = _fake_dsml_tool_call(tool_name, tool_args, round_index)
-                tool_result = _execute_and_record_tool_call(fake_tool_call, ctx)
-                tool_messages.extend(
-                    [
-                        {"role": "assistant", "tool_calls": [fake_tool_call]},
-                        {
-                            "role": "tool",
-                            "tool_call_id": fake_tool_call["id"],
-                            "content": json.dumps(tool_result, ensure_ascii=False),
-                        },
-                    ]
-                )
-                continue
 
             return content, None
 

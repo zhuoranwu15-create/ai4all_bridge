@@ -537,23 +537,22 @@ def test_on_tool_detected_called_once_even_across_multiple_tool_rounds():
 
 
 def test_on_tool_detected_called_for_dsml_tool_call():
-    """DSML 格式的工具调用同样触发 callback 一次。"""
+    """DSML 工具调用经 adapter 规范化后，orchestration 层触发 callback 一次。
+
+    DSML→tool_calls 转换在 llm_adapters._normalize_openai_chat_payload 完成；
+    此处 mock 在 _http_chat_with_tools 层，模拟 adapter 已规范化后的形态。
+    """
     from app.llm import generate_reply_with_tools
 
-    dsml_content = (
-        "<||DSML||invoke name='web_search'>"
-        "<||DSML||parameter name='query'>今日新闻</||DSML||parameter>"
-        "</||DSML||invoke>"
-    )
-    dsml_resp = {
-        "choices": [{"message": {"role": "assistant", "content": dsml_content}, "finish_reason": "stop"}]
-    }
     callback = MagicMock()
 
     with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
         with patch(
             "app.llm._http_chat_with_tools",
-            side_effect=[dsml_resp, _direct_text_response("新闻已找到")],
+            side_effect=[
+                _tool_call_response("web_search", {"query": "今日新闻"}),
+                _direct_text_response("新闻已找到"),
+            ],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value={"result": "ok"}):
                 reply, err = generate_reply_with_tools(
