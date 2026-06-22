@@ -19,13 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("ai4all.tools.proactive_settings_handlers")
 
-_CATEGORY_LABELS = {
-    "companion_followup": "陪伴跟进",
-    "content_invitation": "内容邀请",
-    "reactivation_topic_followup": "话题唤回",
-    "reactivation_content_invitation": "内容唤回",
-    "legacy_proactive": "其它主动消息",
-}
+from app.proactive.categories import CATEGORY_LABELS as _CATEGORY_LABELS
 
 _UPDATE_ARG_KEYS = {
     "master_enabled",

@@ -36,8 +36,10 @@ REACTIVATION_TYPES = {
     REACTIVATION_TYPE_CONTENT_INVITATION,
 }
 
-REACTIVATION_PRODUCT_CATEGORY_TOPIC_FOLLOWUP = "reactivation_topic_followup"
-REACTIVATION_PRODUCT_CATEGORY_CONTENT_INVITATION = "reactivation_content_invitation"
+# 拉活分类已合并：话题唤回归入 companion_followup，内容唤回归入 content_invitation。
+# 拉活来源仍由 outbound metadata 的 reactivation=True 标志识别（见 reactivation_outbound_metadata）。
+REACTIVATION_PRODUCT_CATEGORY_TOPIC_FOLLOWUP = "companion_followup"
+REACTIVATION_PRODUCT_CATEGORY_CONTENT_INVITATION = "content_invitation"
 
 ReactivationGenerator = Callable[..., Dict[str, Any]]
 DedupeChecker = Callable[..., Dict[str, Any]]

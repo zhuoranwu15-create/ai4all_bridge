@@ -83,17 +83,17 @@ def test_user_daily_override_widens(fresh_db):
 
 
 def test_user_daily_override_tightens(fresh_db):
-    """用户把 reactivation 每日上限收紧到 1：已发 1 条 → 拦，reason=用户频次。"""
+    """用户把 content_invitation 每日上限收紧到 1：已发 1 条 → 拦，reason=用户频次。"""
     from app.proactive.settings import apply_proactive_message_settings_patch
 
     _create_account("acc-d2")
-    _seed_outbound("acc-d2", "reactivation_topic_followup", created_at=f"{TODAY} 09:00:00", quota_date=TODAY, i=1)
+    _seed_outbound("acc-d2", "content_invitation", created_at=f"{TODAY} 09:00:00", quota_date=TODAY, i=1)
     apply_proactive_message_settings_patch(
         account_id="acc-d2",
-        patch={"frequency": {"reactivation": {"max_per_day": 1}}},
+        patch={"frequency": {"content_invitation": {"max_per_day": 1}}},
         source="tool",
     )
-    decision = _evaluate("acc-d2", "reactivation_topic_followup", NOW)
+    decision = _evaluate("acc-d2", "content_invitation", NOW)
     assert decision.allowed is False
     assert decision.reason == "proactive_user_frequency_exceeded"
 
@@ -136,19 +136,19 @@ def test_weekly_limit_blocks(fresh_db):
     assert decision.counts.get("weekly_limit") == 2
 
 
-def test_weekly_limit_shared_across_reactivation(fresh_db):
-    """reactivation 两类共享每周计数：topic + content 各 1 条 → 第 3 条（topic）被周上限拦。"""
+def test_weekly_limit_content_invitation(fresh_db):
+    """content_invitation 每周计数（拉活内容唤回已并入本分类）：近 7 天 2 条 → 第 3 条被周上限拦。"""
     from app.proactive.settings import apply_proactive_message_settings_patch
 
     _create_account("acc-w2")
-    _seed_outbound("acc-w2", "reactivation_topic_followup", created_at=WITHIN_WEEK, quota_date="2026-05-29", i=1)
-    _seed_outbound("acc-w2", "reactivation_content_invitation", created_at=WITHIN_WEEK, quota_date="2026-05-29", i=2)
+    _seed_outbound("acc-w2", "content_invitation", created_at=WITHIN_WEEK, quota_date="2026-05-29", i=1)
+    _seed_outbound("acc-w2", "content_invitation", created_at=WITHIN_WEEK, quota_date="2026-05-29", i=2)
     apply_proactive_message_settings_patch(
         account_id="acc-w2",
-        patch={"frequency": {"reactivation": {"max_per_day": 3, "max_per_week": 2}}},
+        patch={"frequency": {"content_invitation": {"max_per_day": 3, "max_per_week": 2}}},
         source="tool",
     )
-    decision = _evaluate("acc-w2", "reactivation_topic_followup", NOW)
+    decision = _evaluate("acc-w2", "content_invitation", NOW)
     assert decision.allowed is False
     assert decision.reason == "proactive_user_frequency_exceeded"
 
@@ -177,7 +177,7 @@ def test_total_per_day_blocks_across_categories(fresh_db):
 
     _create_account("acc-t1")
     _seed_outbound("acc-t1", "companion_followup", created_at=f"{TODAY} 08:00:00", quota_date=TODAY, i=1)
-    _seed_outbound("acc-t1", "reactivation_topic_followup", created_at=f"{TODAY} 09:00:00", quota_date=TODAY, i=2)
+    _seed_outbound("acc-t1", "content_invitation", created_at=f"{TODAY} 09:00:00", quota_date=TODAY, i=2)
     # 种一条提醒——不应被计入总量
     _seed_outbound("acc-t1", "user_reminder", created_at=f"{TODAY} 07:00:00", quota_date=TODAY, i=3)
     apply_proactive_message_settings_patch(
@@ -187,7 +187,7 @@ def test_total_per_day_blocks_across_categories(fresh_db):
                 "total_per_day": 2,
                 # 分类上限放宽，确保总量是瓶颈
                 "companion_followup": {"max_per_day": 3},
-                "reactivation": {"max_per_day": 3},
+                "content_invitation": {"max_per_day": 3},
             }
         },
         source="tool",
@@ -210,5 +210,5 @@ def test_total_per_day_allows_when_under_limit(fresh_db):
         patch={"frequency": {"total_per_day": 3}},
         source="tool",
     )
-    decision = _evaluate("acc-t2", "reactivation_topic_followup", NOW)
+    decision = _evaluate("acc-t2", "content_invitation", NOW)
     assert decision.allowed is True

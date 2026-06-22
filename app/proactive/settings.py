@@ -16,34 +16,13 @@ from app.db import (
     insert_proactive_message_setting_event,
     upsert_proactive_message_settings_row,
 )
+# 分类 registry 是单一数据源；此处 re-export 以保持历史 import 路径
+# （main.py / serializers 仍 `from app.proactive.settings import PROACTIVE_FREQUENCY_BUCKETS`）。
+from app.proactive.categories import (  # noqa: F401  (re-export)
+    PROACTIVE_FREQUENCY_BUCKETS,
+    PROACTIVE_SETTING_CATEGORIES,
+)
 from app.time_utils import beijing_now
-
-# 受主动消息设置影响的分类（与 OutboundCategory 对齐）。user_reminder /
-# content_invitation_response / task_result 不在此列——它们在 policy 里走豁免直通。
-PROACTIVE_SETTING_CATEGORIES = (
-    "companion_followup",
-    "content_invitation",
-    "reactivation_topic_followup",
-    "reactivation_content_invitation",
-    "legacy_proactive",
-)
-
-# 频次"桶"：与现有 _category_daily_limit 的日上限口径一致。reactivation 桶覆盖
-# content_invitation + 两个 reactivation_* 分类（共享计数）。
-PROACTIVE_FREQUENCY_BUCKETS = (
-    "companion_followup",
-    "reactivation",
-    "legacy_proactive",
-)
-
-# category(value) -> 频次桶
-_CATEGORY_FREQUENCY_BUCKET = {
-    "companion_followup": "companion_followup",
-    "content_invitation": "reactivation",
-    "reactivation_topic_followup": "reactivation",
-    "reactivation_content_invitation": "reactivation",
-    "legacy_proactive": "legacy_proactive",
-}
 
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 
@@ -135,11 +114,6 @@ def is_category_enabled(effective: Dict[str, Any], category: str) -> bool:
     if isinstance(entry, dict) and "enabled" in entry:
         return bool(entry["enabled"])
     return True
-
-
-def category_to_frequency_bucket(category_value: str) -> Optional[str]:
-    """把 OutboundCategory.value 映射到频次桶；未知返回 None。"""
-    return _CATEGORY_FREQUENCY_BUCKET.get(str(category_value or ""))
 
 
 def resolve_frequency_limits(effective: Dict[str, Any], bucket: str) -> Dict[str, Any]:

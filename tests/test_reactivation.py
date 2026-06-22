@@ -237,8 +237,9 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
     )
 
     assert first["action"] == "sent"
-    assert first["outbound_message"]["product_category"] == "reactivation_topic_followup"
-    assert outbound[0]["product_category"] == "reactivation_topic_followup"
+    # 拉活话题唤回已并入 companion_followup；拉活来源由 metadata.reactivation 标识。
+    assert first["outbound_message"]["product_category"] == "companion_followup"
+    assert outbound[0]["product_category"] == "companion_followup"
     assert count_reactivation_outbound_for_quota_date(
         account_id="acc-react-real",
         quota_date="2026-06-05",
@@ -321,7 +322,8 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     updated = get_content_invitation(invitation_id=invitation["id"])
 
     assert result["action"] == "sent"
-    assert outbound[0]["product_category"] == "reactivation_content_invitation"
+    # 拉活内容唤回已并入 content_invitation；拉活来源由 metadata.reactivation 标识。
+    assert outbound[0]["product_category"] == "content_invitation"
     assert outbound[0]["metadata"]["reactivation"] is True
     # Reactivation owns advancing the content_invitations state machine so the
     # downstream "send titles" interaction stays available.
@@ -515,8 +517,8 @@ def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
             text="上次说的露营计划定下来了吗？",
             idempotency_key="rule-dedupe-sent",
             now=now,
-            product_category="reactivation_topic_followup",
-            metadata={"topic": "露营计划"},
+            product_category="companion_followup",
+            metadata={"topic": "露营计划", "reactivation": True},
         )
 
     duplicate = rule_reactivation_dedupe_check(

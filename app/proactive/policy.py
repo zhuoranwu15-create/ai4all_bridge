@@ -1,13 +1,10 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, time
-from enum import Enum
 from typing import Any, Dict, Optional
 
 from app.config import settings
 from app.db import (
     count_outbound_in_window,
-    count_reactivation_outbound_for_quota_date,
-    count_reactivation_outbound_in_window,
     count_total_proactive_outbound_for_quota_date,
     get_account,
     get_content_invitation_preference,
@@ -15,8 +12,15 @@ from app.db import (
     get_pending_companion_followup_count_in_window,
     get_pending_reminder_count_in_window,
 )
+# 分类定义集中在 categories registry；此处 re-export 保持 `from app.proactive.policy
+# import OutboundCategory` 等历史 import 路径不变。
+from app.proactive.categories import (  # noqa: F401  (re-export)
+    EXEMPT_CATEGORIES,
+    OutboundCategory,
+    SOURCE_CATEGORY_MAP,
+    spec_for,
+)
 from app.proactive.settings import (
-    category_to_frequency_bucket,
     get_effective_proactive_message_settings,
     get_total_daily_limit,
     is_category_enabled,
@@ -26,30 +30,6 @@ from app.proactive.settings import (
 
 
 POLICY_VERSION = "outbound_policy_v1"
-
-
-class OutboundCategory(str, Enum):
-    USER_REMINDER = "user_reminder"
-    COMPANION_FOLLOWUP = "companion_followup"
-    CONTENT_INVITATION = "content_invitation"
-    REACTIVATION_TOPIC_FOLLOWUP = "reactivation_topic_followup"
-    REACTIVATION_CONTENT_INVITATION = "reactivation_content_invitation"
-    CONTENT_INVITATION_RESPONSE = "content_invitation_response"
-    TASK_RESULT = "task_result"
-    LEGACY_PROACTIVE = "legacy_proactive"
-
-
-SOURCE_CATEGORY_MAP = {
-    "reminder": OutboundCategory.USER_REMINDER,
-    "reminder_change_confirmation": OutboundCategory.USER_REMINDER,
-    "commitment": OutboundCategory.COMPANION_FOLLOWUP,
-    "account_check": OutboundCategory.COMPANION_FOLLOWUP,
-    "heartbeat": OutboundCategory.COMPANION_FOLLOWUP,
-    "content_invitation": OutboundCategory.CONTENT_INVITATION,
-    "content_invitation_titles": OutboundCategory.CONTENT_INVITATION_RESPONSE,
-    "content_invitation_feedback": OutboundCategory.CONTENT_INVITATION_RESPONSE,
-    "async_task_result": OutboundCategory.TASK_RESULT,
-}
 
 
 @dataclass
@@ -97,35 +77,30 @@ def normalize_outbound_category(
 ) -> OutboundCategory:
     raw_category = str(product_category or "").strip()
     if raw_category:
-        try:
-            return OutboundCategory(raw_category)
-        except ValueError:
-            return OutboundCategory.LEGACY_PROACTIVE
-    return SOURCE_CATEGORY_MAP.get(str(source or "").strip(), OutboundCategory.LEGACY_PROACTIVE)
+        # 显式 product_category 必须是已知 category（reactivation 等直传分类走这条）。
+        return OutboundCategory(raw_category)
+    source_key = str(source or "").strip()
+    category = SOURCE_CATEGORY_MAP.get(source_key)
+    if category is None:
+        # 未知 source 不再静默兜底（旧 LEGACY_PROACTIVE 已废弃）：快速失败，
+        # 暴露未注册的主动消息来源，避免错配配额/开关。
+        raise ValueError(f"unknown proactive source: {source_key!r}")
+    return category
 
 
 def _category_daily_limit(category: OutboundCategory) -> int:
-    def _setting_int(name: str, default: int) -> int:
-        value = getattr(settings, name, default)
-        try:
-            return int(value or 0)
-        except (TypeError, ValueError):
-            return default
+    """分类的全局日上限：从 registry 的 daily_limit_setting 读 settings。
 
-    if category == OutboundCategory.COMPANION_FOLLOWUP:
-        return _setting_int("companion_followup_daily_limit", 1)
-    # content_invitation sends now flow through the unified reactivation path and
-    # share its single daily limit; the legacy CONTENT_INVITATION category maps to
-    # the same limit so any residual legacy-category send stays bounded.
-    if category in {
-        OutboundCategory.CONTENT_INVITATION,
-        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
-        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-    }:
-        return _setting_int("reactivation_daily_limit", 1)
-    if category == OutboundCategory.LEGACY_PROACTIVE:
-        return _setting_int("proactive_outbound_daily_limit", 0)
-    return 0
+    豁免分类（daily_limit_setting=None）返回 0（不设上限，配额由 fast-path 直通）。
+    """
+    spec = spec_for(category)
+    if not spec.daily_limit_setting:
+        return 0
+    value = getattr(settings, spec.daily_limit_setting, spec.daily_limit_default)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return spec.daily_limit_default
 
 
 def _blocked(
@@ -200,12 +175,12 @@ def evaluate_outbound_policy(
             metadata=policy_metadata,
         )
 
-    if category in {
-        OutboundCategory.USER_REMINDER,
-        OutboundCategory.CONTENT_INVITATION_RESPONSE,
-        OutboundCategory.TASK_RESULT,
-    }:
+    # 豁免直通分类（提醒/内容邀请回复/任务结果）：不过总开关/配额/时段/avoidance。
+    if category in EXEMPT_CATEGORIES:
         return _allowed(quota_date=quota_date, category=category, metadata=policy_metadata)
+
+    # 本分类的策略维度（频次桶/内容偏好/avoidance 等）一次取出，后续多处复用。
+    spec = spec_for(category)
 
     # 账号级主动消息设置（用户偏好）。在豁免分类之后读取，提醒等不受影响。
     eff_settings = get_effective_proactive_message_settings(account_id)
@@ -283,30 +258,20 @@ def evaluate_outbound_policy(
 
     counts: Dict[str, Any] = {}
     # 频次桶 + 用户自定义频次（已 clamp 到系统硬上限）。
-    bucket = category_to_frequency_bucket(category.value)
+    bucket = spec.frequency_bucket
     freq_limits = resolve_frequency_limits(eff_settings, bucket) if bucket else {}
-    is_reactivation_bucket = category in {
-        OutboundCategory.CONTENT_INVITATION,
-        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
-        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-    }
 
     # 日上限：用户设了就用用户值（覆盖全局，可放宽/收紧），否则沿用全局。
+    # 计数统一按 category 的 product_category（拉活已合并入 companion/content，不再单独计数）。
     user_daily = freq_limits.get("max_per_day")
     daily_is_user = user_daily is not None
     daily_limit = user_daily if daily_is_user else _category_daily_limit(category)
     if daily_limit > 0:
-        if is_reactivation_bucket:
-            current_count = count_reactivation_outbound_for_quota_date(
-                account_id=account_id,
-                quota_date=quota_date,
-            )
-        else:
-            current_count = get_outbound_daily_usage(
-                account_id=account_id,
-                quota_date=quota_date,
-                product_category=category.value,
-            )
+        current_count = get_outbound_daily_usage(
+            account_id=account_id,
+            quota_date=quota_date,
+            product_category=category.value,
+        )
         counts["daily_count"] = current_count
         counts["daily_limit"] = daily_limit
         if current_count >= daily_limit:
@@ -322,17 +287,11 @@ def evaluate_outbound_policy(
     weekly_limit = freq_limits.get("max_per_week")
     if weekly_limit:
         since = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        if is_reactivation_bucket:
-            weekly_count = count_reactivation_outbound_in_window(
-                account_id=account_id,
-                since=since,
-            )
-        else:
-            weekly_count = count_outbound_in_window(
-                account_id=account_id,
-                product_category=category.value,
-                since=since,
-            )
+        weekly_count = count_outbound_in_window(
+            account_id=account_id,
+            product_category=category.value,
+            since=since,
+        )
         counts["weekly_count"] = weekly_count
         counts["weekly_limit"] = weekly_limit
         if weekly_count >= weekly_limit:
@@ -362,10 +321,7 @@ def evaluate_outbound_policy(
                 metadata=policy_metadata,
             )
 
-    if category in {
-        OutboundCategory.CONTENT_INVITATION,
-        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-    }:
+    if spec.content_preference_check:
         topic = str((metadata or {}).get("topic") or "").strip()
         if topic:
             preference = get_content_invitation_preference(
@@ -393,12 +349,7 @@ def evaluate_outbound_policy(
                         metadata=policy_metadata,
                     )
 
-    if category in {
-        OutboundCategory.COMPANION_FOLLOWUP,
-        OutboundCategory.CONTENT_INVITATION,
-        OutboundCategory.REACTIVATION_TOPIC_FOLLOWUP,
-        OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-    }:
+    if spec.avoidance_window:
         try:
             avoidance_hours = int(getattr(settings, "proactive_avoidance_window_hours", 6) or 0)
         except (TypeError, ValueError):
@@ -421,10 +372,7 @@ def evaluate_outbound_policy(
                     next_allowed_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
                     metadata=policy_metadata,
                 )
-            if category in {
-                OutboundCategory.CONTENT_INVITATION,
-                OutboundCategory.REACTIVATION_CONTENT_INVITATION,
-            }:
+            if spec.avoidance_check_companion:
                 companion_count = get_pending_companion_followup_count_in_window(
                     account_id=account_id,
                     start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),

@@ -41,7 +41,7 @@ def test_overview_reflects_update_and_audit(client, fresh_db):
             "master_enabled": True,
             "category_updates": {"content_invitation": {"enabled": False}},
             "allowed_windows": [{"days": ["SAT", "SUN"], "start": "09:00", "end": "12:00"}],
-            "frequency": {"reactivation": {"max_per_week": 2}},
+            "frequency": {"content_invitation": {"max_per_week": 2}},
         },
         source="tool",
         reason="user_requested",
@@ -55,7 +55,7 @@ def test_overview_reflects_update_and_audit(client, fresh_db):
     settings = body["proactive_message_settings"]
     assert settings["categories"]["content_invitation"]["enabled"] is False
     assert settings["allowed_windows"][0]["days"] == ["SAT", "SUN"]
-    assert settings["frequency"]["reactivation"]["max_per_week"] == 2
+    assert settings["frequency"]["content_invitation"]["max_per_week"] == 2
     events = body["proactive_message_setting_events"]
     assert events and events[0]["source"] == "tool"
     assert events[0]["reason"] == "user_requested"

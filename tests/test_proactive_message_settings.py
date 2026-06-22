@@ -77,9 +77,6 @@ def test_master_disabled_blocks_proactive_but_not_reminder(fresh_db):
     for cat in (
         "companion_followup",
         "content_invitation",
-        "reactivation_topic_followup",
-        "reactivation_content_invitation",
-        "legacy_proactive",
     ):
         decision = _evaluate("acc-master", cat, DAYTIME)
         assert decision.allowed is False, cat

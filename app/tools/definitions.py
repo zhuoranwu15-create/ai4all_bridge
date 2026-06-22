@@ -278,7 +278,7 @@ def get_proactive_message_settings_tools() -> list:
                     "查询当前用户的主动消息设定（你会不会、什么时候主动找 TA）。"
                     "当用户问『你现在会什么时候主动找我』『我是不是关了主动消息』这类问题时调用。"
                     "返回：总开关、各分类开关、静默时段、临时静默截止时间。"
-                    "边界：这只影响系统主动触达（陪伴跟进、内容邀请、重新激活），不影响用户提醒。"
+                    "边界：这只影响系统主动触达（陪伴跟进、内容邀请），不影响用户提醒。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -297,7 +297,7 @@ def get_proactive_message_settings_tools() -> list:
                     "触发场景（用户说下列任何一句，立即调用，不要问『确定吗』）：\n"
                     "- 『以后别主动找我了』→ master_enabled=false\n"
                     "- 『每天最多X条 / 总共X条 / 一天就发X次』→ total_per_day=X\n"
-                    "- 『一周最多X次』→ frequency={\"reactivation\":{\"max_per_week\":X}}\n"
+                    "- 『一周最多X次』→ frequency={\"default\":{\"max_per_week\":X}}\n"
                     "- 『只在XX时间段找我』→ allowed_windows\n"
                     "- 『晚上X点后别发』→ quiet_hours\n"
                     "- 『这周先别主动发』→ muted_until\n"
@@ -316,9 +316,8 @@ def get_proactive_message_settings_tools() -> list:
                             "type": "object",
                             "description": (
                                 "按分类开关主动消息。键为分类名，值为 {\"enabled\": true/false}。"
-                                "可用分类：companion_followup(陪伴跟进)、content_invitation(内容邀请)、"
-                                "reactivation_topic_followup(话题唤回)、reactivation_content_invitation(内容唤回)、"
-                                "legacy_proactive。"
+                                "可用分类：companion_followup(陪伴跟进，含话题唤回)、"
+                                "content_invitation(内容邀请，含内容唤回)。"
                             ),
                         },
                         "quiet_hours": {
@@ -347,7 +346,7 @@ def get_proactive_message_settings_tools() -> list:
                         "frequency": {
                             "type": "object",
                             "description": (
-                                "精细频次控制（按分组）。键为 companion_followup/reactivation/default；"
+                                "精细频次控制（按分组）。键为 companion_followup/content_invitation/default；"
                                 "值为 {\"max_per_day\": N, \"max_per_week\": M}。"
                                 "如只需总量限制，优先用 total_per_day 参数，不必用 frequency。"
                             ),

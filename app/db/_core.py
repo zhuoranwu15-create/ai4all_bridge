@@ -1626,12 +1626,106 @@ def _migration_0005_rpm_hits(conn: Connection) -> None:
     )
 
 
+def _migration_0006_merge_reactivation_categories(conn: Connection) -> None:
+    """拉活分类合并入 companion_followup / content_invitation。
+
+    OutboundCategory 从 8 个收敛到 5 个：reactivation_topic_followup 并入
+    companion_followup，reactivation_content_invitation 并入 content_invitation。
+    历史 outbound_messages 行的 product_category 一并迁移，使新的按分类计数口径
+    （get_outbound_daily_usage/count_outbound_in_window）覆盖这些行。拉活来源仍由
+    metadata_json.reactivation 标志识别，不依赖 product_category，故迁移不影响拉活节流。
+    幂等：旧值不存在时 UPDATE 影响 0 行。
+    """
+    conn.execute(
+        """
+        UPDATE outbound_messages
+        SET product_category = 'companion_followup'
+        WHERE product_category = 'reactivation_topic_followup'
+        """
+    )
+    conn.execute(
+        """
+        UPDATE outbound_messages
+        SET product_category = 'content_invitation'
+        WHERE product_category = 'reactivation_content_invitation'
+        """
+    )
+
+
+def _migration_0007_merge_reactivation_settings_keys(conn: Connection) -> None:
+    """把存量用户偏好里的旧分类键并入新分类（配合 0006 的消息行迁移）。
+
+    8→5 收敛后，proactive_message_settings 的两个 JSON 列里可能残留旧键：
+      - category_settings_json: reactivation_topic_followup → companion_followup,
+        reactivation_content_invitation → content_invitation
+      - frequency_json: 旧 reactivation 桶 → content_invitation
+    0006 只迁了 outbound_messages.product_category，未动偏好行，导致升级后用户此前
+    设置的关闭/频次偏好被新口径静默忽略。此迁移按键改名补齐。
+
+    合并策略：目标新键已存在时保留现有值（不被旧键覆盖），仅丢弃旧键，避免回退用户
+    后来用新键设置的偏好。幂等：无旧键时不产生变更。
+    """
+    cat_rename = {
+        "reactivation_topic_followup": "companion_followup",
+        "reactivation_content_invitation": "content_invitation",
+    }
+    freq_rename = {"reactivation": "content_invitation"}
+
+    def _apply_rename(raw: Optional[str], rename: Dict[str, str]):
+        if not raw:
+            return None, False
+        try:
+            obj = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return None, False
+        if not isinstance(obj, dict):
+            return None, False
+        if not (set(obj.keys()) & set(rename.keys())):
+            return None, False  # 无旧键 → 不动（幂等）
+        # 两遍：先拷所有非旧键（保证新键值优先、不被旧键覆盖），再用旧键仅补缺失目标。
+        # 单遍按 JSON 原始顺序会在旧键排前时让旧值先落、新值被丢，故必须分两遍。
+        new_obj: Dict[str, Any] = {
+            key: value for key, value in obj.items() if key not in rename
+        }
+        for key, value in obj.items():
+            if key not in rename:
+                continue
+            target = rename[key]
+            if target in new_obj:
+                continue  # 目标新键已存在 → 保留现值，丢弃旧键
+            new_obj[target] = value
+        return json.dumps(new_obj, ensure_ascii=False), True
+
+    rows = conn.execute(
+        "SELECT account_id, category_settings_json, frequency_json "
+        "FROM proactive_message_settings"
+    ).fetchall()
+    for row in rows:
+        account_id = row["account_id"]
+        new_cat, cat_changed = _apply_rename(row["category_settings_json"], cat_rename)
+        new_freq, freq_changed = _apply_rename(row["frequency_json"], freq_rename)
+        if not (cat_changed or freq_changed):
+            continue
+        # 一条 UPDATE 写两列；未变更的列写回原值（同值回写在 SQLite/PG 均为 no-op）。
+        conn.execute(
+            "UPDATE proactive_message_settings "
+            "SET category_settings_json = ?, frequency_json = ? WHERE account_id = ?",
+            (
+                new_cat if cat_changed else row["category_settings_json"],
+                new_freq if freq_changed else row["frequency_json"],
+                account_id,
+            ),
+        )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
     (3, _migration_0003_user_meta),
     (4, _migration_0004_account_profile_files),
     (5, _migration_0005_rpm_hits),
+    (6, _migration_0006_merge_reactivation_categories),
+    (7, _migration_0007_merge_reactivation_settings_keys),
 ]
 
 

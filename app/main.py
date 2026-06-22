@@ -414,6 +414,11 @@ def _is_debug_trace_account(account_id: str) -> bool:
 
 @app.on_event("startup")
 def startup() -> None:
+    # 主动消息分类 registry 一致性校验（enum/registry 对齐、source 唯一、豁免不变量）。
+    # 放在最前：配置性错误应在启动即暴露，而非运行期静默错配配额/开关。
+    from app.proactive.categories import validate_category_registry
+
+    validate_category_registry()
     if settings.has_central_role:
         # standalone / central：运行完整 DDL 迁移
         init_db()

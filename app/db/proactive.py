@@ -17,6 +17,9 @@ from app.db._core import (
     _new_id,
     connect,
 )
+# 豁免分类以 registry 为单一数据源，避免与 categories.py 漂移（新增豁免分类即生效）。
+# categories.py 为纯数据叶子模块，不反向依赖 app.db，故此 import 无环。
+from app.proactive.categories import EXEMPT_CATEGORIES
 __all__ = [
     'CONTENT_INVITATION_ACTIVE_STATUSES',
     'OUTBOUND_QUOTA_STATUSES',
@@ -30,7 +33,6 @@ __all__ = [
     'claim_pending_outbound_by_node',
     'claim_pending_outbound_message',
     'count_outbound_in_window',
-    'count_reactivation_outbound_in_window',
     'count_total_proactive_outbound_for_quota_date',
     'create_content_invitation',
     'create_outbound_message',
@@ -308,51 +310,7 @@ def count_outbound_in_window(
     return int(row["count"]) if row else 0
 
 
-def count_reactivation_outbound_in_window(
-    *,
-    account_id: str,
-    since: str,
-) -> int:
-    """Rolling-window twin of count_reactivation_outbound_for_quota_date.
-
-    Counts the shared reactivation category set (incl. legacy rows flagged with
-    metadata.reactivation=1) with created_at >= since. For the shared weekly cap.
-    """
-    from app.db.accounts import LEGACY_REACTIVATION_PRODUCT_CATEGORIES, REACTIVATION_PRODUCT_CATEGORIES
-    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
-    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
-    with connect() as conn:
-        row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS count
-            FROM outbound_messages
-            WHERE account_id = ?
-              AND created_at >= ?
-              AND status IN ('pending', 'sending', 'sent')
-              AND (
-                product_category IN ({placeholders})
-                OR (
-                  product_category IN ({legacy_placeholders})
-                  AND json_valid(metadata_json)
-                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
-                )
-              )
-            """,
-            (
-                account_id,
-                since,
-                *REACTIVATION_PRODUCT_CATEGORIES,
-                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
-            ),
-        ).fetchone()
-    return int(row["count"]) if row else 0
-
-
-_PROACTIVE_EXEMPT_CATEGORIES = (
-    "user_reminder",
-    "content_invitation_response",
-    "task_result",
-)
+_PROACTIVE_EXEMPT_CATEGORIES = tuple(cat.value for cat in EXEMPT_CATEGORIES)
 
 
 def count_total_proactive_outbound_for_quota_date(

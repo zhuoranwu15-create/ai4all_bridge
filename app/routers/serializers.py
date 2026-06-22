@@ -184,11 +184,16 @@ def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
 
 def _proactive_message_settings_with_resolved(eff: dict) -> dict:
     """在有效设定基础上补充每个频次桶的实际有效值（含全局默认），便于后台展示。"""
-    # 全局桶日上限（与 policy._category_daily_limit 保持一致）
+    # 全局桶日上限（从分类 registry 派生，与 policy._category_daily_limit 同源）
+    from app.proactive.categories import CATEGORY_SPECS
+
     _global_day = {
-        "companion_followup": int(getattr(settings, "companion_followup_daily_limit", 1) or 1),
-        "reactivation": int(getattr(settings, "reactivation_daily_limit", 1) or 1),
-        "legacy_proactive": int(getattr(settings, "proactive_outbound_daily_limit", 0) or 0),
+        spec.frequency_bucket: int(
+            getattr(settings, spec.daily_limit_setting, spec.daily_limit_default)
+            or spec.daily_limit_default
+        )
+        for spec in CATEGORY_SPECS
+        if spec.frequency_bucket and spec.daily_limit_setting
     }
     resolved = {}
     for bucket in PROACTIVE_FREQUENCY_BUCKETS:

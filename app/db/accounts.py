@@ -26,8 +26,6 @@ from app.db._core import (
     logger,
 )
 __all__ = [
-    'LEGACY_REACTIVATION_PRODUCT_CATEGORIES',
-    'REACTIVATION_PRODUCT_CATEGORIES',
     'clear_all_messages_for_account',
     'clear_session_messages',
     'consume_valid_verification_token',
@@ -495,57 +493,32 @@ def count_recent_inbound_messages_for_account(*, account_id: str, since: str) ->
     return int(row["count"] if row else 0)
 
 
-REACTIVATION_PRODUCT_CATEGORIES = (
-    "reactivation_topic_followup",
-    "reactivation_content_invitation",
-)
-LEGACY_REACTIVATION_PRODUCT_CATEGORIES = (
-    "companion_followup",
-    "content_invitation",
-)
-
-
 def list_recent_reactivation_outbound_messages(
     *,
     account_id: str,
     since: str,
     limit: int = 20,
 ) -> List[Dict[str, Any]]:
-    """Return recent outbound messages tagged as reactivation, newest first.
+    """Return recent reactivation-origin outbound messages, newest first.
 
-    New rows use reactivation-specific product_category values. The metadata
-    fallback keeps any rows created by the previous wiring (legacy category +
-    metadata_json.reactivation=true) visible to dedupe.
+    拉活分类已合并入 companion_followup / content_invitation；拉活来源统一由
+    metadata_json.reactivation=true 标识（与 category 解耦），dedupe 据此识别。
     """
     from app.db.proactive import _decode_outbound_message
-    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
-    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
     with connect() as conn:
         rows = conn.execute(
-            f"""
+            """
             SELECT *
             FROM outbound_messages
             WHERE account_id = ?
               AND created_at >= ?
               AND status IN ('pending', 'sending', 'sent')
-              AND (
-                product_category IN ({placeholders})
-                OR (
-                  product_category IN ({legacy_placeholders})
-                  AND json_valid(metadata_json)
-                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
-                )
-              )
+              AND json_valid(metadata_json)
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
             ORDER BY id DESC
             LIMIT ?
             """,
-            (
-                account_id,
-                since,
-                *REACTIVATION_PRODUCT_CATEGORIES,
-                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
-                max(int(limit), 1),
-            ),
+            (account_id, since, max(int(limit), 1)),
         ).fetchall()
     return [_decode_outbound_message(row) for row in rows]
 
@@ -555,38 +528,24 @@ def count_reactivation_outbound_for_quota_date(
     account_id: str,
     quota_date: str,
 ) -> int:
-    """Count reactivation outbound rows for a local quota date.
+    """Count reactivation-origin outbound rows for a local quota date.
 
-    Uses quota_date (set at insert from local date) instead of created_at
-    (stored as UTC by SQLite strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))), so the daily limit honors
-    the local-day boundary regardless of server timezone. Goes through
-    ix_outbound_messages_account_category_date.
+    拉活节流（每天最多 1 次）以 metadata_json.reactivation=true 为准，独立于
+    合并后的 companion_followup / content_invitation 分类配额。使用 quota_date
+    （入库时按本地日写入）保证跨时区日界正确。
     """
-    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
-    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
     with connect() as conn:
         row = conn.execute(
-            f"""
+            """
             SELECT COUNT(*) AS count
             FROM outbound_messages
             WHERE account_id = ?
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')
-              AND (
-                product_category IN ({placeholders})
-                OR (
-                  product_category IN ({legacy_placeholders})
-                  AND json_valid(metadata_json)
-                  AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
-                )
-              )
+              AND json_valid(metadata_json)
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
             """,
-            (
-                account_id,
-                quota_date,
-                *REACTIVATION_PRODUCT_CATEGORIES,
-                *LEGACY_REACTIVATION_PRODUCT_CATEGORIES,
-            ),
+            (account_id, quota_date),
         ).fetchone()
     return int(row["count"]) if row else 0
 
@@ -600,11 +559,9 @@ def list_reactivation_outbound_messages_admin(
     """Return sent reactivation outbound messages across all accounts for admin display.
 
     Joins with accounts to include display_name. Newest first.
-    Covers both new product_category values and legacy rows with metadata flag.
+    拉活来源统一以 metadata_json.reactivation=true 标识（分类已合并）。
     """
     from app.db.proactive import _decode_outbound_message
-    placeholders = ", ".join("?" for _ in REACTIVATION_PRODUCT_CATEGORIES)
-    legacy_placeholders = ", ".join("?" for _ in LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
     params: List[Any] = []
     account_clause = ""
     if account_id:
@@ -614,8 +571,6 @@ def list_reactivation_outbound_messages_admin(
     if since:
         since_clause = "AND o.created_at >= ?"
         params.append(since)
-    params.extend(REACTIVATION_PRODUCT_CATEGORIES)
-    params.extend(LEGACY_REACTIVATION_PRODUCT_CATEGORIES)
     params.append(max(int(limit), 1))
     with connect() as conn:
         rows = conn.execute(
@@ -626,14 +581,8 @@ def list_reactivation_outbound_messages_admin(
             WHERE o.status IN ('pending', 'sending', 'sent')
               {account_clause}
               {since_clause}
-              AND (
-                o.product_category IN ({placeholders})
-                OR (
-                  o.product_category IN ({legacy_placeholders})
-                  AND json_valid(o.metadata_json)
-                  AND CAST(json_extract(o.metadata_json, '$.reactivation') AS INTEGER) = 1
-                )
-              )
+              AND json_valid(o.metadata_json)
+              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS INTEGER) = 1
             ORDER BY o.id DESC
             LIMIT ?
             """,

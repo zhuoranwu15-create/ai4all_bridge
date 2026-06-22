@@ -150,7 +150,7 @@ def test_settings(tmp_path, db_dsn):
     s.proactive_account_check_context_messages = 12
     s.proactive_account_check_min_confidence = 0.85
     s.proactive_content_invitation_tool_rounds = 5
-    s.reactivation_daily_limit = 1
+    s.content_invitation_daily_limit = 1
     s.proactive_frequency_max_per_day_cap = 3
     s.proactive_frequency_max_per_week_cap = 14
     s.reactivation_send_slots = "12:15,18:15,21:05"

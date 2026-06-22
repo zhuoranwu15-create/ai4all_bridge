@@ -99,10 +99,13 @@ class Settings(BaseSettings):
     openclaw_inbound_require_binding: bool = True
 
     proactive_outbound_enabled: bool = True
+    # 已废弃：原 legacy_proactive 分类日上限，分类合并后不再使用，保留字段仅为兼容历史 .env。
     proactive_outbound_daily_limit: int = 3
     proactive_quiet_hours_start: str = "22:00"
     proactive_quiet_hours_end: str = "08:00"
     companion_followup_daily_limit: int = 1
+    # 内容邀请日上限（含原拉活内容唤回，已合并入本分类）。原名 reactivation_daily_limit。
+    content_invitation_daily_limit: int = 1
     proactive_avoidance_window_hours: int = 6
     content_invitation_rejection_cooldown_days: int = 30
     content_invitation_expire_hours: int = 24
@@ -116,7 +119,6 @@ class Settings(BaseSettings):
     proactive_content_invitation_tool_rounds: int = 5
     reactivation_dispatch_enabled: bool = False
     reactivation_dispatch_dry_run: bool = True
-    reactivation_daily_limit: int = 1
     # 用户自定义频次的系统硬顶：用户通过主动消息设定 tool 设的 max_per_day/week
     # 超过即封顶到此（用户可在硬顶内放宽/收紧，但不能突破）。
     proactive_frequency_max_per_day_cap: int = 3
