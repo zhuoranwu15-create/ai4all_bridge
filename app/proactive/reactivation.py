@@ -12,13 +12,13 @@ from app.db import (
     get_pending_companion_followup_count_in_window,
     get_pending_reminder_count_in_window,
     get_proactive_account_state,
-    list_channel_bindings_for_account,
     list_due_reactivation_candidate_accounts,
     list_recent_reactivation_outbound_messages,
     mark_content_invitation_invited,
     release_content_invitation_claim,
     upsert_proactive_account_state,
 )
+from app.proactive._common import _select_route
 from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.settings import (
     get_effective_proactive_message_settings,
@@ -387,21 +387,6 @@ def reactivation_outbound_metadata(
     if extra:
         metadata.update(extra)
     return {key: value for key, value in metadata.items() if value is not None}
-
-
-def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
-    for binding in list_channel_bindings_for_account(account_id=account_id):
-        chat_id = _clean_text(binding.get("chat_id"))
-        channel_account_id = _clean_text(binding.get("channel_account_id"))
-        if chat_id and channel_account_id:
-            return {
-                "channel_binding_id": binding["id"],
-                "channel": binding["channel"],
-                "channel_account_id": channel_account_id,
-                "to_user_id": chat_id,
-                "session_key": binding.get("session_key"),
-            }
-    return None
 
 
 def _reactivation_product_category(candidate_type: str) -> str:

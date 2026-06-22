@@ -14,11 +14,11 @@ from app.db import (
     list_recent_messages,
     list_recent_messages_for_account_since,
     list_recent_reactivation_outbound_messages,
-    list_channel_bindings_for_account,
     list_sessions_for_account,
     upsert_proactive_account_state,
 )
 from app.llm import generate_completion, generate_reply_with_tools, is_llm_configured
+from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.reactivation import (
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
@@ -137,19 +137,6 @@ def _parse_state_time(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _clean_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _truncate_text(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "...[truncated]"
-
-
 def _no_op(
     *,
     account_id: str,
@@ -164,22 +151,6 @@ def _no_op(
         "evaluated_at": _format_decision_time(now),
         "metadata": metadata or {},
     }
-
-
-def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
-    for binding in list_channel_bindings_for_account(account_id=account_id):
-        to_user_id = _clean_text(binding.get("chat_id"))
-        channel_account_id = _clean_text(binding.get("channel_account_id"))
-        if not to_user_id or not channel_account_id:
-            continue
-        return {
-            "channel_binding_id": binding["id"],
-            "channel": binding["channel"],
-            "channel_account_id": channel_account_id,
-            "to_user_id": to_user_id,
-            "session_key": binding.get("session_key"),
-        }
-    return None
 
 
 def _candidate_from_state_metadata(
@@ -344,19 +315,6 @@ def _build_content_invitation_user_prompt(
             "recent_chat:\n" + ("\n".join(history_lines) if history_lines else "- none"),
         ]
     )
-
-
-def _extract_json_object(text: str) -> Dict[str, Any]:
-    cleaned = (text or "").strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("LLM output did not contain a JSON object")
-    return json.loads(cleaned[start : end + 1])
 
 
 def _normalize_llm_candidate(

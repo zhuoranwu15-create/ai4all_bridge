@@ -10,13 +10,13 @@ from app.db import (
     create_proactive_commitment,
     get_account,
     get_proactive_account_state,
-    list_channel_bindings_for_account,
     list_due_proactive_commitments,
     list_recent_messages,
     mark_proactive_commitment_failed,
     mark_proactive_commitment_sent,
 )
 from app.llm import generate_completion, is_llm_configured
+from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.state import mark_account_proactive_sent
 
@@ -50,19 +50,6 @@ def _format_time(value: datetime) -> str:
     return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _clean_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _truncate_text(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit] + "...[truncated]"
-
-
 def _no_op(
     *,
     account_id: str,
@@ -77,35 +64,6 @@ def _no_op(
         "evaluated_at": _format_time(now),
         "metadata": metadata or {},
     }
-
-
-def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
-    for binding in list_channel_bindings_for_account(account_id=account_id):
-        to_user_id = _clean_text(binding.get("chat_id"))
-        channel_account_id = _clean_text(binding.get("channel_account_id"))
-        if not to_user_id or not channel_account_id:
-            continue
-        return {
-            "channel_binding_id": binding["id"],
-            "channel": binding["channel"],
-            "channel_account_id": channel_account_id,
-            "to_user_id": to_user_id,
-            "session_key": binding.get("session_key"),
-        }
-    return None
-
-
-def _extract_json_object(text: str) -> Dict[str, Any]:
-    cleaned = (text or "").strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:].strip()
-    start = cleaned.find("{")
-    end = cleaned.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("LLM output did not contain a JSON object")
-    return json.loads(cleaned[start : end + 1])
 
 
 def _parse_due_at(value: Any) -> Optional[datetime]:
