@@ -42,6 +42,9 @@ def test_agent_context_user_files_created_from_blank_template(fresh_db, tmp_path
         assert "{user_clause}" not in context.blocks["SOUL"]
         assert "个人 AI 陪伴与生活助理" not in context.blocks["SOUL"]
         assert "- 暂无" in context.blocks["USER"]
+        # RELATIONSHIP.md 已移除：不再作为上下文文件，也不进 prompt（关系状态由 DB 维护）
+        assert "RELATIONSHIP" not in context.blocks
+        assert "RELATIONSHIP.md" not in context.files
         assert "- 暂无" in context.blocks["MEMORY"]
         assert "测试助手" in context.blocks["IDENTITY"]
         # System blocks are populated from data/system/
@@ -119,6 +122,7 @@ def test_agent_context_does_not_overwrite_existing_user_files(fresh_db, tmp_path
         assert context.blocks["SOUL"] == "custom soul"
         assert context.files["SOUL.md"]["created"] is False
         assert context.files["IDENTITY.md"]["created"] is True
+        assert "RELATIONSHIP.md" not in context.files
 
 
 def test_ensure_agent_context_files_skips_default_render_when_files_exist(fresh_db, tmp_path):

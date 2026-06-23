@@ -40,6 +40,7 @@ from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.llm_providers import LLMProviderConfig
 from app.memory_writer import write_memory
+from app.relationship_state import maybe_update_relationship_state_after_turn
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import (
     create_sync_block_task,
@@ -1658,6 +1659,15 @@ def _finalize_turn(
                     "openclaw_session_key": openclaw_session_key,
                     "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
                 },
+            ),
+        )
+        # turn 后确定性关系状态更新（30 条阈值 + 资源风险）。不阻塞主回复，
+        # 失败在函数内部记日志；inbound 已在此前持久化，计数含当前消息。
+        background_loop.call_soon_threadsafe(
+            background_loop.create_task,
+            asyncio.to_thread(
+                maybe_update_relationship_state_after_turn,
+                account_id=account_id,
             ),
         )
         if normal_reply_generated:

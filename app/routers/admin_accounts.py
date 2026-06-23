@@ -8,6 +8,7 @@ from app.routers.serializers import _binding_intent_for_view, _can_bypass_redact
 from app.routers.models import ProfileUpdateRequest
 from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_account_user_meta_current, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
 from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
+from app.relationship_state import render_relationship_view
 from app.time_utils import beijing_now_str
 from app.user_profiles import ensure_user_profile, read_agent_context, read_user_profile
 from datetime import date as date_cls, datetime
@@ -142,7 +143,8 @@ def admin_account_meta(account_id: str, _: None = Depends(verify_admin_auth)) ->
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
     meta = get_account_user_meta(account_id=account_id)
-    return {"meta": meta}
+    # 关系状态可读视图：由 DB 四字段即时渲染，不写回 profile_storage。
+    return {"meta": meta, "relationship_view": render_relationship_view(meta)}
 
 
 @router.patch("/admin/accounts/{account_id}/meta/companion")

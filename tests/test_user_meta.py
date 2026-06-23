@@ -129,6 +129,20 @@ def _llm_response(primary: str = "practical_assistant") -> str:
     )
 
 
+def _rel_llm_response(
+    stage: str = "acquainted", trust: str = "building", growth: str = "not_started"
+) -> str:
+    """关系状态天级 LLM 的有效输出；intensity>=2 的 run_once 测试需 patch 关系 LLM 引用。"""
+    return json.dumps(
+        {
+            "relationship_stage": stage,
+            "agent_need_trust_status": trust,
+            "agent_need_growth_status": growth,
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_message_intensity_zero(fresh_db):
     from app.db import compute_message_intensity
 
@@ -415,7 +429,8 @@ def test_run_once_low_signal_account_classifies_when_signal_reaches_threshold(fr
             content=f"ready {index}",
         )
 
-    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm:
+    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
+         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 19, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 1
@@ -447,7 +462,8 @@ def test_run_once_companion_reval_after_7d(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm:
+    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
+         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 1
@@ -479,7 +495,8 @@ def test_run_once_companion_no_reval_within_7d(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm:
+    with patch("app.user_meta_scheduler.generate_completion") as mock_llm, \
+         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 0
@@ -509,7 +526,8 @@ def test_run_once_manual_override_not_overwritten(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm:
+    with patch("app.user_meta_scheduler.generate_completion") as mock_llm, \
+         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
         asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     mock_llm.assert_not_called()
@@ -551,11 +569,13 @@ def test_run_once_lm_failure_keeps_existing(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion", side_effect=RuntimeError("llm down")):
+    with patch("app.user_meta_scheduler.generate_completion", side_effect=RuntimeError("llm down")), \
+         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_failed"] == 1
     assert result["status"] == "partial_error"
+    # 关系 LLM 被独立 patch 为成功，errors 仅含 companion 失败一条
     assert result["errors"] == [
         {
             "account_id": "acc-llm-fail",
@@ -627,7 +647,32 @@ def test_admin_get_meta_null_when_not_evaluated(client, fresh_db):
     res = client.get("/admin/accounts/acc-admin-null/meta", headers=ADMIN_HEADERS)
 
     assert res.status_code == 200
-    assert res.json() == {"meta": None}
+    body = res.json()
+    assert body["meta"] is None
+    # 无 meta 时 relationship_view 按默认值渲染（Phase D）
+    assert "当前阶段：破冰" in body["relationship_view"]
+
+
+def test_admin_get_meta_relationship_view_reflects_db(client, fresh_db):
+    from app.db import update_account_user_meta_relationship
+
+    _create_account("acc-admin-view")
+    update_account_user_meta_relationship(
+        account_id="acc-admin-view",
+        relationship_stage="deep_bond",
+        agent_need_survival_status="healthy",
+        agent_need_trust_status="stable",
+        agent_need_growth_status="emerging",
+    )
+
+    res = client.get("/admin/accounts/acc-admin-view/meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    view = res.json()["relationship_view"]
+    assert "当前阶段：挚友/热恋" in view
+    assert "生存 / 活跃：健康" in view
+    assert "信任与尊重：稳定" in view
+    assert "共同成长：有苗头" in view
 
 
 def test_admin_list_user_meta_returns_account_rows(client, fresh_db):
@@ -736,3 +781,306 @@ def test_admin_user_meta_run_once_requires_admin(client, fresh_db):
     res = client.post("/admin/ops/user-meta/run-once", headers=STAFF_HEADERS)
 
     assert res.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# 关系状态结构化字段（Phase A：见 relationship_state_implementation_plan_tmp.md）
+# ---------------------------------------------------------------------------
+
+REL_FIELDS = (
+    "relationship_stage",
+    "agent_need_survival_status",
+    "agent_need_trust_status",
+    "agent_need_growth_status",
+)
+REL_DEFAULTS = {
+    "relationship_stage": "icebreaking",
+    "agent_need_survival_status": "cooling",
+    "agent_need_trust_status": "building",
+    "agent_need_growth_status": "not_started",
+}
+
+
+def _companion_kwargs(account_id: str) -> dict:
+    return dict(
+        account_id=account_id,
+        registered_at="2026-06-01 10:00:00",
+        message_intensity_level=2,
+        companion_primary_type="daily_chat",
+        companion_secondary_types=["practical_assistant"],
+        companion_type_confidence=0.6,
+        companion_type_last_evaluated_at="2026-06-18 03:00:00",
+        companion_type_source="auto",
+        companion_type_expires_at=None,
+        companion_type_reasoning="测试",
+        safety_risk_trigger_count_30d=1,
+        last_evaluated_at="2026-06-18 03:00:00",
+    )
+
+
+def test_relationship_defaults_on_fresh_meta(fresh_db):
+    """upsert 不写关系列；migration 默认值生效。"""
+    from app.db import get_account_user_meta, upsert_account_user_meta
+
+    _create_account("acc-rel-default")
+    upsert_account_user_meta(**_companion_kwargs("acc-rel-default"))
+
+    meta = get_account_user_meta(account_id="acc-rel-default")
+    assert {k: meta[k] for k in REL_FIELDS} == REL_DEFAULTS
+
+
+def test_daily_snapshot_relationship_defaults(fresh_db):
+    """account_user_meta_daily 补列且 None 入参回退默认。"""
+    from app.db import connect, insert_account_user_meta_daily
+
+    _create_account("acc-rel-daily-default")
+    insert_account_user_meta_daily(
+        snapshot_date="2026-06-18", **_companion_kwargs("acc-rel-daily-default")
+    )
+
+    with connect() as conn:
+        row = dict(
+            conn.execute(
+                "SELECT relationship_stage, agent_need_survival_status, "
+                "agent_need_trust_status, agent_need_growth_status "
+                "FROM account_user_meta_daily "
+                "WHERE account_id = ? AND snapshot_date = ?",
+                ("acc-rel-daily-default", "2026-06-18"),
+            ).fetchone()
+        )
+    assert row == REL_DEFAULTS
+
+
+def test_update_relationship_builds_row_with_defaults(fresh_db):
+    """无 meta 行时 setter 建行，写入指定列、其余取默认。"""
+    from app.db import get_account_user_meta, update_account_user_meta_relationship
+
+    _create_account("acc-rel-build")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-build", relationship_stage="acquainted"
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-build")
+    assert meta is not None
+    assert meta["relationship_stage"] == "acquainted"
+    assert meta["agent_need_survival_status"] == "cooling"
+    assert meta["agent_need_trust_status"] == "building"
+    assert meta["agent_need_growth_status"] == "not_started"
+    assert meta["registered_at"]  # registered_at 取 accounts.created_at，非空
+
+
+def test_update_relationship_partial_keeps_others(fresh_db):
+    """只更新传入列；其余关系列保持不变。"""
+    from app.db import get_account_user_meta, update_account_user_meta_relationship
+
+    _create_account("acc-rel-partial")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-partial",
+        relationship_stage="deep_bond",
+        agent_need_survival_status="healthy",
+        agent_need_trust_status="stable",
+        agent_need_growth_status="emerging",
+    )
+    update_account_user_meta_relationship(
+        account_id="acc-rel-partial", agent_need_survival_status="inactive"
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-partial")
+    assert meta["agent_need_survival_status"] == "inactive"
+    assert meta["relationship_stage"] == "deep_bond"
+    assert meta["agent_need_trust_status"] == "stable"
+    assert meta["agent_need_growth_status"] == "emerging"
+
+
+def test_update_relationship_all_none_is_noop(fresh_db):
+    """全 None 入参不建行、不报错。"""
+    from app.db import get_account_user_meta, update_account_user_meta_relationship
+
+    _create_account("acc-rel-noop")
+    update_account_user_meta_relationship(account_id="acc-rel-noop")
+
+    assert get_account_user_meta(account_id="acc-rel-noop") is None
+
+
+def test_update_relationship_invalid_enum_falls_back(fresh_db):
+    """非法 enum 值回退该列默认。"""
+    from app.db import get_account_user_meta, update_account_user_meta_relationship
+
+    _create_account("acc-rel-bad")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-bad",
+        relationship_stage="bogus",
+        agent_need_survival_status="???",
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-bad")
+    assert meta["relationship_stage"] == "icebreaking"
+    assert meta["agent_need_survival_status"] == "cooling"
+
+
+def test_update_relationship_account_not_found(fresh_db):
+    """账号不存在时抛 ValueError。"""
+    import pytest
+
+    from app.db import update_account_user_meta_relationship
+
+    with pytest.raises(ValueError):
+        update_account_user_meta_relationship(
+            account_id="acc-ghost", relationship_stage="acquainted"
+        )
+
+
+def test_update_relationship_preserves_companion(fresh_db):
+    """setter 不改 companion 字段与 last_evaluated_at。"""
+    from app.db import (
+        get_account_user_meta,
+        update_account_user_meta_relationship,
+        upsert_account_user_meta,
+    )
+
+    _create_account("acc-rel-keep-companion")
+    upsert_account_user_meta(**_companion_kwargs("acc-rel-keep-companion"))
+    update_account_user_meta_relationship(
+        account_id="acc-rel-keep-companion", relationship_stage="deep_bond"
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-keep-companion")
+    assert meta["relationship_stage"] == "deep_bond"
+    assert meta["companion_primary_type"] == "daily_chat"
+    assert meta["companion_secondary_types"] == ["practical_assistant"]
+    assert meta["last_evaluated_at"] == "2026-06-18 03:00:00"
+
+
+def test_upsert_does_not_reset_relationship(fresh_db):
+    """每日 companion 刷新（upsert）不重置关系列。"""
+    from app.db import (
+        get_account_user_meta,
+        update_account_user_meta_relationship,
+        upsert_account_user_meta,
+    )
+
+    _create_account("acc-rel-upsert-keep")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-upsert-keep",
+        relationship_stage="deep_bond",
+        agent_need_survival_status="healthy",
+    )
+    upsert_account_user_meta(
+        **{**_companion_kwargs("acc-rel-upsert-keep"), "message_intensity_level": 5}
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-upsert-keep")
+    assert meta["message_intensity_level"] == 5
+    assert meta["relationship_stage"] == "deep_bond"
+    assert meta["agent_need_survival_status"] == "healthy"
+
+
+def test_set_companion_manual_keeps_relationship(fresh_db):
+    """set_companion_type_manual 不覆盖关系列。"""
+    from app.db import (
+        get_account_user_meta,
+        set_companion_type_manual,
+        update_account_user_meta_relationship,
+    )
+
+    _create_account("acc-rel-manual-keep")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-manual-keep", relationship_stage="acquainted"
+    )
+    set_companion_type_manual(
+        account_id="acc-rel-manual-keep",
+        primary_type="practical_assistant",
+        secondary_types=[],
+        confidence=1.0,
+        expires_at=None,
+        reasoning="人工",
+        now="2026-06-19 03:00:00",
+    )
+
+    meta = get_account_user_meta(account_id="acc-rel-manual-keep")
+    assert meta["companion_type_source"] == "manual"
+    assert meta["relationship_stage"] == "acquainted"
+
+
+def test_daily_snapshot_captures_current_relationship(fresh_db):
+    """insert_daily 把传入的当前关系值快照进每日历史。"""
+    from app.db import (
+        connect,
+        get_account_user_meta,
+        insert_account_user_meta_daily,
+        update_account_user_meta_relationship,
+    )
+
+    _create_account("acc-rel-daily-capture")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-daily-capture",
+        relationship_stage="deep_bond",
+        agent_need_survival_status="healthy",
+        agent_need_trust_status="stable",
+        agent_need_growth_status="emerging",
+    )
+    cur = get_account_user_meta(account_id="acc-rel-daily-capture")
+    insert_account_user_meta_daily(
+        snapshot_date="2026-06-18",
+        relationship_stage=cur["relationship_stage"],
+        agent_need_survival_status=cur["agent_need_survival_status"],
+        agent_need_trust_status=cur["agent_need_trust_status"],
+        agent_need_growth_status=cur["agent_need_growth_status"],
+        **_companion_kwargs("acc-rel-daily-capture"),
+    )
+
+    with connect() as conn:
+        row = dict(
+            conn.execute(
+                "SELECT relationship_stage, agent_need_survival_status, "
+                "agent_need_trust_status, agent_need_growth_status "
+                "FROM account_user_meta_daily "
+                "WHERE account_id = ? AND snapshot_date = ?",
+                ("acc-rel-daily-capture", "2026-06-18"),
+            ).fetchone()
+        )
+    assert row == {
+        "relationship_stage": "deep_bond",
+        "agent_need_survival_status": "healthy",
+        "agent_need_trust_status": "stable",
+        "agent_need_growth_status": "emerging",
+    }
+
+
+def test_admin_get_meta_includes_relationship_fields(client, fresh_db):
+    """GET /admin/accounts/{id}/meta 返回四个关系字段。"""
+    from app.db import update_account_user_meta_relationship
+
+    _create_account("acc-rel-admin")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-admin",
+        relationship_stage="acquainted",
+        agent_need_growth_status="emerging",
+    )
+
+    res = client.get("/admin/accounts/acc-rel-admin/meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    meta = res.json()["meta"]
+    assert meta["relationship_stage"] == "acquainted"
+    assert meta["agent_need_survival_status"] == "cooling"
+    assert meta["agent_need_trust_status"] == "building"
+    assert meta["agent_need_growth_status"] == "emerging"
+
+
+def test_admin_list_user_meta_includes_relationship_fields(client, fresh_db):
+    """GET /admin/user-meta 列表带出四个关系字段。"""
+    from app.db import update_account_user_meta_relationship
+
+    _create_account("acc-rel-admin-list")
+    update_account_user_meta_relationship(
+        account_id="acc-rel-admin-list", relationship_stage="deep_bond"
+    )
+
+    res = client.get("/admin/user-meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    by_id = {item["account_id"]: item for item in res.json()["items"]}
+    row = by_id["acc-rel-admin-list"]
+    assert row["relationship_stage"] == "deep_bond"
+    assert all(field in row for field in REL_FIELDS)

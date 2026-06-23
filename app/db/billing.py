@@ -60,6 +60,7 @@ __all__ = [
     'get_platform_user',
     'get_platform_user_by_phone',
     'get_platform_user_id_for_account',
+    'get_wallet_balance_shell_micros',
     'get_wallet_summary',
     'grant_new_user_shells',
     'grant_shells',
@@ -2018,6 +2019,21 @@ def get_wallet_summary(
             "unit": "贝壳",
         },
     }
+
+
+def get_wallet_balance_shell_micros(*, account_id: str) -> Optional[int]:
+    """只读返回账号当前贝壳余额（micros）；无绑定 / 无钱包返回 None。
+
+    供 agent_need_survival_status 的资源风险判断；不创建钱包、不发放新用户额度。
+    """
+    summary = get_wallet_summary(
+        account_id=account_id,
+        ensure_grant=False,
+        create_if_missing=False,
+    )
+    if not summary or not summary.get("wallet"):
+        return None
+    return int(summary["wallet"]["balance_shell_micros"])
 
 
 def list_wallet_ledger(

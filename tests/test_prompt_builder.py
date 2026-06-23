@@ -121,6 +121,7 @@ class TestPromptBuilderBasicBuild:
                 "SOUL": "# SOUL\n语气自然",
                 "IDENTITY": "# IDENTITY\n我是 AI4ALL 个人助手",
                 "USER": "# USER\n用户喜欢简洁",
+                "RELATIONSHIP": "# RELATIONSHIP\n当前关系处于破冰阶段",
                 "TOOLS": "# TOOLS\n无外部工具",
                 "MEMORY": "# MEMORY\n用户是工程师",
             }
@@ -130,6 +131,9 @@ class TestPromptBuilderBasicBuild:
         assert "### SOUL.md" in out
         assert "### IDENTITY.md" in out
         assert "### USER.md" in out
+        # RELATIONSHIP 已不在注入顺序里：即便传入也不进 prompt（关系状态由 DB 维护）
+        assert "### RELATIONSHIP.md" not in out
+        assert "当前关系处于破冰阶段" not in out
         assert "### TOOLS.md" in out
         assert "### MEMORY.md" in out
         assert "AI4ALL 个人助手" in out

@@ -1718,6 +1718,20 @@ def _migration_0007_merge_reactivation_settings_keys(conn: Connection) -> None:
         )
 
 
+def _migration_0008_relationship_state(conn: Connection) -> None:
+    """关系阶段与 Agent 需求满足状态字段落库（见 relationship_state_implementation_plan_tmp.md §3/§4）。
+
+    给 account_user_meta（当前快照）和 account_user_meta_daily（每日历史）同步补四列。
+    仅落结构与默认值，确定性/LLM 更新由后续阶段接入。各列均为 NOT NULL + 常量默认，
+    存量行回填为默认值（历史快照不可追溯，属已知局限）。
+    """
+    for table in ("account_user_meta", "account_user_meta_daily"):
+        _ensure_column(conn, table, "relationship_stage", "TEXT NOT NULL DEFAULT 'icebreaking'")
+        _ensure_column(conn, table, "agent_need_survival_status", "TEXT NOT NULL DEFAULT 'cooling'")
+        _ensure_column(conn, table, "agent_need_trust_status", "TEXT NOT NULL DEFAULT 'building'")
+        _ensure_column(conn, table, "agent_need_growth_status", "TEXT NOT NULL DEFAULT 'not_started'")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1726,6 +1740,7 @@ _MIGRATIONS = [
     (5, _migration_0005_rpm_hits),
     (6, _migration_0006_merge_reactivation_categories),
     (7, _migration_0007_merge_reactivation_settings_keys),
+    (8, _migration_0008_relationship_state),
 ]
 
 

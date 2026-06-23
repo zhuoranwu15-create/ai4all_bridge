@@ -4,18 +4,47 @@ import math
 from typing import Any, Dict, List, Optional
 
 from app.db._core import MODERATION_BLOCKED_ERROR, _clean_text, connect
+from app.time_utils import beijing_naive_now
 
 __all__ = [
+    "GROWTH_STATUS_VALUES",
+    "RELATIONSHIP_STAGE_VALUES",
+    "SURVIVAL_STATUS_VALUES",
+    "TRUST_STATUS_VALUES",
     "compute_message_intensity",
     "compute_safety_risk_count_30d",
+    "count_inbound_messages",
     "fetch_recent_inbound_messages",
+    "list_recent_inbound_message_dates",
     "get_account_user_meta",
     "insert_account_user_meta_daily",
     "list_account_user_meta_current",
     "list_accounts_for_meta_refresh",
     "set_companion_type_manual",
+    "update_account_user_meta_relationship",
     "upsert_account_user_meta",
 ]
+
+# 关系状态枚举与默认值（见 relationship_state_implementation_plan_tmp.md §3）。
+# 非法值在写入入口回退默认，避免脏值入库。
+RELATIONSHIP_STAGE_VALUES = {"icebreaking", "acquainted", "deep_bond"}
+SURVIVAL_STATUS_VALUES = {"healthy", "cooling", "inactive", "resource_risk"}
+TRUST_STATUS_VALUES = {"building", "stable", "damaged"}
+GROWTH_STATUS_VALUES = {"not_started", "emerging", "stable"}
+
+_RELATIONSHIP_DEFAULTS = {
+    "relationship_stage": ("icebreaking", RELATIONSHIP_STAGE_VALUES),
+    "agent_need_survival_status": ("cooling", SURVIVAL_STATUS_VALUES),
+    "agent_need_trust_status": ("building", TRUST_STATUS_VALUES),
+    "agent_need_growth_status": ("not_started", GROWTH_STATUS_VALUES),
+}
+
+
+def _normalize_relationship_value(column: str, value: Any) -> str:
+    """把关系状态值规整到合法枚举；非法值回退该列默认。"""
+    default, allowed = _RELATIONSHIP_DEFAULTS[column]
+    text = _clean_text(value)
+    return text if text in allowed else default
 
 
 def _encode_string_list(values: Optional[List[str]]) -> str:
@@ -80,6 +109,54 @@ def compute_message_intensity(*, account_id: str, today_start: str) -> int:
         ).fetchone()
     count = int(row["cnt"] or 0) if row else 0
     return math.floor(math.log1p(count))
+
+
+def count_inbound_messages(*, account_id: str) -> int:
+    """统计账号入站消息总数，供 relationship_stage 的 30 条阈值判断（含当天）。"""
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM messages
+            WHERE account_id = ?
+              AND direction = 'inbound'
+            """,
+            (cleaned_account_id,),
+        ).fetchone()
+    return int(row["cnt"] or 0) if row else 0
+
+
+def list_recent_inbound_message_dates(
+    *, account_id: str, since_date: str
+) -> List[str]:
+    """返回自 since_date（含）起有用户入站消息的去重北京自然日，升序。
+
+    messages.created_at 以北京时间字符串存储，自然日取其前 10 位（YYYY-MM-DD）。
+    since_date 可传日期（'2026-06-01'）或日期时间字符串，按字符串下界比较。
+    供 agent_need_survival_status 的连续天数判断。
+    """
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_since_date = _clean_text(since_date)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_since_date:
+        raise ValueError("since_date is required")
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT substr(created_at, 1, 10) AS d
+            FROM messages
+            WHERE account_id = ?
+              AND direction = 'inbound'
+              AND created_at >= ?
+            ORDER BY d
+            """,
+            (cleaned_account_id, cleaned_since_date),
+        ).fetchall()
+    return [row["d"] for row in rows if row["d"]]
 
 
 def compute_safety_risk_count_30d(*, account_id: str, thirty_days_ago: str) -> int:
@@ -221,8 +298,15 @@ def insert_account_user_meta_daily(
     companion_type_reasoning: Optional[str],
     safety_risk_trigger_count_30d: int,
     last_evaluated_at: str,
+    relationship_stage: Optional[str] = None,
+    agent_need_survival_status: Optional[str] = None,
+    agent_need_trust_status: Optional[str] = None,
+    agent_need_growth_status: Optional[str] = None,
 ) -> None:
-    """插入账号每日元属性快照；同账号同日幂等忽略。"""
+    """插入账号每日元属性快照；同账号同日幂等忽略。
+
+    四个关系状态入参用于把当前关系快照进每日历史；None 或非法值回退该列默认。
+    """
     cleaned_account_id = _clean_text(account_id)
     cleaned_snapshot_date = _clean_text(snapshot_date)
     cleaned_registered_at = _clean_text(registered_at)
@@ -247,9 +331,11 @@ def insert_account_user_meta_daily(
                 companion_type_confidence, companion_type_last_evaluated_at,
                 companion_type_source, companion_type_expires_at,
                 companion_type_reasoning, safety_risk_trigger_count_30d,
-                last_evaluated_at
+                last_evaluated_at,
+                relationship_stage, agent_need_survival_status,
+                agent_need_trust_status, agent_need_growth_status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cleaned_account_id,
@@ -265,6 +351,16 @@ def insert_account_user_meta_daily(
                 _clean_text(companion_type_reasoning),
                 max(0, _coerce_int(safety_risk_trigger_count_30d)),
                 cleaned_last_evaluated_at,
+                _normalize_relationship_value("relationship_stage", relationship_stage),
+                _normalize_relationship_value(
+                    "agent_need_survival_status", agent_need_survival_status
+                ),
+                _normalize_relationship_value(
+                    "agent_need_trust_status", agent_need_trust_status
+                ),
+                _normalize_relationship_value(
+                    "agent_need_growth_status", agent_need_growth_status
+                ),
             ),
         )
 
@@ -283,6 +379,8 @@ def get_account_user_meta(*, account_id: str) -> Optional[Dict[str, Any]]:
                 companion_type_confidence, companion_type_last_evaluated_at,
                 companion_type_source, companion_type_expires_at,
                 companion_type_reasoning, safety_risk_trigger_count_30d,
+                relationship_stage, agent_need_survival_status,
+                agent_need_trust_status, agent_need_growth_status,
                 last_evaluated_at, created_at, updated_at
             FROM account_user_meta
             WHERE account_id = ?
@@ -337,6 +435,10 @@ def list_account_user_meta_current(
                 m.companion_type_expires_at,
                 m.companion_type_reasoning,
                 m.safety_risk_trigger_count_30d,
+                m.relationship_stage,
+                m.agent_need_survival_status,
+                m.agent_need_trust_status,
+                m.agent_need_growth_status,
                 m.last_evaluated_at,
                 m.created_at AS meta_created_at,
                 m.updated_at AS meta_updated_at
@@ -449,4 +551,70 @@ def set_companion_type_manual(
                 cleaned_now,
                 cleaned_now,
             ),
+        )
+
+
+def update_account_user_meta_relationship(
+    *,
+    account_id: str,
+    relationship_stage: Optional[str] = None,
+    agent_need_survival_status: Optional[str] = None,
+    agent_need_trust_status: Optional[str] = None,
+    agent_need_growth_status: Optional[str] = None,
+) -> None:
+    """更新账号关系状态列，仅写入非 None 入参；其余列保持不变。
+
+    关系状态（relationship_stage / 三个 agent_need_*）的唯一写入口，turn 级与天级
+    确定性 / LLM 更新共用；companion 字段不在此处改动。非法 enum 值回退该列默认。
+    account_user_meta 行不存在时按默认值建行（registered_at 取 accounts.created_at），
+    以保证新账号在天级任务首跑前也能写入关系状态。
+    """
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+
+    # 收集本次要写的列：仅非 None 入参，并规整到合法枚举。
+    updates: List[tuple] = []
+    for column, value in (
+        ("relationship_stage", relationship_stage),
+        ("agent_need_survival_status", agent_need_survival_status),
+        ("agent_need_trust_status", agent_need_trust_status),
+        ("agent_need_growth_status", agent_need_growth_status),
+    ):
+        if value is not None:
+            updates.append((column, _normalize_relationship_value(column, value)))
+    if not updates:
+        return
+
+    now = beijing_naive_now().strftime("%Y-%m-%d %H:%M:%S")
+    with connect() as conn:
+        account = conn.execute(
+            "SELECT created_at FROM accounts WHERE id = ?",
+            (cleaned_account_id,),
+        ).fetchone()
+        if account is None:
+            raise ValueError("account not found")
+        # 缺行建行：registered_at / last_evaluated_at 为 NOT NULL 无默认，需补值。
+        # 已存在则走 ON CONFLICT，仅更新关系列与 updated_at，不动这两列。
+        insert_columns = ["account_id", "registered_at", "last_evaluated_at", "updated_at"]
+        insert_values: List[Any] = [
+            cleaned_account_id,
+            str(account["created_at"]),
+            now,
+            now,
+        ]
+        for column, value in updates:
+            insert_columns.append(column)
+            insert_values.append(value)
+        set_clause = ", ".join(f"{column} = excluded.{column}" for column, _ in updates)
+        placeholders = ", ".join("?" for _ in insert_columns)
+        conn.execute(
+            f"""
+            INSERT INTO account_user_meta({", ".join(insert_columns)})
+            VALUES ({placeholders})
+            ON CONFLICT(account_id) DO UPDATE SET
+                {set_clause},
+                updated_at = excluded.updated_at
+            """,
+            tuple(insert_values),
         )

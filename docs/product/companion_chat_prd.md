@@ -1,6 +1,11 @@
 # 产品专题 PRD：陪伴式聊天
 
-更新时间：2026-05-31
+更新时间：2026-06-22
+
+## 子文档
+
+- [AI Agent 设定](companion_chat_agent_prd.md)：定义 Agent 的角色设定、使命、需求层次、关系进展阶段和边界。
+- [对话编排与动态加载](companion_chat_orchestration_prd.md)：定义每轮对话如何按状态加载上下文、选择回复策略和处理写入。
 
 ## 1. 目标
 

@@ -1,8 +1,8 @@
 # 技术设计：用户元属性建设 Phase 1
 
 关联 PRD：`docs/product/user_meta_attributes_prd.md`
-更新时间：2026-06-18
-范围：Phase 1 全量（可计算元属性 + 陪伴类型 LLM 推断标签）
+更新时间：2026-06-22
+范围：Phase 1 全量（可计算元属性 + 陪伴类型 LLM 推断标签 + 关系状态）
 
 > 2026-06-18 确认：PRD 的 Phase 1 范围已调整为包含陪伴类型初版，本设计按“可计算元属性 + 陪伴类型”一次上线执行。
 
@@ -10,7 +10,7 @@
 
 ## 1. 范围与目标
 
-本期一次上线 PRD 全部三类属性，按天级更新：
+当前设计覆盖以下账号级用户元属性：
 
 | 字段组 | 字段 | 来源 | 计算方式 |
 |---|---|---|---|
@@ -18,6 +18,7 @@
 | 活跃强度 | `message_intensity_level` | `messages` 表 | `floor(ln(1 + inbound_count_until_yesterday))` |
 | 安全风险 | `safety_risk_trigger_count_30d` | `content_moderation_tasks` | 近 30 天入站非 pass 风险触发次数（去重） |
 | 陪伴类型 | `companion_*` 4 个字段 | LLM 分类推断 | 7 天重算一次，置信度 + 来源 + 摘要 |
+| 关系状态 | `relationship_stage` / `agent_need_*_status` | `messages` / 账号状态 / 天级 LLM | 关系阶段 + Agent 需求满足状态，供动态编排读取 |
 
 派生结果写入两张表：
 - `account_user_meta`：每账号一行的当前快照，每日覆盖更新
@@ -36,6 +37,12 @@ CREATE TABLE IF NOT EXISTS account_user_meta (
 
     -- 活跃强度（每日重算）
     message_intensity_level          INTEGER NOT NULL DEFAULT 0,
+
+    -- 关系状态（动态编排读取；部分准实时更新，部分每日重评估）
+    relationship_stage               TEXT NOT NULL DEFAULT 'icebreaking',
+    agent_need_survival_status       TEXT NOT NULL DEFAULT 'cooling',
+    agent_need_trust_status          TEXT NOT NULL DEFAULT 'building',
+    agent_need_growth_status         TEXT NOT NULL DEFAULT 'not_started',
 
     -- 陪伴类型（LLM 推断，7 天重算）
     companion_primary_type           TEXT,                -- enum，见第 3.3 节
@@ -68,6 +75,10 @@ CREATE TABLE IF NOT EXISTS account_user_meta_daily (
 
     registered_at                    TEXT NOT NULL,
     message_intensity_level          INTEGER NOT NULL DEFAULT 0,
+    relationship_stage               TEXT NOT NULL DEFAULT 'icebreaking',
+    agent_need_survival_status       TEXT NOT NULL DEFAULT 'cooling',
+    agent_need_trust_status          TEXT NOT NULL DEFAULT 'building',
+    agent_need_growth_status         TEXT NOT NULL DEFAULT 'not_started',
     companion_primary_type           TEXT,
     companion_secondary_types        TEXT NOT NULL DEFAULT '[]',
     companion_type_confidence        REAL,
@@ -89,7 +100,9 @@ CREATE INDEX IF NOT EXISTS ix_account_user_meta_daily_account_date
 
 ### 2.3 迁移注册
 
-在 `app/db/_core.py` 追加第 3 版迁移：
+`account_user_meta` 已由第 3 版迁移创建。关系状态字段作为后续扩展时，应新增独立 migration，并对 `account_user_meta` 与 `account_user_meta_daily` 同步执行 `_ensure_column`，保证已有数据库无损升级。
+
+原始第 3 版迁移：
 
 ```python
 def _migration_0003_user_meta(conn: sqlite3.Connection) -> None:
@@ -218,7 +231,33 @@ WHERE account_id  = :account_id
 - 调用方式：通过 `generate_completion(messages)` 调用项目统一 LLM 入口，不构造 batch 专用 provider，不绕过 runtime config
 - 失败处理：LLM 调用失败或输出解析失败时，保留现有 `companion_*` 字段不变，记录错误到调度器摘要
 
-### 3.4 `registered_at`
+### 3.4 关系状态与 Agent 需求状态
+
+四个状态字段是动态编排的结构化输入，不是普通 prompt 记忆。编排层可以每 turn 读取它们，但不应每 turn 全量重算。
+
+#### 字段枚举
+
+| 字段 | 默认值 | 可选值 | 中文含义 |
+| --- | --- | --- | --- |
+| `relationship_stage` | `icebreaking` | `icebreaking` / `acquainted` / `deep_bond` | 破冰 / 相识 / 挚友/热恋 |
+| `agent_need_survival_status` | `cooling` | `healthy` / `cooling` / `inactive` / `resource_risk` | 健康 / 冷却 / 失活 / 资源风险 |
+| `agent_need_trust_status` | `building` | `building` / `stable` / `damaged` | 建立中 / 稳定 / 受损 |
+| `agent_need_growth_status` | `not_started` | `not_started` / `emerging` / `stable` | 未开始 / 有苗头 / 稳定发生 |
+
+#### 更新边界
+
+- `relationship_stage`：默认 `icebreaking`。准实时规则只允许从 `icebreaking` 推进到 `acquainted`：当账号累计用户入站消息数超过 30 条时触发。天级任务可通过 LLM 保守修正阶段；`acquainted` 到 `deep_bond` 仅由天级 LLM 判断。
+- `agent_need_survival_status`：默认 `cooling`。连续两个自然日用户有发送消息给 Agent（不区分用户主动发起或回复主动消息）时转为 `healthy`；`healthy` 状态下连续三个自然日无用户消息转为 `cooling`；连续一个月无用户消息转为 `inactive`；账号欠费超过 500 贝壳（余额低于 `-500`）时触发 `resource_risk`。`resource_risk` 用于提示服务资源风险，但不阻碍关系阶段、信任状态和成长状态的正常计算。
+- `agent_need_trust_status`：仅由天级 LLM 判断，不做 turn 级实时更新。
+- `agent_need_growth_status`：仅由天级 LLM 判断，不做 turn 级实时更新。
+
+#### 运行方式
+
+- turn 链路：读取四个状态用于后续编排；只执行低成本确定性更新，例如 `relationship_stage` 的 30 条消息阈值，或账号余额触发 `resource_risk`。
+- 天级 `user_meta_scheduler`：负责稳定重评估四个状态，并写入 `account_user_meta` 当前快照和 `account_user_meta_daily` 历史快照。
+- 信号不足时保留当前状态，不为了每日快照机械改写。
+
+### 3.5 `registered_at`
 
 直接读取 `accounts.created_at`，无需额外计算。
 
@@ -245,6 +284,10 @@ def upsert_account_user_meta(
     account_id: str,
     registered_at: str,
     message_intensity_level: int,
+    relationship_stage: str,
+    agent_need_survival_status: str,
+    agent_need_trust_status: str,
+    agent_need_growth_status: str,
     companion_primary_type: Optional[str],
     companion_secondary_types: list[str],
     companion_type_confidence: Optional[float],
@@ -255,7 +298,7 @@ def upsert_account_user_meta(
     safety_risk_trigger_count_30d: int,
     last_evaluated_at: str,
 ) -> None:
-    """INSERT OR REPLACE 当前快照（含陪伴类型字段）。"""
+    """INSERT OR REPLACE 当前快照（含关系状态和陪伴类型字段）。"""
 
 def insert_account_user_meta_daily(
     *,
@@ -343,13 +386,13 @@ class UserMetaScheduler:
         2. 分页拉取非 debug 账号（list_accounts_for_meta_refresh，offset 递增）
         3. 逐账号处理：
            a. 计算 message_intensity_level、safety_risk_trigger_count_30d
-           b. 判断是否需要重新推断陪伴类型
-              - 需要且 intensity >= 2：调用 LLM，写入推断结果
-              - 需要但 intensity < 2：保留 companion_* 为 NULL
-              - 不需要：沿用当前快照的 companion_* 值
-           c. upsert_account_user_meta
-           d. insert_account_user_meta_daily（snapshot_date = today_beijing）
-           e. await asyncio.sleep(inter_account_sleep)
+           b. 计算确定性关系状态：relationship_stage 的消息数阈值、agent_need_survival_status 的活跃/欠费规则
+           c. 判断 LLM 任务
+              - 陪伴类型：沿用 7 天缓存和 intensity >= 2 的既有规则
+              - 关系状态：天级 LLM 可保守修正 relationship_stage，并判断 trust/growth；信号不足时保留当前值
+           d. upsert_account_user_meta
+           e. insert_account_user_meta_daily（snapshot_date = today_beijing）
+           f. await asyncio.sleep(inter_account_sleep)
         4. record_scheduler_heartbeat(service="user_meta_scheduler", ...)
         5. 返回 {processed, skipped, companion_evaluated, companion_failed, errors}
         """
@@ -405,6 +448,10 @@ GET /admin/accounts/{account_id}/meta
   "registered_at": "2025-08-01 10:23:45",
   "message_intensity_level": 4,
   "safety_risk_trigger_count_30d": 2,
+  "relationship_stage": "acquainted",
+  "agent_need_survival_status": "healthy",
+  "agent_need_trust_status": "building",
+  "agent_need_growth_status": "emerging",
   "companion_primary_type": "emotional_support",
   "companion_secondary_types": ["daily_chat"],
   "companion_type_confidence": 0.82,
@@ -458,19 +505,19 @@ POST /admin/ops/user-meta/run-once
 
 | 文件 | 变更类型 | 改动摘要 |
 |---|---|---|
-| `app/db/_core.py` | 修改 | 新增 `_migration_0003_user_meta`，追加到 `_MIGRATIONS` |
-| `app/db/user_meta.py` | 新建 | 全部 user_meta DB 操作 |
+| `app/db/_core.py` | 修改 | `account_user_meta` / `account_user_meta_daily` 增加四个关系状态字段；已有库通过新增 migration / `_ensure_column` 无损补列 |
+| `app/db/user_meta.py` | 修改 | user_meta DB 操作读写四个关系状态字段；补充确定性统计 helper |
 | `app/db/__init__.py` | 修改 | re-export user_meta 公开接口 |
 | `app/prompts/user_meta_companion_type.py` | 新建 | 分类 prompt 模板 + `COMPANION_TYPE_ENUM` |
-| `app/user_meta_scheduler.py` | 新建 | `UserMetaScheduler`（含 LLM 推断步骤） |
+| `app/user_meta_scheduler.py` | 修改 | `UserMetaScheduler` 增加关系状态和 Agent 需求状态更新口径 |
 | `app/config.py` | 修改 | 4 个新配置变量 |
 | `.env.example` | 修改 | 补充 USER_META_* 变量说明 |
 | `app/main.py` | 修改 | startup/shutdown 接线 |
-| `app/routers/admin_accounts.py` | 修改 | 新增 GET meta + PATCH companion 端点 |
+| `app/routers/admin_accounts.py` | 修改 | GET meta 返回关系状态字段；后续如需要再增加人工调整端点 |
 | `app/routers/admin_ops.py` | 修改 | 新增 POST user-meta/run-once 端点 |
 | `app/db/lifecycle.py` | 修改 | `wipe_account_data` 删除账号元属性当前/历史快照 |
 | `scripts/check_user_meta_companion_type.py` | 新建 | 本地验证陪伴类型 prompt + LLM 解析链路，便于上线前抽测 |
-| `tests/test_user_meta.py` | 新建 | 单测（见第 9 节） |
+| `tests/test_user_meta.py` | 修改 | 补充四个关系状态字段的 schema、默认值、更新口径测试 |
 
 ---
 
@@ -501,6 +548,15 @@ def test_safety_window_boundary():           # 31 天前事件不计入
 # upsert / daily
 def test_upsert_idempotent():                # 同账号两次 upsert → 一行，值取最后一次
 def test_daily_insert_or_ignore():           # 同账号同 snapshot_date 两次 insert → 一行
+
+# relationship / agent needs
+def test_relationship_defaults():            # 默认 icebreaking/cooling/building/not_started
+def test_relationship_stage_realtime_threshold(): # 用户入站消息 >30 → icebreaking 转 acquainted
+def test_survival_two_active_days_healthy(): # 连续两天用户发消息 → healthy
+def test_survival_three_silent_days_cooling(): # healthy 后连续三天无用户消息 → cooling
+def test_survival_one_month_silent_inactive(): # 连续一个月无用户消息 → inactive
+def test_survival_resource_risk_by_balance(): # 余额低于 -500 贝壳 → resource_risk
+def test_trust_growth_not_updated_by_turn(): # trust/growth 不在 turn 级实时更新
 
 # companion manual override
 def test_set_companion_manual_sets_source(): # source='manual', expires_at 正确写入
@@ -563,6 +619,9 @@ def test_patch_companion_requires_admin():     # staff token → 403
 | 陪伴类型 LLM 调用方式 | 复用项目 LLM provider 抽象 | 不直接引入 Anthropic SDK |
 | 被审核拦截消息是否进入分类上下文 | 不进入 | 过滤 `messages.error = MODERATION_BLOCKED_ERROR` |
 | `companion_type_expires_at` 为 NULL 的 manual override 是否永久有效 | 永不自动重算 | 需人工再次 PATCH 或设置 expires_at 才会恢复 auto |
+| 关系状态字段数量 | 仅 4 个 | `relationship_stage`、`agent_need_survival_status`、`agent_need_trust_status`、`agent_need_growth_status` |
+| survival 默认值 | `cooling`（冷却） | 不设 `unknown` |
+| trust/growth 是否 turn 级实时更新 | 否 | 仅由天级 LLM 判断 |
 | `run_once` 是否限制每次最大 LLM 调用数 | 不限制，依赖 7 天缓存自然控制 | 首次全量运行时若账号多，可接受较慢；后续每天只有 7 天到期账号需推断 |
 | `companion_type_reasoning` 是否进入历史快照 | 是（写入 `account_user_meta_daily`） | 供回溯分析，存储代价低 |
 | 账号 wipe 是否清理元属性 | 是 | `wipe_account_data` 同步删除当前/历史快照 |

@@ -21,6 +21,10 @@ from app.prompts.user_meta_companion_type import (
     COMPANION_TYPE_ENUM,
     build_companion_classify_prompt,
 )
+from app.relationship_state import (
+    apply_daily_deterministic_relationship,
+    apply_daily_llm_relationship,
+)
 from app.time_utils import BEIJING_TZ, beijing_naive_now
 
 
@@ -216,6 +220,8 @@ class UserMetaScheduler:
             "skipped": 0,
             "companion_evaluated": 0,
             "companion_failed": 0,
+            "relationship_evaluated": 0,
+            "relationship_failed": 0,
             "errors": [],
         }
         self._record_heartbeat(status="running")
@@ -249,6 +255,18 @@ class UserMetaScheduler:
                                     "step": "companion_classification",
                                     "error": account_result.get("companion_error")
                                     or "companion classification failed",
+                                }
+                            )
+                        if account_result.get("relationship_evaluated"):
+                            result["relationship_evaluated"] += 1
+                        if account_result.get("relationship_failed"):
+                            result["relationship_failed"] += 1
+                            result["errors"].append(
+                                {
+                                    "account_id": account_id,
+                                    "step": "relationship_evaluation",
+                                    "error": account_result.get("relationship_error")
+                                    or "relationship evaluation failed",
                                 }
                             )
                     except Exception as err:  # noqa: BLE001 - account-level isolation
@@ -305,6 +323,11 @@ class UserMetaScheduler:
         companion_failed = False
         companion_evaluated = False
         companion_error = None
+        # 关系 LLM 与 companion 共用同一次入站消息抓取（intensity>=2 时填充）。
+        recent_messages: Optional[List[Dict[str, Any]]] = None
+        relationship_evaluated = False
+        relationship_failed = False
+        relationship_error = None
         needs_companion_evaluation = _needs_companion_evaluation(meta=current_meta, now=now)
         if (
             not needs_companion_evaluation
@@ -364,6 +387,37 @@ class UserMetaScheduler:
             safety_risk_trigger_count_30d=safety_count,
             last_evaluated_at=evaluated_at,
         )
+        # 天级确定性关系更新（stage 阈值 + survival 连续天数/资源风险），写入并返回更新后
+        # 的四个关系状态；trust/growth 原样透传（留待天级 LLM，Phase C）。
+        relationship = apply_daily_deterministic_relationship(
+            account_id=account_id,
+            snapshot_date=snapshot_date,
+            current_meta=current_meta,
+        )
+        # 天级 LLM 更新 relationship_stage(仅 acquainted→deep_bond)/trust/growth；
+        # 不碰 survival（确定性）。门控 intensity>=2，复用 companion 的入站消息抓取。
+        # 失败保留确定性结果，不影响 companion / daily 写入。
+        if intensity >= 2:
+            if recent_messages is None:
+                recent_messages = fetch_recent_inbound_messages(
+                    account_id=account_id, limit=50
+                )
+            try:
+                relationship = await asyncio.to_thread(
+                    apply_daily_llm_relationship,
+                    account_id=account_id,
+                    deterministic=relationship,
+                    messages=recent_messages,
+                )
+                relationship_evaluated = True
+            except Exception as err:  # noqa: BLE001 - LLM failure keeps deterministic values
+                logger.warning(
+                    "relationship evaluation failed account=%s error=%s",
+                    account_id,
+                    err,
+                )
+                relationship_failed = True
+                relationship_error = str(err)
         insert_account_user_meta_daily(
             account_id=account_id,
             snapshot_date=snapshot_date,
@@ -378,11 +432,19 @@ class UserMetaScheduler:
             companion_type_reasoning=companion["reasoning"],
             safety_risk_trigger_count_30d=safety_count,
             last_evaluated_at=evaluated_at,
+            # 把当日确定性更新后的关系状态快照进每日历史。
+            relationship_stage=relationship["relationship_stage"],
+            agent_need_survival_status=relationship["agent_need_survival_status"],
+            agent_need_trust_status=relationship["agent_need_trust_status"],
+            agent_need_growth_status=relationship["agent_need_growth_status"],
         )
         return {
             "companion_evaluated": companion_evaluated,
             "companion_failed": companion_failed,
             "companion_error": companion_error,
+            "relationship_evaluated": relationship_evaluated,
+            "relationship_failed": relationship_failed,
+            "relationship_error": relationship_error,
         }
 
     def start(self) -> None:
