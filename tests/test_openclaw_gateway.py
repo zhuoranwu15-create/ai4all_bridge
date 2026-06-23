@@ -1,4 +1,5 @@
 import json
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -206,7 +207,7 @@ def test_send_weixin_text_uses_ws_when_enabled(monkeypatch):
     ]
 
 
-def test_send_weixin_text_falls_back_to_cli_on_ws_error(monkeypatch):
+def test_send_weixin_text_falls_back_to_cli_on_ws_error(monkeypatch, caplog):
     from app import openclaw_gateway
     from app.openclaw_gateway import OpenClawGatewayError
 
@@ -219,17 +220,26 @@ def test_send_weixin_text_falls_back_to_cli_on_ws_error(monkeypatch):
         openclaw_gateway.settings, "openclaw_gateway_ws_fallback_to_cli", True
     )
     monkeypatch.setattr(openclaw_gateway, "_persistent_gateway_client", lambda: FakeClient())
-    with patch("app.openclaw_gateway.subprocess.run", return_value=_Completed()) as mock_run:
-        result = openclaw_gateway.send_weixin_text(
-            to_user_id="peer@im.wechat",
-            text="hello",
-            idempotency_key="idem-fallback",
-            gateway_timeout_ms=1234,
-        )
+    with caplog.at_level(logging.WARNING, logger="ai4all.openclaw_gateway"):
+        with patch("app.openclaw_gateway.subprocess.run", return_value=_Completed()) as mock_run:
+            result = openclaw_gateway.send_weixin_text(
+                to_user_id="peer@im.wechat",
+                text="hello",
+                idempotency_key="idem-fallback",
+                gateway_timeout_ms=1234,
+            )
 
     assert result["messageId"] == "msg-1"
     params = _params_from_call(mock_run)
     assert params["idempotencyKey"] == "idem-fallback"
+    # 降级保留为 WARNING(不进飞书),但须带异常详情用于排障。
+    fallback_warns = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.WARNING and "falling back to CLI" in rec.getMessage()
+    ]
+    assert fallback_warns, "WS→CLI 降级应记录 WARNING"
+    assert "ws closed" in fallback_warns[0].getMessage()
 
 
 def test_send_weixin_text_raises_ws_error_when_fallback_disabled(monkeypatch):

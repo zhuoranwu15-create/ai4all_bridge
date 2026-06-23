@@ -1329,6 +1329,15 @@ def _resolve_turn_reply(
                     _record_timing(timings, "reply_generation_ms", generation_started)
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
+                # 用户将真实收到「卡住了」兜底回复(生成失败且无可用回复)。ERROR 级 → 经 ai4all
+                # 命名空间的 Feishu handler 推送 FEISHU_ALERT_WEBHOOK_URL(同签名 5min 冷却+脱敏)。
+                # 这里补的是 generate_reply_with_tools 返回 error 字符串的静默路径(超时/空响应/
+                # 限流/工具轮超限等);LLM 直接抛异常的路径已由下方 except 的 logger.exception 覆盖。
+                logger.error(
+                    "user received generation fallback reply account=%s generation_error=%s",
+                    account_id,
+                    generation_error,
+                )
             normal_reply_generated = generation_error is None
             if tool_names_used:
                 debug_metadata["tool_names_used"] = tool_names_used

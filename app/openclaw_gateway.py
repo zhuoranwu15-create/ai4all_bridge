@@ -279,10 +279,15 @@ def _run_send_gateway_call(*, params: Dict[str, Any], timeout_ms: int) -> Dict[s
                 params=params,
                 timeout_ms=timeout_ms,
             )
-        except OpenClawGatewayError:
+        except OpenClawGatewayError as err:
             if not _setting_bool("openclaw_gateway_ws_fallback_to_cli", True):
                 raise
-            logger.warning("persistent OpenClaw Gateway send failed; falling back to CLI")
+            # WARNING 级(不进飞书告警):外发降级回退慢速 CLI。保留异常详情用于排障——常见诱因是
+            # 同通道账号登录/改配置触发 OpenClaw 通道热重启,期间连接被重置导致 send 立即失败。
+            logger.warning(
+                "persistent OpenClaw Gateway send failed; falling back to CLI: %s",
+                err,
+            )
     return _run_gateway_call(method="send", params=params, timeout_ms=timeout_ms)
 
 

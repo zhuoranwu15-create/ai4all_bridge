@@ -50,8 +50,9 @@ def test_turn_creates_reminder_via_tool_call(client, fresh_db):
     assert "提醒" in data.get("reply", "")
 
 
-def test_turn_tool_generation_error_returns_friendly_reply(client, fresh_db):
+def test_turn_tool_generation_error_returns_friendly_reply(client, fresh_db, caplog):
     """Tool LLM errors should not persist or return an empty assistant message."""
+    import logging
     from unittest.mock import patch as _patch
     from app.db import get_or_create_session, list_sessions_for_account, set_account_onboarding_state
 
@@ -66,29 +67,39 @@ def test_turn_tool_generation_error_returns_friendly_reply(client, fresh_db):
         )
         set_account_onboarding_state(account_id="tool-error-session", state="complete")
 
-    with patch(
-        "app.turn_service.generate_reply_with_tools",
-        return_value=("", "LLM API key is missing"),
-    ):
-        resp = client.post(
-            "/openclaw/turn",
-            headers={"Authorization": "Bearer test-secret"},
-            json={
-                "session_key": "tool-error-session",
-                "channel": "openclaw-weixin",
-                "channel_account_id": "bot-1",
-                "sender_id": "user-1",
-                "chat_id": "chat-1",
-                "message_type": "text",
-                "text": "你好",
-                "chat_type": "private",
-            },
-        )
+    with caplog.at_level(logging.ERROR, logger="ai4all.turn_service"):
+        with patch(
+            "app.turn_service.generate_reply_with_tools",
+            return_value=("", "LLM API key is missing"),
+        ):
+            resp = client.post(
+                "/openclaw/turn",
+                headers={"Authorization": "Bearer test-secret"},
+                json={
+                    "session_key": "tool-error-session",
+                    "channel": "openclaw-weixin",
+                    "channel_account_id": "bot-1",
+                    "sender_id": "user-1",
+                    "chat_id": "chat-1",
+                    "message_type": "text",
+                    "text": "你好",
+                    "chat_type": "private",
+                },
+            )
 
     assert resp.status_code == 200
     assert resp.json()["reply"] == "我这边刚刚有点卡住了，你可以稍后再发我一次。"
     session = list_sessions_for_account(account_id="tool-error-session", limit=1)[0]
     assert session["turn_count"] == 0
+    # 用户收到「卡住了」兜底回复时须打 ERROR(带 generation_error 详情)→ 进飞书告警管道。
+    fallback_alerts = [
+        rec
+        for rec in caplog.records
+        if rec.levelno == logging.ERROR
+        and "user received generation fallback reply" in rec.getMessage()
+    ]
+    assert fallback_alerts, "用户收到卡住了兜底回复应记录 ERROR 告警"
+    assert "LLM API key is missing" in fallback_alerts[0].getMessage()
 
 
 def test_turn_gates_web_search_tool_registration(client, fresh_db):
