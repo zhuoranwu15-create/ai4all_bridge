@@ -117,6 +117,46 @@ def test_pg_integrity_error_caught_by_alias(pg_settings):
     assert caught
 
 
+def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_settings):
+    from app.db._core import _ensure_pg_functions, connect
+
+    with connect() as conn:
+        _ensure_pg_functions(conn)
+        conn.execute(
+            """
+            CREATE TABLE outbound_messages (
+                account_id TEXT NOT NULL,
+                quota_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                metadata_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO outbound_messages(account_id, quota_date, status, metadata_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("acc-pg-react", "2026-06-24", "sent", '{"reactivation": true}'),
+        )
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND quota_date = ?
+              AND status IN ('pending', 'sending', 'sent')
+              AND json_valid(metadata_json)
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+            """,
+            ("acc-pg-react", "2026-06-24"),
+        ).fetchone()
+
+    assert row["count"] == 1
+
+
 # ---------------------------------------------------------------------------
 # 1c：真 PG 上 init_db() 建全量 schema
 # ---------------------------------------------------------------------------

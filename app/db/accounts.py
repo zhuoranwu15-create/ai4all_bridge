@@ -514,7 +514,7 @@ def list_recent_reactivation_outbound_messages(
               AND created_at >= ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -543,7 +543,7 @@ def count_reactivation_outbound_for_quota_date(
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             """,
             (account_id, quota_date),
         ).fetchone()
@@ -582,7 +582,7 @@ def list_reactivation_outbound_messages_admin(
               {account_clause}
               {since_clause}
               AND json_valid(o.metadata_json)
-              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             ORDER BY o.id DESC
             LIMIT ?
             """,

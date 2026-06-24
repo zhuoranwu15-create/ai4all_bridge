@@ -229,6 +229,17 @@ def test_translate_json_valid_passthrough():
     assert "IS JSON" not in out
 
 
+def test_translate_reactivation_json_bool_predicate_uses_text_comparison():
+    sql = (
+        "AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) "
+        "IN ('1', 'true')"
+    )
+    out = _backend.translate_statement(sql)
+    assert "safe_json_extract_text(metadata_json, ARRAY['reactivation'])" in out
+    assert "AS TEXT" in out
+    assert "AS INTEGER" not in out
+
+
 def test_translate_mixed_modifier_and_plain_in_one_statement():
     # 同一语句里既有带修饰符 datetime 又有 strftime 无修饰符，互不干扰
     sql = (
