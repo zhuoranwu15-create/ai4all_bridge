@@ -44,7 +44,10 @@ def pg_settings(postgresql_my, monkeypatch):
     dsn = _dsn_from_conn(postgresql_my)
     fake = types.SimpleNamespace(database_url=dsn, database_path="unused.sqlite3")
     monkeypatch.setattr(_backend, "_settings", lambda: fake)
-    return fake
+    try:
+        yield fake
+    finally:
+        _backend.close_pg_pool()
 
 
 def test_pg_backend_selected(pg_settings):
@@ -120,7 +123,7 @@ def test_pg_integrity_error_caught_by_alias(pg_settings):
 
 def test_pg_init_db_builds_full_schema(pg_settings):
     """init_db() 在真 PG 上跑通三条迁移、建出全量表（含前向外键引用的表）。"""
-    from app.db._core import connect, init_db
+    from app.db._core import _MIGRATIONS, connect, init_db
 
     init_db()
 
@@ -129,7 +132,7 @@ def test_pg_init_db_builds_full_schema(pg_settings):
         versions = [r["version"] for r in conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()]
-        assert versions == [1, 2, 3, 4, 5]
+        assert versions == [version for version, _ in _MIGRATIONS]
 
         # 关键表都建出来了，含 baseline 中"被先定义的表引用"的 tool_invocations
         for table in ("accounts", "messages", "sessions", "tool_invocations",
@@ -141,13 +144,13 @@ def test_pg_init_db_builds_full_schema(pg_settings):
 
 def test_pg_init_db_idempotent(pg_settings):
     """重复 init_db() 不重复执行迁移（版本表已记录）。"""
-    from app.db._core import connect, init_db
+    from app.db._core import _MIGRATIONS, connect, init_db
 
     init_db()
     init_db()  # 第二次应为 no-op
     with connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-        assert count == 5
+        assert count == len(_MIGRATIONS)
 
 
 def test_pg_identity_default_and_now_default(pg_settings):

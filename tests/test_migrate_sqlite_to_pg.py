@@ -82,7 +82,12 @@ def _build_source_sqlite(path: str) -> None:
 
 @pytest.fixture
 def pg_dsn(postgresql_my):
-    return _dsn_from_conn(postgresql_my)
+    from app.db._backend import close_pg_pool
+
+    try:
+        yield _dsn_from_conn(postgresql_my)
+    finally:
+        close_pg_pool()
 
 
 def test_migrate_row_counts_and_ledger_reconcile(tmp_path, pg_dsn):

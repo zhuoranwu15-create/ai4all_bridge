@@ -339,6 +339,9 @@ def fresh_db(test_settings):
         init_db()
         yield test_settings
     finally:
+        from app.db._backend import close_pg_pool
+
+        close_pg_pool()
         for p in reversed(patches):
             p.stop()
 
