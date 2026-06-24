@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prompt Lab Debug</title>
+  <title>Debug Chat & Prompt Lab</title>
   <link rel="stylesheet" href="style.css">
   <style>
     body { min-height: 100vh; }
@@ -155,18 +155,46 @@
     .provider-panel {
       margin-top: 10px;
     }
+    .chat-composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+      margin-top: 10px;
+    }
+    .chat-composer textarea {
+      min-height: 72px;
+      max-height: 180px;
+    }
+    .chat-composer button { min-height: 40px; }
+    .chat-history { max-height: 560px; overflow: auto; }
+    .message-actions { display: flex; justify-content: flex-end; margin-top: 6px; }
+    .dry-run-row { margin-top: 12px; padding-top: 12px; border-top: 1px solid #e1e7f0; }
+    .execution-layout {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .execution-reply { margin-top: 12px; }
+    .state-ok { color: #067647; }
+    .state-warn { color: #b54708; }
+    .state-muted { color: #667085; }
     @media (max-width: 980px) {
       .lab-shell, .split { grid-template-columns: 1fr; }
+      .lab-main { order: 1; }
+      .lab-sidebar { order: 2; }
       .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .observability-grid { grid-template-columns: 1fr; }
+      .observability-grid, .execution-layout { grid-template-columns: 1fr; }
+      .chat-composer { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
   <header class="admin-header">
     <div>
-      <h1>Prompt Lab Debug</h1>
-      <p class="page-subtitle">DEV ONLY · 构建、编辑并重放本轮发送给 LLM 的 messages。</p>
+      <h1>Debug Chat & Prompt Lab</h1>
+      <p class="page-subtitle">DEV ONLY · 本地对话与单轮链路检查。</p>
     </div>
     <span id="admin-user" class="pill">—</span>
   </header>
@@ -177,7 +205,7 @@
         <h2>账号</h2>
         <div class="toolbar-row">
           <select id="accountSelect"></select>
-          <button onclick="reloadCurrent()">刷新</button>
+          <button onclick="loadAccounts()">刷新</button>
         </div>
         <div id="accountStatus" class="status-msg"></div>
       </section>
@@ -191,14 +219,50 @@
     <main class="lab-main">
       <section class="card">
         <div class="card-title-row">
-          <h2>对话</h2>
+          <h2>Debug Chat</h2>
           <span id="sessionLabel" class="card-note">—</span>
         </div>
         <div class="toolbar-row">
-          <input id="userText" placeholder="输入一条用户消息用于 dry-run build">
-          <button class="primary" onclick="buildPrompt()">Build Prompt</button>
+          <input id="sessionIdInput" type="number" min="1" placeholder="session_id">
+          <button onclick="loadSessionById()">载入 Session</button>
+          <input id="messageFilter" placeholder="筛选某一轮用户消息">
         </div>
-        <div id="conversation" class="message-list">请选择账号</div>
+        <div id="conversation" class="message-list chat-history">请选择账号</div>
+        <div class="chat-composer">
+          <textarea id="chatText" placeholder="输入消息"></textarea>
+          <button id="sendChatButton" class="primary" onclick="sendDebugChat()">发送</button>
+        </div>
+        <div id="chatStatus" class="status-msg"></div>
+        <div class="toolbar-row dry-run-row">
+          <input id="userText" placeholder="Prompt dry-run 消息">
+          <button onclick="buildPrompt()">Build Prompt</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>本轮执行</h2>
+          <span id="executionStatus" class="card-note">请选择一条实际 trace</span>
+        </div>
+        <div class="meta-grid" id="executionMeta"></div>
+        <div class="execution-layout">
+          <div class="debug-panel">
+            <h3>调用的 Tools</h3>
+            <div id="executedTools" class="debug-list">暂无数据</div>
+          </div>
+          <div class="debug-panel">
+            <h3>Memory</h3>
+            <div id="memoryPanel" class="debug-list">暂无数据</div>
+          </div>
+          <div class="debug-panel">
+            <h3>延迟明细</h3>
+            <div id="latencyPanel" class="debug-list">暂无数据</div>
+          </div>
+        </div>
+        <div class="execution-reply">
+          <h3>最终回复</h3>
+          <div id="actualReply" class="reply-box">暂无数据</div>
+        </div>
       </section>
 
       <section class="card">
@@ -275,6 +339,7 @@
     var currentSessionId = null;
     var currentSourceTraceId = null;
     var currentConversationMessages = [];
+    var currentTraces = [];
     var conversationExpanded = false;
     var llmProviders = [];
 
@@ -283,6 +348,13 @@
       bindLlmProviderControls();
       await Promise.all([loadAccounts(), loadLlmProviders()]);
       bindLengthMeters();
+      document.getElementById('messageFilter').addEventListener('input', renderConversation);
+      document.getElementById('chatText').addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+          event.preventDefault();
+          sendDebugChat();
+        }
+      });
     })();
 
     function bindLlmProviderControls() {
@@ -315,6 +387,8 @@
       if (preferred) select.value = preferred;
       select.onchange = function() {
         currentAccountId = select.value;
+        currentSessionId = null;
+        currentTraces = [];
         conversationExpanded = false;
         reloadCurrent();
       };
@@ -433,13 +507,17 @@
       var el = document.getElementById('conversation');
       var traceEl = document.getElementById('traceList');
       try {
-        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/conversation');
+        var url = '/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/conversation';
+        if (currentSessionId) url += '?session_id=' + encodeURIComponent(currentSessionId);
+        var data = await apiFetch(url);
         currentSessionId = data.session && data.session.id;
+        document.getElementById('sessionIdInput').value = currentSessionId || '';
         document.getElementById('sessionLabel').textContent = currentSessionId ? ('session #' + currentSessionId) : '—';
         var messages = data.messages || [];
         currentConversationMessages = messages;
-        renderConversation();
         var traces = data.traces || [];
+        currentTraces = traces;
+        renderConversation();
         traceEl.innerHTML = traces.length ? traces.map(renderTrace).join('') : '<div class="status-msg">暂无 trace</div>';
       } catch (e) {
         el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
@@ -450,6 +528,13 @@
     function renderConversation() {
       var el = document.getElementById('conversation');
       var messages = currentConversationMessages || [];
+      var filter = (document.getElementById('messageFilter').value || '').trim().toLowerCase();
+      if (filter) {
+        messages = messages.filter(function(message) {
+          var content = message.content_redacted ? '' : String(message.content || '');
+          return content.toLowerCase().indexOf(filter) >= 0;
+        });
+      }
       if (!messages.length) {
         el.innerHTML = '<div class="status-msg">暂无消息</div>';
         return;
@@ -475,10 +560,54 @@
 
     function renderMessage(m) {
       var content = m.content_redacted ? ('已脱敏 · ' + m.content_chars + ' chars') : m.content;
+      var trace = (currentTraces || []).find(function(item) {
+        return item.message_id && (item.message_id === m.message_id || item.message_id === m.reply_to_message_id);
+      });
+      var inspect = trace
+        ? '<div class="message-actions"><button onclick="loadTrace(\'' + esc(trace.trace_id) + '\', true)">查看详情</button></div>'
+        : '';
       return '<div class="message-item">'
         + '<div class="message-head"><strong>' + esc(m.role || m.direction) + '</strong><span>' + esc(formatDateTime(m.created_at)) + '</span></div>'
         + '<div class="message-body">' + esc(content || '') + '</div>'
+        + inspect
         + '</div>';
+    }
+
+    async function loadSessionById() {
+      var value = Number(document.getElementById('sessionIdInput').value || 0);
+      if (!value) {
+        document.getElementById('sessionLabel').textContent = '请输入有效 session_id';
+        return;
+      }
+      currentSessionId = value;
+      conversationExpanded = false;
+      await loadConversation();
+    }
+
+    async function sendDebugChat() {
+      var input = document.getElementById('chatText');
+      var button = document.getElementById('sendChatButton');
+      var status = document.getElementById('chatStatus');
+      var text = (input.value || '').trim();
+      if (!currentAccountId || !text) return;
+      button.disabled = true;
+      status.textContent = '发送中...';
+      try {
+        var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/chat', {
+          method: 'POST',
+          body: JSON.stringify({ text: text, session_id: currentSessionId }),
+        });
+        currentSessionId = data.session_id || currentSessionId;
+        input.value = '';
+        status.textContent = data.turn && data.turn.reply ? '已回复' : (data.status || '完成');
+        await loadConversation();
+        if (data.trace_id) await loadTrace(data.trace_id, false);
+      } catch (e) {
+        status.textContent = e.message;
+      } finally {
+        button.disabled = false;
+        input.focus();
+      }
     }
 
     function renderTrace(t) {
@@ -511,7 +640,7 @@
       }
     }
 
-    async function loadTrace(traceId) {
+    async function loadTrace(traceId, scrollToDetail) {
       var status = document.getElementById('buildStatus');
       status.textContent = '载入 trace...';
       try {
@@ -524,6 +653,7 @@
         var messages = data.messages || [];
         var systemPrompt = data.system_prompt || (messages[0] && messages[0].content) || '';
         status.textContent = '已载入 trace · ' + messages.length + ' messages · ' + systemPrompt.length + ' chars';
+        if (scrollToDetail) document.getElementById('executionStatus').scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (e) {
         status.textContent = e.message;
       }
@@ -545,6 +675,10 @@
       updateLengthMeters();
       renderMeta(data.metadata || {});
       renderObservability(data);
+      renderExecution(
+        data.execution || {},
+        data.tooling || (data.metadata && data.metadata.tooling) || {}
+      );
     }
 
     function renderMeta(meta) {
@@ -573,7 +707,9 @@
       var rows = Object.keys(blocks || {}).map(function(name) {
         var b = blocks[name] || {};
         var status = b.included === false ? 'dropped' : 'included';
-        return '<div class="debug-row"><div><strong>' + esc(name) + '</strong><small>' + esc(b.section || '—') + ' · ' + esc(status) + '</small></div><code>' + esc(String(b.chars || 0)) + ' chars</code></div>';
+        if (b.truncated) status += ' · truncated';
+        var limit = b.char_limit ? (' · limit ' + b.char_limit) : '';
+        return '<div class="debug-row"><div><strong>' + esc(name) + '</strong><small>' + esc(b.section || '—') + ' · ' + esc(status) + esc(limit) + '</small></div><code>' + esc(String(b.chars || 0)) + ' chars</code></div>';
       });
       document.getElementById('promptBlocks').innerHTML = rows.length ? rows.join('') : '<span class="card-note">暂无 block 数据</span>';
     }
@@ -603,6 +739,117 @@
         return '<div class="debug-row"><div><strong>' + esc(m.role || '—') + '</strong><small>session ' + esc(String(m.session_id == null ? '—' : m.session_id)) + ' · ' + esc(label) + '</small></div><code>' + esc(String(m.chars || 0)) + ' chars</code></div>';
       }));
       document.getElementById('historyPanel').innerHTML = rows.join('');
+    }
+
+    function renderExecution(execution, tooling) {
+      var status = document.getElementById('executionStatus');
+      var usage = execution.usage || {};
+      var dryRun = execution.status === 'dry_run';
+      status.textContent = dryRun ? 'dry-run 未执行模型' : (execution.trace_id || '暂无实际执行数据');
+      var meta = [
+        ['latency', execution.latency_ms == null ? '—' : execution.latency_ms + ' ms'],
+        ['input tokens', usage.input_tokens == null ? '—' : usage.input_tokens],
+        ['output tokens', usage.output_tokens == null ? '—' : usage.output_tokens],
+        ['cost', usage.cost_shells == null ? '—' : usage.cost_shells + ' shells'],
+        ['usage source', usage.available ? (usage.estimated ? 'estimated' : 'provider') : 'unavailable'],
+        ['tools called', (execution.tool_invocations || []).length],
+        ['message_id', execution.message_id || '—'],
+        ['error', execution.error || '—'],
+      ];
+      document.getElementById('executionMeta').innerHTML = meta.map(function(item) {
+        return '<div class="meta-tile"><span>' + esc(item[0]) + '</span><strong>' + esc(String(item[1])) + '</strong></div>';
+      }).join('');
+      renderExecutedTools(
+        execution.tool_invocations || [],
+        execution.tool_names_used || [],
+        tooling || {}
+      );
+      renderMemory(execution.memory || {});
+      renderLatency(execution.timings || {});
+      var reply = execution.reply_redacted
+        ? ('已脱敏 · ' + (execution.reply_chars || 0) + ' chars')
+        : (execution.reply || (dryRun ? 'dry-run 不产生最终回复' : '暂无回复'));
+      document.getElementById('actualReply').textContent = reply;
+    }
+
+    function toolChoiceLabel(choice) {
+      if (choice === 'auto' || choice == null) return '模型自动选择';
+      if (choice === 'none') return '本轮禁止调用';
+      var forced = choice && choice.function && choice.function.name;
+      return forced ? ('强制调用 ' + forced) : String(choice);
+    }
+
+    function renderExecutedTools(invocations, names, tooling) {
+      var choice = tooling.first_round_tool_choice;
+      var rows = [
+        '<div class="debug-row"><div><strong>首轮工具策略</strong><small>tool_choice=' + esc(JSON.stringify(choice == null ? 'auto' : choice)) + '</small></div><code>' + esc(toolChoiceLabel(choice)) + '</code></div>'
+      ];
+      rows = rows.concat(invocations.map(function(item) {
+        var detail = item.args ? JSON.stringify(item.args) : ('invocation #' + (item.id || '—'));
+        return '<div class="debug-row"><div><strong>' + esc(item.tool_name || '—') + '</strong><small>' + esc(detail) + '</small></div><code>' + esc((item.status || '—') + ' · ' + (item.latency_ms == null ? '—' : item.latency_ms + 'ms')) + '</code></div>';
+      }));
+      if (!invocations.length && names.length) {
+        rows = rows.concat(names.map(function(name) {
+          return '<div class="debug-row"><strong>' + esc(name) + '</strong><code>record unavailable</code></div>';
+        }));
+      }
+      var called = {};
+      invocations.forEach(function(item) { called[item.tool_name] = true; });
+      names.forEach(function(name) { called[name] = true; });
+      var availableNotCalled = (tooling.available_tools || []).filter(function(tool) {
+        return !called[tool.name];
+      });
+      availableNotCalled.sort(function(left, right) {
+        if (left.name === 'web_search') return -1;
+        if (right.name === 'web_search') return 1;
+        return String(left.name).localeCompare(String(right.name));
+      });
+      rows = rows.concat(availableNotCalled.map(function(tool) {
+        return '<div class="debug-row"><div><strong>' + esc(tool.name) + '</strong><small>' + esc(tool.group || 'tool') + ' · 已提供给模型</small></div><code>可用 · 未调用</code></div>';
+      }));
+      if (!invocations.length && !names.length) {
+        rows.push('<div class="debug-row"><strong>实际调用</strong><code>本轮未调用工具</code></div>');
+      }
+      document.getElementById('executedTools').innerHTML = rows.join('');
+    }
+
+    function renderMemory(memory) {
+      var rows = (memory.sources || []).map(function(source) {
+        var state = source.included ? 'included' : 'not included';
+        if (source.truncated) state += ' · truncated';
+        return '<div class="debug-row"><div><strong>' + esc(source.name || 'memory') + '</strong><small>' + esc((source.kind || '—') + ' · ' + state) + '</small></div><code>' + esc(String(source.source_chars || 0)) + ' chars</code></div>';
+      });
+      rows.push('<div class="debug-row"><div><strong>retrieval</strong><small>matches: ' + esc(String((memory.matches || []).length)) + '</small></div><code>' + (memory.retrieval_performed ? 'performed' : 'not performed') + '</code></div>');
+      rows.push('<div class="debug-row"><strong>daily notes</strong><code>' + (memory.daily_notes_loaded ? 'loaded' : 'not loaded') + '</code></div>');
+      document.getElementById('memoryPanel').innerHTML = rows.join('');
+    }
+
+    function renderLatency(timings) {
+      var labels = {
+        prepare_ms: '准备账号与会话',
+        image_understanding_ms: '图片理解',
+        inbound_db_ms: '保存用户消息',
+        inbound_moderation_ms: '入站内容审核',
+        referral_ms: '邀请关系处理',
+        image_charge_ms: '图片计费',
+        inbound_total_ms: '入站处理总计',
+        prompt_build_ms: '组装 Prompt',
+        reply_generation_ms: '模型生成回复',
+        reply_total_ms: '回复阶段总计',
+        reply_ready_ms: '回复就绪总耗时',
+        outbound_sync_guard_ms: '出站同步审核',
+        outbound_db_ms: '保存 AI 回复',
+        outbound_moderation_enqueue_ms: '出站审核入队',
+        billing_ms: 'Token 计费',
+        onboarding_advance_ms: '新用户流程推进',
+        after_turn_enqueue_ms: '轮后任务入队',
+        finalize_total_ms: '收尾处理总计'
+      };
+      var keys = Object.keys(timings || {});
+      var rows = keys.map(function(key) {
+        return '<div class="debug-row"><div><strong>' + esc(labels[key] || key) + '</strong><small>' + esc(key) + '</small></div><code>' + esc(String(timings[key])) + ' ms</code></div>';
+      });
+      document.getElementById('latencyPanel').innerHTML = rows.length ? rows.join('') : '<span class="card-note">旧 trace 无分段 latency</span>';
     }
 
     function syncSystemIntoMessages() {

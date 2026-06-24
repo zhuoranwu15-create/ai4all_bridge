@@ -174,6 +174,28 @@ def test_record_chat_usage_charge_debits_and_is_idempotent(fresh_db):
     assert count == 1
 
 
+def test_get_chat_turn_cost_event_finds_matching_message(fresh_db):
+    import app.db as db
+
+    account_id = _create_account()
+    charged = db.record_chat_usage_charge(
+        account_id=account_id,
+        model="deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        reply="hello",
+        source_type="chat_turn",
+        source_id="reply-1",
+        idempotency_key=f"chat-turn-{account_id}-msg-1",
+        input_tokens=100,
+        output_tokens=20,
+    )
+
+    assert db.get_chat_turn_cost_event(
+        account_id=account_id,
+        message_id="msg-1",
+    )["id"] == charged["cost_event"]["id"]
+
+
 def test_record_chat_usage_charge_returns_none_without_owner(fresh_db):
     import app.db as db
 

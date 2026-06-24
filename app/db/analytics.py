@@ -247,6 +247,8 @@ def get_tool_invocation(*, tool_invocation_id: int) -> Optional[Dict[str, Any]]:
 def list_tool_invocations(
     *,
     account_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    message_id: Optional[str] = None,
     tool_name: Optional[str] = None,
     status: Optional[str] = None,
     limit: int = 50,
@@ -256,6 +258,12 @@ def list_tool_invocations(
     if account_id:
         clauses.append("account_id = ?")
         params.append(account_id)
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(session_id)
+    if message_id:
+        clauses.append("message_id = ?")
+        params.append(message_id)
     if tool_name:
         clauses.append("tool_name = ?")
         params.append(tool_name)

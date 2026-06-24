@@ -52,6 +52,7 @@ __all__ = [
     'get_binding_intent',
     'get_completed_binding_intent_for_openclaw_login_session_key',
     'get_first_active_account_for_user',
+    'get_chat_turn_cost_event',
     'get_latest_subscription_for_user',
     'get_or_create_account_active_session',
     'get_or_create_default_ai4all_account_for_user',
@@ -1816,6 +1817,29 @@ def record_chat_usage_charge(
         "ledger": _decode_ledger_row(ledger_row),
         "wallet": _decode_wallet_row(wallet_row),
     }
+
+
+def get_chat_turn_cost_event(
+    *,
+    account_id: str,
+    message_id: str,
+) -> Optional[Dict[str, Any]]:
+    """Return the token cost event for one inbound chat message, if recorded."""
+    idempotency_key = f"chat-turn-{account_id}-{message_id}"
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM cost_events
+            WHERE account_id = ?
+              AND cost_type = 'llm_tokens'
+              AND idempotency_key = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (account_id, idempotency_key),
+        ).fetchone()
+    return _decode_cost_event_row(row) if row else None
 
 
 def record_image_understanding_charge(

@@ -221,8 +221,11 @@ class TestPromptBuilderTruncation:
 
     def test_agent_context_file_truncated(self):
         long_user = "U" * 2001
-        out = self.pb.build(agent_context={"USER": long_user})
-        assert "...[已截断]" in out
+        result = self.pb.assemble(agent_context={"USER": long_user})
+        assert "...[已截断]" in result.prompt
+        metric = result.as_dict()["project_context"]
+        assert metric["truncated"] is True
+        assert metric["included"] is True
 
     def test_default_tools_context_not_truncated(self):
         from app.user_profiles import _default_system_templates

@@ -14,7 +14,7 @@ from app.app_runtime import get_background_loop
 from app.routers.deps import get_admin_user, verify_admin_auth
 from app.routers.serializers import _audit_plaintext_access, _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _normalize_ts, _profile_for_view, _prompt_lab_messages_for_view, _prompt_lab_session_for_account, _redact_raw_payload, _redacted_flag_for_account, _require_plaintext_access, _session_for_view, _trace_for_view, _validate_prompt_lab_messages
 from app.routers.models import ProfileUpdateRequest
-from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
+from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_chat_turn_cost_event, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
 from app.llm import generate_completion, get_active_llm_model, resolve_active_llm_provider
 from app.llm_providers import get_llm_provider
 from app.onboarding import is_onboarding_active
@@ -48,6 +48,17 @@ class PromptLabReplayRequest(BaseModel):
     source_trace_id: Optional[str] = None
     provider_id: Optional[str] = Field(default=None, max_length=100)
     reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class PromptLabChatRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    session_id: Optional[int] = None
+
+
+def require_non_production_debug() -> None:
+    """Reject Prompt Lab APIs outside local, development, and test environments."""
+    if str(getattr(settings, "app_env", "") or "").lower() not in {"local", "development", "test"}:
+        raise HTTPException(status_code=403, detail="debug features are disabled outside local environments")
 
 
 def _preview_session_for_account(account_id: str) -> dict:
@@ -185,6 +196,88 @@ def _trace_observability_for_prompt_lab(trace: dict, messages: list[dict[str, An
         "tooling": tooling,
         "history_metadata": history_metadata,
         "carryover": carryover,
+    }
+
+
+def _trace_execution_for_prompt_lab(trace: dict) -> dict:
+    """Aggregate one trace's reply, tools, memory, latency, token usage, and cost."""
+    account_id = str(trace.get("account_id") or "")
+    session_id = trace.get("session_id")
+    message_id = str(trace.get("message_id") or "")
+    metadata = trace.get("metadata") or {}
+    plaintext = _can_bypass_redaction_for_account(account_id)
+
+    invocations = list_tool_invocations(
+        account_id=account_id,
+        session_id=int(session_id) if session_id is not None else None,
+        message_id=message_id or None,
+        limit=50,
+    )
+    if not plaintext:
+        invocations = [
+            {
+                "id": item.get("id"),
+                "tool_name": item.get("tool_name"),
+                "status": item.get("status"),
+                "latency_ms": item.get("latency_ms"),
+                "error": bool(item.get("error")),
+                "created_at": item.get("created_at"),
+            }
+            for item in invocations
+        ]
+
+    cost_event = (
+        get_chat_turn_cost_event(account_id=account_id, message_id=message_id)
+        if account_id and message_id
+        else None
+    )
+    usage = {
+        "available": bool(cost_event),
+        "input_tokens": cost_event.get("input_tokens") if cost_event else None,
+        "output_tokens": cost_event.get("output_tokens") if cost_event else None,
+        "billable_tokens": cost_event.get("billable_tokens") if cost_event else None,
+        "cost_shell_micros": cost_event.get("computed_shell_micros") if cost_event else None,
+        "cost_shells": (
+            float(cost_event.get("computed_shell_micros") or 0) / 1_000_000
+            if cost_event else None
+        ),
+        "estimated": bool((cost_event.get("metadata") or {}).get("estimated")) if cost_event else None,
+    }
+
+    memory = metadata.get("memory") or {}
+    if not memory:
+        memory_file = ((metadata.get("agent_context") or {}).get("files") or {}).get("MEMORY.md") or {}
+        memory = {
+            "retrieval_performed": False,
+            "matches": [],
+            "sources": [
+                {
+                    "name": "MEMORY.md",
+                    "kind": "context_file",
+                    "exists": bool(memory_file.get("exists")),
+                    "source_chars": int(memory_file.get("chars") or 0),
+                    "included": bool(memory_file.get("exists") and memory_file.get("chars")),
+                    "truncated": None,
+                    "char_limit": 3000,
+                }
+            ],
+            "daily_notes_loaded": bool(metadata.get("daily_notes_loaded")),
+            "legacy_trace": True,
+        }
+
+    return {
+        "trace_id": trace.get("trace_id"),
+        "message_id": trace.get("message_id"),
+        "reply": trace.get("reply") if plaintext else None,
+        "reply_redacted": not plaintext and trace.get("reply") is not None,
+        "reply_chars": len(str(trace.get("reply") or "")),
+        "latency_ms": trace.get("latency_ms"),
+        "timings": metadata.get("timings") or {},
+        "error": trace.get("error"),
+        "tool_names_used": metadata.get("tool_names_used") or [],
+        "tool_invocations": invocations,
+        "memory": memory,
+        "usage": usage,
     }
 
 
@@ -358,7 +451,11 @@ def debug_get_user_profile(account_id: str, _: None = Depends(verify_admin_auth)
 
 
 @router.get("/debug/prompt-lab/accounts/{account_id}/context-files")
-def debug_prompt_lab_context_files(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
+def debug_prompt_lab_context_files(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+    __: None = Depends(require_non_production_debug),
+) -> dict:
     """Return account context files for prompt-lab inspection."""
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
@@ -395,6 +492,7 @@ def debug_prompt_lab_conversation(
     session_id: Optional[int] = None,
     limit: int = 80,
     _: None = Depends(verify_admin_auth),
+    __: None = Depends(require_non_production_debug),
 ) -> dict:
     """Return the selected account conversation and recent prompt traces."""
     if get_account(account_id=account_id) is None:
@@ -413,11 +511,64 @@ def debug_prompt_lab_conversation(
     }
 
 
+@router.post("/debug/prompt-lab/accounts/{account_id}/chat")
+def debug_prompt_lab_chat(
+    account_id: str,
+    payload: PromptLabChatRequest,
+    _: None = Depends(verify_admin_auth),
+    __: None = Depends(require_non_production_debug),
+) -> dict:
+    """Run one local-only debug message through the normal turn pipeline."""
+    account = get_account(account_id=account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    selected_session = _prompt_lab_session_for_account(
+        account_id=account_id,
+        session_id=payload.session_id,
+    )
+    if selected_session.get("status") != "active":
+        raise HTTPException(status_code=409, detail="debug chat only supports the active session")
+
+    message_id = f"debug-chat-{uuid.uuid4().hex}"
+    channel_account_id = f"debug-{account_id}"
+    turn = handle_openclaw_turn(
+        OpenClawTurnRequest(
+            event_id=f"evt-{message_id}",
+            message_id=message_id,
+            channel="debug-chat",
+            channel_account_id=channel_account_id,
+            account_id=channel_account_id,
+            sender_id="prompt-lab-user",
+            sender_name="Prompt Lab",
+            chat_id=f"debug-chat:{account_id}",
+            chat_type="private",
+            session_key=f"debug-chat:{account_id}",
+            message_type="text",
+            text=payload.text.strip(),
+            timestamp=int(time.time()),
+            raw={"source": "prompt_lab_debug_chat"},
+        ),
+        background_loop=get_background_loop(),
+        account_id_override=account_id,
+        force_debug_trace=True,
+    )
+    active_session = _prompt_lab_session_for_account(account_id=account_id)
+    return {
+        "status": turn.status,
+        "account_id": account_id,
+        "session_id": int(active_session["id"]),
+        "message_id": message_id,
+        "trace_id": (turn.metadata or {}).get("debug_trace_id"),
+        "turn": turn.model_dump(),
+    }
+
+
 @router.post("/debug/prompt-lab/accounts/{account_id}/build")
 def debug_prompt_lab_build(
     account_id: str,
     payload: PromptLabBuildRequest,
     _: None = Depends(verify_admin_auth),
+    __: None = Depends(require_non_production_debug),
 ) -> dict:
     """Build the full LLM message list for a dry-run prompt-lab turn."""
     account = get_account(account_id=account_id)
@@ -442,6 +593,7 @@ def debug_prompt_lab_build(
             "tooling": observability["tooling"],
             "history_metadata": observability["history_metadata"],
             "carryover": observability["carryover"],
+            "execution": _trace_execution_for_prompt_lab(trace),
             **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
         }
 
@@ -473,6 +625,13 @@ def debug_prompt_lab_build(
         "tooling": tooling,
         "history_metadata": llm_input.get("history_metadata") or {},
         "carryover": llm_input.get("carryover") or {},
+        "execution": {
+            "status": "dry_run",
+            "tool_invocations": [],
+            "memory": llm_input["metadata"].get("memory") or {},
+            "usage": {"available": False},
+            "timings": {},
+        },
         **_prompt_lab_messages_for_view(account_id=account_id, messages=messages),
     }
 
@@ -482,6 +641,7 @@ def debug_prompt_lab_replay(
     account_id: str,
     payload: PromptLabReplayRequest,
     admin_user: dict = Depends(get_admin_user),
+    _: None = Depends(require_non_production_debug),
 ) -> dict:
     """Replay edited prompt-lab messages without writing normal chat state."""
     if get_account(account_id=account_id) is None:

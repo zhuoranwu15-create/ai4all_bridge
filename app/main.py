@@ -249,6 +249,10 @@ _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/prompt_debug.html",
     "/ui/proactive_debug.html",
     "/ui/web_search_debug.html",
+    "/ops/onboarding_debug.html",
+    "/ops/prompt_debug.html",
+    "/ops/proactive_debug.html",
+    "/ops/web_search_debug.html",
 }
 
 

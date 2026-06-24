@@ -471,6 +471,22 @@ def build_turn_llm_input(
         "carryover_summary_included": bool(carryover_summary),
         "carryover_summary_suppressed_by_history": suppress_carryover,
         "carryover": carryover_metadata,
+        "memory": {
+            "retrieval_performed": False,
+            "matches": [],
+            "sources": [
+                {
+                    "name": "MEMORY.md",
+                    "kind": "context_file",
+                    "exists": bool(agent_context.files.get("MEMORY.md", {}).get("exists")),
+                    "source_chars": int(agent_context.files.get("MEMORY.md", {}).get("chars") or 0),
+                    "included": bool(agent_context.blocks.get("MEMORY")),
+                    "truncated": len(agent_context.blocks.get("MEMORY") or "") > 3000,
+                    "char_limit": 3000,
+                }
+            ],
+            "daily_notes_loaded": False,
+        },
     }
     if debug_dry_run:
         metadata["debug_dry_run"] = True
@@ -716,6 +732,8 @@ def _prepare_turn(
     *,
     id_diagnostics: Dict[str, Any],
     started_at: float,
+    account_id_override: Optional[str] = None,
+    force_debug_trace: bool = False,
 ) -> Union[_TurnSetup, OpenClawTurnResponse]:
     """阶段A：身份/账号解析、unbound 收口、session/binding 初始化、onboarding welcome、
     disabled、限流、首次去重。命中守卫直接返回 OpenClawTurnResponse；否则返回 _TurnSetup。"""
@@ -727,7 +745,7 @@ def _prepare_turn(
         chat_id=payload.chat_id,
     )
     openclaw_session_key = identity.session_key
-    resolved_account_id = resolve_account_id_for_inbound_channel_identity(
+    resolved_account_id = account_id_override or resolve_account_id_for_inbound_channel_identity(
         channel=identity.channel,
         session_key=identity.session_key,
         channel_account_id=identity.channel_account_id,
@@ -803,7 +821,7 @@ def _prepare_turn(
     profile_path = ensure_user_profile(account_id)
     ensure_agent_context_files(account_id, display_name=account.get("display_name"))
     ensure_account_state(account_id=account_id)
-    debug_trace_enabled = _is_debug_trace_account(account_id)
+    debug_trace_enabled = force_debug_trace or _is_debug_trace_account(account_id)
 
     onboarding_state = get_account_onboarding_state(account_id=account_id)
     onboarding_channel_enabled = identity.channel == "openclaw-weixin"
@@ -1462,6 +1480,7 @@ def _finalize_turn(
         )
         debug_metadata.update(moderation_reply_metadata)
     _record_timing(timings, "outbound_sync_guard_ms", outbound_guard_started)
+    debug_metadata["timings"] = dict(timings)
 
     trace_id = None
     outbound_inserted_id = None
@@ -1758,6 +1777,8 @@ def handle_openclaw_turn(
     *,
     background_loop: Optional[asyncio.AbstractEventLoop] = None,
     force_web_search_enabled: Optional[bool] = None,
+    account_id_override: Optional[str] = None,
+    force_debug_trace: bool = False,
 ) -> OpenClawTurnResponse:
     """每条入站微信消息的主入口。编排脊柱：解析+守卫 → 入站持久化+筛查 →
     解析回复 → 终结。各阶段细节见对应 _prepare_turn/_persist_and_screen_inbound/
@@ -1792,7 +1813,13 @@ def handle_openclaw_turn(
         return OpenClawTurnResponse(status="ignored", no_reply=True)
 
     prepare_started = time.monotonic()
-    setup = _prepare_turn(payload, id_diagnostics=id_diagnostics, started_at=started_at)
+    setup = _prepare_turn(
+        payload,
+        id_diagnostics=id_diagnostics,
+        started_at=started_at,
+        account_id_override=account_id_override,
+        force_debug_trace=force_debug_trace,
+    )
     _record_timing(timings, "prepare_ms", prepare_started)
     if isinstance(setup, OpenClawTurnResponse):
         timings["reply_ready_ms"] = _elapsed_ms(started_at)

@@ -92,6 +92,8 @@ class BlockMetric:
     section: str
     chars: int
     included: bool
+    truncated: bool = False
+    char_limit: Optional[int] = None
 
 
 @dataclass
@@ -111,7 +113,13 @@ class BuildResult:
 
     def as_dict(self) -> Dict[str, Dict[str, object]]:
         return {
-            b.name: {"chars": b.chars, "section": b.section, "included": b.included}
+            b.name: {
+                "chars": b.chars,
+                "section": b.section,
+                "included": b.included,
+                "truncated": b.truncated,
+                "char_limit": b.char_limit,
+            }
             for b in self.blocks
         }
 
@@ -389,7 +397,14 @@ class PromptBuilder:
         kept_ids = {id(b) for b in kept}
         prompt = "\n\n".join(b.text for b in kept if b.text)
         metrics = [
-            BlockMetric(name=b.name, section=b.section, chars=len(b.text), included=id(b) in kept_ids)
+            BlockMetric(
+                name=b.name,
+                section=b.section,
+                chars=len(b.text),
+                included=id(b) in kept_ids,
+                truncated="...[已截断]" in b.text,
+                char_limit=b.char_limit,
+            )
             for b in blocks
         ]
         return BuildResult(prompt=prompt, blocks=metrics)
