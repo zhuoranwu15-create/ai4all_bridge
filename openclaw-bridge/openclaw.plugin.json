@@ -15,9 +15,9 @@
       },
       "timeoutMs": {
         "type": "integer",
-        "default": 15000,
+        "default": 45000,
         "minimum": 1000,
-        "maximum": 30000
+        "maximum": 120000
       },
       "onlyChannel": {
         "type": "string",
@@ -36,6 +36,14 @@
         "default": 5242880,
         "minimum": 65536,
         "maximum": 12582912
+      },
+      "requestDumpEnabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "requestDumpDir": {
+        "type": "string",
+        "default": "tmp/llm_request_bodies/openclaw"
       }
     }
   }

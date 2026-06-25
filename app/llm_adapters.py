@@ -1,20 +1,100 @@
 """Protocol adapters that normalize provider responses to OpenAI chat shape."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
+import threading
 import time
+import uuid
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
 
+from app.config import settings
 from app.llm_providers import LLMProviderConfig
 
 
 logger = logging.getLogger("ai4all.llm.adapters")
 _VERSION_PATH_RE = re.compile(r"/v\d+(?:/|$)")
+_DUMP_SEQ_LOCK = threading.Lock()
+_DUMP_SEQ = 0
+
+
+def _json_body_bytes(body: Dict[str, Any]) -> bytes:
+    """Encode JSON exactly once so the dumped bytes are the bytes sent on the wire."""
+    return json.dumps(
+        body,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _next_dump_seq() -> int:
+    global _DUMP_SEQ
+    with _DUMP_SEQ_LOCK:
+        _DUMP_SEQ += 1
+        return _DUMP_SEQ
+
+
+def _safe_label(value: Any) -> str:
+    text = str(value or "unknown").strip()
+    cleaned = []
+    for ch in text:
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            cleaned.append(ch)
+        else:
+            cleaned.append("_")
+    return "".join(cleaned).strip("_")[:80] or "unknown"
+
+
+def _write_request_dump(
+    *,
+    provider: LLMProviderConfig,
+    url: str,
+    body_bytes: bytes,
+    attempt: int,
+) -> None:
+    """Write the exact LLM request body bytes and metadata for local debugging."""
+    if not bool(getattr(settings, "llm_request_dump_enabled", False)):
+        return
+
+    try:
+        dump_dir = Path(str(getattr(settings, "llm_request_dump_dir", "") or "tmp/llm_request_bodies/ai4all"))
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now().isoformat(timespec="microseconds")
+        timestamp = created_at.replace(":", "").replace(".", "").replace("-", "")
+        seq = _next_dump_seq()
+        digest = hashlib.sha256(body_bytes).hexdigest()
+        stem = (
+            f"{timestamp}-ai4all-{seq:06d}-"
+            f"{_safe_label(provider.id)}-{_safe_label(provider.protocol)}-attempt{attempt}"
+        )
+        body_path = dump_dir / f"{stem}.body.json"
+        meta_path = dump_dir / f"{stem}.meta.json"
+        body_path.write_bytes(body_bytes)
+        meta = {
+            "id": str(uuid.uuid4()),
+            "source": "ai4all",
+            "created_at": created_at,
+            "url": url,
+            "method": "POST",
+            "provider_id": provider.id,
+            "protocol": provider.protocol,
+            "model": provider.model,
+            "attempt": attempt,
+            "body_file": str(body_path),
+            "body_bytes": len(body_bytes),
+            "body_sha256": digest,
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as err:
+        logger.warning("failed to dump llm request body provider=%s error=%s", provider.id, err)
 
 
 def _chat_timeout(provider: LLMProviderConfig) -> httpx.Timeout:
@@ -41,14 +121,21 @@ def _post_json(
 ) -> Dict[str, Any]:
     max_attempts = max(1, int(provider.max_retries) + 1)
     last_request_error: Optional[httpx.RequestError] = None
+    body_bytes = _json_body_bytes(body)
     for attempt in range(1, max_attempts + 1):
         try:
+            _write_request_dump(
+                provider=provider,
+                url=url,
+                body_bytes=body_bytes,
+                attempt=attempt,
+            )
             with httpx.Client(
                 timeout=_chat_timeout(provider),
                 trust_env=False,
                 transport=_chat_transport(provider),
             ) as client:
-                response = client.post(url, headers=headers, json=body)
+                response = client.post(url, headers=headers, content=body_bytes)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPStatusError as err:

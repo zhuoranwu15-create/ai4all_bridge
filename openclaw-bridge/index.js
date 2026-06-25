@@ -1,19 +1,23 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8000";
 const DEFAULT_SECRET = "dev-secret";
 // 同步调 /openclaw/turn 的超时（毫秒），同时用作 hook 执行预算（见文件末尾各 api.on 注册）。
-// 带 web_search 的轮次后端延迟常达 9~14s，8s 会被截断 → 用户收到桥侧"卡住了"兜底而真实回复被丢弃。
-// 调到 15s 留足头寸；env AI4ALL_BRIDGE_TIMEOUT_MS / 插件配置 timeoutMs 仍可覆盖 fetch 超时。
-const DEFAULT_TIMEOUT_MS = 15000;
+// 工具轮会先 out-of-band 发暂态提示，最终回复也由后端 out-of-band 发送；bridge 必须等到
+// 后端返回 no_reply，避免中途超时插入"卡住了"兜底再叠加正式答复。
+// env AI4ALL_BRIDGE_TIMEOUT_MS / 插件配置 timeoutMs 仍可覆盖 fetch 超时。
+const DEFAULT_TIMEOUT_MS = 45000;
 const DEFAULT_ONLY_CHANNEL = "openclaw-weixin";
 // 多机：读图片本地字节内联进 turn（base64），让中心无需访问 node 本地路径即可理解图片。
 // 上限须 <= 中心 image_max_bytes 且 <= nginx client_max_body_size（见部署文档）。
 const DEFAULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_REQUEST_DUMP_DIR = "tmp/llm_request_bodies/openclaw";
 const SHADOW_STATE_TTL_MS = 10 * 60 * 1000;
 const VOICE_DEBUG_MAX_FIELDS = 80;
 const VOICE_DEBUG_MAX_STRING = 240;
+const REQUEST_DUMP_FETCH_STATE_KEY = Symbol.for("ai4all.openclawBridge.llmRequestDumpFetch");
 
 function asRecord(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -41,6 +45,10 @@ function resolveConfig(api) {
     shadowTraceAccountIds: String(cfg.shadowTraceAccountIds || process.env.AI4ALL_SHADOW_TRACE_ACCOUNT_IDS || ""),
     voiceDebug: parseOptionalBoolean(process.env.AI4ALL_VOICE_DEBUG) ?? parseOptionalBoolean(cfg.voiceDebug) ?? false,
     imageMaxBytes: Number(cfg.imageMaxBytes || process.env.AI4ALL_IMAGE_MAX_BYTES || DEFAULT_IMAGE_MAX_BYTES),
+    requestDumpEnabled: parseOptionalBoolean(process.env.AI4ALL_LLM_REQUEST_DUMP_ENABLED)
+      ?? parseOptionalBoolean(cfg.requestDumpEnabled)
+      ?? false,
+    requestDumpDir: String(cfg.requestDumpDir || process.env.AI4ALL_LLM_REQUEST_DUMP_DIR || DEFAULT_REQUEST_DUMP_DIR),
   };
 }
 
@@ -77,6 +85,187 @@ function parseOptionalBoolean(value) {
 
 function parseCsvSet(value) {
   return new Set(String(value || "").split(",").map((item) => item.trim()).filter(Boolean));
+}
+
+function safeFilenamePart(value) {
+  const text = String(value || "unknown").trim();
+  const cleaned = text.replace(/[^a-zA-Z0-9_.-]+/g, "_").replace(/^_+|_+$/g, "");
+  return (cleaned || "unknown").slice(0, 80);
+}
+
+function requestMethod(input, init) {
+  return String(init?.method || input?.method || "GET").toUpperCase();
+}
+
+function requestUrl(input) {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  if (input && typeof input.url === "string") {
+    return input.url;
+  }
+  return "";
+}
+
+function bytesFromFetchBody(body) {
+  if (body == null) {
+    return null;
+  }
+  if (typeof body === "string") {
+    return Buffer.from(body, "utf8");
+  }
+  if (Buffer.isBuffer(body)) {
+    return Buffer.from(body);
+  }
+  if (body instanceof Uint8Array) {
+    return Buffer.from(body);
+  }
+  if (body instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(body));
+  }
+  if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+    return Buffer.from(body.toString(), "utf8");
+  }
+  return null;
+}
+
+async function requestBodyBytes(input, init) {
+  const direct = bytesFromFetchBody(init?.body);
+  if (direct) {
+    return direct;
+  }
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    try {
+      const cloned = input.clone();
+      const buffer = await cloned.arrayBuffer();
+      return Buffer.from(buffer);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function llmJsonBodyInfo(bodyBytes) {
+  try {
+    const parsed = JSON.parse(bodyBytes.toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const hasModel = typeof parsed.model === "string" && parsed.model.trim();
+    const hasLlmShape = Array.isArray(parsed.messages)
+      || Array.isArray(parsed.input)
+      || typeof parsed.system === "string"
+      || Array.isArray(parsed.contents);
+    if (!hasModel || !hasLlmShape) {
+      return null;
+    }
+    return {
+      model: parsed.model,
+      hasMessages: Array.isArray(parsed.messages),
+      hasInput: Array.isArray(parsed.input),
+      hasSystem: typeof parsed.system === "string",
+      hasContents: Array.isArray(parsed.contents),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLlmRequestDump(api, config, details) {
+  try {
+    mkdirSync(config.requestDumpDir, { recursive: true });
+    const createdAt = new Date().toISOString();
+    const state = globalThis[REQUEST_DUMP_FETCH_STATE_KEY] || {};
+    state.seq = Number(state.seq || 0) + 1;
+    globalThis[REQUEST_DUMP_FETCH_STATE_KEY] = state;
+    const digest = createHash("sha256").update(details.bodyBytes).digest("hex");
+    const stamp = createdAt.replace(/[-:.]/g, "").replace("T", "-").replace("Z", "Z");
+    const urlHost = (() => {
+      try {
+        return new URL(details.url).host;
+      } catch {
+        return "unknown-host";
+      }
+    })();
+    const stem = [
+      stamp,
+      "openclaw",
+      String(state.seq).padStart(6, "0"),
+      safeFilenamePart(urlHost),
+      safeFilenamePart(details.info.model),
+    ].join("-");
+    const bodyFile = `${config.requestDumpDir.replace(/\/+$/, "")}/${stem}.body.json`;
+    const metaFile = `${config.requestDumpDir.replace(/\/+$/, "")}/${stem}.meta.json`;
+    writeFileSync(bodyFile, details.bodyBytes);
+    writeFileSync(
+      metaFile,
+      JSON.stringify(
+        {
+          source: "openclaw",
+          created_at: createdAt,
+          url: details.url,
+          method: details.method,
+          model: details.info.model,
+          body_file: bodyFile,
+          body_bytes: details.bodyBytes.length,
+          body_sha256: digest,
+          body_shape: {
+            has_messages: details.info.hasMessages,
+            has_input: details.info.hasInput,
+            has_system: details.info.hasSystem,
+            has_contents: details.info.hasContents,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+  } catch (err) {
+    api.logger.warn(`ai4all bridge failed to dump llm request body: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function installLlmRequestDumpFetch(api) {
+  const initialConfig = resolveConfig(api);
+  process.env.AI4ALL_LLM_REQUEST_DUMP_ENABLED = initialConfig.requestDumpEnabled ? "true" : "false";
+  process.env.AI4ALL_LLM_REQUEST_DUMP_DIR = initialConfig.requestDumpDir;
+  const state = globalThis[REQUEST_DUMP_FETCH_STATE_KEY] || {};
+  if (state.installed) {
+    return;
+  }
+  const originalFetch = globalThis.fetch;
+  if (typeof originalFetch !== "function") {
+    api.logger.warn("ai4all bridge request dump skipped: global fetch is unavailable");
+    return;
+  }
+  state.installed = true;
+  state.originalFetch = originalFetch;
+  state.seq = Number(state.seq || 0);
+  globalThis[REQUEST_DUMP_FETCH_STATE_KEY] = state;
+  globalThis.fetch = async function ai4allLlmRequestDumpFetch(input, init) {
+    const config = resolveConfig(api);
+    if (config.requestDumpEnabled && requestMethod(input, init) === "POST") {
+      const bodyBytes = await requestBodyBytes(input, init);
+      if (bodyBytes && bodyBytes.length > 0) {
+        const info = llmJsonBodyInfo(bodyBytes);
+        if (info) {
+          writeLlmRequestDump(api, config, {
+            bodyBytes,
+            info,
+            method: requestMethod(input, init),
+            url: requestUrl(input),
+          });
+        }
+      }
+    }
+    return originalFetch(input, init);
+  };
+  api.logger.info("ai4all bridge llm request dump fetch wrapper installed");
 }
 
 function isShadowTraceAccount(config, accountId) {
@@ -467,10 +656,14 @@ export default definePluginEntry({
   description: "Routes OpenClaw chat turns to the AI4ALL backend and returns a synthetic reply.",
   register(api) {
     const initialConfig = resolveConfig(api);
+    const hookTimeoutMs = Number.isFinite(initialConfig.timeoutMs) && initialConfig.timeoutMs > 0
+      ? initialConfig.timeoutMs
+      : DEFAULT_TIMEOUT_MS;
     const shadowAccountCount = parseCsvSet(initialConfig.shadowTraceAccountIds).size;
     api.logger.info(
-      `ai4all bridge registered hooks backend=${initialConfig.backendUrl} onlyChannel=${initialConfig.onlyChannel} shadowTraceAccountCount=${shadowAccountCount}`
+      `ai4all bridge registered hooks backend=${initialConfig.backendUrl} onlyChannel=${initialConfig.onlyChannel} timeoutMs=${hookTimeoutMs} shadowTraceAccountCount=${shadowAccountCount}`
     );
+    installLlmRequestDumpFetch(api);
     const shadowRuns = new Map();
 
     function stateKeys(...keys) {
@@ -647,7 +840,7 @@ export default definePluginEntry({
           reason: "ai4all_error",
         };
       }
-    }, { timeoutMs: DEFAULT_TIMEOUT_MS, priority: 100 });
+    }, { timeoutMs: hookTimeoutMs, priority: 100 });
 
     api.on("llm_input", async (event, ctx) => {
       const provider = ctx.messageProvider || "";
@@ -680,7 +873,7 @@ export default definePluginEntry({
         images_count: event.imagesCount,
         hook_llm_input_at: new Date().toISOString(),
       };
-    }, { timeoutMs: DEFAULT_TIMEOUT_MS, priority: 100 });
+    }, { timeoutMs: hookTimeoutMs, priority: 100 });
 
     api.on("agent_end", async (event, ctx) => {
       const provider = ctx.messageProvider || "";
@@ -711,7 +904,7 @@ export default definePluginEntry({
         message_count: Array.isArray(event.messages) ? event.messages.length : 0,
         hook_agent_end_at: new Date().toISOString(),
       };
-    }, { timeoutMs: DEFAULT_TIMEOUT_MS, priority: 100 });
+    }, { timeoutMs: hookTimeoutMs, priority: 100 });
 
     api.on("message_sending", async (event, ctx) => {
       const config = resolveConfig(api);
@@ -796,6 +989,6 @@ export default definePluginEntry({
           originalOpenClawReplyLength: openclawReply.length,
         },
       };
-    }, { timeoutMs: DEFAULT_TIMEOUT_MS, priority: 1000 });
+    }, { timeoutMs: hookTimeoutMs, priority: 1000 });
   },
 });
