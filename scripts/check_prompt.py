@@ -19,7 +19,7 @@ def resolve_base_url(raw_url: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--account", default="86f866663cf9-im-bot")
+    parser.add_argument("--account", default="aid_806382741")
     parser.add_argument("--url", default="http://127.0.0.1:8000")
     parser.add_argument("--token", default=os.getenv("ADMIN_TOKEN", "dev-admin-token"))
     args = parser.parse_args()

@@ -597,7 +597,7 @@ def test_patch_companion_requires_admin():     # staff token → 403
 ### 9.4 开发验证脚本
 
 ```bash
-.venv/bin/python scripts/check_user_meta_companion_type.py --account 86f866663cf9-im-bot --limit 50
+.venv/bin/python scripts/check_user_meta_companion_type.py --account aid_806382741 --limit 50
 ```
 
 脚本职责：

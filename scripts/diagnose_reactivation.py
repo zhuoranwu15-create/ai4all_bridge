@@ -4,7 +4,7 @@
 在生产服务器上直接运行（无需启动 HTTP 服务）：
 
     .venv/bin/python scripts/diagnose_reactivation.py
-    .venv/bin/python scripts/diagnose_reactivation.py --account 86f866663cf9-im-bot
+    .venv/bin/python scripts/diagnose_reactivation.py --account aid_806382741
     .venv/bin/python scripts/diagnose_reactivation.py --run-planning --dispatch-dry-run
     .venv/bin/python scripts/diagnose_reactivation.py --json --output /tmp/reactivation.json
 

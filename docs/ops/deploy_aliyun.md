@@ -561,7 +561,7 @@ curl http://127.0.0.1:8180/health
 curl http://127.0.0.1:8180/health/ready
 curl https://your-domain.example/api/health
 .venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "hello"
-.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot --token "$ADMIN_TOKEN"
+.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account aid_806382741 --token "$ADMIN_TOKEN"
 openclaw plugins inspect ai4all-openclaw-bridge --runtime
 openclaw channels status --probe
 

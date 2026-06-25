@@ -56,14 +56,14 @@ ADMIN_STAFF_TOKEN=
 ADMIN_DEBUG_PLAINTEXT_ENABLED=true
 
 # 脱敏重新打开后，仍允许这些测试账号绕过 Admin/Debug 默认脱敏。
-ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=86f866663cf9-im-bot,aid_123456789
+ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=aid_806382741,aid_123456789
 ```
 
 上线前或推到共享开发机/准生产环境时应切换为：
 
 ```bash
 ADMIN_DEBUG_PLAINTEXT_ENABLED=false
-ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=86f866663cf9-im-bot,aid_123456789
+ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=aid_806382741,aid_123456789
 ```
 
 约束：
@@ -101,7 +101,7 @@ ADMIN_DEBUG_PLAINTEXT_ACCOUNT_ALLOWLIST=86f866663cf9-im-bot,aid_123456789
 ## 查看 Prompt 组装结果
 
 ```bash
-curl -s -X POST "http://localhost:8180/debug/prompt-lab/accounts/86f866663cf9-im-bot/build" \
+curl -s -X POST "http://localhost:8180/debug/prompt-lab/accounts/aid_806382741/build" \
   -H "Authorization: Bearer dev-admin-token" \
   -H "Content-Type: application/json" \
   -d '{"include_tool_instructions": true}' | jq '{prompt_blocks, tooling, history_metadata, carryover}'
@@ -114,7 +114,7 @@ curl -s -X POST "http://localhost:8180/debug/prompt-lab/accounts/86f866663cf9-im
 ```bash
 .venv/bin/python scripts/check_prompt.py \
   --url http://127.0.0.1:8180 \
-  --account 86f866663cf9-im-bot
+  --account aid_806382741
 ```
 
 需要编辑 prompt 后对比输出时，使用 `http://localhost:8180/ui/prompt_debug.html`。Prompt Lab 的 replay 只调用 LLM，不写正常消息、不发微信、不更新记忆、不触发工具。
@@ -145,7 +145,7 @@ curl -s -X POST "http://localhost:8180/debug/sessions/<session_id>/reset" \
 
 ```bash
 # 查看 profile 元信息
-curl -s "http://localhost:8180/debug/accounts/86f866663cf9-im-bot/user-profile" \
+curl -s "http://localhost:8180/debug/accounts/aid_806382741/user-profile" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 ```
 
@@ -195,7 +195,7 @@ curl -s -X PATCH "http://localhost:8180/debug/accounts/{account_id}/onboarding/s
 
 ```bash
 # 列出某账号的提醒
-curl -s "http://localhost:8180/debug/reminders/86f866663cf9-im-bot" \
+curl -s "http://localhost:8180/debug/reminders/aid_806382741" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 修改提醒（如重新调度）
@@ -226,15 +226,15 @@ Proactive Debug 可完成以下手动验证，不需要直接写 curl：
 
 ```bash
 # 手动触发一次 dreaming（生成 memory 更新候选）
-curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/dreaming" \
+curl -s -X POST "http://localhost:8180/admin/accounts/aid_806382741/dreaming" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 查看 dreaming 历史和 memory items
-curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/dreaming" \
+curl -s "http://localhost:8180/admin/accounts/aid_806382741/dreaming" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 查看账号的 proactive 状态（账号主动检查候选、quiet hours 等）
-curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/proactive-state" \
+curl -s "http://localhost:8180/admin/accounts/aid_806382741/proactive-state" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 手动触发一次 proactive scheduler（不等待定时器）
@@ -242,7 +242,7 @@ curl -s -X POST "http://localhost:8180/admin/proactive/scheduler/run-once" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 查看 commitments（从对话中提取的承诺/待办）
-curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/commitments" \
+curl -s "http://localhost:8180/admin/accounts/aid_806382741/commitments" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 ```
 
@@ -266,17 +266,17 @@ curl -s "http://localhost:8180/admin/accounts" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 查看账号详情（含会话、channel bindings）
-curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot" \
+curl -s "http://localhost:8180/admin/accounts/aid_806382741" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 查看用量（今日 + 近 7 日消息数）
-curl -s "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/usage" \
+curl -s "http://localhost:8180/admin/accounts/aid_806382741/usage" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 禁用 / 启用账号
-curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/disable" \
+curl -s -X POST "http://localhost:8180/admin/accounts/aid_806382741/disable" \
   -H "Authorization: Bearer dev-admin-token" | jq .
-curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/enable" \
+curl -s -X POST "http://localhost:8180/admin/accounts/aid_806382741/enable" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 ```
 
@@ -287,12 +287,12 @@ curl -s -X POST "http://localhost:8180/admin/accounts/86f866663cf9-im-bot/enable
 在 `.env` 中开启指定账号的全量追踪：
 
 ```
-DEBUG_TRACE_ACCOUNT_IDS=86f866663cf9-im-bot
+DEBUG_TRACE_ACCOUNT_IDS=aid_806382741
 ```
 
 ```bash
 # 列出 traces（默认 redacted）
-curl -s "http://localhost:8180/debug/traces?account_id=86f866663cf9-im-bot" \
+curl -s "http://localhost:8180/debug/traces?account_id=aid_806382741" \
   -H "Authorization: Bearer dev-admin-token" | jq .
 
 # 获取单条 trace

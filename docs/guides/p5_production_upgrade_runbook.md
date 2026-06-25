@@ -136,7 +136,7 @@ ai4all.db _core  INFO  schema_migrations: current_version=5, target=5 — up to 
 .venv/bin/python scripts/send_mock_turn.py \
     --url http://127.0.0.1:8180 \
     --text "PG 迁移测试消息" \
-    --account 86f866663cf9-im-bot
+    --account aid_806382741
 
 # 预期：终端回显 AI 回复；DB 中 messages/daily_usage/memories 均有新记录
 ```
@@ -144,7 +144,7 @@ ai4all.db _core  INFO  schema_migrations: current_version=5, target=5 — up to 
 ```bash
 # 用 psql 确认数据落 PG
 psql "postgresql://ai4all:your-strong-password@localhost:5432/ai4all" -c \
-    "SELECT COUNT(*) FROM messages WHERE account_id = '86f866663cf9-im-bot' ORDER BY 1 DESC LIMIT 1;"
+    "SELECT COUNT(*) FROM messages WHERE account_id = 'aid_806382741' ORDER BY 1 DESC LIMIT 1;"
 ```
 
 **本步骤完成后，aliyun1 已完全跑在 PG 上，行为与之前一致。可在此稳定观察 1–3 天后再推进阶段二。**

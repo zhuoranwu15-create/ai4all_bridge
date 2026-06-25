@@ -70,12 +70,12 @@
 .venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好"
 
 # 查看某个账号组装后的 system prompt。
-.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot
+.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account aid_806382741
 ```
 
 这两个脚本默认使用端口 `8000`；本地测试时必须显式传入 `--url`。
 
-主要测试账号：`86f866663cf9-im-bot`，该账号在 `data/ai4all.sqlite3` 中历史最多。
+主要测试账号：`aid_806382741`。旧 `im-bot` 形态账号逐步淘汰，不再作为默认示例。
 
 完整调试参考：[`docs/guides/debugging.md`](docs/guides/debugging.md)
 

@@ -7,7 +7,7 @@
     .venv/bin/python scripts/pg_smoke_check.py \
         --pg "postgresql://ai4all:120502PG@localhost:5432/ai4all" \
         --sqlite data/ai4all.sqlite3 \
-        --account 86f866663cf9-im-bot
+        --account aid_806382741
 """
 import argparse
 import sqlite3
@@ -21,7 +21,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pg", required=True)
     ap.add_argument("--sqlite", default="data/ai4all.sqlite3")
-    ap.add_argument("--account", default="86f866663cf9-im-bot")
+    ap.add_argument("--account", default="aid_806382741")
     args = ap.parse_args()
 
     from app.config import settings

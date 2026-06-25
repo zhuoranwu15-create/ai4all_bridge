@@ -120,10 +120,10 @@ Typed hooks:
 before_agent_reply
 ```
 
-For local orchestration comparison, enable shadow trace only for test accounts.
-Those accounts will let OpenClaw run its native agent, rewrite the outbound
-content back to AI4ALL's reply, and store the OpenClaw prompt trace in the
-backend:
+Shadow trace stays disabled by default. Leave the Bridge-side account list
+empty; add test accounts only when doing local orchestration comparison. Those
+accounts will let OpenClaw run its native agent, rewrite the outbound content
+back to AI4ALL's reply, and store the OpenClaw prompt trace in the backend:
 
 ```json5
 {
@@ -134,7 +134,7 @@ backend:
           allowConversationAccess: true
         },
         config: {
-          shadowTraceAccountIds: "aid_123456789"
+          shadowTraceAccountIds: ""
         }
       }
     }
@@ -142,10 +142,10 @@ backend:
 }
 ```
 
-Set the backend side too:
+Only set the backend side when enabling shadow trace:
 
 ```bash
-DEBUG_TRACE_ACCOUNT_IDS=aid_123456789
+# DEBUG_TRACE_ACCOUNT_IDS=aid_123456789
 ```
 
 ## WeChat E2E Check
