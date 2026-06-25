@@ -33,7 +33,14 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 本地地址：`http://localhost:8180`
 
-标准数据库：`data/ai4all.sqlite3`
+### 数据库后端（双后端，按 `DATABASE_URL` 二选一）
+
+代码同时支持 SQLite 与 PostgreSQL，由 `.env` 的 `DATABASE_URL` 决定：
+
+- **留空（默认）→ SQLite**：本地开发用 `data/ai4all.sqlite3`，测试用内存 SQLite。本文档下文提到的「标准数据库 `data/ai4all.sqlite3`」均指此本地/测试默认。
+- **非空（`postgresql://…`）→ PostgreSQL**：**生产（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG，这是线上真实后端**。aliyun1 本地 PG，aliyun2 直连中心 PG。回滚只需重新注释 `DATABASE_URL` 并重启服务即回 SQLite。
+
+因此 SQLite 代码路径是刻意保留的（dev/test 默认 + 回滚通道），并非生产形态。下文 `app/db/*` 等描述同时覆盖两后端。
 
 ## 鉴权
 
