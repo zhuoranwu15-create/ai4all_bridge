@@ -4,8 +4,10 @@
 .env.bak.*
 .env.bak_*
 env_dev
+dev_env
 dev_memo.md
 docs/tmp/
+tmp/
 .venv/
 __pycache__/
 *.py[cod]

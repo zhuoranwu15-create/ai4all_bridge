@@ -271,5 +271,11 @@ OpenClaw 的 Project Context 有排序和文件职责，但不会让 `TOOLS.md` 
 
 ## 变更日志
 
+- 2026-06-25（落地）：Batch A/B/C 已实现并通过全量测试（931 passed），线上实测 aid_806382741 总字数 6315→6119（新增「上下文与外部证据纪律」后仍净降）。要点：
+  - Batch A（`app/prompt_builder.py`）：`_OUTPUT_DIRECTIVES_FIXED`→`【微信回复呈现】`只留机械格式（去掉 150 字硬限与 emoji 语气句）；`_FACTUAL_DISCIPLINE`→`【事实准确与核实纪律】`；新增 `_CONTEXT_EVIDENCE_DISCIPLINE` 挂为 Block 3c。
+  - Batch B（`app/user_profiles.py` + `data/system/*.md`）：TOOLS.md 瘦身去重（2011→1366），删与事实纪律重复句、保留触发/失败口径；冻结 `_PREV_DEFAULT_TOOLS_V1` 登记进 known-set 实现现网自愈升级；AGENTS.md 磁盘与代码默认收敛为一份。
+  - 关键决策：语气类规则单一来源定为「AGENTS.md 全局底线（保留‘不客服腔’，覆盖所有账号、零回归）+ SOUL 人格细节」；代码常量不再含语气。
+  - Batch C（`app/soul_templates/blank.md`）：仅给 blank 默认模板加「说话方式」；三个人格模板已有更好的 `【你怎么说话】`，不重复添加。
+  - 跨线遗留：TOOLS.md 工具触发无法彻底下沉到 schema description（运行时仅注入工具名），待第 1 线 runtime 注入 schema 后再下沉。
 - 2026-06-25：根据 OpenClaw 源码和 prompt trace 重新收敛文档。把落地方式从宽泛 5 batch 改为“三个短硬 prompt block + 静态 context 减重 + 回放评估”，强调 `TOOLS.md` 是用法说明不是工具可用性，外部/召回/metadata 都按来源使用。
 - 2026-06-24：由占位骨架重写为技术设计文档。修正 `web_search 默认常驻` 等跨线表述，明确本线只负责 prompt 行为纪律、静态模板和回复呈现。

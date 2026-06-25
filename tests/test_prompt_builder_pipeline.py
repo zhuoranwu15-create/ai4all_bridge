@@ -70,7 +70,7 @@ def test_token_budget_drops_low_priority_volatile_keeps_stable():
         token_budget=120,
     )
     # stable 核心必须保留
-    assert "【回复格式要求】" in res.prompt   # output_directives (stable)
+    assert "【微信回复呈现】" in res.prompt   # output_directives (stable)
     assert res.included("output_directives") is True
     assert res.included("factual_discipline") is True
     # 最低优先级的 daily_notes 应最先被丢弃

@@ -64,6 +64,22 @@ def test_checked_in_system_tools_file_matches_default_template():
     assert checked_in.strip() == _default_system_templates()["TOOLS.md"].strip()
 
 
+def test_checked_in_system_agents_file_matches_default_template():
+    from app.user_profiles import _default_system_templates
+
+    repo_root = Path(__file__).resolve().parents[1]
+    checked_in = (repo_root / "data" / "system" / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert checked_in.strip() == _default_system_templates()["AGENTS.md"].strip()
+
+
+def test_previous_full_tools_default_is_known_and_upgradable():
+    """瘦身前的上一版完整 TOOLS.md 应被识别为已知默认，可被自愈升级。"""
+    from app.user_profiles import _PREV_DEFAULT_TOOLS_V1, _known_default_tools_templates_cached
+
+    assert _PREV_DEFAULT_TOOLS_V1.strip() in _known_default_tools_templates_cached()
+
+
 def test_default_tools_template_mentions_default_chat_tools():
     from app.tools import get_default_tools
     from app.user_profiles import _default_system_templates
@@ -108,6 +124,9 @@ def test_agent_context_ignores_legacy_user_profile_when_creating_files(fresh_db,
         assert "喜欢简洁" not in context.blocks["USER"]
         assert "用户是工程师" not in context.blocks["MEMORY"]
         assert "专属的陪伴" in context.blocks["SOUL"]
+        # 新账号默认 SOUL（blank 模板）含"说话方式"语气细节（不客服腔等）。
+        assert "说话方式" in context.blocks["SOUL"]
+        assert "不用客服式" in context.blocks["SOUL"]
 
 
 def test_agent_context_does_not_overwrite_existing_user_files(fresh_db, tmp_path):
