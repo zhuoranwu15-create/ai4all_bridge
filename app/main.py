@@ -244,9 +244,11 @@ _background_loop: Optional[asyncio.AbstractEventLoop] = None
 app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 
 _LOCAL_DEBUG_UI_ENVS = {"local", "development", "test"}
+# 仅非生产环境可直接打开的调试 UI。prompt_debug 不在此列：它在生产经域名 /ops/ 访问，
+# 已由 nginx basic auth + 页面内 admin Bearer token + 明文 allowlist 三层保护，且其底层
+# /debug/* API 在生产本就可达，故放开该页 UI（其余调试页仍仅限非生产）。
 _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/onboarding_debug.html",
-    "/ui/prompt_debug.html",
     "/ui/proactive_debug.html",
     "/ui/web_search_debug.html",
 }
