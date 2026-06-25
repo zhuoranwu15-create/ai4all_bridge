@@ -52,6 +52,25 @@ class Settings(BaseSettings):
     llm_max_tool_rounds: int = 3
     llm_force_ipv4: bool = True
     llm_context_messages: int = 100
+    llm_request_dump_enabled: bool = False
+    llm_request_dump_dir: str = "tmp/llm_request_bodies/ai4all"
+    # Agent runtime 对齐开关（Batch A）
+    llm_tool_surface_prompt_enabled: bool = True   # 本轮可用工具 block 进 system prompt
+    llm_external_content_wrapper_enabled: bool = True  # web_search/web_fetch 结果加 untrusted wrapper
+    # Agent runtime 对齐开关（Batch B）
+    llm_skills_prompt_enabled: bool = True         # skills catalog 进 system prompt
+    llm_read_tool_enabled: bool = True             # read 工具常驻默认集（registry 控制）
+    web_fetch_timeout_seconds: float = 8.0
+    # Agent runtime 对齐开关（Batch C）
+    llm_tool_evidence_replay_enabled: bool = True  # 最近 K 轮工具证据回灌进 history
+    llm_tool_evidence_turns: int = 2               # 回灌的最近 turn 数上限
+    llm_tool_evidence_max_result_chars: int = 1500 # 单条 tool result 截断字符数
+    # Agent runtime 对齐开关（Batch D）
+    llm_current_message_envelope_enabled: bool = False  # 当前 user 消息加 typed envelope（灰度关）
+    web_fetch_connect_timeout_seconds: float = 3.0
+    web_fetch_max_response_bytes: int = 524288     # 512KB
+    web_fetch_max_chars: int = 60000
+    web_fetch_max_redirects: int = 3
     llm_default_prompt: str = (
         "你是 AI4ALL 的个人 AI 陪伴与生活助理。"
         "你要自然、温和、简洁地回应用户，优先提供情绪陪伴、日常建议和生活协助。"

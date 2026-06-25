@@ -397,6 +397,23 @@ def _build_tooling_envelope(
     }
 
 
+def _wrap_current_message_envelope(messages: List[Dict[str, Any]], message_type: str) -> None:
+    """将 messages 里最后一条 user 消息包裹进 typed envelope（原地修改）。
+
+    格式：<current_message type="...">原文</current_message>
+    落库的 content 不变，只在 LLM feed 里加标注。
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            content = messages[i].get("content") or ""
+            safe_type = (message_type or "text").replace('"', "")
+            messages[i] = dict(messages[i])  # 避免修改 history 列表里的原对象
+            messages[i]["content"] = (
+                f'<current_message type="{safe_type}">\n{content}\n</current_message>'
+            )
+            return
+
+
 def build_turn_llm_input(
     *,
     account_id: str,
@@ -416,6 +433,7 @@ def build_turn_llm_input(
     include_tool_instructions: bool = True,
     debug_dry_run: bool = False,
     llm_provider: Optional[LLMProviderConfig] = None,
+    message_type: str = "text",
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
@@ -433,6 +451,16 @@ def build_turn_llm_input(
         {"role": row["role"], "content": row["content"]}
         for row in history_rows
     ]
+    if getattr(settings, "llm_tool_evidence_replay_enabled", True):
+        from app.tool_evidence_replay import inject_tool_evidence_replay
+        history = inject_tool_evidence_replay(
+            history,
+            history_rows,
+            account_id,
+            enabled=True,
+            max_turns=int(getattr(settings, "llm_tool_evidence_turns", 2)),
+            max_result_chars=int(getattr(settings, "llm_tool_evidence_max_result_chars", 1500)),
+        )
     file_profile = read_user_profile(account_id)
     soul = extract_section(file_profile, "Soul")
     user_prefs = extract_section(file_profile, "User Preferences")
@@ -504,7 +532,12 @@ def build_turn_llm_input(
             needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
         )
 
+    from app.skills import list_skill_catalog
+
     builder = PromptBuilder()
+    _tool_surface_enabled = getattr(settings, "llm_tool_surface_prompt_enabled", True)
+    _skills_enabled = getattr(settings, "llm_skills_prompt_enabled", True)
+    skill_catalog = list_skill_catalog() if _skills_enabled and not onboarding_active else None
     build_result = builder.assemble(
         display_name=account.get("display_name"),
         soul=soul,
@@ -521,6 +554,8 @@ def build_turn_llm_input(
         weekday=beijing_weekday_str(_now),
         daypart=beijing_daypart_str(_now),
         model_name=selected_llm_provider.model,
+        tools=tooling["available_tool_names"] if _tool_surface_enabled else None,
+        skills=skill_catalog or None,
         tool_instructions=(
             None if onboarding_active or not include_tool_instructions else _tool_instructions(
                 active_content_invitation=active_content_invitation,
@@ -544,6 +579,8 @@ def build_turn_llm_input(
     if debug_dry_run and text.strip():
         messages.append({"role": "user", "content": text.strip()})
         metadata["dry_run_user_text_included"] = True
+    if getattr(settings, "llm_current_message_envelope_enabled", False):
+        _wrap_current_message_envelope(messages, message_type=message_type)
     metadata["messages_count"] = len(messages)
     metadata["include_tool_instructions"] = bool(include_tool_instructions and not onboarding_active)
     metadata["web_search_enabled"] = web_search_enabled
@@ -1255,6 +1292,7 @@ def _resolve_turn_reply(
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
                 llm_provider=llm_provider,
+                message_type=payload.message_type,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
@@ -1283,6 +1321,7 @@ def _resolve_turn_reply(
             _record_timing(timings, "prompt_build_ms", prompt_started)
 
             generation_started = time.monotonic()
+            _round_traces: Optional[List[Dict]] = None
             if onboarding_active:
                 try:
                     reply = generate_reply(
@@ -1314,6 +1353,7 @@ def _resolve_turn_reply(
                     if tool_thinking_sender is not None:
                         tool_thinking_sender(tool_names)
 
+                _round_traces = [] if debug_trace_enabled else None
                 try:
                     reply, generation_error = generate_reply_with_tools(
                         user_text=text,
@@ -1325,9 +1365,13 @@ def _resolve_turn_reply(
                         messages=llm_messages,
                         provider=llm_provider,
                         on_tool_detected=_on_tool_detected,
+                        round_trace_collector=_round_traces,
                     )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
+            if _round_traces:
+                debug_metadata["rounds"] = _round_traces
+                debug_metadata["round_count"] = len(_round_traces)
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
                 # 用户将真实收到「卡住了」兜底回复(生成失败且无可用回复)。ERROR 级 → 经 ai4all

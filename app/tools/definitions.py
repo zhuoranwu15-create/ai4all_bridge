@@ -1,3 +1,75 @@
+def get_web_fetch_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "web_fetch",
+                "description": (
+                    "抓取一个公网 HTTP(S) URL 的文本/JSON/HTML 可读内容。"
+                    "用于读取已知 URL（如 skill 中指定的数据接口）；搜索未知信息用 web_search。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "目标 URL，必须是公网 HTTP(S) 地址",
+                        },
+                        "extractMode": {
+                            "type": "string",
+                            "enum": ["markdown", "text"],
+                            "description": "内容提取模式；默认 text",
+                        },
+                        "maxChars": {
+                            "type": "integer",
+                            "minimum": 200,
+                            "maximum": 20000,
+                            "description": "返回文本的最大字符数；默认 6000",
+                        },
+                    },
+                    "required": ["url"],
+                },
+            },
+        }
+    ]
+
+
+def get_read_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "description": (
+                    "读取允许的文本文件。主要用途：按 skills catalog 中的 <location> 加载 SKILL.md，"
+                    "再按其说明调用其他工具。只能读取 skills/ 前缀的路径；不能读取任意本地文件。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "虚拟路径，如 'skills/weather/SKILL.md'",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "从第几行开始（1-based），默认 1",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 400,
+                            "description": "返回行数上限，默认 200",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+
+
 def get_reminder_tools() -> list:
     return [
         {

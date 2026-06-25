@@ -158,6 +158,11 @@ _FACTUAL_DISCIPLINE = (
     "【事实准确】当前时间、日期、星期以下方运行时信息为准；"
     "涉及你和用户的关系事实（认识多久、连续聊天天数等）必须调用 session_status 等可用工具取真值，"
     "不要凭印象编造。"
+    "涉及现实世界中会随时间变化、或在你知识截止之后才有结果的事实"
+    "（考试成绩/录取分数线、比赛赛果、新闻进展、价格行情，"
+    "以及“……出来了吗/最新情况/现在是不是已经……”这类问题），"
+    "不得用“一般/通常/应该”凭记忆作答，必须先调用 web_search 等可用检索工具核实；"
+    "本轮无可用检索工具时，如实说明你无法实时核实，不要把按记忆的推测当成确定结论。"
 )
 
 _CONTEXT_BLOCK_ORDER = (
@@ -291,8 +296,17 @@ class PromptBuilder:
 
         # Block 1: Tooling
         if tools:
-            tool_list = "、".join(tools)
-            _add("tooling", f"【可用工具】\n你可以调用以下工具：{tool_list}。", section=_SECTION_STABLE)
+            tool_lines = "\n".join(f"- {t}" for t in tools)
+            _add(
+                "tooling",
+                (
+                    "【本轮可用工具】\n"
+                    "以下工具由运行时按账号、场景和开关过滤后提供。"
+                    "只有本节列出的工具可以调用；TOOLS.md 是用法说明，不代表本轮可用性。\n"
+                    f"{tool_lines}"
+                ),
+                section=_SECTION_STABLE,
+            )
 
         # Block 2: Safety
         if _SAFETY_TEXT:
@@ -307,8 +321,33 @@ class PromptBuilder:
 
         # Block 4: Skills
         if skills:
-            skill_list = "、".join(skills)
-            _add("skills", f"【技能列表】\n你擅长的领域包括：{skill_list}。", section=_SECTION_STABLE)
+            skill_entries = []
+            for s in skills:
+                if isinstance(s, dict):
+                    skill_entries.append(
+                        f"  <skill>\n"
+                        f"    <name>{s.get('name', '')}</name>\n"
+                        f"    <description>{s.get('description', '')}</description>\n"
+                        f"    <location>{s.get('location', '')}</location>\n"
+                        f"    <version>{s.get('version', '')}</version>\n"
+                        f"  </skill>"
+                    )
+                else:
+                    skill_entries.append(f"  <skill><name>{s}</name></skill>")
+            available_skills_xml = "\n".join(skill_entries)
+            _add(
+                "skills",
+                (
+                    "【Skills】\n"
+                    "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact "
+                    "<location> with `read`, then follow it.\n"
+                    "If a skill's <version> differs from a previous turn, re-read it before using.\n"
+                    "If several apply, choose the most specific. If none clearly apply, read none.\n"
+                    "One skill up front max. Never guess/fabricate skill paths.\n\n"
+                    f"<available_skills>\n{available_skills_xml}\n</available_skills>"
+                ),
+                section=_SECTION_STABLE,
+            )
 
         project_context = self._build_project_context(agent_context)
         if not project_context:

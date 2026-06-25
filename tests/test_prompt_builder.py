@@ -263,16 +263,22 @@ class TestPromptBuilderSkips:
 
     def test_tooling_skip_when_tools_none(self):
         out = self.pb.build(tools=None)
-        assert "【可用工具】" not in out
+        assert "【本轮可用工具】" not in out
 
     def test_tooling_skip_when_tools_empty(self):
         out = self.pb.build(tools=[])
-        assert "【可用工具】" not in out
+        assert "【本轮可用工具】" not in out
 
     def test_tooling_present_when_tools_provided(self):
         out = self.pb.build(tools=["search", "weather"])
-        assert "search" in out
-        assert "weather" in out
+        assert "【本轮可用工具】" in out
+        assert "- search" in out
+        assert "- weather" in out
+
+    def test_tooling_has_availability_disclaimer(self):
+        out = self.pb.build(tools=["web_search"])
+        assert "TOOLS.md" in out
+        assert "本轮可用性" in out
 
     def test_skills_skip_when_none(self):
         out = self.pb.build(skills=None)
@@ -325,6 +331,19 @@ class TestPromptBuilderOutputDirectives:
     def test_style_none_no_error(self):
         out = self.pb.build(style=None)
         assert isinstance(out, str)
+
+    def test_factual_discipline_always_present(self):
+        # 事实纪律块为常驻 STABLE 块，无参数构建也应出现。
+        out = self.pb.build()
+        assert "【事实准确】" in out
+        assert "session_status" in out
+
+    def test_factual_discipline_requires_search_for_time_sensitive_facts(self):
+        # A 改造：时效性/知识截止后才有结果的事实须用 web_search 核实，不得凭记忆搪塞。
+        out = self.pb.build()
+        assert "web_search" in out
+        assert "出来了吗" in out
+        assert "凭记忆" in out
 
 
 class TestPromptBuilderRuntime:

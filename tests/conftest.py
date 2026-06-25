@@ -101,6 +101,14 @@ def test_settings(tmp_path, db_dsn):
     s.llm_context_messages = 100
     s.llm_default_prompt = "你是测试助手"
     s.llm_max_tool_rounds = 3
+    s.llm_request_dump_enabled = False
+    # Agent runtime 对齐开关（Batch A-D）：MagicMock 不会自动返回 False，需显式设定。
+    s.llm_tool_surface_prompt_enabled = True
+    s.llm_external_content_wrapper_enabled = True
+    s.llm_skills_prompt_enabled = False     # 测试里不需要 skill catalog
+    s.llm_read_tool_enabled = True
+    s.llm_tool_evidence_replay_enabled = False  # 避免测试依赖 DB 里的 tool_invocations
+    s.llm_current_message_envelope_enabled = False  # 灰度关：不影响现有测试断言
     s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10

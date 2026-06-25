@@ -105,3 +105,57 @@ def test_turn_history_keeps_carryover_when_previous_session_is_partial(fresh_db)
     assert "【会话延续摘要】" in llm_input["system_prompt"]
     assert llm_input["metadata"]["carryover_summary_included"] is True
     assert llm_input["metadata"]["carryover_summary_suppressed_by_history"] is False
+
+
+def test_tool_surface_block_present_when_web_search_enabled(fresh_db):
+    """web_search_enabled=True 时 system prompt 应含「本轮可用工具」block 且列出 web_search。"""
+    from app.turn_service import build_turn_llm_input
+
+    account_id = "acc-tool-surface"
+    sess = _session(account_id, "s1")
+
+    fresh_db.llm_context_messages = 100
+    fresh_db.llm_tool_surface_prompt_enabled = True
+    with patch("app.turn_service.settings", fresh_db):
+        llm_input = build_turn_llm_input(
+            account_id=account_id,
+            account=sess["account"],
+            session=sess["session"],
+            profile={},
+            text="",
+            today="2026-06-24",
+            onboarding_state="complete",
+            onboarding_active=False,
+            web_search_enabled=True,
+            include_tool_instructions=False,
+        )
+
+    assert "【本轮可用工具】" in llm_input["system_prompt"]
+    assert "web_search" in llm_input["system_prompt"]
+    assert "TOOLS.md" in llm_input["system_prompt"]
+
+
+def test_tool_surface_block_absent_during_onboarding(fresh_db):
+    """onboarding_active=True 时 system prompt 不含工具 block（onboarding 阶段无工具）。"""
+    from app.turn_service import build_turn_llm_input
+
+    account_id = "acc-tool-surface-onboarding"
+    sess = _session(account_id, "s1")
+
+    fresh_db.llm_context_messages = 100
+    fresh_db.llm_tool_surface_prompt_enabled = True
+    with patch("app.turn_service.settings", fresh_db):
+        llm_input = build_turn_llm_input(
+            account_id=account_id,
+            account=sess["account"],
+            session=sess["session"],
+            profile={},
+            text="",
+            today="2026-06-24",
+            onboarding_state="step1",
+            onboarding_active=True,
+            web_search_enabled=True,
+            include_tool_instructions=False,
+        )
+
+    assert "【本轮可用工具】" not in llm_input["system_prompt"]
