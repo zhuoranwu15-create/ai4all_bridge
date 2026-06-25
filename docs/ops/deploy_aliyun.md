@@ -204,6 +204,13 @@ journalctl -u ai4all-monitor-health.service -n 50 --no-pager
 
 ## nginx 反代
 
+> **真源在仓库**：aliyun1 的实际 vhost 已纳入 git，见 [`deploy/nginx/`](../../deploy/nginx/)
+> （`ai4company.top.conf` 公网域名、`ai4all-node.conf` 内网节点入口）。改动后用
+> `scripts/deploy_nginx.sh`（备份 → 写入 → `nginx -t` 失败自动回滚 → reload）同步上线，
+> **不要直接手改 `/etc/nginx/conf.d/`**，否则与 git 漂移。basic auth 凭据
+> `.ai4all_ops.htpasswd` 是机密、不在 git，创建方式见 [`deploy/nginx/README.md`](../../deploy/nginx/README.md)。
+> 下方代码块仅为结构示例。
+
 示例只展示核心策略，证书可用阿里云证书服务或 certbot 管理。公网路径约定：
 
 - `/`：用户主页，反代到 Backend `/ui/home.html`。
