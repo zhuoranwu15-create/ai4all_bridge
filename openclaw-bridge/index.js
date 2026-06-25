@@ -248,8 +248,11 @@ function installLlmRequestDumpFetch(api) {
   state.seq = Number(state.seq || 0);
   globalThis[REQUEST_DUMP_FETCH_STATE_KEY] = state;
   globalThis.fetch = async function ai4allLlmRequestDumpFetch(input, init) {
-    const config = resolveConfig(api);
-    if (config.requestDumpEnabled && requestMethod(input, init) === "POST") {
+    // 该 wrapper 装在进程级 globalThis.fetch 上，每个出站请求都会进。先用 install 时写入
+    // process.env 的开关做廉价短路（默认关），避免对每次 fetch 都跑一遍 resolveConfig。
+    const method = requestMethod(input, init);
+    if (process.env.AI4ALL_LLM_REQUEST_DUMP_ENABLED === "true" && method === "POST") {
+      const config = resolveConfig(api);
       const bodyBytes = await requestBodyBytes(input, init);
       if (bodyBytes && bodyBytes.length > 0) {
         const info = llmJsonBodyInfo(bodyBytes);
@@ -257,7 +260,7 @@ function installLlmRequestDumpFetch(api) {
           writeLlmRequestDump(api, config, {
             bodyBytes,
             info,
-            method: requestMethod(input, init),
+            method,
             url: requestUrl(input),
           });
         }

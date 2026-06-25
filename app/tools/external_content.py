@@ -4,7 +4,7 @@ DB 侧永远存 raw tool result；只有 LLM messages 拿到 projected 版本。
 """
 import json
 import secrets
-from typing import Any
+from typing import Any, Optional
 
 # 结果需要被标记为外部不可信内容的工具名称集合
 _EXTERNAL_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "web_fetch"})
@@ -13,9 +13,13 @@ _EXTERNAL_TOOL_NAMES: frozenset[str] = frozenset({"web_search", "web_fetch"})
 _DEFAULT_MAX_CHARS = 6000
 
 
-def wrap_external_content(text: str, *, source: str) -> str:
-    """用 EXTERNAL_UNTRUSTED_CONTENT 标记包裹文本，供 web_fetch handler 内部使用。"""
-    marker_id = secrets.token_hex(8)
+def wrap_external_content(text: str, *, source: str, marker_id: Optional[str] = None) -> str:
+    """用 EXTERNAL_UNTRUSTED_CONTENT 标记包裹文本，供 web_fetch handler 内部使用。
+
+    marker_id 省略时自动生成；调用方若还要在别处引用同一 id（如 externalContent 元数据），
+    可显式传入复用，避免重复实现标记格式。
+    """
+    marker_id = marker_id or secrets.token_hex(8)
     return (
         f'<<<EXTERNAL_UNTRUSTED_CONTENT source="{source}" id="{marker_id}">>>\n'
         f"{text}\n"

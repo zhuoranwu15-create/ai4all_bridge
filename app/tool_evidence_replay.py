@@ -60,10 +60,8 @@ def inject_tool_evidence_replay(
         if mid:
             by_mid.setdefault(mid, []).append(inv)
 
-    if not by_mid:
-        return history
-
     # 重建 history，在 user 消息后 splice tool wire
+    # (invocations 来自 WHERE message_id IN (...)，by_mid 必非空；下方 zip 循环对无匹配也安全)
     result: List[Dict[str, Any]] = []
     for msg, row in zip(history, history_rows):
         result.append(msg)

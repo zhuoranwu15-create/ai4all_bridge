@@ -16,6 +16,7 @@ import httpx
 
 from app.config import settings
 from app.tools._url_guard import SSRFError, assert_public_url
+from app.tools.external_content import wrap_external_content
 
 
 def _strip_html(html: str) -> str:
@@ -31,8 +32,8 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
-def _extract_text(content_bytes: bytes, content_type: str, extract_mode: str) -> str:
-    """根据 content-type 和 extractMode 返回可读文本。"""
+def _extract_text(content_bytes: bytes, content_type: str) -> str:
+    """根据 content-type 返回可读文本（JSON 紧凑化 / HTML 去标签 / 其余原样）。"""
     ct = content_type.lower().split(";")[0].strip()
 
     if "json" in ct:
@@ -125,17 +126,13 @@ def handle_web_fetch(args: Dict[str, Any], ctx: Any) -> Dict[str, Any]:
 
     took_ms = int((time.monotonic() - started) * 1000)
     content_type = resp.headers.get("content-type", "text/plain")
-    raw_text = _extract_text(content_bytes, content_type, extract_mode)
+    raw_text = _extract_text(content_bytes, content_type)
 
     truncated = len(raw_text) > max_chars
     text_out = raw_text[:max_chars]
 
     marker_id = secrets.token_hex(8)
-    wrapped_text = (
-        f'<<<EXTERNAL_UNTRUSTED_CONTENT source="web_fetch" id="{marker_id}">>>\n'
-        f"{text_out}\n"
-        f'<<<END_EXTERNAL_UNTRUSTED_CONTENT id="{marker_id}">>>'
-    )
+    wrapped_text = wrap_external_content(text_out, source="web_fetch", marker_id=marker_id)
 
     return {
         "url": url,
