@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proactive Test Lab</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg:#f5f6f8;
+      --panel:#fff;
+      --line:#d7dee8;
+      --line-strong:#b9c4d3;
+      --text:#20242a;
+      --muted:#667085;
+      --blue:#2563eb;
+      --green:#087443;
+      --danger:#b42318;
+      --soft:#f8fafc;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:16px 20px 12px; border-bottom:1px solid var(--line); background:#fff; display:flex; align-items:center; justify-content:space-between; gap:16px; }
+    h1 { margin:0; font-size:22px; }
+    h2 { margin:0; font-size:16px; }
+    h3 { margin:0 0 10px; font-size:15px; }
+    input, textarea, select, button { font:inherit; }
+    input, textarea, select { border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fff; min-width:0; }
+    textarea { width:100%; min-height:94px; resize:vertical; }
+    button { border:1px solid var(--line); border-radius:6px; padding:8px 12px; background:#fff; cursor:pointer; }
+    button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    main { padding:16px 20px 28px; }
+    .token { display:flex; gap:8px; align-items:center; color:var(--muted); font-size:13px; }
+    .muted { color:var(--muted); }
+    .error { color:var(--danger); }
+    .ok { color:var(--green); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .toolbar { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .stats { display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:10px; margin-bottom:12px; }
+    .metric { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#fff; color:var(--muted); }
+    .metric b { display:block; font-size:22px; margin-top:4px; color:var(--text); }
+    .workspace { display:grid; grid-template-columns:minmax(320px, .95fr) minmax(360px, 1.05fr) minmax(380px, 1fr); gap:12px; align-items:start; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; min-height:200px; overflow:hidden; }
+    .panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px; border-bottom:1px solid var(--line); background:#fbfcfe; }
+    .panel-body { padding:12px; }
+    .scroll { max-height:calc(100vh - 260px); overflow:auto; }
+    table { width:100%; border-collapse:collapse; background:#fff; }
+    th, td { text-align:left; border-bottom:1px solid var(--line); padding:8px 9px; vertical-align:top; font-size:13px; }
+    th { color:#344054; background:#f9fafb; position:sticky; top:0; z-index:1; }
+    #samplesBody td:nth-child(2) { width:58%; }
+    #samplesBody td:nth-child(5) { min-width:170px; }
+    tr.is-selected td { background:#eff6ff; }
+    pre { white-space:pre-wrap; overflow:auto; background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:10px; margin:0; font-size:13px; }
+    .pill { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:#344054; background:#f9fafb; font-size:12px; }
+    .pill.success { border-color:#abefc6; background:#ecfdf3; color:#067647; }
+    .pill.skip { border-color:#fedf89; background:#fffaeb; color:#b54708; }
+    .pill.error { border-color:#fecdca; background:#fef3f2; color:#b42318; }
+    .stack { display:flex; flex-direction:column; gap:10px; }
+    .chat { display:flex; flex-direction:column; gap:8px; }
+    .msg { border:1px solid var(--line); border-left-width:4px; border-radius:8px; padding:8px 10px; background:var(--soft); }
+    .msg.user { border-left-color:#2563eb; background:#eff6ff; }
+    .msg.assistant { border-left-color:#087443; background:#ecfdf3; }
+    .msg.system { border-left-color:#7c3aed; background:#f5f3ff; }
+    .msg b { display:flex; justify-content:space-between; gap:8px; color:#475467; margin-bottom:4px; font-size:12px; }
+    .msg .text { white-space:pre-wrap; line-height:1.45; }
+    .dialogue-preview { display:flex; flex-direction:column; gap:6px; min-width:300px; }
+    .dialogue-line { width:fit-content; max-width:100%; border:1px solid var(--line); border-radius:8px; padding:6px 8px; line-height:1.38; color:#344054; background:#fff; }
+    .dialogue-line.user { border-color:#bfdbfe; background:#eff6ff; }
+    .dialogue-line.assistant { border-color:#bbf7d0; background:#ecfdf3; }
+    .dialogue-line.system { border-color:#ddd6fe; background:#f5f3ff; }
+    .dialogue-line b { color:#475467; margin-right:5px; font-size:12px; }
+    .dialogue-more { color:var(--muted); font-size:12px; }
+    .output-card { border:1px solid var(--line); border-radius:8px; background:#fff; overflow:hidden; }
+    .output-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; background:#f8fafc; border-bottom:1px solid var(--line); }
+    .output-meta { display:flex; gap:6px; flex-wrap:wrap; }
+    .output-text { padding:12px; font-size:15px; line-height:1.55; white-space:pre-wrap; }
+    .output-text.empty { color:var(--muted); font-size:13px; }
+    .output-reason { padding:10px 12px; border-top:1px solid var(--line); color:#475467; line-height:1.45; }
+    .debug-details { border:1px solid var(--line); border-radius:8px; background:#fff; }
+    .debug-details summary { cursor:pointer; padding:9px 12px; color:var(--muted); }
+    .debug-details pre { border:0; border-top:1px solid var(--line); border-radius:0; }
+    .split { display:grid; grid-template-columns:repeat(3, minmax(84px, 1fr)); gap:8px; }
+    .field { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:13px; }
+    .field input, .field select { width:100%; }
+    .detail-empty { padding:18px; border:1px dashed var(--line-strong); border-radius:8px; color:var(--muted); background:#fcfcfd; }
+    .wide { width:220px; }
+    @media (max-width: 1280px) { .workspace { grid-template-columns:1fr; } .scroll { max-height:none; } }
+    @media (max-width: 820px) {
+      header, .toolbar { align-items:flex-start; flex-direction:column; }
+      .stats { grid-template-columns:1fr 1fr; }
+      .token, .row { width:100%; }
+      .wide, select, input[type="file"] { width:100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Proactive Test Lab</h1>
+      <div class="muted">一页完成：样本筛选、dry-run 生成、候选查看、人工审核。</div>
+    </div>
+    <div class="token">
+      <input id="adminToken" type="password" placeholder="Admin token">
+      <button onclick="saveToken()">保存</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="statsBox" class="stats"></div>
+
+    <div class="toolbar">
+      <div class="row">
+        <input id="sampleFile" type="file" accept=".json,.jsonl,application/json">
+        <button onclick="importFile()">导入文件</button>
+        <button onclick="bootstrapSamples()">自动套入 300 条样本</button>
+        <button onclick="refreshAll()">刷新</button>
+      </div>
+      <span id="globalStatus" class="muted"></span>
+    </div>
+
+    <div class="workspace">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>1. 样本</h2>
+          <button class="primary" onclick="runGeneration()">生成选中样本</button>
+        </div>
+        <div class="panel-body stack">
+          <div class="row">
+            <select id="sampleScenario" class="wide" onchange="loadSamples()">
+              <option value="">全部 scenario</option>
+              <option>account_check</option>
+              <option>reactivation_topic</option>
+              <option>content_invitation</option>
+            </select>
+            <select id="sampleSource" class="wide" onchange="loadSamples()">
+              <option value="">全部 source</option>
+              <option>synthetic</option>
+              <option>manual</option>
+              <option>real_desensitized</option>
+              <option>public_dataset</option>
+            </select>
+            <button onclick="toggleVisibleSamples(true)">全选本页</button>
+            <button onclick="toggleVisibleSamples(false)">清空</button>
+          </div>
+          <div id="sampleSummary" class="muted"></div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>选</th><th>对话</th><th>scenario</th><th>silence</th><th>sample</th></tr></thead>
+              <tbody id="samplesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>2. 生成候选</h2>
+          <button onclick="loadCandidates()">刷新候选</button>
+        </div>
+        <div class="panel-body stack">
+          <div id="generateStatus" class="muted">选择左侧样本后生成。</div>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>candidate</th><th>sample</th><th>status</th><th>输出摘要</th></tr></thead>
+              <tbody id="candidatesBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>3. 详情和审核</h2>
+          <button class="primary" onclick="saveReview()">保存审核</button>
+        </div>
+        <div class="panel-body stack">
+          <div id="detailBox" class="detail-empty">点击左侧样本或中间候选查看详情。</div>
+          <div id="reviewForm" class="stack" style="display:none;">
+            <div class="row">
+              <label><input id="humanPromote" type="checkbox"> 应该发送</label>
+              <select id="rejectReason"></select>
+            </div>
+            <div class="split">
+              <label class="field">tone <input id="toneScore" type="number" min="1" max="5"></label>
+              <label class="field">pressure <input id="pressureScore" type="number" min="1" max="5"></label>
+              <label class="field">marketing <input id="marketingScore" type="number" min="1" max="5"></label>
+            </div>
+            <div class="row">
+              <label><input id="privacyRisk" type="checkbox"> privacy risk</label>
+              <label><input id="hallucinationRisk" type="checkbox"> hallucination risk</label>
+            </div>
+            <textarea id="reviewNotes" placeholder="review notes"></textarea>
+            <span id="reviewStatus" class="muted"></span>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const API = '/internal/proactive-test';
+    const rejectReasons = ['', 'no_clear_reason', 'too_pushy', 'too_marketing', 'too_generic', 'too_private', 'too_old_topic', 'duplicate_topic', 'wrong_timing', 'high_risk_advice', 'hallucinated_fact', 'too_long', 'not_friend_like', 'should_skip', 'other'];
+    let token = localStorage.getItem('proactive_test_admin_token') || 'dev-admin-token';
+    let samples = [];
+    let candidates = [];
+    let selectedSampleId = null;
+    let selectedCandidate = null;
+
+    document.getElementById('adminToken').value = token;
+    document.getElementById('rejectReason').innerHTML = rejectReasons.map(r => `<option value="${r}">${r || 'reject reason'}</option>`).join('');
+
+    function saveToken() {
+      token = document.getElementById('adminToken').value.trim();
+      localStorage.setItem('proactive_test_admin_token', token);
+      refreshAll();
+    }
+
+    async function api(path, opts = {}) {
+      const res = await fetch(API + path, {
+        ...opts,
+        headers: {'Content-Type':'application/json', 'Authorization':'Bearer ' + token, ...(opts.headers || {})}
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || res.statusText);
+      return data;
+    }
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+    }
+
+    function setStatus(text, kind = 'muted') {
+      const el = document.getElementById('globalStatus');
+      el.className = kind;
+      el.textContent = text || '';
+    }
+
+    function statusPill(status) {
+      const cls = status === 'success' ? 'success' : status === 'skip' ? 'skip' : status === 'error' ? 'error' : '';
+      return `<span class="pill ${cls}">${esc(status || '-')}</span>`;
+    }
+
+    function boolPill(value) {
+      if (value === true) return '<span class="pill success">建议发送</span>';
+      if (value === false) return '<span class="pill skip">建议不发</span>';
+      return '<span class="pill">未判断</span>';
+    }
+
+    function confidenceText(value) {
+      if (value === null || value === undefined || value === '') return '-';
+      const number = Number(value);
+      if (!Number.isFinite(number)) return String(value);
+      return Math.round(number * 100) + '%';
+    }
+
+    function selectedSampleIds() {
+      return Array.from(document.querySelectorAll('.sampleCheck:checked')).map(el => el.value);
+    }
+
+    function toggleVisibleSamples(checked) {
+      document.querySelectorAll('.sampleCheck').forEach(el => { el.checked = checked; });
+    }
+
+    function roleLabel(role) {
+      return {user:'用户', assistant:'AI', system:'系统'}[role] || role || '-';
+    }
+
+    function messageText(message) {
+      return message && (message.text || message.content || '');
+    }
+
+    function renderChat(chat) {
+      return `<div class="chat">${(chat || []).map(m => `
+        <div class="msg ${esc(m.role || '')}">
+          <b><span>${esc(roleLabel(m.role))}</span><span>${esc(m.created_at || '')}</span></b>
+          <div class="text">${esc(messageText(m))}</div>
+        </div>`).join('')}</div>`;
+    }
+
+    function renderDialoguePreview(chat) {
+      const messages = (chat || []).slice(-4);
+      const lines = messages.map(m => {
+        const text = messageText(m).replace(/\s+/g, ' ').trim();
+        const shortText = text.length > 72 ? text.slice(0, 72) + '...' : text;
+        return `<div class="dialogue-line ${esc(m.role || '')}"><b>${esc(roleLabel(m.role))}</b>${esc(shortText)}</div>`;
+      }).join('');
+      const more = (chat || []).length > messages.length ? `<div class="dialogue-more">还有 ${(chat || []).length - messages.length} 条更早消息</div>` : '';
+      return `<div class="dialogue-preview">${lines || '<span class="muted">无对话</span>'}${more}</div>`;
+    }
+
+    function candidateSummary(candidate) {
+      if (!candidate) return '';
+      if (candidate.generation_error) return `<span class="error">${esc(candidate.generation_error)}</span>`;
+      const text = candidate.generated_text || candidate.model_reason || '无生成文案';
+      const shortText = String(text).length > 120 ? String(text).slice(0, 120) + '...' : text;
+      return `
+        <div>${esc(shortText)}</div>
+        <div class="muted">${esc(candidate.generated_type || '-')} · confidence ${esc(confidenceText(candidate.model_confidence))}</div>`;
+    }
+
+    function renderModelOutput(candidate) {
+      const raw = {
+        generated_type: candidate.generated_type,
+        generated_text: candidate.generated_text,
+        model_should_send: candidate.model_should_send,
+        confidence: candidate.model_confidence,
+        reason: candidate.model_reason,
+        raw: candidate.model_raw
+      };
+      return `
+        <div class="output-card">
+          <div class="output-head">
+            <strong>${esc(candidate.generated_type || '模型输出')}</strong>
+            <div class="output-meta">
+              ${statusPill(candidate.generation_status)}
+              ${boolPill(candidate.model_should_send)}
+              <span class="pill">置信度 ${esc(confidenceText(candidate.model_confidence))}</span>
+            </div>
+          </div>
+          <div class="output-text ${candidate.generated_text ? '' : 'empty'}">${esc(candidate.generated_text || candidate.generation_error || '模型没有生成可发送文案')}</div>
+          <div class="output-reason"><strong>理由：</strong>${esc(candidate.model_reason || '-')}</div>
+        </div>
+        <details class="debug-details">
+          <summary>查看原始模型 JSON</summary>
+          <pre>${esc(JSON.stringify(raw, null, 2))}</pre>
+        </details>`;
+    }
+
+    async function importFile() {
+      const file = document.getElementById('sampleFile').files[0];
+      if (!file) return;
+      setStatus('正在导入文件...');
+      try {
+        const raw = await file.text();
+        const out = await api('/samples/import', {method:'POST', body:JSON.stringify({raw_text: raw})});
+        setStatus(`导入 ${out.imported} 条，失败 ${out.failed} 条`, out.failed ? 'error' : 'ok');
+        await refreshAll();
+      } catch (err) {
+        setStatus(err.message || String(err), 'error');
+      }
+    }
+
+    async function bootstrapSamples() {
+      setStatus('正在自动套入样本...');
+      try {
+        const out = await api('/samples/bootstrap', {method:'POST', body:JSON.stringify({limit: 300})});
+        const summary = out.import_db || {};
+        setStatus(`已套入 ${summary.inserted || 0} 条，已存在 ${summary.skipped_existing || 0} 条，失败 ${summary.failed || 0} 条`, summary.failed ? 'error' : 'ok');
+        await refreshAll();
+      } catch (err) {
+        setStatus(err.message || String(err), 'error');
+      }
+    }
+
+    async function loadSamples() {
+      const qs = new URLSearchParams();
+      const scenario = document.getElementById('sampleScenario').value;
+      const source = document.getElementById('sampleSource').value;
+      if (scenario) qs.set('scenario_type', scenario);
+      if (source) qs.set('source', source);
+      qs.set('limit', '100');
+      const out = await api('/samples?' + qs.toString());
+      samples = out.items || [];
+      if (!scenario && !source && samples.length === 0) {
+        await bootstrapSamples();
+        return;
+      }
+      document.getElementById('sampleSummary').textContent = `当前显示 ${samples.length} 条；勾选后点击生成。`;
+      document.getElementById('samplesBody').innerHTML = samples.map(s => `
+        <tr class="${s.sample_id === selectedSampleId ? 'is-selected' : ''}">
+          <td><input class="sampleCheck" type="checkbox" value="${esc(s.sample_id)}"></td>
+          <td>${renderDialoguePreview(s.chat_history)}</td>
+          <td>${esc(s.scenario_type)}</td>
+          <td>${esc(s.silence_hours || 0)}h</td>
+          <td><button onclick="selectSample('${esc(s.sample_id)}')">${esc(s.sample_id)}</button><div class="muted">${esc(s.notes || '')}</div></td>
+        </tr>`).join('');
+    }
+
+    function selectSample(sampleId) {
+      selectedSampleId = sampleId;
+      selectedCandidate = null;
+      const sample = samples.find(s => s.sample_id === sampleId);
+      if (!sample) return;
+      document.getElementById('reviewForm').style.display = 'none';
+      document.getElementById('detailBox').className = 'stack';
+      document.getElementById('detailBox').innerHTML = `
+        <h3>对话</h3>
+        ${renderChat(sample.chat_history)}
+        <h3>样本信息</h3>
+        <pre>${esc(JSON.stringify({
+          sample_id: sample.sample_id,
+          scenario_type: sample.scenario_type,
+          source: sample.source,
+          silence_hours: sample.silence_hours,
+        }, null, 2))}</pre>
+        <h3>备注</h3>
+        <pre>${esc(sample.notes || '')}</pre>`;
+      loadSamples().catch(err => setStatus(err.message || String(err), 'error'));
+    }
+
+    async function runGeneration() {
+      const ids = selectedSampleIds();
+      if (!ids.length) {
+        document.getElementById('generateStatus').textContent = '请先勾选样本。';
+        return;
+      }
+      document.getElementById('generateStatus').textContent = 'generating...';
+      try {
+        const out = await api('/generate', {method:'POST', body:JSON.stringify({sample_ids: ids, dry_run: true})});
+        document.getElementById('generateStatus').textContent = `${out.run_id}: success ${out.success}, skip ${out.skip}, error ${out.error}`;
+        await loadCandidates();
+        await loadStats();
+      } catch (err) {
+        document.getElementById('generateStatus').textContent = err.message || String(err);
+      }
+    }
+
+    async function loadCandidates() {
+      const out = await api('/candidates?limit=100');
+      candidates = out.items || [];
+      document.getElementById('candidatesBody').innerHTML = candidates.map(c => `
+        <tr class="${selectedCandidate && selectedCandidate.id === c.id ? 'is-selected' : ''}">
+          <td><button onclick="selectCandidate('${esc(c.id)}')">${esc(c.id)}</button><div class="muted">${esc(c.review_status || '')}</div></td>
+          <td>${esc(c.sample_id)}</td>
+          <td>${statusPill(c.generation_status)}</td>
+          <td>${candidateSummary(c)}</td>
+        </tr>`).join('');
+    }
+
+    function selectCandidate(id) {
+      selectedCandidate = candidates.find(c => c.id === id);
+      if (!selectedCandidate) return;
+      selectedSampleId = selectedCandidate.sample_id;
+      document.getElementById('reviewForm').style.display = 'flex';
+      document.getElementById('detailBox').className = 'stack';
+      document.getElementById('detailBox').innerHTML = `
+        <h3>对话</h3>
+        ${renderChat(selectedCandidate.chat_history)}
+        <h3>模型输出</h3>
+        ${renderModelOutput(selectedCandidate)}
+        <h3>候选信息</h3>
+        <pre>${esc(JSON.stringify({
+          candidate_id: selectedCandidate.id,
+          sample_id: selectedCandidate.sample_id,
+          scenario_type: selectedCandidate.scenario_type,
+          run_id: selectedCandidate.run_id,
+          status: selectedCandidate.generation_status,
+        }, null, 2))}</pre>`;
+      document.getElementById('humanPromote').checked = !!selectedCandidate.human_should_promote;
+      document.getElementById('rejectReason').value = selectedCandidate.reject_reason || '';
+      document.getElementById('toneScore').value = selectedCandidate.tone_score || '';
+      document.getElementById('pressureScore').value = selectedCandidate.pressure_score || '';
+      document.getElementById('marketingScore').value = selectedCandidate.marketing_score || '';
+      document.getElementById('privacyRisk').checked = !!selectedCandidate.privacy_risk;
+      document.getElementById('hallucinationRisk').checked = !!selectedCandidate.hallucination_risk;
+      document.getElementById('reviewNotes').value = selectedCandidate.review_notes || '';
+      loadCandidates().catch(err => setStatus(err.message || String(err), 'error'));
+    }
+
+    async function saveReview() {
+      if (!selectedCandidate) {
+        document.getElementById('reviewStatus').textContent = '先选择一条 candidate。';
+        return;
+      }
+      const payload = {
+        candidate_id: selectedCandidate.id,
+        human_should_promote: document.getElementById('humanPromote').checked,
+        reject_reason: document.getElementById('rejectReason').value || null,
+        tone_score: Number(document.getElementById('toneScore').value) || null,
+        pressure_score: Number(document.getElementById('pressureScore').value) || null,
+        marketing_score: Number(document.getElementById('marketingScore').value) || null,
+        privacy_risk: document.getElementById('privacyRisk').checked,
+        hallucination_risk: document.getElementById('hallucinationRisk').checked,
+        review_notes: document.getElementById('reviewNotes').value
+      };
+      try {
+        await api('/reviews', {method:'POST', body:JSON.stringify(payload)});
+        document.getElementById('reviewStatus').textContent = 'saved';
+        await loadCandidates();
+        await loadStats();
+      } catch (err) {
+        document.getElementById('reviewStatus').textContent = err.message || String(err);
+      }
+    }
+
+    async function loadStats() {
+      const s = await api('/stats');
+      document.getElementById('statsBox').innerHTML = `
+        <div class="metric">总样本<b>${s.total_samples}</b></div>
+        <div class="metric">总候选<b>${s.total_candidates}</b></div>
+        <div class="metric">生成成功率<b>${Math.round((s.generation_success_rate || 0) * 100)}%</b></div>
+        <div class="metric">人工通过率<b>${Math.round((s.human_promote_rate || 0) * 100)}%</b></div>`;
+    }
+
+    async function refreshAll() {
+      await Promise.all([loadStats(), loadCandidates()]);
+      await loadSamples();
+    }
+
+    refreshAll().catch(err => setStatus(err.message || String(err), 'error'));
+  </script>
+</body>
+</html>

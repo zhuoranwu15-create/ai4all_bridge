@@ -1732,6 +1732,76 @@ def _migration_0008_relationship_state(conn: Connection) -> None:
         _ensure_column(conn, table, "agent_need_growth_status", "TEXT NOT NULL DEFAULT 'not_started'")
 
 
+def _migration_0009_proactive_test_lab(conn: Connection) -> None:
+    """主动消息测试台：样本、dry-run 候选与人工审核，完全独立于正式发送表。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS proactive_test_samples (
+            id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL UNIQUE,
+            source TEXT NOT NULL,
+            scenario_type TEXT NOT NULL,
+            chat_history_json TEXT NOT NULL,
+            silence_hours REAL,
+            expected_active_message_type TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_samples_source
+            ON proactive_test_samples(source);
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_samples_scenario
+            ON proactive_test_samples(scenario_type);
+
+        CREATE TABLE IF NOT EXISTS proactive_test_candidates (
+            id TEXT PRIMARY KEY,
+            sample_id TEXT NOT NULL,
+            run_id TEXT NOT NULL,
+            scenario_type TEXT NOT NULL,
+            generated_type TEXT,
+            generated_text TEXT,
+            model_should_send INTEGER,
+            model_confidence REAL,
+            model_reason TEXT,
+            model_raw_json TEXT,
+            generation_status TEXT NOT NULL,
+            generation_error TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_candidates_run
+            ON proactive_test_candidates(run_id);
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_candidates_sample
+            ON proactive_test_candidates(sample_id);
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_candidates_status
+            ON proactive_test_candidates(generation_status);
+
+        CREATE TABLE IF NOT EXISTS proactive_test_reviews (
+            id TEXT PRIMARY KEY,
+            candidate_id TEXT NOT NULL UNIQUE,
+            human_should_promote INTEGER NOT NULL,
+            reject_reason TEXT,
+            tone_score INTEGER,
+            pressure_score INTEGER,
+            marketing_score INTEGER,
+            privacy_risk INTEGER NOT NULL DEFAULT 0,
+            hallucination_risk INTEGER NOT NULL DEFAULT 0,
+            review_notes TEXT,
+            reviewer TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_reviews_candidate
+            ON proactive_test_reviews(candidate_id);
+        CREATE INDEX IF NOT EXISTS idx_proactive_test_reviews_reject
+            ON proactive_test_reviews(reject_reason);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1741,6 +1811,7 @@ _MIGRATIONS = [
     (6, _migration_0006_merge_reactivation_categories),
     (7, _migration_0007_merge_reactivation_settings_keys),
     (8, _migration_0008_relationship_state),
+    (9, _migration_0009_proactive_test_lab),
 ]
 
 

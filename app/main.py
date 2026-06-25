@@ -248,10 +248,12 @@ _LOCAL_ONLY_DEBUG_UI_PATHS = {
     "/ui/onboarding_debug.html",
     "/ui/prompt_debug.html",
     "/ui/proactive_debug.html",
+    "/ui/proactive_test_lab.html",
     "/ui/web_search_debug.html",
     "/ops/onboarding_debug.html",
     "/ops/prompt_debug.html",
     "/ops/proactive_debug.html",
+    "/ops/proactive_test_lab.html",
     "/ops/web_search_debug.html",
 }
 
@@ -326,6 +328,8 @@ if settings.has_central_role:
     app.include_router(_admin_accounts_router.router)
     from app.routers import admin_proactive as _admin_proactive_router  # noqa: E402
     app.include_router(_admin_proactive_router.router)
+    from app.routers import proactive_test as _proactive_test_router  # noqa: E402
+    app.include_router(_proactive_test_router.router)
     from app.routers import admin_dreaming as _admin_dreaming_router  # noqa: E402
     app.include_router(_admin_dreaming_router.router)
     from app.routers import admin_ops as _admin_ops_router  # noqa: E402
