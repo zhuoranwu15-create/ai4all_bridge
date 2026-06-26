@@ -1391,6 +1391,26 @@
       cursor: pointer;
       transition: all 0.15s ease;
     }
+    .preview-item {
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text-muted);
+      display: flex;
+      gap: 4px;
+    }
+    .preview-role {
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .preview-role.user {
+      color: var(--primary);
+    }
+    .preview-role.assistant {
+      color: var(--ok);
+    }
     .sample-card-select-col {
       display: flex;
       align-items: center;
@@ -2097,7 +2117,7 @@ function handleFileSelect(input) {
         if (cb.checked) checkedSampleIdsCache.add(cb.value);
         else checkedSampleIdsCache.delete(cb.value);
       });
-      
+
       const count = checkedSampleIdsCache.size;
       const btn = document.getElementById('generateBtn');
       if (btn) {
@@ -2192,7 +2212,19 @@ function handleFileSelect(input) {
       const active = selectedSampleId === sample.sample_id ? ' active' : '';
       const checked = isSampleChecked(sample.sample_id) ? 'checked' : '';
       const checkedClass = checked ? ' checked-card' : '';
-      const preview = (sample.chat_history || []).slice(-3).map(m => `<span>${roleLabel(m.role)}: ${shortText(messageText(m), 25)}</span>`).join(' / ');
+
+      const chatHistory = sample.chat_history || [];
+      let previewHtml = '';
+      if (chatHistory.length > 0) {
+        previewHtml = chatHistory.slice(-3).map(m => {
+          const roleClass = m.role === 'user' ? 'user' : 'assistant';
+          const label = roleLabel(m.role);
+          return `<div class="preview-item"><span class="preview-role ${roleClass}">${esc(label)}:</span><span>${esc(shortText(messageText(m), 40))}</span></div>`;
+        }).join('');
+      } else {
+        previewHtml = '<div class="empty-state" style="padding:0; text-align:left; font-size:11px;">无对话记录</div>';
+      }
+
       return `<article class="sample-card${active}${checkedClass}" onclick="handleSampleCardClick(event, '${esc(sample.sample_id)}')">
         <div class="sample-card-select-col">
           <input class="sampleCheck" type="checkbox" value="${esc(sample.sample_id)}" ${checked} onclick="event.stopPropagation(); updateGenerateBtn();">
@@ -2207,7 +2239,7 @@ function handleFileSelect(input) {
           <div class="card-meta-row" style="padding: 0; margin: 0;">
             <span class="pill primary">${esc(scenarioLabel(sample.scenario_type))}</span>
           </div>
-          <div class="card-draft-preview" style="padding: 7px 8px; margin: 0;">${preview || '无对话记录'}</div>
+          <div class="card-draft-preview" style="padding: 6px 8px; margin: 0; display: flex; flex-direction: column; gap: 3px;">${previewHtml}</div>
         </div>
       </article>`;
     }
