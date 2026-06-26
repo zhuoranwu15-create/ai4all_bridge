@@ -43,7 +43,11 @@ def test_rpm_rate_limit_uses_configured_window(fresh_db, monkeypatch):
 
     fresh_db.rate_limit_daily = 0
     fresh_db.rate_limit_rpm = 2
-    fresh_db.rate_limit_rpm_window_seconds = 30
+    # 窗口取足够大（小时级）：本测试验证「同窗口内第 N 次被拦」，而非窗口过期。
+    # 走的是完整 handle_openclaw_turn（含 DB / advisory 锁），PG 全量负载下 3 轮调用
+    # 偶尔跨越数十秒；若窗口太小，第 1 次命中行会被 DELETE WHERE hit_at < now-window
+    # 当过期清掉，导致第 3 次 count 不足而漏拦（与限流逻辑无关的墙钟脆弱性）。
+    fresh_db.rate_limit_rpm_window_seconds = 3600
 
     monkeypatch.setattr(turn_service, "settings", fresh_db)
     monkeypatch.setattr(turn_service, "rate_limiter", RateLimiter())
