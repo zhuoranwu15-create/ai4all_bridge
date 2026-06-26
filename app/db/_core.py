@@ -1802,6 +1802,45 @@ def _migration_0009_proactive_test_lab(conn: Connection) -> None:
     )
 
 
+def _migration_0010_proactive_test_lab_labels(conn: Connection) -> None:
+    """主动消息测试台标注字段：上下文证据、触发判断、人工终审标签。"""
+    for column in ("user_context", "memory_evidence", "open_loop"):
+        _ensure_column(conn, "proactive_test_samples", column, "TEXT")
+    for column in (
+        "trigger_type",
+        "candidate_message",
+        "should_send_score",
+        "when_reason",
+        "content_quality",
+        "risk_tag",
+    ):
+        definition = "INTEGER" if column == "should_send_score" else "TEXT"
+        _ensure_column(conn, "proactive_test_candidates", column, definition)
+    for column in ("revised_message", "final_label", "promote_level", "user_response"):
+        _ensure_column(conn, "proactive_test_reviews", column, "TEXT")
+
+
+def _migration_0011_proactive_test_long_context_refs(conn: Connection) -> None:
+    """主动消息测试样本可绑定真实 account/session，用于动态拉取长聊天上下文。"""
+    _ensure_column(conn, "proactive_test_samples", "account_id", "TEXT")
+    _ensure_column(conn, "proactive_test_samples", "session_id", "INTEGER")
+    _ensure_column(conn, "proactive_test_samples", "context_limit", "INTEGER NOT NULL DEFAULT 120")
+    _ensure_column(conn, "proactive_test_samples", "context_source", "TEXT")
+
+
+def _migration_0012_proactive_test_layers(conn: Connection) -> None:
+    """主动消息测试台 L0-L5 分层评估结构。"""
+    for column in (
+        "l0_context_json",
+        "l1_trigger_json",
+        "l2_when_json",
+        "l3_how_json",
+        "l4_safety_json",
+    ):
+        _ensure_column(conn, "proactive_test_candidates", column, "TEXT")
+    _ensure_column(conn, "proactive_test_reviews", "l5_outcome_json", "TEXT")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1812,6 +1851,9 @@ _MIGRATIONS = [
     (7, _migration_0007_merge_reactivation_settings_keys),
     (8, _migration_0008_relationship_state),
     (9, _migration_0009_proactive_test_lab),
+    (10, _migration_0010_proactive_test_lab_labels),
+    (11, _migration_0011_proactive_test_long_context_refs),
+    (12, _migration_0012_proactive_test_layers),
 ]
 
 

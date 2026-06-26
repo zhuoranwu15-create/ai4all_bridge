@@ -67,6 +67,13 @@ def _import_samples(samples: List[Dict[str, Any]], *, upsert: bool) -> Dict[str,
                 silence_hours=sample.get("silence_hours"),
                 expected_active_message_type=sample.get("expected_active_message_type"),
                 notes=sample.get("notes"),
+                user_context=sample.get("user_context"),
+                memory_evidence=sample.get("memory_evidence"),
+                open_loop=sample.get("open_loop"),
+                account_id=sample.get("account_id"),
+                session_id=sample.get("session_id"),
+                context_limit=sample.get("context_limit"),
+                context_source=sample.get("context_source"),
             )
             inserted += 1
         except Exception as err:  # noqa: BLE001 - import should continue per sample

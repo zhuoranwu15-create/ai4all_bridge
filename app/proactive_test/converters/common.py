@@ -87,7 +87,7 @@ def silence_for(
 def normalize_chat_history(
     messages: List[Dict[str, Any]],
     *,
-    max_turns: int = 8,
+    max_turns: int = 20,
     max_message_chars: int = 1000,
     max_total_chars: int = 8000,
 ) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -150,4 +150,7 @@ def make_sample(
         "chat_history": chat_history,
         "silence_hours": silence_for(scenario, default_silence_hours=default_silence_hours),
         "notes": notes,
+        "user_context": "用户最近围绕这个话题连续表达过需求或状态，适合评估是否需要轻量续聊。",
+        "memory_evidence": "由当前样本聊天记录转换得到，未接入真实用户记忆。",
+        "open_loop": "需要判断是否存在自然、低打扰的未完成话题。",
     }

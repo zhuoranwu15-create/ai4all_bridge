@@ -9,6 +9,8 @@ __all__ = [
     "create_proactive_test_candidate",
     "get_proactive_test_candidate",
     "get_proactive_test_sample_by_sample_id",
+    "get_proactive_test_long_context",
+    "hydrate_proactive_test_sample_context",
     "import_proactive_test_sample",
     "list_proactive_test_candidates",
     "list_proactive_test_samples",
@@ -38,6 +40,16 @@ def _decode_candidate(row: Row) -> Dict[str, Any]:
         None if item.get("model_should_send") is None else bool(item.get("model_should_send"))
     )
     item["model_raw"] = _decode_json_object(item.get("model_raw_json"), None)
+    for source, target in (
+        ("l0_context_json", "l0_context"),
+        ("l1_trigger_json", "l1_trigger"),
+        ("l2_when_json", "l2_when"),
+        ("l3_how_json", "l3_how"),
+        ("l4_safety_json", "l4_safety"),
+        ("l5_outcome_json", "l5_outcome"),
+    ):
+        if source in item:
+            item[target] = _decode_json_object(item.pop(source, None), {})
     item["review_status"] = "reviewed" if item.get("review_id") else "unreviewed"
     for key in ("human_should_promote", "privacy_risk", "hallucination_risk"):
         if key in item and item[key] is not None:
@@ -54,6 +66,13 @@ def import_proactive_test_sample(
     silence_hours: Optional[float] = None,
     expected_active_message_type: Optional[str] = None,
     notes: Optional[str] = None,
+    user_context: Optional[str] = None,
+    memory_evidence: Optional[str] = None,
+    open_loop: Optional[str] = None,
+    account_id: Optional[str] = None,
+    session_id: Optional[int] = None,
+    context_limit: Optional[int] = None,
+    context_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     cleaned_sample_id = _clean_text(sample_id)
     cleaned_source = _clean_text(source) or "manual"
@@ -69,9 +88,11 @@ def import_proactive_test_sample(
             """
             INSERT INTO proactive_test_samples(
                 id, sample_id, source, scenario_type, chat_history_json,
-                silence_hours, expected_active_message_type, notes, created_at, updated_at
+                silence_hours, expected_active_message_type, notes,
+                user_context, memory_evidence, open_loop, account_id, session_id,
+                context_limit, context_source, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(sample_id) DO UPDATE SET
                 source = excluded.source,
                 scenario_type = excluded.scenario_type,
@@ -79,6 +100,13 @@ def import_proactive_test_sample(
                 silence_hours = excluded.silence_hours,
                 expected_active_message_type = excluded.expected_active_message_type,
                 notes = excluded.notes,
+                user_context = excluded.user_context,
+                memory_evidence = excluded.memory_evidence,
+                open_loop = excluded.open_loop,
+                account_id = excluded.account_id,
+                session_id = excluded.session_id,
+                context_limit = excluded.context_limit,
+                context_source = excluded.context_source,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (
@@ -90,6 +118,13 @@ def import_proactive_test_sample(
                 silence_hours,
                 _clean_text(expected_active_message_type),
                 _clean_text(notes),
+                _clean_text(user_context),
+                _clean_text(memory_evidence),
+                _clean_text(open_loop),
+                _clean_text(account_id),
+                session_id,
+                max(1, min(int(context_limit or 120), 200)),
+                _clean_text(context_source),
             ),
         )
         row = conn.execute(
@@ -108,6 +143,117 @@ def get_proactive_test_sample_by_sample_id(sample_id: str) -> Optional[Dict[str,
             (_clean_text(sample_id),),
         ).fetchone()
     return _decode_sample(row) if row else None
+
+
+def _message_rows_to_chat(rows: List[Row]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "role": row["role"],
+            "text": row["content"],
+            "created_at": row["created_at"],
+            "message_id": row["message_id"],
+            "session_id": row["session_id"],
+        }
+        for row in rows
+        if _clean_text(row["content"])
+    ]
+
+
+def _fetch_real_context(
+    *,
+    account_id: str,
+    session_id: Optional[int],
+    limit: int,
+) -> tuple[List[Dict[str, Any]], str]:
+    clauses = [
+        "account_id = ?",
+        "content IS NOT NULL",
+        "content != ''",
+        "NOT (role = 'assistant' AND error IS NOT NULL AND error != '')",
+        "NOT (error IS NOT NULL AND error = 'moderation_blocked')",
+    ]
+    params: List[Any] = [account_id]
+    source = "account_recent"
+    if session_id is not None:
+        clauses.append("session_id = ?")
+        params.append(int(session_id))
+        source = f"session:{session_id}"
+    where = " AND ".join(clauses)
+    with connect() as conn:
+        if session_id is not None:
+            session = conn.execute(
+                "SELECT account_id FROM sessions WHERE id = ?",
+                (int(session_id),),
+            ).fetchone()
+            if session is None or session["account_id"] != account_id:
+                return [], "session_account_mismatch"
+        rows = conn.execute(
+            f"""
+            SELECT id, session_id, message_id, role, content, created_at
+            FROM messages
+            WHERE {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        ).fetchall()
+    return _message_rows_to_chat(list(reversed(rows))), source
+
+
+def get_proactive_test_long_context(
+    *,
+    account_id: str,
+    session_id: Optional[int] = None,
+    limit: int = 120,
+) -> tuple[List[Dict[str, Any]], str]:
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        return [], "missing_account_id"
+    return _fetch_real_context(
+        account_id=cleaned_account_id,
+        session_id=session_id,
+        limit=max(1, min(int(limit), 200)),
+    )
+
+
+def hydrate_proactive_test_sample_context(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """Refresh a test sample's chat_history from bound account/session when available."""
+    account_id = _clean_text(sample.get("account_id"))
+    if not account_id:
+        sample["context_source"] = sample.get("context_source") or "sample_chat_history"
+        return sample
+    session_id = sample.get("session_id")
+    try:
+        cleaned_session_id = int(session_id) if session_id is not None else None
+    except (TypeError, ValueError):
+        cleaned_session_id = None
+    limit = max(1, min(int(sample.get("context_limit") or 120), 200))
+    chat_history, source = _fetch_real_context(
+        account_id=account_id,
+        session_id=cleaned_session_id,
+        limit=limit,
+    )
+    if not chat_history:
+        sample["context_source"] = source
+        return sample
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE proactive_test_samples
+            SET chat_history_json = ?, context_source = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE sample_id = ?
+            """,
+            (
+                json.dumps(chat_history, ensure_ascii=False),
+                source,
+                sample["sample_id"],
+            ),
+        )
+    refreshed = dict(sample)
+    refreshed["chat_history"] = chat_history
+    refreshed["context_source"] = source
+    return refreshed
 
 
 def list_proactive_test_samples(
@@ -162,6 +308,17 @@ def create_proactive_test_candidate(
     model_raw_json: Any,
     generation_status: str,
     generation_error: Optional[str] = None,
+    trigger_type: Optional[str] = None,
+    candidate_message: Optional[str] = None,
+    should_send_score: Optional[int] = None,
+    when_reason: Optional[str] = None,
+    content_quality: Optional[str] = None,
+    risk_tag: Optional[str] = None,
+    l0_context: Optional[Dict[str, Any]] = None,
+    l1_trigger: Optional[Dict[str, Any]] = None,
+    l2_when: Optional[Dict[str, Any]] = None,
+    l3_how: Optional[Dict[str, Any]] = None,
+    l4_safety: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     candidate_id = _new_id("ptc")
     raw_text = (
@@ -175,9 +332,12 @@ def create_proactive_test_candidate(
             INSERT INTO proactive_test_candidates(
                 id, sample_id, run_id, scenario_type, generated_type, generated_text,
                 model_should_send, model_confidence, model_reason, model_raw_json,
-                generation_status, generation_error, created_at, updated_at
+                generation_status, generation_error, trigger_type, candidate_message,
+                should_send_score, when_reason, content_quality, risk_tag,
+                l0_context_json, l1_trigger_json, l2_when_json, l3_how_json,
+                l4_safety_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 candidate_id,
@@ -192,6 +352,17 @@ def create_proactive_test_candidate(
                 raw_text,
                 _clean_text(generation_status) or "error",
                 _clean_text(generation_error),
+                _clean_text(trigger_type),
+                _clean_text(candidate_message) or _clean_text(generated_text),
+                should_send_score,
+                _clean_text(when_reason),
+                _clean_text(content_quality),
+                _clean_text(risk_tag),
+                json.dumps(l0_context or {}, ensure_ascii=False),
+                json.dumps(l1_trigger or {}, ensure_ascii=False),
+                json.dumps(l2_when or {}, ensure_ascii=False),
+                json.dumps(l3_how or {}, ensure_ascii=False),
+                json.dumps(l4_safety or {}, ensure_ascii=False),
             ),
         )
     item = get_proactive_test_candidate(candidate_id)
@@ -206,7 +377,9 @@ def get_proactive_test_candidate(candidate_id: str) -> Optional[Dict[str, Any]]:
             """
             SELECT c.*, r.id AS review_id, r.human_should_promote, r.reject_reason,
                    r.tone_score, r.pressure_score, r.marketing_score,
-                   r.privacy_risk, r.hallucination_risk, r.review_notes, r.reviewer
+                   r.privacy_risk, r.hallucination_risk, r.review_notes, r.reviewer,
+                   r.revised_message, r.final_label, r.promote_level, r.user_response,
+                   r.l5_outcome_json
             FROM proactive_test_candidates c
             LEFT JOIN proactive_test_reviews r ON r.candidate_id = c.id
             WHERE c.id = ?
@@ -245,9 +418,12 @@ def list_proactive_test_candidates(
         rows = conn.execute(
             f"""
             SELECT c.*, s.chat_history_json, s.silence_hours, s.source, s.notes,
+                   s.user_context, s.memory_evidence, s.open_loop,
                    r.id AS review_id, r.human_should_promote, r.reject_reason,
                    r.tone_score, r.pressure_score, r.marketing_score,
-                   r.privacy_risk, r.hallucination_risk, r.review_notes, r.reviewer
+                   r.privacy_risk, r.hallucination_risk, r.review_notes, r.reviewer,
+                   r.revised_message, r.final_label, r.promote_level, r.user_response,
+                   r.l5_outcome_json
             FROM proactive_test_candidates c
             LEFT JOIN proactive_test_samples s ON s.sample_id = c.sample_id
             LEFT JOIN proactive_test_reviews r ON r.candidate_id = c.id
@@ -277,6 +453,11 @@ def upsert_proactive_test_review(
     hallucination_risk: bool,
     review_notes: Optional[str],
     reviewer: Optional[str],
+    revised_message: Optional[str] = None,
+    final_label: Optional[str] = None,
+    promote_level: Optional[str] = None,
+    user_response: Optional[str] = None,
+    l5_outcome: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cleaned_candidate_id = _clean_text(candidate_id)
     if not cleaned_candidate_id:
@@ -287,9 +468,10 @@ def upsert_proactive_test_review(
             INSERT INTO proactive_test_reviews(
                 id, candidate_id, human_should_promote, reject_reason, tone_score,
                 pressure_score, marketing_score, privacy_risk, hallucination_risk,
-                review_notes, reviewer, created_at, updated_at
+                review_notes, reviewer, revised_message, final_label, promote_level,
+                user_response, l5_outcome_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(candidate_id) DO UPDATE SET
                 human_should_promote = excluded.human_should_promote,
                 reject_reason = excluded.reject_reason,
@@ -300,6 +482,11 @@ def upsert_proactive_test_review(
                 hallucination_risk = excluded.hallucination_risk,
                 review_notes = excluded.review_notes,
                 reviewer = excluded.reviewer,
+                revised_message = excluded.revised_message,
+                final_label = excluded.final_label,
+                promote_level = excluded.promote_level,
+                user_response = excluded.user_response,
+                l5_outcome_json = excluded.l5_outcome_json,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (
@@ -314,6 +501,11 @@ def upsert_proactive_test_review(
                 int(bool(hallucination_risk)),
                 _clean_text(review_notes),
                 _clean_text(reviewer),
+                _clean_text(revised_message),
+                _clean_text(final_label),
+                _clean_text(promote_level),
+                _clean_text(user_response),
+                json.dumps(l5_outcome or {}, ensure_ascii=False),
             ),
         )
         row = conn.execute(

@@ -5,217 +5,1380 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Proactive Test Lab</title>
   <style>
+    /* CSS Variables for Theme */
     :root {
       color-scheme: light;
-      --bg:#f5f6f8;
-      --panel:#fff;
-      --line:#d7dee8;
-      --line-strong:#b9c4d3;
-      --text:#20242a;
-      --muted:#667085;
-      --blue:#2563eb;
-      --green:#087443;
-      --danger:#b42318;
-      --soft:#f8fafc;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --panel-soft: #fdfefe;
+      --line: #e0e4eb;
+      --line-strong: #cdd3dd;
+      --line-soft: #f0f2f6; /* Lighter line for internal field divisions */
+      --text: #1f2328;
+      --muted: #697386;
+      --faint: #8b93a7;
+      --primary: #375f72;
+      --primary-soft: #eef5f7;
+      --primary-line: #c8d9e1;
+      --danger: #b42318;
+      --danger-soft: #fff1f0;
+      --warn: #b54708;
+      --warn-soft: #fff8eb;
+      --ok: #087443;
+      --ok-soft: #eefbf3;
+      --shadow-sm: 0 1px 2px rgba(16,24,40,.04);
+      --shadow-md: 0 1px 3px rgba(16,24,40,.05);
+      --shadow-lg: 0 8px 22px rgba(16,24,40,.06);
+
+      --header-height: 52px;
+      --panel-padding-sm: 10px;
+      --panel-padding-md: 12px;
+      --card-gap: 8px;
+      --border-radius-sm: 8px;
+      --border-radius-md: 8px;
+      --border-radius-lg: 8px;
     }
+
+    /* Base Styles */
     * { box-sizing: border-box; }
-    body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--text); }
-    header { padding:16px 20px 12px; border-bottom:1px solid var(--line); background:#fff; display:flex; align-items:center; justify-content:space-between; gap:16px; }
-    h1 { margin:0; font-size:22px; }
-    h2 { margin:0; font-size:16px; }
-    h3 { margin:0 0 10px; font-size:15px; }
-    input, textarea, select, button { font:inherit; }
-    input, textarea, select { border:1px solid var(--line); border-radius:6px; padding:8px 10px; background:#fff; min-width:0; }
-    textarea { width:100%; min-height:94px; resize:vertical; }
-    button { border:1px solid var(--line); border-radius:6px; padding:8px 12px; background:#fff; cursor:pointer; }
-    button.primary { background:var(--blue); color:#fff; border-color:var(--blue); }
-    button:disabled { opacity:.55; cursor:not-allowed; }
-    main { padding:16px 20px 28px; }
-    .token { display:flex; gap:8px; align-items:center; color:var(--muted); font-size:13px; }
-    .muted { color:var(--muted); }
-    .error { color:var(--danger); }
-    .ok { color:var(--green); }
-    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .toolbar { background:#fff; border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
-    .stats { display:grid; grid-template-columns:repeat(4, minmax(130px, 1fr)); gap:10px; margin-bottom:12px; }
-    .metric { border:1px solid var(--line); border-radius:8px; padding:10px 12px; background:#fff; color:var(--muted); }
-    .metric b { display:block; font-size:22px; margin-top:4px; color:var(--text); }
-    .workspace { display:grid; grid-template-columns:minmax(320px, .95fr) minmax(360px, 1.05fr) minmax(380px, 1fr); gap:12px; align-items:start; }
-    .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; min-height:200px; overflow:hidden; }
-    .panel-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:12px; border-bottom:1px solid var(--line); background:#fbfcfe; }
-    .panel-body { padding:12px; }
-    .scroll { max-height:calc(100vh - 260px); overflow:auto; }
-    table { width:100%; border-collapse:collapse; background:#fff; }
-    th, td { text-align:left; border-bottom:1px solid var(--line); padding:8px 9px; vertical-align:top; font-size:13px; }
-    th { color:#344054; background:#f9fafb; position:sticky; top:0; z-index:1; }
-    #samplesBody td:nth-child(2) { width:58%; }
-    #samplesBody td:nth-child(5) { min-width:170px; }
-    tr.is-selected td { background:#eff6ff; }
-    pre { white-space:pre-wrap; overflow:auto; background:var(--soft); border:1px solid var(--line); border-radius:6px; padding:10px; margin:0; font-size:13px; }
-    .pill { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:#344054; background:#f9fafb; font-size:12px; }
-    .pill.success { border-color:#abefc6; background:#ecfdf3; color:#067647; }
-    .pill.skip { border-color:#fedf89; background:#fffaeb; color:#b54708; }
-    .pill.error { border-color:#fecdca; background:#fef3f2; color:#b42318; }
-    .stack { display:flex; flex-direction:column; gap:10px; }
-    .chat { display:flex; flex-direction:column; gap:8px; }
-    .msg { border:1px solid var(--line); border-left-width:4px; border-radius:8px; padding:8px 10px; background:var(--soft); }
-    .msg.user { border-left-color:#2563eb; background:#eff6ff; }
-    .msg.assistant { border-left-color:#087443; background:#ecfdf3; }
-    .msg.system { border-left-color:#7c3aed; background:#f5f3ff; }
-    .msg b { display:flex; justify-content:space-between; gap:8px; color:#475467; margin-bottom:4px; font-size:12px; }
-    .msg .text { white-space:pre-wrap; line-height:1.45; }
-    .dialogue-preview { display:flex; flex-direction:column; gap:6px; min-width:300px; }
-    .dialogue-line { width:fit-content; max-width:100%; border:1px solid var(--line); border-radius:8px; padding:6px 8px; line-height:1.38; color:#344054; background:#fff; }
-    .dialogue-line.user { border-color:#bfdbfe; background:#eff6ff; }
-    .dialogue-line.assistant { border-color:#bbf7d0; background:#ecfdf3; }
-    .dialogue-line.system { border-color:#ddd6fe; background:#f5f3ff; }
-    .dialogue-line b { color:#475467; margin-right:5px; font-size:12px; }
-    .dialogue-more { color:var(--muted); font-size:12px; }
-    .output-card { border:1px solid var(--line); border-radius:8px; background:#fff; overflow:hidden; }
-    .output-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; background:#f8fafc; border-bottom:1px solid var(--line); }
-    .output-meta { display:flex; gap:6px; flex-wrap:wrap; }
-    .output-text { padding:12px; font-size:15px; line-height:1.55; white-space:pre-wrap; }
-    .output-text.empty { color:var(--muted); font-size:13px; }
-    .output-reason { padding:10px 12px; border-top:1px solid var(--line); color:#475467; line-height:1.45; }
-    .debug-details { border:1px solid var(--line); border-radius:8px; background:#fff; }
-    .debug-details summary { cursor:pointer; padding:9px 12px; color:var(--muted); }
-    .debug-details pre { border:0; border-top:1px solid var(--line); border-radius:0; }
-    .split { display:grid; grid-template-columns:repeat(3, minmax(84px, 1fr)); gap:8px; }
-    .field { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:13px; }
-    .field input, .field select { width:100%; }
-    .detail-empty { padding:18px; border:1px dashed var(--line-strong); border-radius:8px; color:var(--muted); background:#fcfcfd; }
-    .wide { width:220px; }
-    @media (max-width: 1280px) { .workspace { grid-template-columns:1fr; } .scroll { max-height:none; } }
-    @media (max-width: 820px) {
-      header, .toolbar { align-items:flex-start; flex-direction:column; }
-      .stats { grid-template-columns:1fr 1fr; }
-      .token, .row { width:100%; }
-      .wide, select, input[type="file"] { width:100%; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+      overflow: hidden; /* Main app container will manage scrolling */
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    button, input, textarea, select { font: inherit; }
+    h1, h2, h3, h4, p { margin: 0; }
+    h1 { font-size: 16px; font-weight: 700; }
+    h2 { font-size: 14px; font-weight: 700; }
+    h3 { font-size: 13px; font-weight: 600; color: var(--text); }
+    h4 { font-size: 12px; font-weight: 600; color: var(--text); }
+    .subtle { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb {
+      background-color: var(--line-strong);
+      border-radius: 4px;
+      border: 2px solid var(--bg);
+    }
+    ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+
+    /* App Layout */
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      background: var(--bg);
+    }
+
+    /* Global Header */
+    .global-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      height: var(--header-height);
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      box-shadow: var(--shadow-sm);
+      z-index: 100;
+      flex-shrink: 0;
+    }
+    .header-section { display: flex; align-items: center; gap: var(--card-gap); }
+    .header-brand { gap: 12px; }
+    .brand-mark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: var(--border-radius-sm);
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 800;
+      font-size: 14px;
+    }
+    .header-metrics { flex-grow: 1; justify-content: center; }
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(4, auto);
+      gap: 10px;
+    }
+    .stats-grid .metric {
+      padding: 3px 7px;
+      background: var(--panel-soft);
+      border-radius: var(--border-radius-sm);
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .stats-grid .metric b { display: block; margin-top: 1px; color: var(--text); font-size: 13px; font-weight: 600; }
+    .header-actions { gap: 12px; }
+    .access-control { display: flex; gap: 6px; }
+    .access-control input { width: 120px; padding: 6px 8px; font-size: 12px; }
+    .status-message {
+      font-size: 12px;
+      color: var(--muted);
+      min-width: 80px;
+      text-align: right;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .status-message.error { color: var(--danger); }
+    .status-message.ok { color: var(--ok); }
+
+    /* Main Content Grid */
+    .main-layout-grid {
+      display: grid;
+      grid-template-columns: 300px minmax(520px, 1fr) 318px;
+      gap: 8px;
+      padding: 8px;
+      flex-grow: 1;
+      overflow: hidden; /* Prevents main scrollbar, children handle their own */
+    }
+
+    /* Base Panel Styles for Columns */
+    .left-rail, .center-workspace, .right-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-lg);
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden; /* Internal scrolling */
+    }
+
+    /* Left Rail */
+    .left-rail-header {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      flex-shrink: 0;
+    }
+    .tabs { display: flex; gap: 6px; }
+    .tab {
+      flex: 1;
+      padding: 7px 9px;
+      border-radius: var(--border-radius-sm);
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-weight: 500;
+      border: 1px solid var(--line);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 12px;
+    }
+    .tab.active {
+      background: #fff;
+      border-color: var(--primary);
+      color: var(--primary);
+      font-weight: 600;
+    }
+    .tab-count {
+      min-width: 20px;
+      text-align: center;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(0,0,0,.05);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .tab.active .tab-count { background: var(--primary); color: white; }
+
+    .left-rail-body {
+      flex-grow: 1;
+      overflow-y: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    /* Section Cards within Left Rail */
+    .section-card {
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      padding: var(--panel-padding-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .section-collapsible {
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      padding: var(--panel-padding-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .section-collapsible summary {
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0;
+      outline: none;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .section-collapsible summary::marker { display: none; }
+    .section-collapsible summary::-webkit-details-marker { display: none; }
+    .section-collapsible summary::before {
+      content: '▶';
+      font-size: 10px;
+      margin-right: 8px;
+      color: var(--muted);
+      transition: transform 0.2s ease;
+    }
+    .section-collapsible[open] summary::before { transform: rotate(90deg); }
+    .section-collapsible .section-content {
+      padding-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .section-collapsible h4 { margin-top: 10px; margin-bottom: 5px; font-size: 13px; }
+    .section-collapsible h4:first-of-type { margin-top: 0; }
+
+    /* Form Elements */
+    .field-group { display: flex; flex-direction: column; gap: 5px; }
+    .field-group label { font-size: 12px; color: var(--muted); font-weight: 500; }
+    .field-group-inline { display: flex; gap: 8px; }
+    .field-group-inline > * { flex: 1; }
+    .field-group-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .score-row {
+      display:grid;
+      grid-template-columns:1fr;
+      gap:7px;
+    }
+    .checkbox-group { display: flex; flex-wrap: wrap; gap: 12px; }
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .checkbox-label input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--primary);
+    }
+
+    /* Buttons */
+    .btn {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      padding: 6px 10px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn:hover { border-color: var(--line-strong); background: var(--panel-soft); }
+    .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+    .btn-primary:hover { background: #575bcf; border-color: #575bcf; }
+    .btn-secondary { background: var(--panel-soft); color: var(--text); border-color: var(--line); }
+    .btn-secondary:hover { background: var(--line); }
+    .btn-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+    .btn-danger:hover { background: #fee2e1; }
+    .btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+    .btn-ghost:hover { background: var(--panel-soft); }
+    .btn-icon {
+      width: 34px;
+      height: 34px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      border-radius: var(--border-radius-sm);
+    }
+    .btn-icon svg { width: 18px; height: 18px; }
+    .btn-lg { padding: 8px 14px; font-size: 13px; }
+    .btn-sm { padding: 5px 8px; font-size: 12px; }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    .choice-grid {
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(86px, 1fr));
+      gap:6px;
+    }
+    .choice-grid.compact { grid-template-columns:repeat(6, minmax(32px, 1fr)); gap:4px; }
+    .choice-grid.multi { grid-template-columns:repeat(3, minmax(72px, 1fr)); gap:5px; }
+    .choice-btn {
+      min-height:26px;
+      border:1px solid var(--line);
+      border-radius:var(--border-radius-sm);
+      background:#fff;
+      color:var(--text);
+      padding:4px 6px;
+      font-size:11px;
+      font-weight:600;
+      line-height:1.25;
+      cursor:pointer;
+      text-align:center;
+      overflow-wrap:normal;
+      word-break:normal;
+    }
+    .choice-btn:hover { border-color:var(--line-strong); background:var(--panel-soft); }
+    .choice-btn.active {
+      border-color:var(--primary);
+      background:var(--primary);
+      color:#fff;
+      box-shadow:0 0 0 3px var(--primary-soft);
+    }
+    .choice-btn.danger.active { border-color:var(--danger); background:var(--danger); }
+    .choice-btn.warn.active { border-color:var(--warn); background:var(--warn); color:#fff; }
+    .choice-btn.ok.active { border-color:var(--ok); background:var(--ok); }
+    .visually-hidden-field {
+      position:absolute !important;
+      width:1px !important;
+      height:1px !important;
+      overflow:hidden !important;
+      clip:rect(0 0 0 0) !important;
+      white-space:nowrap !important;
+      border:0 !important;
+      padding:0 !important;
+      margin:-1px !important;
+    }
+
+    /* Inputs/Selects/Textareas */
+    input, textarea, select {
+      width: 100%;
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      padding: 7px 9px;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow:0 0 0 3px var(--primary-soft);
+    }
+    textarea { min-height: 68px; resize: vertical; }
+
+    /* Card List (Candidate/Sample) */
+    .card-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      min-height: 320px;
+    }
+    .queue-list-shell {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .queue-list-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .candidate-card, .sample-card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      padding: 9px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .candidate-card:hover, .sample-card:hover { border-color: var(--primary-line); background:#fbfcfd; }
+    .candidate-card.active, .sample-card.active {
+      border-color: var(--primary);
+      box-shadow: inset 3px 0 0 var(--primary);
+    }
+    .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+    .card-identity { min-width: 0; flex-grow: 1; }
+    .card-identity strong {
+      font-size: 13px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: block;
+    }
+    .card-identity .subtle { font-size: 11px; color: var(--muted); }
+    .card-meta-row { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 7px;
+      color: #596274;
+      background: #fafbfc;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+      font-weight: 500;
+    }
+    .pill.primary { border-color: var(--primary-line); background: var(--primary-soft); color: var(--primary); }
+    .pill.ok { border-color: #b6e9c6; background: var(--ok-soft); color: var(--ok); }
+    .pill.warn { border-color: #f4d39b; background: var(--warn-soft); color: var(--warn); }
+    .pill.danger { border-color: #efc1bb; background: var(--danger-soft); color: var(--danger); }
+    .card-reason {
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 1;
+      -webkit-box-orient: vertical;
+    }
+    .card-draft-preview {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      background: var(--panel-soft);
+      padding: 7px 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: normal;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      color: var(--text);
+    }
+    .card-actions { display: flex; gap: 6px; margin-top: 2px; }
+
+    /* Center Workspace (Detail View) */
+    .detail-view {
+      overflow-y: auto;
+      padding: 10px;
+      gap: var(--card-gap); /* Gap between sections */
+    }
+    .detail-view-content {
+      display: flex;
+      flex-direction: column;
+      gap: var(--card-gap);
+    }
+    .detail-title { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+    .detail-subtitle { margin-bottom: 8px; }
+
+    .detail-section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .detail-section.soft { background: var(--panel-soft); }
+    .detail-section.compact-section { padding: 9px; }
+    .detail-section > h3 { text-align:left; }
+
+    /* Conversation */
+    .conversation-container {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      max-height: 360px;
+      overflow: auto;
+      padding: 6px;
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      background: #fcfdff;
+    }
+    .conversation-count {
+      color: var(--faint);
+      font-size: 11px;
+      padding: 1px 4px 5px;
+      border-bottom: 1px solid var(--line-soft);
+      margin-bottom: 3px;
+    }
+    .message-bubble {
+      width: 100%;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 3px 6px;
+      line-height: 1.3;
+      font-size: 12px;
+      white-space: normal;
+      word-break: break-word;
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", sans-serif;
+      text-align:left;
+      display: grid;
+      grid-template-columns: 72px minmax(0, 1fr);
+      gap: 8px;
+      align-items: start;
+    }
+    .message-bubble .role {
+      display: block;
+      margin: 0;
+      color: var(--faint);
+      font-size: 10px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .message-text {
+      min-width: 0;
+    }
+    .message-bubble.user {
+      background: #eef8fc;
+      border-color: #bae6fd;
+      color: #0369a1;
+    }
+    .message-bubble.assistant {
+      background: #f8fafc;
+      border-color: #e2e8f0;
+      color: #344054;
+    }
+
+    /* System Prompt Details Accordion */
+    .system-prompt-details {
+      align-self: center;
+      width: 100%;
+      margin-bottom: 4px;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--border-radius-sm);
+      background: #f9fafb;
+      overflow: hidden;
+    }
+    .system-prompt-details summary {
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 12px;
+      background: #f3f4f6;
+      outline: none;
+      font-weight: 600;
+      user-select: none;
+    }
+    .system-prompt-details[open] summary {
+      border-bottom: 1px dashed var(--line-strong);
+    }
+    .system-prompt-details .message-bubble.system {
+      width: 100%;
+      max-width: 100%;
+      border: none;
+      background: transparent;
+      padding: 10px 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      line-height: 1.5;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      color: #374151;
+    }
+
+    /* Evidence */
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 10px;
+    }
+    .evidence-item {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .evidence-item strong { display: block; margin-bottom: 4px; color: var(--text); }
+    .evidence-item .subtle { color: var(--muted); font-size: 12px; }
+
+    /* Draft Full Preview */
+    .draft-full-preview {
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--primary);
+      background: #fff;
+      border-radius: 6px;
+      padding: 7px 9px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      font-size: 13px;
+      color: var(--text);
+      margin-top: 2px;
+      text-align:left;
+    }
+
+    /* AI Reasoning */
+    .reasoning-card p { font-size: 12px; line-height: 1.4; color: var(--muted); }
+    .reasoning-card strong { color: var(--text); font-weight: 600; }
+    .reasoning-table {
+      width:100%;
+      border-collapse:separate;
+      border-spacing:0;
+      border:1px solid var(--line);
+      border-radius:var(--border-radius-md);
+      overflow:hidden;
+      background:#fff;
+      font-size:12px;
+    }
+    .reasoning-table th,
+    .reasoning-table td {
+      padding:7px 9px;
+      border-bottom:1px solid var(--line-soft);
+      vertical-align:top;
+      text-align:left;
+      line-height:1.4;
+    }
+    .reasoning-table tr:last-child th,
+    .reasoning-table tr:last-child td { border-bottom:0; }
+    .reasoning-table th {
+      width:132px;
+      color:var(--muted);
+      background:#fbfcfd;
+      font-weight:700;
+      white-space:nowrap;
+    }
+
+    /* Risk Checklist */
+    .risk-checklist {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 6px;
+    }
+    .risk-check-item {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      padding: 6px 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      background: var(--panel);
+    }
+    .risk-check-item.hit {
+      border-color: var(--danger);
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-weight: 600;
+    }
+    .risk-check-item span:last-child { font-weight: 500; }
+
+    /* Prompt Layers */
+    .layer-container {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .layer-card {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      overflow: hidden;
+      background: var(--panel-soft);
+    }
+    .layer-card-title {
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      outline: none;
+      user-select: none;
+    }
+    .layer-card:not([open]) .layer-card-title { border-bottom: 0; }
+    .layer-card-title::marker { display: none; }
+    .layer-card-title::-webkit-details-marker { display: none; }
+    .layer-card-title::before { content: none; }
+    .layer-summary-row {
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:8px;
+      width:100%;
+    }
+    .layer-card-title strong { font-size: 13px; color: var(--text); }
+    .layer-card-title span { color: var(--muted); font-size: 11px; }
+    .layer-card-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+    }
+    .layer-field-item {
+      padding: 8px 10px;
+      border-top: 1px solid var(--line-soft);
+      min-width: 0;
+    }
+    .layer-field-item:nth-child(-n+2) { border-top: 0; }
+    .layer-field-item:nth-child(odd) { border-right: 1px solid var(--line-soft); }
+    .field-label-name strong { display: block; color: var(--text); font-size: 11px; font-weight: 600; }
+    .field-label-name span { display: block; margin-top: 2px; color: var(--faint); font-size: 10px; line-height: 1.3; }
+    .field-value-display { margin-top: 5px; color: var(--text); font-size: 12px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .field-value-display .pill { margin-bottom: 4px; }
+
+    /* Right Panel (Review Form) */
+    .review-panel {
+      overflow-y: auto;
+      padding: 10px;
+      position: relative; /* For sticky children */
+    }
+    .review-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: -10px;
+      background: var(--panel);
+      z-index: 50;
+      padding-top: 10px;
+      margin-left: -10px;
+      margin-right: -10px;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    .review-panel-header h2 { font-size: 15px; font-weight: 700; margin: 0; }
+    .review-actions-group {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      width: 100%;
+    }
+    .review-actions-group .btn {
+      min-width: 0;
+      padding-left: 8px;
+      padding-right: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .review-form { display: flex; flex-direction: column; gap: 8px; }
+    .review-save-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      position: sticky;
+      bottom: -10px;
+      background: var(--panel);
+      z-index: 50;
+      padding-bottom: 10px;
+      margin-left: -10px;
+      margin-right: -10px;
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+    .review-save-actions .status-message { text-align: center; }
+
+    /* Raw JSON details */
+    details.raw {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      background: var(--panel-soft);
+      overflow: hidden;
+      margin-top: var(--card-gap);
+    }
+    details.raw summary {
+      padding: 10px 12px;
+      color: var(--muted);
+      font-weight: 500;
+      cursor: pointer;
+      outline: none;
+      font-size: 13px;
+    }
+    details.raw summary::marker { display: none; }
+    details.raw summary::-webkit-details-marker { display: none; }
+    details.raw summary::before {
+      content: '▶';
+      font-size: 10px;
+      margin-right: 8px;
+      color: var(--muted);
+      transition: transform 0.2s ease;
+    }
+    details.raw[open] summary::before { transform: rotate(90deg); }
+    details.raw pre {
+      margin: 0;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: #fdfdfd;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      line-height: 1.45;
+      color: var(--text);
+    }
+
+    /* Empty State */
+    .empty-state {
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--border-radius-md);
+      padding: 18px;
+      color: var(--muted);
+      background: var(--panel-soft);
+      text-align: center;
+      line-height: 1.6;
+      font-size: 13px;
+    }
+
+    /* Sidebar Collapse */
+    .app-container.sidebar-collapsed .main-layout-grid { grid-template-columns: 60px 1fr 320px; }
+    .app-container.sidebar-collapsed .left-rail { width: 60px; }
+    .app-container.sidebar-collapsed .left-rail .section-card,
+    .app-container.sidebar-collapsed .left-rail .section-collapsible,
+    .app-container.sidebar-collapsed .left-rail .card-list .card-identity strong,
+    .app-container.sidebar-collapsed .left-rail .card-meta-row,
+    .app-container.sidebar-collapsed .left-rail .card-reason,
+    .app-container.sidebar-collapsed .left-rail .card-draft-preview,
+    .app-container.sidebar-collapsed .left-rail .card-actions,
+    .app-container.sidebar-collapsed .left-rail .tab span:first-child,
+    .app-container.sidebar-collapsed .left-rail .tab-count { display: none; }
+
+    .app-container.sidebar-collapsed .left-rail-body { padding-top: 0; }
+    .app-container.sidebar-collapsed .left-rail-header { padding-left: 0; padding-right: 0; }
+    .app-container.sidebar-collapsed .left-rail .tabs { flex-direction: column; align-items: center; gap: 4px; }
+    .app-container.sidebar-collapsed .left-rail .tab {
+      width: 40px;
+      height: 40px;
+      padding: 0;
+      border-radius: var(--border-radius-sm);
+      display: grid;
+      place-items: center;
+    }
+    .app-container.sidebar-collapsed .left-rail .tab#tabCandidates::before { content: '◎'; font-size: 16px; margin: 0; }
+    .app-container.sidebar-collapsed .left-rail .tab#tabSamples::before { content: '☰'; font-size: 16px; margin: 0; }
+    .collapse-btn svg { transition: transform 0.2s ease; }
+    .app-container.sidebar-collapsed .collapse-btn svg { transform: rotate(180deg); }
+
+    /* Responsive Adjustments */
+    @media (max-width: 1280px) {
+      .global-header h1 { font-size: 16px; }
+      .stats-grid { gap: 10px; }
+      .stats-grid .metric { padding: 3px 6px; }
+      .stats-grid .metric b { font-size: 13px; }
+      .access-control input { width: 100px; }
+      .main-layout-grid { grid-template-columns: 280px minmax(420px, 1fr) 300px; }
+      .review-panel-header h2 { font-size: 16px; }
+    }
+
+    @media (max-width: 1024px) {
+      .global-header { flex-wrap: wrap; height: auto; padding-top: 10px; padding-bottom: 10px; gap: 10px 20px; }
+      .header-brand { flex-grow: 1; }
+      .header-metrics { flex-basis: 100%; justify-content: flex-start; margin-top: 10px; }
+      .header-actions { flex-grow: 1; justify-content: flex-end; }
+      .main-layout-grid { grid-template-columns: 280px 1fr; } /* Left and Center */
+      .right-panel {
+        grid-column: 1 / -1; /* Occupy full width below center */
+        margin-top: var(--card-gap);
+        border-radius: var(--border-radius-lg);
+      }
+      .review-panel-header { position: static; border-bottom: none; padding-bottom: 0; padding-top: 0; }
+      .review-save-actions { position: static; border-top: none; padding-top: 0; padding-bottom: 0; }
+      .app-container.sidebar-collapsed .main-layout-grid { grid-template-columns: 60px 1fr; }
+    }
+
+    @media (max-width: 768px) {
+      body {
+        font-size: 13px;
+        overflow-y: auto; /* Allow body scrolling if needed on mobile */
+      }
+      .app-container {
+        height: auto;
+        box-sizing: border-box;
+        overflow-x: hidden;
+      }
+      .main-layout-grid {
+        display: flex;
+        flex-direction: column;
+        grid-template-columns: 1fr; /* Stack all columns */
+        padding: 8px;
+        gap: 8px;
+        overflow-x: hidden;
+        box-sizing: border-box;
+      }
+      .left-rail, .center-workspace, .right-panel {
+        width: 100% !important;
+        min-height: auto;
+        border-radius: var(--border-radius-lg);
+        padding: var(--panel-padding-sm);
+        overflow: visible; /* Let content expand naturally */
+      }
+      .left-rail-body, .detail-view, .review-panel {
+        padding: var(--panel-padding-sm);
+        overflow: visible;
+      }
+      .section-card, .section-collapsible { padding: var(--panel-padding-sm); }
+      .layer-card-fields { grid-template-columns: 1fr; }
+      .layer-field-item:nth-child(odd) { border-right: 0; }
+      .layer-field-item:nth-child(2) { border-top: 1px solid var(--line-soft); }
+      .review-panel-header {
+        position: static;
+        flex-direction: column;
+        gap: 10px;
+        align-items: stretch;
+        margin: 0;
+        padding: 0 0 10px 0;
+      }
+      .review-actions-group { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+      .score-row { grid-template-columns:1fr; }
+      .choice-grid.compact { grid-template-columns:repeat(6, minmax(32px, 1fr)); }
+      .choice-grid.multi { grid-template-columns:repeat(2, minmax(72px, 1fr)); }
+      .btn-lg { width: 100%; }
+      .review-save-actions {
+        position: static;
+        margin: 10px 0 0 0;
+        padding: 10px 0 0 0;
+      }
+
+      /* Disable sidebar collapse on mobile */
+      .app-container.sidebar-collapsed .left-rail { width: 100% !important; }
+      .app-container.sidebar-collapsed .main-layout-grid { display: flex; flex-direction: column; }
+      .app-container.sidebar-collapsed .left-rail .section-card,
+      .app-container.sidebar-collapsed .left-rail .section-collapsible,
+      .app-container.sidebar-collapsed .left-rail .card-list .card-identity strong,
+      .app-container.sidebar-collapsed .left-rail .card-meta-row,
+      .app-container.sidebar-collapsed .left-rail .card-reason,
+      .app-container.sidebar-collapsed .left-rail .card-draft-preview,
+      .app-container.sidebar-collapsed .left-rail .card-actions { display: flex; }
+      .app-container.sidebar-collapsed .left-rail .tabs { flex-direction: row; }
+      .app-container.sidebar-collapsed .left-rail .tab { width: auto; height: auto; padding: 8px 12px; }
+      .app-container.sidebar-collapsed .left-rail .tab span:first-child,
+      .app-container.sidebar-collapsed .left-rail .tab-count { display: inline; }
+      .app-container.sidebar-collapsed .left-rail .tab::before { content: none; }
+      .collapse-btn { display: none; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div>
-      <h1>Proactive Test Lab</h1>
-      <div class="muted">一页完成：样本筛选、dry-run 生成、候选查看、人工审核。</div>
-    </div>
-    <div class="token">
-      <input id="adminToken" type="password" placeholder="Admin token">
-      <button onclick="saveToken()">保存</button>
-    </div>
-  </header>
-
-  <main>
-    <div id="statsBox" class="stats"></div>
-
-    <div class="toolbar">
-      <div class="row">
-        <input id="sampleFile" type="file" accept=".json,.jsonl,application/json">
-        <button onclick="importFile()">导入文件</button>
-        <button onclick="bootstrapSamples()">自动套入 300 条样本</button>
-        <button onclick="refreshAll()">刷新</button>
+  <div id="appRoot" class="app-container">
+    <header id="globalHeader" class="global-header">
+      <div class="header-section header-brand">
+        <div class="brand-mark">AF</div>
+        <h1>AI for All Bridge</h1>
+        <button id="collapseBtn" class="btn btn-icon" onclick="toggleSidebar()" title="收起侧栏">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
       </div>
-      <span id="globalStatus" class="muted"></span>
+      <div class="header-section header-metrics">
+        <div id="statsBox" class="stats-grid">
+          <div class="metric">样本<b>0</b></div>
+          <div class="metric">候选<b>0</b></div>
+          <div class="metric">生成成功率<b>0%</b></div>
+          <div class="metric">人工通过率<b>0%</b></div>
+        </div>
+      </div>
+      <div class="header-section header-actions">
+        <div class="access-control">
+          <input id="adminToken" type="password" placeholder="Admin token" aria-label="Admin token">
+          <button class="btn btn-secondary btn-sm" onclick="saveToken()">保存</button>
+        </div>
+        <button class="btn btn-icon" onclick="refreshAll()" title="刷新所有数据">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3L22 6M22 12.5a10 10 0 0 1-18.8 4.3L2 18"/></svg>
+        </button>
+        <div id="globalStatus" class="status-message"></div>
+      </div>
+    </header>
+
+    <div class="main-layout-grid">
+      <aside id="leftRail" class="left-rail">
+        <div class="left-rail-header">
+          <div class="tabs">
+            <button id="tabCandidates" class="tab active" onclick="selectQueueMode('candidates')">Review Queue <span id="navQueueCount" class="tab-count">0</span></button>
+            <button id="tabSamples" class="tab" onclick="selectQueueMode('samples')">Sample Pool <span id="navSampleCount" class="tab-count">0</span></button>
+          </div>
+        </div>
+        <div class="left-rail-body">
+          <section class="section-card section-filters">
+            <h3 class="section-title">Queue Filters</h3>
+            <div class="field-group">
+              <label for="candidateScenario">Scenario</label>
+              <select id="candidateScenario" onchange="loadCandidates()">
+                <option value="">全部类型</option>
+                <option>account_check</option>
+                <option>reactivation_topic</option>
+                <option>content_invitation</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="reviewStatusFilter">Review Status</label>
+              <select id="reviewStatusFilter" onchange="loadCandidates()">
+                <option value="">全部状态</option>
+                <option value="unreviewed">待审核</option>
+                <option value="reviewed">已审核</option>
+              </select>
+            </div>
+          </section>
+
+          <section class="queue-list-shell" aria-label="Review list">
+            <div class="queue-list-title">
+              <span id="queueListTitle">Review queue</span>
+              <span id="queueListHint">按风险和分数扫描</span>
+            </div>
+            <div id="queueBody" class="card-list">
+              <div class="empty-state">加载中...</div>
+            </div>
+          </section>
+
+          <details class="section-collapsible">
+            <summary>Sample Management</summary>
+            <div class="section-content">
+              <h4>Import from File</h4>
+              <input id="sampleFile" type="file" accept=".json,.jsonl,application/json" aria-label="Import samples from file">
+              <button class="btn btn-secondary" onclick="importFile()">导入文件</button>
+              <button class="btn btn-secondary" onclick="bootstrapSamples()">自动套入 300 条样本</button>
+              <div class="field-group-inline">
+                <select id="sampleScenario" onchange="loadSamples()" aria-label="Filter samples by scenario">
+                  <option value="">全部 scenario</option>
+                  <option>account_check</option>
+                  <option>reactivation_topic</option>
+                  <option>content_invitation</option>
+                </select>
+                <select id="sampleSource" onchange="loadSamples()" aria-label="Filter samples by source">
+                  <option value="">全部 source</option>
+                  <option>synthetic</option>
+                  <option>manual</option>
+                  <option>real_desensitized</option>
+                  <option>public_dataset</option>
+                </select>
+              </div>
+              <button class="btn btn-primary" onclick="runGeneration()">生成选中样本</button>
+              <div id="generateStatus" class="status-message">选择样本后生成 proactive draft。</div>
+
+              <h4>Create from Real Session</h4>
+              <input id="realAccountId" placeholder="account_id" aria-label="Real account ID">
+              <div class="field-group-inline">
+                <input id="realSessionId" placeholder="session_id 可空" aria-label="Real session ID (optional)">
+                <input id="realContextLimit" type="number" min="1" max="200" value="120" aria-label="Context message limit">
+              </div>
+              <select id="realScenario" aria-label="Scenario for real session sample">
+                <option value="account_check">task_followup</option>
+                <option value="reactivation_topic">reactivation</option>
+                <option value="content_invitation">content_invitation</option>
+              </select>
+              <button class="btn btn-secondary" onclick="createSampleFromSession()">从真实会话拉长上下文</button>
+            </div>
+          </details>
+        </div>
+      </aside>
+
+      <main id="detailView" class="center-workspace detail-view">
+        <div id="detailBox" class="empty-state">还没有选择候选。左侧生成样本后，在 Review queue 点开一张卡片。</div>
+      </main>
+
+      <aside id="reviewPanel" class="right-panel review-panel">
+        <div class="review-panel-header">
+          <h2>Review Actions</h2>
+          <div class="review-actions-group">
+            <button class="btn btn-danger" onclick="quickReject()">拒绝</button>
+            <button class="btn btn-secondary" onclick="focusRewrite()">改写</button>
+            <button class="btn btn-primary" onclick="quickApprove()">通过</button>
+          </div>
+        </div>
+        <div id="reviewForm" class="review-form" style="display:none;">
+          <section class="section-card">
+            <h3 class="section-title">Decision & Promote</h3>
+            <div class="field-group">
+              <label for="finalLabel">Final Label</label>
+              <input id="finalLabel" class="visually-hidden-field" type="hidden">
+              <div id="finalLabelChoices" class="choice-grid"></div>
+            </div>
+            <div class="field-group">
+              <label for="promoteLevel">Promote Level</label>
+              <input id="promoteLevel" class="visually-hidden-field" type="hidden">
+              <div id="promoteLevelChoices" class="choice-grid"></div>
+            </div>
+            <div class="field-group">
+              <label for="userResponse">User Response</label>
+              <input id="userResponse" class="visually-hidden-field" type="hidden">
+              <div id="userResponseChoices" class="choice-grid"></div>
+            </div>
+          </section>
+
+          <section class="section-card">
+            <h3 class="section-title">Risk & Quality Assessment</h3>
+            <div class="checkbox-group">
+              <label class="checkbox-label"><input id="humanPromote" type="checkbox"> 应该发送</label>
+              <label class="checkbox-label"><input id="privacyRisk" type="checkbox"> Privacy Risk</label>
+              <label class="checkbox-label"><input id="hallucinationRisk" type="checkbox"> Hallucination Risk</label>
+            </div>
+            <div class="field-group">
+              <label for="rejectReason">Reject Reason</label>
+              <input id="rejectReason" class="visually-hidden-field" type="hidden">
+              <div id="rejectReasonChoices" class="choice-grid"></div>
+            </div>
+            <div class="field-group-grid score-row">
+              <div class="field-group">
+                <label for="toneScore">Tone (1-5)</label>
+                <input id="toneScore" class="visually-hidden-field" type="hidden">
+                <div id="toneScoreChoices" class="choice-grid compact"></div>
+              </div>
+              <div class="field-group">
+                <label for="pressureScore">Pressure (1-5)</label>
+                <input id="pressureScore" class="visually-hidden-field" type="hidden">
+                <div id="pressureScoreChoices" class="choice-grid compact"></div>
+              </div>
+              <div class="field-group">
+                <label for="marketingScore">Marketing (1-5)</label>
+                <input id="marketingScore" class="visually-hidden-field" type="hidden">
+                <div id="marketingScoreChoices" class="choice-grid compact"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="section-card">
+            <h3 class="section-title">Revised Message & Notes</h3>
+            <div class="field-group">
+              <label for="revisedMessage">Revised Message</label>
+              <textarea id="revisedMessage" placeholder="人工改写版本 revised_message"></textarea>
+            </div>
+            <div class="field-group">
+              <label for="reviewNotes">Review Notes</label>
+              <textarea id="reviewNotes" placeholder="审核笔记"></textarea>
+            </div>
+          </section>
+
+          <div class="review-save-actions">
+            <button class="btn btn-primary btn-lg" onclick="saveReview()">保存审核</button>
+            <span id="reviewSaveStatus" class="status-message"></span>
+          </div>
+        </div>
+      </aside>
     </div>
-
-    <div class="workspace">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>1. 样本</h2>
-          <button class="primary" onclick="runGeneration()">生成选中样本</button>
-        </div>
-        <div class="panel-body stack">
-          <div class="row">
-            <select id="sampleScenario" class="wide" onchange="loadSamples()">
-              <option value="">全部 scenario</option>
-              <option>account_check</option>
-              <option>reactivation_topic</option>
-              <option>content_invitation</option>
-            </select>
-            <select id="sampleSource" class="wide" onchange="loadSamples()">
-              <option value="">全部 source</option>
-              <option>synthetic</option>
-              <option>manual</option>
-              <option>real_desensitized</option>
-              <option>public_dataset</option>
-            </select>
-            <button onclick="toggleVisibleSamples(true)">全选本页</button>
-            <button onclick="toggleVisibleSamples(false)">清空</button>
-          </div>
-          <div id="sampleSummary" class="muted"></div>
-          <div class="scroll">
-            <table>
-              <thead><tr><th>选</th><th>对话</th><th>scenario</th><th>silence</th><th>sample</th></tr></thead>
-              <tbody id="samplesBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>2. 生成候选</h2>
-          <button onclick="loadCandidates()">刷新候选</button>
-        </div>
-        <div class="panel-body stack">
-          <div id="generateStatus" class="muted">选择左侧样本后生成。</div>
-          <div class="scroll">
-            <table>
-              <thead><tr><th>candidate</th><th>sample</th><th>status</th><th>输出摘要</th></tr></thead>
-              <tbody id="candidatesBody"></tbody>
-            </table>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="panel-head">
-          <h2>3. 详情和审核</h2>
-          <button class="primary" onclick="saveReview()">保存审核</button>
-        </div>
-        <div class="panel-body stack">
-          <div id="detailBox" class="detail-empty">点击左侧样本或中间候选查看详情。</div>
-          <div id="reviewForm" class="stack" style="display:none;">
-            <div class="row">
-              <label><input id="humanPromote" type="checkbox"> 应该发送</label>
-              <select id="rejectReason"></select>
-            </div>
-            <div class="split">
-              <label class="field">tone <input id="toneScore" type="number" min="1" max="5"></label>
-              <label class="field">pressure <input id="pressureScore" type="number" min="1" max="5"></label>
-              <label class="field">marketing <input id="marketingScore" type="number" min="1" max="5"></label>
-            </div>
-            <div class="row">
-              <label><input id="privacyRisk" type="checkbox"> privacy risk</label>
-              <label><input id="hallucinationRisk" type="checkbox"> hallucination risk</label>
-            </div>
-            <textarea id="reviewNotes" placeholder="review notes"></textarea>
-            <span id="reviewStatus" class="muted"></span>
-          </div>
-        </div>
-      </section>
-    </div>
-  </main>
+  </div>
 
   <script>
     const API = '/internal/proactive-test';
-    const rejectReasons = ['', 'no_clear_reason', 'too_pushy', 'too_marketing', 'too_generic', 'too_private', 'too_old_topic', 'duplicate_topic', 'wrong_timing', 'high_risk_advice', 'hallucinated_fact', 'too_long', 'not_friend_like', 'should_skip', 'other'];
+    const rejectReasons = [
+      ['', 'None'],
+      ['no_clear_reason', '原因不清'],
+      ['too_pushy', '太催促'],
+      ['too_marketing', '营销感太强'],
+      ['too_generic', '太泛泛'],
+      ['too_private', '隐私感太强'],
+      ['too_old_topic', '话题太旧'],
+      ['duplicate_topic', '重复话题'],
+      ['wrong_timing', '时机不对'],
+      ['high_risk_advice', '高风险建议'],
+      ['hallucinated_fact', '可能幻觉事实'],
+      ['too_long', '文案太长'],
+      ['not_friend_like', '不像朋友'],
+      ['should_skip', '应该跳过'],
+      ['other', '其他'],
+    ];
+    const finalLabels = [
+      ['', 'None · 未选择'],
+      ['CD', 'CD · 可直接发送'],
+      ['FA', 'FA · 误触发'],
+      ['MN', 'MN · 需要人工改写'],
+      ['NR', 'NR · 不需要回复'],
+    ];
+    const promoteLevels = [
+      ['', 'None · 未选择'],
+      ['reject', '丢弃 · reject'],
+      ['keep', '保留观察 · keep'],
+      ['fewshot', '沉淀 few-shot · fewshot'],
+      ['rule', '沉淀规则 · rule'],
+      ['auto_send', '可自动发送 · auto_send'],
+    ];
+    const userResponses = [
+      ['', 'None · 未选择'],
+      ['accepted', '接受/正向 · accepted'],
+      ['ignored', '忽略 · ignored'],
+      ['negative', '负向反馈 · negative'],
+      ['opt-out', '明确拒收 · opt-out'],
+    ];
+    const scoreChoices = [
+      ['', 'None'],
+      ['1', '1'],
+      ['2', '2'],
+      ['3', '3'],
+      ['4', '4'],
+      ['5', '5'],
+    ];
+    const layerDefinitions = {
+      l0_context: ['L0 Context Layer', '上下文层', [
+        ['recent_session', 'recent session', '最近会话：本轮前后的长聊天背景'],
+        ['long_term_memory', 'long-term memory', '长期记忆：长期偏好、事实和稳定状态'],
+        ['relationship', 'RELATIONSHIP.md', '关系状态：当前亲近度和互动边界'],
+        ['open_loops', 'open loops', '未完成事项：之前留下的待跟进话题'],
+        ['user_energy_state', 'user energy state', '用户能量：忙、累、低落、兴奋等状态'],
+        ['user_proactivity_preference', 'user proactivity preference', '主动偏好：用户是否接受被主动打扰']
+      ]],
+      l1_trigger: ['L1 Trigger Layer', '触发层', [
+        ['trigger_type', 'trigger_type', '触发类型：open loop、复盘、内容邀请、提醒等'],
+        ['evidence', 'evidence', '触发证据：来自哪句对话、记忆或未完成事项']
+      ]],
+      l2_when: ['L2 When Layer', '时机层', [
+        ['should_intervene', 'should_intervene', '介入评分：-2 不该发，0 不确定，2 很该发'],
+        ['timing_risk', 'timing_risk', '时机风险：现在发是否太早、太晚或打断用户'],
+        ['false_alarm_risk', 'false_alarm_risk', '误触发风险：是否可能误判用户需求'],
+        ['user_autonomy_risk', 'user_autonomy_risk', '自主性风险：是否替用户做决定或施压']
+      ]],
+      l3_how: ['L3 How Layer', '表达层', [
+        ['target_planning', 'target planning', '目标规划：这次主动消息想达成什么'],
+        ['dialogue_guidance', 'dialogue guidance', '表达指导：具体该怎么开口'],
+        ['tone', 'tone', '语气判断：朋友感、系统感、营销感、催促感'],
+        ['grounding', 'grounding', '上下文锚定：是否引用具体对话或记忆']
+      ]],
+      l4_safety: ['L4 Safety Auditor', '安全审计层', [
+        ['sensitive_topic', 'sensitive topic', '敏感话题：健康、情绪、财务、关系等高风险内容'],
+        ['wrong_memory', 'wrong memory', '错误记忆：是否引用了不确定或错误的事实'],
+        ['over_triggering', 'over-triggering', '过度触发：是否太频繁或时机太密'],
+        ['too_intimate', 'too intimate', '过度亲密：是否越过关系边界'],
+        ['too_pushy', 'too pushy', '催促感：是否像催任务或逼用户回应'],
+        ['manipulation_risk', 'manipulation risk', '操控风险：是否诱导、施压或利用情绪'],
+        ['risk_tags', 'risk tags', '风险标签：命中的风险类型集合'],
+        ['notes', 'notes', '审计说明：为什么判定 these risks']
+      ]],
+      l5_outcome: ['L5 Outcome Layer', '结果层', [
+        ['user_response', 'user response', '用户反应：accepted / ignored / negative / opt-out'],
+        ['future_usefulness', 'future usefulness', '未来价值：是否适合沉淀成规则或 few-shot'],
+        ['final_label', 'final_label', '最终标签：CD / FA / MN / NR'],
+        ['promote_level', 'promote_level', '沉淀等级：reject / keep / fewshot / rule / auto_send']
+      ]]
+    };
+
     let token = localStorage.getItem('proactive_test_admin_token') || 'dev-admin-token';
     let samples = [];
     let candidates = [];
+    let queueMode = 'candidates';
     let selectedSampleId = null;
     let selectedCandidate = null;
 
     document.getElementById('adminToken').value = token;
-    document.getElementById('rejectReason').innerHTML = rejectReasons.map(r => `<option value="${r}">${r || 'reject reason'}</option>`).join('');
+    const choiceGroups = [
+      ['finalLabel', 'finalLabelChoices', finalLabels],
+      ['promoteLevel', 'promoteLevelChoices', promoteLevels],
+      ['userResponse', 'userResponseChoices', userResponses],
+      ['rejectReason', 'rejectReasonChoices', rejectReasons],
+      ['toneScore', 'toneScoreChoices', scoreChoices],
+      ['pressureScore', 'pressureScoreChoices', scoreChoices],
+      ['marketingScore', 'marketingScoreChoices', scoreChoices],
+    ];
 
-    function saveToken() {
-      token = document.getElementById('adminToken').value.trim();
-      localStorage.setItem('proactive_test_admin_token', token);
-      refreshAll();
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
     }
-
+    function isMultiChoiceField(fieldId) {
+      return fieldId === 'rejectReason';
+    }
+    function splitChoiceValues(value) {
+      return String(value || '').split(',').map(v => v.trim()).filter(Boolean);
+    }
+    function renderChoiceGroup(fieldId, containerId, options) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      if (isMultiChoiceField(fieldId)) container.classList.add('multi');
+      container.innerHTML = options.map(([value, label]) => {
+        const tone = value === 'reject' || value === 'too_pushy' || value === 'too_marketing' || value === 'high_risk_advice' || value === 'hallucinated_fact' || value === 'opt-out' || value === 'NR' ? ' danger' : '';
+        const ok = value === 'CD' || value === 'auto_send' || value === 'accepted' ? ' ok' : '';
+        const warn = value === 'MN' || value === 'FA' || value === 'fewshot' || value === 'rule' || value === 'keep' || value === 'ignored' ? ' warn' : '';
+        return `<button type="button" class="choice-btn${tone}${ok}${warn}" data-field="${esc(fieldId)}" data-value="${esc(value)}">${esc(label)}</button>`;
+      }).join('');
+      container.querySelectorAll('.choice-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (isMultiChoiceField(fieldId)) toggleMultiChoiceValue(fieldId, btn.dataset.value || '');
+          else setChoiceValue(fieldId, btn.dataset.value || '');
+        });
+      });
+    }
+    function toggleMultiChoiceValue(fieldId, value) {
+      const field = document.getElementById(fieldId);
+      if (!field) return;
+      if (!value) {
+        field.value = '';
+      } else {
+        const values = splitChoiceValues(field.value);
+        const exists = values.includes(value);
+        field.value = (exists ? values.filter(v => v !== value) : [...values, value]).join(',');
+      }
+      syncChoiceGroup(fieldId);
+      if (fieldId === 'rejectReason' && field.value) {
+        document.getElementById('humanPromote').checked = false;
+        const pField = document.getElementById('promoteLevel');
+        if (pField) { pField.value = 'reject'; syncChoiceGroup('promoteLevel'); }
+      }
+    }
+    function setChoiceValue(fieldId, value) {
+      const field = document.getElementById(fieldId);
+      if (!field) return;
+      field.value = value;
+      syncChoiceGroup(fieldId);
+      if (fieldId === 'promoteLevel') {
+        if (value === 'reject') {
+          document.getElementById('humanPromote').checked = false;
+        } else if (value) {
+          document.getElementById('humanPromote').checked = true;
+          const rField = document.getElementById('rejectReason');
+          if (rField) { rField.value = ''; syncChoiceGroup('rejectReason'); }
+        }
+      } else if (fieldId === 'rejectReason' && value) {
+        document.getElementById('humanPromote').checked = false;
+        const pField = document.getElementById('promoteLevel');
+        if (pField) { pField.value = 'reject'; syncChoiceGroup('promoteLevel'); }
+      }
+    }
+    function syncChoiceGroup(fieldId) {
+      const field = document.getElementById(fieldId);
+      if (!field) return;
+      const multiValues = isMultiChoiceField(fieldId) ? splitChoiceValues(field.value) : [];
+      document.querySelectorAll(`.choice-btn[data-field="${fieldId}"]`).forEach((btn) => {
+        const value = btn.dataset.value || '';
+        btn.classList.toggle('active', isMultiChoiceField(fieldId) ? (!value ? !field.value : multiValues.includes(value)) : value === (field.value || ''));
+      });
+    }
+    function syncAllChoiceGroups() {
+      choiceGroups.forEach(([fieldId]) => syncChoiceGroup(fieldId));
+    }
+    choiceGroups.forEach(([fieldId, containerId, options]) => renderChoiceGroup(fieldId, containerId, options));
+    syncAllChoiceGroups();
+    document.getElementById('humanPromote').addEventListener('change', (e) => {
+      if (e.target.checked) {
+        const currentPromote = document.getElementById('promoteLevel').value;
+        if (currentPromote === 'reject' || !currentPromote) {
+          setChoiceValue('promoteLevel', 'keep');
+        }
+        setChoiceValue('rejectReason', '');
+      } else {
+        setChoiceValue('promoteLevel', 'reject');
+      }
+    });
+    function setStatus(text, kind = '') {
+      const el = document.getElementById('globalStatus');
+      el.className = 'status-message ' + kind;
+      el.textContent = text || '';
+    }
+    function toggleSidebar() {
+      const root = document.getElementById('appRoot');
+      const collapsed = root.classList.toggle('sidebar-collapsed');
+      document.getElementById('collapseBtn').innerHTML = collapsed ?
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>' :
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>';
+      document.getElementById('collapseBtn').title = collapsed ? '展开侧栏' : '收起侧栏';
+    }
     async function api(path, opts = {}) {
       const res = await fetch(API + path, {
         ...opts,
@@ -225,106 +1388,162 @@
       if (!res.ok) throw new Error(data.detail || res.statusText);
       return data;
     }
-
-    function esc(s) {
-      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
+    function saveToken() {
+      token = document.getElementById('adminToken').value.trim();
+      localStorage.setItem('proactive_test_admin_token', token);
+      refreshAll();
     }
-
-    function setStatus(text, kind = 'muted') {
-      const el = document.getElementById('globalStatus');
-      el.className = kind;
-      el.textContent = text || '';
-    }
-
-    function statusPill(status) {
-      const cls = status === 'success' ? 'success' : status === 'skip' ? 'skip' : status === 'error' ? 'error' : '';
-      return `<span class="pill ${cls}">${esc(status || '-')}</span>`;
-    }
-
-    function boolPill(value) {
-      if (value === true) return '<span class="pill success">建议发送</span>';
-      if (value === false) return '<span class="pill skip">建议不发</span>';
-      return '<span class="pill">未判断</span>';
-    }
-
-    function confidenceText(value) {
-      if (value === null || value === undefined || value === '') return '-';
-      const number = Number(value);
-      if (!Number.isFinite(number)) return String(value);
-      return Math.round(number * 100) + '%';
-    }
-
-    function selectedSampleIds() {
-      return Array.from(document.querySelectorAll('.sampleCheck:checked')).map(el => el.value);
-    }
-
-    function toggleVisibleSamples(checked) {
-      document.querySelectorAll('.sampleCheck').forEach(el => { el.checked = checked; });
-    }
-
     function roleLabel(role) {
-      return {user:'用户', assistant:'AI', system:'系统'}[role] || role || '-';
+      return {user:'用户', assistant:'AI', system:'系统提示'}[role] || role || '-';
     }
-
     function messageText(message) {
       return message && (message.text || message.content || '');
     }
-
-    function renderChat(chat) {
-      return `<div class="chat">${(chat || []).map(m => `
-        <div class="msg ${esc(m.role || '')}">
-          <b><span>${esc(roleLabel(m.role))}</span><span>${esc(m.created_at || '')}</span></b>
-          <div class="text">${esc(messageText(m))}</div>
-        </div>`).join('')}</div>`;
+    function shortText(text, limit = 140) {
+      const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+      return normalized.length > limit ? normalized.slice(0, limit) + '...' : normalized;
     }
-
-    function renderDialoguePreview(chat) {
-      const messages = (chat || []).slice(-4);
-      const lines = messages.map(m => {
-        const text = messageText(m).replace(/\s+/g, ' ').trim();
-        const shortText = text.length > 72 ? text.slice(0, 72) + '...' : text;
-        return `<div class="dialogue-line ${esc(m.role || '')}"><b>${esc(roleLabel(m.role))}</b>${esc(shortText)}</div>`;
-      }).join('');
-      const more = (chat || []).length > messages.length ? `<div class="dialogue-more">还有 ${(chat || []).length - messages.length} 条更早消息</div>` : '';
-      return `<div class="dialogue-preview">${lines || '<span class="muted">无对话</span>'}${more}</div>`;
+    function scenarioLabel(value) {
+      return {
+        account_check:'task_followup',
+        reactivation_topic:'reactivation',
+        content_invitation:'content_invitation'
+      }[value] || value || '-';
     }
-
-    function candidateSummary(candidate) {
-      if (!candidate) return '';
-      if (candidate.generation_error) return `<span class="error">${esc(candidate.generation_error)}</span>`;
-      const text = candidate.generated_text || candidate.model_reason || '无生成文案';
-      const shortText = String(text).length > 120 ? String(text).slice(0, 120) + '...' : text;
-      return `
-        <div>${esc(shortText)}</div>
-        <div class="muted">${esc(candidate.generated_type || '-')} · confidence ${esc(confidenceText(candidate.model_confidence))}</div>`;
+    function riskLevel(candidate) {
+      const tags = String(candidate.risk_tag || '').toLowerCase();
+      const l4 = candidate.l4_safety || {};
+      if (candidate.generation_status === 'error' || l4.sensitive_topic || l4.wrong_memory || tags.includes('wrong') || tags.includes('sensitive')) return ['High risk', 'danger'];
+      if (l4.over_triggering || l4.too_pushy || tags.includes('over') || tags.includes('pushy') || Number(candidate.should_send_score) < 0) return ['Needs care', 'warn'];
+      return ['Low risk', 'ok'];
     }
-
-    function renderModelOutput(candidate) {
-      const raw = {
-        generated_type: candidate.generated_type,
-        generated_text: candidate.generated_text,
-        model_should_send: candidate.model_should_send,
-        confidence: candidate.model_confidence,
-        reason: candidate.model_reason,
-        raw: candidate.model_raw
-      };
-      return `
-        <div class="output-card">
-          <div class="output-head">
-            <strong>${esc(candidate.generated_type || '模型输出')}</strong>
-            <div class="output-meta">
-              ${statusPill(candidate.generation_status)}
-              ${boolPill(candidate.model_should_send)}
-              <span class="pill">置信度 ${esc(confidenceText(candidate.model_confidence))}</span>
-            </div>
-          </div>
-          <div class="output-text ${candidate.generated_text ? '' : 'empty'}">${esc(candidate.generated_text || candidate.generation_error || '模型没有生成可发送文案')}</div>
-          <div class="output-reason"><strong>理由：</strong>${esc(candidate.model_reason || '-')}</div>
-        </div>
-        <details class="debug-details">
-          <summary>查看原始模型 JSON</summary>
-          <pre>${esc(JSON.stringify(raw, null, 2))}</pre>
+    function statusPill(candidate) {
+      if (candidate.review_status === 'reviewed') return '<span class="pill ok">已审核</span>';
+      if (candidate.generation_status === 'error') return '<span class="pill danger">生成失败</span>';
+      if (candidate.generation_status === 'skip') return '<span class="pill warn">跳过</span>';
+      return '<span class="pill primary">待审核</span>';
+    }
+    function selectedSampleIds() {
+      return Array.from(document.querySelectorAll('.sampleCheck:checked')).map(el => el.value);
+    }
+    function renderMessageBubble(message) {
+      if (message.role === 'system') {
+        return `<details class="system-prompt-details">
+          <summary>系统提示词 (System Prompt) · 点击展开/收起</summary>
+          <div class="message-bubble system">${esc(messageText(message))}</div>
         </details>`;
+      }
+      return `<div class="message-bubble ${esc(message.role || '')}">
+        <span class="role">${esc(roleLabel(message.role))}${message.created_at ? ' · ' + esc(new Date(message.created_at).toLocaleString('zh-CN', {hour: '2-digit', minute: '2-digit'})) : ''}</span>
+        <span class="message-text">${esc(messageText(message))}</span>
+      </div>`;
+    }
+    function renderConversation(messages) {
+      const list = messages || [];
+      if (!list.length) return '<div class="empty-state">没有对话上下文。</div>';
+      return `<div class="conversation-container">
+        <div class="conversation-count">共 ${list.length} 条消息，已显示全部聊天记录。</div>
+        ${list.map(renderMessageBubble).join('')}
+      </div>`;
+    }
+    function renderValue(value, key) {
+      if (value === undefined || value === null || value === '') return '<div class="field-value-display subtle">-</div>';
+      if (typeof value === 'boolean') return `<div class="field-value-display"><span class="pill ${value ? 'danger' : 'ok'}">${value ? 'true · 有风险' : 'false · 无风险'}</span></div>`;
+      if (Array.isArray(value)) return `<div class="field-value-display">${value.length ? value.map(v => `<span class="pill ${key === 'risk_tags' ? 'danger' : ''}">${esc(v)}</span>`).join(' ') : '-'}</div>`;
+      if (typeof value === 'object') return `<div class="field-value-display">${Object.entries(value).map(([k, v]) => `<span class="pill">${esc(k)}: ${esc(v)}</span>`).join(' ') || '-'}</div>`;
+      return `<div class="field-value-display">${esc(value)}</div>`;
+    }
+    function renderLayer(name, data) {
+      const [title, subtitle, fields] = layerDefinitions[name];
+      return `<details class="layer-card layer-accordion" open>
+        <summary class="layer-card-title">
+          <div class="layer-summary-row">
+            <strong>${esc(title)}</strong>
+            <span>${esc(subtitle)}</span>
+          </div>
+        </summary>
+        <div class="layer-card-fields">
+          ${fields.map(([key, label, help]) => `<div class="layer-field-item">
+            <div class="field-label-name"><strong>${esc(label)}</strong><span>${esc(help)}</span></div>
+            ${renderValue((data || {})[key], key)}
+          </div>`).join('')}
+        </div>
+      </details>`;
+    }
+    function renderLayers(candidate) {
+      return `<div class="layer-container">
+        ${renderLayer('l0_context', candidate.l0_context)}
+        ${renderLayer('l1_trigger', candidate.l1_trigger)}
+        ${renderLayer('l2_when', candidate.l2_when)}
+        ${renderLayer('l3_how', candidate.l3_how)}
+        ${renderLayer('l4_safety', candidate.l4_safety)}
+        ${renderLayer('l5_outcome', candidate.l5_outcome)}
+      </div>`;
+    }
+    function candidateDraft(candidate) {
+      return candidate.candidate_message || candidate.generated_text || candidate.generation_error || '模型没有生成可发送文案';
+    }
+    function renderCandidateCard(candidate) {
+      const [risk, riskCls] = riskLevel(candidate);
+      const active = selectedCandidate && selectedCandidate.id === candidate.id ? 'active' : '';
+      const userId = candidate.account_id || candidate.user_context || candidate.sample_id || 'unknown user';
+      const createdAt = candidate.created_at ? new Date(candidate.created_at).toLocaleString('zh-CN', {day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'}) : '';
+
+      return `<article class="candidate-card ${active}" onclick="selectCandidate('${esc(candidate.id)}')">
+        <div class="card-header">
+          <div class="card-identity">
+            <strong>${esc(shortText(userId, 48))}</strong>
+            <span class="subtle">${esc(createdAt)}</span>
+          </div>
+          ${statusPill(candidate)}
+        </div>
+        <div class="card-meta-row">
+          <span class="pill primary">${esc(scenarioLabel(candidate.trigger_type || candidate.generated_type || candidate.scenario_type))}</span>
+          <span class="pill ${riskCls}">${esc(risk)}</span>
+          <span class="pill">Score: ${esc(candidate.should_send_score ?? '-')}</span>
+        </div>
+        <div class="card-reason">${esc(shortText(candidate.when_reason || candidate.model_reason || candidate.open_loop || '暂无触发理由', 160))}</div>
+        <div class="card-draft-preview">${esc(shortText(candidateDraft(candidate), 220))}</div>
+        <div class="card-actions" onclick="event.stopPropagation()">
+          <button class="btn btn-secondary btn-sm" onclick="selectCandidate('${esc(candidate.id)}')">查看详情</button>
+        </div>
+      </article>`;
+    }
+    function renderSampleCard(sample) {
+      const active = selectedSampleId === sample.sample_id ? 'active' : '';
+      const preview = (sample.chat_history || []).slice(-3).map(m => `<span>${roleLabel(m.role)}: ${shortText(messageText(m), 30)}</span>`).join(' / ');
+      return `<article class="sample-card ${active}" onclick="selectSample('${esc(sample.sample_id)}')">
+        <div class="card-header">
+          <div class="card-identity">
+            <strong>${esc(sample.sample_id)}</strong>
+            <span class="subtle">${esc(sample.source || '-')} · 静默期 ${esc(sample.silence_hours || 0)}h</span>
+          </div>
+          <label class="checkbox-label" onclick="event.stopPropagation()">
+            <input class="sampleCheck" type="checkbox" value="${esc(sample.sample_id)}"> 选中
+          </label>
+        </div>
+        <div class="card-meta-row">
+          <span class="pill primary">${esc(scenarioLabel(sample.scenario_type))}</span>
+          <span class="pill">${esc(sample.context_source || 'sample')}</span>
+        </div>
+        <div class="card-draft-preview">${preview || '无对话'}</div>
+      </article>`;
+    }
+    function renderQueue() {
+      document.getElementById('tabCandidates').className = 'tab ' + (queueMode === 'candidates' ? 'active' : '');
+      document.getElementById('tabSamples').className = 'tab ' + (queueMode === 'samples' ? 'active' : '');
+      document.getElementById('queueListTitle').textContent = queueMode === 'samples' ? 'Sample pool' : 'Review queue';
+      document.getElementById('queueListHint').textContent = queueMode === 'samples' ? '勾选后批量生成' : '按风险和分数扫描';
+      const body = document.getElementById('queueBody');
+      if (queueMode === 'samples') {
+        body.innerHTML = samples.length ? samples.map(renderSampleCard).join('') : '<div class="empty-state">还没有样本。可以自动套入 300 条，或从真实会话拉长上下文。</div>';
+        return;
+      }
+      body.innerHTML = candidates.length ? candidates.map(renderCandidateCard).join('') : '<div class="empty-state">还没有候选。先在 Sample pool 选样本并生成。</div>';
+    }
+    function selectQueueMode(mode) {
+      queueMode = mode;
+      renderQueue();
     }
 
     async function importFile() {
@@ -336,23 +1555,34 @@
         const out = await api('/samples/import', {method:'POST', body:JSON.stringify({raw_text: raw})});
         setStatus(`导入 ${out.imported} 条，失败 ${out.failed} 条`, out.failed ? 'error' : 'ok');
         await refreshAll();
-      } catch (err) {
-        setStatus(err.message || String(err), 'error');
-      }
+      } catch (err) { setStatus(err.message || String(err), 'error'); }
     }
-
     async function bootstrapSamples() {
       setStatus('正在自动套入样本...');
       try {
-        const out = await api('/samples/bootstrap', {method:'POST', body:JSON.stringify({limit: 300})});
+        const out = await api('/samples/bootstrap', {method:'POST', body:JSON.stringify({limit: 300, upsert: true})});
         const summary = out.import_db || {};
         setStatus(`已套入 ${summary.inserted || 0} 条，已存在 ${summary.skipped_existing || 0} 条，失败 ${summary.failed || 0} 条`, summary.failed ? 'error' : 'ok');
         await refreshAll();
-      } catch (err) {
-        setStatus(err.message || String(err), 'error');
-      }
+      } catch (err) { setStatus(err.message || String(err), 'error'); }
     }
-
+    async function createSampleFromSession() {
+      const accountId = document.getElementById('realAccountId').value.trim();
+      const sessionId = document.getElementById('realSessionId').value.trim();
+      const scenarioType = document.getElementById('realScenario').value;
+      const contextLimit = Number(document.getElementById('realContextLimit').value) || 120;
+      if (!accountId) return setStatus('请先输入 account_id。', 'error');
+      setStatus('正在从真实会话拉取长上下文...');
+      try {
+        const payload = {account_id: accountId, scenario_type: scenarioType, context_limit: contextLimit, notes: 'created from proactive test lab UI'};
+        if (sessionId) payload.session_id = Number(sessionId);
+        const out = await api('/samples/from-session', {method:'POST', body:JSON.stringify(payload)});
+        selectedSampleId = out.sample.sample_id;
+        setStatus(`已创建样本 ${out.sample.sample_id}，上下文 ${out.message_count} 条`, 'ok');
+        await refreshAll();
+        selectQueueMode('samples');
+      } catch (err) { setStatus(err.message || String(err), 'error'); }
+    }
     async function loadSamples() {
       const qs = new URLSearchParams();
       const scenario = document.getElementById('sampleScenario').value;
@@ -362,107 +1592,157 @@
       qs.set('limit', '100');
       const out = await api('/samples?' + qs.toString());
       samples = out.items || [];
-      if (!scenario && !source && samples.length === 0) {
-        await bootstrapSamples();
-        return;
-      }
-      document.getElementById('sampleSummary').textContent = `当前显示 ${samples.length} 条；勾选后点击生成。`;
-      document.getElementById('samplesBody').innerHTML = samples.map(s => `
-        <tr class="${s.sample_id === selectedSampleId ? 'is-selected' : ''}">
-          <td><input class="sampleCheck" type="checkbox" value="${esc(s.sample_id)}"></td>
-          <td>${renderDialoguePreview(s.chat_history)}</td>
-          <td>${esc(s.scenario_type)}</td>
-          <td>${esc(s.silence_hours || 0)}h</td>
-          <td><button onclick="selectSample('${esc(s.sample_id)}')">${esc(s.sample_id)}</button><div class="muted">${esc(s.notes || '')}</div></td>
-        </tr>`).join('');
+      document.getElementById('navSampleCount').textContent = samples.length;
+      renderQueue();
     }
-
+    async function loadCandidates() {
+      const qs = new URLSearchParams();
+      const scenario = document.getElementById('candidateScenario').value;
+      const reviewStatus = document.getElementById('reviewStatusFilter').value;
+      if (scenario) qs.set('scenario_type', scenario);
+      if (reviewStatus) qs.set('review_status', reviewStatus);
+      qs.set('limit', '100');
+      const out = await api('/candidates?' + qs.toString());
+      candidates = out.items || [];
+      document.getElementById('navQueueCount').textContent = candidates.length;
+      renderQueue();
+    }
+    async function runGeneration() {
+      const ids = selectedSampleIds();
+      if (!ids.length) return document.getElementById('generateStatus').textContent = '请先在 Sample pool 勾选样本。';
+      document.getElementById('generateStatus').className = 'status-message';
+      document.getElementById('generateStatus').textContent = 'generating...';
+      try {
+        const out = await api('/generate', {method:'POST', body:JSON.stringify({sample_ids: ids, dry_run: true})});
+        document.getElementById('generateStatus').textContent = `${out.run_id}: success ${out.success}, skip ${out.skip}, error ${out.error}`;
+        document.getElementById('generateStatus').className = `status-message ${out.error > 0 ? 'error' : 'ok'}`;
+        await loadCandidates();
+        await loadStats();
+        selectQueueMode('candidates');
+      } catch (err) {
+        document.getElementById('generateStatus').textContent = err.message || String(err);
+        document.getElementById('generateStatus').className = 'status-message error';
+      }
+    }
     function selectSample(sampleId) {
       selectedSampleId = sampleId;
       selectedCandidate = null;
       const sample = samples.find(s => s.sample_id === sampleId);
       if (!sample) return;
+
       document.getElementById('reviewForm').style.display = 'none';
-      document.getElementById('detailBox').className = 'stack';
       document.getElementById('detailBox').innerHTML = `
-        <h3>对话</h3>
-        ${renderChat(sample.chat_history)}
-        <h3>样本信息</h3>
-        <pre>${esc(JSON.stringify({
-          sample_id: sample.sample_id,
-          scenario_type: sample.scenario_type,
-          source: sample.source,
-          silence_hours: sample.silence_hours,
-        }, null, 2))}</pre>
-        <h3>备注</h3>
-        <pre>${esc(sample.notes || '')}</pre>`;
-      loadSamples().catch(err => setStatus(err.message || String(err), 'error'));
+        <h2 class="detail-title">Sample Context: ${esc(sample.sample_id)}</h2>
+        <div class="detail-section compact-section">
+          <h3>Conversation History</h3>
+          ${renderConversation(sample.chat_history)}
+        </div>
+        <div class="detail-section soft">
+          <h3>Sample Evidence</h3>
+          <div class="evidence-grid">
+            <div class="evidence-item"><strong>User Context</strong><div class="subtle">${esc(sample.user_context || '-')}</div></div>
+            <div class="evidence-item"><strong>Memory Evidence</strong><div class="subtle">${esc(sample.memory_evidence || '-')}</div></div>
+            <div class="evidence-item"><strong>Open Loop</strong><div class="subtle">${esc(sample.open_loop || '-')}</div></div>
+          </div>
+        </div>
+        <details class="raw"><summary>查看 sample JSON</summary><pre>${esc(JSON.stringify(sample, null, 2))}</pre></details>`;
+      renderQueue(); // Re-render queue to highlight active card
     }
-
-    async function runGeneration() {
-      const ids = selectedSampleIds();
-      if (!ids.length) {
-        document.getElementById('generateStatus').textContent = '请先勾选样本。';
-        return;
-      }
-      document.getElementById('generateStatus').textContent = 'generating...';
-      try {
-        const out = await api('/generate', {method:'POST', body:JSON.stringify({sample_ids: ids, dry_run: true})});
-        document.getElementById('generateStatus').textContent = `${out.run_id}: success ${out.success}, skip ${out.skip}, error ${out.error}`;
-        await loadCandidates();
-        await loadStats();
-      } catch (err) {
-        document.getElementById('generateStatus').textContent = err.message || String(err);
-      }
-    }
-
-    async function loadCandidates() {
-      const out = await api('/candidates?limit=100');
-      candidates = out.items || [];
-      document.getElementById('candidatesBody').innerHTML = candidates.map(c => `
-        <tr class="${selectedCandidate && selectedCandidate.id === c.id ? 'is-selected' : ''}">
-          <td><button onclick="selectCandidate('${esc(c.id)}')">${esc(c.id)}</button><div class="muted">${esc(c.review_status || '')}</div></td>
-          <td>${esc(c.sample_id)}</td>
-          <td>${statusPill(c.generation_status)}</td>
-          <td>${candidateSummary(c)}</td>
-        </tr>`).join('');
-    }
-
     function selectCandidate(id) {
       selectedCandidate = candidates.find(c => c.id === id);
       if (!selectedCandidate) return;
       selectedSampleId = selectedCandidate.sample_id;
+
+      const [risk, riskCls] = riskLevel(selectedCandidate);
+      const l4 = selectedCandidate.l4_safety || {};
+
       document.getElementById('reviewForm').style.display = 'flex';
-      document.getElementById('detailBox').className = 'stack';
       document.getElementById('detailBox').innerHTML = `
-        <h3>对话</h3>
-        ${renderChat(selectedCandidate.chat_history)}
-        <h3>模型输出</h3>
-        ${renderModelOutput(selectedCandidate)}
-        <h3>候选信息</h3>
-        <pre>${esc(JSON.stringify({
-          candidate_id: selectedCandidate.id,
-          sample_id: selectedCandidate.sample_id,
-          scenario_type: selectedCandidate.scenario_type,
-          run_id: selectedCandidate.run_id,
-          status: selectedCandidate.generation_status,
-        }, null, 2))}</pre>`;
+        <h2 class="detail-title">Candidate Detail: ${esc(selectedCandidate.id)}</h2>
+        <p class="detail-subtitle subtle">Sample: ${esc(selectedCandidate.sample_id)}</p>
+
+        <div class="detail-section compact-section">
+          <div class="card-meta-row">
+            ${statusPill(selectedCandidate)}
+            <span class="pill ${riskCls}">${esc(risk)}</span>
+            <span class="pill primary">${esc(scenarioLabel(selectedCandidate.trigger_type || selectedCandidate.generated_type || selectedCandidate.scenario_type))}</span>
+            <span class="pill">Score: ${esc(selectedCandidate.should_send_score ?? '-')}</span>
+          </div>
+          <h3>AI Draft Message</h3>
+          <div class="draft-full-preview">${esc(candidateDraft(selectedCandidate))}</div>
+        </div>
+
+        <div class="detail-section soft">
+          <h3>AI Reasoning</h3>
+          <table class="reasoning-table">
+            <tbody>
+              <tr><th>When Reason</th><td>${esc(selectedCandidate.when_reason || selectedCandidate.model_reason || '-')}</td></tr>
+              <tr><th>Content Quality</th><td>${esc(selectedCandidate.content_quality || '-')}</td></tr>
+              <tr><th>Risk Tags</th><td>${esc(selectedCandidate.risk_tag || '无')}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="detail-section">
+          <h3>Risk Checklist</h3>
+          <div class="risk-checklist">
+            ${['sensitive_topic','wrong_memory','over_triggering','too_intimate','too_pushy','manipulation_risk'].map(k => `<div class="risk-check-item ${l4[k] ? 'hit' : ''}"><span>${esc(k.replaceAll('_', ' '))}</span><span>${l4[k] ? 'True' : 'False'}</span></div>`).join('')}
+          </div>
+          ${l4.notes ? `<p class="reasoning-card"><strong>Audit Notes:</strong> ${esc(l4.notes)}</p>` : ''}
+        </div>
+
+        <div class="detail-section compact-section">
+          <h3>Conversation History</h3>
+          ${renderConversation(selectedCandidate.chat_history)}
+        </div>
+
+        <div class="detail-section compact-section">
+          <h3>Prompt Layers</h3>
+          <div class="layer-container">
+            ${renderLayers(selectedCandidate)}
+          </div>
+        </div>
+        <details class="raw"><summary>查看原始 candidate JSON</summary><pre>${esc(JSON.stringify(selectedCandidate, null, 2))}</pre></details>`;
+
       document.getElementById('humanPromote').checked = !!selectedCandidate.human_should_promote;
       document.getElementById('rejectReason').value = selectedCandidate.reject_reason || '';
+      document.getElementById('finalLabel').value = selectedCandidate.final_label || '';
+      document.getElementById('promoteLevel').value = selectedCandidate.promote_level || '';
+      document.getElementById('userResponse').value = selectedCandidate.user_response || '';
       document.getElementById('toneScore').value = selectedCandidate.tone_score || '';
       document.getElementById('pressureScore').value = selectedCandidate.pressure_score || '';
       document.getElementById('marketingScore').value = selectedCandidate.marketing_score || '';
       document.getElementById('privacyRisk').checked = !!selectedCandidate.privacy_risk;
       document.getElementById('hallucinationRisk').checked = !!selectedCandidate.hallucination_risk;
+      document.getElementById('revisedMessage').value = selectedCandidate.revised_message || candidateDraft(selectedCandidate);
       document.getElementById('reviewNotes').value = selectedCandidate.review_notes || '';
-      loadCandidates().catch(err => setStatus(err.message || String(err), 'error'));
+      document.getElementById('reviewSaveStatus').textContent = '';
+      syncAllChoiceGroups();
+      renderQueue();
     }
-
+    function focusRewrite() {
+      const el = document.getElementById('revisedMessage');
+      if (el && selectedCandidate) el.focus();
+    }
+    function quickApprove(id) {
+      if (id) selectCandidate(id);
+      if (!selectedCandidate) return;
+      document.getElementById('humanPromote').checked = true;
+      document.getElementById('promoteLevel').value = document.getElementById('promoteLevel').value || 'keep';
+      syncAllChoiceGroups();
+      saveReview();
+    }
+    function quickReject(id) {
+      if (id) selectCandidate(id);
+      if (!selectedCandidate) return;
+      document.getElementById('humanPromote').checked = false;
+      document.getElementById('promoteLevel').value = 'reject';
+      document.getElementById('rejectReason').value = document.getElementById('rejectReason').value || 'should_skip';
+      syncAllChoiceGroups();
+      saveReview();
+    }
     async function saveReview() {
-      if (!selectedCandidate) {
-        document.getElementById('reviewStatus').textContent = '先选择一条 candidate。';
-        return;
-      }
+      if (!selectedCandidate) return document.getElementById('reviewSaveStatus').textContent = '先选择一条 candidate。';
       const payload = {
         candidate_id: selectedCandidate.id,
         human_should_promote: document.getElementById('humanPromote').checked,
@@ -472,31 +1752,86 @@
         marketing_score: Number(document.getElementById('marketingScore').value) || null,
         privacy_risk: document.getElementById('privacyRisk').checked,
         hallucination_risk: document.getElementById('hallucinationRisk').checked,
+        revised_message: document.getElementById('revisedMessage').value || null,
+        final_label: document.getElementById('finalLabel').value || null,
+        promote_level: document.getElementById('promoteLevel').value || null,
+        user_response: document.getElementById('userResponse').value || null,
+        l5_outcome: {
+          user_response: document.getElementById('userResponse').value || null,
+          future_usefulness: document.getElementById('reviewNotes').value || null, /* Using notes for future_usefulness */
+          final_label: document.getElementById('finalLabel').value || null,
+          promote_level: document.getElementById('promoteLevel').value || null,
+        },
         review_notes: document.getElementById('reviewNotes').value
       };
+      document.getElementById('reviewSaveStatus').className = 'status-message';
+      document.getElementById('reviewSaveStatus').textContent = '保存中...';
       try {
         await api('/reviews', {method:'POST', body:JSON.stringify(payload)});
-        document.getElementById('reviewStatus').textContent = 'saved';
+        document.getElementById('reviewSaveStatus').textContent = '保存成功！';
+        document.getElementById('reviewSaveStatus').className = 'status-message ok';
+        // Refresh candidates and stats to reflect changes, but keep selected candidate active
+        const currentSelectedId = selectedCandidate.id;
         await loadCandidates();
         await loadStats();
+        // Re-select the candidate to update its display with new review status
+        selectCandidate(currentSelectedId);
       } catch (err) {
-        document.getElementById('reviewStatus').textContent = err.message || String(err);
+        document.getElementById('reviewSaveStatus').textContent = err.message || String(err);
+        document.getElementById('reviewSaveStatus').className = 'status-message error';
       }
     }
-
     async function loadStats() {
       const s = await api('/stats');
       document.getElementById('statsBox').innerHTML = `
-        <div class="metric">总样本<b>${s.total_samples}</b></div>
-        <div class="metric">总候选<b>${s.total_candidates}</b></div>
+        <div class="metric">样本<b>${s.total_samples}</b></div>
+        <div class="metric">候选<b>${s.total_candidates}</b></div>
         <div class="metric">生成成功率<b>${Math.round((s.generation_success_rate || 0) * 100)}%</b></div>
         <div class="metric">人工通过率<b>${Math.round((s.human_promote_rate || 0) * 100)}%</b></div>`;
     }
-
     async function refreshAll() {
-      await Promise.all([loadStats(), loadCandidates()]);
-      await loadSamples();
+      setStatus('刷新中...');
+      try {
+        await Promise.all([loadStats(), loadCandidates(), loadSamples()]);
+        setStatus('刷新完成', 'ok');
+      } catch (err) {
+        setStatus(err.message || String(err), 'error');
+      }
     }
+
+    // Keyboard Shortcuts and Navigation
+    document.addEventListener('keydown', (e) => {
+      const activeEl = document.activeElement;
+      const isInputOrTextarea = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        activeEl.isContentEditable
+      );
+
+      // Ctrl + Enter or Cmd + Enter triggers saveReview
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        saveReview();
+        return;
+      }
+
+      // 1, 2, 3, 4 map to Final Labels CD, FA, MN, NR respectively when not focused on an input
+      if (!isInputOrTextarea) {
+        if (e.key === '1') {
+          e.preventDefault();
+          setChoiceValue('finalLabel', 'CD');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          setChoiceValue('finalLabel', 'FA');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          setChoiceValue('finalLabel', 'MN');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          setChoiceValue('finalLabel', 'NR');
+        }
+      }
+    });
 
     refreshAll().catch(err => setStatus(err.message || String(err), 'error'));
   </script>

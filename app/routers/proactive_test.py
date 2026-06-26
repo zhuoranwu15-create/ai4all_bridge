@@ -13,6 +13,8 @@ from app.db import (
     create_proactive_test_candidate,
     get_proactive_test_candidate,
     get_proactive_test_sample_by_sample_id,
+    get_proactive_test_long_context,
+    hydrate_proactive_test_sample_context,
     import_proactive_test_sample,
     list_proactive_test_candidates,
     list_proactive_test_samples,
@@ -27,6 +29,9 @@ router = APIRouter()
 
 _NON_PRODUCTION_ENVS = {"local", "development", "test"}
 _SOURCES = {"real_desensitized", "public_dataset", "synthetic", "manual"}
+_FINAL_LABELS = {"CD", "FA", "MN", "NR"}
+_PROMOTE_LEVELS = {"reject", "keep", "fewshot", "rule", "auto_send"}
+_USER_RESPONSES = {"accepted", "ignored", "negative", "opt-out"}
 
 
 def require_non_production_internal() -> None:
@@ -48,11 +53,28 @@ class ProactiveTestSampleIn(BaseModel):
     silence_hours: Optional[float] = None
     expected_active_message_type: Optional[str] = None
     notes: Optional[str] = None
+    user_context: Optional[str] = None
+    memory_evidence: Optional[str] = None
+    open_loop: Optional[str] = None
+    account_id: Optional[str] = None
+    session_id: Optional[int] = None
+    context_limit: Optional[int] = Field(default=None, ge=1, le=200)
+    context_source: Optional[str] = None
 
 
 class ProactiveTestImportRequest(BaseModel):
     samples: Optional[List[ProactiveTestSampleIn]] = None
     raw_text: Optional[str] = None
+
+
+class ProactiveTestSessionSampleRequest(BaseModel):
+    account_id: str
+    session_id: Optional[int] = None
+    scenario_type: str
+    sample_id: Optional[str] = None
+    context_limit: int = Field(default=120, ge=1, le=200)
+    silence_hours: Optional[float] = None
+    notes: Optional[str] = None
 
 
 class ProactiveTestBootstrapRequest(BaseModel):
@@ -76,6 +98,11 @@ class ProactiveTestReviewRequest(BaseModel):
     privacy_risk: bool = False
     hallucination_risk: bool = False
     review_notes: Optional[str] = None
+    revised_message: Optional[str] = None
+    final_label: Optional[str] = None
+    promote_level: Optional[str] = None
+    user_response: Optional[str] = None
+    l5_outcome: Optional[dict[str, Any]] = None
 
 
 def _parse_raw_samples(raw_text: str) -> List[dict[str, Any]]:
@@ -155,6 +182,13 @@ def import_samples(
                 silence_hours=sample.silence_hours,
                 expected_active_message_type=sample.expected_active_message_type,
                 notes=sample.notes,
+                user_context=sample.user_context,
+                memory_evidence=sample.memory_evidence,
+                open_loop=sample.open_loop,
+                account_id=sample.account_id,
+                session_id=sample.session_id,
+                context_limit=sample.context_limit,
+                context_source=sample.context_source,
             )
             imported += 1
         except Exception as err:  # noqa: BLE001 - import should collect per-row errors
@@ -175,6 +209,45 @@ def bootstrap_samples(
         import_db=True,
         upsert=payload.upsert,
     )
+
+
+@router.post("/internal/proactive-test/samples/from-session")
+def create_sample_from_session(
+    payload: ProactiveTestSessionSampleRequest,
+    _: None = Depends(verify_admin_auth),
+    __: None = Depends(require_non_production_internal),
+) -> dict:
+    if payload.scenario_type not in SCENARIO_TYPES:
+        raise HTTPException(status_code=400, detail="scenario_type is invalid")
+    chat_history, context_source = get_proactive_test_long_context(
+        account_id=payload.account_id,
+        session_id=payload.session_id,
+        limit=payload.context_limit,
+    )
+    if not chat_history:
+        raise HTTPException(status_code=404, detail=f"no context found: {context_source}")
+    sample_id = (
+        payload.sample_id
+        or f"session_{payload.account_id}_{payload.session_id or 'recent'}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    )
+    user_context = f"从真实会话拉取最近 {len(chat_history)} 条消息，来源 {context_source}。"
+    sample = import_proactive_test_sample(
+        sample_id=sample_id,
+        source="real_desensitized",
+        scenario_type=payload.scenario_type,
+        chat_history=chat_history,
+        silence_hours=payload.silence_hours,
+        expected_active_message_type=payload.scenario_type,
+        notes=payload.notes or "created from real session for proactive test lab",
+        user_context=user_context,
+        memory_evidence="真实会话 messages 表上下文；请在审核时结合记忆字段校验。",
+        open_loop="由审核员根据长聊天上下文判断未完成事项。",
+        account_id=payload.account_id,
+        session_id=payload.session_id,
+        context_limit=payload.context_limit,
+        context_source=context_source,
+    )
+    return {"ok": True, "sample": sample, "message_count": len(chat_history)}
 
 
 @router.get("/internal/proactive-test/samples")
@@ -230,6 +303,7 @@ def generate_candidates(
                 generation_error="sample_not_found",
             )
         else:
+            sample = hydrate_proactive_test_sample_context(sample)
             generated = generate_proactive_test_candidate(sample)
             result = create_proactive_test_candidate(
                 sample_id=sample["sample_id"],
@@ -243,6 +317,17 @@ def generate_candidates(
                 model_raw_json=generated.model_raw_json,
                 generation_status=generated.generation_status,
                 generation_error=generated.generation_error,
+                trigger_type=generated.trigger_type,
+                candidate_message=generated.candidate_message,
+                should_send_score=generated.should_send_score,
+                when_reason=generated.when_reason,
+                content_quality=generated.content_quality,
+                risk_tag=generated.risk_tag,
+                l0_context=generated.l0_context,
+                l1_trigger=generated.l1_trigger,
+                l2_when=generated.l2_when,
+                l3_how=generated.l3_how,
+                l4_safety=generated.l4_safety,
             )
         status = result.get("generation_status") or "error"
         counts[status if status in counts else "error"] += 1
@@ -292,6 +377,12 @@ def save_review(
         raise HTTPException(status_code=404, detail="candidate not found")
     if payload.reject_reason and payload.reject_reason not in REJECT_REASONS:
         raise HTTPException(status_code=400, detail="reject_reason is invalid")
+    if payload.final_label and payload.final_label not in _FINAL_LABELS:
+        raise HTTPException(status_code=400, detail="final_label is invalid")
+    if payload.promote_level and payload.promote_level not in _PROMOTE_LEVELS:
+        raise HTTPException(status_code=400, detail="promote_level is invalid")
+    if payload.user_response and payload.user_response not in _USER_RESPONSES:
+        raise HTTPException(status_code=400, detail="user_response is invalid")
     review = upsert_proactive_test_review(
         candidate_id=payload.candidate_id,
         human_should_promote=payload.human_should_promote,
@@ -303,6 +394,11 @@ def save_review(
         hallucination_risk=payload.hallucination_risk,
         review_notes=payload.review_notes,
         reviewer=str(admin_user.get("id") or admin_user.get("role") or "admin"),
+        revised_message=payload.revised_message,
+        final_label=payload.final_label,
+        promote_level=payload.promote_level,
+        user_response=payload.user_response,
+        l5_outcome=payload.l5_outcome,
     )
     return {"ok": True, "review": review}
 

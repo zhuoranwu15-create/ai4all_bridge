@@ -66,6 +66,59 @@ _ASSISTANT_SUFFIXES = [
 ]
 
 
+def _context_fields(scenario: str, user_text: str, assistant_text: str, note: str) -> Dict[str, str]:
+    return {
+        "user_context": f"最近用户聊到：{user_text} AI 已回应：{assistant_text}",
+        "memory_evidence": f"样本记忆：用户对「{note}」有持续兴趣或明确待办。",
+        "open_loop": f"未完成事项：判断是否要围绕「{note}」做一次轻量跟进。",
+    }
+
+
+def _long_history(
+    *,
+    scenario: str,
+    user_text: str,
+    assistant_text: str,
+    note: str,
+    rng: random.Random,
+) -> List[Dict[str, str]]:
+    lead_ins = {
+        "account_check": [
+            ("user", "我最近事情有点多，老怕把重要的小事忘了。"),
+            ("assistant", "那我们先只抓真正有时间点的事，别把提醒弄得太重。"),
+            ("user", "我希望你提醒我的时候像朋友顺口问一句，不要像催任务。"),
+            ("assistant", "明白，轻一点、短一点，只在有明确上下文时提。"),
+        ],
+        "reactivation_topic": [
+            ("user", "我有些话题会聊到一半就断掉。"),
+            ("assistant", "断掉也没关系，后面如果自然想起可以再接上。"),
+            ("user", "但如果完全没人接，我有时就懒得继续。"),
+            ("assistant", "那适合用很轻的方式把入口递回来，不要逼你回答。"),
+        ],
+        "content_invitation": [
+            ("user", "我喜欢有用的资料，但不喜欢被硬塞链接。"),
+            ("assistant", "那内容邀请要先说明为什么相关，再给你选择权。"),
+            ("user", "最好不要看起来像营销推送。"),
+            ("assistant", "可以，只在你明确表达过想了解的时候再提。"),
+        ],
+    }
+    history = [{"role": role, "text": text} for role, text in lead_ins.get(scenario, [])]
+    if rng.random() < 0.5:
+        history.extend([
+            {"role": "user", "text": rng.choice(_OPENERS)},
+            {"role": "assistant", "text": "嗯，我在。我们可以先抓最小的一步。"},
+        ])
+    history.extend([
+        {"role": "user", "text": user_text},
+        {"role": "assistant", "text": assistant_text},
+        {"role": "user", "text": "这个我晚点可能还要再想一下。"},
+        {"role": "assistant", "text": f"好，我记一下重点：{note}。"},
+    ])
+    if rng.random() < 0.55:
+        history.append({"role": "assistant", "text": rng.choice(_ASSISTANT_SUFFIXES)})
+    return history
+
+
 def _generated_rows(
     *,
     start: int,
@@ -81,16 +134,13 @@ def _generated_rows(
         scenario = scenarios[offset % len(scenarios)]
         topic = _TOPICS[scenario][(offset // len(scenarios)) % len(_TOPICS[scenario])]
         user_text, assistant_text, note = topic
-        include_opener = rng.random() < 0.45
-        include_suffix = rng.random() < 0.55
-        history = []
-        if include_opener:
-            history.append({"role": "user", "text": rng.choice(_OPENERS)})
-            history.append({"role": "assistant", "text": "嗯，我在。你说说现在卡在哪。"})
-        history.append({"role": "user", "text": user_text})
-        history.append({"role": "assistant", "text": assistant_text})
-        if include_suffix:
-            history.append({"role": "assistant", "text": rng.choice(_ASSISTANT_SUFFIXES)})
+        history = _long_history(
+            scenario=scenario,
+            user_text=user_text,
+            assistant_text=assistant_text,
+            note=note,
+            rng=rng,
+        )
         rows.append(
             {
                 "sample_id": f"synthetic_generated_{start + offset:06d}",
@@ -102,6 +152,7 @@ def _generated_rows(
                     "companion_followup" if scenario != "content_invitation" else "content_invitation"
                 ),
                 "notes": f"{note}; generated synthetic expansion",
+                **_context_fields(scenario, user_text, assistant_text, note),
             }
         )
     return rows
@@ -155,6 +206,9 @@ def convert(
                     if default_silence_hours is None
                     else float(default_silence_hours),
                     "notes": notes,
+                    "user_context": row.get("user_context"),
+                    "memory_evidence": row.get("memory_evidence"),
+                    "open_loop": row.get("open_loop"),
                 }
             else:
                 sample = make_sample(
@@ -166,6 +220,13 @@ def convert(
                     default_silence_hours=default_silence_hours,
                     notes=notes,
                 )
+            if not sample.get("user_context"):
+                joined = " ".join(item.get("text", "") for item in history[-4:])
+                sample["user_context"] = f"最近聊天摘要：{joined[:240]}"
+            if not sample.get("memory_evidence"):
+                sample["memory_evidence"] = "样本内聊天记录显示该话题可作为记忆证据。"
+            if not sample.get("open_loop"):
+                sample["open_loop"] = "待判断：是否存在适合低打扰跟进的未完成事项。"
             samples.append(sample)
         except Exception as err:  # noqa: BLE001 - per-row conversion should not stop batch
             result.skipped += 1
