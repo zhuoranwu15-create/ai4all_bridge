@@ -11,6 +11,12 @@ import pytest
 pytest.importorskip("psycopg")
 pytest.importorskip("pytest_postgresql")
 
+# 见 test_db_backend_pg.py 同款说明：pytest-postgresql 已是必装依赖，纯 SQLite 档需靠
+# 本地 PG 工具链(pg_config)是否存在来决定跳过，否则 `make test` 在无本地 PG 的开发机上 ERROR。
+import shutil
+if shutil.which("pg_config") is None:
+    pytest.skip("缺 pg_config（未装本地 PG 开发工具链），跳过真 PG 测试", allow_module_level=True)
+
 try:
     from pytest_postgresql import factories as _pg_factories
 

@@ -17,7 +17,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.9"
+          python-version: "3.11"   # 对齐 dev/生产 venv（3.11），避免版本漂移逃过门禁
           cache: pip
           cache-dependency-path: requirements.txt
 

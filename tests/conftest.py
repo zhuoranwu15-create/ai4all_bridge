@@ -12,6 +12,11 @@ from unittest.mock import patch, MagicMock
 # ---------------------------------------------------------------------------
 import app.config as _app_config  # noqa: E402
 _app_config.settings.database_url = ""
+# 同类 ambient .env 泄漏：dev/生产 .env 常把 openclaw_cli_path 设成绝对路径（CLI 不在服务 PATH 时），
+# 会泄漏进直接用全局 settings 的 openclaw/runtime_health/node 测试——它们断言命令首元素为裸名 "openclaw"，
+# 装了 CLI 的开发机上 cmd[0] 变成绝对路径致误判失败（CI/干净环境无 .env 故不暴露）。在此固定回默认裸名，
+# 使测试与本机 .env 无关；需要绝对路径的测试自行 monkeypatch 覆盖。
+_app_config.settings.openclaw_cli_path = "openclaw"
 
 
 # ---------------------------------------------------------------------------
