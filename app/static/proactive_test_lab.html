@@ -202,6 +202,45 @@
       flex-direction: column;
       gap: 8px;
     }
+    .workflow-guide {
+      border: 1px solid var(--primary-line);
+      background: var(--primary-soft);
+      border-radius: var(--border-radius-md);
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .workflow-title {
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .workflow-steps {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .workflow-step {
+      display: flex;
+      gap: 6px;
+      align-items: flex-start;
+    }
+    .workflow-step b {
+      flex: 0 0 auto;
+      width: 18px;
+      height: 18px;
+      display: grid;
+      place-items: center;
+      border-radius: 999px;
+      background: #fff;
+      color: var(--primary);
+      border: 1px solid var(--primary-line);
+      font-size: 11px;
+    }
 
     /* Section Cards within Left Rail */
     .section-card {
@@ -251,6 +290,11 @@
     }
     .section-collapsible h4 { margin-top: 10px; margin-bottom: 5px; font-size: 13px; }
     .section-collapsible h4:first-of-type { margin-top: 0; }
+    .section-help {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
 
     /* Form Elements */
     .field-group { display: flex; flex-direction: column; gap: 5px; }
@@ -873,6 +917,54 @@
     .collapse-btn svg { transition: transform 0.2s ease; }
     .app-container.sidebar-collapsed .collapse-btn svg { transform: rotate(180deg); }
 
+    /* 准备样本折叠项 */
+    .import-sub {
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      background: var(--panel);
+      overflow: hidden;
+    }
+    .import-sub summary {
+      padding: 7px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text);
+      outline: none;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .import-sub summary::after { content: '▸'; color: var(--muted); font-size: 11px; }
+    .import-sub[open] summary::after { content: '▾'; }
+    .import-sub summary::-webkit-details-marker { display: none; }
+    .import-sub-body {
+      padding: 10px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--panel-soft);
+    }
+
+    /* Filter row */
+    .filter-row { display: flex; gap: 6px; }
+    .filter-row select { flex: 1; font-size: 12px; padding: 6px 8px; }
+
+    /* Generate bar — fixed to bottom of left-rail */
+    .generate-bar {
+      flex-shrink: 0;
+      padding: 10px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .generate-bar .status-message { text-align: center; }
+
     /* Responsive Adjustments */
     @media (max-width: 1280px) {
       .global-header h1 { font-size: 16px; }
@@ -970,6 +1062,373 @@
       .app-container.sidebar-collapsed .left-rail .tab::before { content: none; }
       .collapse-btn { display: none; }
     }
+
+    /* Stepper & Three-step Redesign */
+    .stepper-header {
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel-soft);
+      flex-shrink: 0;
+    }
+    .stepper-tabs {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+    }
+    .step-tab {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 2px;
+      border-radius: var(--border-radius-sm);
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      cursor: not-allowed;
+      opacity: 0.5;
+      transition: all 0.2s ease;
+      position: relative;
+    }
+    .step-tab.unlocked {
+      cursor: pointer;
+      opacity: 0.9;
+    }
+    .step-tab.unlocked:hover {
+      background: var(--line-soft);
+      border-color: var(--line-strong);
+    }
+    .step-tab.active {
+      background: #ffffff;
+      border-color: var(--primary);
+      color: var(--primary);
+      box-shadow: 0 2px 4px rgba(55, 95, 114, 0.08);
+      font-weight: 600;
+      opacity: 1;
+      cursor: pointer;
+    }
+    .step-badge {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--line-strong);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 700;
+      margin-bottom: 2px;
+    }
+    .step-tab.active .step-badge {
+      background: var(--primary);
+    }
+    .step-tab.unlocked .step-badge {
+      background: var(--primary-line);
+      color: var(--primary);
+    }
+    .step-label {
+      font-size: 10px;
+    }
+    .step-arrow {
+      color: var(--line-strong);
+      font-size: 9px;
+    }
+    .step-count {
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      background: var(--line-strong);
+      color: #ffffff;
+      font-size: 8px;
+      font-weight: 700;
+      padding: 1px 3px;
+      border-radius: 999px;
+      min-width: 12px;
+      text-align: center;
+    }
+    .step-tab.active .step-count {
+      background: var(--primary);
+    }
+
+    /* Step Panel Layouts & Central Modal Overlay */
+    .step-modal-backdrop {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(16, 24, 40, 0.45);
+      backdrop-filter: blur(5px);
+      -webkit-backdrop-filter: blur(5px);
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .step-modal-content {
+      background: #ffffff;
+      border-radius: var(--border-radius-lg);
+      box-shadow: 0 20px 24px -4px rgba(16, 24, 40, 0.1), 0 8px 8px -4px rgba(16, 24, 40, 0.04);
+      width: 960px;
+      max-width: 95%;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--line-strong);
+      animation: modalFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes modalFadeIn {
+      from { opacity: 0; transform: scale(0.96) translateY(10px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+    .step-modal-header {
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--line-soft);
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      background: var(--panel-soft);
+    }
+    .step-modal-header-text h2 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+    }
+    .step-modal-header-text p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .step-modal-body {
+      padding: 24px;
+      overflow-y: auto;
+      flex-grow: 1;
+      background: #fff;
+    }
+    .step-modal-footer {
+      padding: 16px 24px;
+      border-top: 1px solid var(--line-soft);
+      display: flex;
+      justify-content: flex-end;
+      background: var(--panel-soft);
+    }
+    
+    .import-columns-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .import-card {
+      background: #ffffff;
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      height: 100%;
+    }
+    .import-card:hover {
+      border-color: var(--primary);
+      box-shadow: 0 12px 20px rgba(16, 24, 40, 0.06);
+      transform: translateY(-2px);
+    }
+    .import-card h4 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid var(--line-soft);
+      padding-bottom: 8px;
+    }
+    .import-card p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.5;
+      flex-grow: 1;
+    }
+    
+    /* File upload container style */
+    .file-upload-zone {
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--border-radius-sm);
+      padding: 18px 12px;
+      text-align: center;
+      background: var(--panel-soft);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .file-upload-zone:hover {
+      border-color: var(--primary);
+      background: #fff;
+    }
+    
+    .step-panel {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      height: 100%;
+      position: relative;
+    }
+    
+    /* Navigation shortcut banner */
+    .nav-shortcut-banner {
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: var(--border-radius-sm);
+      background: var(--primary-soft);
+      border: 1px solid var(--primary-line);
+      text-align: center;
+    }
+
+    /* Scrollable lists within steps */
+    .step-scroll-list {
+      flex-grow: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 2px;
+    }
+    .step-scroll-list::-webkit-scrollbar {
+      width: 4px;
+    }
+    .step-scroll-list::-webkit-scrollbar-thumb {
+      background-color: var(--line-strong);
+      border-radius: 2px;
+    }
+
+    /* Selection counter bar */
+    .selection-counter-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: var(--panel-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-sm);
+      padding: 6px 10px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    /* Custom Generation Status Overlay during build */
+    .generation-progress-box {
+      border: 1px solid var(--primary-line);
+      background: var(--primary-soft);
+      border-radius: var(--border-radius-md);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+      text-align: center;
+    }
+    
+    /* Collapsed sidebar stepper fixes */
+    .app-container.sidebar-collapsed .stepper-tabs {
+      flex-direction: column;
+      gap: 6px;
+    }
+    .app-container.sidebar-collapsed .step-arrow {
+      display: none;
+    }
+    .app-container.sidebar-collapsed .step-tab {
+      width: 40px;
+      height: 40px;
+      padding: 0;
+    }
+    .app-container.sidebar-collapsed .step-tab .step-label {
+      display: none;
+    }
+    .app-container.sidebar-collapsed .step-tab .step-badge {
+      margin-bottom: 0;
+      width: 20px;
+      height: 20px;
+      font-size: 11px;
+    }
+    .app-container.sidebar-collapsed .step-tab .step-count {
+      top: -2px;
+      right: -2px;
+    }
+
+    .progress-spinner {
+      border: 2px solid rgba(255,255,255,0.3);
+      border-radius: 50%;
+      border-top: 2px solid #fff;
+      width: 14px;
+      height: 14px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    /* Redesigned 2-column layout for sample cards */
+    .sample-card {
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: flex-start !important;
+      gap: 10px !important;
+      padding: 10px !important;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--border-radius-md);
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .sample-card-select-col {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 18px; /* Center with card identity title */
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    .sample-card-select-col input[type="checkbox"] {
+      width: 15px;
+      height: 15px;
+      cursor: pointer;
+      margin: 0;
+    }
+    .sample-card-content-col {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0; /* Prevents text overflow */
+    }
+    .sample-card.checked-card {
+      background-color: var(--primary-soft) !important;
+      border-color: var(--primary-line) !important;
+    }
+
+    /* Dynamic layouts for wide screens to avoid cramped columns in Step 2 */
+    @media (min-width: 1025px) {
+      .main-layout-grid.step2-layout {
+        grid-template-columns: 480px 1fr !important;
+      }
+      .main-layout-grid.step2-layout .right-panel {
+        display: none !important;
+      }
+      .main-layout-grid.step3-layout {
+        grid-template-columns: 320px minmax(520px, 1fr) 340px !important;
+      }
+    }
   </style>
 </head>
 <body>
@@ -1002,90 +1461,171 @@
       </div>
     </header>
 
-    <div class="main-layout-grid">
-      <aside id="leftRail" class="left-rail">
-        <div class="left-rail-header">
-          <div class="tabs">
-            <button id="tabCandidates" class="tab active" onclick="selectQueueMode('candidates')">Review Queue <span id="navQueueCount" class="tab-count">0</span></button>
-            <button id="tabSamples" class="tab" onclick="selectQueueMode('samples')">Sample Pool <span id="navSampleCount" class="tab-count">0</span></button>
+    <!-- STEP 1: IMPORT SAMPLES (CENTRAL MODAL DASHBOARD OVERLAY) -->
+    <div id="panelStep1" class="step-modal-backdrop" style="display: flex;">
+      <div class="step-modal-content">
+        <div class="step-modal-header">
+          <div class="step-modal-header-text">
+            <h2>准备测试样本 (第一步：准备样本)</h2>
+            <p>评估测试台需要对话上下文作为输入。请选择以下三种方式之一导入测试样本：</p>
+          </div>
+          <button class="btn btn-ghost btn-sm" style="color:var(--muted); font-size:16px; font-weight:700;" onclick="unlockStep(2)" title="关闭">✕</button>
+        </div>
+        <div class="step-modal-body">
+          <div class="import-columns-grid">
+            <!-- Method A: Synthetic -->
+            <div class="import-card">
+              <h4><span style="color:var(--primary);">◈</span> 自动套入合成样本</h4>
+              <p>一键自动向数据库导入 300 条模拟真实对话的上下文测试样本，覆盖 reactivation、待办跟进、内容邀请等场景。最快捷，推荐开发测试首选。</p>
+              <button class="btn btn-primary" style="width:100%; margin-top: auto;" onclick="bootstrapSamples()">一键导入 300条合成样本</button>
+            </div>
+
+            <!-- Method B: File Upload -->
+            <div class="import-card">
+              <h4><span>↑</span> 本地文件导入 (JSON/JSONL)</h4>
+              <p>导入您本地导出的自定义微信会话上下文记录（符合系统 message 格式的 JSON 数组文件）。</p>
+              <div class="file-upload-zone" onclick="document.getElementById('sampleFile').click()">
+                <span id="fileUploadStatus" style="font-size:11px; color:var(--muted);">点击选择 JSON / JSONL 数据文件</span>
+                <input id="sampleFile" type="file" accept=".json,.jsonl,application/json" style="display:none;" onchange="handleFileSelect(this)">
+              </div>
+              <button class="btn btn-secondary" style="width:100%; margin-top: auto;" onclick="importFile()">上传并执行导入</button>
+            </div>
+
+            <!-- Method C: Real Session -->
+            <div class="import-card" style="gap: 10px;">
+              <h4><span>↓</span> 从真实账号拉取微信上下文</h4>
+              <p>指定微信 desensitized 账号的 Account ID 导入最近 120 条微信聊天会话记录。</p>
+              
+              <div class="field-group">
+                <label for="realAccountId">Account ID (必填)</label>
+                <input id="realAccountId" placeholder="例如：86f866663cf9-im-bot" style="font-size: 12px; padding: 6px;">
+              </div>
+              
+              <div class="field-group-inline" style="display:flex; gap:6px;">
+                <div class="field-group" style="flex:1;">
+                  <label for="realSessionId">Session ID (可选)</label>
+                  <input id="realSessionId" placeholder="最新" style="font-size: 12px; padding: 6px;">
+                </div>
+                <div class="field-group" style="width:60px;">
+                  <label for="realContextLimit">条数</label>
+                  <input id="realContextLimit" type="number" min="1" max="200" value="120" style="font-size: 12px; padding: 6px;">
+                </div>
+              </div>
+              
+              <div class="field-group">
+                <label for="realScenario">Scenario 业务类型</label>
+                <select id="realScenario" style="font-size: 12px; padding: 6px;">
+                  <option value="account_check">task_followup (待办跟进)</option>
+                  <option value="reactivation_topic">reactivation (静默激活)</option>
+                  <option value="content_invitation">content_invitation (内容邀请)</option>
+                </select>
+              </div>
+              
+              <button class="btn btn-primary" style="width:100%; margin-top: auto;" onclick="createSampleFromSession()">拉取微信上下文</button>
+            </div>
           </div>
         </div>
+        <div class="step-modal-footer">
+          <button class="btn btn-ghost" style="color:var(--primary); font-weight:600;" onclick="unlockStep(2)">已有数据？跳过导入直接选择样本 ➔</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-layout-grid">
+      <aside id="leftRail" class="left-rail">
+        <div class="stepper-header">
+          <div class="stepper-tabs">
+            <button id="btnStep1" class="step-tab active" onclick="selectQueueMode('step1')" title="第一步：准备样本">
+              <span class="step-badge">1</span>
+              <span class="step-label">导入样本</span>
+            </button>
+            <div class="step-arrow">➔</div>
+            <button id="btnStep2" class="step-tab" onclick="selectQueueMode('step2')" title="第二步：选择样本">
+              <span class="step-badge">2</span>
+              <span class="step-label">选择样本</span>
+              <span id="navSampleCount" class="step-count">0</span>
+            </button>
+            <div class="step-arrow">➔</div>
+            <button id="btnStep3" class="step-tab" onclick="selectQueueMode('step3')" title="第三步：生成候选 & 审核打标">
+              <span class="step-badge">3</span>
+              <span class="step-label">审核打标</span>
+              <span id="navQueueCount" class="step-count">0</span>
+            </button>
+          </div>
+        </div>
+        
         <div class="left-rail-body">
-          <section class="section-card section-filters">
-            <h3 class="section-title">Queue Filters</h3>
-            <div class="field-group">
-              <label for="candidateScenario">Scenario</label>
-              <select id="candidateScenario" onchange="loadCandidates()">
-                <option value="">全部类型</option>
+          <!-- STEP 2: SELECT SAMPLES -->
+          <div id="panelStep2" class="step-panel" style="display: none;">
+            <div class="filter-row">
+              <select id="sampleScenario" onchange="loadSamples()" aria-label="Filter samples by scenario">
+                <option value="">全部 scenario 场景</option>
                 <option>account_check</option>
                 <option>reactivation_topic</option>
                 <option>content_invitation</option>
               </select>
+              <select id="sampleSource" onchange="loadSamples()" aria-label="Filter samples by source">
+                <option value="">全部数据来源</option>
+                <option>synthetic</option>
+                <option>manual</option>
+                <option>real_desensitized</option>
+                <option>public_dataset</option>
+              </select>
             </div>
-            <div class="field-group">
-              <label for="reviewStatusFilter">Review Status</label>
+            
+            <div class="selection-counter-bar">
+              <label class="checkbox-label">
+                <input type="checkbox" id="selectAllSamples" onclick="toggleSelectAllSamples(this)">
+                <span>全选本页</span>
+              </label>
+              <span id="selectionCounterText">已选 0 个样本</span>
+              <button class="btn btn-ghost btn-sm" style="padding: 2px 4px; color: var(--danger);" onclick="resetWorkflow()">重新导入</button>
+            </div>
+
+            <!-- Scrollable list of sample cards -->
+            <div id="sampleQueueBody" class="step-scroll-list card-list">
+              <div class="empty-state">加载中...</div>
+            </div>
+          </div>
+
+          <!-- STEP 3: CANDIDATE AUDIT QUEUE -->
+          <div id="panelStep3" class="step-panel" style="display: none;">
+            <div class="filter-row">
+              <select id="candidateScenario" onchange="loadCandidates()">
+                <option value="">全部场景类型</option>
+                <option>account_check</option>
+                <option>reactivation_topic</option>
+                <option>content_invitation</option>
+              </select>
               <select id="reviewStatusFilter" onchange="loadCandidates()">
-                <option value="">全部状态</option>
+                <option value="">全部审核状态</option>
                 <option value="unreviewed">待审核</option>
                 <option value="reviewed">已审核</option>
               </select>
             </div>
-          </section>
 
-          <section class="queue-list-shell" aria-label="Review list">
-            <div class="queue-list-title">
-              <span id="queueListTitle">Review queue</span>
-              <span id="queueListHint">按风险和分数扫描</span>
+            <!-- Scrollable list of candidate cards -->
+            <div id="candidateQueueBody" class="step-scroll-list card-list">
+              <div class="empty-state">还没有候选。<br>先在 <b>第二步</b> 勾选样本，再点击生成。</div>
             </div>
-            <div id="queueBody" class="card-list">
-              <div class="empty-state">加载中...</div>
+            
+            <div style="padding: 8px 10px; border-top: 1px solid var(--line); display:flex; justify-content:space-between; align-items:center; background: var(--panel-soft);">
+              <span style="font-size:11px; color:var(--muted);">正在审核候选消息</span>
+              <button class="btn btn-secondary btn-sm" onclick="selectQueueMode('step2')">← 返回第二步</button>
             </div>
-          </section>
+          </div>
 
-          <details class="section-collapsible">
-            <summary>Sample Management</summary>
-            <div class="section-content">
-              <h4>Import from File</h4>
-              <input id="sampleFile" type="file" accept=".json,.jsonl,application/json" aria-label="Import samples from file">
-              <button class="btn btn-secondary" onclick="importFile()">导入文件</button>
-              <button class="btn btn-secondary" onclick="bootstrapSamples()">自动套入 300 条样本</button>
-              <div class="field-group-inline">
-                <select id="sampleScenario" onchange="loadSamples()" aria-label="Filter samples by scenario">
-                  <option value="">全部 scenario</option>
-                  <option>account_check</option>
-                  <option>reactivation_topic</option>
-                  <option>content_invitation</option>
-                </select>
-                <select id="sampleSource" onchange="loadSamples()" aria-label="Filter samples by source">
-                  <option value="">全部 source</option>
-                  <option>synthetic</option>
-                  <option>manual</option>
-                  <option>real_desensitized</option>
-                  <option>public_dataset</option>
-                </select>
-              </div>
-              <button class="btn btn-primary" onclick="runGeneration()">生成选中样本</button>
-              <div id="generateStatus" class="status-message">选择样本后生成 proactive draft。</div>
+        </div>
 
-              <h4>Create from Real Session</h4>
-              <input id="realAccountId" placeholder="account_id" aria-label="Real account ID">
-              <div class="field-group-inline">
-                <input id="realSessionId" placeholder="session_id 可空" aria-label="Real session ID (optional)">
-                <input id="realContextLimit" type="number" min="1" max="200" value="120" aria-label="Context message limit">
-              </div>
-              <select id="realScenario" aria-label="Scenario for real session sample">
-                <option value="account_check">task_followup</option>
-                <option value="reactivation_topic">reactivation</option>
-                <option value="content_invitation">content_invitation</option>
-              </select>
-              <button class="btn btn-secondary" onclick="createSampleFromSession()">从真实会话拉长上下文</button>
-            </div>
-          </details>
+        <!-- Floating Candidate Generation Control Bar (Fixed to bottom of Step 2) -->
+        <div id="generateBar" class="generate-bar" style="display:none;">
+          <button id="generateBtn" class="btn btn-primary" onclick="runGeneration()">生成选中样本的候选</button>
+          <div id="generateStatus" class="status-message">在上方列表勾选样本，再点击生成。</div>
         </div>
       </aside>
 
       <main id="detailView" class="center-workspace detail-view">
-        <div id="detailBox" class="empty-state">还没有选择候选。左侧生成样本后，在 Review queue 点开一张卡片。</div>
+        <div id="detailBox" class="empty-state">从左侧列表选择一条候选，这里展示详情和 AI 推理过程。</div>
       </main>
 
       <aside id="reviewPanel" class="right-panel review-panel">
@@ -1097,6 +1637,7 @@
             <button class="btn btn-primary" onclick="quickApprove()">通过</button>
           </div>
         </div>
+        <div id="reviewPlaceholder" class="empty-state" style="margin:10px; font-size:12px; line-height:1.7;">从左侧 <b>② 候选</b> tab 点开一条卡片，这里显示审核表单。</div>
         <div id="reviewForm" class="review-form" style="display:none;">
           <section class="section-card">
             <h3 class="section-title">Decision & Promote</h3>
@@ -1264,9 +1805,11 @@
     let token = localStorage.getItem('proactive_test_admin_token') || 'dev-admin-token';
     let samples = [];
     let candidates = [];
-    let queueMode = 'candidates';
+    let queueMode = 'step1';  // 默认打开第一步添加样本
     let selectedSampleId = null;
     let selectedCandidate = null;
+    let maxUnlockedStep = 1;
+    let checkedSampleIdsCache = new Set();
 
     document.getElementById('adminToken').value = token;
     const choiceGroups = [
@@ -1370,6 +1913,12 @@
       const el = document.getElementById('globalStatus');
       el.className = 'status-message ' + kind;
       el.textContent = text || '';
+    }
+    function updateGenerateBtn() {
+      const count = selectedSampleIds().length;
+      const btn = document.getElementById('generateBtn');
+      if (!btn) return;
+      btn.textContent = count > 0 ? `生成选中 ${count} 个样本的候选 →` : '生成选中样本的候选';
     }
     function toggleSidebar() {
       const root = document.getElementById('appRoot');
@@ -1509,54 +2058,199 @@
         </div>
       </article>`;
     }
+function handleFileSelect(input) {
+      const status = document.getElementById('fileUploadStatus');
+      if (input.files && input.files[0]) {
+        status.textContent = `已选择: ${input.files[0].name}`;
+        status.style.color = 'var(--primary)';
+      } else {
+        status.textContent = '点击选择 JSON / JSONL 数据文件';
+        status.style.color = 'var(--muted)';
+      }
+    }
+    
+    function handleSampleCardClick(event, sampleId) {
+      if (event.target.classList.contains('sampleCheck')) return;
+      const card = event.currentTarget;
+      const cb = card.querySelector('.sampleCheck');
+      if (cb) {
+        cb.checked = !cb.checked;
+        updateGenerateBtn();
+      }
+      selectSample(sampleId);
+    }
+    
+    function toggleSelectAllSamples(checkbox) {
+      const checkboxes = document.querySelectorAll('#sampleQueueBody .sampleCheck');
+      checkboxes.forEach(cb => {
+        cb.checked = checkbox.checked;
+      });
+      updateGenerateBtn();
+    }
+
+    function isSampleChecked(id) {
+      return checkedSampleIdsCache.has(id);
+    }
+
+    function updateGenerateBtn() {
+      document.querySelectorAll('#sampleQueueBody .sampleCheck').forEach(cb => {
+        if (cb.checked) checkedSampleIdsCache.add(cb.value);
+        else checkedSampleIdsCache.delete(cb.value);
+      });
+      
+      const count = checkedSampleIdsCache.size;
+      const btn = document.getElementById('generateBtn');
+      if (btn) {
+        btn.textContent = count > 0 ? `生成选中 ${count} 个样本的候选 ➔` : '生成选中样本的候选';
+        btn.disabled = count === 0;
+      }
+      const counterText = document.getElementById('selectionCounterText');
+      if (counterText) {
+        counterText.textContent = `已选 ${count} 个样本`;
+      }
+    }
+
+    function setStep(step) {
+      if (step > maxUnlockedStep) return;
+      
+      const grid = document.querySelector('.main-layout-grid');
+      if (grid) {
+        grid.classList.remove('step2-layout', 'step3-layout');
+        if (step === 2) {
+          grid.classList.add('step2-layout');
+        } else if (step === 3) {
+          grid.classList.add('step3-layout');
+        }
+      }
+
+      document.getElementById('panelStep1').style.display = 'none';
+      document.getElementById('panelStep2').style.display = 'none';
+      document.getElementById('panelStep3').style.display = 'none';
+      document.getElementById('generateBar').style.display = 'none';
+
+      for (let i = 1; i <= 3; i++) {
+        const btn = document.getElementById(`btnStep${i}`);
+        if (btn) {
+          btn.classList.remove('active');
+          if (i <= maxUnlockedStep) {
+            btn.classList.add('unlocked');
+          } else {
+            btn.classList.remove('unlocked');
+          }
+        }
+      }
+
+      document.getElementById(`btnStep${step}`).classList.add('active');
+      queueMode = 'step' + step;
+
+      if (step === 1) {
+        document.getElementById('panelStep1').style.display = 'flex';
+      } else if (step === 2) {
+        document.getElementById('panelStep2').style.display = 'flex';
+        document.getElementById('generateBar').style.display = 'flex';
+        loadSamples();
+      } else if (step === 3) {
+        document.getElementById('panelStep3').style.display = 'flex';
+        loadCandidates();
+      }
+      renderQueue();
+    }
+    
+    function unlockStep(step) {
+      if (step > maxUnlockedStep) {
+        maxUnlockedStep = step;
+      }
+      setStep(step);
+    }
+    
+    function resetWorkflow() {
+      maxUnlockedStep = 1;
+      checkedSampleIdsCache.clear();
+      const sa = document.getElementById('selectAllSamples');
+      if (sa) sa.checked = false;
+      updateGenerateBtn();
+      setStep(1);
+      const sf = document.getElementById('sampleFile');
+      if (sf) sf.value = '';
+      const fus = document.getElementById('fileUploadStatus');
+      if (fus) fus.textContent = '点击选择 JSON / JSONL 数据文件';
+      const ra = document.getElementById('realAccountId');
+      if (ra) ra.value = '';
+    }
+
+    function selectQueueMode(mode) {
+      if (mode === 'samples' || mode === 'step2') {
+        setStep(2);
+      } else if (mode === 'candidates' || mode === 'step3') {
+        setStep(3);
+      } else if (mode === 'step1') {
+        setStep(1);
+      }
+    }
+
     function renderSampleCard(sample) {
-      const active = selectedSampleId === sample.sample_id ? 'active' : '';
-      const preview = (sample.chat_history || []).slice(-3).map(m => `<span>${roleLabel(m.role)}: ${shortText(messageText(m), 30)}</span>`).join(' / ');
-      return `<article class="sample-card ${active}" onclick="selectSample('${esc(sample.sample_id)}')">
-        <div class="card-header">
-          <div class="card-identity">
-            <strong>${esc(sample.sample_id)}</strong>
-            <span class="subtle">${esc(sample.source || '-')} · 静默期 ${esc(sample.silence_hours || 0)}h</span>
+      const active = selectedSampleId === sample.sample_id ? ' active' : '';
+      const checked = isSampleChecked(sample.sample_id) ? 'checked' : '';
+      const checkedClass = checked ? ' checked-card' : '';
+      const preview = (sample.chat_history || []).slice(-3).map(m => `<span>${roleLabel(m.role)}: ${shortText(messageText(m), 25)}</span>`).join(' / ');
+      return `<article class="sample-card${active}${checkedClass}" onclick="handleSampleCardClick(event, '${esc(sample.sample_id)}')">
+        <div class="sample-card-select-col">
+          <input class="sampleCheck" type="checkbox" value="${esc(sample.sample_id)}" ${checked} onclick="event.stopPropagation(); updateGenerateBtn();">
+        </div>
+        <div class="sample-card-content-col">
+          <div class="card-header" style="padding: 0; margin: 0; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+            <div class="card-identity">
+              <strong>${esc(sample.sample_id)}</strong>
+              <span class="subtle">${esc(sample.source || '-')} · 静默 ${esc(sample.silence_hours || 0)}h</span>
+            </div>
           </div>
-          <label class="checkbox-label" onclick="event.stopPropagation()">
-            <input class="sampleCheck" type="checkbox" value="${esc(sample.sample_id)}"> 选中
-          </label>
+          <div class="card-meta-row" style="padding: 0; margin: 0;">
+            <span class="pill primary">${esc(scenarioLabel(sample.scenario_type))}</span>
+          </div>
+          <div class="card-draft-preview" style="padding: 7px 8px; margin: 0;">${preview || '无对话记录'}</div>
         </div>
-        <div class="card-meta-row">
-          <span class="pill primary">${esc(scenarioLabel(sample.scenario_type))}</span>
-          <span class="pill">${esc(sample.context_source || 'sample')}</span>
-        </div>
-        <div class="card-draft-preview">${preview || '无对话'}</div>
       </article>`;
     }
+
     function renderQueue() {
-      document.getElementById('tabCandidates').className = 'tab ' + (queueMode === 'candidates' ? 'active' : '');
-      document.getElementById('tabSamples').className = 'tab ' + (queueMode === 'samples' ? 'active' : '');
-      document.getElementById('queueListTitle').textContent = queueMode === 'samples' ? 'Sample pool' : 'Review queue';
-      document.getElementById('queueListHint').textContent = queueMode === 'samples' ? '勾选后批量生成' : '按风险和分数扫描';
-      const body = document.getElementById('queueBody');
-      if (queueMode === 'samples') {
-        body.innerHTML = samples.length ? samples.map(renderSampleCard).join('') : '<div class="empty-state">还没有样本。可以自动套入 300 条，或从真实会话拉长上下文。</div>';
-        return;
+      for (let i = 1; i <= 3; i++) {
+        const btn = document.getElementById(`btnStep${i}`);
+        if (btn) {
+          btn.className = 'step-tab ' + (queueMode === 'step' + i ? 'active' : '') + (i <= maxUnlockedStep ? ' unlocked' : '');
+        }
       }
-      body.innerHTML = candidates.length ? candidates.map(renderCandidateCard).join('') : '<div class="empty-state">还没有候选。先在 Sample pool 选样本并生成。</div>';
-    }
-    function selectQueueMode(mode) {
-      queueMode = mode;
-      renderQueue();
+
+      if (queueMode === 'step2') {
+        const sampleBody = document.getElementById('sampleQueueBody');
+        if (sampleBody) {
+          sampleBody.innerHTML = samples.length
+            ? samples.map(renderSampleCard).join('')
+            : '<div class="empty-state">样本列表为空。<br>请返回 <b>第一步</b> 添加样本。</div>';
+        }
+        updateGenerateBtn();
+      } else if (queueMode === 'step3') {
+        const candidateBody = document.getElementById('candidateQueueBody');
+        if (candidateBody) {
+          candidateBody.innerHTML = candidates.length
+            ? candidates.map(renderCandidateCard).join('')
+            : '<div class="empty-state">还没有候选。<br>先在 <b>第二步</b> 勾选样本，再点击生成。</div>';
+        }
+      }
     }
 
     async function importFile() {
-      const file = document.getElementById('sampleFile').files[0];
-      if (!file) return;
+      const file = document.getElementById('sampleFile')?.files[0];
+      if (!file) return alert('请先选择文件。');
       setStatus('正在导入文件...');
       try {
         const raw = await file.text();
         const out = await api('/samples/import', {method:'POST', body:JSON.stringify({raw_text: raw})});
         setStatus(`导入 ${out.imported} 条，失败 ${out.failed} 条`, out.failed ? 'error' : 'ok');
         await refreshAll();
+        unlockStep(2);
       } catch (err) { setStatus(err.message || String(err), 'error'); }
     }
+    
     async function bootstrapSamples() {
       setStatus('正在自动套入样本...');
       try {
@@ -1564,13 +2258,15 @@
         const summary = out.import_db || {};
         setStatus(`已套入 ${summary.inserted || 0} 条，已存在 ${summary.skipped_existing || 0} 条，失败 ${summary.failed || 0} 条`, summary.failed ? 'error' : 'ok');
         await refreshAll();
+        unlockStep(2);
       } catch (err) { setStatus(err.message || String(err), 'error'); }
     }
+    
     async function createSampleFromSession() {
-      const accountId = document.getElementById('realAccountId').value.trim();
-      const sessionId = document.getElementById('realSessionId').value.trim();
-      const scenarioType = document.getElementById('realScenario').value;
-      const contextLimit = Number(document.getElementById('realContextLimit').value) || 120;
+      const accountId = document.getElementById('realAccountId')?.value.trim();
+      const sessionId = document.getElementById('realSessionId')?.value.trim();
+      const scenarioType = document.getElementById('realScenario')?.value;
+      const contextLimit = Number(document.getElementById('realContextLimit')?.value) || 120;
       if (!accountId) return setStatus('请先输入 account_id。', 'error');
       setStatus('正在从真实会话拉取长上下文...');
       try {
@@ -1580,9 +2276,10 @@
         selectedSampleId = out.sample.sample_id;
         setStatus(`已创建样本 ${out.sample.sample_id}，上下文 ${out.message_count} 条`, 'ok');
         await refreshAll();
-        selectQueueMode('samples');
+        unlockStep(2);
       } catch (err) { setStatus(err.message || String(err), 'error'); }
     }
+    
     async function loadSamples() {
       const qs = new URLSearchParams();
       const scenario = document.getElementById('sampleScenario').value;
@@ -1590,11 +2287,14 @@
       if (scenario) qs.set('scenario_type', scenario);
       if (source) qs.set('source', source);
       qs.set('limit', '100');
-      const out = await api('/samples?' + qs.toString());
-      samples = out.items || [];
-      document.getElementById('navSampleCount').textContent = samples.length;
-      renderQueue();
+      try {
+        const out = await api('/samples?' + qs.toString());
+        samples = out.items || [];
+        document.getElementById('navSampleCount').textContent = samples.length;
+        renderQueue();
+      } catch (err) { console.error(err); }
     }
+    
     async function loadCandidates() {
       const qs = new URLSearchParams();
       const scenario = document.getElementById('candidateScenario').value;
@@ -1602,26 +2302,43 @@
       if (scenario) qs.set('scenario_type', scenario);
       if (reviewStatus) qs.set('review_status', reviewStatus);
       qs.set('limit', '100');
-      const out = await api('/candidates?' + qs.toString());
-      candidates = out.items || [];
-      document.getElementById('navQueueCount').textContent = candidates.length;
-      renderQueue();
+      try {
+        const out = await api('/candidates?' + qs.toString());
+        candidates = out.items || [];
+        document.getElementById('navQueueCount').textContent = candidates.length;
+        renderQueue();
+      } catch (err) { console.error(err); }
     }
+    
     async function runGeneration() {
-      const ids = selectedSampleIds();
-      if (!ids.length) return document.getElementById('generateStatus').textContent = '请先在 Sample pool 勾选样本。';
-      document.getElementById('generateStatus').className = 'status-message';
-      document.getElementById('generateStatus').textContent = 'generating...';
+      const ids = Array.from(checkedSampleIdsCache);
+      if (!ids.length) return alert('先在上方勾选样本，再生成候选。');
+      
+      const btn = document.getElementById('generateBtn');
+      const statusEl = document.getElementById('generateStatus');
+      btn.disabled = true;
+      btn.innerHTML = `<span class="progress-spinner"></span>正在生成候选文案...`;
+      statusEl.textContent = '模型正在并发生成中，这可能需要几秒钟...';
+      statusEl.className = 'status-message';
+
       try {
         const out = await api('/generate', {method:'POST', body:JSON.stringify({sample_ids: ids, dry_run: true})});
-        document.getElementById('generateStatus').textContent = `${out.run_id}: success ${out.success}, skip ${out.skip}, error ${out.error}`;
-        document.getElementById('generateStatus').className = `status-message ${out.error > 0 ? 'error' : 'ok'}`;
+        statusEl.textContent = `生成完成：成功 ${out.success}，跳过 ${out.skip}，失败 ${out.error}`;
+        statusEl.className = `status-message ${out.error > 0 ? 'error' : 'ok'}`;
+        
         await loadCandidates();
         await loadStats();
-        selectQueueMode('candidates');
+        unlockStep(3);
+        
+        if (candidates.length > 0) {
+          selectCandidate(candidates[0].id);
+        }
       } catch (err) {
-        document.getElementById('generateStatus').textContent = err.message || String(err);
-        document.getElementById('generateStatus').className = 'status-message error';
+        statusEl.textContent = err.message || String(err);
+        statusEl.className = 'status-message error';
+      } finally {
+        btn.disabled = false;
+        updateGenerateBtn();
       }
     }
     function selectSample(sampleId) {
@@ -1631,6 +2348,8 @@
       if (!sample) return;
 
       document.getElementById('reviewForm').style.display = 'none';
+      const rphS = document.getElementById('reviewPlaceholder');
+      if (rphS) rphS.style.display = 'block';
       document.getElementById('detailBox').innerHTML = `
         <h2 class="detail-title">Sample Context: ${esc(sample.sample_id)}</h2>
         <div class="detail-section compact-section">
@@ -1657,6 +2376,8 @@
       const l4 = selectedCandidate.l4_safety || {};
 
       document.getElementById('reviewForm').style.display = 'flex';
+      const rph = document.getElementById('reviewPlaceholder');
+      if (rph) rph.style.display = 'none';
       document.getElementById('detailBox').innerHTML = `
         <h2 class="detail-title">Candidate Detail: ${esc(selectedCandidate.id)}</h2>
         <p class="detail-subtitle subtle">Sample: ${esc(selectedCandidate.sample_id)}</p>
@@ -1832,6 +2553,14 @@
         }
       }
     });
+
+    // Checkbox delegation — update generate button text on any check/uncheck
+    document.getElementById('leftRail').addEventListener('change', (e) => {
+      if (e.target.classList.contains('sampleCheck')) updateGenerateBtn();
+    });
+
+    // Init: 默认打开第一步导入样本，引导用户先准备样本
+    selectQueueMode('step1');
 
     refreshAll().catch(err => setStatus(err.message || String(err), 'error'));
   </script>
