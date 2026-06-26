@@ -11,6 +11,14 @@ import pytest
 pytest.importorskip("psycopg")
 pytest.importorskip("pytest_postgresql")
 
+# pytest-postgresql 在 requirements.txt 内（PG 已是生产后端），故"纯 SQLite 机器没装它"的
+# 旧假设不再成立：仅 importorskip 不足以让纯 SQLite 档跳过本文件。还需本地 PG 工具链——
+# pytest-postgresql 7.x 起临时实例要 pg_config 探测版本。缺则优雅跳过，使 `make test`
+# 在"装了依赖但没本地 PG server"的开发机上也干净（CI/PG 档装了完整 postgresql，照常运行）。
+import shutil
+if shutil.which("pg_config") is None:
+    pytest.skip("缺 pg_config（未装本地 PG 开发工具链），跳过真 PG 测试", allow_module_level=True)
+
 from app.db import _backend  # noqa: E402
 
 postgresql_proc = None

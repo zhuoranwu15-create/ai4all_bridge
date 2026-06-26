@@ -217,7 +217,10 @@ def test_node_gateway_standalone_always_local(monkeypatch):
         return {"qrDataUrl": "x"}
 
     monkeypatch.setattr(node_gateway.openclaw_gateway, "start_weixin_qr_login", _fake_start)
-    # 默认 settings = standalone
+    # 显式注入 standalone：不能依赖进程 ambient settings——开发机 .env 可能设了 central,node，
+    # 会让 node_id="aliyun2" 被判为远程节点并真发 HTTP。与下方兄弟测试同款注入方式。
+    from app.config import Settings
+    monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="standalone"))
     out = node_gateway.node_start_qr(
         node_id="aliyun2", account_id="sess-1", gateway_timeout_ms=5000, start_timeout_ms=5000
     )
