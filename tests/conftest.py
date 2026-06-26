@@ -4,6 +4,17 @@ from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
+# ambient DATABASE_URL guard：本地/生产 .env 可能为「运行时」设了 DATABASE_URL（切 PG）。
+# 测试后端只由 AI4ALL_TEST_DB 决定、且每测试用独立库；因此在此把进程内 ambient
+# database_url 清空，避免它泄漏到未 patch settings 的测试——否则全局 is_postgres()
+# 会被误判（SQLite 连接跑出 PG 分支报错），PG 档下甚至会误连真实 dev/生产库。
+# 两档都生效：SQLite 档回到空串（→ database_path）；PG 档由 test_settings 各自注入临时库 DSN。
+# ---------------------------------------------------------------------------
+import app.config as _app_config  # noqa: E402
+_app_config.settings.database_url = ""
+
+
+# ---------------------------------------------------------------------------
 # 测试后端开关（1e）：默认 SQLite；AI4ALL_TEST_DB=postgres 时整套跑临时 PG。
 # PG 档由 pytest-postgresql 提供：postgresql_proc 起一个 session 级 PG 进程，
 # postgresql_db 为每个测试 create/drop 一个独立库（与 SQLite 的 tmp_path 每测试隔离对等）。
