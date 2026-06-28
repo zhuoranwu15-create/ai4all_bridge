@@ -52,6 +52,16 @@ class Settings(BaseSettings):
     llm_max_tool_rounds: int = 3
     llm_force_ipv4: bool = True
     llm_context_messages: int = 100
+    # 短期对话历史裁剪（仅作用于对话 history，不含 system prompt；详见
+    # docs/tech_design/context_window_token_budget_design.md）。
+    # 历史 token 预算：>0 时在条数窗口基础上再按 token 从最旧端裁剪、保留尾部最近；0=关闭（退回纯条数）。
+    llm_context_token_budget: int = 3000
+    # 单条历史消息字符硬上限：>0 时超长单条截断加 ...[已截断]（只改喂 LLM 副本，不改落库）；0=关闭。
+    llm_context_message_max_chars: int = 2000
+    # Token 压力滚动摘要总开关：涉及后台 LLM 调用成本，默认关，确认后按账号灰度开。
+    llm_rolling_summary_enabled: bool = False
+    # 本会话未被摘要覆盖的溢出消息达到该条数即触发后台滚动摘要（仅 rolling_summary 开启时生效）。
+    llm_rolling_summary_trigger_messages: int = 20
     llm_request_dump_enabled: bool = False
     llm_request_dump_dir: str = "tmp/llm_request_bodies/ai4all"
     # Agent runtime 对齐开关（Batch A）
@@ -83,7 +93,6 @@ class Settings(BaseSettings):
     rate_limit_daily_message: str = "今天聊得有点多了，我晚些时候再继续陪你。"
     rate_limit_rpm_message: str = "消息来得太快了，稍等一下再发我吧。"
     debug_trace_account_ids: str = ""
-    conversation_session_max_turns: int = 500
     conversation_session_business_day_start_hour: int = 4
     dreaming_scheduler_enabled: bool = False
     dreaming_scheduler_batch_size: int = 100

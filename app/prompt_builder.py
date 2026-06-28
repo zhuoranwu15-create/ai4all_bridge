@@ -6,11 +6,13 @@ section[stable|volatile]、char_limit、trim_priority），再按 token 预算�
 直接读取，免去手维护 ``*_chars`` / 僵尸 ``daily_notes_loaded`` 并避免与真实组装漂移。
 """
 import logging
-import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# token 估算口径与历史裁剪共用同一实现，避免两处 len/1.5 公式漂移（见 context_window）。
+from app.context_window import estimate_tokens as _estimate_tokens
 
 
 logger = logging.getLogger("ai4all.prompt_builder")
@@ -57,15 +59,6 @@ def _truncate(text: str, limit: int, block_name: str) -> str:
         "prompt block %s truncated: %d -> %d chars", block_name, len(text), limit
     )
     return truncated
-
-
-def _estimate_tokens(text: str) -> int:
-    """Rough token estimate for budget trimming only (NOT for billing).
-
-    中文约 1 token/字、英文/混排约 1 token/1.5 字；取 len/1.5 的 ceil 作保守近似。
-    精度不要求高——预算裁剪本身是粗粒度的兜底，真值计量走 LLM usage。
-    """
-    return math.ceil(len(text or "") / 1.5)
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +206,7 @@ class PromptBuilder:
         long_term_memory: Optional[str] = None,
         daily_notes: Optional[str] = None,
         carryover_summary: Optional[str] = None,
+        rolling_summary: Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         style: Optional[str] = None,
         tools: Optional[List[str]] = None,
@@ -236,6 +230,7 @@ class PromptBuilder:
             long_term_memory=long_term_memory,
             daily_notes=daily_notes,
             carryover_summary=carryover_summary,
+            rolling_summary=rolling_summary,
             system_prompt_override=system_prompt_override,
             style=style,
             tools=tools,
@@ -261,6 +256,7 @@ class PromptBuilder:
         long_term_memory: Optional[str] = None,
         daily_notes: Optional[str] = None,
         carryover_summary: Optional[str] = None,
+        rolling_summary: Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         style: Optional[str] = None,
         tools: Optional[List[str]] = None,
@@ -401,6 +397,12 @@ class PromptBuilder:
         if carryover_summary and carryover_summary.strip():
             carryover_text = _truncate(carryover_summary, 2000, "carryover_summary")
             _add("carryover_summary", f"【会话延续摘要】\n{carryover_text}", char_limit=2000, trim_priority=20)
+
+        # Block 11b: Rolling intra-session summary (token 压力下已滑出窗口的本会话头部消息摘要)。
+        # 与 carryover（跨 session）语义不同、并存不互斥；trim_priority 介于二者与长期记忆之间。
+        if rolling_summary and rolling_summary.strip():
+            rolling_text = _truncate(rolling_summary, 1000, "rolling_summary")
+            _add("rolling_summary", f"【更早对话摘要】\n{rolling_text}", char_limit=1000, trim_priority=25)
 
         # Block 12: Daily Notes
         if daily_notes and daily_notes.strip():

@@ -47,6 +47,7 @@ from app.moderation.service import (
     enqueue_message_for_moderation,
     screen_inbound_message_sync,
 )
+from app.context_window import trim_history_rows
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.proactive.state import ensure_account_state
@@ -447,15 +448,25 @@ def build_turn_llm_input(
         account_id=account_id,
         limit=settings.llm_context_messages,
     )
+    # Token 预算 + 单消息硬上限裁剪（默认开；仅作用于对话历史，不含 system prompt）。
+    # 关键：tool_evidence / carryover 抑制 / history_metadata 一律基于裁剪后的 kept_rows，
+    # 保证"实际丢了哪些消息"与各下游判断一致，避免既丢原文又抑制摘要的上下文双丢。
+    trim_result = trim_history_rows(
+        history_rows,
+        token_budget=int(getattr(settings, "llm_context_token_budget", 0) or 0),
+        per_message_max_chars=int(getattr(settings, "llm_context_message_max_chars", 0) or 0),
+    )
+    kept_rows = trim_result["kept"]
     history = [
         {"role": row["role"], "content": row["content"]}
-        for row in history_rows
+        for row in kept_rows
     ]
     if getattr(settings, "llm_tool_evidence_replay_enabled", True):
         from app.tool_evidence_replay import inject_tool_evidence_replay
+        # history 由 kept_rows 构建，inject 内部 zip(history, rows) 需 1:1 对齐，故同传 kept_rows。
         history = inject_tool_evidence_replay(
             history,
-            history_rows,
+            kept_rows,
             account_id,
             enabled=True,
             max_turns=int(getattr(settings, "llm_tool_evidence_turns", 2)),
@@ -471,10 +482,15 @@ def build_turn_llm_input(
     )
     suppress_carryover = _history_covers_previous_session(
         current_session_id=current_session_id,
-        history_rows=history_rows,
+        history_rows=kept_rows,
     )
     carryover_summary = None if suppress_carryover else session.get("carryover_summary")
-    history_metadata = _summarize_history_rows(history_rows)
+    # Token 压力滚动摘要（P3，默认关）：摘要只覆盖已滑出窗口的本会话头部消息，
+    # 一旦生成即不在当前窗口内，故 session.rolling_summary 非空时直接注入。
+    rolling_summary = None
+    if getattr(settings, "llm_rolling_summary_enabled", False):
+        rolling_summary = (session.get("rolling_summary") or "").strip() or None
+    history_metadata = _summarize_history_rows(kept_rows)
     carryover_metadata = {
         "source_chars": len(session.get("carryover_summary") or ""),
         "included": bool(carryover_summary),
@@ -486,6 +502,10 @@ def build_turn_llm_input(
         "history_cross_session": True,
         "history_session_count": history_metadata["session_count"],
         "history": history_metadata,
+        "history_dropped_count": trim_result["metrics"]["dropped_count"],
+        "history_truncated_count": trim_result["metrics"]["truncated_count"],
+        "history_est_tokens": trim_result["metrics"]["kept_est_tokens"],
+        "rolling_summary_included": bool(rolling_summary),
         "soul_chars": len(soul),
         "user_prefs_chars": len(user_prefs),
         "long_term_memory_chars": len(long_term_memory),
@@ -545,6 +565,7 @@ def build_turn_llm_input(
         long_term_memory=long_term_memory,
         daily_notes=None,
         carryover_summary=carryover_summary,
+        rolling_summary=rolling_summary,
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
         agent_context=agent_context.blocks,
@@ -824,7 +845,6 @@ def _prepare_turn(
         sender_name=payload.sender_name,
         chat_id=identity.chat_id,
         business_day=business_day,
-        max_turns=int(getattr(settings, "conversation_session_max_turns", 500)),
     )
     binding = upsert_channel_binding(
         account_id=account_id,
@@ -1714,6 +1734,18 @@ def _finalize_turn(
                 account_id=account_id,
             ),
         )
+        # P3 Token 压力滚动摘要（默认关）：复用本 after-turn 后台链路触发，同步回复零新增 LLM 调用。
+        # 函数内部对开关/异常全兜底，这里仅在开关开时挂任务，避免无谓调度。
+        if getattr(settings, "llm_rolling_summary_enabled", False):
+            from app.context_summarizer import maybe_update_rolling_summary
+            background_loop.call_soon_threadsafe(
+                background_loop.create_task,
+                asyncio.to_thread(
+                    maybe_update_rolling_summary,
+                    account_id=account_id,
+                    session_id=int(session["id"]),
+                ),
+            )
         if normal_reply_generated:
             background_loop.call_soon_threadsafe(
                 background_loop.create_task,

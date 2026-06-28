@@ -23,7 +23,6 @@ def test_account_active_session_rotates_when_business_day_changes(fresh_db):
         sender_name=None,
         chat_id="chat-1",
         business_day="2026-05-24",
-        max_turns=500,
     )["session"]
     insert_message(
         account_id="acc-lifecycle-day",
@@ -43,7 +42,6 @@ def test_account_active_session_rotates_when_business_day_changes(fresh_db):
         sender_name=None,
         chat_id="chat-1",
         business_day="2026-05-25",
-        max_turns=500,
     )["session"]
 
     assert second["id"] != first["id"]
@@ -58,32 +56,3 @@ def test_account_active_session_rotates_when_business_day_changes(fresh_db):
     assert closed["session_key"] == f"{ACCOUNT_ACTIVE_SESSION_KEY}:{first['id']}"
 
 
-def test_account_active_session_rotates_when_max_turns_reached(fresh_db):
-    from app.db import (
-        get_or_create_account_active_session,
-        increment_session_turn_count,
-    )
-
-    first = get_or_create_account_active_session(
-        account_id="acc-lifecycle-max",
-        channel="openclaw-weixin",
-        sender_id="sender-1",
-        sender_name=None,
-        chat_id="chat-1",
-        business_day="2026-05-25",
-        max_turns=1,
-    )["session"]
-    increment_session_turn_count(session_id=int(first["id"]))
-
-    second = get_or_create_account_active_session(
-        account_id="acc-lifecycle-max",
-        channel="openclaw-weixin",
-        sender_id="sender-1",
-        sender_name=None,
-        chat_id="chat-1",
-        business_day="2026-05-25",
-        max_turns=1,
-    )["session"]
-
-    assert second["id"] != first["id"]
-    assert second["business_day"] == "2026-05-25"
