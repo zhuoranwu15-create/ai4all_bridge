@@ -35,15 +35,12 @@ def _close_reason_for(
     session: Dict[str, Any],
     *,
     business_day: Optional[str],
-    max_turns: int,
 ) -> Optional[str]:
     if session.get("status") != "active":
         return "replaced"
     session_business_day = str(session.get("business_day") or "").strip()
     if business_day and session_business_day and session_business_day != business_day:
         return "daily_dreaming"
-    if max_turns > 0 and int(session.get("turn_count") or 0) >= max_turns:
-        return "max_turns"
     return None
 
 
@@ -60,9 +57,7 @@ def _fallback_close_summary(
         account_id=account_id,
         today=source_business_day or beijing_now().date().isoformat(),
         days=1,
-        source_type="max_turns_compression"
-        if close_reason == "max_turns"
-        else "daily_dreaming",
+        source_type="daily_dreaming",
         source_session_id=session_id,
         source_business_day=source_business_day,
         actor_type="system",
@@ -118,10 +113,8 @@ def get_or_create_account_active_session_with_dreaming(
     sender_name: Optional[str],
     chat_id: Optional[str],
     business_day: Optional[str] = None,
-    max_turns: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Return active session, rotating with LLM Dreaming before creating a new one."""
-    max_turns_value = max(0, int(max_turns or 0))
     initial = get_or_create_session(
         account_id=account_id,
         channel=channel,
@@ -135,7 +128,6 @@ def get_or_create_account_active_session_with_dreaming(
     close_reason = _close_reason_for(
         session,
         business_day=business_day,
-        max_turns=max_turns_value,
     )
     if not close_reason:
         return initial

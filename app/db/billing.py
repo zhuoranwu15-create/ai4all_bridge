@@ -2675,7 +2675,6 @@ def get_or_create_account_active_session(
     sender_name: Optional[str],
     chat_id: Optional[str],
     business_day: Optional[str] = None,
-    max_turns: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Return the account-level active session used for main conversation context.
 
@@ -2683,9 +2682,6 @@ def get_or_create_account_active_session(
     existing sessions schema and rotates the stable compatibility key when
     the account's active session crosses a lifecycle boundary.
     """
-    max_turns = int(max_turns or 0)
-    if max_turns <= 0:
-        max_turns = 0
 
     with connect() as conn:
         conn.execute(
@@ -2726,7 +2722,6 @@ def get_or_create_account_active_session(
             rotation_reason = _active_session_rotation_reason(
                 dict(session),
                 business_day=business_day,
-                max_turns=max_turns,
             )
             if rotation_reason:
                 carryover_summary = _build_session_carryover_summary(
@@ -2821,16 +2816,12 @@ def _active_session_rotation_reason(
     session: Dict[str, Any],
     *,
     business_day: Optional[str],
-    max_turns: int,
 ) -> Optional[str]:
     if session.get("status") != "active":
         return "replaced"
     session_business_day = _clean_text(session.get("business_day"))
     if business_day and session_business_day and session_business_day != business_day:
         return "daily_dreaming"
-    turn_count = int(session.get("turn_count") or 0)
-    if max_turns > 0 and turn_count >= max_turns:
-        return "max_turns"
     return None
 
 

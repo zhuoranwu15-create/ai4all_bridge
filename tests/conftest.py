@@ -125,13 +125,18 @@ def test_settings(tmp_path, db_dsn):
     s.llm_read_tool_enabled = True
     s.llm_tool_evidence_replay_enabled = False  # 避免测试依赖 DB 里的 tool_invocations
     s.llm_current_message_envelope_enabled = False  # 灰度关：不影响现有测试断言
+    # 短期上下文裁剪（context_window）：测试默认关，避免 MagicMock 自动属性污染历史组装；
+    # 需要验证裁剪的用例在测试内显式置非零。滚动摘要 P3 默认关。
+    s.llm_context_token_budget = 0
+    s.llm_context_message_max_chars = 0
+    s.llm_rolling_summary_enabled = False
+    s.llm_rolling_summary_trigger_messages = 20
     s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10
     s.rate_limit_rpm_window_seconds = 30.0
     s.rate_limit_daily_message = "每日上限"
     s.rate_limit_rpm_message = "每分钟上限"
-    s.conversation_session_max_turns = 500
     s.conversation_session_business_day_start_hour = 4
     s.dreaming_scheduler_enabled = False
     s.dreaming_scheduler_interval_seconds = 300.0

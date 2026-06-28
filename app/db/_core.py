@@ -1732,6 +1732,30 @@ def _migration_0008_relationship_state(conn: Connection) -> None:
         _ensure_column(conn, table, "agent_need_growth_status", "TEXT NOT NULL DEFAULT 'not_started'")
 
 
+def _migration_0009_messages_account_id_index(conn: Connection) -> None:
+    """补 messages(account_id, id) 索引，支撑短期历史热点查询。
+
+    list_recent_messages_for_account 走 `WHERE account_id=? ORDER BY id DESC LIMIT N`，
+    既有索引 ux_messages_account_message(account_id, message_id) 因 message_id 非有序无法服务
+    该 ORDER BY id，会退化成"扫该账号全部消息再排序"。本索引让其走有序覆盖、O(LIMIT) 取回。
+    纯增益、幂等，SQLite/PG 双后端通用。
+    """
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_messages_account_id ON messages(account_id, id)"
+    )
+
+
+def _migration_0010_sessions_rolling_summary(conn: Connection) -> None:
+    """sessions 增滚动摘要两列（Token 压力 intra-session 摘要，灰度默认关）。
+
+    rolling_summary：本会话已滑出窗口的头部消息的滚动摘要文本。
+    rolling_summary_upto_id：水位线，标记摘要已覆盖到哪条 message.id，避免重复摘要 / 与 kept
+    window 重叠。见 docs/tech_design/context_window_token_budget_design.md §6。
+    """
+    _ensure_column(conn, "sessions", "rolling_summary", "TEXT")
+    _ensure_column(conn, "sessions", "rolling_summary_upto_id", "INTEGER")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1741,6 +1765,8 @@ _MIGRATIONS = [
     (6, _migration_0006_merge_reactivation_categories),
     (7, _migration_0007_merge_reactivation_settings_keys),
     (8, _migration_0008_relationship_state),
+    (9, _migration_0009_messages_account_id_index),
+    (10, _migration_0010_sessions_rolling_summary),
 ]
 
 
