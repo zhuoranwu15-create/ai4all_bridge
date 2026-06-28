@@ -112,6 +112,22 @@ def _chat_transport(provider: LLMProviderConfig) -> httpx.HTTPTransport:
     )
 
 
+def _request_error_message(err: Optional[httpx.RequestError]) -> str:
+    """Build a self-diagnosing error string carrying the httpx subtype.
+
+    底层 httpx 异常类型（ReadTimeout / ConnectError / …）是区分根因的关键，
+    但只落在 WARNING 日志、不进 P2 报警。把类型名带进 RuntimeError，使上层
+    ERROR 报警自带「读超时 / 连不上 / 连接重置」语义，无需登机翻日志。
+    类型名与 httpx 文案不含密钥，脱敏安全。
+    """
+    if err is None:
+        return "LLM request failed"
+    detail = str(err).strip()
+    if detail:
+        return f"LLM request failed: {type(err).__name__}: {detail}"
+    return f"LLM request failed: {type(err).__name__}"
+
+
 def _post_json(
     *,
     provider: LLMProviderConfig,
@@ -161,10 +177,13 @@ def _post_json(
                 max_attempts,
                 err,
             )
-            if attempt >= max_attempts:
-                raise RuntimeError("LLM request failed") from err
+            # ReadTimeout 来自服务端生成耗时过长（重上下文/慢模型），用同样的 timeout
+            # 重试同一重请求几乎无益，只会让用户再多等一个 timeout 窗口 → 快速失败，
+            # 不消耗剩余 attempt。连接类瞬时错误（ConnectError/ConnectTimeout 等）仍重试。
+            if isinstance(err, httpx.ReadTimeout) or attempt >= max_attempts:
+                raise RuntimeError(_request_error_message(err)) from err
             time.sleep(min(0.2 * attempt, 1.0))
-    raise RuntimeError("LLM request failed") from last_request_error
+    raise RuntimeError(_request_error_message(last_request_error)) from last_request_error
 
 
 def _join_url(base_url: str, suffix: str) -> str:

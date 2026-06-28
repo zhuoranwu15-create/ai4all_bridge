@@ -185,6 +185,65 @@ def test_post_json_disables_transport_connect_retries():
     assert mock_transport.call_args.kwargs["retries"] == 0
 
 
+def test_post_json_read_timeout_fails_fast_without_retry():
+    """ReadTimeout 应快速失败、不消耗重试，且错误消息带 httpx 子类型。"""
+    import httpx
+    import pytest
+
+    from app.llm_adapters import _post_json
+
+    calls = {"n": 0}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            calls["n"] += 1
+            raise httpx.ReadTimeout("The read operation timed out")
+
+    provider = _provider("openai_chat", max_retries=3)  # 允许多次重试，验证不被消耗
+    with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+        with pytest.raises(RuntimeError) as exc_info:
+            _post_json(provider=provider, url="https://provider.test", headers={}, body={})
+
+    assert calls["n"] == 1  # 读超时仅尝试一次
+    assert "ReadTimeout" in str(exc_info.value)
+
+
+def test_post_json_connect_error_retries_until_exhausted():
+    """连接类瞬时错误仍按 max_retries 重试，最终带子类型抛出。"""
+    import httpx
+    import pytest
+
+    from app.llm_adapters import _post_json
+
+    calls = {"n": 0}
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            calls["n"] += 1
+            raise httpx.ConnectError("connection refused")
+
+    provider = _provider("openai_chat", max_retries=2)  # 共 3 次尝试
+    with patch("app.llm_adapters.time.sleep", return_value=None):
+        with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+            with pytest.raises(RuntimeError) as exc_info:
+                _post_json(provider=provider, url="https://provider.test", headers={}, body={})
+
+    assert calls["n"] == 3
+    assert "ConnectError" in str(exc_info.value)
+
+
 def test_anthropic_adapter_converts_system_tools_and_tool_results():
     from app.llm_adapters import chat_completion
 
