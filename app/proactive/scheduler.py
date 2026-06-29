@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.proactive.commitments import dispatch_due_commitments
 from app.proactive.content_invitations import expire_stale_content_invitations
+from app.proactive.icebreaker import dispatch_due_icebreakers
 from app.proactive.reactivation import dispatch_due_reactivation_candidates
 from app.proactive.reminders import dispatch_due_reminders
 from app.proactive.state import (
@@ -18,6 +19,7 @@ from app.time_utils import beijing_naive_now
 DispatchDueReminders = Callable[..., List[Dict[str, Any]]]
 DispatchDueCommitments = Callable[..., List[Dict[str, Any]]]
 DispatchDueReactivation = Callable[..., List[Dict[str, Any]]]
+DispatchDueIcebreakers = Callable[..., List[Dict[str, Any]]]
 ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
 ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
 
@@ -38,6 +40,7 @@ class ProactiveScheduler:
         dispatch_reminders: DispatchDueReminders = dispatch_due_reminders,
         dispatch_commitments: DispatchDueCommitments = dispatch_due_commitments,
         dispatch_reactivation: DispatchDueReactivation = dispatch_due_reactivation_candidates,
+        dispatch_icebreakers: DispatchDueIcebreakers = dispatch_due_icebreakers,
         expire_content_invitations: ExpireContentInvitations = expire_stale_content_invitations,
         scan_account_checks: ScanDueAccountChecks = scan_due_proactive_account_checks,
     ) -> None:
@@ -50,6 +53,7 @@ class ProactiveScheduler:
         self._dispatch_reminders = dispatch_reminders
         self._dispatch_commitments = dispatch_commitments
         self._dispatch_reactivation = dispatch_reactivation
+        self._dispatch_icebreakers = dispatch_icebreakers
         self._expire_content_invitations = expire_content_invitations
         self._scan_account_checks = scan_account_checks
         self._task: Optional[asyncio.Task[None]] = None
@@ -118,6 +122,14 @@ class ProactiveScheduler:
             limit=self.batch_size,
             node_id=self.node_id,
         )
+        # Step 5：破冰话术派发（独立分类，单步失败不影响后续过期扫描）
+        icebreaker_results = await _step(
+            "icebreakers",
+            self._dispatch_icebreakers,
+            now=current,
+            limit=self.batch_size,
+            node_id=self.node_id,
+        )
         expired_content_results = await _step(
             "expire_content_invitations",
             self._expire_content_invitations,
@@ -137,6 +149,8 @@ class ProactiveScheduler:
             "account_checks": account_results,
             "reactivation_count": len(reactivation_results),
             "reactivations": reactivation_results,
+            "icebreaker_count": len(icebreaker_results),
+            "icebreakers": icebreaker_results,
             "expired_content_invitation_count": len(expired_content_results),
             "expired_content_invitations": expired_content_results,
             "errors": step_errors or None,

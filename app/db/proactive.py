@@ -53,9 +53,15 @@ __all__ = [
     'get_reminder',
     'insert_proactive_message_setting_event',
     'list_content_invitations_for_account',
+    'create_icebreaker_impression',
+    'get_last_icebreaker_impression',
+    'list_accounts_due_for_icebreaker',
+    'list_icebreaker_scripts',
     'list_due_proactive_account_states',
     'list_due_proactive_commitments',
     'list_due_reactivation_candidate_accounts',
+    'list_recent_icebreaker_script_ids',
+    'update_icebreaker_impression_feedback',
     'list_due_reminders',
     'list_outbound_messages',
     'list_proactive_commitments_for_account',
@@ -2283,5 +2289,241 @@ def upsert_content_invitation_preference(
     if row is None:
         raise RuntimeError("content_invitation_preference was not created")
     return _decode_content_invitation_preference(row)
+
+
+# ---------------------------------------------------------------------------
+# Icebreaker DB 层（话术触达记录）
+# ---------------------------------------------------------------------------
+
+# 判断"今日已发"时的 status 集合：不含 cancelled（policy 拦截用户未看到，允许当天重试）
+_ICEBREAKER_SENT_STATUSES = ("pending", "sending", "sent")
+
+
+def list_icebreaker_scripts(
+    *,
+    enabled_only: bool = True,
+    max_marketing_feel: Optional[int] = None,
+    exclude_ids: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """返回话术库候选列表，供 pick_icebreaker_script 选取。
+
+    Args:
+        enabled_only: 仅返回 enabled=1 的话术（默认 True）
+        max_marketing_feel: 过滤 marketing_feel > 此值的话术（None=不过滤）
+        exclude_ids: 排除指定 id 列表（最近已发，30 天去重）
+    """
+    clauses: List[str] = []
+    params: List[Any] = []
+
+    if enabled_only:
+        clauses.append("enabled = 1")
+
+    if max_marketing_feel is not None:
+        clauses.append("marketing_feel <= ?")
+        params.append(max_marketing_feel)
+
+    if exclude_ids:
+        placeholders = ",".join("?" * len(exclude_ids))
+        clauses.append(f"id NOT IN ({placeholders})")
+        params.extend(exclude_ids)
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, script_type, text, reply_cost, tone,
+                   marketing_feel, freq_tier, enabled
+            FROM icebreaker_scripts
+            {where}
+            """,
+            params,
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_accounts_due_for_icebreaker(
+    *,
+    quota_date: str,
+    limit: int = 50,
+    node_id: Optional[str] = None,
+) -> List[str]:
+    """返回今日尚未收到 proactive_icebreaker 的 active 账号 id 列表。
+
+    cancelled 状态不计入"已发"，允许当天 policy 解锁后重试。
+    不依赖 proactive_account_state；由调用方（icebreaker.py）负责 policy 判断。
+    node_id 非空时只返回归属该节点的账号（厚节点调度分片）。
+    """
+    cleaned_quota_date = _clean_text(quota_date)
+    if not cleaned_quota_date:
+        raise ValueError("quota_date is required")
+    node_filter = _clean_text(node_id) if node_id else None
+    node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
+    # params 顺序对应 SQL 中 ? 出现顺序：
+    # 1) om.quota_date = ?  (JOIN ON 条件)
+    # 2) a.assigned_node_id = ?  (WHERE node_clause，仅 node_filter 时)
+    # 3) LIMIT ?
+    params: List[Any] = (
+        [cleaned_quota_date]
+        + ([node_filter] if node_filter else [])
+        + [limit]
+    )
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT a.id
+            FROM accounts a
+            LEFT JOIN outbound_messages om
+                ON om.account_id = a.id
+                AND om.quota_date = ?
+                AND om.product_category = 'proactive_icebreaker'
+                AND om.status IN ('pending', 'sending', 'sent')
+            WHERE a.status = 'active'
+              {node_clause}
+              AND om.account_id IS NULL
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return [row["id"] for row in rows]
+
+
+def create_icebreaker_impression(
+    *,
+    account_id: str,
+    script_id: str,
+    outbound_message_id: Optional[int],
+    script_type: str,
+    marketing_feel: Optional[int],
+    status: str = "sent",
+    replied: Optional[int] = None,
+    reply_within_hours: Optional[float] = None,
+    continued_conversation: Optional[int] = None,
+    negative_signal: int = 0,
+) -> int:
+    """写入一条 icebreaker_impressions 记录，返回新插入行的 id。"""
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_script_id = _clean_text(script_id)
+    cleaned_script_type = _clean_text(script_type)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_script_id:
+        raise ValueError("script_id is required")
+    if not cleaned_script_type:
+        raise ValueError("script_type is required")
+    with connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO icebreaker_impressions (
+                account_id, script_id, outbound_message_id,
+                script_type, marketing_feel, status,
+                replied, reply_within_hours, continued_conversation,
+                negative_signal
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                cleaned_account_id,
+                cleaned_script_id,
+                outbound_message_id,
+                cleaned_script_type,
+                marketing_feel,
+                status,
+                replied,
+                reply_within_hours,
+                continued_conversation,
+                negative_signal,
+            ),
+        )
+        return int(cur.lastrowid)
+
+
+def list_recent_icebreaker_script_ids(
+    *,
+    account_id: str,
+    since: str,
+) -> List[str]:
+    """返回账号在 since 之后已发送（status='sent'）的话术 id 列表，用于 30 天去重。
+
+    只统计 sent，不统计 cancelled（policy 拦截时用户未看到，可重复选用同一话术）。
+    """
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_since = _clean_text(since)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    if not cleaned_since:
+        raise ValueError("since is required")
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT script_id
+            FROM icebreaker_impressions
+            WHERE account_id = ?
+              AND status = 'sent'
+              AND created_at >= ?
+            """,
+            (cleaned_account_id, cleaned_since),
+        ).fetchall()
+    return [row["script_id"] for row in rows]
+
+
+def get_last_icebreaker_impression(
+    *,
+    account_id: str,
+) -> Optional[Dict[str, Any]]:
+    """返回账号最近一次 icebreaker impression，用于类型轮换和营销感频控。
+
+    返回字段：script_id, script_type, marketing_feel, status, created_at。
+    """
+    cleaned_account_id = _clean_text(account_id)
+    if not cleaned_account_id:
+        raise ValueError("account_id is required")
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, script_id, script_type, marketing_feel, status, created_at
+            FROM icebreaker_impressions
+            WHERE account_id = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (cleaned_account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_icebreaker_impression_feedback(
+    *,
+    impression_id: int,
+    replied: Optional[int] = None,
+    reply_within_hours: Optional[float] = None,
+    continued_conversation: Optional[int] = None,
+    negative_signal: Optional[int] = None,
+) -> None:
+    """回填效果字段（v1 留空，v2 由 turn_service 异步写入）。
+
+    只更新显式传入的字段（非 None），其余字段保持不变。
+    """
+    updates: List[str] = []
+    params: List[Any] = []
+    if replied is not None:
+        updates.append("replied = ?")
+        params.append(replied)
+    if reply_within_hours is not None:
+        updates.append("reply_within_hours = ?")
+        params.append(reply_within_hours)
+    if continued_conversation is not None:
+        updates.append("continued_conversation = ?")
+        params.append(continued_conversation)
+    if negative_signal is not None:
+        updates.append("negative_signal = ?")
+        params.append(negative_signal)
+    if not updates:
+        return
+    updates.append("updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))")
+    params.append(impression_id)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE icebreaker_impressions SET {', '.join(updates)} WHERE id = ?",
+            params,
+        )
 
 

@@ -134,6 +134,8 @@ class Settings(BaseSettings):
     companion_followup_daily_limit: int = 1
     # 内容邀请日上限（含原拉活内容唤回，已合并入本分类）。原名 reactivation_daily_limit。
     content_invitation_daily_limit: int = 1
+    # 主动破冰话术日上限。
+    icebreaker_daily_limit: int = 1
     proactive_avoidance_window_hours: int = 6
     content_invitation_rejection_cooldown_days: int = 30
     content_invitation_expire_hours: int = 24

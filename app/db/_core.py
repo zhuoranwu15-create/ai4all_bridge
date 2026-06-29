@@ -1865,6 +1865,72 @@ def _migration_0014_sessions_rolling_summary(conn: Connection) -> None:
     _ensure_column(conn, "sessions", "rolling_summary_upto_id", "INTEGER")
 
 
+def _migration_0015_icebreaker_tables(conn: Connection) -> None:
+    """主动破冰话术：话术库与发送记录两张表。
+
+    icebreaker_scripts：预置话术库，来自人工标注的 100 条候选。
+    icebreaker_impressions：每次触达记录，含 outbound_message_id 关联、效果回填字段。
+    两张表完全独立于正式发送流（outbound_messages），不影响现有主动消息逻辑。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS icebreaker_scripts (
+            id TEXT PRIMARY KEY,
+            script_type TEXT NOT NULL,
+            text TEXT NOT NULL,
+            reply_cost TEXT NOT NULL,
+            tone TEXT,
+            suitable_for TEXT,
+            avoid_when TEXT,
+            follow_goal TEXT,
+            signal_extract TEXT,
+            fun_score INTEGER,
+            reply_ease_score INTEGER,
+            offense_risk INTEGER,
+            marketing_feel INTEGER,
+            freq_tier TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            notes TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_scripts_type
+            ON icebreaker_scripts(script_type, enabled);
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_scripts_marketing
+            ON icebreaker_scripts(marketing_feel, enabled);
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_scripts_freq
+            ON icebreaker_scripts(freq_tier, enabled);
+
+        CREATE TABLE IF NOT EXISTS icebreaker_impressions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            script_id TEXT NOT NULL,
+            outbound_message_id INTEGER,
+            script_type TEXT NOT NULL,
+            marketing_feel INTEGER,
+            status TEXT NOT NULL DEFAULT 'sent',
+            replied INTEGER,
+            reply_within_hours REAL,
+            continued_conversation INTEGER,
+            negative_signal INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(script_id) REFERENCES icebreaker_scripts(id),
+            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_impressions_account
+            ON icebreaker_impressions(account_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_impressions_script
+            ON icebreaker_impressions(script_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_icebreaker_impressions_status
+            ON icebreaker_impressions(account_id, status, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1880,6 +1946,7 @@ _MIGRATIONS = [
     (12, _migration_0012_proactive_test_layers),
     (13, _migration_0013_messages_account_id_index),
     (14, _migration_0014_sessions_rolling_summary),
+    (15, _migration_0015_icebreaker_tables),
 ]
 
 

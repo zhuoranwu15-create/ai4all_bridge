@@ -20,6 +20,7 @@ class OutboundCategory(str, Enum):
     CONTENT_INVITATION = "content_invitation"
     CONTENT_INVITATION_RESPONSE = "content_invitation_response"
     TASK_RESULT = "task_result"
+    PROACTIVE_ICEBREAKER = "proactive_icebreaker"
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,19 @@ CATEGORY_SPECS: Tuple[CategorySpec, ...] = (
         avoidance_window=False,
         avoidance_check_companion=False,
         label="任务结果",
+    ),
+    CategorySpec(
+        category=OutboundCategory.PROACTIVE_ICEBREAKER,
+        sources=("icebreaker",),
+        exempt=False,
+        daily_limit_setting="icebreaker_daily_limit",
+        daily_limit_default=1,
+        user_configurable=True,
+        frequency_bucket="proactive_icebreaker",
+        content_preference_check=False,
+        avoidance_window=True,
+        avoidance_check_companion=False,  # 破冰属于 companion 家族，不互相避让（同 COMPANION_FOLLOWUP）
+        label="破冰话术",
     ),
 )
 
