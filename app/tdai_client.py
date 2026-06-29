@@ -64,7 +64,7 @@ def _recall_sync(*, account_id: str, query: str) -> Dict[str, Any]:
     the slow tail and cold hits — a miss degrades gracefully (no injection) and
     never blocks the reply.
     """
-    timeout = float(getattr(settings, "tdai_recall_timeout_seconds", 0.2))
+    timeout = float(getattr(settings, "tdai_recall_timeout_seconds", 0.5))
     key = tdai_session_key(account_id)
     try:
         with httpx.Client(timeout=timeout) as client:

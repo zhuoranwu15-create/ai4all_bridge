@@ -298,7 +298,9 @@ class Settings(BaseSettings):
     tdai_recall_enabled: bool = True
     tdai_capture_enabled: bool = True
     # 热路径严格超时（秒）：超时直接降级，不阻主回复。
-    tdai_recall_timeout_seconds: float = 0.2
+    # 0.5 覆盖 DashScope embedding 往返的 warm 长尾（实测中位 ~350ms）；
+    # 0.2 会让约 30% warm 召回误降级。
+    tdai_recall_timeout_seconds: float = 0.5
     tdai_capture_timeout_seconds: float = 2.0
     # 每段 recall 注入内容最大字符数（prepend_context / context 各自截断）。
     tdai_recall_max_chars: int = 2500

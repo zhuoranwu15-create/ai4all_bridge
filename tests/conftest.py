@@ -287,7 +287,7 @@ def test_settings(tmp_path, db_dsn):
     s.tdai_gateway_api_key = ""
     s.tdai_recall_enabled = True
     s.tdai_capture_enabled = True
-    s.tdai_recall_timeout_seconds = 0.2
+    s.tdai_recall_timeout_seconds = 0.5
     s.tdai_capture_timeout_seconds = 2.0
     s.tdai_recall_max_chars = 2500
     s.tdai_recall_account_allowlist = ""
