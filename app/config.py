@@ -290,6 +290,21 @@ class Settings(BaseSettings):
     outbound_claim_timeout_seconds: int = 60        # sending 卡死回收阈值(节点崩溃安全网)
     local_node_inline_dispatch: bool = False        # true: central 同机 node 出站同进程即时发(迁移期降延迟)
 
+    # ===== TDAI 长期记忆 sidecar（docs/tech_design/tdai_multitenant_design.md）=====
+    # 总开关：默认 false；生产启用时显式设 true。capture/recall 均受此控制。
+    tdai_enabled: bool = False
+    tdai_gateway_url: str = "http://127.0.0.1:8420"
+    tdai_gateway_api_key: str = ""
+    tdai_recall_enabled: bool = True
+    tdai_capture_enabled: bool = True
+    # 热路径严格超时（秒）：超时直接降级，不阻主回复。
+    tdai_recall_timeout_seconds: float = 0.2
+    tdai_capture_timeout_seconds: float = 2.0
+    # 每段 recall 注入内容最大字符数（prepend_context / context 各自截断）。
+    tdai_recall_max_chars: int = 2500
+    # 逗号分隔的 account_id，空 = recall 对所有账号关闭。capture 不受此控制（全量）。
+    tdai_recall_account_allowlist: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"
