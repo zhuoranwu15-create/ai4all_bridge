@@ -151,6 +151,89 @@ def test_reactivation_outbound_metadata_includes_dedupe_and_type():
     assert metadata["policy"]["daily_limit_key"] == "reactivation"
 
 
+def test_reactivation_outbound_queries_match_text_true_and_keep_account_scope(fresh_db):
+    from app.db import (
+        count_reactivation_outbound_for_quota_date,
+        create_outbound_message,
+        list_reactivation_outbound_messages_admin,
+        list_recent_reactivation_outbound_messages,
+    )
+
+    _create_account("acc-react-meta")
+    _create_account("acc-react-other")
+
+    bool_row = create_outbound_message(
+        account_id="acc-react-meta",
+        channel="openclaw-weixin",
+        channel_account_id=None,
+        to_user_id="user@im.wechat",
+        session_key=None,
+        source="reactivation",
+        text="bool true",
+        idempotency_key="react-meta-bool",
+        quota_date="2026-06-24",
+        metadata={"reactivation": True},
+    )
+    text_row = create_outbound_message(
+        account_id="acc-react-meta",
+        channel="openclaw-weixin",
+        channel_account_id=None,
+        to_user_id="user@im.wechat",
+        session_key=None,
+        source="reactivation",
+        text="text true",
+        idempotency_key="react-meta-text",
+        quota_date="2026-06-24",
+        metadata={"reactivation": "true"},
+    )
+    create_outbound_message(
+        account_id="acc-react-meta",
+        channel="openclaw-weixin",
+        channel_account_id=None,
+        to_user_id="user@im.wechat",
+        session_key=None,
+        source="reactivation",
+        text="false flag",
+        idempotency_key="react-meta-false",
+        quota_date="2026-06-24",
+        metadata={"reactivation": False},
+    )
+    create_outbound_message(
+        account_id="acc-react-other",
+        channel="openclaw-weixin",
+        channel_account_id=None,
+        to_user_id="user@im.wechat",
+        session_key=None,
+        source="reactivation",
+        text="other account",
+        idempotency_key="react-meta-other",
+        quota_date="2026-06-24",
+        metadata={"reactivation": True},
+    )
+
+    assert count_reactivation_outbound_for_quota_date(
+        account_id="acc-react-meta",
+        quota_date="2026-06-24",
+    ) == 2
+    recent_ids = [
+        item["id"]
+        for item in list_recent_reactivation_outbound_messages(
+            account_id="acc-react-meta",
+            since="2000-01-01 00:00:00",
+        )
+    ]
+    admin_ids = [
+        item["id"]
+        for item in list_reactivation_outbound_messages_admin(
+            account_id="acc-react-meta",
+            since="2000-01-01 00:00:00",
+        )
+    ]
+
+    assert recent_ids == [text_row["id"], bool_row["id"]]
+    assert admin_ids == [text_row["id"], bool_row["id"]]
+
+
 def test_dispatch_reactivation_dry_run_would_send_without_outbound(fresh_db):
     from app.db import list_outbound_messages
     from app.proactive.reactivation import (

@@ -32,7 +32,7 @@ def _seed_account_dir(profiles_dir: Path, dir_name: str) -> Path:
 def test_apply_imports_all_files_keyed_by_account_id(fresh_db, tmp_path):
     """整目录导入后，storage 应按 account_id + 相对 posix 路径存到每个文件。"""
     profiles_dir = tmp_path / "profiles"
-    account_id = "86f866663cf9-im-bot"  # 真实形态 id：净化 == 原始
+    account_id = "aid_806382741"  # 真实形态 id：净化 == 原始
     _seed_account_dir(profiles_dir, account_id)
 
     plans = collect_import_plans(profiles_dir, db_account_ids=[account_id])

@@ -24,6 +24,7 @@ __all__ = [
     'get_tool_invocation',
     'insert_debug_trace',
     'list_debug_traces',
+    'list_recent_tool_invocations_for_replay',
     'list_search_provider_runs',
     'list_tool_invocations',
     'update_tool_invocation',
@@ -324,6 +325,35 @@ def update_tool_invocation(
             (tool_invocation_id,),
         ).fetchone()
     return _decode_tool_invocation(row) if row else None
+
+
+def list_recent_tool_invocations_for_replay(
+    account_id: str,
+    *,
+    message_ids: List[str],
+) -> List[Dict[str, Any]]:
+    """返回给定 inbound message_id 列表对应的 tool_invocations（已完成），按 id ASC 排序。
+
+    用于 Batch C tool 证据跨 turn 回灌：调用方传最近 K 轮的 user message_id，
+    此函数返回这几轮里所有已完成的工具调用，供 inject_tool_evidence_replay 重建 wire。
+    """
+    if not message_ids:
+        return []
+    placeholders = ",".join("?" * len(message_ids))
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, message_id, tool_call_id, tool_name, status, args_json, result_json
+            FROM tool_invocations
+            WHERE account_id = ?
+              AND message_id IN ({placeholders})
+              AND status IN ('succeeded', 'failed')
+              AND tool_call_id IS NOT NULL AND tool_call_id != ''
+            ORDER BY id ASC
+            """,
+            [account_id] + list(message_ids),
+        ).fetchall()
+    return [_decode_tool_invocation(row) for row in rows]
 
 
 def create_search_provider_run(

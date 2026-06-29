@@ -205,7 +205,6 @@ def test_session_lifecycle_uses_llm_carryover_when_available(fresh_db, tmp_path)
         sender_name=None,
         chat_id="chat",
         business_day="2026-05-17",
-        max_turns=500,
     )["session"]
     insert_message(
         account_id=account_id,
@@ -226,7 +225,6 @@ def test_session_lifecycle_uses_llm_carryover_when_available(fresh_db, tmp_path)
             sender_name=None,
             chat_id="chat",
             business_day="2026-05-18",
-            max_turns=500,
         )["session"]
 
     assert second["id"] != first["id"]
@@ -248,7 +246,6 @@ def test_session_lifecycle_falls_back_when_llm_fails(fresh_db, tmp_path):
         sender_name=None,
         chat_id="chat",
         business_day="2026-05-17",
-        max_turns=500,
     )["session"]
     insert_message(
         account_id=account_id,
@@ -268,7 +265,6 @@ def test_session_lifecycle_falls_back_when_llm_fails(fresh_db, tmp_path):
         sender_name=None,
         chat_id="chat",
         business_day="2026-05-18",
-        max_turns=500,
     )["session"]
 
     assert second["id"] != first["id"]

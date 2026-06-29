@@ -31,6 +31,8 @@ __all__ = [
     'consume_valid_verification_token',
     'consume_verification_token',
     'count_context_messages_for_session',
+    'list_context_messages_for_session',
+    'update_session_rolling_summary',
     'count_reactivation_outbound_for_quota_date',
     'count_recent_inbound_messages_for_account',
     'count_verifications_last_hour',
@@ -514,7 +516,7 @@ def list_recent_reactivation_outbound_messages(
               AND created_at >= ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -543,7 +545,7 @@ def count_reactivation_outbound_for_quota_date(
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             """,
             (account_id, quota_date),
         ).fetchone()
@@ -582,7 +584,7 @@ def list_reactivation_outbound_messages_admin(
               {account_clause}
               {since_clause}
               AND json_valid(o.metadata_json)
-              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS INTEGER) = 1
+              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
             ORDER BY o.id DESC
             LIMIT ?
             """,
@@ -619,6 +621,55 @@ def count_context_messages_for_session(*, session_id: int) -> int:
             (session_id, _NON_CONTEXT_ASSISTANT_REPLY, MODERATION_BLOCKED_ERROR),
         ).fetchone()
     return int(row["count"] if row else 0)
+
+
+def list_context_messages_for_session(
+    *, session_id: int, after_id: int = 0, limit: int = 1000
+) -> List[Dict[str, Any]]:
+    """Return context-eligible messages of one session (id ASC), with id > after_id.
+
+    带 id 返回，供 P3 滚动摘要推进水位线用；过滤口径与 count_context_messages_for_session 一致。
+    """
+    if limit <= 0:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, role, content FROM messages
+            WHERE session_id = ?
+              AND id > ?
+              AND content IS NOT NULL
+              AND content != ''
+              AND NOT (
+                role = 'assistant'
+                AND error IS NOT NULL
+                AND error != ''
+              )
+              AND NOT (
+                role = 'assistant'
+                AND content = ?
+              )
+              AND (error IS NULL OR error != ?)
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (session_id, after_id, _NON_CONTEXT_ASSISTANT_REPLY, MODERATION_BLOCKED_ERROR, limit),
+        ).fetchall()
+    return [
+        {"id": row["id"], "role": row["role"], "content": row["content"]}
+        for row in rows
+    ]
+
+
+def update_session_rolling_summary(
+    *, session_id: int, rolling_summary: str, rolling_summary_upto_id: int
+) -> None:
+    """Persist a session's rolling summary text + watermark (P3，account 隔离由 session 归属保证)。"""
+    with connect() as conn:
+        conn.execute(
+            "UPDATE sessions SET rolling_summary = ?, rolling_summary_upto_id = ? WHERE id = ?",
+            (rolling_summary, rolling_summary_upto_id, session_id),
+        )
 
 
 def clear_session_messages(*, session_id: int) -> int:

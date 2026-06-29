@@ -597,3 +597,224 @@ def test_on_tool_detected_exception_does_not_affect_reply():
 
     assert err is None
     assert reply == final_text
+
+
+def test_external_tool_result_gets_untrusted_wrapper():
+    """web_search 工具结果在投喂给 LLM 时带 externalContent 标记；DB raw result 不变。"""
+    settings_mock = MagicMock()
+    settings_mock.llm_api_key = "test-key"
+    settings_mock.llm_model = "test-model"
+    settings_mock.llm_base_url = "http://fake-llm"
+    settings_mock.llm_timeout_seconds = 30
+    settings_mock.llm_connect_timeout_seconds = 5
+    settings_mock.llm_max_retries = 0
+    settings_mock.llm_max_tool_rounds = 3
+    settings_mock.llm_force_ipv4 = False
+    settings_mock.llm_default_prompt = "你是助手"
+    settings_mock.llm_external_content_wrapper_enabled = True
+
+    from app.llm import generate_reply_with_tools
+
+    search_result = {
+        "status": "succeeded",
+        "results": [{"title": "北京天气", "url": "https://example.com", "snippet": "晴"}],
+    }
+    tool_resp = _tool_call_response("web_search", {"query": "北京天气"})
+    final_text = "今天北京晴天。"
+    http_mock = MagicMock(side_effect=[tool_resp, _direct_text_response(final_text)])
+
+    with patch("app.llm.settings", settings_mock):
+        with patch("app.llm._http_chat_with_tools", http_mock):
+            with patch("app.tools.executor.execute_tool_call", return_value=search_result):
+                reply, err = generate_reply_with_tools(
+                    user_text="北京今天天气",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "web_search"}}],
+                    ctx=_make_ctx(),
+                )
+
+    assert err is None
+    assert reply == final_text
+
+    # 第二次 LLM 调用的 messages 中应含有 externalContent 标记
+    second_call_messages = http_mock.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert tool_msgs, "should have at least one tool message in second LLM call"
+    tool_content = json.loads(tool_msgs[0]["content"])
+    assert tool_content["externalContent"]["untrusted"] is True
+    assert tool_content["externalContent"]["source"] == "web_search"
+
+
+def test_internal_tool_result_has_no_wrapper():
+    """create_reminder 等内部工具结果投喂给 LLM 时不加 externalContent 标记。"""
+    settings_mock = MagicMock()
+    settings_mock.llm_api_key = "test-key"
+    settings_mock.llm_model = "test-model"
+    settings_mock.llm_base_url = "http://fake-llm"
+    settings_mock.llm_timeout_seconds = 30
+    settings_mock.llm_connect_timeout_seconds = 5
+    settings_mock.llm_max_retries = 0
+    settings_mock.llm_max_tool_rounds = 3
+    settings_mock.llm_force_ipv4 = False
+    settings_mock.llm_default_prompt = "你是助手"
+    settings_mock.llm_external_content_wrapper_enabled = True
+
+    from app.llm import generate_reply_with_tools
+
+    tool_result = {"status": "created", "reminder_id": "rem-1"}
+    tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
+    final_text = "提醒已设置。"
+    http_mock = MagicMock(side_effect=[tool_resp, _direct_text_response(final_text)])
+
+    with patch("app.llm.settings", settings_mock):
+        with patch("app.llm._http_chat_with_tools", http_mock):
+            with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
+                reply, err = generate_reply_with_tools(
+                    user_text="提醒我开会",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                )
+
+    second_call_messages = http_mock.call_args_list[1][0][0]
+    tool_msgs = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert tool_msgs
+    tool_content = json.loads(tool_msgs[0]["content"])
+    assert "externalContent" not in tool_content
+    assert tool_content["reminder_id"] == "rem-1"
+
+
+# ---------------------------------------------------------------------------
+# round_trace_collector
+# ---------------------------------------------------------------------------
+
+def _make_settings_mock():
+    s = MagicMock()
+    s.llm_api_key = "test-key"
+    s.llm_model = "test-model"
+    s.llm_base_url = "http://fake-llm"
+    s.llm_timeout_seconds = 30
+    s.llm_connect_timeout_seconds = 5
+    s.llm_max_retries = 0
+    s.llm_max_tool_rounds = 3
+    s.llm_force_ipv4 = False
+    s.llm_default_prompt = "你是助手"
+    return s
+
+
+def test_round_trace_collector_direct_response():
+    """Single-round (no tools): collector records one entry with finish_reason=stop."""
+    from app.llm import generate_reply_with_tools
+
+    collector = []
+    with patch("app.llm.settings", _make_settings_mock()):
+        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("答复")):
+            reply, err = generate_reply_with_tools(
+                user_text="你好",
+                history=[],
+                system_prompt="你是助手",
+                tools=[],
+                ctx=_make_ctx(),
+                round_trace_collector=collector,
+            )
+
+    assert err is None
+    assert reply == "答复"
+    assert len(collector) == 1
+    assert collector[0]["round"] == 0
+    assert collector[0]["finish_reason"] == "stop"
+    assert collector[0]["tool_calls"] is None
+    assert isinstance(collector[0]["messages"], list)
+    assert collector[0]["messages"][0]["role"] == "system"
+
+
+def test_round_trace_collector_two_rounds():
+    """Tool call followed by final response: collector has 2 entries."""
+    from app.llm import generate_reply_with_tools
+
+    tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
+    tool_result = {"status": "created", "reminder_id": "rem-1"}
+    final_text = "已设置提醒。"
+
+    collector = []
+    with patch("app.llm.settings", _make_settings_mock()):
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp, _direct_text_response(final_text)],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
+                reply, err = generate_reply_with_tools(
+                    user_text="明天提醒我开会",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                    round_trace_collector=collector,
+                )
+
+    assert err is None
+    assert reply == final_text
+    assert len(collector) == 2
+    # Round 0: initial messages, finish_reason=tool_calls
+    assert collector[0]["round"] == 0
+    assert collector[0]["finish_reason"] == "tool_calls"
+    assert collector[0]["tool_calls"] is not None
+    assert len(collector[0]["tool_calls"]) == 1
+    # Round 1: messages include tool result, finish_reason=stop
+    assert collector[1]["round"] == 1
+    assert collector[1]["finish_reason"] == "stop"
+    # Round 1 messages have more entries than round 0 (assistant tool_calls + tool result added)
+    assert len(collector[1]["messages"]) > len(collector[0]["messages"])
+
+
+def test_round_trace_collector_none_is_noop():
+    """Passing no collector (None) does not break the function."""
+    from app.llm import generate_reply_with_tools
+
+    with patch("app.llm.settings", _make_settings_mock()):
+        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("ok")):
+            reply, err = generate_reply_with_tools(
+                user_text="你好",
+                history=[],
+                system_prompt="你是助手",
+                tools=[],
+                ctx=_make_ctx(),
+                round_trace_collector=None,
+            )
+
+    assert err is None
+    assert reply == "ok"
+
+
+def test_round_trace_collector_messages_are_snapshots():
+    """Each round's messages are independent deep copies, not shared references."""
+    from app.llm import generate_reply_with_tools
+
+    tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
+    tool_result = {"status": "created", "reminder_id": "rem-1"}
+    final_text = "已设置。"
+
+    collector = []
+    with patch("app.llm.settings", _make_settings_mock()):
+        with patch(
+            "app.llm._http_chat_with_tools",
+            side_effect=[tool_resp, _direct_text_response(final_text)],
+        ):
+            with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
+                generate_reply_with_tools(
+                    user_text="提醒我",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "create_reminder"}}],
+                    ctx=_make_ctx(),
+                    round_trace_collector=collector,
+                )
+
+    # Round 0 messages should NOT contain tool result messages (added in round 1)
+    round0_roles = [m["role"] for m in collector[0]["messages"]]
+    assert "tool" not in round0_roles
+    # Round 1 messages should contain the tool result
+    round1_roles = [m["role"] for m in collector[1]["messages"]]
+    assert "tool" in round1_roles

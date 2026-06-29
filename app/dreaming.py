@@ -519,8 +519,6 @@ def _auto_apply_skip_reason(item: Dict[str, Any], *, source_type: str) -> Option
         return "low_confidence"
     if item["importance"] == "low":
         return "low_importance"
-    if source_type == "max_turns_compression" and item["importance"] != "high":
-        return "max_turns_requires_high_importance"
     if item["target_file"] not in ALLOWED_TARGET_FILES:
         return "unsupported_target_file"
     if item["operation"] in {"delete", "downgrade"} and item["category"] != "correction":

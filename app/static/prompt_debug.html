@@ -491,13 +491,23 @@
       var el = document.getElementById('contextFiles');
       try {
         var data = await apiFetch('/debug/prompt-lab/accounts/' + encodeURIComponent(currentAccountId) + '/context-files');
-        el.innerHTML = (data.files || []).map(function(file) {
+        var files = data.files || [];
+        // 按 section 分组渲染
+        var accountFiles = files.filter(function(f) { return f.section !== 'skill'; });
+        var skillFiles = files.filter(function(f) { return f.section === 'skill'; });
+        function renderFile(file) {
           var body = file.content_redacted ? ('已脱敏 · ' + file.chars + ' chars') : file.content;
           return '<div class="context-item">'
             + '<div class="context-head"><strong>' + esc(file.filename) + '</strong><span>' + esc(file.chars) + ' chars</span></div>'
             + '<div class="context-body">' + esc(body || '') + '</div>'
             + '</div>';
-        }).join('');
+        }
+        var html = accountFiles.map(renderFile).join('');
+        if (skillFiles.length) {
+          html += '<div style="margin:8px 0 4px;font-size:11px;color:#687386;font-weight:600;letter-spacing:.04em;">SKILLS</div>';
+          html += skillFiles.map(renderFile).join('');
+        }
+        el.innerHTML = html || '<div class="status-msg">暂无文件</div>';
       } catch (e) {
         el.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
       }
@@ -613,11 +623,59 @@
     function renderTrace(t) {
       var label = t.trace_id || t.id;
       var detail = t.reply_redacted ? ('reply ' + (t.reply_chars || 0) + ' chars') : (t.reply || '');
-      return '<div class="trace-item">'
+      var panelId = 'rounds-' + esc(label).replace(/[^a-zA-Z0-9]/g, '_');
+      return '<div class="trace-item" id="trace-item-' + panelId + '">'
         + '<div class="trace-head"><strong class="mono">' + esc(label) + '</strong><span>' + esc(t.source || '') + '</span></div>'
         + '<div class="message-body">' + esc(detail || '') + '</div>'
+        + '<div style="display:flex;gap:6px;margin-top:6px">'
         + '<button onclick="loadTrace(\'' + esc(label) + '\')">载入</button>'
+        + '<button onclick="showRounds(\'' + esc(label) + '\',\'' + panelId + '\')">Rounds</button>'
+        + '</div>'
+        + '<div id="' + panelId + '" style="display:none;margin-top:8px"></div>'
         + '</div>';
+    }
+
+    async function showRounds(traceId, panelId) {
+      var panel = document.getElementById(panelId);
+      if (!panel) return;
+      if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+      panel.style.display = 'block';
+      panel.innerHTML = '<div class="status-msg">加载中...</div>';
+      try {
+        var data = await apiFetch('/debug/traces/' + encodeURIComponent(traceId));
+        var trace = data.trace || {};
+        var meta = trace.metadata || {};
+        var rounds = meta.rounds;
+        if (!rounds || !rounds.length) {
+          panel.innerHTML = '<div class="status-msg">无 rounds 数据（账号需在 DEBUG_TRACE_ACCOUNT_IDS 中，且需工具调用）</div>';
+          return;
+        }
+        var html = '<div style="font-size:12px;color:#516070;margin-bottom:6px"><strong>' + rounds.length + ' LLM 调用</strong></div>';
+        rounds.forEach(function(r) {
+          var msgs = r.messages || [];
+          var toolCalls = r.tool_calls;
+          var fr = r.finish_reason || '—';
+          var rolesSummary = msgs.map(function(m) { return m.role || '?'; }).join(' → ');
+          html += '<div style="border:1px solid #e1e7f0;border-radius:6px;padding:8px;margin-bottom:6px">'
+            + '<div style="font-size:12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+            + '<strong>Round ' + r.round + '</strong>'
+            + '<span style="color:#516070">' + esc(rolesSummary) + ' · finish: ' + esc(fr) + ' · ' + msgs.length + ' msgs</span>'
+            + '</div>';
+          if (toolCalls && toolCalls.length) {
+            var names = toolCalls.map(function(tc) { return (tc.function || {}).name || '?'; }).join(', ');
+            html += '<div style="font-size:12px;color:#8b5cf6;margin-bottom:4px">⚙ ' + esc(names) + '</div>';
+          }
+          var jsonStr = JSON.stringify(msgs, null, 2);
+          var tid = 'round-detail-' + panelId + '-' + r.round;
+          html += '<button style="font-size:11px;padding:2px 8px" onclick="var el=document.getElementById(\'' + tid + '\');el.style.display=el.style.display===\'none\'?\'block\':\'none\'">展开 messages</button>'
+            + '<pre id="' + tid + '" style="display:none;white-space:pre-wrap;word-break:break-all;font-size:11px;max-height:400px;overflow:auto;background:#f7f9fc;border-radius:4px;padding:8px;margin-top:4px">'
+            + esc(jsonStr) + '</pre>';
+          html += '</div>';
+        });
+        panel.innerHTML = html;
+      } catch (e) {
+        panel.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
+      }
     }
 
     async function buildPrompt() {

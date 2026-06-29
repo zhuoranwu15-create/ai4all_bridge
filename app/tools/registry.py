@@ -18,8 +18,10 @@ from app.tools.definitions import (
     get_content_invitation_generation_tools,
     get_content_invitation_response_tools,
     get_proactive_message_settings_tools,
+    get_read_tools,
     get_reminder_tools,
     get_session_status_tools,
+    get_web_fetch_tools,
     get_web_search_tools,
 )
 
@@ -51,6 +53,14 @@ class ToolSpec:
 # 每个工具的分发元数据：name -> (handler_module, handler_attr, call_style,
 # runtime_requires_flag, default_when_flag)。这是分发与默认集的单一声明处。
 _META: Dict[str, tuple] = {
+    "web_fetch": (
+        "app.tools.web_fetch_handlers", "handle_web_fetch",
+        CALL_PLAIN, None, _DEFAULT_ALWAYS,
+    ),
+    "read": (
+        "app.tools.read_handlers", "handle_read",
+        CALL_PLAIN, None, _DEFAULT_ALWAYS,
+    ),
     "create_reminder": ("app.tools.reminder_handlers", "handle_create_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "list_reminders": ("app.tools.reminder_handlers", "handle_list_reminders", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "cancel_reminder": ("app.tools.reminder_handlers", "handle_cancel_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
@@ -90,6 +100,8 @@ _META: Dict[str, tuple] = {
 # reminder → session_status → proactive_message_settings → web_search → content_invitation_response），
 # content_invitation_generation 仅供生成路径直接装载，放最后且永不进默认集。
 _GROUP_PROVIDERS: List[tuple] = [
+    ("web_fetch", get_web_fetch_tools),
+    ("read", get_read_tools),
     ("reminder", get_reminder_tools),
     ("session_status", get_session_status_tools),
     ("proactive_message_settings", get_proactive_message_settings_tools),

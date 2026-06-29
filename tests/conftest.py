@@ -4,6 +4,22 @@ from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
+# ambient DATABASE_URL guard：本地/生产 .env 可能为「运行时」设了 DATABASE_URL（切 PG）。
+# 测试后端只由 AI4ALL_TEST_DB 决定、且每测试用独立库；因此在此把进程内 ambient
+# database_url 清空，避免它泄漏到未 patch settings 的测试——否则全局 is_postgres()
+# 会被误判（SQLite 连接跑出 PG 分支报错），PG 档下甚至会误连真实 dev/生产库。
+# 两档都生效：SQLite 档回到空串（→ database_path）；PG 档由 test_settings 各自注入临时库 DSN。
+# ---------------------------------------------------------------------------
+import app.config as _app_config  # noqa: E402
+_app_config.settings.database_url = ""
+# 同类 ambient .env 泄漏：dev/生产 .env 常把 openclaw_cli_path 设成绝对路径（CLI 不在服务 PATH 时），
+# 会泄漏进直接用全局 settings 的 openclaw/runtime_health/node 测试——它们断言命令首元素为裸名 "openclaw"，
+# 装了 CLI 的开发机上 cmd[0] 变成绝对路径致误判失败（CI/干净环境无 .env 故不暴露）。在此固定回默认裸名，
+# 使测试与本机 .env 无关；需要绝对路径的测试自行 monkeypatch 覆盖。
+_app_config.settings.openclaw_cli_path = "openclaw"
+
+
+# ---------------------------------------------------------------------------
 # 测试后端开关（1e）：默认 SQLite；AI4ALL_TEST_DB=postgres 时整套跑临时 PG。
 # PG 档由 pytest-postgresql 提供：postgresql_proc 起一个 session 级 PG 进程，
 # postgresql_db 为每个测试 create/drop 一个独立库（与 SQLite 的 tmp_path 每测试隔离对等）。
@@ -101,13 +117,26 @@ def test_settings(tmp_path, db_dsn):
     s.llm_context_messages = 100
     s.llm_default_prompt = "你是测试助手"
     s.llm_max_tool_rounds = 3
+    s.llm_request_dump_enabled = False
+    # Agent runtime 对齐开关（Batch A-D）：MagicMock 不会自动返回 False，需显式设定。
+    s.llm_tool_surface_prompt_enabled = True
+    s.llm_external_content_wrapper_enabled = True
+    s.llm_skills_prompt_enabled = False     # 测试里不需要 skill catalog
+    s.llm_read_tool_enabled = True
+    s.llm_tool_evidence_replay_enabled = False  # 避免测试依赖 DB 里的 tool_invocations
+    s.llm_current_message_envelope_enabled = False  # 灰度关：不影响现有测试断言
+    # 短期上下文裁剪（context_window）：测试默认关，避免 MagicMock 自动属性污染历史组装；
+    # 需要验证裁剪的用例在测试内显式置非零。滚动摘要 P3 默认关。
+    s.llm_context_token_budget = 0
+    s.llm_context_message_max_chars = 0
+    s.llm_rolling_summary_enabled = False
+    s.llm_rolling_summary_trigger_messages = 20
     s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10
     s.rate_limit_rpm_window_seconds = 30.0
     s.rate_limit_daily_message = "每日上限"
     s.rate_limit_rpm_message = "每分钟上限"
-    s.conversation_session_max_turns = 500
     s.conversation_session_business_day_start_hour = 4
     s.dreaming_scheduler_enabled = False
     s.dreaming_scheduler_interval_seconds = 300.0

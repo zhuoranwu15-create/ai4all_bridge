@@ -190,8 +190,12 @@ def test_dispatch_proactive_central_enqueues_without_send(fresh_db, monkeypatch)
     from app.proactive import messaging
 
     _create_account("acc-central")
+    # local_node_inline_dispatch 必须显式钉 False：Settings(...) 仍会从开发机 .env 继承该字段，
+    # 本机 aliyun1（central+node 同机）线上开了 inline，会让“中心不直发”断言被泄漏配置破坏。
     monkeypatch.setattr(
-        messaging, "settings", Settings(ai4all_role="central", default_node_id="aliyun1")
+        messaging,
+        "settings",
+        Settings(ai4all_role="central", default_node_id="aliyun1", local_node_inline_dispatch=False),
     )
     sent = {}
     monkeypatch.setattr(messaging, "send_weixin_text", lambda **kw: sent.setdefault("called", True))

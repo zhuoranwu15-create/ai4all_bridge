@@ -694,7 +694,7 @@ Expected: page reloads, account dropdown populates with accounts from the DB.
 
 - [ ] **Step 3: Verify the golden path**
 
-1. Select account `86f866663cf9-im-bot` from the dropdown.
+1. Select account `aid_806382741` from the dropdown.
 2. Right panel shows existing reminders (or "暂无提醒" if none).
 3. Type `明天上午10点提醒我喝水` in the chat input, press Enter.
 4. Typing indicator appears, then AI reply appears in the chat.

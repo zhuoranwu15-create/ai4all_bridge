@@ -14,7 +14,7 @@ storage 的 key 是**原始 account_id**，而磁盘目录名是 _safe_account_d
 
 Usage:
     .venv/bin/python scripts/import_profiles_to_db.py
-    .venv/bin/python scripts/import_profiles_to_db.py --account 86f866663cf9-im-bot
+    .venv/bin/python scripts/import_profiles_to_db.py --account aid_806382741
     .venv/bin/python scripts/import_profiles_to_db.py --apply
     .venv/bin/python scripts/import_profiles_to_db.py --apply --overwrite
 """

@@ -17,7 +17,7 @@ from app.user_meta_scheduler import classify_companion_type  # noqa: E402
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--account", default="86f866663cf9-im-bot")
+    parser.add_argument("--account", default="aid_806382741")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--show-prompt", action="store_true")

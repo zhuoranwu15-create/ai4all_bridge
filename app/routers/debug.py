@@ -456,7 +456,7 @@ def debug_prompt_lab_context_files(
     _: None = Depends(verify_admin_auth),
     __: None = Depends(require_non_production_debug),
 ) -> dict:
-    """Return account context files for prompt-lab inspection."""
+    """Return account context files + global skill files for prompt-lab inspection."""
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
     context = read_agent_context(account_id)
@@ -472,12 +472,26 @@ def debug_prompt_lab_context_files(
             "path": str(path),
             "exists": exists,
             "chars": len(content),
+            "section": "account",
         }
         if plaintext:
             item["content"] = content
         else:
             item["content_redacted"] = True
         files.append(item)
+    # 全局 skill 文件：只读、非账号隔离，不脱敏
+    from app.skills import list_skill_catalog, read_skill
+    for skill in list_skill_catalog():
+        location = skill.get("location", "")
+        content = read_skill(location) or ""
+        files.append({
+            "filename": location,
+            "path": location,
+            "exists": bool(content),
+            "chars": len(content),
+            "content": content,
+            "section": "skill",
+        })
     return {
         "account_id": account_id,
         "agent_context": context.metadata(),

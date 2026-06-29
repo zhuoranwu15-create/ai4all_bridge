@@ -1,0 +1,43 @@
+name: tests
+
+# 上线门禁：push / PR 到 main 时，在 PostgreSQL 上跑全量测试，与生产后端对齐。
+# 日常本地仍可用 SQLite 档（make test）快速迭代；本工作流是「合并/上线前强制 PG」那一层。
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pg-tests:
+    name: PostgreSQL 档全量测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # 对齐 dev/生产 venv（3.11），避免版本漂移逃过门禁
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: 准备 PostgreSQL 二进制（pytest-postgresql 自起临时实例需要 pg_ctl/initdb）
+        run: |
+          # ubuntu-latest 预装 postgresql；把对应 bin 目录加进 PATH。缺失则即时安装。
+          PG_BIN=$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | sort -V | tail -1 || true)
+          if [ -z "$PG_BIN" ]; then
+            sudo apt-get update && sudo apt-get install -y postgresql
+            PG_BIN=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+          fi
+          echo "使用 PG 二进制目录: $PG_BIN"
+          echo "$PG_BIN" >> "$GITHUB_PATH"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 跑 PG 档全量测试
+        env:
+          AI4ALL_TEST_DB: postgres
+        run: pytest tests/ -q

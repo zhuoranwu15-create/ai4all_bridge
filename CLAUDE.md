@@ -37,7 +37,14 @@
 
 本地地址：`http://localhost:8180`
 
-标准数据库：`data/ai4all.sqlite3`
+### 数据库后端（双后端，按 `DATABASE_URL` 二选一）
+
+代码同时支持 SQLite 与 PostgreSQL，由 `.env` 的 `DATABASE_URL` 决定：
+
+- **留空（默认）→ SQLite**：本地开发用 `data/ai4all.sqlite3`，测试用内存 SQLite。本文档下文提到的「标准数据库 `data/ai4all.sqlite3`」均指此本地/测试默认。
+- **非空（`postgresql://…`）→ PostgreSQL**：**生产（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG，这是线上真实后端**。aliyun1 本地 PG，aliyun2 直连中心 PG。回滚只需重新注释 `DATABASE_URL` 并重启服务即回 SQLite。
+
+因此 SQLite 代码路径是刻意保留的（dev/test 默认 + 回滚通道），并非生产形态。下文 `app/db/*` 等描述同时覆盖两后端。
 
 ## 鉴权
 
@@ -70,12 +77,12 @@
 .venv/bin/python scripts/send_mock_turn.py --url http://127.0.0.1:8180 --text "你好"
 
 # 查看某个账号组装后的 system prompt。
-.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account 86f866663cf9-im-bot
+.venv/bin/python scripts/check_prompt.py --url http://127.0.0.1:8180 --account aid_806382741
 ```
 
 这两个脚本默认使用端口 `8000`；本地测试时必须显式传入 `--url`。
 
-主要测试账号：`86f866663cf9-im-bot`，该账号在 `data/ai4all.sqlite3` 中历史最多。
+主要测试账号：`aid_806382741`。旧 `im-bot` 形态账号逐步淘汰，不再作为默认示例。
 
 完整调试参考：[`docs/guides/debugging.md`](docs/guides/debugging.md)
 

@@ -3,7 +3,7 @@
 安全保证:只读 DB(account/session/profile/历史),不写 messages、不扣费、
 不调用 OpenClaw 网关(不会发到用户微信)。唯一外部副作用是一次 LLM API 调用。
 
-    PYTHONPATH=. .venv/bin/python scripts/dry_run_reply.py 86f866663cf9-im-bot "在吗"
+    PYTHONPATH=. .venv/bin/python scripts/dry_run_reply.py aid_806382741 "在吗"
 """
 
 import sys
@@ -34,7 +34,7 @@ def _active_session(account_id: str):
 
 
 def main() -> int:
-    account_id = sys.argv[1] if len(sys.argv) > 1 else "86f866663cf9-im-bot"
+    account_id = sys.argv[1] if len(sys.argv) > 1 else "aid_806382741"
     user_text = sys.argv[2] if len(sys.argv) > 2 else "在吗"
 
     account = get_account(account_id=account_id)

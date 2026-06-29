@@ -47,6 +47,7 @@ from app.moderation.service import (
     enqueue_message_for_moderation,
     screen_inbound_message_sync,
 )
+from app.context_window import trim_history_rows
 from app.prompt_builder import PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.proactive.state import ensure_account_state
@@ -397,6 +398,23 @@ def _build_tooling_envelope(
     }
 
 
+def _wrap_current_message_envelope(messages: List[Dict[str, Any]], message_type: str) -> None:
+    """将 messages 里最后一条 user 消息包裹进 typed envelope（原地修改）。
+
+    格式：<current_message type="...">原文</current_message>
+    落库的 content 不变，只在 LLM feed 里加标注。
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            content = messages[i].get("content") or ""
+            safe_type = (message_type or "text").replace('"', "")
+            messages[i] = dict(messages[i])  # 避免修改 history 列表里的原对象
+            messages[i]["content"] = (
+                f'<current_message type="{safe_type}">\n{content}\n</current_message>'
+            )
+            return
+
+
 def build_turn_llm_input(
     *,
     account_id: str,
@@ -416,6 +434,7 @@ def build_turn_llm_input(
     include_tool_instructions: bool = True,
     debug_dry_run: bool = False,
     llm_provider: Optional[LLMProviderConfig] = None,
+    message_type: str = "text",
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
@@ -429,10 +448,30 @@ def build_turn_llm_input(
         account_id=account_id,
         limit=settings.llm_context_messages,
     )
+    # Token 预算 + 单消息硬上限裁剪（默认开；仅作用于对话历史，不含 system prompt）。
+    # 关键：tool_evidence / carryover 抑制 / history_metadata 一律基于裁剪后的 kept_rows，
+    # 保证"实际丢了哪些消息"与各下游判断一致，避免既丢原文又抑制摘要的上下文双丢。
+    trim_result = trim_history_rows(
+        history_rows,
+        token_budget=int(getattr(settings, "llm_context_token_budget", 0) or 0),
+        per_message_max_chars=int(getattr(settings, "llm_context_message_max_chars", 0) or 0),
+    )
+    kept_rows = trim_result["kept"]
     history = [
         {"role": row["role"], "content": row["content"]}
-        for row in history_rows
+        for row in kept_rows
     ]
+    if getattr(settings, "llm_tool_evidence_replay_enabled", True):
+        from app.tool_evidence_replay import inject_tool_evidence_replay
+        # history 由 kept_rows 构建，inject 内部 zip(history, rows) 需 1:1 对齐，故同传 kept_rows。
+        history = inject_tool_evidence_replay(
+            history,
+            kept_rows,
+            account_id,
+            enabled=True,
+            max_turns=int(getattr(settings, "llm_tool_evidence_turns", 2)),
+            max_result_chars=int(getattr(settings, "llm_tool_evidence_max_result_chars", 1500)),
+        )
     file_profile = read_user_profile(account_id)
     soul = extract_section(file_profile, "Soul")
     user_prefs = extract_section(file_profile, "User Preferences")
@@ -443,10 +482,15 @@ def build_turn_llm_input(
     )
     suppress_carryover = _history_covers_previous_session(
         current_session_id=current_session_id,
-        history_rows=history_rows,
+        history_rows=kept_rows,
     )
     carryover_summary = None if suppress_carryover else session.get("carryover_summary")
-    history_metadata = _summarize_history_rows(history_rows)
+    # Token 压力滚动摘要（P3，默认关）：摘要只覆盖已滑出窗口的本会话头部消息，
+    # 一旦生成即不在当前窗口内，故 session.rolling_summary 非空时直接注入。
+    rolling_summary = None
+    if getattr(settings, "llm_rolling_summary_enabled", False):
+        rolling_summary = (session.get("rolling_summary") or "").strip() or None
+    history_metadata = _summarize_history_rows(kept_rows)
     carryover_metadata = {
         "source_chars": len(session.get("carryover_summary") or ""),
         "included": bool(carryover_summary),
@@ -458,6 +502,10 @@ def build_turn_llm_input(
         "history_cross_session": True,
         "history_session_count": history_metadata["session_count"],
         "history": history_metadata,
+        "history_dropped_count": trim_result["metrics"]["dropped_count"],
+        "history_truncated_count": trim_result["metrics"]["truncated_count"],
+        "history_est_tokens": trim_result["metrics"]["kept_est_tokens"],
+        "rolling_summary_included": bool(rolling_summary),
         "soul_chars": len(soul),
         "user_prefs_chars": len(user_prefs),
         "long_term_memory_chars": len(long_term_memory),
@@ -520,7 +568,12 @@ def build_turn_llm_input(
             needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
         )
 
+    from app.skills import list_skill_catalog
+
     builder = PromptBuilder()
+    _tool_surface_enabled = getattr(settings, "llm_tool_surface_prompt_enabled", True)
+    _skills_enabled = getattr(settings, "llm_skills_prompt_enabled", True)
+    skill_catalog = list_skill_catalog() if _skills_enabled and not onboarding_active else None
     build_result = builder.assemble(
         display_name=account.get("display_name"),
         soul=soul,
@@ -528,6 +581,7 @@ def build_turn_llm_input(
         long_term_memory=long_term_memory,
         daily_notes=None,
         carryover_summary=carryover_summary,
+        rolling_summary=rolling_summary,
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
         agent_context=agent_context.blocks,
@@ -537,6 +591,8 @@ def build_turn_llm_input(
         weekday=beijing_weekday_str(_now),
         daypart=beijing_daypart_str(_now),
         model_name=selected_llm_provider.model,
+        tools=tooling["available_tool_names"] if _tool_surface_enabled else None,
+        skills=skill_catalog or None,
         tool_instructions=(
             None if onboarding_active or not include_tool_instructions else _tool_instructions(
                 active_content_invitation=active_content_invitation,
@@ -560,6 +616,8 @@ def build_turn_llm_input(
     if debug_dry_run and text.strip():
         messages.append({"role": "user", "content": text.strip()})
         metadata["dry_run_user_text_included"] = True
+    if getattr(settings, "llm_current_message_envelope_enabled", False):
+        _wrap_current_message_envelope(messages, message_type=message_type)
     metadata["messages_count"] = len(messages)
     metadata["include_tool_instructions"] = bool(include_tool_instructions and not onboarding_active)
     metadata["web_search_enabled"] = web_search_enabled
@@ -805,7 +863,6 @@ def _prepare_turn(
         sender_name=payload.sender_name,
         chat_id=identity.chat_id,
         business_day=business_day,
-        max_turns=int(getattr(settings, "conversation_session_max_turns", 500)),
     )
     binding = upsert_channel_binding(
         account_id=account_id,
@@ -1273,6 +1330,7 @@ def _resolve_turn_reply(
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
                 llm_provider=llm_provider,
+                message_type=payload.message_type,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
@@ -1301,6 +1359,7 @@ def _resolve_turn_reply(
             _record_timing(timings, "prompt_build_ms", prompt_started)
 
             generation_started = time.monotonic()
+            _round_traces: Optional[List[Dict]] = None
             if onboarding_active:
                 try:
                     reply = generate_reply(
@@ -1332,6 +1391,7 @@ def _resolve_turn_reply(
                     if tool_thinking_sender is not None:
                         tool_thinking_sender(tool_names)
 
+                _round_traces = [] if debug_trace_enabled else None
                 try:
                     reply, generation_error = generate_reply_with_tools(
                         user_text=text,
@@ -1343,9 +1403,13 @@ def _resolve_turn_reply(
                         messages=llm_messages,
                         provider=llm_provider,
                         on_tool_detected=_on_tool_detected,
+                        round_trace_collector=_round_traces,
                     )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
+            if _round_traces:
+                debug_metadata["rounds"] = _round_traces
+                debug_metadata["round_count"] = len(_round_traces)
             if generation_error and not reply:
                 reply = _GENERATION_ERROR_REPLY
                 # 用户将真实收到「卡住了」兜底回复(生成失败且无可用回复)。ERROR 级 → 经 ai4all
@@ -1689,6 +1753,18 @@ def _finalize_turn(
                 account_id=account_id,
             ),
         )
+        # P3 Token 压力滚动摘要（默认关）：复用本 after-turn 后台链路触发，同步回复零新增 LLM 调用。
+        # 函数内部对开关/异常全兜底，这里仅在开关开时挂任务，避免无谓调度。
+        if getattr(settings, "llm_rolling_summary_enabled", False):
+            from app.context_summarizer import maybe_update_rolling_summary
+            background_loop.call_soon_threadsafe(
+                background_loop.create_task,
+                asyncio.to_thread(
+                    maybe_update_rolling_summary,
+                    account_id=account_id,
+                    session_id=int(session["id"]),
+                ),
+            )
         if normal_reply_generated:
             background_loop.call_soon_threadsafe(
                 background_loop.create_task,

@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import time
@@ -6,6 +7,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from app.config import settings
 from app.llm_adapters import chat_completion
 from app.llm_providers import LLMProviderConfig, get_legacy_llm_provider, get_llm_provider
+from app.tools.external_content import project_tool_result_for_llm
 
 
 logger = logging.getLogger("ai4all.llm")
@@ -370,6 +372,7 @@ def generate_reply_with_tools(
     messages: Optional[List[Dict]] = None,
     provider: Optional[LLMProviderConfig] = None,
     on_tool_detected: Optional[Callable[[List[str]], None]] = None,
+    round_trace_collector: Optional[List[Dict]] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None).
 
@@ -412,6 +415,10 @@ def generate_reply_with_tools(
 
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
+        _round_snapshot: Optional[Dict] = None
+        if round_trace_collector is not None:
+            _round_snapshot = {"round": round_index, "messages": copy.deepcopy(tool_messages)}
+            round_trace_collector.append(_round_snapshot)
         try:
             response = _http_chat_with_tools(
                 tool_messages,
@@ -425,6 +432,9 @@ def generate_reply_with_tools(
         choice = response.get("choices", [{}])[0]
         finish_reason = choice.get("finish_reason", "")
         message = choice.get("message", {})
+        if _round_snapshot is not None:
+            _round_snapshot["finish_reason"] = finish_reason
+            _round_snapshot["tool_calls"] = message.get("tool_calls")
         logger.debug(
             "llm_response round=%d finish_reason=%s has_tool_calls=%s content_prefix=%r",
             round_index,
@@ -463,12 +473,17 @@ def generate_reply_with_tools(
                 assistant_message["content"] = message.get("content")
             tool_messages.append(assistant_message)
             for tool_call in tool_calls:
+                tool_name = (tool_call.get("function") or {}).get("name", "")
                 tool_result = _execute_and_record_tool_call(tool_call, ctx)
+                if getattr(settings, "llm_external_content_wrapper_enabled", True):
+                    content = project_tool_result_for_llm(tool_name, tool_result)
+                else:
+                    content = json.dumps(tool_result, ensure_ascii=False)
                 tool_messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.get("id", "call_0"),
-                        "content": json.dumps(tool_result, ensure_ascii=False),
+                        "content": content,
                     }
                 )
             continue

@@ -11,6 +11,14 @@ import pytest
 pytest.importorskip("psycopg")
 pytest.importorskip("pytest_postgresql")
 
+# pytest-postgresql 在 requirements.txt 内（PG 已是生产后端），故"纯 SQLite 机器没装它"的
+# 旧假设不再成立：仅 importorskip 不足以让纯 SQLite 档跳过本文件。还需本地 PG 工具链——
+# pytest-postgresql 7.x 起临时实例要 pg_config 探测版本。缺则优雅跳过，使 `make test`
+# 在"装了依赖但没本地 PG server"的开发机上也干净（CI/PG 档装了完整 postgresql，照常运行）。
+import shutil
+if shutil.which("pg_config") is None:
+    pytest.skip("缺 pg_config（未装本地 PG 开发工具链），跳过真 PG 测试", allow_module_level=True)
+
 from app.db import _backend  # noqa: E402
 
 postgresql_proc = None
@@ -115,6 +123,46 @@ def test_pg_integrity_error_caught_by_alias(pg_settings):
     except _backend.IntegrityError:
         caught = True
     assert caught
+
+
+def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_settings):
+    from app.db._core import _ensure_pg_functions, connect
+
+    with connect() as conn:
+        _ensure_pg_functions(conn)
+        conn.execute(
+            """
+            CREATE TABLE outbound_messages (
+                account_id TEXT NOT NULL,
+                quota_date TEXT NOT NULL,
+                status TEXT NOT NULL,
+                metadata_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO outbound_messages(account_id, quota_date, status, metadata_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("acc-pg-react", "2026-06-24", "sent", '{"reactivation": true}'),
+        )
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM outbound_messages
+            WHERE account_id = ?
+              AND quota_date = ?
+              AND status IN ('pending', 'sending', 'sent')
+              AND json_valid(metadata_json)
+              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+            """,
+            ("acc-pg-react", "2026-06-24"),
+        ).fetchone()
+
+    assert row["count"] == 1
 
 
 # ---------------------------------------------------------------------------
