@@ -102,6 +102,7 @@ def dispatch_icebreaker(
     account_id: str,
     *,
     now: Optional[datetime] = None,
+    trigger_source: str = "scheduler",
 ) -> Dict[str, Any]:
     """为单个账号派发一条破冰话术，返回操作结果字典。
 
@@ -121,6 +122,30 @@ def dispatch_icebreaker(
     script_id = script["id"]
     idempotency_key = f"icebreaker-{account_id}-{script_id}-{current.date().isoformat()}-{uuid.uuid4().hex[:8]}"
 
+    # Proactive Selection Trace MVP：记录"这条话术为什么被选中"
+    last_imp = get_last_icebreaker_impression(account_id=account_id)
+    selection_trace = {
+        "decision_trace": {
+            "trace_type": "proactive_selection_trace",
+            "trace_version": 1,
+            "l0_context": {
+                "last_icebreaker_at": last_imp["created_at"] if last_imp else None,
+                "last_category": last_imp["script_type"] if last_imp else None,
+            },
+            "l1_trigger": {
+                "trigger_type": "icebreaker",
+                "trigger_source": trigger_source,
+            },
+            "l3_how": {
+                "script_id": script["id"],
+                "script_type": script.get("script_type"),
+                "marketing_feel": script.get("marketing_feel"),
+                "reply_cost": script.get("reply_cost"),
+                "freq_tier": script.get("freq_tier"),
+            },
+        }
+    }
+
     try:
         outbound = dispatch_proactive_text(
             account_id=account_id,
@@ -132,6 +157,7 @@ def dispatch_icebreaker(
             text=script["text"],
             idempotency_key=idempotency_key,
             now=current,
+            metadata=selection_trace,
         )
     except Exception as exc:
         logger.exception("dispatch_proactive_text failed for account=%s script=%s", account_id, script_id)

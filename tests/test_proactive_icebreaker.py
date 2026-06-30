@@ -431,3 +431,169 @@ def test_scheduler_other_step_failure_does_not_kill_icebreaker():
     assert result["icebreaker_count"] == 1
     assert result["status"] == "partial_error"
     assert "reminders" in result["errors"]
+
+
+# ---------------------------------------------------------------------------
+# 5. Proactive Selection Trace MVP
+# ---------------------------------------------------------------------------
+
+def _get_outbound_metadata(outbound_id) -> dict:
+    import json
+    from app.db._core import connect
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT metadata_json FROM outbound_messages WHERE id=?",
+            (outbound_id,),
+        ).fetchone()
+    if row and row["metadata_json"]:
+        return json.loads(row["metadata_json"])
+    return {}
+
+
+def test_dispatch_icebreaker_trace_written(fresh_db):
+    """成功发送时，outbound_messages.metadata_json 应包含 decision_trace selection trace。"""
+    from app.proactive.icebreaker import dispatch_icebreaker
+
+    _create_account("acc-trace1", fresh_db)
+    _insert_script("破冰TR01", script_type="小测试")
+
+    mock_route = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "bot",
+        "to_user_id": "chat-acc-trace1",
+        "session_key": "session-acc-trace1",
+    }
+
+    with patch("app.proactive.icebreaker._select_route", return_value=mock_route), \
+         patch("app.proactive.icebreaker.dispatch_proactive_text",
+               return_value={"id": None, "status": "sent"}) as mock_dispatch:
+        result = dispatch_icebreaker("acc-trace1", trigger_source="scheduler")
+
+    assert result["status"] == "sent"
+
+    # dispatch_proactive_text 被调用时，metadata 参数应包含 decision_trace
+    call_kwargs = mock_dispatch.call_args.kwargs
+    meta = call_kwargs.get("metadata", {})
+    dt = meta.get("decision_trace", {})
+
+    assert dt.get("trace_type") == "proactive_selection_trace"
+    assert dt.get("trace_version") == 1
+    assert dt["l1_trigger"]["trigger_type"] == "icebreaker"
+    assert dt["l1_trigger"]["trigger_source"] == "scheduler"
+    assert dt["l3_how"]["script_id"] == "破冰TR01"
+    assert dt["l3_how"]["script_type"] == "小测试"
+    assert dt["l3_how"]["marketing_feel"] is not None
+    assert dt["l3_how"]["reply_cost"] is not None
+    assert dt["l3_how"]["freq_tier"] is not None
+
+
+def test_dispatch_icebreaker_trace_on_cancel(fresh_db):
+    """policy 拦截 cancelled 时，metadata 里仍应有 decision_trace.l3_how.script_id。
+
+    即使没发出去，也要知道"选了哪条话术、但被 policy 拦了"。
+    """
+    from app.proactive.icebreaker import dispatch_icebreaker
+
+    _create_account("acc-trace2", fresh_db)
+    _insert_script("破冰TR02", script_type="安全吐槽")
+
+    mock_route = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "bot",
+        "to_user_id": "chat-acc-trace2",
+        "session_key": "session-acc-trace2",
+    }
+
+    with patch("app.proactive.icebreaker._select_route", return_value=mock_route), \
+         patch("app.proactive.icebreaker.dispatch_proactive_text",
+               return_value={"id": None, "status": "cancelled"}) as mock_dispatch:
+        result = dispatch_icebreaker("acc-trace2")
+
+    assert result["status"] == "cancelled"
+
+    call_kwargs = mock_dispatch.call_args.kwargs
+    meta = call_kwargs.get("metadata", {})
+    dt = meta.get("decision_trace", {})
+
+    assert dt.get("trace_type") == "proactive_selection_trace"
+    assert dt["l3_how"]["script_id"] == "破冰TR02"
+
+
+def test_dispatch_icebreaker_trace_l0_context(fresh_db):
+    """有上一条 impression 时，l0_context 应记录 last_icebreaker_at / last_category。"""
+    from app.proactive.icebreaker import dispatch_icebreaker
+
+    _create_account("acc-trace3", fresh_db)
+    _insert_script("破冰TR03", script_type="小测试")
+    _insert_script("破冰TR04", script_type="安全吐槽")
+
+    # 先插一条历史 impression（安全吐槽）
+    _insert_impression("acc-trace3", "破冰TR03", "小测试", status="sent")
+
+    mock_route = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "bot",
+        "to_user_id": "chat-acc-trace3",
+        "session_key": "session-acc-trace3",
+    }
+
+    with patch("app.proactive.icebreaker._select_route", return_value=mock_route), \
+         patch("app.proactive.icebreaker.dispatch_proactive_text",
+               return_value={"id": None, "status": "sent"}) as mock_dispatch:
+        dispatch_icebreaker("acc-trace3")
+
+    call_kwargs = mock_dispatch.call_args.kwargs
+    meta = call_kwargs.get("metadata", {})
+    l0 = meta.get("decision_trace", {}).get("l0_context", {})
+
+    assert l0.get("last_icebreaker_at") is not None, "应记录上一次破冰时间"
+    assert l0.get("last_category") == "小测试", "应记录上一条 impression 的 script_type"
+
+
+def test_dispatch_icebreaker_trace_persisted_to_outbound_metadata(fresh_db):
+    """integration：不 mock dispatch_proactive_text，验证 decision_trace 真实写入 outbound_messages.metadata_json。"""
+    import json
+    from app.proactive.icebreaker import dispatch_icebreaker
+    from app.db._core import connect
+
+    _create_account("acc-intg", fresh_db)
+    _insert_script("破冰IG01", script_type="小测试")
+
+    mock_route = {
+        "channel": "openclaw-weixin",
+        "channel_account_id": "bot",
+        "to_user_id": "chat-acc-intg",
+        "session_key": "session-acc-intg",
+    }
+
+    # 只 mock _select_route（本地无 channel_bindings），其余全部真实执行
+    with patch("app.proactive.icebreaker._select_route", return_value=mock_route):
+        result = dispatch_icebreaker("acc-intg", trigger_source="scheduler")
+
+    # policy 可能放行(sent) 也可能拦截(cancelled)，两种都应该写入 outbound
+    assert result["status"] in ("sent", "cancelled", "pending"), f"unexpected status: {result}"
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT metadata_json FROM outbound_messages
+            WHERE account_id = 'acc-intg'
+              AND product_category = 'proactive_icebreaker'
+            ORDER BY id DESC LIMIT 1
+            """,
+        ).fetchone()
+
+    assert row is not None, "outbound_messages 应有一条 proactive_icebreaker 记录"  # 断言 1
+
+    assert row["metadata_json"] is not None, "metadata_json 不应为 NULL"            # 断言 2a
+    meta = json.loads(row["metadata_json"])                                           # 断言 2b：loads 失败即报错
+    assert isinstance(meta, dict), "metadata_json 应为合法 JSON 对象"                # 断言 2c
+
+    dt = meta.get("decision_trace", {})
+
+    assert dt.get("trace_type") == "proactive_selection_trace"                        # 断言 3
+    assert dt.get("trace_version") == 1                                               # 断言 4
+    assert dt["l1_trigger"]["trigger_type"] == "icebreaker"                           # 断言 5
+    assert dt["l1_trigger"]["trigger_source"] == "scheduler"                          # 断言 6
+    assert dt["l3_how"]["script_id"], "l3_how.script_id 不应为空"                    # 断言 7（非空即可）
+    assert dt["l3_how"]["script_id"] == "破冰IG01"                                   # 断言 7+（等值验证）
