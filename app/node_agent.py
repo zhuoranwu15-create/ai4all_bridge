@@ -19,6 +19,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
 from app import openclaw_gateway
+from app.auth_utils import bearer_matches  # 仅依赖 stdlib hmac，不拉起中心 app/db 栈
 from app.config import settings
 from app.openclaw_gateway import DEFAULT_WEIXIN_CHANNEL, OpenClawGatewayError
 
@@ -30,10 +31,10 @@ logger = logging.getLogger("ai4all.node_agent")
 def _verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> None:
     """节点 exec 端点鉴权:Bearer <AI4ALL_BRIDGE_SECRET>,须与中心一致。
 
-    刻意不 import 中心 main 的同名依赖,保持 node-only 进程不拉起整个 central app。
+    刻意不 import 中心 main 的同名依赖,保持 node-only 进程不拉起整个 central app；
+    bearer_matches 仅依赖 stdlib，不破坏该隔离，同时带来恒定时间比较 + 空 secret 拒绝。
     """
-    expected = f"Bearer {settings.ai4all_bridge_secret}"
-    if authorization != expected:
+    if not bearer_matches(settings.ai4all_bridge_secret, authorization):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid bridge authorization",

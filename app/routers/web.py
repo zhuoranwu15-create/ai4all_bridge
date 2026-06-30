@@ -895,7 +895,13 @@ def web_register_and_binding_intent(
 
 
 @router.post("/web/agents")
-def web_create_agent(payload: WebCreateAgentRequest) -> dict:
+def web_create_agent(
+    payload: WebCreateAgentRequest,
+    platform_user=Depends(_require_session),
+) -> dict:
+    # 鉴权 + 属主校验：只能为「当前登录用户自己」创建账号，禁止指定他人 platform_user_id。
+    if payload.platform_user_id != platform_user["id"]:
+        raise HTTPException(status_code=403, detail="无权为其他用户创建账号")
     if get_platform_user(platform_user_id=payload.platform_user_id) is None:
         raise HTTPException(status_code=404, detail="platform_user not found")
     try:
@@ -938,9 +944,15 @@ def web_create_binding_intent(
 
 
 @router.get("/web/binding-intents/{binding_intent_id}")
-def web_get_binding_intent(binding_intent_id: str) -> dict:
+def web_get_binding_intent(
+    binding_intent_id: str,
+    platform_user=Depends(_require_session),
+) -> dict:
     binding_intent = get_binding_intent(binding_intent_id=binding_intent_id)
-    if binding_intent is None:
+    # 鉴权 + 属主校验：binding_intent 含 qr_data_url / manual_login_command，泄露即可劫持
+    # 微信绑定。非属主统一按 404 处理，避免泄露 intent 是否存在。属主访问自己的 QR/登录命令
+    # 属正常流程（onboarding 扫码 + home 重绑都依赖），故不脱敏原样返回。
+    if binding_intent is None or binding_intent.get("platform_user_id") != platform_user["id"]:
         raise HTTPException(status_code=404, detail="binding_intent not found")
     return {"binding_intent": binding_intent}
 

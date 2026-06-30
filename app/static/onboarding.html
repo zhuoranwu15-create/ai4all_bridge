@@ -173,6 +173,8 @@
       options = options || {};
       var headers = {};
       if (options.body) headers['Content-Type'] = 'application/json';
+      // 注册后拿到的 session token 注入鉴权头：binding-intents 轮询等受保护接口依赖它。
+      if (state.sessionToken) headers['Authorization'] = 'Bearer ' + state.sessionToken;
       var res = await fetch(path, Object.assign({}, options, {
         headers: Object.assign(headers, options.headers || {}),
       }));
@@ -357,6 +359,7 @@
             invite_code: normalizedInviteCode() || null,
           }),
         });
+        state.sessionToken = data.session_token;
         state.platformUser = data.platform_user;
         state.account = data.account;
         state.subscription = data.subscription;
