@@ -75,9 +75,14 @@ def test_checked_in_system_agents_file_matches_default_template():
 
 def test_previous_full_tools_default_is_known_and_upgradable():
     """瘦身前的上一版完整 TOOLS.md 应被识别为已知默认，可被自愈升级。"""
-    from app.user_profiles import _PREV_DEFAULT_TOOLS_V1, _known_default_tools_templates_cached
+    from app.user_profiles import (
+        _PREV_DEFAULT_TOOLS_V1,
+        _PREV_DEFAULT_TOOLS_V2,
+        _known_default_tools_templates_cached,
+    )
 
     assert _PREV_DEFAULT_TOOLS_V1.strip() in _known_default_tools_templates_cached()
+    assert _PREV_DEFAULT_TOOLS_V2.strip() in _known_default_tools_templates_cached()
 
 
 def test_default_tools_template_mentions_default_chat_tools():
@@ -95,6 +100,9 @@ def test_default_tools_template_mentions_default_chat_tools():
 
     missing = sorted(name for name in tool_names if name not in tools_text)
     assert missing == []
+    assert "图片理解能力" in tools_text
+    assert "可以接收并理解用户在当前微信对话里发来的图片" in tools_text
+    assert "不能发送或生成图片" in tools_text
 
 
 def test_agent_context_ignores_legacy_user_profile_when_creating_files(fresh_db, tmp_path):
@@ -323,6 +331,29 @@ def test_previous_default_tools_file_without_session_status_is_upgraded(tmp_path
         updated = tools_path.read_text(encoding="utf-8")
         assert created["TOOLS.md"] is False
         assert updated.strip() == _default_system_templates()["TOOLS.md"].strip()
+
+
+def test_previous_default_tools_file_without_image_capability_is_upgraded(tmp_path):
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import (
+            _PREV_DEFAULT_TOOLS_V2,
+            _default_system_templates,
+            ensure_system_context_files,
+        )
+
+        system_dir = tmp_path / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        tools_path = system_dir / "TOOLS.md"
+        tools_path.write_text(_PREV_DEFAULT_TOOLS_V2.strip() + "\n", encoding="utf-8")
+
+        created = ensure_system_context_files()
+
+        updated = tools_path.read_text(encoding="utf-8")
+        assert created["TOOLS.md"] is False
+        assert updated.strip() == _default_system_templates()["TOOLS.md"].strip()
+        assert "图片理解能力" in updated
+        assert "不能发送或生成图片" in updated
 
 
 def test_custom_system_tools_file_is_not_overwritten(tmp_path):

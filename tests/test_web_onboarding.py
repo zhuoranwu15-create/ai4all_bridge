@@ -336,11 +336,8 @@ def test_web_login_with_invite_code_creates_referral_relationship(client):
 
 
 def test_web_create_agent_creates_account_profile_owner_and_subscription(client):
-    user = client.post(
-        "/web/register",
-        json={"phone": "13800000001", "display_name": "Bob",
-              "otp_token": _get_verified_token("13800000001")},
-    ).json()["platform_user"]
+    session_headers, login_data = _get_login_data("13800000001", client)
+    user = login_data["platform_user"]
 
     res = client.post(
         "/web/agents",
@@ -350,6 +347,7 @@ def test_web_create_agent_creates_account_profile_owner_and_subscription(client)
             "role_prompt": "你是 Bob 的个人助理。",
             "plan": "trial",
         },
+        headers=session_headers,
     )
 
     assert res.status_code == 200
@@ -399,10 +397,37 @@ def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     assert mock_start.call_args.kwargs["account_id"] == intent["id"]
     mock_schedule.assert_called_once_with(intent["id"])
 
-    fetched = client.get(f"/web/binding-intents/{intent['id']}")
+    fetched = client.get(f"/web/binding-intents/{intent['id']}", headers=session_headers)
     assert fetched.status_code == 200
     assert fetched.json()["binding_intent"]["id"] == intent["id"]
     assert fetched.json()["binding_intent"]["qr_data_url"] == "data:image/png;base64,ZmFrZQ=="
+
+    # 无鉴权访问被拒绝（曾可枚举 capability URL 拿到 qr_data_url / manual_login_command）。
+    assert client.get(f"/web/binding-intents/{intent['id']}").status_code == 401
+
+    # 他人登录态访问非属主 intent：按 404 处理，不泄露存在性。
+    other_headers, _ = _get_login_data("13800000099", client)
+    cross = client.get(f"/web/binding-intents/{intent['id']}", headers=other_headers)
+    assert cross.status_code == 404
+
+
+def test_web_create_agent_rejects_foreign_platform_user(client):
+    """只能为自己创建账号：指定他人 platform_user_id 返回 403；无鉴权返回 401。"""
+    session_headers, login_data = _get_login_data("13800000051", client)
+    other_headers, other_login = _get_login_data("13800000052", client)
+
+    res = client.post(
+        "/web/agents",
+        json={"platform_user_id": other_login["platform_user"]["id"], "agent_name": "X"},
+        headers=session_headers,
+    )
+    assert res.status_code == 403
+
+    no_auth = client.post(
+        "/web/agents",
+        json={"platform_user_id": login_data["platform_user"]["id"], "agent_name": "X"},
+    )
+    assert no_auth.status_code == 401
 
 
 def test_register_and_binding_intent_creates_default_account_and_qr(client):
@@ -1456,20 +1481,27 @@ def test_binding_intent_requires_session_auth(client):
 
 
 def test_web_create_agent_enforces_per_user_limit(client):
+    from app.db import create_platform_user_session
+
     user = client.post(
         "/web/register",
         json={"phone": "13800009999",
               "otp_token": _get_verified_token("13800009999")},
     ).json()["platform_user"]
+    # 直接签发 session（不走 /web/login，避免额外创建默认账号扰动限额计数）。
+    session = create_platform_user_session(platform_user_id=user["id"], days=7)
+    headers = {"Authorization": f"Bearer {session['token']}"}
     for i in range(10):
         res = client.post(
             "/web/agents",
             json={"platform_user_id": user["id"], "agent_name": f"Bot {i}"},
+            headers=headers,
         )
         assert res.status_code == 200, f"agent {i} creation failed: {res.json()}"
     res = client.post(
         "/web/agents",
         json={"platform_user_id": user["id"], "agent_name": "Bot 11"},
+        headers=headers,
     )
     assert res.status_code == 400
     assert "maximum" in res.json()["detail"]
@@ -1504,7 +1536,7 @@ def test_get_binding_intent_auto_expires_stale_qr(client):
     assert fetched["status"] == "expired"
 
     # Verify via HTTP too
-    res = client.get(f"/web/binding-intents/{intent['id']}")
+    res = client.get(f"/web/binding-intents/{intent['id']}", headers=session_headers)
     assert res.status_code == 200
     assert res.json()["binding_intent"]["status"] == "expired"
 

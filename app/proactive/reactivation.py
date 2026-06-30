@@ -838,7 +838,7 @@ def dispatch_reactivation_candidate(
                 outbound_message_id=outbound_id,
                 invited_at=format_reactivation_time(current),
             )
-        else:
+        elif outbound_status not in {"pending", "sending"}:
             # Send blocked/failed -> reset the row so a later slot can retry.
             release_content_invitation_claim(invitation_id=invitation_id)
 
@@ -848,8 +848,14 @@ def dispatch_reactivation_candidate(
             reason="sent",
             now=current,
         )
+    if outbound_status == "sent":
+        action = "sent"
+    elif outbound_status in {"pending", "sending"}:
+        action = "queued"
+    else:
+        action = "send_blocked"
     return {
-        "action": "sent" if outbound_status == "sent" else "send_blocked",
+        "action": action,
         "account_id": account_id,
         "reason": outbound.get("error"),
         "outbound_message": outbound,

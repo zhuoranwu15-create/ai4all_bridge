@@ -415,6 +415,90 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     assert get_reactivation_candidate(account_id="acc-react-ci") is None
 
 
+def test_remote_content_invitation_finalizes_on_node_result(fresh_db, monkeypatch):
+    from app.config import Settings
+    from app.db import (
+        create_content_invitation,
+        get_content_invitation,
+        list_outbound_messages,
+    )
+    from app.proactive import messaging
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+    from app.routers.bridge import node_outbound_result
+    from app.schemas import NodeOutboundResultRequest
+
+    _create_account("acc-react-ci-remote")
+    _create_route("acc-react-ci-remote")
+    ensure_account_state(account_id="acc-react-ci-remote")
+    monkeypatch.setattr(
+        messaging,
+        "settings",
+        Settings(
+            ai4all_role="central",
+            default_node_id="aliyun2",
+            local_node_inline_dispatch=False,
+        ),
+    )
+    monkeypatch.setattr(
+        messaging,
+        "send_weixin_text",
+        lambda **_kw: (_ for _ in ()).throw(AssertionError("should not inline send")),
+    )
+
+    invitation = create_content_invitation(
+        account_id="acc-react-ci-remote",
+        topic="中亚五国",
+        invitation_text="要不要看看几条中亚五国的内容？",
+        title_items=[{"title": "标题一"}, {"title": "标题二"}, {"title": "标题三"}],
+        expires_at="2099-01-01 00:00:00",
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-react-ci-remote",
+        candidate={
+            "id": "react-ci-remote",
+            "type": "content_invitation",
+            "text": "要不要看看几条中亚五国的内容？",
+            "content_invitation_id": invitation["id"],
+            "scheduled_slot": "slot_2",
+            "scheduled_at": "2026-06-05 18:15:00",
+        },
+    )
+
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-ci-remote",
+        now=datetime(2026, 6, 5, 18, 15),
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {
+            "checked": True,
+            "duplicate": False,
+            "reason": "test",
+        },
+    )
+    outbound = list_outbound_messages(account_id="acc-react-ci-remote", limit=10)[0]
+    claimed = get_content_invitation(invitation_id=invitation["id"])
+
+    assert result["action"] == "queued"
+    assert outbound["status"] == "pending"
+    assert outbound["node_id"] == "aliyun2"
+    assert claimed["status"] == "sending"
+    assert get_reactivation_candidate(account_id="acc-react-ci-remote") is not None
+
+    node_outbound_result(
+        outbound["id"],
+        NodeOutboundResultRequest(status="sent", gateway_message_id="remote-msg-1"),
+    )
+    updated = get_content_invitation(invitation_id=invitation["id"])
+
+    assert updated["status"] == "invited"
+    assert updated["outbound_message_id"] == outbound["id"]
+    assert get_reactivation_candidate(account_id="acc-react-ci-remote") is None
+
+
 def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(fresh_db):
     from app.db import list_outbound_messages
     from app.proactive.reactivation import (

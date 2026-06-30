@@ -5,6 +5,7 @@ app.app_runtime.get_background_loop() 读取。
 """
 import logging
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter, Depends
 
@@ -23,18 +24,87 @@ from app.schemas import (
 from app.routers.deps import verify_bridge_auth
 from app.db import (
     claim_pending_outbound_by_node,
+    get_content_invitation,
     get_or_create_session,
     insert_debug_trace,
     insert_outbound_delivery_message,
+    mark_content_invitation_invited,
     mark_outbound_message_failed,
     mark_outbound_message_sent,
+    release_content_invitation_claim,
     resolve_account_id_for_inbound_channel_identity,
     upsert_access_node,
     upsert_channel_binding,
 )
+from app.proactive.reactivation import (
+    REACTIVATION_TYPE_CONTENT_INVITATION,
+    clear_reactivation_candidate,
+    format_reactivation_time,
+)
+from app.time_utils import beijing_naive_now
 
 logger = logging.getLogger("ai4all")
 router = APIRouter()
+
+
+def _complete_reactivation_content_invitation_outbound(
+    *,
+    outbound_message: Optional[dict],
+    final_status: str,
+) -> None:
+    """Advance content-invitation state after a remote node reports final delivery."""
+    if not outbound_message:
+        return
+    metadata = outbound_message.get("metadata") or {}
+    if not metadata.get("reactivation"):
+        return
+    if metadata.get("reactivation_type") != REACTIVATION_TYPE_CONTENT_INVITATION:
+        return
+
+    invitation_id = str(metadata.get("content_invitation_id") or "").strip()
+    if not invitation_id:
+        return
+    account_id = str(outbound_message.get("account_id") or "").strip()
+    invitation = get_content_invitation(invitation_id=invitation_id)
+    if invitation is None or invitation.get("account_id") != account_id:
+        logger.warning(
+            "content invitation finalization account mismatch outbound_id=%s invitation_id=%s",
+            outbound_message.get("id"),
+            invitation_id,
+        )
+        return
+
+    if final_status == "sent":
+        current = beijing_naive_now()
+        invited_at = str(outbound_message.get("sent_at") or "").strip()
+        if not invited_at:
+            invited_at = format_reactivation_time(current)
+        outbound_id = (
+            int(outbound_message["id"])
+            if outbound_message.get("id") is not None
+            else None
+        )
+        updated = mark_content_invitation_invited(
+            invitation_id=invitation_id,
+            outbound_message_id=outbound_id,
+            invited_at=invited_at,
+        )
+        if updated is None:
+            logger.warning(
+                "content invitation finalization skipped outbound_id=%s invitation_id=%s",
+                outbound_message.get("id"),
+                invitation_id,
+            )
+        if account_id:
+            clear_reactivation_candidate(
+                account_id=account_id,
+                reason="sent",
+                now=current,
+            )
+        return
+
+    if final_status == "failed":
+        release_content_invitation_claim(invitation_id=invitation_id)
 
 
 @router.post("/openclaw/debug-traces")
@@ -149,10 +219,18 @@ def node_outbound_result(
                     outbound_message_id,
                     err,
                 )
+            _complete_reactivation_content_invitation_outbound(
+                outbound_message=sent,
+                final_status="sent",
+            )
         return {"status": "sent", "outbound_message": sent}
     failed = mark_outbound_message_failed(
         outbound_message_id=outbound_message_id,
         error=str(payload.error or "node_send_failed"),
+    )
+    _complete_reactivation_content_invitation_outbound(
+        outbound_message=failed,
+        final_status="failed",
     )
     return {"status": "failed", "outbound_message": failed}
 
