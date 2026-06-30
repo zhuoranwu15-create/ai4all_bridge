@@ -252,13 +252,6 @@ class Settings(BaseSettings):
     aliyun_web_search_enable_source: bool = True
     aliyun_web_search_strategy: str = ""
 
-    baidu_ai_search_enabled: bool = False
-    baidu_ai_search_api_key: str = ""
-    baidu_ai_search_base_url: str = "https://qianfan.baidubce.com"
-    baidu_ai_search_endpoint: str = "/v2/ai_search/web_search"
-    baidu_ai_search_source: str = "baidu_search_v2"
-    baidu_ai_search_top_k: int = 5
-
     # Aliyun SMS
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""

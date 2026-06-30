@@ -20,10 +20,6 @@ class AliyunSearchError(RuntimeError):
     pass
 
 
-class BaiduSearchError(RuntimeError):
-    pass
-
-
 class _DuckDuckGoHTMLParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -340,120 +336,6 @@ def bing_search(
         results=results,
         latency_ms=latency_ms,
         warnings=_unsupported_filter_warnings("Bing RSS", unsupported_filters),
-    )
-
-
-def parse_baidu_ai_search_response(payload: Dict[str, Any], *, count: int) -> List[Dict[str, Any]]:
-    retrieved_at = datetime.now(timezone.utc).isoformat()
-    results: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    references = payload.get("references") or []
-    if not isinstance(references, list):
-        return []
-    for item in references:
-        if not isinstance(item, dict):
-            continue
-        url = _collapse_ws(item.get("url") or "")
-        title = _collapse_ws(item.get("title") or item.get("web_anchor") or url)
-        if not title or not url or url in seen:
-            continue
-        seen.add(url)
-        score = item.get("rerank_score")
-        if score is None:
-            score = item.get("authority_score")
-        results.append(
-            {
-                "title": title,
-                "url": url,
-                "snippet": _collapse_ws(item.get("content") or ""),
-                "site_name": _collapse_ws(item.get("website") or "") or _site_name(url),
-                "retrieved_at": retrieved_at,
-                "score": score,
-                "published_at": item.get("date"),
-            }
-        )
-        if len(results) >= count:
-            break
-    return results
-
-
-def baidu_ai_search(
-    *,
-    query: str,
-    api_key: str,
-    base_url: str = "https://qianfan.baidubce.com",
-    endpoint: str = "/v2/ai_search/web_search",
-    search_source: str = "baidu_search_v2",
-    count: int = 5,
-    top_k: int = 5,
-    timeout_seconds: float = 8.0,
-    language: Optional[str] = None,
-    country: Optional[str] = None,
-    freshness: Optional[str] = None,
-    date_after: Optional[str] = None,
-    date_before: Optional[str] = None,
-    include_raw_response: bool = False,
-) -> Dict[str, Any]:
-    cleaned_query = _collapse_ws(query)
-    if not cleaned_query:
-        raise BaiduSearchError("query is required")
-    if not api_key:
-        raise BaiduSearchError("baidu api key is required")
-    normalized_count = min(max(int(count or 5), 1), 10)
-    normalized_top_k = min(max(int(top_k or normalized_count), normalized_count), 20)
-    unsupported_filters = [
-        name
-        for name, value in (
-            ("language", language),
-            ("country", country),
-            ("freshness", freshness),
-            ("date_after", date_after),
-            ("date_before", date_before),
-        )
-        if value
-    ]
-    url = base_url.rstrip("/") + "/" + endpoint.lstrip("/")
-    body: Dict[str, Any] = {
-        "messages": [{"role": "user", "content": cleaned_query}],
-        "search_source": search_source,
-        "resource_type_filter": [{"type": "web", "top_k": normalized_top_k}],
-    }
-
-    started = time.monotonic()
-    try:
-        with httpx.Client(timeout=timeout_seconds, follow_redirects=True, trust_env=False) as client:
-            response = client.post(
-                url,
-                headers={
-                    "X-Appbuilder-Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
-            response.raise_for_status()
-            payload = response.json()
-    except httpx.HTTPStatusError as err:
-        raise BaiduSearchError(_http_status_error_message("baidu", err.response)) from err
-    except httpx.HTTPError as err:
-        raise BaiduSearchError(f"baidu request failed: {err}") from err
-    except ValueError as err:
-        raise BaiduSearchError("baidu returned invalid json") from err
-
-    payload_error = _payload_error(payload)
-    if payload_error:
-        raise BaiduSearchError(f"baidu error {payload_error}")
-    latency_ms = int((time.monotonic() - started) * 1000)
-    results = parse_baidu_ai_search_response(payload, count=normalized_count)
-    if not results:
-        raise BaiduSearchError("baidu returned no results")
-
-    return _search_response(
-        provider="baidu",
-        query=cleaned_query,
-        results=results,
-        latency_ms=latency_ms,
-        warnings=_unsupported_filter_warnings("Baidu AI Search", unsupported_filters),
-        raw_response=payload if include_raw_response else None,
     )
 
 

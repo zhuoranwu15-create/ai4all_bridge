@@ -253,12 +253,6 @@ def test_settings(tmp_path, db_dsn):
     s.aliyun_web_search_forced = True
     s.aliyun_web_search_enable_source = True
     s.aliyun_web_search_strategy = ""
-    s.baidu_ai_search_enabled = False
-    s.baidu_ai_search_api_key = ""
-    s.baidu_ai_search_base_url = "https://qianfan.baidubce.com"
-    s.baidu_ai_search_endpoint = "/v2/ai_search/web_search"
-    s.baidu_ai_search_source = "baidu_search_v2"
-    s.baidu_ai_search_top_k = 5
     s.aliyun_access_key_id = ""
     s.aliyun_access_key_secret = ""
     s.aliyun_sms_sign_name = ""
