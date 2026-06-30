@@ -181,7 +181,7 @@ def test_admin_generates_account_check_candidate_draft(client, fresh_db):
     with (
         patch("app.proactive.account_checks.settings", fresh_db),
         patch(
-            "app.proactive.account_checks.generate_completion",
+            "app.proactive.generation.account_check.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得看一下后续 B。", '
                 '"reason": "用户明确提到后续 B", "confidence": 0.91}'

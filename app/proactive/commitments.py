@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -17,33 +16,9 @@ from app.db import (
 )
 from app.llm import generate_completion, is_llm_configured
 from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
 from app.proactive.messaging import dispatch_proactive_text
 from app.proactive.state import mark_account_proactive_sent
-
-
-COMMITMENT_EXTRACTION_SYSTEM_PROMPT = """你是 AI4ALL 的隐藏 follow-up commitment 抽取器。
-
-你的任务是判断本轮对话是否出现了一个明确、低打扰、高价值、适合未来主动跟进的事项。
-
-严格规则：
-- 只输出 JSON，不输出解释，不输出 Markdown。
-- 默认不创建 commitment；没有明确后续价值时 should_create=false。
-- 不要抽取普通寒暄、情绪陪伴、泛泛建议、无时间约束的事项。
-- 不要编造用户没有表达过的目标、事实、日期或后续动作。
-- 不抽取医疗、法律、金融等高风险建议。
-- 如果用户已经显式要求“提醒我”，主提醒链路会处理，这里不要重复抽取。
-- due_at 必须是未来时间，格式为 YYYY-MM-DD HH:MM:SS。
-- text 必须是未来主动发给用户的一条自然微信消息，最多 80 个中文字符。
-
-JSON schema:
-{
-  "should_create": false,
-  "text": "",
-  "due_at": "",
-  "reason": "简短原因",
-  "confidence": 0.0
-}
-"""
 
 
 def _format_time(value: datetime) -> str:

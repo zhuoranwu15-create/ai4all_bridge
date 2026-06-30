@@ -295,7 +295,7 @@ def test_generate_account_check_candidate_draft_writes_draft_without_enabling_se
         patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.account_checks.generate_completion",
+            "app.proactive.generation.account_check.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得关注一下事情 B。", '
                 '"reason": "用户提到后续 B", "confidence": 0.92}'
@@ -344,7 +344,7 @@ def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db)
         patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.account_checks.generate_completion",
+            "app.proactive.generation.account_check.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "低置信候选", '
                 '"reason": "不够确定", "confidence": 0.4}'
@@ -376,7 +376,7 @@ def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_
         patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.account_checks.generate_completion",
+            "app.proactive.generation.topic_followup.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "昨天那个相亲对象后来有再找你吗？", '
                 '"topic": "相亲聊天压力", "reason": "用户最近讨论相亲回复压力", '
@@ -415,7 +415,7 @@ def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
         patch("app.proactive.account_checks.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.account_checks.generate_completion",
+            "app.proactive.generation.topic_followup.generate_completion",
             return_value=(
                 '{"should_send": false, "text": "", "topic": "中亚五国", '
                 '"reason": "轻知识话题应交给 content_invitation", "confidence": 0.2}'

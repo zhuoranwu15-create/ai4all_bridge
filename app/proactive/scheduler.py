@@ -7,10 +7,8 @@ from app.proactive.commitments import dispatch_due_commitments
 from app.proactive.content_invitations import expire_stale_content_invitations
 from app.proactive.reactivation import dispatch_due_reactivation_candidates
 from app.proactive.reminders import dispatch_due_reminders
-from app.proactive.state import (
-    DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
-    scan_due_proactive_account_checks,
-)
+from app.proactive.planning import scan_due_proactive_account_checks
+from app.proactive.state import DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS
 from app.db import record_scheduler_heartbeat
 from app.time_utils import beijing_naive_now
 
