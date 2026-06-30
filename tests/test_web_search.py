@@ -91,32 +91,6 @@ def test_parse_bing_rss_extracts_results():
     assert results[0]["site_name"] == "sports.cctv.com"
 
 
-def test_parse_baidu_ai_search_response_extracts_references():
-    from app.web_search import parse_baidu_ai_search_response
-
-    payload = {
-        "references": [
-            {
-                "title": "欧冠-巴黎圣日耳曼点球大战击败阿森纳成功卫冕",
-                "url": "https://sports.cctv.com/example",
-                "content": "90分钟内战成1-1，点球大战4-3，总比分5-4。",
-                "website": "央视网",
-                "rerank_score": 0.88,
-                "date": "2026-05-31 01:01:00",
-            }
-        ]
-    }
-
-    results = parse_baidu_ai_search_response(payload, count=3)
-
-    assert len(results) == 1
-    assert results[0]["title"].startswith("欧冠-巴黎圣日耳曼")
-    assert results[0]["url"] == "https://sports.cctv.com/example"
-    assert results[0]["snippet"] == "90分钟内战成1-1，点球大战4-3，总比分5-4。"
-    assert results[0]["site_name"] == "央视网"
-    assert results[0]["score"] == 0.88
-
-
 def test_parse_aliyun_web_search_response_extracts_references_and_answer():
     from app.web_search import _extract_aliyun_answer, parse_aliyun_web_search_response
 
@@ -198,7 +172,7 @@ def test_http_status_error_message_extracts_provider_json_error():
     assert "HTTP 401" in message
 
 
-def test_payload_error_extracts_baidu_style_error():
+def test_payload_error_extracts_structured_error():
     from app.web_search import _payload_error
 
     assert _payload_error({"code": "PermissionDenied", "message": "invalid appbuilder token"}) == (
