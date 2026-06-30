@@ -942,3 +942,111 @@ def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
     assert result["content_invitation_generation"]["reason"] == "topic_followup_candidate_selected"
     assert candidate["type"] == REACTIVATION_TYPE_TOPIC_FOLLOWUP
     assert candidate["text"] == "昨晚小家伙睡得乖不乖？"
+
+
+def _create_pending_reminder(account_id: str, *, due_at: str) -> None:
+    """插入一条 pending 用户提醒，用于触发 policy 的 avoidance 拦截（bug B 复现）。"""
+    from app.db import create_reminder
+
+    create_reminder(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        channel_account_id="bot-1",
+        to_user_id="user@im.wechat",
+        session_key=f"session-{account_id}",
+        text="记得喝水",
+        due_at=due_at,
+    )
+
+
+def test_dispatch_reactivation_reschedules_when_policy_cancels(fresh_db):
+    """bug B：候选过了 reactivation 自身 60min avoidance，却被 policy 的 6h avoidance 取消时，
+    不应原样留在过去的 slot 上每个 tick 空转，而应改期到下一个 slot。"""
+    from app.db import list_outbound_messages
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-cancel")
+    _create_route("acc-react-cancel")
+    ensure_account_state(account_id="acc-react-cancel")
+    # 提醒在 105 分钟后：落在 reactivation 60min 窗口之外、policy 6h 窗口之内。
+    _create_pending_reminder("acc-react-cancel", due_at="2026-06-05 14:00:00")
+    upsert_reactivation_candidate(
+        account_id="acc-react-cancel",
+        candidate={
+            "id": "react-cancel-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+        },
+    )
+
+    now = datetime(2026, 6, 5, 12, 15)
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-cancel",
+        now=now,
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+
+    # 被 policy 取消 → 改期，而非 send_blocked 且候选卡死。
+    assert result["action"] == "delayed"
+    candidate = get_reactivation_candidate(account_id="acc-react-cancel")
+    assert candidate is not None
+    new_scheduled = datetime.fromisoformat(candidate["scheduled_at"].replace(" ", "T"))
+    assert new_scheduled > now  # scheduled_at 前移到未来，不再停在过去
+    # 产生了一条 cancelled 出站行，原因是 policy 的 user-reminder avoidance。
+    outbound = list_outbound_messages(account_id="acc-react-cancel", limit=10)
+    assert outbound and outbound[0]["status"] == "cancelled"
+    assert outbound[0]["policy_reason"] == "avoidance_window_user_reminder"
+
+    # 同一 tick 再跑一次：scheduled_at 已在未来 → not_due，不再每 tick 空转。
+    second = dispatch_reactivation_candidate(
+        account_id="acc-react-cancel",
+        now=now,
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+    assert second["action"] == "not_due"
+
+
+def test_dispatch_reactivation_clears_when_policy_cancels_at_final_slot(fresh_db):
+    """bug B：最后一个 slot 被 policy 取消、已无下一 slot 时，应清除候选（等下次 planning 重生成），
+    而不是把过期候选永远留着。"""
+    from app.proactive.reactivation import (
+        dispatch_reactivation_candidate,
+        get_reactivation_candidate,
+        upsert_reactivation_candidate,
+    )
+    from app.proactive.state import ensure_account_state
+
+    _create_account("acc-react-final")
+    _create_route("acc-react-final")
+    ensure_account_state(account_id="acc-react-final")
+    # now=21:05（非静默时段），提醒在 105 分钟后（22:50）：reactivation 60min 外、policy 6h 内。
+    _create_pending_reminder("acc-react-final", due_at="2026-06-05 22:50:00")
+    upsert_reactivation_candidate(
+        account_id="acc-react-final",
+        candidate={
+            "id": "react-final-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_3",
+            "scheduled_at": "2026-06-05 21:05:00",
+        },
+    )
+
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-final",
+        now=datetime(2026, 6, 5, 21, 5),
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+
+    assert result["action"] == "send_blocked"
+    assert get_reactivation_candidate(account_id="acc-react-final") is None

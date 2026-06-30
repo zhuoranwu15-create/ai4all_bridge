@@ -1,3 +1,11 @@
+"""账号级主动消息的候选生成 + account_check 派发。
+
+注意（account_check 休眠路径，有意设计）：account_check candidate（`decide_account_check_action`
+读取的 `account_check_candidate`）**只由 admin 端点**经 `generate_account_check_candidate_draft`
++ `promote_account_check_candidate_draft` 人工产生；自动调度链路（`scan_due_proactive_account_checks`）
+**不生成**它。因此 scheduler 的 account_checks 步在无人工候选时恒 `no_op`，这是预期行为，不是漏接。
+自动主动消息当前真正在跑的是 commitment 与 reactivation（topic_followup / content_invitation）两条。
+"""
 import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional

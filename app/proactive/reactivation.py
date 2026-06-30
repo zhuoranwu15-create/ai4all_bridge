@@ -848,10 +848,47 @@ def dispatch_reactivation_candidate(
             reason="sent",
             now=current,
         )
-    if outbound_status == "sent":
         action = "sent"
     elif outbound_status in {"pending", "sending"}:
         action = "queued"
+    elif outbound_status == "cancelled":
+        # 被 policy/moderation 拦截（cancelled）。此时 scheduled_at 已是过去，若原样保留候选，
+        # 下一次扫描仍判定为 due 而每个 tick 重复跑一遍 policy（候选空转、卡到次日）。
+        # 因此把候选改期到下一个发送 slot；已无可用 slot 时清除，等下次 planning 重新生成。
+        # （把每-tick 重试降为每-slot 重试，不改 policy/avoidance 口径——见 bug B 修复。）
+        next_slot = _next_slot_after(candidate, now=current, allowed_windows=allowed_windows)
+        if next_slot:
+            state = reschedule_reactivation_candidate(
+                account_id=account_id,
+                candidate=candidate,
+                scheduled_slot=next_slot["scheduled_slot"],
+                scheduled_at=next_slot["scheduled_at"],
+                reason="send_blocked_policy",
+                now=current,
+            )
+            return {
+                "action": "delayed",
+                "account_id": account_id,
+                "reason": outbound.get("error") or "send_blocked_policy",
+                "outbound_message": outbound,
+                "reactivation_candidate": get_reactivation_candidate_from_metadata(
+                    state.get("metadata") or {}
+                ),
+                "evaluated_at": format_reactivation_time(current),
+            }
+        clear_reactivation_candidate(
+            account_id=account_id,
+            reason="send_blocked_policy_final_slot",
+            now=current,
+        )
+        return {
+            "action": "send_blocked",
+            "account_id": account_id,
+            "reason": outbound.get("error") or "send_blocked_policy",
+            "outbound_message": outbound,
+            "reactivation_candidate": candidate,
+            "evaluated_at": format_reactivation_time(current),
+        }
     else:
         action = "send_blocked"
     return {

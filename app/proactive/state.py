@@ -180,6 +180,10 @@ def scan_due_proactive_account_checks(
     we only (a) send a due companion-followup candidate, and (b) refresh the
     reactivation candidate — but never overwrite one that is already queued.
     node_id 非空时只处理归属该节点的账号（厚节点改造 P4 调度分片）。
+
+    注意：这里的 (a) 依赖 `account_check_candidate` 已存在，而该候选**只由 admin 端点**人工
+    promote 产生（见 `account_checks.py` 模块说明）；本编排器不会自动生成它，故无人工候选时
+    `decide_account_check_action` 恒返回 no_op，account_check 这条仅作为 admin 工具存在。
     """
     current = now or beijing_naive_now()
     due_accounts = list_due_proactive_account_checks(now=current, limit=limit, node_id=node_id)
