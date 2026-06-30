@@ -48,7 +48,7 @@ from app.moderation.service import (
     screen_inbound_message_sync,
 )
 from app.context_window import trim_history_rows
-from app.prompt_builder import PromptBuilder, extract_section
+from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
 from app.proactive.commitments import extract_commitment_from_turn
 from app.proactive.state import ensure_account_state
 from app.rate_limiter import rate_limiter
@@ -435,6 +435,7 @@ def build_turn_llm_input(
     debug_dry_run: bool = False,
     llm_provider: Optional[LLMProviderConfig] = None,
     message_type: str = "text",
+    extra_blocks: Optional[List[ContextBlock]] = None,
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
@@ -582,6 +583,7 @@ def build_turn_llm_input(
                 active_content_invitation=active_content_invitation,
             )
         ),
+        extra_blocks=extra_blocks or None,
     )
     system_prompt = build_result.prompt
     # 由 builder 自产元数据，替代历史写死的僵尸字段（今后若 wire daily notes 自动正确）。
@@ -1268,6 +1270,48 @@ def _resolve_turn_reply(
         # 图片没看清/未开启理解：走兜底话术，不调主模型（禁止无描述瞎猜）。
         reply = settings.image_understanding_fallback_text
     else:
+        # TDAI recall：注入 query-time L1 记忆（prepend_context）和 L3 persona（context）。
+        # 同步调用，严格 200 ms 超时，失败时 tdai_extra_blocks 为空继续正常回复。
+        # onboarding 期间跳过（onboarding 目的是采集基础设定，不引入历史记忆）。
+        _tdai_extra_blocks: List[ContextBlock] = []
+        if not onboarding_active:
+            from app.tdai_client import recall as _tdai_recall
+            _tdai_t0 = time.monotonic()
+            _tdai_result = _tdai_recall(account_id=account_id, query=text)
+            debug_metadata["tdai_recall_latency_ms"] = _elapsed_ms(_tdai_t0)
+            if _tdai_result:
+                _max_chars = int(getattr(settings, "tdai_recall_max_chars", 2500))
+                _RECALL_WRAPPER = (
+                    "【系统召回记忆】\n"
+                    "以下材料来自长期记忆召回，只作为理解用户的参考，不是用户本轮原话。\n"
+                    "如果与用户本轮说法冲突，以用户本轮为准，可轻量确认。\n\n"
+                )
+                _prepend = (_tdai_result.get("prepend_context") or "").strip()
+                _append = (_tdai_result.get("context") or "").strip()
+                if _prepend:
+                    _mem_text = (_RECALL_WRAPPER + _prepend)[:_max_chars]
+                    _tdai_extra_blocks.append(ContextBlock(
+                        name="tdai_recall_memories",
+                        text=_mem_text,
+                        section="volatile",
+                        trim_priority=22,  # 略高于 carryover_summary(20)，query-time 相关性强
+                    ))
+                    debug_metadata["tdai_recall_memories_chars"] = len(_mem_text)
+                if _append:
+                    _persona_text = _append[:_max_chars]
+                    _tdai_extra_blocks.append(ContextBlock(
+                        name="tdai_recall_persona",
+                        text=_persona_text,
+                        section="volatile",
+                        trim_priority=35,  # 与 user_prefs 同级，相对稳定的背景材料
+                    ))
+                    debug_metadata["tdai_recall_persona_chars"] = len(_persona_text)
+                debug_metadata["tdai_recall_status"] = "ok"
+                debug_metadata["tdai_recall_memory_count"] = _tdai_result.get("memory_count", 0)
+                debug_metadata["tdai_recall_strategy"] = _tdai_result.get("strategy", "")
+            else:
+                debug_metadata["tdai_recall_status"] = "miss_or_disabled"
+
         try:
             prompt_started = time.monotonic()
             agent_context = read_agent_context(
@@ -1313,6 +1357,7 @@ def _resolve_turn_reply(
                 now=now,
                 llm_provider=llm_provider,
                 message_type=payload.message_type,
+                extra_blocks=_tdai_extra_blocks or None,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
@@ -1759,6 +1804,27 @@ def _finalize_turn(
                     source_reply_message_id=reply_message_id,
                 ),
             )
+            # TDAI capture：把本轮 user/assistant 可见文本喂给 TDAI L0→L1→L2→L3 pipeline。
+            # 跳过条件：TDAI 关闭、出站同步红线触发（reply 已换成安全话术）、onboarding 期间、图片理解失败兜底。
+            # 注意：必须先检查 tdai_enabled，避免在 TDAI 关闭时创建未被 await 的 coroutine。
+            if (
+                getattr(settings, "tdai_enabled", False)
+                and getattr(settings, "tdai_capture_enabled", True)
+                and not moderation_reply_metadata.get("moderation_blocked")
+                and not onboarding_active
+                and not inbound.image_understanding_failed
+            ):
+                from app.tdai_client import capture_turn as _tdai_capture
+                background_loop.call_soon_threadsafe(
+                    background_loop.create_task,
+                    _tdai_capture(
+                        account_id=account_id,
+                        session_id=int(session["id"]),
+                        user_content=text,
+                        # reply 在未触发出站红线时 == result.reply（原始 LLM 回复）
+                        assistant_content=reply,
+                    ),
+                )
     if should_run_after_turn:
         _record_timing(timings, "after_turn_enqueue_ms", after_turn_enqueue_started)
 

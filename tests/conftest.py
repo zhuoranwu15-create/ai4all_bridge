@@ -281,6 +281,16 @@ def test_settings(tmp_path, db_dsn):
     s.outbound_pull_batch_size = 20
     s.outbound_claim_timeout_seconds = 60
     s.local_node_inline_dispatch = False
+    # TDAI 长期记忆 sidecar：测试默认关闭，避免 MagicMock 属性自动为 truthy 触发 capture。
+    s.tdai_enabled = False
+    s.tdai_gateway_url = "http://127.0.0.1:8420"
+    s.tdai_gateway_api_key = ""
+    s.tdai_recall_enabled = True
+    s.tdai_capture_enabled = True
+    s.tdai_recall_timeout_seconds = 0.5
+    s.tdai_capture_timeout_seconds = 2.0
+    s.tdai_recall_max_chars = 2500
+    s.tdai_recall_account_allowlist = ""
     terms_dir = tmp_path / "moderation"
     terms_dir.mkdir(parents=True, exist_ok=True)
     (terms_dir / "sensitive_terms.json").write_text(

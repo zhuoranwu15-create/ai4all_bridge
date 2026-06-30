@@ -1115,6 +1115,21 @@ def web_me_unbind(
         # 不再有独立的磁盘目录清理。
         stats = unbind_and_wipe_account(account_id=account_id)
 
+    # DB 事务已提交，best-effort 清除 TDAI namespace。
+    # 无论 keep_memories 取值：TDAI 是 AI4ALL messages 的派生缓存，随时可从中心 PG 重建，
+    # 删除不会丢失权威数据。失败只记 warning，不阻断本次响应。
+    _bg = get_background_loop()
+    if _bg is not None:
+        from app.tdai_client import namespace_wipe as _tdai_namespace_wipe
+        _bg.call_soon_threadsafe(
+            _bg.create_task,
+            _tdai_namespace_wipe(account_id=account_id),
+        )
+    else:
+        logger.warning(
+            "tdai namespace_wipe skipped: no background loop account=%s", account_id
+        )
+
     return {
         "status": "ok",
         "keep_memories": payload.keep_memories,
