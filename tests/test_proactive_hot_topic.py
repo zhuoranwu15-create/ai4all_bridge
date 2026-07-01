@@ -159,7 +159,7 @@ def test_refresh_hot_topic_pool_search_failed_noop(fresh_db):
          patch(f"{HT}.run_headless_web_search", return_value={"status": "failed", "error": "boom"}):
         result = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 9, 0))
     assert result["action"] == "no_op"
-    assert result["reason"] == "hot_topic_search_failed"
+    assert result["reason"] == "hot_topic_no_data"
 
 
 # --------------------------------------------------------------------------- 每账号选择
