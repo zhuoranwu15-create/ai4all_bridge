@@ -8,7 +8,7 @@ from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
 from app.llm import generate_completion
-from app.proactive.account_checks import (
+from app.proactive.contract.prompts import (
     ACCOUNT_CHECK_CANDIDATE_SYSTEM_PROMPT,
     CONTENT_INVITATION_SYSTEM_PROMPT,
     TOPIC_FOLLOWUP_SYSTEM_PROMPT,

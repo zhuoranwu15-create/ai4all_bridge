@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 
 from app.config import settings  # noqa: E402
 from app.db import init_db  # noqa: E402
-from app.proactive.scheduler import ProactiveScheduler  # noqa: E402
+from app.proactive.orchestration.scheduler import ProactiveScheduler  # noqa: E402
 from app.alerting import configure_error_log_alerting  # noqa: E402
 from app.time_utils import verify_host_timezone  # noqa: E402
 

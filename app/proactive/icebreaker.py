@@ -29,8 +29,8 @@ from app.db import (
     list_icebreaker_scripts,
     list_recent_icebreaker_script_ids,
 )
-from app.proactive._common import _select_route
-from app.proactive.messaging import dispatch_proactive_text
+from app.proactive.contract.common import _select_route
+from app.proactive.delivery.outbound import dispatch_proactive_text
 from app.time_utils import beijing_naive_now
 
 

@@ -8,11 +8,9 @@ from app.config import settings
 from app.db import create_search_provider_run
 from app.web_search import (
     AliyunSearchError,
-    BaiduSearchError,
     BingSearchError,
     DuckDuckGoSearchError,
     aliyun_web_search,
-    baidu_ai_search,
     bing_search,
     duckduckgo_search,
 )
@@ -21,8 +19,8 @@ if TYPE_CHECKING:
     from app.turn_context import TurnContext
 
 logger = logging.getLogger("ai4all.tools.web_search")
-_SUPPORTED_PROVIDERS = {"aliyun", "baidu", "bing", "duckduckgo"}
-_SEARCH_ERRORS = (AliyunSearchError, BaiduSearchError, BingSearchError, DuckDuckGoSearchError)
+_SUPPORTED_PROVIDERS = {"aliyun", "bing", "duckduckgo"}
+_SEARCH_ERRORS = (AliyunSearchError, BingSearchError, DuckDuckGoSearchError)
 _PROVIDER_ORDER_OVERRIDE: ContextVar[Optional[List[str]]] = ContextVar(
     "web_search_provider_order_override",
     default=None,
@@ -132,6 +130,46 @@ def handle_web_search(
     return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
 
 
+def run_headless_web_search(
+    query: str,
+    *,
+    count: int = 5,
+    args: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """无 TurnContext 的后台 web 搜索（供全局召回等无账号场景用）。
+
+    复用 provider 顺序 + failover，但**不落 search_provider_runs**（无账号维度可归属）。
+    返回与 handle_web_search 同形：成功 {"status":"succeeded", "results":[...], ...}，
+    失败 {"status":"failed", "error":...}。
+    """
+    query = str(query or "").strip()
+    if not query:
+        return {"status": "failed", "query": query, "provider": "", "error": "query is required", "attempts": []}
+    call_args = dict(args or {})
+    providers = _provider_order()
+    failover = bool(getattr(settings, "web_search_provider_failover", True))
+    attempts: List[Dict[str, Any]] = []
+    for provider in providers:
+        if provider not in _SUPPORTED_PROVIDERS:
+            error = f"unsupported web_search provider: {provider}"
+            attempts.append({"provider": provider, "status": "failed", "error": error})
+            if failover:
+                continue
+            return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+        try:
+            response = _execute_provider(provider, query=query, count=count, args=call_args)
+        except _SEARCH_ERRORS as err:
+            error = str(err)
+            attempts.append({"provider": provider, "status": "failed", "error": error})
+            if failover:
+                continue
+            return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+        return {"status": "succeeded", "attempts": attempts, **response}
+    error = attempts[-1]["error"] if attempts else "no web_search provider configured"
+    provider = attempts[-1]["provider"] if attempts else ""
+    return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+
+
 def _provider_order() -> List[str]:
     override = _PROVIDER_ORDER_OVERRIDE.get()
     if override:
@@ -178,23 +216,9 @@ def _execute_provider(provider: str, *, query: str, count: int, args: Dict[str, 
             search_strategy=str(getattr(settings, "aliyun_web_search_strategy", "") or "") or None,
             include_raw_response=bool(getattr(settings, "web_search_trace_raw_response", False)),
         ),
-        "baidu": lambda: baidu_ai_search(
-            **common,
-            api_key=str(getattr(settings, "baidu_ai_search_api_key", "") or ""),
-            base_url=str(getattr(settings, "baidu_ai_search_base_url", "") or ""),
-            endpoint=str(getattr(settings, "baidu_ai_search_endpoint", "") or ""),
-            search_source=str(getattr(settings, "baidu_ai_search_source", "") or "baidu_search_v2"),
-            top_k=int(getattr(settings, "baidu_ai_search_top_k", count) or count),
-            include_raw_response=bool(getattr(settings, "web_search_trace_raw_response", False)),
-        ),
     }
     if provider == "aliyun" and not bool(getattr(settings, "aliyun_web_search_enabled", False)):
         raise AliyunSearchError("aliyun web search is disabled")
-    if provider == "baidu" and not bool(getattr(settings, "baidu_ai_search_enabled", False)):
-        raise BaiduSearchError("baidu ai search is disabled")
-
-    # TODO(web-search): 核对各供应商（aliyun/baidu/bing/duckduckgo）的稳定性/SLA 承诺与
-    # 实际超时表现，据此校准 web_search_sync_timeout_seconds 与 provider_order/failover 策略。
 
     # 每次供应商调用都打点延时日志：定位"带搜索的轮次为何变慢/超时"用，成功失败都记。
     started = time.monotonic()

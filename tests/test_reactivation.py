@@ -53,12 +53,7 @@ def _insert_inbound(account_id: str, *, created_at: str) -> None:
 
 def test_reactivation_candidate_upsert_replace_and_clear_preserves_metadata(fresh_db):
     from app.db import get_proactive_account_state, upsert_proactive_account_state
-    from app.proactive.reactivation import (
-        REACTIVATION_METADATA_KEY,
-        clear_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
+    from app.proactive.store.candidates import REACTIVATION_METADATA_KEY, clear_reactivation_candidate, get_reactivation_candidate, upsert_reactivation_candidate
 
     _create_account("acc-reactivation")
     upsert_proactive_account_state(
@@ -108,7 +103,7 @@ def test_reactivation_candidate_upsert_replace_and_clear_preserves_metadata(fres
 
 
 def test_content_invitation_reactivation_requires_invitation_id():
-    from app.proactive.reactivation import normalize_reactivation_candidate
+    from app.proactive.store.candidates import normalize_reactivation_candidate
 
     try:
         normalize_reactivation_candidate(
@@ -125,7 +120,7 @@ def test_content_invitation_reactivation_requires_invitation_id():
 
 
 def test_reactivation_outbound_metadata_includes_dedupe_and_type():
-    from app.proactive.reactivation import reactivation_outbound_metadata
+    from app.proactive.store.candidates import reactivation_outbound_metadata
 
     metadata = reactivation_outbound_metadata(
         candidate={
@@ -236,11 +231,9 @@ def test_reactivation_outbound_queries_match_text_true_and_keep_account_scope(fr
 
 def test_dispatch_reactivation_dry_run_would_send_without_outbound(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-dispatch")
     _create_route("acc-react-dispatch")
@@ -277,12 +270,9 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
         list_outbound_messages,
         list_recent_reactivation_outbound_messages,
     )
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-real")
     _create_route("acc-react-real")
@@ -299,7 +289,7 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
     )
 
     with patch(
-        "app.proactive.messaging.send_weixin_text",
+        "app.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:react-real-1"},
     ):
         first = dispatch_reactivation_candidate(
@@ -361,12 +351,9 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
         get_content_invitation,
         list_outbound_messages,
     )
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-ci")
     _create_route("acc-react-ci")
@@ -391,7 +378,7 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     )
 
     with patch(
-        "app.proactive.messaging.send_weixin_text",
+        "app.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:react-ci-1"},
     ):
         result = dispatch_reactivation_candidate(
@@ -415,14 +402,92 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     assert get_reactivation_candidate(account_id="acc-react-ci") is None
 
 
+def test_remote_content_invitation_finalizes_on_node_result(fresh_db, monkeypatch):
+    from app.config import Settings
+    from app.db import (
+        create_content_invitation,
+        get_content_invitation,
+        list_outbound_messages,
+    )
+    from app.proactive.delivery import outbound as messaging
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+    from app.routers.bridge import node_outbound_result
+    from app.schemas import NodeOutboundResultRequest
+
+    _create_account("acc-react-ci-remote")
+    _create_route("acc-react-ci-remote")
+    ensure_account_state(account_id="acc-react-ci-remote")
+    monkeypatch.setattr(
+        messaging,
+        "settings",
+        Settings(
+            ai4all_role="central",
+            default_node_id="aliyun2",
+            local_node_inline_dispatch=False,
+        ),
+    )
+    monkeypatch.setattr(
+        messaging,
+        "send_weixin_text",
+        lambda **_kw: (_ for _ in ()).throw(AssertionError("should not inline send")),
+    )
+
+    invitation = create_content_invitation(
+        account_id="acc-react-ci-remote",
+        topic="中亚五国",
+        invitation_text="要不要看看几条中亚五国的内容？",
+        title_items=[{"title": "标题一"}, {"title": "标题二"}, {"title": "标题三"}],
+        expires_at="2099-01-01 00:00:00",
+    )
+    upsert_reactivation_candidate(
+        account_id="acc-react-ci-remote",
+        candidate={
+            "id": "react-ci-remote",
+            "type": "content_invitation",
+            "text": "要不要看看几条中亚五国的内容？",
+            "content_invitation_id": invitation["id"],
+            "scheduled_slot": "slot_2",
+            "scheduled_at": "2026-06-05 18:15:00",
+        },
+    )
+
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-ci-remote",
+        now=datetime(2026, 6, 5, 18, 15),
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {
+            "checked": True,
+            "duplicate": False,
+            "reason": "test",
+        },
+    )
+    outbound = list_outbound_messages(account_id="acc-react-ci-remote", limit=10)[0]
+    claimed = get_content_invitation(invitation_id=invitation["id"])
+
+    assert result["action"] == "queued"
+    assert outbound["status"] == "pending"
+    assert outbound["node_id"] == "aliyun2"
+    assert claimed["status"] == "sending"
+    assert get_reactivation_candidate(account_id="acc-react-ci-remote") is not None
+
+    node_outbound_result(
+        outbound["id"],
+        NodeOutboundResultRequest(status="sent", gateway_message_id="remote-msg-1"),
+    )
+    updated = get_content_invitation(invitation_id=invitation["id"])
+
+    assert updated["status"] == "invited"
+    assert updated["outbound_message_id"] == outbound["id"]
+    assert get_reactivation_candidate(account_id="acc-react-ci-remote") is None
+
+
 def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-ci-missing")
     _create_route("acc-react-ci-missing")
@@ -454,12 +519,9 @@ def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(f
 
 def test_dispatch_reactivation_cancels_when_inbound_since_candidate(fresh_db):
     """候选生成后用户又说过话 → 取消推送并清除候选（取代旧的改期逻辑）。"""
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-cancel")
     _create_route("acc-react-cancel")
@@ -496,12 +558,9 @@ def test_dispatch_reactivation_keeps_candidate_when_inbound_before_generation(fr
     时区一致性回归：曾用 local_to_utc_string 把 generated_at -8h，导致生成前 8 小时内
     的入站被误算为「生成后」而误清候选；`>=` 还会把同秒源消息算进去。
     """
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-before")
     _create_route("acc-react-before")
@@ -536,12 +595,9 @@ def test_dispatch_reactivation_keeps_candidate_when_inbound_before_generation(fr
 
 def test_dispatch_reactivation_cancels_on_duplicate(fresh_db):
     """规则去重命中重复 → 取消并清除候选（无 LLM、无重生成）。"""
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-dup")
     _create_route("acc-react-dup")
@@ -578,16 +634,16 @@ def test_dispatch_reactivation_cancels_on_duplicate(fresh_db):
 
 def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
     """规则去重：与近 N 天已发的相同 topic 精确匹配即判重复，无 LLM。"""
-    from app.proactive.messaging import send_proactive_text
-    from app.proactive.reactivation import rule_reactivation_dedupe_check
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.outbound import send_proactive_text
+    from app.proactive.store.candidates import rule_reactivation_dedupe_check
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-rule-dedupe")
     _create_route("acc-rule-dedupe")
     ensure_account_state(account_id="acc-rule-dedupe")
     now = datetime(2026, 6, 5, 12, 0)
     with patch(
-        "app.proactive.messaging.send_weixin_text",
+        "app.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:rule-dedupe"},
     ):
         send_proactive_text(
@@ -622,11 +678,9 @@ def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
 
 def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.reactivation import (
-        dispatch_due_reactivation_candidates,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.delivery.dispatch import dispatch_due_reactivation_candidates
+    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-sweep")
     _create_route("acc-react-sweep")
@@ -674,11 +728,8 @@ def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):
 
 
 def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
-    from app.proactive.reactivation import (
-        get_reactivation_candidate,
-        upsert_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state, scan_due_proactive_account_checks
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state, scan_due_proactive_account_checks
 
     _create_account("acc-react-notdue")
     _create_route("acc-react-notdue")
@@ -706,25 +757,22 @@ def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
     def _explode_content(**_):
         raise AssertionError("content_invitation generator must not run when a candidate exists")
 
-    import app.proactive.state as proactive_state
-    import app.proactive.account_checks as account_checks
+    # 猴补 planning 实际引用的生成器名（scan_due 在 orchestration.planning 里按模块全局
+    # 查找并注入 plan），若规划误跑生成就会抛出——验证"有 pending 候选则跳过生成"。
+    import app.proactive.orchestration.planning as planning
 
-    original_topic = account_checks.generate_topic_followup_candidate
-    original_content = account_checks.generate_content_invitation_candidate
-    account_checks.generate_topic_followup_candidate = _explode_topic_followup
-    account_checks.generate_content_invitation_candidate = _explode_content
-    proactive_state.generate_topic_followup_candidate = _explode_topic_followup
-    proactive_state.generate_content_invitation_candidate = _explode_content
+    original_topic = planning.generate_topic_followup_candidate
+    original_content = planning.generate_content_invitation_candidate
+    planning.generate_topic_followup_candidate = _explode_topic_followup
+    planning.generate_content_invitation_candidate = _explode_content
     try:
         results = scan_due_proactive_account_checks(
             now=datetime(2026, 6, 5, 14, 0),
             limit=10,
         )
     finally:
-        account_checks.generate_topic_followup_candidate = original_topic
-        account_checks.generate_content_invitation_candidate = original_content
-        proactive_state.generate_topic_followup_candidate = original_topic
-        proactive_state.generate_content_invitation_candidate = original_content
+        planning.generate_topic_followup_candidate = original_topic
+        planning.generate_content_invitation_candidate = original_content
 
     assert results[0]["reactivation_planning"]["reason"] == "reactivation_candidate_pending"
     candidate = get_reactivation_candidate(account_id="acc-react-notdue")
@@ -733,7 +781,7 @@ def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
 
 
 def test_reactivation_slot_applies_send_jitter(fresh_db):
-    from app.proactive.reactivation import next_reactivation_slot
+    from app.proactive.slots import next_reactivation_slot
 
     fresh_db.reactivation_send_jitter_min_seconds = 60
     fresh_db.reactivation_send_jitter_max_seconds = 120
@@ -778,12 +826,9 @@ def test_upsert_proactive_account_state_metadata_patch_preserves_sibling_keys(fr
 
 
 def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
-    from app.proactive.reactivation import (
-        REACTIVATION_TYPE_CONTENT_INVITATION,
-        get_reactivation_candidate,
-        plan_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.proactive.store.candidates import REACTIVATION_TYPE_CONTENT_INVITATION, get_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-content")
     ensure_account_state(account_id="acc-plan-content")
@@ -817,12 +862,9 @@ def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
 
 
 def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
-    from app.proactive.reactivation import (
-        REACTIVATION_TYPE_TOPIC_FOLLOWUP,
-        get_reactivation_candidate,
-        plan_reactivation_candidate,
-    )
-    from app.proactive.state import ensure_account_state
+    from app.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP, get_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-topic")
     ensure_account_state(account_id="acc-plan-topic")
@@ -858,3 +900,105 @@ def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
     assert result["content_invitation_generation"]["reason"] == "topic_followup_candidate_selected"
     assert candidate["type"] == REACTIVATION_TYPE_TOPIC_FOLLOWUP
     assert candidate["text"] == "昨晚小家伙睡得乖不乖？"
+
+
+def _create_pending_reminder(account_id: str, *, due_at: str) -> None:
+    """插入一条 pending 用户提醒，用于触发 policy 的 avoidance 拦截（bug B 复现）。"""
+    from app.db import create_reminder
+
+    create_reminder(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        channel_account_id="bot-1",
+        to_user_id="user@im.wechat",
+        session_key=f"session-{account_id}",
+        text="记得喝水",
+        due_at=due_at,
+    )
+
+
+def test_dispatch_reactivation_reschedules_when_policy_cancels(fresh_db):
+    """bug B：候选过了 reactivation 自身 60min avoidance，却被 policy 的 6h avoidance 取消时，
+    不应原样留在过去的 slot 上每个 tick 空转，而应改期到下一个 slot。"""
+    from app.db import list_outbound_messages
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    _create_account("acc-react-cancel")
+    _create_route("acc-react-cancel")
+    ensure_account_state(account_id="acc-react-cancel")
+    # 提醒在 105 分钟后：落在 reactivation 60min 窗口之外、policy 6h 窗口之内。
+    _create_pending_reminder("acc-react-cancel", due_at="2026-06-05 14:00:00")
+    upsert_reactivation_candidate(
+        account_id="acc-react-cancel",
+        candidate={
+            "id": "react-cancel-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+        },
+    )
+
+    now = datetime(2026, 6, 5, 12, 15)
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-cancel",
+        now=now,
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+
+    # 被 policy 取消 → 改期，而非 send_blocked 且候选卡死。
+    assert result["action"] == "delayed"
+    candidate = get_reactivation_candidate(account_id="acc-react-cancel")
+    assert candidate is not None
+    new_scheduled = datetime.fromisoformat(candidate["scheduled_at"].replace(" ", "T"))
+    assert new_scheduled > now  # scheduled_at 前移到未来，不再停在过去
+    # 产生了一条 cancelled 出站行，原因是 policy 的 user-reminder avoidance。
+    outbound = list_outbound_messages(account_id="acc-react-cancel", limit=10)
+    assert outbound and outbound[0]["status"] == "cancelled"
+    assert outbound[0]["policy_reason"] == "avoidance_window_user_reminder"
+
+    # 同一 tick 再跑一次：scheduled_at 已在未来 → not_due，不再每 tick 空转。
+    second = dispatch_reactivation_candidate(
+        account_id="acc-react-cancel",
+        now=now,
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+    assert second["action"] == "not_due"
+
+
+def test_dispatch_reactivation_clears_when_policy_cancels_at_final_slot(fresh_db):
+    """bug B：最后一个 slot 被 policy 取消、已无下一 slot 时，应清除候选（等下次 planning 重生成），
+    而不是把过期候选永远留着。"""
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    _create_account("acc-react-final")
+    _create_route("acc-react-final")
+    ensure_account_state(account_id="acc-react-final")
+    # now=21:05（非静默时段），提醒在 105 分钟后（22:50）：reactivation 60min 外、policy 6h 内。
+    _create_pending_reminder("acc-react-final", due_at="2026-06-05 22:50:00")
+    upsert_reactivation_candidate(
+        account_id="acc-react-final",
+        candidate={
+            "id": "react-final-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_3",
+            "scheduled_at": "2026-06-05 21:05:00",
+        },
+    )
+
+    result = dispatch_reactivation_candidate(
+        account_id="acc-react-final",
+        now=datetime(2026, 6, 5, 21, 5),
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+
+    assert result["action"] == "send_blocked"
+    assert get_reactivation_candidate(account_id="acc-react-final") is None

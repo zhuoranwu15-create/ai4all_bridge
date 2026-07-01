@@ -2,9 +2,18 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.db import list_channel_bindings_for_account
+
+
+def format_reactivation_time(value: datetime) -> str:
+    """主动消息时间戳统一格式化（北京 naive 时间字符串，秒粒度）。
+
+    纯格式化、跨层复用（store / delivery / bridge / slots 都用），故落在契约层公共工具。
+    """
+    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _clean_text(value: Any) -> Optional[str]:

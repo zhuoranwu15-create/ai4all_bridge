@@ -32,7 +32,7 @@ def test_overview_includes_default_effective_settings(client, fresh_db):
 
 
 def test_overview_reflects_update_and_audit(client, fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-ov2")
     apply_proactive_message_settings_patch(

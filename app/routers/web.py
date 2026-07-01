@@ -895,7 +895,13 @@ def web_register_and_binding_intent(
 
 
 @router.post("/web/agents")
-def web_create_agent(payload: WebCreateAgentRequest) -> dict:
+def web_create_agent(
+    payload: WebCreateAgentRequest,
+    platform_user=Depends(_require_session),
+) -> dict:
+    # 鉴权 + 属主校验：只能为「当前登录用户自己」创建账号，禁止指定他人 platform_user_id。
+    if payload.platform_user_id != platform_user["id"]:
+        raise HTTPException(status_code=403, detail="无权为其他用户创建账号")
     if get_platform_user(platform_user_id=payload.platform_user_id) is None:
         raise HTTPException(status_code=404, detail="platform_user not found")
     try:
@@ -938,9 +944,15 @@ def web_create_binding_intent(
 
 
 @router.get("/web/binding-intents/{binding_intent_id}")
-def web_get_binding_intent(binding_intent_id: str) -> dict:
+def web_get_binding_intent(
+    binding_intent_id: str,
+    platform_user=Depends(_require_session),
+) -> dict:
     binding_intent = get_binding_intent(binding_intent_id=binding_intent_id)
-    if binding_intent is None:
+    # 鉴权 + 属主校验：binding_intent 含 qr_data_url / manual_login_command，泄露即可劫持
+    # 微信绑定。非属主统一按 404 处理，避免泄露 intent 是否存在。属主访问自己的 QR/登录命令
+    # 属正常流程（onboarding 扫码 + home 重绑都依赖），故不脱敏原样返回。
+    if binding_intent is None or binding_intent.get("platform_user_id") != platform_user["id"]:
         raise HTTPException(status_code=404, detail="binding_intent not found")
     return {"binding_intent": binding_intent}
 
@@ -1114,6 +1126,21 @@ def web_me_unbind(
         # P2 后 profile 文件已入库，由 wipe 事务内 delete_account 一并删行（见 stats.profile_files_deleted），
         # 不再有独立的磁盘目录清理。
         stats = unbind_and_wipe_account(account_id=account_id)
+
+    # DB 事务已提交，best-effort 清除 TDAI namespace。
+    # 无论 keep_memories 取值：TDAI 是 AI4ALL messages 的派生缓存，随时可从中心 PG 重建，
+    # 删除不会丢失权威数据。失败只记 warning，不阻断本次响应。
+    _bg = get_background_loop()
+    if _bg is not None:
+        from app.tdai_client import namespace_wipe as _tdai_namespace_wipe
+        _bg.call_soon_threadsafe(
+            _bg.create_task,
+            _tdai_namespace_wipe(account_id=account_id),
+        )
+    else:
+        logger.warning(
+            "tdai namespace_wipe skipped: no background loop account=%s", account_id
+        )
 
     return {
         "status": "ok",

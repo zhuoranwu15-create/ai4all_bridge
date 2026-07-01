@@ -1732,7 +1732,7 @@ def _migration_0008_relationship_state(conn: Connection) -> None:
         _ensure_column(conn, table, "agent_need_growth_status", "TEXT NOT NULL DEFAULT 'not_started'")
 
 
-def _migration_0009_proactive_test_lab(conn: Connection) -> None:
+def _migration_0012_proactive_test_lab(conn: Connection) -> None:
     """主动消息测试台：样本、dry-run 候选与人工审核，完全独立于正式发送表。"""
     conn.executescript(
         """
@@ -1802,7 +1802,7 @@ def _migration_0009_proactive_test_lab(conn: Connection) -> None:
     )
 
 
-def _migration_0010_proactive_test_lab_labels(conn: Connection) -> None:
+def _migration_0013_proactive_test_lab_labels(conn: Connection) -> None:
     """主动消息测试台标注字段：上下文证据、触发判断、人工终审标签。"""
     for column in ("user_context", "memory_evidence", "open_loop"):
         _ensure_column(conn, "proactive_test_samples", column, "TEXT")
@@ -1820,7 +1820,7 @@ def _migration_0010_proactive_test_lab_labels(conn: Connection) -> None:
         _ensure_column(conn, "proactive_test_reviews", column, "TEXT")
 
 
-def _migration_0011_proactive_test_long_context_refs(conn: Connection) -> None:
+def _migration_0014_proactive_test_long_context_refs(conn: Connection) -> None:
     """主动消息测试样本可绑定真实 account/session，用于动态拉取长聊天上下文。"""
     _ensure_column(conn, "proactive_test_samples", "account_id", "TEXT")
     _ensure_column(conn, "proactive_test_samples", "session_id", "INTEGER")
@@ -1828,7 +1828,7 @@ def _migration_0011_proactive_test_long_context_refs(conn: Connection) -> None:
     _ensure_column(conn, "proactive_test_samples", "context_source", "TEXT")
 
 
-def _migration_0012_proactive_test_layers(conn: Connection) -> None:
+def _migration_0015_proactive_test_layers(conn: Connection) -> None:
     """主动消息测试台 L0-L5 分层评估结构。"""
     for column in (
         "l0_context_json",
@@ -1841,7 +1841,7 @@ def _migration_0012_proactive_test_layers(conn: Connection) -> None:
     _ensure_column(conn, "proactive_test_reviews", "l5_outcome_json", "TEXT")
 
 
-def _migration_0013_messages_account_id_index(conn: Connection) -> None:
+def _migration_0009_messages_account_id_index(conn: Connection) -> None:
     """补 messages(account_id, id) 索引，支撑短期历史热点查询。
 
     list_recent_messages_for_account 走 `WHERE account_id=? ORDER BY id DESC LIMIT N`，
@@ -1854,7 +1854,7 @@ def _migration_0013_messages_account_id_index(conn: Connection) -> None:
     )
 
 
-def _migration_0014_sessions_rolling_summary(conn: Connection) -> None:
+def _migration_0010_sessions_rolling_summary(conn: Connection) -> None:
     """sessions 增滚动摘要两列（Token 压力 intra-session 摘要，灰度默认关）。
 
     rolling_summary：本会话已滑出窗口的头部消息的滚动摘要文本。
@@ -1865,7 +1865,41 @@ def _migration_0014_sessions_rolling_summary(conn: Connection) -> None:
     _ensure_column(conn, "sessions", "rolling_summary_upto_id", "INTEGER")
 
 
-def _migration_0015_icebreaker_tables(conn: Connection) -> None:
+def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
+    """全局（无主）主动消息候选池——首个真·全局召回（近期热点 hot_topic）的落地表。
+
+    刻意**无 account_id**：存的是"所有账号只读共享的无主候选池"（如近 24h 热点主题），
+    不是任何账号的数据，因此不受"按 account_id 隔离"这条核心不变量约束——这是该不变量
+    唯一的、显式的例外（详见 app/proactive/store/global_candidates.py 模块说明）。池→账号
+    的绑定发生在**选择层**：每账号 LLM 打分选中 top1 时才盖上 account_id，写进该账号自己的
+    reactivation 候选（proactive_account_state.metadata）。本表本身绝不写任何账号维度数据。
+
+    UNIQUE(kind, generated_date, dedupe_key) 天然实现"当日同主题只入一次 + 跨天历史去重依据"；
+    expires_at 存北京 naive 时间字符串，读活跃池时按 expires_at > now 过滤（被动 TTL，不主动清表）。
+    strftime 默认值 / AUTOINCREMENT / INSERT OR IGNORE 由 _backend 方言翻译层适配 PG，双后端通用。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS proactive_global_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            topic TEXT,
+            text TEXT NOT NULL,
+            generated_date TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_global_candidates_kind_date_key
+            ON proactive_global_candidates(kind, generated_date, dedupe_key);
+        CREATE INDEX IF NOT EXISTS ix_global_candidates_kind_expires
+            ON proactive_global_candidates(kind, expires_at);
+        """
+    )
+
+
+def _migration_0016_icebreaker_tables(conn: Connection) -> None:
     """主动破冰话术：话术库与发送记录两张表。
 
     icebreaker_scripts：预置话术库，来自人工标注的 100 条候选。
@@ -1940,13 +1974,14 @@ _MIGRATIONS = [
     (6, _migration_0006_merge_reactivation_categories),
     (7, _migration_0007_merge_reactivation_settings_keys),
     (8, _migration_0008_relationship_state),
-    (9, _migration_0009_proactive_test_lab),
-    (10, _migration_0010_proactive_test_lab_labels),
-    (11, _migration_0011_proactive_test_long_context_refs),
-    (12, _migration_0012_proactive_test_layers),
-    (13, _migration_0013_messages_account_id_index),
-    (14, _migration_0014_sessions_rolling_summary),
-    (15, _migration_0015_icebreaker_tables),
+    (9, _migration_0009_messages_account_id_index),
+    (10, _migration_0010_sessions_rolling_summary),
+    (11, _migration_0011_proactive_global_candidates),
+    (12, _migration_0012_proactive_test_lab),
+    (13, _migration_0013_proactive_test_lab_labels),
+    (14, _migration_0014_proactive_test_long_context_refs),
+    (15, _migration_0015_proactive_test_layers),
+    (16, _migration_0016_icebreaker_tables),
 ]
 
 

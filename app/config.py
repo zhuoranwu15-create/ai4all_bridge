@@ -165,6 +165,16 @@ class Settings(BaseSettings):
     reactivation_topic_followup_window_hours: int = 72
     reactivation_topic_followup_context_messages: int = 100
     reactivation_content_invitation_context_messages: int = 100
+    # 近期热点（hot_topic）全局召回：搜索近 24h 热点 → 抽主题成无主候选池 → 每账号 LLM 打分
+    # 选择 → 多样性打散 → top1 拉活。默认关；产品目标同拉活，复用 companion_followup 分类/配额。
+    hot_topic_recall_enabled: bool = False               # 全局召回总开关（fail-closed）
+    hot_topic_recall_query: str = "过去24小时国内外热点新闻话题"  # 全局召回使用的搜索 query
+    hot_topic_pool_size: int = 8                         # 单日全局池最多抽取的主题数
+    hot_topic_select_top_k: int = 3                      # 每账号相关性排序后保留、参与多样性打散的候选数
+    hot_topic_history_dedupe_days: int = 3               # 全局历史去重回看天数（近 N 天已入池主题不再入池）
+    hot_topic_ttl_hours: int = 24                        # 全局候选池条目存活时长
+    hot_topic_min_score: float = 0.3                     # 每账号 LLM 相关性分数下限，低于则不选
+    hot_topic_profile_context_messages: int = 50         # 打分时喂入的近期聊天条数（近 30 天内）
     proactive_commitment_extraction_enabled: bool = True
     proactive_commitment_context_messages: int = 8
     proactive_commitment_min_confidence: float = 0.9
@@ -254,13 +264,6 @@ class Settings(BaseSettings):
     aliyun_web_search_enable_source: bool = True
     aliyun_web_search_strategy: str = ""
 
-    baidu_ai_search_enabled: bool = False
-    baidu_ai_search_api_key: str = ""
-    baidu_ai_search_base_url: str = "https://qianfan.baidubce.com"
-    baidu_ai_search_endpoint: str = "/v2/ai_search/web_search"
-    baidu_ai_search_source: str = "baidu_search_v2"
-    baidu_ai_search_top_k: int = 5
-
     # Aliyun SMS
     aliyun_access_key_id: str = ""
     aliyun_access_key_secret: str = ""
@@ -291,6 +294,23 @@ class Settings(BaseSettings):
     outbound_pull_batch_size: int = 20              # 节点单轮认领条数
     outbound_claim_timeout_seconds: int = 60        # sending 卡死回收阈值(节点崩溃安全网)
     local_node_inline_dispatch: bool = False        # true: central 同机 node 出站同进程即时发(迁移期降延迟)
+
+    # ===== TDAI 长期记忆 sidecar（docs/tech_design/tdai_multitenant_design.md）=====
+    # 总开关：默认 false；生产启用时显式设 true。capture/recall 均受此控制。
+    tdai_enabled: bool = False
+    tdai_gateway_url: str = "http://127.0.0.1:8420"
+    tdai_gateway_api_key: str = ""
+    tdai_recall_enabled: bool = True
+    tdai_capture_enabled: bool = True
+    # 热路径严格超时（秒）：超时直接降级，不阻主回复。
+    # 0.5 覆盖 DashScope embedding 往返的 warm 长尾（实测中位 ~350ms）；
+    # 0.2 会让约 30% warm 召回误降级。
+    tdai_recall_timeout_seconds: float = 0.5
+    tdai_capture_timeout_seconds: float = 2.0
+    # 每段 recall 注入内容最大字符数（prepend_context / context 各自截断）。
+    tdai_recall_max_chars: int = 2500
+    # 逗号分隔的 account_id，空 = recall 对所有账号关闭。capture 不受此控制（全量）。
+    tdai_recall_account_allowlist: str = ""
 
     class Config:
         env_file = ".env"

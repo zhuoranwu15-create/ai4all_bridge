@@ -8,13 +8,14 @@ from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
 
+from app.auth_utils import bearer_matches
 from app.config import settings
 from app.db import get_platform_user_by_session_token, upsert_admin_user
 
 
 def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> None:
-    expected = f"Bearer {settings.ai4all_bridge_secret}"
-    if authorization != expected:
+    # bearer_matches 内置「空 token 永不通过 + 恒定时间比较」（见 app/auth_utils.py）。
+    if not bearer_matches(settings.ai4all_bridge_secret, authorization):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid bridge authorization",
@@ -22,32 +23,28 @@ def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> N
 
 
 def get_admin_user(authorization: Optional[str] = Header(default=None)) -> dict:
-    admin_expected = f"Bearer {settings.admin_token}"
-    if authorization == admin_expected:
-        user = upsert_admin_user(
+    # 依次匹配 admin > reviewer > staff；bearer_matches 对空/未配置 token 一律返回 False，
+    # 故空 admin/reviewer/staff token 不会被 "Bearer " 绕过。
+    if bearer_matches(settings.admin_token, authorization):
+        return upsert_admin_user(
             admin_user_id="admin",
             role="admin",
             display_name="Admin",
         )
-        return user
 
-    reviewer_token = str(getattr(settings, "admin_reviewer_token", "") or "").strip()
-    if reviewer_token and authorization == f"Bearer {reviewer_token}":
-        user = upsert_admin_user(
+    if bearer_matches(getattr(settings, "admin_reviewer_token", ""), authorization):
+        return upsert_admin_user(
             admin_user_id="reviewer",
             role="reviewer",
             display_name="Reviewer",
         )
-        return user
 
-    staff_token = str(getattr(settings, "admin_staff_token", "") or "").strip()
-    if staff_token and authorization == f"Bearer {staff_token}":
-        user = upsert_admin_user(
+    if bearer_matches(getattr(settings, "admin_staff_token", ""), authorization):
+        return upsert_admin_user(
             admin_user_id="staff",
             role="staff",
             display_name="Staff",
         )
-        return user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

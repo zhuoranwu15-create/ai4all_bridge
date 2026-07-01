@@ -18,7 +18,7 @@ def _create_account(account_id: str) -> None:
 
 
 def _evaluate(account_id: str, category: str, now: datetime):
-    from app.proactive.policy import OutboundCategory, evaluate_outbound_policy
+    from app.proactive.delivery.policy import OutboundCategory, evaluate_outbound_policy
 
     return evaluate_outbound_policy(
         account_id=account_id,
@@ -34,7 +34,7 @@ DAYTIME = datetime(2026, 5, 30, 10, 0)
 
 
 def test_effective_defaults_when_no_row(fresh_db):
-    from app.proactive.settings import get_effective_proactive_message_settings
+    from app.proactive.preferences import get_effective_proactive_message_settings
 
     eff = get_effective_proactive_message_settings("nobody")
     assert eff["master_enabled"] is True
@@ -46,7 +46,7 @@ def test_effective_defaults_when_no_row(fresh_db):
 
 def test_sparse_merge_master_only_keeps_global_quiet_hours(fresh_db):
     """只设 master_enabled 后，quiet_hours 仍跟随全局（P0-1 稀疏存储）。"""
-    from app.proactive.settings import (
+    from app.proactive.preferences import (
         apply_proactive_message_settings_patch,
         get_effective_proactive_message_settings,
     )
@@ -66,7 +66,7 @@ def test_sparse_merge_master_only_keeps_global_quiet_hours(fresh_db):
 
 
 def test_master_disabled_blocks_proactive_but_not_reminder(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-master")
     apply_proactive_message_settings_patch(
@@ -89,7 +89,7 @@ def test_master_disabled_blocks_proactive_but_not_reminder(fresh_db):
 
 
 def test_category_disable_is_scoped(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-cat")
     apply_proactive_message_settings_patch(
@@ -106,7 +106,7 @@ def test_category_disable_is_scoped(fresh_db):
 
 
 def test_muted_until_blocks_then_clears(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-mute")
     apply_proactive_message_settings_patch(
@@ -130,7 +130,7 @@ def test_muted_until_blocks_then_clears(fresh_db):
 
 
 def test_user_quiet_hours_override_global(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-quiet")
     # 用户设 23:00-07:00，覆盖全局 22:00-08:00
@@ -150,7 +150,7 @@ def test_user_quiet_hours_override_global(fresh_db):
 
 
 def test_user_quiet_hours_disabled_allows_night(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-noquiet")
     apply_proactive_message_settings_patch(
@@ -163,7 +163,7 @@ def test_user_quiet_hours_disabled_allows_night(fresh_db):
 
 
 def test_account_isolation(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-A")
     _create_account("acc-B")
@@ -178,7 +178,7 @@ def test_account_isolation(fresh_db):
 
 def test_update_writes_audit_event(fresh_db):
     from app.db import create_tool_invocation, list_proactive_message_setting_events
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-audit")
     invocation = create_tool_invocation(
@@ -201,7 +201,7 @@ def test_update_writes_audit_event(fresh_db):
 
 
 def test_invalid_quiet_hours_rejected(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-bad")
     with pytest.raises(ValueError):
@@ -213,7 +213,7 @@ def test_invalid_quiet_hours_rejected(fresh_db):
 
 
 def test_unknown_category_rejected(fresh_db):
-    from app.proactive.settings import apply_proactive_message_settings_patch
+    from app.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-badcat")
     with pytest.raises(ValueError):

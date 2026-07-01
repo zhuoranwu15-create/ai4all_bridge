@@ -16,7 +16,7 @@ def _create_account(account_id: str) -> None:
 
 
 def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
-    from app.proactive.state import (
+    from app.proactive.store.account_state import (
         ensure_account_state,
         list_due_proactive_account_checks,
     )
@@ -47,7 +47,7 @@ def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
 
 
 def test_proactive_account_state_respects_disabled_and_cooldown(fresh_db):
-    from app.proactive.state import (
+    from app.proactive.store.account_state import (
         ensure_account_state,
         list_due_proactive_account_checks,
         mark_account_proactive_sent,
@@ -91,7 +91,7 @@ def test_proactive_account_state_respects_disabled_and_cooldown(fresh_db):
 
 
 def test_mark_account_checked_moves_next_scan_forward(fresh_db):
-    from app.proactive.state import (
+    from app.proactive.store.account_state import (
         ensure_account_state,
         list_due_proactive_account_checks,
         mark_account_checked,
@@ -119,7 +119,7 @@ def test_mark_account_checked_moves_next_scan_forward(fresh_db):
 
 
 def test_scan_due_proactive_account_checks_claims_and_marks_no_op(fresh_db):
-    from app.proactive.state import (
+    from app.proactive.store.account_state import (
         ensure_account_state,
         get_account_state,
         scan_due_proactive_account_checks,
@@ -161,13 +161,13 @@ def test_due_reminder_dispatch_does_not_require_proactive_account_state(fresh_db
         get_reminder,
         list_outbound_messages,
     )
-    from app.proactive.reminders import dispatch_due_reminders
+    from app.proactive.obligations.reminders import dispatch_due_reminders
 
     fresh_db.proactive_outbound_daily_limit = 3
     with (
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:state-regression"},
         ),
     ):

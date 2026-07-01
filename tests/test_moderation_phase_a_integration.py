@@ -113,10 +113,10 @@ def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
 
 def test_proactive_sync_guard_cancels_without_gateway_send(fresh_db):
     from app.db import list_content_moderation_tasks
-    from app.proactive.messaging import send_proactive_text
+    from app.proactive.delivery.outbound import send_proactive_text
 
     _create_account("acc-proactive-mod")
-    with patch("app.proactive.messaging.send_weixin_text") as mock_send:
+    with patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send:
         row = send_proactive_text(
             account_id="acc-proactive-mod",
             channel="openclaw-weixin",

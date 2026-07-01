@@ -253,12 +253,6 @@ def test_settings(tmp_path, db_dsn):
     s.aliyun_web_search_forced = True
     s.aliyun_web_search_enable_source = True
     s.aliyun_web_search_strategy = ""
-    s.baidu_ai_search_enabled = False
-    s.baidu_ai_search_api_key = ""
-    s.baidu_ai_search_base_url = "https://qianfan.baidubce.com"
-    s.baidu_ai_search_endpoint = "/v2/ai_search/web_search"
-    s.baidu_ai_search_source = "baidu_search_v2"
-    s.baidu_ai_search_top_k = 5
     s.aliyun_access_key_id = ""
     s.aliyun_access_key_secret = ""
     s.aliyun_sms_sign_name = ""
@@ -281,6 +275,16 @@ def test_settings(tmp_path, db_dsn):
     s.outbound_pull_batch_size = 20
     s.outbound_claim_timeout_seconds = 60
     s.local_node_inline_dispatch = False
+    # TDAI 长期记忆 sidecar：测试默认关闭，避免 MagicMock 属性自动为 truthy 触发 capture。
+    s.tdai_enabled = False
+    s.tdai_gateway_url = "http://127.0.0.1:8420"
+    s.tdai_gateway_api_key = ""
+    s.tdai_recall_enabled = True
+    s.tdai_capture_enabled = True
+    s.tdai_recall_timeout_seconds = 0.5
+    s.tdai_capture_timeout_seconds = 2.0
+    s.tdai_recall_max_chars = 2500
+    s.tdai_recall_account_allowlist = ""
     terms_dir = tmp_path / "moderation"
     terms_dir.mkdir(parents=True, exist_ok=True)
     (terms_dir / "sensitive_terms.json").write_text(
@@ -336,9 +340,15 @@ def fresh_db(test_settings):
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
-        patch("app.proactive.policy.settings", test_settings),
-        patch("app.proactive.reactivation.settings", test_settings),
-        patch("app.proactive.settings.settings", test_settings),
+        patch("app.proactive.delivery.policy.settings", test_settings),
+        patch("app.proactive.store.candidates.settings", test_settings),
+        patch("app.proactive.slots.settings", test_settings),
+        patch("app.proactive.delivery.dispatch.settings", test_settings),
+        patch("app.proactive.recall.manual_companion.settings", test_settings),
+        patch("app.proactive.recall.topic_followup.settings", test_settings),
+        patch("app.proactive.recall.content_invitation.settings", test_settings),
+        patch("app.proactive.recall.hot_topic.settings", test_settings),
+        patch("app.proactive.preferences.settings", test_settings),
         patch("app.moderation.policy.settings", test_settings),
         patch("app.moderation.sensitive_words.settings", test_settings),
         patch("app.moderation.service.settings", test_settings),
@@ -399,7 +409,8 @@ def client(fresh_db):
         patch("app.routers.admin_llm.settings", fresh_db),
         patch("app.llm.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.recall.hot_topic.settings", fresh_db),
         patch("app.moderation.policy.settings", fresh_db),
         patch("app.moderation.sensitive_words.settings", fresh_db),
         patch("app.moderation.service.settings", fresh_db),
