@@ -12,15 +12,15 @@ from app.db import (
     get_pending_companion_followup_count_in_window,
     get_pending_reminder_count_in_window,
 )
-# 分类定义集中在 categories registry；此处 re-export 保持 `from app.proactive.policy
+# 分类定义集中在 categories registry；此处 re-export 保持 `from app.proactive.delivery.policy
 # import OutboundCategory` 等历史 import 路径不变。
-from app.proactive.categories import (  # noqa: F401  (re-export)
+from app.proactive.contract.categories import (  # noqa: F401  (re-export)
     EXEMPT_CATEGORIES,
     OutboundCategory,
     SOURCE_CATEGORY_MAP,
     spec_for,
 )
-from app.proactive.settings import (
+from app.proactive.preferences import (
     get_effective_proactive_message_settings,
     get_total_daily_limit,
     is_category_enabled,

@@ -19,7 +19,7 @@ from app.db import (
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import create_sync_block_task, enqueue_outbound_for_moderation
 from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
-from app.proactive.policy import (
+from app.proactive.delivery.policy import (
     POLICY_VERSION,
     evaluate_outbound_policy,
     is_quiet_hours,

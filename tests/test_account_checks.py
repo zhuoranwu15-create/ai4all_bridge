@@ -30,7 +30,7 @@ def _create_route(account_id: str) -> None:
 
 
 def _create_state(account_id: str, metadata=None) -> None:
-    from app.proactive.state import ensure_account_state
+    from app.proactive.store.account_state import ensure_account_state
 
     ensure_account_state(
         account_id=account_id,
@@ -59,7 +59,7 @@ def _insert_history(account_id: str, text: str, message_id: str = "history-1") -
 
 
 def test_decide_account_check_no_state_no_op(fresh_db):
-    from app.proactive.account_checks import decide_account_check_action
+    from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-no-state")
 
@@ -73,7 +73,7 @@ def test_decide_account_check_no_state_no_op(fresh_db):
 
 
 def test_decide_account_check_no_candidate_no_op(fresh_db):
-    from app.proactive.account_checks import decide_account_check_action
+    from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-no-candidate")
     _create_route("acc-hb-no-candidate")
@@ -89,7 +89,7 @@ def test_decide_account_check_no_candidate_no_op(fresh_db):
 
 
 def test_decide_account_check_candidate_returns_send_text_decision(fresh_db):
-    from app.proactive.account_checks import decide_account_check_action
+    from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-send")
     _create_route("acc-hb-send")
@@ -105,7 +105,7 @@ def test_decide_account_check_candidate_returns_send_text_decision(fresh_db):
         },
     )
 
-    with patch("app.proactive.account_checks.settings", fresh_db):
+    with patch("app.proactive.recall.manual_companion.settings", fresh_db):
         decision = decide_account_check_action(
             account_id="acc-hb-send",
             now=datetime(2026, 5, 22, 10, 0),
@@ -122,7 +122,7 @@ def test_decide_account_check_candidate_returns_send_text_decision(fresh_db):
 
 
 def test_decide_account_check_candidate_requires_route(fresh_db):
-    from app.proactive.account_checks import decide_account_check_action
+    from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-missing-route")
     _create_state(
@@ -140,7 +140,7 @@ def test_decide_account_check_candidate_requires_route(fresh_db):
 
 
 def test_execute_account_check_respects_quiet_hours(fresh_db):
-    from app.proactive.account_checks import decide_account_check_action, execute_account_check_decision
+    from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 
     _create_account("acc-hb-quiet")
     _create_route("acc-hb-quiet")
@@ -149,7 +149,7 @@ def test_execute_account_check_respects_quiet_hours(fresh_db):
         metadata={"account_check_candidate_text": "夜间不该主动发。"},
     )
 
-    with patch("app.proactive.account_checks.settings", fresh_db):
+    with patch("app.proactive.recall.manual_companion.settings", fresh_db):
         now = datetime(2026, 5, 22, 23, 0)
         decision = decide_account_check_action(
             account_id="acc-hb-quiet",
@@ -164,7 +164,7 @@ def test_execute_account_check_respects_quiet_hours(fresh_db):
 
 def test_execute_account_check_respects_companion_daily_limit(fresh_db):
     from app.db import create_outbound_message
-    from app.proactive.account_checks import decide_account_check_action, execute_account_check_decision
+    from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 
     fresh_db.companion_followup_daily_limit = 1
     _create_account("acc-hb-limit")
@@ -187,7 +187,7 @@ def test_execute_account_check_respects_companion_daily_limit(fresh_db):
         product_category="companion_followup",
     )
 
-    with patch("app.proactive.account_checks.settings", fresh_db):
+    with patch("app.proactive.recall.manual_companion.settings", fresh_db):
         now = datetime(2026, 5, 22, 10, 0)
         decision = decide_account_check_action(
             account_id="acc-hb-limit",
@@ -203,10 +203,7 @@ def test_execute_account_check_respects_companion_daily_limit(fresh_db):
 
 def test_execute_account_check_decision_sends_via_outbound_ledger(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.account_checks import (
-        decide_account_check_action,
-        execute_account_check_decision,
-    )
+    from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 
     fresh_db.companion_followup_daily_limit = 3
     _create_account("acc-hb-execute")
@@ -223,10 +220,10 @@ def test_execute_account_check_decision_sends_via_outbound_ledger(fresh_db):
     )
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:account-check-1"},
         ) as mock_send,
     ):
@@ -254,10 +251,7 @@ def test_execute_account_check_decision_sends_via_outbound_ledger(fresh_db):
 
 def test_execute_account_check_decision_skips_no_op(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.account_checks import (
-        decide_account_check_action,
-        execute_account_check_decision,
-    )
+    from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 
     _create_account("acc-hb-execute-noop")
     _create_route("acc-hb-execute-noop")
@@ -279,11 +273,9 @@ def test_execute_account_check_decision_skips_no_op(fresh_db):
 
 def test_generate_account_check_candidate_draft_writes_draft_without_enabling_send(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.account_checks import (
-        decide_account_check_action,
-        generate_account_check_candidate_draft,
-    )
-    from app.proactive.state import get_account_state
+    from app.proactive.delivery.account_check import decide_account_check_action
+    from app.proactive.recall.manual_companion import generate_account_check_candidate_draft
+    from app.proactive.store.account_state import get_account_state
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-hb-draft")
@@ -292,10 +284,10 @@ def test_generate_account_check_candidate_draft_writes_draft_without_enabling_se
     _insert_history("acc-hb-draft", "昨天我让你提醒我今天检查事情 A，明天可能还要看一下后续 B。")
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.generation.account_check.generate_completion",
+            "app.proactive.recall.manual_companion.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得关注一下事情 B。", '
                 '"reason": "用户提到后续 B", "confidence": 0.92}'
@@ -328,8 +320,8 @@ def test_generate_account_check_candidate_draft_writes_draft_without_enabling_se
 
 
 def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db):
-    from app.proactive.account_checks import generate_account_check_candidate_draft
-    from app.proactive.state import get_account_state
+    from app.proactive.recall.manual_companion import generate_account_check_candidate_draft
+    from app.proactive.store.account_state import get_account_state
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-hb-low-confidence")
@@ -341,10 +333,10 @@ def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db)
     _insert_history("acc-hb-low-confidence", "最近只是普通聊天。")
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.generation.account_check.generate_completion",
+            "app.proactive.recall.manual_companion.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "低置信候选", '
                 '"reason": "不够确定", "confidence": 0.4}'
@@ -364,7 +356,7 @@ def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db)
 
 
 def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_db):
-    from app.proactive.account_checks import generate_topic_followup_candidate
+    from app.proactive.recall.topic_followup import generate_topic_followup_candidate
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-topic-followup")
@@ -373,10 +365,10 @@ def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_
     _insert_history("acc-topic-followup", "昨天那个相亲对象让我回消息回得很累。")
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.generation.topic_followup.generate_completion",
+            "app.proactive.recall.topic_followup.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "昨天那个相亲对象后来有再找你吗？", '
                 '"topic": "相亲聊天压力", "reason": "用户最近讨论相亲回复压力", '
@@ -403,7 +395,7 @@ def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_
 
 
 def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
-    from app.proactive.account_checks import generate_topic_followup_candidate
+    from app.proactive.recall.topic_followup import generate_topic_followup_candidate
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-topic-skip-content")
@@ -412,10 +404,10 @@ def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
     _insert_history("acc-topic-skip-content", "中亚五国是哪几个国家？")
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.user_profiles.settings", fresh_db),
         patch(
-            "app.proactive.generation.topic_followup.generate_completion",
+            "app.proactive.recall.topic_followup.generate_completion",
             return_value=(
                 '{"should_send": false, "text": "", "topic": "中亚五国", '
                 '"reason": "轻知识话题应交给 content_invitation", "confidence": 0.2}'
@@ -433,11 +425,9 @@ def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
 
 
 def test_promote_account_check_candidate_draft_enables_send_decision(fresh_db):
-    from app.proactive.account_checks import (
-        decide_account_check_action,
-        promote_account_check_candidate_draft,
-    )
-    from app.proactive.state import get_account_state
+    from app.proactive.delivery.account_check import decide_account_check_action
+    from app.proactive.recall.manual_companion import promote_account_check_candidate_draft
+    from app.proactive.store.account_state import get_account_state
 
     _create_account("acc-hb-promote")
     _create_route("acc-hb-promote")
@@ -473,8 +463,8 @@ def test_promote_account_check_candidate_draft_enables_send_decision(fresh_db):
 
 
 def test_clear_account_check_candidate_draft_removes_draft(fresh_db):
-    from app.proactive.account_checks import clear_account_check_candidate_draft
-    from app.proactive.state import get_account_state
+    from app.proactive.recall.manual_companion import clear_account_check_candidate_draft
+    from app.proactive.store.account_state import get_account_state
 
     _create_account("acc-hb-clear-draft")
     _create_state(

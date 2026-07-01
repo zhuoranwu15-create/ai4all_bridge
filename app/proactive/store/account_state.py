@@ -158,7 +158,7 @@ def mark_account_check_sent(
 def __getattr__(name):  # PEP 562 惰性再导出，避免 state<->planning 循环 import
     """`scan_due_proactive_account_checks` 已搬到 planning.py；保留旧导入路径。"""
     if name == "scan_due_proactive_account_checks":
-        from app.proactive.planning import scan_due_proactive_account_checks as _f
+        from app.proactive.orchestration.planning import scan_due_proactive_account_checks as _f
 
         return _f
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

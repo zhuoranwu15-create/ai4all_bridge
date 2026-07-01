@@ -12,11 +12,11 @@ from app.db import (
     list_recent_reactivation_outbound_messages,
 )
 from app.llm import generate_completion, is_llm_configured
-from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.user_profiles import read_agent_context
-from app.proactive.reactivation import REACTIVATION_TYPE_TOPIC_FOLLOWUP
-from app.proactive.prompts import TOPIC_FOLLOWUP_SYSTEM_PROMPT
-from app.proactive.generation._shared import _format_decision_time, _no_op
+from app.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP
+from app.proactive.contract.prompts import TOPIC_FOLLOWUP_SYSTEM_PROMPT
+from app.proactive.recall._shared import _format_decision_time, _no_op
 
 
 def _build_topic_followup_user_prompt(

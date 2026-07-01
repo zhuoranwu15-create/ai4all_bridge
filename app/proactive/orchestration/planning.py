@@ -2,23 +2,21 @@
 
 scan_due_proactive_account_checks：扫到期账号 → claim → 发到期 companion 候选 +
 刷新 reactivation 候选（已有 pending 则不覆盖）。零行为变更迁移；旧路径
-`from app.proactive.state import scan_due_proactive_account_checks` 仍可用（state 惰性再导出）。
+`from app.proactive.store.account_state import scan_due_proactive_account_checks` 仍可用（state 惰性再导出）。
 """
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.time_utils import beijing_naive_now
-from app.proactive.account_checks import (
+from app.proactive.delivery.account_check import (
     decide_account_check_action,
     execute_account_check_decision,
-    generate_content_invitation_candidate,
-    generate_topic_followup_candidate,
 )
-from app.proactive.reactivation import (
-    get_reactivation_candidate,
-    plan_reactivation_candidate,
-)
-from app.proactive.state import (
+from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.proactive.recall.topic_followup import generate_topic_followup_candidate
+from app.proactive.store.candidates import get_reactivation_candidate
+from app.proactive.delivery.dispatch import plan_reactivation_candidate
+from app.proactive.store.account_state import (
     DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
     claim_due_account_check,
     format_state_time,
@@ -44,7 +42,7 @@ def scan_due_proactive_account_checks(
     node_id 非空时只处理归属该节点的账号（厚节点改造 P4 调度分片）。
 
     注意：这里的 (a) 依赖 `account_check_candidate` 已存在，而该候选**只由 admin 端点**人工
-    promote 产生（见 `account_checks.py` 模块说明）；本编排器不会自动生成它，故无人工候选时
+    promote 产生（见 recall.manual_companion 模块说明）；本编排器不会自动生成它，故无人工候选时
     `decide_account_check_action` 恒返回 no_op，account_check 这条仅作为 admin 工具存在。
     """
     current = now or beijing_naive_now()

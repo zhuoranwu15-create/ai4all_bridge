@@ -17,8 +17,8 @@ from app.db import (
     upsert_proactive_message_settings_row,
 )
 # 分类 registry 是单一数据源；此处 re-export 以保持历史 import 路径
-# （main.py / serializers 仍 `from app.proactive.settings import PROACTIVE_FREQUENCY_BUCKETS`）。
-from app.proactive.categories import (  # noqa: F401  (re-export)
+# （main.py / serializers 仍 `from app.proactive.preferences import PROACTIVE_FREQUENCY_BUCKETS`）。
+from app.proactive.contract.categories import (  # noqa: F401  (re-export)
     PROACTIVE_FREQUENCY_BUCKETS,
     PROACTIVE_SETTING_CATEGORIES,
 )

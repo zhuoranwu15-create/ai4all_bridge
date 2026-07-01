@@ -39,15 +39,10 @@ try:
         list_recent_messages_for_account_since,
         upsert_proactive_account_state,
     )
-    from app.proactive.account_checks import (
-        generate_content_invitation_candidate,
-        generate_topic_followup_candidate,
-    )
-    from app.proactive.reactivation import (
-        dispatch_reactivation_candidate,
-        get_reactivation_candidate,
-        plan_reactivation_candidate,
-    )
+    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+    from app.proactive.recall.topic_followup import generate_topic_followup_candidate
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate, plan_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)
     print(

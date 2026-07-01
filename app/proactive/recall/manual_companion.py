@@ -1,4 +1,15 @@
-"""account_check 关怀候选生成（draft/promote/clear）。candidate 仅由 admin 流程产生，见包说明。"""
+"""**admin 手工关怀候选**（manual companion）的生成（draft/promote/clear）。
+
+语义归位（阶段2.5）：本模块即历史上的 "account_check" 候选生成器。它**只由 admin 端点**
+人工产生候选（draft → promote），自动调度链路（planning）**从不生成**它，故 scheduler 的
+account_checks 步在无人工候选时恒 no_op —— 这是有意设计的休眠路径，不是漏接。自动在跑的
+自主外联是 topic_followup / content_invitation（见 generation 包说明）。
+
+为何函数名与 metadata key 仍带 `account_check`：候选落在 account_state metadata 的
+`account_check_candidate` 键，是已落库的**不可变数据契约**，故 `*_account_check_*` 函数名与
+该 key 一并保留（renaming 需数据迁移，超出本轮"行为等价"边界）。模块名已归位为
+manual_companion 以诚实表达其"admin 手工关怀"角色。
+"""
 import json
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -7,10 +18,10 @@ from app.config import settings
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state, upsert_proactive_account_state
 from app.llm import generate_completion, is_llm_configured
-from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.user_profiles import read_agent_context
-from app.proactive.prompts import ACCOUNT_CHECK_CANDIDATE_SYSTEM_PROMPT
-from app.proactive.generation._shared import (
+from app.proactive.contract.prompts import ACCOUNT_CHECK_CANDIDATE_SYSTEM_PROMPT
+from app.proactive.recall._shared import (
     ACCOUNT_CHECK_CANDIDATE_DRAFT_KEY,
     ACCOUNT_CHECK_CANDIDATE_KEY,
     LEGACY_HEARTBEAT_CANDIDATE_DRAFT_KEY,

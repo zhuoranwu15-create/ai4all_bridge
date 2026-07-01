@@ -1,7 +1,7 @@
-"""Reactivation 发送 slot 调度 + 时间格式化（纯函数，无 DB 写）。
+"""主动消息**发送 slot 计算**（纯函数，无 DB 写）——"几点发"的算法。
 
-从 reactivation.py 抽出：slot 解析、jitter、窗口感知排期等。零行为变更迁移。
-reactivation.py 仍从本模块 re-import，对外 `app.proactive.reactivation.next_reactivation_slot` 等路径不变。
+slot 解析、jitter、窗口感知排期等。命名与 orchestration/scheduler(后台循环) 区分：
+scheduler=跑循环、planning=规划发什么、slots=算几点发。时间戳格式化在 contract/common。
 """
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.proactive.settings import (
+from app.proactive.contract.common import format_reactivation_time  # noqa: F401  (re-export，历史从 slots 导入)
+from app.proactive.preferences import (
     get_effective_proactive_message_settings,
     is_in_allowed_window,
     next_allowed_window_start,
@@ -20,10 +21,6 @@ from app.proactive.settings import (
 def _clean_text(value: Any) -> str:
     return str(value or "").strip()
 
-
-def format_reactivation_time(value: datetime) -> str:
-    """Format reactivation timestamps consistently with proactive state metadata."""
-    return value.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 def _parse_send_slots(value: Optional[str] = None) -> List[str]:
     raw = value if value is not None else getattr(settings, "reactivation_send_slots", "12:15,18:15,21:05")

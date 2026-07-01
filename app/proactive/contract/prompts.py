@@ -1,6 +1,6 @@
 """主动消息各生成器的 system prompt 常量（单一存放处）。
 
-从原 account_checks.py / commitments.py 抽出，业务代码改 import 引用，便于独立维护 prompt。
+从原 recall / obligations 各生成器抽出，业务代码改 import 引用，便于独立维护 prompt。
 内容为零变更迁移；如需改 prompt 文案在此处改。
 """
 

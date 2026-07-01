@@ -43,12 +43,12 @@ try:
         list_sessions_for_account,
         upsert_proactive_account_state,
     )
-    from app.proactive.policy import (
+    from app.proactive.delivery.policy import (
         OutboundCategory,
         evaluate_outbound_policy,
         is_quiet_hours,
     )
-    from app.proactive.account_checks import generate_content_invitation_candidate
+    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)
     print(

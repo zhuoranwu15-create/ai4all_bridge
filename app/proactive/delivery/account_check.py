@@ -4,9 +4,9 @@ from typing import Any, Dict, Optional
 
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
-from app.proactive._common import _select_route
-from app.proactive.messaging import dispatch_proactive_text
-from app.proactive.generation._shared import (
+from app.proactive.contract.common import _select_route
+from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.recall._shared import (
     ACCOUNT_CHECK_CANDIDATE_KEY,
     ACCOUNT_CHECK_SOURCE,
     _candidate_from_state_metadata,

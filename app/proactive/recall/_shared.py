@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.db import list_recent_messages, list_sessions_for_account
-from app.proactive._common import _clean_text
+from app.proactive.contract.common import _clean_text
 
 
 ACCOUNT_CHECK_SOURCE = "account_check"

@@ -8,7 +8,7 @@ from app.routers.deps import get_admin_user, require_admin_user, require_reviewe
 from app.routers.serializers import _normalize_optional_state_datetime, _normalize_ts, _now_db_time
 from app.db import claim_content_moderation_task, get_content_moderation_export, get_content_moderation_stats, get_content_moderation_task, insert_admin_access_event, insert_content_moderation_action, list_content_moderation_actions, list_content_moderation_results, list_content_moderation_tasks, set_account_status, update_content_moderation_task_review_status, update_moderation_account_risk_controls
 from app.moderation import export as moderation_export
-from app.proactive.settings import apply_proactive_message_settings_patch
+from app.proactive.preferences import apply_proactive_message_settings_patch
 from app.time_utils import beijing_now
 from datetime import timedelta
 from typing import Any, Optional

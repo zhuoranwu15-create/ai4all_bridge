@@ -19,7 +19,7 @@ from app.db._core import (
 )
 # 豁免分类以 registry 为单一数据源，避免与 categories.py 漂移（新增豁免分类即生效）。
 # categories.py 为纯数据叶子模块，不反向依赖 app.db，故此 import 无环。
-from app.proactive.categories import EXEMPT_CATEGORIES
+from app.proactive.contract.categories import EXEMPT_CATEGORIES
 __all__ = [
     'CONTENT_INVITATION_ACTIVE_STATUSES',
     'OUTBOUND_QUOTA_STATUSES',

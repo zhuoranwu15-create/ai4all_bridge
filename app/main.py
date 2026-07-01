@@ -146,7 +146,7 @@ from app.openclaw_gateway import (
     send_weixin_text,
     warmup_persistent_gateway_client,
 )
-from app.proactive.messaging import enqueue_onboarding_welcome
+from app.proactive.delivery.outbound import enqueue_onboarding_welcome
 from app.dreaming_scheduler import (
     get_dreaming_scheduler,
     run_dreaming_scheduler_once,
@@ -158,29 +158,33 @@ from app.user_meta_scheduler import (
     stop_user_meta_scheduler,
 )
 from app.prompt_builder import PromptBuilder, extract_section
-from app.proactive.scheduler import (
+from app.proactive.orchestration.scheduler import (
     get_proactive_scheduler,
     run_proactive_scheduler_once,
     start_proactive_scheduler,
     stop_proactive_scheduler,
 )
-from app.proactive.account_checks import (
+from app.proactive.recall.manual_companion import (
     clear_account_check_candidate_draft,
-    decide_account_check_action,
-    execute_account_check_decision,
-    generate_content_invitation_candidate,
     generate_account_check_candidate_draft,
-    generate_topic_followup_candidate,
     promote_account_check_candidate_draft,
 )
-from app.proactive.reactivation import (
+from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.proactive.recall.topic_followup import generate_topic_followup_candidate
+from app.proactive.delivery.account_check import (
+    decide_account_check_action,
+    execute_account_check_decision,
+)
+from app.proactive.store.candidates import (
     REACTIVATION_TYPES,
-    dispatch_reactivation_candidate,
     get_reactivation_candidate_from_metadata,
+)
+from app.proactive.delivery.dispatch import (
+    dispatch_reactivation_candidate,
     plan_reactivation_candidate,
 )
-from app.proactive.state import format_state_time
-from app.proactive.settings import (
+from app.proactive.store.account_state import format_state_time
+from app.proactive.preferences import (
     PROACTIVE_FREQUENCY_BUCKETS,
     apply_proactive_message_settings_patch,
     get_effective_proactive_message_settings,
@@ -418,7 +422,7 @@ def _is_debug_trace_account(account_id: str) -> bool:
 def startup() -> None:
     # 主动消息分类 registry 一致性校验（enum/registry 对齐、source 唯一、豁免不变量）。
     # 放在最前：配置性错误应在启动即暴露，而非运行期静默错配配额/开关。
-    from app.proactive.categories import validate_category_registry
+    from app.proactive.contract.categories import validate_category_registry
 
     validate_category_registry()
     if settings.has_central_role:

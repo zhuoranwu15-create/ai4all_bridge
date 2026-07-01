@@ -16,12 +16,12 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.llm import generate_reply_with_tools, is_llm_configured
-from app.proactive._common import _clean_text, _select_route, _truncate_text
+from app.proactive.contract.common import _clean_text, _select_route, _truncate_text
 from app.user_profiles import read_agent_context
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
 from app.turn_context import TurnContext
-from app.proactive.prompts import CONTENT_INVITATION_SYSTEM_PROMPT
-from app.proactive.generation._shared import _format_decision_time, _latest_session_history, _no_op
+from app.proactive.contract.prompts import CONTENT_INVITATION_SYSTEM_PROMPT
+from app.proactive.recall._shared import _format_decision_time, _latest_session_history, _no_op
 
 
 def _build_content_invitation_user_prompt(

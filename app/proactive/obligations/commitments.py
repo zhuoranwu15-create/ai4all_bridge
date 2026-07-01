@@ -15,10 +15,10 @@ from app.db import (
     mark_proactive_commitment_sent,
 )
 from app.llm import generate_completion, is_llm_configured
-from app.proactive._common import _clean_text, _extract_json_object, _select_route, _truncate_text
-from app.proactive.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
-from app.proactive.messaging import dispatch_proactive_text
-from app.proactive.state import mark_account_proactive_sent
+from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.contract.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
+from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.store.account_state import mark_account_proactive_sent
 
 
 def _format_time(value: datetime) -> str:

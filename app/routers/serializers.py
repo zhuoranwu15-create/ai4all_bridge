@@ -22,9 +22,9 @@ from app.db import (
     insert_admin_access_event,
     list_sessions_for_account,
 )
-from app.proactive.state import format_state_time
-from app.proactive.settings import PROACTIVE_FREQUENCY_BUCKETS, resolve_frequency_limits
-from app.proactive.reactivation import get_reactivation_candidate_from_metadata
+from app.proactive.store.account_state import format_state_time
+from app.proactive.preferences import PROACTIVE_FREQUENCY_BUCKETS, resolve_frequency_limits
+from app.proactive.store.candidates import get_reactivation_candidate_from_metadata
 
 
 def _normalize_optional_state_datetime(value: Optional[str], *, field_name: str) -> Optional[str]:
@@ -185,7 +185,7 @@ def _proactive_state_for_overview(state: Optional[dict]) -> Optional[dict]:
 def _proactive_message_settings_with_resolved(eff: dict) -> dict:
     """在有效设定基础上补充每个频次桶的实际有效值（含全局默认），便于后台展示。"""
     # 全局桶日上限（从分类 registry 派生，与 policy._category_daily_limit 同源）
-    from app.proactive.categories import CATEGORY_SPECS
+    from app.proactive.contract.categories import CATEGORY_SPECS
 
     _global_day = {
         spec.frequency_bucket: int(
