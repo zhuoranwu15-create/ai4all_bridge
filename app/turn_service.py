@@ -49,8 +49,8 @@ from app.moderation.service import (
 )
 from app.context_window import trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
-from app.proactive.commitments import extract_commitment_from_turn
-from app.proactive.state import ensure_account_state
+from app.proactive.obligations.commitments import extract_commitment_from_turn
+from app.proactive.store.account_state import ensure_account_state
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools, iter_specs

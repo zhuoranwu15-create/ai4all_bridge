@@ -8,7 +8,7 @@ from app.db import (
     mark_reminder_failed,
     mark_reminder_sent,
 )
-from app.proactive.messaging import dispatch_proactive_text
+from app.proactive.delivery.outbound import dispatch_proactive_text
 from app.reminder_utils import compute_next_due_at
 from app.time_utils import beijing_naive_now
 

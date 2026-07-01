@@ -130,6 +130,46 @@ def handle_web_search(
     return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
 
 
+def run_headless_web_search(
+    query: str,
+    *,
+    count: int = 5,
+    args: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """无 TurnContext 的后台 web 搜索（供全局召回等无账号场景用）。
+
+    复用 provider 顺序 + failover，但**不落 search_provider_runs**（无账号维度可归属）。
+    返回与 handle_web_search 同形：成功 {"status":"succeeded", "results":[...], ...}，
+    失败 {"status":"failed", "error":...}。
+    """
+    query = str(query or "").strip()
+    if not query:
+        return {"status": "failed", "query": query, "provider": "", "error": "query is required", "attempts": []}
+    call_args = dict(args or {})
+    providers = _provider_order()
+    failover = bool(getattr(settings, "web_search_provider_failover", True))
+    attempts: List[Dict[str, Any]] = []
+    for provider in providers:
+        if provider not in _SUPPORTED_PROVIDERS:
+            error = f"unsupported web_search provider: {provider}"
+            attempts.append({"provider": provider, "status": "failed", "error": error})
+            if failover:
+                continue
+            return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+        try:
+            response = _execute_provider(provider, query=query, count=count, args=call_args)
+        except _SEARCH_ERRORS as err:
+            error = str(err)
+            attempts.append({"provider": provider, "status": "failed", "error": error})
+            if failover:
+                continue
+            return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+        return {"status": "succeeded", "attempts": attempts, **response}
+    error = attempts[-1]["error"] if attempts else "no web_search provider configured"
+    provider = attempts[-1]["provider"] if attempts else ""
+    return _failed_result(query=query, provider=provider, error=error, attempts=attempts)
+
+
 def _provider_order() -> List[str]:
     override = _PROVIDER_ORDER_OVERRIDE.get()
     if override:

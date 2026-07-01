@@ -3,14 +3,13 @@ import logging
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from app.proactive.commitments import dispatch_due_commitments
-from app.proactive.content_invitations import expire_stale_content_invitations
-from app.proactive.reactivation import dispatch_due_reactivation_candidates
-from app.proactive.reminders import dispatch_due_reminders
-from app.proactive.state import (
-    DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
-    scan_due_proactive_account_checks,
-)
+from app.proactive.obligations.commitments import dispatch_due_commitments
+from app.proactive.obligations.content_invitations import expire_stale_content_invitations
+from app.proactive.delivery.dispatch import dispatch_due_reactivation_candidates
+from app.proactive.obligations.reminders import dispatch_due_reminders
+from app.proactive.orchestration.planning import scan_due_proactive_account_checks
+from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+from app.proactive.store.account_state import DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS
 from app.db import record_scheduler_heartbeat
 from app.time_utils import beijing_naive_now
 
@@ -20,6 +19,7 @@ DispatchDueCommitments = Callable[..., List[Dict[str, Any]]]
 DispatchDueReactivation = Callable[..., List[Dict[str, Any]]]
 ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
 ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
+RefreshHotTopicPool = Callable[..., Dict[str, Any]]
 
 logger = logging.getLogger("ai4all.proactive.scheduler")
 
@@ -40,6 +40,7 @@ class ProactiveScheduler:
         dispatch_reactivation: DispatchDueReactivation = dispatch_due_reactivation_candidates,
         expire_content_invitations: ExpireContentInvitations = expire_stale_content_invitations,
         scan_account_checks: ScanDueAccountChecks = scan_due_proactive_account_checks,
+        refresh_hot_topics: RefreshHotTopicPool = refresh_hot_topic_pool,
     ) -> None:
         self.interval_seconds = max(float(interval_seconds), 1.0)
         self.batch_size = max(int(batch_size), 1)
@@ -52,6 +53,7 @@ class ProactiveScheduler:
         self._dispatch_reactivation = dispatch_reactivation
         self._expire_content_invitations = expire_content_invitations
         self._scan_account_checks = scan_account_checks
+        self._refresh_hot_topics = refresh_hot_topics
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -103,6 +105,15 @@ class ProactiveScheduler:
             bypass_quiet_hours=self.bypass_quiet_hours,
             node_id=self.node_id,
         )
+        # 每日全局热点池刷新（幂等+settings 门控）：放在 per-account planning 之前，使当轮
+        # planning 就能读到新鲜池。返回 dict（非 list），故不走 _step，单独做步骤级隔离。
+        hot_topic_result: Dict[str, Any] = {}
+        try:
+            hot_topic_result = await asyncio.to_thread(self._refresh_hot_topics, now=current)
+        except Exception as err:  # noqa: BLE001 — 步骤级隔离，单步失败不拖垮整轮
+            logger.exception("proactive scheduler step hot_topic_pool failed: %s", err)
+            step_errors["hot_topic_pool"] = str(err)
+
         account_results = await _step(
             "account_checks",
             self._scan_account_checks,
@@ -139,6 +150,7 @@ class ProactiveScheduler:
             "reactivations": reactivation_results,
             "expired_content_invitation_count": len(expired_content_results),
             "expired_content_invitations": expired_content_results,
+            "hot_topic_pool": hot_topic_result,
             "errors": step_errors or None,
         }
         self.last_run = result

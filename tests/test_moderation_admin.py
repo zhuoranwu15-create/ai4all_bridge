@@ -188,7 +188,7 @@ def test_admin_can_export_single_moderation_task_and_view_artifact(client):
 
 def test_admin_actions_restrict_proactive_and_disable_account(client):
     from app.db import get_account, get_moderation_account_risk_state
-    from app.proactive.settings import get_effective_proactive_message_settings
+    from app.proactive.preferences import get_effective_proactive_message_settings
 
     task = _task(account_id="acc-mod-action", text="confirmed risk")
     until = "2099-01-01 00:00:00"

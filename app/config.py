@@ -163,6 +163,16 @@ class Settings(BaseSettings):
     reactivation_topic_followup_window_hours: int = 72
     reactivation_topic_followup_context_messages: int = 100
     reactivation_content_invitation_context_messages: int = 100
+    # 近期热点（hot_topic）全局召回：搜索近 24h 热点 → 抽主题成无主候选池 → 每账号 LLM 打分
+    # 选择 → 多样性打散 → top1 拉活。默认关；产品目标同拉活，复用 companion_followup 分类/配额。
+    hot_topic_recall_enabled: bool = False               # 全局召回总开关（fail-closed）
+    hot_topic_recall_query: str = "过去24小时国内外热点新闻话题"  # 全局召回使用的搜索 query
+    hot_topic_pool_size: int = 8                         # 单日全局池最多抽取的主题数
+    hot_topic_select_top_k: int = 3                      # 每账号相关性排序后保留、参与多样性打散的候选数
+    hot_topic_history_dedupe_days: int = 3               # 全局历史去重回看天数（近 N 天已入池主题不再入池）
+    hot_topic_ttl_hours: int = 24                        # 全局候选池条目存活时长
+    hot_topic_min_score: float = 0.3                     # 每账号 LLM 相关性分数下限，低于则不选
+    hot_topic_profile_context_messages: int = 50         # 打分时喂入的近期聊天条数（近 30 天内）
     proactive_commitment_extraction_enabled: bool = True
     proactive_commitment_context_messages: int = 8
     proactive_commitment_min_confidence: float = 0.9

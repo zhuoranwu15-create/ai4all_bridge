@@ -1756,6 +1756,40 @@ def _migration_0010_sessions_rolling_summary(conn: Connection) -> None:
     _ensure_column(conn, "sessions", "rolling_summary_upto_id", "INTEGER")
 
 
+def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
+    """全局（无主）主动消息候选池——首个真·全局召回（近期热点 hot_topic）的落地表。
+
+    刻意**无 account_id**：存的是"所有账号只读共享的无主候选池"（如近 24h 热点主题），
+    不是任何账号的数据，因此不受"按 account_id 隔离"这条核心不变量约束——这是该不变量
+    唯一的、显式的例外（详见 app/proactive/store/global_candidates.py 模块说明）。池→账号
+    的绑定发生在**选择层**：每账号 LLM 打分选中 top1 时才盖上 account_id，写进该账号自己的
+    reactivation 候选（proactive_account_state.metadata）。本表本身绝不写任何账号维度数据。
+
+    UNIQUE(kind, generated_date, dedupe_key) 天然实现"当日同主题只入一次 + 跨天历史去重依据"；
+    expires_at 存北京 naive 时间字符串，读活跃池时按 expires_at > now 过滤（被动 TTL，不主动清表）。
+    strftime 默认值 / AUTOINCREMENT / INSERT OR IGNORE 由 _backend 方言翻译层适配 PG，双后端通用。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS proactive_global_candidates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            topic TEXT,
+            text TEXT NOT NULL,
+            generated_date TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            metadata_json TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_global_candidates_kind_date_key
+            ON proactive_global_candidates(kind, generated_date, dedupe_key);
+        CREATE INDEX IF NOT EXISTS ix_global_candidates_kind_expires
+            ON proactive_global_candidates(kind, expires_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1767,6 +1801,7 @@ _MIGRATIONS = [
     (8, _migration_0008_relationship_state),
     (9, _migration_0009_messages_account_id_index),
     (10, _migration_0010_sessions_rolling_summary),
+    (11, _migration_0011_proactive_global_candidates),
 ]
 
 

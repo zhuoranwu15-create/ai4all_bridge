@@ -36,11 +36,11 @@ from app.db import (
     upsert_access_node,
     upsert_channel_binding,
 )
-from app.proactive.reactivation import (
+from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
     clear_reactivation_candidate,
-    format_reactivation_time,
 )
+from app.proactive.contract.common import format_reactivation_time
 from app.time_utils import beijing_naive_now
 
 logger = logging.getLogger("ai4all")

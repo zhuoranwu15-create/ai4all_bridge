@@ -8,10 +8,16 @@ from app.config import settings
 from app.routers.deps import verify_admin_auth
 from app.routers.serializers import _beijing_display, _content_invitation_for_overview, _list_reactivation_candidate_admin_items, _normalize_optional_state_datetime, _normalize_ts, _proactive_message_settings_with_resolved, _proactive_state_for_overview, _redact_text_field
 from app.db import cancel_proactive_commitment, get_account, get_proactive_account_state, get_proactive_commitment, list_content_invitations_for_account, list_outbound_messages, list_proactive_commitments_for_account, list_proactive_message_setting_events, list_reactivation_outbound_messages_admin, list_reminders_for_account, upsert_proactive_account_state
-from app.proactive.account_checks import clear_account_check_candidate_draft, decide_account_check_action, execute_account_check_decision, generate_account_check_candidate_draft, generate_content_invitation_candidate, generate_topic_followup_candidate, promote_account_check_candidate_draft
-from app.proactive.reactivation import REACTIVATION_TYPES, dispatch_reactivation_candidate, plan_reactivation_candidate
-from app.proactive.scheduler import get_proactive_scheduler, run_proactive_scheduler_once
-from app.proactive.settings import get_effective_proactive_message_settings
+from app.proactive.recall.manual_companion import clear_account_check_candidate_draft, generate_account_check_candidate_draft, promote_account_check_candidate_draft
+from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
+from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.proactive.recall.hot_topic import refresh_hot_topic_pool, select_hot_topic_candidate
+from app.proactive.recall.topic_followup import generate_topic_followup_candidate
+from app.proactive.store.candidates import REACTIVATION_TYPES
+from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+from app.proactive.orchestration.planning import plan_reactivation_candidate
+from app.proactive.orchestration.scheduler import get_proactive_scheduler, run_proactive_scheduler_once
+from app.proactive.preferences import get_effective_proactive_message_settings
 from app.session_lifecycle import run_daily_dreaming_scan
 from app.time_utils import beijing_now
 from datetime import timedelta
@@ -412,4 +418,23 @@ async def admin_proactive_scheduler_run_once(
     )
     dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
     result["daily_dreaming"] = dreaming
+    return {"status": "ok", "run": result}
+
+
+@router.post("/admin/proactive/hot-topic/refresh-once")
+async def admin_proactive_hot_topic_refresh_once(
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """手动触发一次全局热点池刷新（搜索→抽主题→入池）。受 settings 门控，幂等（当日已生成即 no_op）。"""
+    result = await asyncio.to_thread(refresh_hot_topic_pool)
+    return {"status": "ok", "run": result}
+
+
+@router.post("/admin/accounts/{account_id}/hot-topic/select-once")
+async def admin_proactive_hot_topic_select_once(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """对单账号跑一次热点选择（读全局池→LLM 打分→打散→top1），仅返回候选、不落库、不发送（调试用）。"""
+    result = await asyncio.to_thread(select_hot_topic_candidate, account_id=account_id)
     return {"status": "ok", "run": result}

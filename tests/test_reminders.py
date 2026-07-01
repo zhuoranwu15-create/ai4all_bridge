@@ -74,15 +74,15 @@ def test_reminder_create_due_claim_and_mark_sent(fresh_db):
 
 def test_dispatch_due_reminders_sends_due_one_shot(fresh_db):
     from app.db import create_reminder, get_reminder, list_outbound_messages
-    from app.proactive.reminders import dispatch_due_reminders
+    from app.proactive.obligations.reminders import dispatch_due_reminders
 
     fresh_db.proactive_outbound_daily_limit = 3
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:rem-1"},
         ) as mock_send,
     ):
@@ -121,12 +121,12 @@ def test_dispatch_due_reminders_sends_due_one_shot(fresh_db):
 
 def test_dispatch_due_reminders_skips_not_due(fresh_db):
     from app.db import create_reminder, get_reminder
-    from app.proactive.reminders import dispatch_due_reminders
+    from app.proactive.obligations.reminders import dispatch_due_reminders
 
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.messaging.send_weixin_text") as mock_send,
+        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
     ):
         _create_account("acc-not-due")
         create_reminder(
@@ -150,14 +150,14 @@ def test_dispatch_due_reminders_skips_not_due(fresh_db):
 def test_dispatch_due_reminder_bypasses_quiet_hours(fresh_db):
     """user_reminder product_category bypasses quiet hours so the reminder is sent."""
     from app.db import create_reminder, get_reminder, list_outbound_messages
-    from app.proactive.reminders import dispatch_due_reminders
+    from app.proactive.obligations.reminders import dispatch_due_reminders
 
     now = datetime(2026, 5, 22, 23, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:rem-quiet"},
         ) as mock_send,
     ):
@@ -184,14 +184,14 @@ def test_dispatch_due_reminder_bypasses_quiet_hours(fresh_db):
 
 def test_dispatch_due_reminder_marks_gateway_failure(fresh_db):
     from app.db import create_reminder, get_reminder, list_outbound_messages
-    from app.proactive.reminders import dispatch_due_reminders
+    from app.proactive.obligations.reminders import dispatch_due_reminders
 
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             side_effect=RuntimeError("gateway down"),
         ),
     ):
@@ -265,8 +265,8 @@ def test_recurring_reminder_resets_after_dispatch(fresh_db):
 
     mock_send = MagicMock(return_value={"id": None, "status": "sent"})
     with patch("app.db.settings", fresh_db), \
-         patch("app.proactive.reminders.dispatch_proactive_text", mock_send):
-        from app.proactive.reminders import dispatch_reminder
+         patch("app.proactive.obligations.reminders.dispatch_proactive_text", mock_send):
+        from app.proactive.obligations.reminders import dispatch_reminder
         result = dispatch_reminder(
             reminder_id="rem-recur-1",
             now=datetime(2026, 5, 30, 9, 0, 0),
@@ -289,14 +289,14 @@ def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
     周期相同,会命中已 sent 的出站行而静默不发;修复后键含当次 due_at。
     """
     from app.db import create_reminder, get_reminder, list_outbound_messages
-    from app.proactive.reminders import dispatch_reminder
+    from app.proactive.obligations.reminders import dispatch_reminder
 
     fresh_db.proactive_outbound_daily_limit = 10
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.messaging.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.messaging.send_weixin_text",
+            "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:recur"},
         ) as mock_send,
     ):

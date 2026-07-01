@@ -9,7 +9,7 @@ update：校验并落库一次偏好变更（带审计），返回结果摘要�
 import logging
 from typing import Any, Dict, Optional, TYPE_CHECKING
 
-from app.proactive.settings import (
+from app.proactive.preferences import (
     apply_proactive_message_settings_patch,
     get_effective_proactive_message_settings,
 )
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("ai4all.tools.proactive_settings_handlers")
 
-from app.proactive.categories import CATEGORY_LABELS as _CATEGORY_LABELS
+from app.proactive.contract.categories import CATEGORY_LABELS as _CATEGORY_LABELS
 
 _UPDATE_ARG_KEYS = {
     "master_enabled",

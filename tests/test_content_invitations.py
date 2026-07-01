@@ -42,7 +42,7 @@ def _title_items():
 
 
 def _create_proactive_state(account_id: str) -> None:
-    from app.proactive.state import ensure_account_state
+    from app.proactive.store.account_state import ensure_account_state
 
     ensure_account_state(
         account_id=account_id,
@@ -221,7 +221,7 @@ def test_admin_overview_lists_content_invitations_redacted(client, fresh_db):
 
 def test_account_check_content_invitation_generation_creates_candidate_with_tool(fresh_db):
     from app.db import get_content_invitation, list_tool_invocations
-    from app.proactive.account_checks import generate_content_invitation_candidate
+    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
     fresh_db.proactive_quiet_hours_start = "00:00"
@@ -269,7 +269,7 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
     ]
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.llm.settings", fresh_db),
         patch("app.llm._http_chat_with_tools", side_effect=responses) as mock_llm,
     ):
@@ -301,7 +301,7 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
 
 def test_account_check_content_invitation_generation_avoids_pending_user_reminder(fresh_db):
     from app.db import create_reminder
-    from app.proactive.account_checks import generate_content_invitation_candidate
+    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-content-avoid")
@@ -319,7 +319,7 @@ def test_account_check_content_invitation_generation_avoids_pending_user_reminde
     )
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.llm.settings", fresh_db),
         patch("app.llm._http_chat_with_tools") as mock_llm,
     ):
@@ -382,7 +382,7 @@ def test_admin_run_proactive_check_once_displays_generated_content_invitation(cl
     ]
 
     with (
-        patch("app.proactive.account_checks.settings", fresh_db),
+        patch("app.proactive.recall.manual_companion.settings", fresh_db),
         patch("app.llm.settings", fresh_db),
         patch("app.llm._http_chat_with_tools", side_effect=responses),
     ):
