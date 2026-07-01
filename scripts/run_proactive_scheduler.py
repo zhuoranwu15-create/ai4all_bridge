@@ -26,6 +26,7 @@ async def main() -> None:
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
         planning_interval_seconds=settings.proactive_planning_interval_seconds,
+        hot_topic_pool_refresh_interval_seconds=settings.hot_topic_pool_refresh_interval_seconds,
     )
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()

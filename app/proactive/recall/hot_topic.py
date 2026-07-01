@@ -31,6 +31,7 @@ from app.proactive.contract.prompts import (
     HOT_TOPIC_RANK_SYSTEM_PROMPT,
     HOT_TOPIC_RECALL_SYSTEM_PROMPT,
 )
+from app.proactive.recall._hot_list import collect_hot_list_lines
 from app.proactive.recall._shared import _format_decision_time, _no_op
 from app.proactive.selection.diversity import rank_and_diversify
 from app.proactive.store.candidates import REACTIVATION_TYPE_HOT_TOPIC, _normalize_dedupe_key
@@ -56,8 +57,13 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
         return _no_op(account_id="", reason="hot_topic_recall_disabled", now=current)
     if not is_llm_configured():
         return _no_op(account_id="", reason="llm_disabled", now=current)
-    if not bool(getattr(settings, "web_search_enabled", False)):
-        return _no_op(account_id="", reason="web_search_disabled", now=current)
+
+    # 数据来源门控：热榜或 web search 至少配置一个
+    hot_topic_sources_raw = _clean_text(getattr(settings, "hot_topic_sources", "")) or ""
+    configured_sources = [s.strip() for s in hot_topic_sources_raw.split(",") if s.strip()]
+    web_search_ok = bool(getattr(settings, "web_search_enabled", False))
+    if not configured_sources and not web_search_ok:
+        return _no_op(account_id="", reason="hot_topic_no_data_source", now=current)
 
     today = current.date().isoformat()
     pool_today = [
@@ -73,28 +79,52 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
             metadata={"existing_count": len(pool_today)},
         )
 
-    query = _clean_text(getattr(settings, "hot_topic_recall_query", "")) or "过去24小时国内外热点新闻话题"
-    try:
-        count = int(getattr(settings, "web_search_max_results", 5) or 5)
-    except (TypeError, ValueError):
-        count = 5
-    search = run_headless_web_search(query, count=count, args={"freshness": "day"})
-    if search.get("status") != "succeeded":
-        return _no_op(
-            account_id="",
-            reason="hot_topic_search_failed",
-            now=current,
-            metadata={"error": search.get("error")},
+    # Step 1：优先从热榜抓取
+    result_lines: list = []
+    data_source = "none"
+    if configured_sources:
+        source_urls = {
+            "toutiao": _clean_text(getattr(settings, "hot_topic_toutiao_url", "")) or "",
+            "zhihu": _clean_text(getattr(settings, "hot_topic_zhihu_url", "")) or "",
+        }
+        source_backup_urls = {
+            "zhihu": _clean_text(getattr(settings, "hot_topic_zhihu_backup_url", "")) or "",
+        }
+        try:
+            fetch_timeout = float(getattr(settings, "hot_topic_fetch_timeout_seconds", 5.0) or 5.0)
+            max_items = int(getattr(settings, "hot_topic_max_items_per_source", 20) or 20)
+        except (TypeError, ValueError):
+            fetch_timeout, max_items = 5.0, 20
+        result_lines = collect_hot_list_lines(
+            sources=configured_sources,
+            source_urls=source_urls,
+            source_backup_urls=source_backup_urls,
+            timeout=fetch_timeout,
+            max_items_per_source=max_items,
         )
-    results = search.get("results") or []
-    if not results:
-        return _no_op(account_id="", reason="hot_topic_no_search_results", now=current)
+        if result_lines:
+            data_source = "hot_list"
 
-    result_lines = [
-        f"- {_clean_text(item.get('title'))}: {_truncate_text(_clean_text(item.get('snippet')), 200)}"
-        for item in results
-        if _clean_text(item.get("title")) or _clean_text(item.get("snippet"))
-    ]
+    # Step 2：热榜全部失败时降级 web search
+    if not result_lines and web_search_ok:
+        query = _clean_text(getattr(settings, "hot_topic_recall_query", "")) or "过去24小时国内外热点新闻话题"
+        try:
+            count = int(getattr(settings, "web_search_max_results", 5) or 5)
+        except (TypeError, ValueError):
+            count = 5
+        search = run_headless_web_search(query, count=count, args={"freshness": "day"})
+        if search.get("status") == "succeeded":
+            search_results = search.get("results") or []
+            result_lines = [
+                f"- {_clean_text(item.get('title'))}: {_truncate_text(_clean_text(item.get('snippet')), 200)}"
+                for item in search_results
+                if _clean_text(item.get("title")) or _clean_text(item.get("snippet"))
+            ]
+            if result_lines:
+                data_source = "web_search"
+
+    if not result_lines:
+        return _no_op(account_id="", reason="hot_topic_no_data", now=current)
     try:
         pool_size = int(getattr(settings, "hot_topic_pool_size", 8) or 8)
     except (TypeError, ValueError):
@@ -154,13 +184,14 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
             text=text[:120],
             now=current,
             ttl_hours=ttl_hours,
-            metadata={"source": "hot_topic_recall", "query": query},
+            metadata={"source": "hot_topic_recall", "data_source": data_source},
         )
         inserted.append({"topic": topic, "text": text[:120]})
 
     return {
         "action": "hot_topic_pool_refreshed",
         "account_id": "",
+        "data_source": data_source,
         "inserted_count": len(inserted),
         "candidates": inserted,
         "evaluated_at": _format_decision_time(current),

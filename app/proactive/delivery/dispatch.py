@@ -26,6 +26,7 @@ from app.proactive.slots import _account_allowed_windows, _next_slot_after
 from app.proactive.contract.common import format_reactivation_time
 from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
+    REACTIVATION_TYPE_HOT_TOPIC,
     _avoidance_count,
     _clean_text,
     _has_sent_reactivation_today,
@@ -196,6 +197,20 @@ def dispatch_reactivation_candidate(
             "text": candidate["text"],
             "reactivation_candidate": candidate,
             "outbound_metadata": outbound_metadata,
+            "evaluated_at": format_reactivation_time(current),
+        }
+
+    # per-type hot_topic dry_run gate：hot_topic_dispatch_dry_run=True（默认）时只记录
+    # would_send，其他候选类型不受影响。两个开关都 false 才真实发热点消息。
+    if candidate.get("type") == REACTIVATION_TYPE_HOT_TOPIC and bool(
+        getattr(settings, "hot_topic_dispatch_dry_run", True)
+    ):
+        return {
+            "action": "would_send",
+            "account_id": account_id,
+            "text": candidate["text"],
+            "reactivation_candidate": candidate,
+            "outbound_metadata": {**outbound_metadata, "dry_run": True},
             "evaluated_at": format_reactivation_time(current),
         }
 
