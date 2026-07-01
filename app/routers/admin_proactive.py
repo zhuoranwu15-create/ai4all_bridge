@@ -13,7 +13,8 @@ from app.proactive.delivery.account_check import decide_account_check_action, ex
 from app.proactive.recall.content_invitation import generate_content_invitation_candidate
 from app.proactive.recall.topic_followup import generate_topic_followup_candidate
 from app.proactive.store.candidates import REACTIVATION_TYPES
-from app.proactive.delivery.dispatch import dispatch_reactivation_candidate, plan_reactivation_candidate
+from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+from app.proactive.orchestration.planning import plan_reactivation_candidate
 from app.proactive.orchestration.scheduler import get_proactive_scheduler, run_proactive_scheduler_once
 from app.proactive.preferences import get_effective_proactive_message_settings
 from app.session_lifecycle import run_daily_dreaming_scan

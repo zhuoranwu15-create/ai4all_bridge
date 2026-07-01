@@ -41,7 +41,8 @@ try:
     )
     from app.proactive.recall.content_invitation import generate_content_invitation_candidate
     from app.proactive.recall.topic_followup import generate_topic_followup_candidate
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate, plan_reactivation_candidate
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.orchestration.planning import plan_reactivation_candidate
     from app.proactive.store.candidates import get_reactivation_candidate
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)

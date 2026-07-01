@@ -826,7 +826,7 @@ def test_upsert_proactive_account_state_metadata_patch_preserves_sibling_keys(fr
 
 
 def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
-    from app.proactive.delivery.dispatch import plan_reactivation_candidate
+    from app.proactive.orchestration.planning import plan_reactivation_candidate
     from app.proactive.store.candidates import REACTIVATION_TYPE_CONTENT_INVITATION, get_reactivation_candidate
     from app.proactive.store.account_state import ensure_account_state
 
@@ -862,7 +862,7 @@ def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
 
 
 def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
-    from app.proactive.delivery.dispatch import plan_reactivation_candidate
+    from app.proactive.orchestration.planning import plan_reactivation_candidate
     from app.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP, get_reactivation_candidate
     from app.proactive.store.account_state import ensure_account_state
 

@@ -22,7 +22,6 @@ from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
 from app.proactive.delivery.policy import (
     POLICY_VERSION,
     evaluate_outbound_policy,
-    is_quiet_hours,
     normalize_outbound_category,
 )
 

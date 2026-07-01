@@ -1,13 +1,11 @@
-"""自主外联（拉活）候选的**派发层**：规划选择 + 取到期候选 → policy → 发送 → 状态机。
+"""自主外联（拉活）候选的**派发层**：取到期候选 → policy → 发送 → 状态机。
 
-从 reactivation.py 拆出"何时发就发、发不出去怎么收尾"这一职责：
-- `plan_reactivation_candidate`：组装各种类 proposer → `selection.select_first` 按优先级
-  短路选出胜者 → 落库（候选存储在 candidate_store）。
-- `dispatch_reactivation_candidate` / `dispatch_due_reactivation_candidates`：到期候选经
-  `messaging.dispatch_proactive_text`（内含 policy 闸门）发送，并推进 content_invitation 行
-  与候选的状态机（含阶段0 的 cancelled 改期/清除）。
+`dispatch_reactivation_candidate` / `dispatch_due_reactivation_candidates`：到期候选经
+`delivery.outbound.dispatch_proactive_text`（内含 policy 闸门）发送，并推进 content_invitation
+行与候选的状态机（含阶段0 的 cancelled 改期/清除）。
 
-存储读写委托 store.candidates，调度时间委托 scheduling。
+规划选择（召回→选择→落库）已归位 orchestration/planning（plan 是规划不是派发）。
+存储读写委托 store.candidates，调度时间委托 slots。
 """
 from __future__ import annotations
 
@@ -24,15 +22,10 @@ from app.db import (
 from app.proactive.contract.common import _select_route
 from app.proactive.delivery.outbound import dispatch_proactive_text
 from app.time_utils import beijing_naive_now
-from app.proactive.slots import (
-    _account_allowed_windows,
-    _next_slot_after,
-    _with_default_schedule,
-)
+from app.proactive.slots import _account_allowed_windows, _next_slot_after
 from app.proactive.contract.common import format_reactivation_time
 from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
-    REACTIVATION_TYPE_TOPIC_FOLLOWUP,
     _avoidance_count,
     _clean_text,
     _has_sent_reactivation_today,
@@ -42,18 +35,12 @@ from app.proactive.store.candidates import (
     clear_reactivation_candidate,
     get_reactivation_candidate,
     get_reactivation_candidate_from_metadata,
-    normalize_reactivation_candidate,
     reactivation_outbound_metadata,
     reschedule_reactivation_candidate,
     rule_reactivation_dedupe_check,
-    upsert_reactivation_candidate,
 )
-from app.proactive.contract.candidate import ProactiveCandidate
-from app.proactive.selection.ranker import ranked_kinds
-from app.proactive.selection.selector import Proposal, select_first
 
 
-ReactivationGenerator = Callable[..., Dict[str, Any]]
 DedupeChecker = Callable[..., Dict[str, Any]]
 
 
@@ -70,137 +57,6 @@ def _no_op(
         "reason": reason,
         "evaluated_at": format_reactivation_time(now),
         "metadata": metadata or {},
-    }
-
-
-def _candidate_from_content_invitation(
-    *,
-    invitation: Dict[str, Any],
-    now: datetime,
-) -> Dict[str, Any]:
-    invitation_id = _clean_text(invitation.get("id"))
-    return normalize_reactivation_candidate(
-        {
-            "id": f"reactivation-content-{invitation_id}",
-            "type": REACTIVATION_TYPE_CONTENT_INVITATION,
-            "content_invitation_id": invitation_id,
-            "topic": invitation.get("topic"),
-            "text": invitation.get("invitation_text"),
-            "generated_at": format_reactivation_time(now),
-            "metadata": {
-                "title_count": len(invitation.get("title_items") or []),
-                "source": "content_invitation_generation",
-            },
-        }
-    )
-
-
-def plan_reactivation_candidate(
-    *,
-    account_id: str,
-    now: Optional[datetime] = None,
-    topic_followup_generator: Optional[ReactivationGenerator] = None,
-    content_invitation_generator: Optional[ReactivationGenerator] = None,
-) -> Dict[str, Any]:
-    """Refresh the unified reactivation candidate for one account.
-
-    选择逻辑（topic 优先、content 兜底）已提到 selection 层：本函数把各种类包成 proposer，
-    交给 `select_first` 按 ranker 顺序短路选择，胜者落库。返回 dict 与历史逐键一致。
-    """
-    current = now or beijing_naive_now()
-    allowed_windows = _account_allowed_windows(account_id)
-
-    # 每个种类一个 proposer：跑生成器 → 把产出适配成 ProactiveCandidate（无产出则 None）。
-    # None-generator 的兜底 reason 与原实现逐一对齐。select_first 会按 ranker 顺序短路，
-    # 故 topic 命中时 content proposer 不执行（与原"topic 抢占即不跑 content"一致）。
-    def _topic_proposer() -> Proposal:
-        result = (
-            topic_followup_generator(account_id=account_id, now=current)
-            if topic_followup_generator
-            else _no_op(
-                account_id=account_id,
-                reason="topic_followup_generator_not_implemented",
-                now=current,
-            )
-        )
-        raw = result.get("reactivation_candidate")
-        candidate = (
-            ProactiveCandidate.from_legacy(raw, account_id=account_id)
-            if isinstance(raw, dict)
-            else None
-        )
-        return Proposal(result=result, candidate=candidate)
-
-    def _content_proposer() -> Proposal:
-        if content_invitation_generator is None:
-            result = _no_op(
-                account_id=account_id,
-                reason="content_invitation_generator_missing",
-                now=current,
-            )
-        else:
-            result = content_invitation_generator(account_id=account_id, now=current)
-        invitation = result.get("content_invitation")
-        candidate = None
-        if result.get("action") == "content_invitation_candidate_created" and isinstance(
-            invitation, dict
-        ):
-            candidate = ProactiveCandidate.from_legacy(
-                _candidate_from_content_invitation(invitation=invitation, now=current),
-                account_id=account_id,
-            )
-        return Proposal(result=result, candidate=candidate)
-
-    selection = select_first(
-        ranked_kinds(),
-        {
-            REACTIVATION_TYPE_TOPIC_FOLLOWUP: _topic_proposer,
-            REACTIVATION_TYPE_CONTENT_INVITATION: _content_proposer,
-        },
-    )
-    # topic 是优先级最高的 proposer，必然被执行（select_first 从它开始）。
-    topic_result = selection.outcomes[REACTIVATION_TYPE_TOPIC_FOLLOWUP].result
-
-    if selection.chosen_kind is not None:
-        state = upsert_reactivation_candidate(
-            account_id=account_id,
-            candidate=_with_default_schedule(
-                selection.candidate.to_legacy(), now=current, allowed_windows=allowed_windows
-            ),
-        )
-        content_outcome = selection.outcomes.get(REACTIVATION_TYPE_CONTENT_INVITATION)
-        # content 被 topic 抢占未执行时，沿用原实现的合成 no_op。
-        content_generation = (
-            content_outcome.result
-            if content_outcome is not None
-            else _no_op(
-                account_id=account_id,
-                reason="topic_followup_candidate_selected",
-                now=current,
-            )
-        )
-        return {
-            "action": "reactivation_candidate_planned",
-            "account_id": account_id,
-            "reactivation_type": selection.chosen_kind,
-            "reactivation_candidate": get_reactivation_candidate_from_metadata(
-                state.get("metadata") or {}
-            ),
-            "topic_followup_generation": topic_result,
-            "content_invitation_generation": content_generation,
-            "evaluated_at": format_reactivation_time(current),
-        }
-
-    # 两个种类都未产出候选 → 都已执行；reason 回退链与原实现一致。
-    content_result = selection.outcomes[REACTIVATION_TYPE_CONTENT_INVITATION].result
-    return {
-        "action": "no_op",
-        "account_id": account_id,
-        "reason": content_result.get("reason") or topic_result.get("reason") or "no_reactivation_candidate",
-        "topic_followup_generation": topic_result,
-        "content_invitation_generation": content_result,
-        "evaluated_at": format_reactivation_time(current),
-        "metadata": {},
     }
 
 

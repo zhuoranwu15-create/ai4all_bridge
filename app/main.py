@@ -179,10 +179,8 @@ from app.proactive.store.candidates import (
     REACTIVATION_TYPES,
     get_reactivation_candidate_from_metadata,
 )
-from app.proactive.delivery.dispatch import (
-    dispatch_reactivation_candidate,
-    plan_reactivation_candidate,
-)
+from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+from app.proactive.orchestration.planning import plan_reactivation_candidate
 from app.proactive.store.account_state import format_state_time
 from app.proactive.preferences import (
     PROACTIVE_FREQUENCY_BUCKETS,
