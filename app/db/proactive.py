@@ -51,8 +51,11 @@ __all__ = [
     'get_proactive_commitment',
     'get_proactive_message_settings_row',
     'get_reminder',
+    'insert_global_candidate',
     'insert_proactive_message_setting_event',
+    'list_active_global_candidates',
     'list_content_invitations_for_account',
+    'list_recent_global_candidate_keys',
     'list_due_proactive_account_states',
     'list_due_proactive_commitments',
     'list_due_reactivation_candidate_accounts',
@@ -1302,6 +1305,94 @@ def cancel_proactive_commitment(
 # ---------------------------------------------------------------------------
 # Proactive account state
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Global (ownerless) candidate pool —— proactive_global_candidates
+# 见 _migration_0011：刻意无 account_id（隔离不变量的显式例外）。
+# ---------------------------------------------------------------------------
+
+def _decode_global_candidate(row: Row) -> Dict[str, Any]:
+    item = dict(row)
+    raw = item.pop("metadata_json", None)
+    try:
+        item["metadata"] = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        item["metadata"] = {}
+    return item
+
+
+def insert_global_candidate(
+    *,
+    kind: str,
+    topic: Optional[str],
+    text: str,
+    generated_date: str,
+    dedupe_key: str,
+    expires_at: str,
+    created_at: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """入池一条全局候选；命中 UNIQUE(kind,generated_date,dedupe_key) 则静默忽略（幂等）。
+
+    调用方在入池前已做历史去重，这里的 INSERT OR IGNORE 只作并发/重跑的兜底防重，
+    不返回是否命中（跨后端 rowcount 语义不统一，调用方按"尝试集 - 已存在集"自行计数）。
+    """
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO proactive_global_candidates(
+                kind, topic, text, generated_date, dedupe_key, expires_at, metadata_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                kind,
+                topic,
+                text,
+                generated_date,
+                dedupe_key,
+                expires_at,
+                json.dumps(metadata or {}, ensure_ascii=False),
+                created_at,
+            ),
+        )
+
+
+def list_active_global_candidates(
+    *,
+    kind: str,
+    now: str,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """未过期（expires_at > now）的某类全局候选，新到旧。now 为北京 naive 时间字符串。"""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM proactive_global_candidates
+            WHERE kind = ? AND expires_at > ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (kind, now, max(int(limit), 1)),
+        ).fetchall()
+    return [_decode_global_candidate(row) for row in rows]
+
+
+def list_recent_global_candidate_keys(
+    *,
+    kind: str,
+    since_date: str,
+) -> List[str]:
+    """generated_date >= since_date 的已入池 dedupe_key 去重列表，供生成时历史去重。"""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT dedupe_key FROM proactive_global_candidates
+            WHERE kind = ? AND generated_date >= ?
+            """,
+            (kind, since_date),
+        ).fetchall()
+    return [row["dedupe_key"] for row in rows]
+
 
 def _decode_proactive_account_state(row: Row) -> Dict[str, Any]:
     item = dict(row)

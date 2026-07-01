@@ -12,9 +12,12 @@ from typing import Tuple
 
 # 越靠前优先级越高；与 plan_reactivation_candidate 原 if/else 顺序一致。
 # account_check / manual_companion 是 admin 手工候选、自动链路不生成，不入自动 rank。
+# hot_topic（近期热点，全局召回）置末位 fallback：个人续聊/内容邀请命中即短路，二者皆空
+# 才用热点兜底。顺序为产品取舍，可按效果调整（改此元组一处即可，planning/selector 不动）。
 DISCRETIONARY_RANK: Tuple[str, ...] = (
     "topic_followup",
     "content_invitation",
+    "hot_topic",
 )
 
 

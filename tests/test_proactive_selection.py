@@ -12,10 +12,12 @@ from app.proactive.selection.selector import Proposal, SelectionResult, select_f
 
 
 def test_ranker_order_and_index():
-    assert ranked_kinds() == ("topic_followup", "content_invitation")
+    # hot_topic（近期热点，全局召回）为末位 fallback：个人续聊/内容邀请皆空才兜底。
+    assert ranked_kinds() == ("topic_followup", "content_invitation", "hot_topic")
     assert DISCRETIONARY_RANK[0] == "topic_followup"
     assert rank_index("topic_followup") == 0
     assert rank_index("content_invitation") == 1
+    assert rank_index("hot_topic") == 2
     # 未登记的种类排到最后，不抛错。
     assert rank_index("unknown_kind") == len(DISCRETIONARY_RANK)
 

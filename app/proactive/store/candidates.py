@@ -27,9 +27,13 @@ from app.proactive.contract.common import format_reactivation_time
 REACTIVATION_METADATA_KEY = "reactivation_candidate"
 REACTIVATION_TYPE_TOPIC_FOLLOWUP = "topic_followup"
 REACTIVATION_TYPE_CONTENT_INVITATION = "content_invitation"
+# 近期热点：全局召回抽出的主题，经每账号打分选中后作为拉活候选。产品目标同 topic_followup
+# （陪伴续聊），故 _reactivation_product_category 走默认分支归入 companion_followup 分类。
+REACTIVATION_TYPE_HOT_TOPIC = "hot_topic"
 REACTIVATION_TYPES = {
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
     REACTIVATION_TYPE_CONTENT_INVITATION,
+    REACTIVATION_TYPE_HOT_TOPIC,
 }
 
 # 拉活分类已合并：话题唤回归入 companion_followup，内容唤回归入 content_invitation。

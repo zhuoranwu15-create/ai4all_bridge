@@ -11,6 +11,7 @@ from app.db import cancel_proactive_commitment, get_account, get_proactive_accou
 from app.proactive.recall.manual_companion import clear_account_check_candidate_draft, generate_account_check_candidate_draft, promote_account_check_candidate_draft
 from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.proactive.recall.hot_topic import refresh_hot_topic_pool, select_hot_topic_candidate
 from app.proactive.recall.topic_followup import generate_topic_followup_candidate
 from app.proactive.store.candidates import REACTIVATION_TYPES
 from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
@@ -417,4 +418,23 @@ async def admin_proactive_scheduler_run_once(
     )
     dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
     result["daily_dreaming"] = dreaming
+    return {"status": "ok", "run": result}
+
+
+@router.post("/admin/proactive/hot-topic/refresh-once")
+async def admin_proactive_hot_topic_refresh_once(
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """手动触发一次全局热点池刷新（搜索→抽主题→入池）。受 settings 门控，幂等（当日已生成即 no_op）。"""
+    result = await asyncio.to_thread(refresh_hot_topic_pool)
+    return {"status": "ok", "run": result}
+
+
+@router.post("/admin/accounts/{account_id}/hot-topic/select-once")
+async def admin_proactive_hot_topic_select_once(
+    account_id: str,
+    _: None = Depends(verify_admin_auth),
+) -> dict:
+    """对单账号跑一次热点选择（读全局池→LLM 打分→打散→top1），仅返回候选、不落库、不发送（调试用）。"""
+    result = await asyncio.to_thread(select_hot_topic_candidate, account_id=account_id)
     return {"status": "ok", "run": result}

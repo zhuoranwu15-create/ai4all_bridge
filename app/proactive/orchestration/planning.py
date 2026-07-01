@@ -17,10 +17,12 @@ from app.proactive.delivery.account_check import (
     execute_account_check_decision,
 )
 from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.proactive.recall.hot_topic import select_hot_topic_candidate
 from app.proactive.recall.topic_followup import generate_topic_followup_candidate
 from app.proactive.slots import _account_allowed_windows, _with_default_schedule
 from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
+    REACTIVATION_TYPE_HOT_TOPIC,
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
     get_reactivation_candidate,
     get_reactivation_candidate_from_metadata,
@@ -83,6 +85,7 @@ def plan_reactivation_candidate(
     now: Optional[datetime] = None,
     topic_followup_generator: Optional[ReactivationGenerator] = None,
     content_invitation_generator: Optional[ReactivationGenerator] = None,
+    hot_topic_generator: Optional[ReactivationGenerator] = None,
 ) -> Dict[str, Any]:
     """Refresh the unified reactivation candidate for one account.
 
@@ -134,11 +137,32 @@ def plan_reactivation_candidate(
             )
         return Proposal(result=result, candidate=candidate)
 
+    def _hot_topic_proposer() -> Proposal:
+        # 与 topic proposer 同构：跑（注入的）每账号热点选择器，产出 reactivation_candidate 则
+        # 适配成 ProactiveCandidate。未注入时兜底 no_op（reason 与 topic 分支同一范式）。
+        result = (
+            hot_topic_generator(account_id=account_id, now=current)
+            if hot_topic_generator
+            else _no_op(
+                account_id=account_id,
+                reason="hot_topic_generator_not_implemented",
+                now=current,
+            )
+        )
+        raw = result.get("reactivation_candidate")
+        candidate = (
+            ProactiveCandidate.from_legacy(raw, account_id=account_id)
+            if isinstance(raw, dict)
+            else None
+        )
+        return Proposal(result=result, candidate=candidate)
+
     selection = select_first(
         ranked_kinds(),
         {
             REACTIVATION_TYPE_TOPIC_FOLLOWUP: _topic_proposer,
             REACTIVATION_TYPE_CONTENT_INVITATION: _content_proposer,
+            REACTIVATION_TYPE_HOT_TOPIC: _hot_topic_proposer,
         },
     )
     # topic 是优先级最高的 proposer，必然被执行（select_first 从它开始）。
@@ -162,6 +186,17 @@ def plan_reactivation_candidate(
                 now=current,
             )
         )
+        # hot_topic 是末位 proposer：被上游抢占未执行时合成 no_op（reason 记明是谁抢占）。
+        hot_topic_outcome = selection.outcomes.get(REACTIVATION_TYPE_HOT_TOPIC)
+        hot_topic_generation = (
+            hot_topic_outcome.result
+            if hot_topic_outcome is not None
+            else _no_op(
+                account_id=account_id,
+                reason=f"{selection.chosen_kind}_candidate_selected",
+                now=current,
+            )
+        )
         return {
             "action": "reactivation_candidate_planned",
             "account_id": account_id,
@@ -171,17 +206,24 @@ def plan_reactivation_candidate(
             ),
             "topic_followup_generation": topic_result,
             "content_invitation_generation": content_generation,
+            "hot_topic_generation": hot_topic_generation,
             "evaluated_at": format_reactivation_time(current),
         }
 
-    # 两个种类都未产出候选 → 都已执行；reason 回退链与原实现一致。
+    # 各种类都未产出候选 → 都已执行；reason 回退链沿用 content→topic 原顺序，再补 hot_topic 尾项
+    # （既有两类为空的场景 reason 与原实现逐字一致，hot_topic 仅在前两者 reason 皆空时才兜底）。
     content_result = selection.outcomes[REACTIVATION_TYPE_CONTENT_INVITATION].result
+    hot_topic_result = selection.outcomes[REACTIVATION_TYPE_HOT_TOPIC].result
     return {
         "action": "no_op",
         "account_id": account_id,
-        "reason": content_result.get("reason") or topic_result.get("reason") or "no_reactivation_candidate",
+        "reason": content_result.get("reason")
+        or topic_result.get("reason")
+        or hot_topic_result.get("reason")
+        or "no_reactivation_candidate",
         "topic_followup_generation": topic_result,
         "content_invitation_generation": content_result,
+        "hot_topic_generation": hot_topic_result,
         "evaluated_at": format_reactivation_time(current),
         "metadata": {},
     }
@@ -267,6 +309,7 @@ def scan_due_proactive_account_checks(
                 now=current,
                 topic_followup_generator=generate_topic_followup_candidate,
                 content_invitation_generator=generate_content_invitation_candidate,
+                hot_topic_generator=select_hot_topic_candidate,
             )
             content_invitation_generation = reactivation_planning.get(
                 "content_invitation_generation",
