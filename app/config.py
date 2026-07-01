@@ -173,6 +173,21 @@ class Settings(BaseSettings):
     hot_topic_ttl_hours: int = 24                        # 全局候选池条目存活时长
     hot_topic_min_score: float = 0.3                     # 每账号 LLM 相关性分数下限，低于则不选
     hot_topic_profile_context_messages: int = 50         # 打分时喂入的近期聊天条数（近 30 天内）
+    # 全局热点池刷新在调度器内的最小间隔（秒）；进程重启后首 tick 立即刷一次，之后按此间隔。
+    # 函数内部仍有每日幂等门控兜底，此处控制调用频率（防止每 30s 无效调用）。
+    hot_topic_pool_refresh_interval_seconds: int = 3600
+    # 热榜数据来源（逗号分隔，按顺序抓取合并）；支持 toutiao / zhihu。
+    # 非空时优先用热榜，全部失败才降级 web search（需 web_search_enabled=true）。
+    hot_topic_sources: str = "toutiao,zhihu"
+    hot_topic_toutiao_url: str = "https://60s.viki.moe/v2/toutiao"
+    hot_topic_zhihu_url: str = "https://60s.viki.moe/v2/zhihu"
+    hot_topic_zhihu_backup_url: str = ""           # 备用 URL；空=不启用
+    hot_topic_fetch_timeout_seconds: float = 5.0   # 每个来源 HTTP 超时
+    hot_topic_max_items_per_source: int = 20        # 每个来源最多取条数
+    # hot_topic 发送独立 dry_run 开关（fail-closed）：True 时 hot_topic 候选只记录 would_send，
+    # 不真实发送，其他类型（topic_followup / content_invitation）不受影响。
+    # 须与 reactivation_dispatch_dry_run=false 配合才能区分拦截；两者均 false 才真发热点。
+    hot_topic_dispatch_dry_run: bool = True
     proactive_commitment_extraction_enabled: bool = True
     proactive_commitment_context_messages: int = 8
     proactive_commitment_min_confidence: float = 0.9

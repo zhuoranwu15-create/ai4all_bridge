@@ -34,6 +34,7 @@ class ProactiveScheduler:
         batch_size: int,
         bypass_quiet_hours: bool = False,
         planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+        hot_topic_pool_refresh_interval_seconds: int = 3600,
         node_id: Optional[str] = None,
         dispatch_reminders: DispatchDueReminders = dispatch_due_reminders,
         dispatch_commitments: DispatchDueCommitments = dispatch_due_commitments,
@@ -46,6 +47,7 @@ class ProactiveScheduler:
         self.batch_size = max(int(batch_size), 1)
         self.bypass_quiet_hours = bypass_quiet_hours
         self.planning_interval_seconds = max(int(planning_interval_seconds), 1)
+        self.hot_topic_pool_refresh_interval_seconds = max(int(hot_topic_pool_refresh_interval_seconds), 1)
         # 厚节点改造 P4：节点角色时只扫本节点账号（assigned_node_id = node_id）
         self.node_id: Optional[str] = node_id or None
         self._dispatch_reminders = dispatch_reminders
@@ -56,6 +58,7 @@ class ProactiveScheduler:
         self._refresh_hot_topics = refresh_hot_topics
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._last_hot_topic_refresh: Optional[datetime] = None  # 进程级内存时间戳，重启归零
         self.last_run: Optional[Dict[str, Any]] = None
         self.last_error: Optional[str] = None
 
@@ -70,6 +73,12 @@ class ProactiveScheduler:
             "batch_size": self.batch_size,
             "bypass_quiet_hours": self.bypass_quiet_hours,
             "planning_interval_seconds": self.planning_interval_seconds,
+            "hot_topic_pool_refresh_interval_seconds": self.hot_topic_pool_refresh_interval_seconds,
+            "last_hot_topic_refresh": (
+                self._last_hot_topic_refresh.isoformat(timespec="seconds")
+                if self._last_hot_topic_refresh is not None
+                else None
+            ),
             "last_run": self.last_run,
             "last_error": self.last_error,
         }
@@ -105,14 +114,21 @@ class ProactiveScheduler:
             bypass_quiet_hours=self.bypass_quiet_hours,
             node_id=self.node_id,
         )
-        # 每日全局热点池刷新（幂等+settings 门控）：放在 per-account planning 之前，使当轮
-        # planning 就能读到新鲜池。返回 dict（非 list），故不走 _step，单独做步骤级隔离。
+        # 全局热点池刷新：每 hot_topic_pool_refresh_interval_seconds 秒最多一次（进程重启
+        # 归零 → 首 tick 立即刷一次）。函数内部仍有每日幂等门控兜底，此处仅控制调用频率。
         hot_topic_result: Dict[str, Any] = {}
-        try:
-            hot_topic_result = await asyncio.to_thread(self._refresh_hot_topics, now=current)
-        except Exception as err:  # noqa: BLE001 — 步骤级隔离，单步失败不拖垮整轮
-            logger.exception("proactive scheduler step hot_topic_pool failed: %s", err)
-            step_errors["hot_topic_pool"] = str(err)
+        elapsed_since_refresh = (
+            (current - self._last_hot_topic_refresh).total_seconds()
+            if self._last_hot_topic_refresh is not None
+            else float("inf")
+        )
+        if elapsed_since_refresh >= self.hot_topic_pool_refresh_interval_seconds:
+            try:
+                hot_topic_result = await asyncio.to_thread(self._refresh_hot_topics, now=current)
+                self._last_hot_topic_refresh = current
+            except Exception as err:  # noqa: BLE001 — 步骤级隔离，单步失败不拖垮整轮
+                logger.exception("proactive scheduler step hot_topic_pool failed: %s", err)
+                step_errors["hot_topic_pool"] = str(err)
 
         account_results = await _step(
             "account_checks",
@@ -241,6 +257,7 @@ def start_proactive_scheduler(
     batch_size: int,
     bypass_quiet_hours: bool = False,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    hot_topic_pool_refresh_interval_seconds: int = 3600,
     node_id: Optional[str] = None,
 ) -> ProactiveScheduler:
     global _scheduler
@@ -250,6 +267,7 @@ def start_proactive_scheduler(
             batch_size=batch_size,
             bypass_quiet_hours=bypass_quiet_hours,
             planning_interval_seconds=planning_interval_seconds,
+            hot_topic_pool_refresh_interval_seconds=hot_topic_pool_refresh_interval_seconds,
             node_id=node_id,
         )
     if not _scheduler.is_running:
@@ -270,6 +288,7 @@ async def run_proactive_scheduler_once(
     batch_size: int,
     bypass_quiet_hours: bool = False,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
+    hot_topic_pool_refresh_interval_seconds: int = 1,  # 一次性调用：_last=None → 总触发
     node_id: Optional[str] = None,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
@@ -278,6 +297,7 @@ async def run_proactive_scheduler_once(
         batch_size=batch_size,
         bypass_quiet_hours=bypass_quiet_hours,
         planning_interval_seconds=planning_interval_seconds,
+        hot_topic_pool_refresh_interval_seconds=hot_topic_pool_refresh_interval_seconds,
         node_id=node_id,
     )
     return await scheduler.run_once(now=now)
