@@ -1,6 +1,6 @@
 """近期热点（hot_topic）召回：全局池 + 每账号选择 + 多样性 + planning 接入。"""
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -69,6 +69,8 @@ def _settings(**overrides):
         hot_topic_select_top_k=3,
         hot_topic_profile_context_messages=50,
         reactivation_dedupe_days=3,
+        hot_topic_pool_refresh_slots="10:00,17:00",
+        hot_topic_account_reserve_ttl_hours=6,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -115,7 +117,7 @@ def test_refresh_hot_topic_pool_inserts_with_history_dedup_and_idempotent(fresh_
     from app.proactive.recall.hot_topic import refresh_hot_topic_pool
     from app.proactive.store.global_candidates import active_global_pool
 
-    now = datetime(2026, 7, 1, 9, 0)
+    now = datetime(2026, 7, 1, 10, 0)
     # 历史池：昨天已入过“露营”，本次应被历史去重滤除。
     _seed_pool(topic="露营", text="旧的露营", generated_date="2026-06-30", now=now)
 
@@ -142,10 +144,10 @@ def test_refresh_hot_topic_pool_inserts_with_history_dedup_and_idempotent(fresh_
         assert result["inserted_count"] == 1
         assert result["candidates"][0]["topic"] == "考研"
 
-        # 幂等：当日池已生成 → 再跑 no_op，不重复调用搜索。
+        # 幂等：当日该档已生成 → 再跑 no_op，不重复调用搜索。
         result2 = refresh_hot_topic_pool(now=now)
         assert result2["action"] == "no_op"
-        assert result2["reason"] == "hot_topic_pool_already_generated_today"
+        assert result2["reason"] == "hot_topic_pool_already_generated_for_slot"
 
     today_pool = [c for c in active_global_pool(kind="hot_topic", now=now) if c["generated_date"] == "2026-07-01"]
     assert [c["topic"] for c in today_pool] == ["考研"]
@@ -157,7 +159,7 @@ def test_refresh_hot_topic_pool_search_failed_noop(fresh_db):
     with patch(f"{HT}.settings", _settings()), \
          patch(f"{HT}.is_llm_configured", return_value=True), \
          patch(f"{HT}.run_headless_web_search", return_value={"status": "failed", "error": "boom"}):
-        result = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 9, 0))
+        result = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 10, 0))
     assert result["action"] == "no_op"
     assert result["reason"] == "hot_topic_no_data"
 
@@ -200,7 +202,10 @@ def test_select_hot_topic_picks_top1(fresh_db):
         {"id": by_topic["摄影"], "score": 0.92, "reason": "用户爱摄影"},
         {"id": by_topic["露营"], "score": 0.4, "reason": "一般"},
     ]})
-    personalized = json.dumps({"text": "上次说的那组照片洗出来没？最近还拍吗"})
+    personalized = json.dumps({"items": [
+        {"id": by_topic["摄影"], "text": "上次说的那组照片洗出来没？最近还拍吗"},
+        {"id": by_topic["露营"], "text": "最近还想去露营吗"},
+    ]})
 
     with patch(f"{HT}.settings", _settings()), \
          patch(f"{HT}.is_llm_configured", return_value=True), \
@@ -268,6 +273,126 @@ def test_select_hot_topic_below_min_score_noop(fresh_db):
 
     assert result["action"] == "no_op"
     assert result["reason"] == "hot_topic_below_min_score"
+
+
+def test_refresh_hot_topic_pool_not_due_before_slot(fresh_db):
+    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+
+    # 09:59 早于配置的 10:00/17:00 档位 → 不消耗任何数据/LLM 调用，直接 no_op。
+    with patch(f"{HT}.settings", _settings()), \
+         patch(f"{HT}.is_llm_configured", return_value=True), \
+         patch(f"{HT}.run_headless_web_search") as mock_search:
+        result = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 9, 59))
+    assert result["action"] == "no_op"
+    assert result["reason"] == "hot_topic_pool_refresh_not_due"
+    mock_search.assert_not_called()
+
+
+def test_refresh_hot_topic_pool_backfills_next_slot_after_restart(fresh_db):
+    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+
+    search_ret = {"status": "succeeded", "results": [{"title": "考研新政", "snippet": "考研相关"}]}
+    themes_json = json.dumps({"themes": [{"topic": "考研", "text": "考研准备咋样"}]}, ensure_ascii=False)
+    with patch(f"{HT}.settings", _settings()), \
+         patch(f"{HT}.is_llm_configured", return_value=True), \
+         patch(f"{HT}.run_headless_web_search", return_value=search_ret), \
+         patch(f"{HT}.generate_completion", return_value=themes_json):
+        # 10:00 档已刷新过一次。
+        first = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 10, 5))
+        assert first["action"] == "hot_topic_pool_refreshed"
+        assert first["slot_key"] == "2026-07-01_slot0"
+
+        # 进程重启后第一个 tick 落在 17:10（跨过 17:00 档），应视为新档补跑，不受 10:00 档已生成影响。
+        second = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 17, 10))
+        assert second["action"] == "hot_topic_pool_refreshed"
+        assert second["slot_key"] == "2026-07-01_slot1"
+
+
+def _seed_ranked_pool(now: datetime):
+    """种入 3 个热点主题并返回 {topic: global_candidate_id} 映射，供储备缓存类测试复用。"""
+    from app.proactive.store.global_candidates import active_global_pool
+
+    _seed_pool(topic="摄影", text="最近拍照了吗", generated_date="2026-07-01", now=now)
+    _seed_pool(topic="露营", text="想去露营吗", generated_date="2026-07-01", now=now)
+    _seed_pool(topic="考研", text="考研准备咋样", generated_date="2026-07-01", now=now)
+    pool = active_global_pool(kind="hot_topic", now=now)
+    return {c["topic"]: c["id"] for c in pool}
+
+
+def test_select_hot_topic_cache_hit_uses_reserve_without_llm(fresh_db):
+    from app.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    now = datetime(2026, 7, 1, 12, 0)
+    _create_account("acc-ht-cache")
+    _create_route("acc-ht-cache")
+    ensure_account_state(account_id="acc-ht-cache")
+    by_topic = _seed_ranked_pool(now)
+
+    ranked = json.dumps({"ranked": [
+        {"id": by_topic["摄影"], "score": 0.9, "reason": "爱摄影"},
+        {"id": by_topic["露营"], "score": 0.8, "reason": "爱户外"},
+        {"id": by_topic["考研"], "score": 0.7, "reason": "在备考"},
+    ]})
+    personalized = json.dumps({"items": [
+        {"id": by_topic["摄影"], "text": "最近拍了啥新照片"},
+        {"id": by_topic["露营"], "text": "周末去露营不"},
+        {"id": by_topic["考研"], "text": "复习得咋样了"},
+    ]})
+
+    with patch(f"{HT}.settings", _settings()), \
+         patch(f"{HT}.is_llm_configured", return_value=True), \
+         patch(f"{HT}.read_agent_context", return_value=_memory_ctx("用户喜欢摄影、露营和考研")), \
+         patch(f"{HT}.generate_completion", side_effect=[ranked, personalized]) as mock_llm:
+        first = select_hot_topic_candidate(account_id="acc-ht-cache", now=now)
+        assert first["reactivation_candidate"]["topic"] == "摄影"
+        assert mock_llm.call_count == 2
+
+        # 第二次：储备缓存里还有露营(0.8)/考研(0.7)未用，命中缓存不应再调用 LLM。
+        second = select_hot_topic_candidate(account_id="acc-ht-cache", now=now + timedelta(minutes=5))
+        assert mock_llm.call_count == 2  # 未新增调用
+        assert second["action"] == "hot_topic_candidate_created"
+        assert second["reactivation_candidate"]["topic"] == "露营"
+        assert second["reactivation_candidate"]["metadata"]["cache_hit"] is True
+
+
+def test_select_hot_topic_reserve_exhausted_regenerates(fresh_db):
+    from app.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    now = datetime(2026, 7, 1, 12, 0)
+    _create_account("acc-ht-exhaust")
+    _create_route("acc-ht-exhaust")
+    ensure_account_state(account_id="acc-ht-exhaust")
+    by_topic = _seed_ranked_pool(now)
+
+    ranked = json.dumps({"ranked": [
+        {"id": by_topic["摄影"], "score": 0.9, "reason": "爱摄影"},
+        {"id": by_topic["露营"], "score": 0.8, "reason": "爱户外"},
+        {"id": by_topic["考研"], "score": 0.7, "reason": "在备考"},
+    ]})
+    personalized = json.dumps({"items": [
+        {"id": by_topic["摄影"], "text": "最近拍了啥新照片"},
+        {"id": by_topic["露营"], "text": "周末去露营不"},
+        {"id": by_topic["考研"], "text": "复习得咋样了"},
+    ]})
+    ranked_2 = json.dumps({"ranked": [{"id": by_topic["摄影"], "score": 0.5, "reason": "再来一轮"}]})
+    personalized_2 = json.dumps({"items": [{"id": by_topic["摄影"], "text": "又想起你爱拍照"}]})
+
+    with patch(f"{HT}.settings", _settings()), \
+         patch(f"{HT}.is_llm_configured", return_value=True), \
+         patch(f"{HT}.read_agent_context", return_value=_memory_ctx("用户喜欢摄影、露营和考研")), \
+         patch(f"{HT}.generate_completion", side_effect=[ranked, personalized, ranked_2, personalized_2]) as mock_llm:
+        select_hot_topic_candidate(account_id="acc-ht-exhaust", now=now)          # 摄影(0.9) 用掉
+        select_hot_topic_candidate(account_id="acc-ht-exhaust", now=now)          # 露营(0.8) 用掉
+        select_hot_topic_candidate(account_id="acc-ht-exhaust", now=now)          # 考研(0.7) 用掉
+        assert mock_llm.call_count == 2  # 三条储备全部命中，未新增 LLM 调用
+
+        # 三条全用完 → 第四次触发重新生成（消耗 side_effect 的第 3/4 次调用）。
+        fourth = select_hot_topic_candidate(account_id="acc-ht-exhaust", now=now)
+        assert mock_llm.call_count == 4
+        assert fourth["action"] == "hot_topic_candidate_created"
+        assert fourth["reactivation_candidate"]["metadata"]["cache_hit"] is False
 
 
 # --------------------------------------------------------------------------- planning 接入

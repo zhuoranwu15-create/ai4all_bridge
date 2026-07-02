@@ -1,15 +1,20 @@
 """近期热点（hot_topic）召回 —— 首个真·全局召回。
 
 两个职责、两种 scope：
-- `refresh_hot_topic_pool`（scope=global，每日一次）：搜索近 24h 热点 → LLM 抽主题 → 历史去重 →
-  入全局候选池（无主，所有账号共享）。**不针对任何账号**，故不走 content_invitation 那条强依赖
-  TurnContext 的工具循环，改为直接 `run_headless_web_search` + `generate_completion`。
-- `select_hot_topic_candidate`（scope=account，planning 时每账号一次）：读全局池 → 用该账号的
-  长期记忆 + 近 N 条聊天做 LLM 相关性打分 → 取 top_k → 多样性打散（近 3 次已推降权）→ top1 →
-  组装成 `type=hot_topic` 的拉活候选（形状对齐 topic_followup 的 `*_candidate_created` 返回）。
+- `refresh_hot_topic_pool`（scope=global，每日按绝对时钟点档位刷新，默认 10:00/17:00）：搜索
+  近 24h 热点 → LLM 抽主题 → 历史去重 → 入全局候选池（无主，所有账号共享）。**不针对任何账号**，
+  故不走 content_invitation 那条强依赖 TurnContext 的工具循环，改为直接 `run_headless_web_search`
+  + `generate_completion`。
+- `select_hot_topic_candidate`（scope=account，planning 时每账号一次，只在 topic_followup/
+  content_invitation 均空时兜底触发）：优先读该账号的 `hot_topic_reserve` 储备缓存（3 条已改写
+  候选，`hot_topic_account_reserve_ttl_hours` 有效期），命中未用条目直接按 rank_score 取最高一条、
+  标记已用、0 次 LLM 调用；缓存缺失/全过期/全部用完才重新生成：读全局池 → 用该账号的长期记忆 +
+  近 N 条聊天做 LLM 相关性打分（1 次调用）→ top_k 多样性打散（近期已推降权）→ 批量个性化改写
+  全部 top_k 条（1 次调用）→ 写回储备缓存，取其中最高分一条提交为本次拉活候选并标记已用。
+  结果形状对齐 topic_followup 的 `*_candidate_created` 返回。
 
-账号隔离：全局池是无主数据（见 store.global_candidates 说明）；LLM 打分只喂**该账号自己**的
-记忆/聊天，选中的 top1 只写进该账号自己的 reactivation 候选，无跨账号泄漏。
+账号隔离：全局池是无主数据（见 store.global_candidates 说明）；LLM 打分/改写只喂**该账号自己**的
+记忆/聊天，储备缓存与最终候选都只写进该账号自己的 proactive_account_state，无跨账号泄漏。
 """
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -21,6 +26,7 @@ from app.db import (
     get_proactive_account_state,
     list_recent_messages_for_account_since,
     list_recent_reactivation_outbound_messages,
+    upsert_proactive_account_state,
 )
 from app.llm import generate_completion, is_llm_configured
 from app.user_profiles import read_agent_context
@@ -48,13 +54,57 @@ HOT_TOPIC_KIND = REACTIVATION_TYPE_HOT_TOPIC
 # 让 LLM 至少能结合较久的兴趣线索（配合 memory）。仍受 context_messages 条数上限约束。
 _PROFILE_WINDOW_DAYS = 30
 
+# 账号级 hot_topic 候选储备缓存，挂在 proactive_account_state.metadata_json 的独立 key，
+# 与单一发送槽位 reactivation_candidate 互不冲突（见 store/candidates.py）。
+HOT_TOPIC_RESERVE_METADATA_KEY = "hot_topic_reserve"
+
+
+def _parse_pool_refresh_slots() -> List[str]:
+    raw = getattr(settings, "hot_topic_pool_refresh_slots", "10:00,17:00")
+    slots: List[str] = []
+    for part in str(raw or "").split(","):
+        text = part.strip()
+        try:
+            datetime.strptime(text, "%H:%M")
+        except ValueError:
+            continue
+        slots.append(text)
+    return slots or ["10:00", "17:00"]
+
+
+def _current_pool_refresh_slot_key(now: datetime) -> Optional[str]:
+    """返回 now 已跨过的最新档位 key（date_slotN）；今日所有档位都未到则 None。
+
+    只按"是否已过档口时间点"判断，不要求精确命中，天然支持补跑——服务在两个档口之间
+    重启后，第一次 tick 就能发现"今日该档未生成过"并补上。
+    """
+    slots = _parse_pool_refresh_slots()
+    current_index: Optional[int] = None
+    for index, slot in enumerate(slots):
+        hour, minute = (int(part) for part in slot.split(":", 1))
+        slot_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot_dt <= now:
+            current_index = index
+    if current_index is None:
+        return None
+    return f"{now.date().isoformat()}_slot{current_index}"
+
 
 def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
-    """全局召回：搜索近 24h 热点 → 抽主题 → 历史去重 → 入池。幂等（当日池已在即跳过）。"""
+    """全局召回：搜索近 24h 热点 → 抽主题 → 历史去重 → 入池。
+
+    绝对时钟点触发（`hot_topic_pool_refresh_slots`，默认 10:00/17:00），幂等门控按
+    "当日+档位" 而非"当日"——允许补跑，只要求该档今日未生成过。
+    """
     current = now or beijing_naive_now()
 
     if not bool(getattr(settings, "hot_topic_recall_enabled", False)):
         return _no_op(account_id="", reason="hot_topic_recall_disabled", now=current)
+
+    slot_key = _current_pool_refresh_slot_key(current)
+    if slot_key is None:
+        return _no_op(account_id="", reason="hot_topic_pool_refresh_not_due", now=current)
+
     if not is_llm_configured():
         return _no_op(account_id="", reason="llm_disabled", now=current)
 
@@ -66,17 +116,17 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
         return _no_op(account_id="", reason="hot_topic_no_data_source", now=current)
 
     today = current.date().isoformat()
-    pool_today = [
+    pool_slot = [
         item
         for item in active_global_pool(kind=HOT_TOPIC_KIND, now=current, limit=100)
-        if item.get("generated_date") == today
+        if item.get("generated_date") == today and (item.get("metadata") or {}).get("slot_key") == slot_key
     ]
-    if pool_today:
+    if pool_slot:
         return _no_op(
             account_id="",
-            reason="hot_topic_pool_already_generated_today",
+            reason="hot_topic_pool_already_generated_for_slot",
             now=current,
-            metadata={"existing_count": len(pool_today)},
+            metadata={"existing_count": len(pool_slot), "slot_key": slot_key},
         )
 
     # Step 1：优先从热榜抓取
@@ -157,13 +207,13 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
         return _no_op(account_id="", reason="hot_topic_no_themes", now=current)
 
     try:
-        lookback_days = int(getattr(settings, "hot_topic_history_dedupe_days", 3) or 3)
+        lookback_days = int(getattr(settings, "hot_topic_history_dedupe_days", 1) or 1)
     except (TypeError, ValueError):
-        lookback_days = 3
+        lookback_days = 1
     try:
-        ttl_hours = int(getattr(settings, "hot_topic_ttl_hours", 24) or 24)
+        ttl_hours = int(getattr(settings, "hot_topic_ttl_hours", 12) or 12)
     except (TypeError, ValueError):
-        ttl_hours = 24
+        ttl_hours = 12
 
     seen = recent_global_dedupe_keys(kind=HOT_TOPIC_KIND, now=current, lookback_days=lookback_days)
     inserted: List[Dict[str, Any]] = []
@@ -184,7 +234,7 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
             text=text[:120],
             now=current,
             ttl_hours=ttl_hours,
-            metadata={"source": "hot_topic_recall", "data_source": data_source},
+            metadata={"source": "hot_topic_recall", "data_source": data_source, "slot_key": slot_key},
         )
         inserted.append({"topic": topic, "text": text[:120]})
 
@@ -192,6 +242,7 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
         "action": "hot_topic_pool_refreshed",
         "account_id": "",
         "data_source": data_source,
+        "slot_key": slot_key,
         "inserted_count": len(inserted),
         "candidates": inserted,
         "evaluated_at": _format_decision_time(current),
@@ -226,21 +277,28 @@ def _build_hot_topic_rank_prompt(
     )
 
 
-def _personalize_hot_topic_text(
+def _personalize_hot_topic_batch(
     *,
     account: Dict[str, Any],
     soul: str,
     memory: str,
     history: List[Dict[str, Any]],
-    topic: str,
-    base_text: str,
+    items: List[Dict[str, Any]],
     now: datetime,
-) -> str:
-    """把池内通用 hook 按该账号的人格+记忆改写成个性化微信消息。失败/空则回退原文。"""
+) -> Dict[int, str]:
+    """一次 LLM 调用批量把池内通用 hook 改写成该账号的个性化微信消息。
+
+    返回 {global_candidate_id: 改写后文案}；调用失败或某条缺失改写结果时，
+    该 id 不出现在返回 dict 里，由调用方回退该条自己的 base_text。
+    """
     history_lines = [
         f"- {item['role']}: {_truncate_text(_clean_text(item.get('content')), 200)}"
         for item in history
         if _clean_text(item.get("content"))
+    ]
+    item_lines = [
+        f"- id={item['id']} topic={_clean_text(item.get('topic'))} base_text={_truncate_text(_clean_text(item.get('text')), 80)}"
+        for item in items
     ]
     user_prompt = "\n\n".join(
         [
@@ -249,8 +307,7 @@ def _personalize_hot_topic_text(
             "SOUL.md:\n" + _truncate_text(soul, 1000),
             "MEMORY.md:\n" + _truncate_text(memory, 1600),
             "recent_chat:\n" + ("\n".join(history_lines) if history_lines else "- none"),
-            f"hot_topic: {topic}",
-            f"base_text: {base_text}",
+            "items:\n" + ("\n".join(item_lines) if item_lines else "- none"),
         ]
     )
     messages = [
@@ -260,10 +317,77 @@ def _personalize_hot_topic_text(
     try:
         raw = generate_completion(messages)
         payload = _extract_json_object(raw)
-        text = _clean_text(payload.get("text")) if isinstance(payload, dict) else ""
-    except Exception:  # noqa: BLE001 — 个性化失败不阻断发送，回退通用 hook
-        return base_text
-    return text or base_text
+        rewritten = payload.get("items") if isinstance(payload, dict) else None
+    except Exception:  # noqa: BLE001 — 批量个性化失败不阻断发送，调用方按条回退 base_text
+        return {}
+    result: Dict[int, str] = {}
+    if not isinstance(rewritten, list):
+        return result
+    for entry in rewritten:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            entry_id = int(entry.get("id"))
+        except (TypeError, ValueError):
+            continue
+        text = _clean_text(entry.get("text"))
+        if text:
+            result[entry_id] = text
+    return result
+
+
+def _build_hot_topic_candidate(item: Dict[str, Any], *, current: datetime, cache_hit: bool) -> Dict[str, Any]:
+    """把储备缓存条目（无论新生成还是缓存命中）组装成 `type=hot_topic` 拉活候选。"""
+    text = _clean_text(item.get("text")) or _clean_text(item.get("base_text"))
+    base_text = _clean_text(item.get("base_text")) or text
+    return {
+        "id": "reactivation-hottopic-" + current.strftime("%Y%m%d%H%M%S") + f"{current.microsecond:06d}",
+        "type": REACTIVATION_TYPE_HOT_TOPIC,
+        "text": text[:120],
+        "topic": item.get("topic") or "hot_topic",
+        "reason": item.get("reason") or "hot_topic_llm_selected",
+        "confidence": item.get("score"),
+        "generated_at": _format_decision_time(current),
+        "metadata": {
+            "source": "hot_topic",
+            "global_candidate_id": item.get("id"),
+            "rank_score": item.get("score"),
+            "base_text": base_text,
+            "personalized": text != base_text,
+            "cache_hit": cache_hit,
+        },
+    }
+
+
+def _pick_reserve_candidate(
+    reserve: Optional[Dict[str, Any]],
+    *,
+    now_str: str,
+) -> Optional[Dict[str, Any]]:
+    """从账号级储备缓存里挑一条未过期、未用、rank_score 最高的候选；无则 None。"""
+    if not isinstance(reserve, dict):
+        return None
+    if _clean_text(reserve.get("expires_at")) <= now_str:
+        return None
+    items = reserve.get("candidates")
+    if not isinstance(items, list):
+        return None
+    unused = [item for item in items if isinstance(item, dict) and not item.get("used")]
+    if not unused:
+        return None
+    return max(unused, key=lambda item: float(item.get("score") or 0.0))
+
+
+def _mark_reserve_candidate_used(reserve: Dict[str, Any], *, candidate_id: Any) -> Dict[str, Any]:
+    next_reserve = dict(reserve)
+    next_candidates = []
+    for item in reserve.get("candidates") or []:
+        if isinstance(item, dict) and item.get("id") == candidate_id:
+            item = dict(item)
+            item["used"] = True
+        next_candidates.append(item)
+    next_reserve["candidates"] = next_candidates
+    return next_reserve
 
 
 def select_hot_topic_candidate(
@@ -271,8 +395,13 @@ def select_hot_topic_candidate(
     account_id: str,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """每账号：读全局池 → LLM 相关性打分 → 多样性打散 → top1 拉活候选。"""
+    """每账号：储备缓存命中直接取（0 次 LLM）；未命中才读全局池 → 打分 → 打散 → 批量个性化。"""
     current = now or beijing_naive_now()
+
+    # 与 refresh_hot_topic_pool 共用总开关：关闭时账号级选择也整体跳过（不读池、不调 LLM），
+    # 而不仅仅停止池刷新——避免关闭 recall 后 account_checks 仍消耗未过期(ttl 24h)的旧池数据。
+    if not bool(getattr(settings, "hot_topic_recall_enabled", False)):
+        return _no_op(account_id=account_id, reason="hot_topic_recall_disabled", now=current)
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -290,6 +419,23 @@ def select_hot_topic_candidate(
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
     if _select_route(account_id) is None:
         return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
+
+    now_str = _format_decision_time(current)
+    reserve = (state.get("metadata") or {}).get(HOT_TOPIC_RESERVE_METADATA_KEY)
+    picked = _pick_reserve_candidate(reserve, now_str=now_str)
+    if picked is not None:
+        updated_reserve = _mark_reserve_candidate_used(reserve, candidate_id=picked.get("id"))
+        upsert_proactive_account_state(
+            account_id=account_id,
+            metadata_patch={HOT_TOPIC_RESERVE_METADATA_KEY: updated_reserve},
+        )
+        candidate = _build_hot_topic_candidate(picked, current=current, cache_hit=True)
+        return {
+            "action": "hot_topic_candidate_created",
+            "account_id": account_id,
+            "reactivation_candidate": candidate,
+            "evaluated_at": now_str,
+        }
 
     try:
         pool_size = int(getattr(settings, "hot_topic_pool_size", 8) or 8)
@@ -399,40 +545,55 @@ def select_hot_topic_candidate(
     if not diversified:
         return _no_op(account_id=account_id, reason="hot_topic_no_candidate_after_diversify", now=current)
 
-    winner = diversified[0]
-    base_text = winner["text"]
-    if not base_text:
+    diversified = [item for item in diversified if item.get("text")]
+    if not diversified:
         return _no_op(account_id=account_id, reason="hot_topic_winner_text_empty", now=current)
-    # 个性化改写：把池内通用 hook 结合该账号人格(SOUL)+记忆+近聊重写成发给这个用户的口语消息。
-    # 失败/空回退通用 hook（不阻断发送）。仅对选中的 top1 做一次，不对整池。
-    personalized = _personalize_hot_topic_text(
+
+    # 批量个性化改写：把池内通用 hook 结合该账号人格(SOUL)+记忆+近聊，一次 LLM 调用重写
+    # 全部 top_k 条（而非只重写 top1），失败/缺项时逐条回退各自的通用 hook（不阻断发送）。
+    personalized_map = _personalize_hot_topic_batch(
         account=account,
         soul=agent_context.blocks.get("SOUL", ""),
         memory=memory,
         history=history,
-        topic=winner["topic"],
-        base_text=base_text,
+        items=diversified,
         now=current,
     )
-    candidate: Dict[str, Any] = {
-        "id": "reactivation-hottopic-" + current.strftime("%Y%m%d%H%M%S") + f"{current.microsecond:06d}",
-        "type": REACTIVATION_TYPE_HOT_TOPIC,
-        "text": personalized[:120],
-        "topic": winner["topic"] or "hot_topic",
-        "reason": winner.get("reason") or "hot_topic_llm_selected",
-        "confidence": winner["score"],
-        "generated_at": _format_decision_time(current),
-        "metadata": {
-            "source": "hot_topic",
-            "global_candidate_id": winner["id"],
-            "rank_score": winner["score"],
-            "base_text": base_text,
-            "personalized": personalized != base_text,
-        },
+    try:
+        reserve_ttl_hours = int(getattr(settings, "hot_topic_account_reserve_ttl_hours", 6) or 6)
+    except (TypeError, ValueError):
+        reserve_ttl_hours = 6
+    reserve_candidates: List[Dict[str, Any]] = []
+    for item in diversified:
+        base_text = item["text"]
+        personalized_text = personalized_map.get(item["id"]) or base_text
+        reserve_candidates.append(
+            {
+                "id": item["id"],
+                "topic": item["topic"],
+                "text": personalized_text[:120],
+                "base_text": base_text,
+                "score": item["score"],
+                "reason": item.get("reason") or "hot_topic_llm_selected",
+                "used": False,
+            }
+        )
+
+    winner = max(reserve_candidates, key=lambda item: item["score"])
+    new_reserve = {
+        "generated_at": now_str,
+        "expires_at": _format_decision_time(current + timedelta(hours=max(reserve_ttl_hours, 1))),
+        "candidates": reserve_candidates,
     }
+    committed_reserve = _mark_reserve_candidate_used(new_reserve, candidate_id=winner["id"])
+    upsert_proactive_account_state(
+        account_id=account_id,
+        metadata_patch={HOT_TOPIC_RESERVE_METADATA_KEY: committed_reserve},
+    )
+    candidate = _build_hot_topic_candidate(winner, current=current, cache_hit=False)
     return {
         "action": "hot_topic_candidate_created",
         "account_id": account_id,
         "reactivation_candidate": candidate,
-        "evaluated_at": _format_decision_time(current),
+        "evaluated_at": now_str,
     }
