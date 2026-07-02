@@ -169,13 +169,16 @@ class Settings(BaseSettings):
     hot_topic_recall_query: str = "过去24小时国内外热点新闻话题"  # 全局召回使用的搜索 query
     hot_topic_pool_size: int = 8                         # 单日全局池最多抽取的主题数
     hot_topic_select_top_k: int = 3                      # 每账号相关性排序后保留、参与多样性打散的候选数
-    hot_topic_history_dedupe_days: int = 3               # 全局历史去重回看天数（近 N 天已入池主题不再入池）
-    hot_topic_ttl_hours: int = 24                        # 全局候选池条目存活时长
+    hot_topic_history_dedupe_days: int = 1               # 全局历史去重回看天数（近 24h 已入池主题不再入池）
+    hot_topic_ttl_hours: int = 12                        # 全局候选池条目存活时长
     hot_topic_min_score: float = 0.3                     # 每账号 LLM 相关性分数下限，低于则不选
     hot_topic_profile_context_messages: int = 50         # 打分时喂入的近期聊天条数（近 30 天内）
-    # 全局热点池刷新在调度器内的最小间隔（秒）；进程重启后首 tick 立即刷一次，之后按此间隔。
-    # 函数内部仍有每日幂等门控兜底，此处控制调用频率（防止每 30s 无效调用）。
-    hot_topic_pool_refresh_interval_seconds: int = 3600
+    # 全局热点池刷新触发点（绝对时钟点，逗号分隔 HH:MM，北京时间）：每天到点各刷一次。
+    # 允许补跑——只要求"今日该档未生成过"，不卡窄时间窗，服务在档口之间重启也能补上。
+    hot_topic_pool_refresh_slots: str = "10:00,17:00"
+    # 账号级 hot_topic 候选储备（3 条已改写候选）的有效期；命中未过期未用条目时 0 次 LLM 调用，
+    # 全部过期/用完才重新生成（1 次排序 + 1 次批量改写，共 2 次 LLM 调用）。
+    hot_topic_account_reserve_ttl_hours: int = 6
     # 热榜数据来源（逗号分隔，按顺序抓取合并）；支持 toutiao / zhihu。
     # 非空时优先用热榜，全部失败才降级 web search（需 web_search_enabled=true）。
     hot_topic_sources: str = "toutiao,zhihu"

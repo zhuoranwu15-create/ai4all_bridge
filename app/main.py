@@ -472,7 +472,6 @@ async def startup_proactive_scheduler() -> None:
         batch_size=settings.proactive_scheduler_batch_size,
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
         planning_interval_seconds=settings.proactive_planning_interval_seconds,
-        hot_topic_pool_refresh_interval_seconds=settings.hot_topic_pool_refresh_interval_seconds,
         node_id=settings.node_id or None,
     )
     logger.info("proactive scheduler started: %s", scheduler.status())
