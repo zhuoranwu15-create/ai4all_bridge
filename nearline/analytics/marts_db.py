@@ -22,6 +22,15 @@ def init_marts() -> None:
     conn = connect_marts()
     try:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        _ensure_column(conn, "agg_daily_proactive", "failed_count",
+                       "INTEGER NOT NULL DEFAULT 0")
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """给已存在的表补列（CREATE TABLE IF NOT EXISTS 不会给旧表加新列）。幂等。"""
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
