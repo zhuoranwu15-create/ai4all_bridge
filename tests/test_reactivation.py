@@ -1002,3 +1002,107 @@ def test_dispatch_reactivation_clears_when_policy_cancels_at_final_slot(fresh_db
 
     assert result["action"] == "send_blocked"
     assert get_reactivation_candidate(account_id="acc-react-final") is None
+
+
+def test_dispatch_reactivation_reschedules_when_send_failed_downstream(fresh_db, monkeypatch):
+    """failed 分支：下游拒收/限速（ret:-2 落 status='failed'）时，不应把过期候选原样留在
+    过去的 slot 上每个 tick 重发（拉活日节流不数 failed，兜底闸拦不住 → 发送风暴），
+    而应改期到下一个 slot，降为每-slot 重试。"""
+    import app.proactive.delivery.outbound as outbound_mod
+    from app.db import list_outbound_messages
+    from app.openclaw_gateway import OpenClawRateLimited
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    _create_account("acc-react-failed")
+    _create_route("acc-react-failed")
+    ensure_account_state(account_id="acc-react-failed")
+    upsert_reactivation_candidate(
+        account_id="acc-react-failed",
+        candidate={
+            "id": "react-failed-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+        },
+    )
+    # 关掉重试与退避，避免真实 sleep 拖慢测试。
+    monkeypatch.setattr(outbound_mod.settings, "proactive_send_rate_limit_max_retries", 0, raising=False)
+    monkeypatch.setattr(outbound_mod.settings, "proactive_send_rate_limit_backoff_seconds", 0.0, raising=False)
+
+    now = datetime(2026, 6, 5, 12, 15)
+    with patch(
+        "app.proactive.delivery.outbound.send_weixin_text",
+        side_effect=OpenClawRateLimited("rate limited", ret=-2),
+    ):
+        result = dispatch_reactivation_candidate(
+            account_id="acc-react-failed",
+            now=now,
+            dry_run=False,
+            dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+        )
+
+    # 下游拒收 → 改期，而非 send_blocked 且候选卡死。
+    assert result["action"] == "delayed"
+    candidate = get_reactivation_candidate(account_id="acc-react-failed")
+    assert candidate is not None
+    new_scheduled = datetime.fromisoformat(candidate["scheduled_at"].replace(" ", "T"))
+    assert new_scheduled > now  # scheduled_at 前移到未来，不再停在过去
+    # 产生了一条 failed 出站行（ret:-2 限速），policy_reason 为空（非策略拦截）。
+    outbound = list_outbound_messages(account_id="acc-react-failed", limit=10)
+    assert outbound and outbound[0]["status"] == "failed"
+    assert outbound[0]["policy_reason"] is None
+    assert (outbound[0]["error"] or "").startswith("rate_limited")
+
+    # 同一 tick 再跑一次：scheduled_at 已在未来 → not_due，不再每 tick 空转重发。
+    second = dispatch_reactivation_candidate(
+        account_id="acc-react-failed",
+        now=now,
+        dry_run=False,
+        dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+    )
+    assert second["action"] == "not_due"
+    # 且没有再产生新的出站行（仍只有第一条 failed）。
+    assert len(list_outbound_messages(account_id="acc-react-failed", limit=10)) == 1
+
+
+def test_dispatch_reactivation_clears_when_send_failed_at_final_slot(fresh_db, monkeypatch):
+    """failed 分支：最后一个 slot 下游拒收、已无下一 slot 时，应清除候选（等下次 planning
+    重生成），而不是把过期候选永远留着每 tick 重发。"""
+    import app.proactive.delivery.outbound as outbound_mod
+    from app.openclaw_gateway import OpenClawRateLimited
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+
+    _create_account("acc-react-failed-final")
+    _create_route("acc-react-failed-final")
+    ensure_account_state(account_id="acc-react-failed-final")
+    upsert_reactivation_candidate(
+        account_id="acc-react-failed-final",
+        candidate={
+            "id": "react-failed-final-1",
+            "type": "topic_followup",
+            "text": "昨天那个相亲对象后来有再找你吗？",
+            "scheduled_slot": "slot_3",
+            "scheduled_at": "2026-06-05 21:05:00",
+        },
+    )
+    monkeypatch.setattr(outbound_mod.settings, "proactive_send_rate_limit_max_retries", 0, raising=False)
+    monkeypatch.setattr(outbound_mod.settings, "proactive_send_rate_limit_backoff_seconds", 0.0, raising=False)
+
+    with patch(
+        "app.proactive.delivery.outbound.send_weixin_text",
+        side_effect=OpenClawRateLimited("rate limited", ret=-2),
+    ):
+        result = dispatch_reactivation_candidate(
+            account_id="acc-react-failed-final",
+            now=datetime(2026, 6, 5, 21, 5),
+            dry_run=False,
+            dedupe_checker=lambda **kwargs: {"checked": True, "duplicate": False, "reason": "test"},
+        )
+
+    assert result["action"] == "send_blocked"
+    assert get_reactivation_candidate(account_id="acc-react-failed-final") is None
