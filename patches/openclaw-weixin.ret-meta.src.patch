@@ -1,0 +1,248 @@
+diff --git a/src/api/api.test.ts b/src/api/api.test.ts
+index a3e7048..cea6f19 100644
+--- a/src/api/api.test.ts
++++ b/src/api/api.test.ts
+@@ -178,11 +178,22 @@ describe("getUploadUrl", () => {
+ });
+ 
+ describe("sendMessage", () => {
+-  it("succeeds on ok response", async () => {
++  it("returns empty parsed response on accept (`{}` body)", async () => {
+     mockFetch.mockResolvedValueOnce({ ok: true, status: 200, text: () => Promise.resolve("") } as Response);
+     await expect(
+       sendMessage({ baseUrl: "https://api.example.com/", body: { msg: { to_user_id: "u" } } }),
+-    ).resolves.toBeUndefined();
++    ).resolves.toEqual({});
++  });
++
++  it("parses business-level ret from the response body", async () => {
++    mockFetch.mockResolvedValueOnce({
++      ok: true,
++      status: 200,
++      text: () => Promise.resolve('{"ret":-2}'),
++    } as Response);
++    await expect(
++      sendMessage({ baseUrl: "https://api.example.com/", body: { msg: { to_user_id: "u" } } }),
++    ).resolves.toEqual({ ret: -2 });
+   });
+ 
+   it("throws on non-ok response", async () => {
+diff --git a/src/api/api.ts b/src/api/api.ts
+index 789367c..3a18162 100644
+--- a/src/api/api.ts
++++ b/src/api/api.ts
+@@ -16,9 +16,11 @@ import type {
+   NotifyStopResp,
+   NotifyStartResp,
+   SendMessageReq,
++  SendMessageResp,
+   SendTypingReq,
+   GetConfigResp,
+ } from "./types.js";
++import { SESSION_EXPIRED_ERRCODE } from "./session-guard.js";
+ 
+ export type WeixinApiOptions = {
+   baseUrl: string;
+@@ -448,11 +450,57 @@ export async function getUploadUrl(
+   return resp;
+ }
+ 
+-/** Send a single message downstream. */
++/**
++ * Best-effort parse of the sendmessage response body.
++ *
++ * The body is `{}` on accept and `{"ret":-2}` on reject/rate-limit; a
++ * non-JSON body is not expected on HTTP 200 (HTTP errors already threw in
++ * `apiPostFetch`). Never throws — an unparseable body yields `{}` so the send
++ * path stays non-fatal, matching the pre-existing "HTTP ok = done" contract.
++ */
++function parseSendMessageResp(rawText: string): SendMessageResp {
++  const trimmed = (rawText ?? "").trim();
++  if (!trimmed) return {};
++  try {
++    const parsed = JSON.parse(trimmed);
++    return parsed && typeof parsed === "object" ? (parsed as SendMessageResp) : {};
++  } catch {
++    return {};
++  }
++}
++
++/**
++ * Classify a sendmessage outcome from its `ret`/`errcode` for logging.
++ *
++ * Grounded in observation (2026-07): `{}`/`ret==0` correlated with real
++ * delivery; `ret==-2` appeared on both a stale-context_token rejection (recipient
++ * did NOT receive) and on a large share of active sends — its exact semantics
++ * (pure rate-limit vs broader soft-reject) are NOT yet confirmed, hence the
++ * TENTATIVE label. Refine this table as `errmsg`/delivery data accumulate.
++ */
++function classifySendMessageResp(resp: SendMessageResp): string {
++  const ret = resp.ret;
++  if (resp.errcode === SESSION_EXPIRED_ERRCODE) return `session_expired(errcode=${SESSION_EXPIRED_ERRCODE})`;
++  if (ret === undefined || ret === 0) return "accepted";
++  if (ret === -2) return "ret_-2(TENTATIVE:rate_limit_or_reject)";
++  return `error(ret=${ret})`;
++}
++
++/**
++ * Send a single message downstream.
++ *
++ * The iLink `sendmessage` response carries a business-level `ret` that the HTTP
++ * status does not reflect (`{}` = accepted, `{"ret":-2}` = reject/rate-limit).
++ * Historically this body was discarded, so a downstream reject looked like a
++ * success. We now parse it, log the outcome at INFO (so sends are observable in
++ * the log file, default level INFO), and return the parsed response for callers
++ * that may act on it. Return value is additive — existing callers ignore it and
++ * behavior is unchanged (parse never throws; only HTTP errors still reject).
++ */
+ export async function sendMessage(
+   params: WeixinApiOptions & { body: SendMessageReq },
+-): Promise<void> {
+-  await apiPostFetch({
++): Promise<SendMessageResp> {
++  const rawText = await apiPostFetch({
+     baseUrl: params.baseUrl,
+     endpoint: "ilink/bot/sendmessage",
+     body: JSON.stringify({ ...params.body, base_info: buildBaseInfo() }),
+@@ -460,6 +508,14 @@ export async function sendMessage(
+     timeoutMs: params.timeoutMs ?? DEFAULT_API_TIMEOUT_MS,
+     label: "sendMessage",
+   });
++  const resp = parseSendMessageResp(rawText);
++  const to = params.body?.msg?.to_user_id ?? "";
++  logger.info(
++    `sendMessage outcome to=${to} classification=${classifySendMessageResp(resp)} ` +
++      `ret=${resp.ret ?? "none"} errcode=${resp.errcode ?? "none"} errmsg=${resp.errmsg ?? "none"} ` +
++      `raw=${redactBody(rawText, 500)}`,
++  );
++  return resp;
+ }
+ 
+ /** Fetch bot config (includes typing_ticket) for a given user. */
+diff --git a/src/api/types.ts b/src/api/types.ts
+index 3efa0aa..edb7e0b 100644
+--- a/src/api/types.ts
++++ b/src/api/types.ts
+@@ -207,8 +207,20 @@ export interface SendMessageReq {
+   msg?: WeixinMessage;
+ }
+ 
++/**
++ * SendMessage response.
++ *
++ * The proto historically documented no body, but the live iLink backend does
++ * return a business-level status here: `{}` on accept, `{"ret":-2}` on
++ * reject/rate-limit (observed 2026-07). HTTP status is 200 in both cases, so
++ * `ret`/`errcode`/`errmsg` are the only signal for whether the send was
++ * actually accepted downstream. Mirrors the other *Resp shapes.
++ */
+ export interface SendMessageResp {
+-  // empty
++  ret?: number;
++  /** Server error code (e.g. -14 = session timeout). Present when the send fails. */
++  errcode?: number;
++  errmsg?: string;
+ }
+ 
+ /** Typing status: 1 = typing (default), 2 = cancel typing. */
+diff --git a/src/channel.ts b/src/channel.ts
+index 42581d0..3e3ed92 100644
+--- a/src/channel.ts
++++ b/src/channel.ts
+@@ -115,7 +115,7 @@ async function sendWeixinOutbound(params: {
+   text: string;
+   accountId?: string | null;
+   contextToken?: string;
+-}): Promise<{ channel: string; messageId: string }> {
++}): Promise<{ channel: string; messageId: string; meta?: Record<string, unknown> }> {
+   const account = resolveWeixinAccount(params.cfg, params.accountId);
+   const aLog = logger.withAccount(account.accountId);
+   assertSessionActive(account.accountId);
+@@ -148,7 +148,11 @@ async function sendWeixinOutbound(params: {
+       contextToken: params.contextToken,
+     }});
+     emitWeixinMessageSent({ to: params.to, content: filteredText, success: true, accountId: account.accountId });
+-    return { channel: "openclaw-weixin", messageId: result.messageId };
++    // meta 携带 iLink 业务码（ret/errcode/errmsg），经核心 send 结果的 meta dock 透传给 ai4all，
++    // 用于识别"网关受理但被下游软拒"的假成功。clean accept 时 meta 为空、返回形状不变。
++    return result.meta
++      ? { channel: "openclaw-weixin", messageId: result.messageId, meta: result.meta }
++      : { channel: "openclaw-weixin", messageId: result.messageId };
+   } catch (err) {
+     emitWeixinMessageSent({ to: params.to, content: filteredText, success: false, error: String(err), accountId: account.accountId });
+     throw err;
+diff --git a/src/messaging/send.ts b/src/messaging/send.ts
+index 64e92c7..bd1c15a 100644
+--- a/src/messaging/send.ts
++++ b/src/messaging/send.ts
+@@ -4,7 +4,7 @@ import { sendMessage as sendMessageApi } from "../api/api.js";
+ import type { WeixinApiOptions } from "../api/api.js";
+ import { logger } from "../util/logger.js";
+ import { generateId } from "../util/random.js";
+-import type { MessageItem, SendMessageReq } from "../api/types.js";
++import type { MessageItem, SendMessageReq, SendMessageResp } from "../api/types.js";
+ import { MessageItemType, MessageState, MessageType } from "../api/types.js";
+ import type { UploadedFileInfo } from "../cdn/upload.js";
+ 
+@@ -54,14 +54,39 @@ function buildSendMessageReq(params: {
+   });
+ }
+ 
++/**
++ * Lift the iLink business-level fields (`ret`/`errcode`/`errmsg`) from a
++ * sendmessage response into a `meta` bag so they survive to outbound callers.
++ *
++ * HTTP status is 200 whether iLink accepts (`{}`) or rejects (`{"ret":-2}`), so
++ * these fields are the only signal for downstream acceptance. Core forwards this
++ * bag verbatim via the gateway send result's `meta` dock (OutboundDeliveryResult.meta),
++ * letting ai4all distinguish real acceptance from a soft reject. Returns
++ * undefined when the response carried no business signal (accept `{}`), so the
++ * normal success path adds no meta and its behavior is unchanged.
++ */
++function buildSendResultMeta(resp: SendMessageResp | undefined | null): Record<string, unknown> | undefined {
++  if (!resp) return undefined;
++  const meta: Record<string, unknown> = {};
++  if (resp.ret !== undefined) meta.ret = resp.ret;
++  if (resp.errcode !== undefined) meta.errcode = resp.errcode;
++  if (resp.errmsg !== undefined) meta.errmsg = resp.errmsg;
++  return Object.keys(meta).length ? meta : undefined;
++}
++
+ /**
+  * Send a plain text message downstream.
++ *
++ * Returns the client-generated messageId plus, when iLink signalled a
++ * business-level outcome, a `meta` bag carrying `ret`/`errcode`/`errmsg`. The
++ * meta field is additive and absent on a clean accept, so existing callers that
++ * only read `messageId` are unaffected.
+  */
+ export async function sendMessageWeixin(params: {
+   to: string;
+   text: string;
+   opts: WeixinApiOptions & { contextToken?: string };
+-}): Promise<{ messageId: string }> {
++}): Promise<{ messageId: string; meta?: Record<string, unknown> }> {
+   const { to, text, opts } = params;
+   if (!opts.contextToken) {
+     logger.warn(`sendMessageWeixin: contextToken missing for to=${to}, sending without context`);
+@@ -73,8 +98,9 @@ export async function sendMessageWeixin(params: {
+     payload: { text },
+     clientId,
+   });
++  let resp: SendMessageResp;
+   try {
+-    await sendMessageApi({
++    resp = await sendMessageApi({
+       baseUrl: opts.baseUrl,
+       token: opts.token,
+       timeoutMs: opts.timeoutMs,
+@@ -84,7 +110,8 @@ export async function sendMessageWeixin(params: {
+     logger.error(`sendMessageWeixin: failed to=${to} clientId=${clientId} err=${String(err)}`);
+     throw err;
+   }
+-  return { messageId: clientId };
++  const meta = buildSendResultMeta(resp);
++  return meta ? { messageId: clientId, meta } : { messageId: clientId };
+ }
+ 
+ /**

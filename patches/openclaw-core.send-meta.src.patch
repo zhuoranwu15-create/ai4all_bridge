@@ -1,0 +1,18 @@
+diff --git a/src/gateway/server-methods/send.ts b/src/gateway/server-methods/send.ts
+index 40aa46a650..4b0bb5488b 100644
+--- a/src/gateway/server-methods/send.ts
++++ b/src/gateway/server-methods/send.ts
+@@ -309,6 +309,13 @@ function buildGatewayDeliveryPayload(params: {
+   if ("pollId" in params.result) {
+     payload.pollId = params.result.pollId;
+   }
++  // Forward the channel-specific `meta` dock so callers can read delivery
++  // signals the core does not model (e.g. iLink's business-level `ret`/`errcode`
++  // that HTTP status hides). Channel-agnostic passthrough; absent for channels
++  // that set no meta, so existing consumers are unaffected.
++  if ("meta" in params.result) {
++    payload.meta = params.result.meta;
++  }
+   return payload;
+ }
+ 
