@@ -162,6 +162,63 @@ def test_send_weixin_text_success_with_messageid_not_treated_as_error(monkeypatc
     assert result["messageId"] == "m-ok"
 
 
+def test_send_weixin_text_raises_on_messageid_plus_ret_minus_2(monkeypatch):
+    """业务码优先：同时带 messageId 与 ret=-2 也判失败（治假成功）。
+
+    messageId 是本地 clientId、恒非空，不能当送达证据；旧逻辑"见 messageId 即成功"
+    会把被 iLink 软拒的消息误标为已发送。现在业务码优先，应抛 OpenClawRateLimited。
+    """
+    from app import openclaw_gateway
+    from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
+
+    class FalseSuccess:
+        returncode = 0
+        stdout = '{"messageId":"m-1","channel":"openclaw-weixin","ret":-2}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=FalseSuccess()):
+        with pytest.raises(OpenClawRateLimited) as exc_info:
+            send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+    assert exc_info.value.ret == -2
+
+
+def test_send_weixin_text_reads_ret_from_meta_dock(monkeypatch):
+    """WS/网关经 meta dock 透传的业务码也应被识别（openclaw-weixin 把 ret 塞在 meta）。"""
+    from app import openclaw_gateway
+    from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
+
+    class MetaReject:
+        returncode = 0
+        stdout = '{"runId":"r-1","messageId":"m-1","channel":"openclaw-weixin","meta":{"ret":-2,"errmsg":"rate limited"}}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=MetaReject()):
+        with pytest.raises(OpenClawRateLimited) as exc_info:
+            send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+    assert exc_info.value.ret == -2
+
+
+def test_send_weixin_text_success_with_meta_ret_zero(monkeypatch):
+    """meta 里 ret=0（clean accept 变体）不应误判为失败。"""
+    from app import openclaw_gateway
+    from app.openclaw_gateway import send_weixin_text
+
+    monkeypatch.setattr(openclaw_gateway.settings, "openclaw_gateway_ws_enabled", False)
+
+    class Ok:
+        returncode = 0
+        stdout = '{"messageId":"m-ok","channel":"openclaw-weixin","meta":{"ret":0}}'
+        stderr = ""
+
+    with patch("app.openclaw_gateway.subprocess.run", return_value=Ok()):
+        result = send_weixin_text(to_user_id="peer@im.wechat", text="hi", gateway_timeout_ms=1234)
+    assert result["messageId"] == "m-ok"
+
+
 def test_send_weixin_text_uses_ws_when_enabled(monkeypatch):
     from app import openclaw_gateway
 

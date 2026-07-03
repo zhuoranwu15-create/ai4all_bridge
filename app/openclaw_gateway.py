@@ -78,38 +78,51 @@ def _extract_send_result_error(result: Dict[str, Any]) -> Optional[Tuple[Optiona
     """从 send 返回体里抽取业务错误 ``(code, message)``；无错误返回 None。
 
     关键背景：``openclaw gateway call send`` 即使 CLI 退出码为 0，iLink 仍可能在
-    返回体里携带业务错误，最典型是限速 ``ret=-2 / errmsg=rate limited``。旧逻辑只读
-    ``messageId``、不看业务码，会把被限速的消息误标为已发送（静默丢消息）。
+    返回体里携带业务错误，最典型是限速 ``ret=-2 / errmsg=rate limited``。
 
-    判定原则（容错、零回归）：
-    - 拿到非空 ``messageId`` → 视为网关已受理，直接判成功（None）。
-    - 否则在已知 iLink/网关字段里找非零业务码或限速文案；命中才报错。
-    - 字段名按已知 iLink 形态做兼容匹配；若真实返回字段不同，则不命中、退回旧行为，
-      不会把正常成功误判为失败。生产抓到一次真实限速返回后应据此校正字段名。
+    业务码优先（2026-07 修正，对治"假成功"）：``messageId`` 是插件本地生成的 clientId、
+    恒为非空，**不能**作为送达证据；旧逻辑"见 messageId 即判成功"会把被下游软拒的消息
+    误标为已发送（静默丢消息）。现改为**先看业务码**：只要拿到非零 ``ret``/``errcode``
+    即判失败（即使同时带 messageId），无业务错误时才回落到成功。
+
+    业务码可能出现在两处，均兼容读取：
+    - 顶层（CLI ``gateway call send`` 直返的响应体）。
+    - ``meta``（WS/CLI 经网关 send RPC 的 ``meta`` dock 透传的 channel 专有字段，
+      openclaw-weixin 把 iLink 的 ret/errcode/errmsg 塞在这里）。
+    字段名按已知 iLink 形态做兼容匹配；均不命中则不报错，不会把正常成功误判为失败。
     """
     if not isinstance(result, dict):
         return None
-    # 成功信号优先：网关回了 messageId 即已受理。
-    if str(result.get("messageId") or "").strip():
-        return None
+
+    # 业务码/文案可能在顶层或 meta dock 里，两处都扫。
+    sources: list[Dict[str, Any]] = [result]
+    meta = result.get("meta")
+    if isinstance(meta, dict):
+        sources.append(meta)
 
     code: Optional[int] = None
-    for key in ("ret", "errcode", "code"):
-        value = result.get(key)
-        if isinstance(value, bool):  # bool 是 int 子类，需先排除
-            continue
-        if isinstance(value, int):
-            code = value
-            break
-        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
-            code = int(value.strip())
+    for src in sources:
+        for key in ("ret", "errcode", "code"):
+            value = src.get(key)
+            if isinstance(value, bool):  # bool 是 int 子类，需先排除
+                continue
+            if isinstance(value, int):
+                code = value
+                break
+            if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                code = int(value.strip())
+                break
+        if code is not None:
             break
 
     message = ""
-    for key in ("errmsg", "error", "message", "msg"):
-        value = result.get(key)
-        if isinstance(value, str) and value.strip():
-            message = value.strip()
+    for src in sources:
+        for key in ("errmsg", "error", "message", "msg"):
+            value = src.get(key)
+            if isinstance(value, str) and value.strip():
+                message = value.strip()
+                break
+        if message:
             break
 
     if code is not None and code != 0:
