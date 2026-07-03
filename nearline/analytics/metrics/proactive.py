@@ -44,11 +44,22 @@ def compute(target_date: str, facts_db_override: Optional[str] = None) -> Dict:
             (d,),
         ).fetchone()["c"]
 
-        # blocked：有 policy_reason 且非 sent，按 created_date 归属。
+        # blocked：有 policy_reason 且非 sent（策略主动拦截），按 created_date 归属。
         blocked = facts.execute(
             "SELECT COUNT(*) AS c "
             "FROM fct_proactive_message p JOIN dim_account a ON p.account_id = a.account_id "
             "WHERE p.created_date = ? AND p.status != 'sent' AND p.policy_reason IS NOT NULL "
+            "AND a.is_debug = 0",
+            (d,),
+        ).fetchone()["c"]
+
+        # failed：下游拒收/错误（status='failed' 且无 policy_reason，含 ret:-2 限速），
+        # 与 blocked（策略拦截）、total_sent（受理）三者互斥。失败行 sent_at 为空，按 created_date 归属。
+        # 2026-07 打通 iLink 业务码后，原本"假成功"的 ret:-2 会真实落 failed，这里让其可见。
+        failed = facts.execute(
+            "SELECT COUNT(*) AS c "
+            "FROM fct_proactive_message p JOIN dim_account a ON p.account_id = a.account_id "
+            "WHERE p.created_date = ? AND p.status = 'failed' AND p.policy_reason IS NULL "
             "AND a.is_debug = 0",
             (d,),
         ).fetchone()["c"]
@@ -79,11 +90,12 @@ def compute(target_date: str, facts_db_override: Optional[str] = None) -> Dict:
 
         marts.execute(
             "INSERT OR REPLACE INTO agg_daily_proactive"
-            "(date, total_sent, blocked_count, covered_accounts, replied_total, resolved_sent, "
-            " reply_rate_overall, reply_latency_p50_sec, reply_window_hours, by_category_json, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(date, total_sent, blocked_count, failed_count, covered_accounts, replied_total, "
+            " resolved_sent, reply_rate_overall, reply_latency_p50_sec, reply_window_hours, "
+            " by_category_json, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                d, total_sent, blocked, covered, replied_total, resolved_sent, reply_rate,
+                d, total_sent, blocked, failed, covered, replied_total, resolved_sent, reply_rate,
                 latency_p50, window_hours, json.dumps(by_cat, ensure_ascii=False),
                 datetime.now().isoformat(timespec="seconds"),
             ),
@@ -114,6 +126,7 @@ def compute(target_date: str, facts_db_override: Optional[str] = None) -> Dict:
             "date": d,
             "total_sent": total_sent,
             "blocked_count": blocked,
+            "failed_count": failed,
             "covered_accounts": covered,
             "resolved_sent": resolved_sent,
             "replied_total": replied_total,

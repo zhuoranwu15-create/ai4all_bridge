@@ -50,7 +50,8 @@ def _proactive_section(m: Dict) -> list:
     return [
         "## 主动消息",
         f"- 总发送：{m['total_sent']} 条（{cat_line}）",
-        f"- 覆盖账号：{m['covered_accounts']} | 策略拦截：{m['blocked_count']}",
+        f"- 覆盖账号：{m['covered_accounts']} | 策略拦截：{m['blocked_count']}"
+        f" | 发送失败：{m.get('failed_count', 0)}（下游拒收/限速，非策略拦截）",
         f"- 回复率（{win}h，已闭合分类别）：{reply_line}",
         f"- 整体回复率：{_pct(m['reply_rate_overall'])}"
         f"（{m['replied_total']}/{m['resolved_sent']}）| 首回 P50：{_num(m['reply_latency_p50_sec'])}s",
@@ -110,6 +111,7 @@ def render_feishu_summary(sections: Dict,
         f"| D1留存 {_retention_line(u)}",
         "【主动消息】"
         f"发送 {p['total_sent']} | 覆盖账号 {p['covered_accounts']} | 策略拦截 {p['blocked_count']} "
+        f"| 发送失败 {p.get('failed_count', 0)} "
         f"| 整体回复率 {_pct(p['reply_rate_overall'])}（{p['replied_total']}/{p['resolved_sent']}）",
         "【Dreaming】"
         f"运行 {d['runs_total']}（成功 {d['runs_succeeded']}/partial {d['runs_partial']}/失败 "

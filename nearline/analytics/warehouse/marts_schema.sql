@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS agg_daily_users (
 CREATE TABLE IF NOT EXISTS agg_daily_proactive (
     date                  TEXT PRIMARY KEY,            -- 北京自然日（按 sent_date）
     total_sent            INTEGER NOT NULL DEFAULT 0,
-    blocked_count         INTEGER NOT NULL DEFAULT 0,  -- 有 policy_reason 的拦截
+    blocked_count         INTEGER NOT NULL DEFAULT 0,  -- 有 policy_reason 的策略拦截
+    failed_count          INTEGER NOT NULL DEFAULT 0,  -- 下游拒收/错误（status='failed' 且无 policy_reason，含 ret:-2 限速）
     covered_accounts      INTEGER NOT NULL DEFAULT 0,  -- 当日收到 sent 的 distinct 账号
     replied_total         INTEGER NOT NULL DEFAULT 0,  -- 窗口已闭合 sent 中 replied 数
     resolved_sent         INTEGER NOT NULL DEFAULT 0,  -- 当日 sent 中窗口已闭合数（回复率分母）
