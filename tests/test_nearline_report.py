@@ -176,7 +176,7 @@ def _sections():
             "d1_retention_rate": 0.5,
         },
         "proactive": {
-            "total_sent": 19, "covered_accounts": 8, "blocked_count": 1,
+            "total_sent": 19, "covered_accounts": 8, "blocked_count": 1, "failed_count": 3,
             "reply_rate_overall": 0.5, "replied_total": 5, "resolved_sent": 10,
             "reply_latency_p50_sec": 1200, "by_category": {}, "reply_window_hours": 24,
         },
@@ -201,6 +201,7 @@ def test_feishu_summary_renders_core_numbers():
     assert "AI4ALL 每日运营报告 — 2026-06-15" in text
     assert "DAU 14" in text
     assert "发送 19" in text
+    assert "发送失败 3" in text
     assert "运行 8" in text
     assert "complete 5" in text
     # 飞书纯文本：不应混入 Markdown 标题井号段
