@@ -276,11 +276,17 @@ def dispatch_reactivation_candidate(
         action = "sent"
     elif outbound_status in {"pending", "sending"}:
         action = "queued"
-    elif outbound_status == "cancelled":
-        # 被 policy/moderation 拦截（cancelled）。此时 scheduled_at 已是过去，若原样保留候选，
-        # 下一次扫描仍判定为 due 而每个 tick 重复跑一遍 policy（候选空转、卡到次日）。
-        # 因此把候选改期到下一个发送 slot；已无可用 slot 时清除，等下次 planning 重新生成。
-        # （把每-tick 重试降为每-slot 重试，不改 policy/avoidance 口径——见 bug B 修复。）
+    elif outbound_status in {"cancelled", "failed"}:
+        # cancelled=策略/moderation 拦截；failed=下游拒收（含 ret:-2 限速）。两者此时
+        # scheduled_at 都已是过去：若原样保留候选，下一次扫描仍判定为 due，每个 tick 重复
+        # 发送。failed 尤甚——拉活日节流只数 pending/sending/sent（见
+        # count_reactivation_outbound_for_quota_date），失败行拦不住兜底闸，持续限速时会
+        # 每 tick 真发一次形成发送风暴。因此统一把候选改期到下一个发送 slot；已无可用 slot
+        # 时清除，等下次 planning 重新生成。（把每-tick 重试降为每-slot 重试，不改
+        # policy/avoidance 口径——见 bug B/failed 分支修复。）
+        reschedule_reason = (
+            "send_blocked_policy" if outbound_status == "cancelled" else "send_failed_downstream"
+        )
         next_slot = _next_slot_after(candidate, now=current, allowed_windows=allowed_windows)
         if next_slot:
             state = reschedule_reactivation_candidate(
@@ -288,13 +294,13 @@ def dispatch_reactivation_candidate(
                 candidate=candidate,
                 scheduled_slot=next_slot["scheduled_slot"],
                 scheduled_at=next_slot["scheduled_at"],
-                reason="send_blocked_policy",
+                reason=reschedule_reason,
                 now=current,
             )
             return {
                 "action": "delayed",
                 "account_id": account_id,
-                "reason": outbound.get("error") or "send_blocked_policy",
+                "reason": outbound.get("error") or reschedule_reason,
                 "outbound_message": outbound,
                 "reactivation_candidate": get_reactivation_candidate_from_metadata(
                     state.get("metadata") or {}
@@ -303,13 +309,13 @@ def dispatch_reactivation_candidate(
             }
         clear_reactivation_candidate(
             account_id=account_id,
-            reason="send_blocked_policy_final_slot",
+            reason=f"{reschedule_reason}_final_slot",
             now=current,
         )
         return {
             "action": "send_blocked",
             "account_id": account_id,
-            "reason": outbound.get("error") or "send_blocked_policy",
+            "reason": outbound.get("error") or reschedule_reason,
             "outbound_message": outbound,
             "reactivation_candidate": candidate,
             "evaluated_at": format_reactivation_time(current),
