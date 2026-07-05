@@ -675,6 +675,49 @@ def test_admin_get_meta_relationship_view_reflects_db(client, fresh_db):
     assert "共同成长：有苗头" in view
 
 
+def test_admin_get_meta_mission_null_when_unassigned(client, fresh_db):
+    """未分配使命：mission 字段为 None（与 meta 为 None 时的表达一致）。"""
+    _create_account("acc-admin-no-mission")
+
+    res = client.get("/admin/accounts/acc-admin-no-mission/meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    assert res.json()["mission"] is None
+
+
+def test_admin_get_meta_mission_reflects_assignment_and_progress(client, fresh_db):
+    """已分配使命：mission 字段包含 agent_mission_and_orchestration_design.md §7 定义的信息。"""
+    from app.db import assign_mission, record_mission_moment
+
+    _create_account("acc-admin-mission")
+    assign_mission(account_id="acc-admin-mission", mission_id="mission_002")
+    record_mission_moment(account_id="acc-admin-mission", mission_id="mission_002", content="地铁上的一次相视一笑")
+
+    res = client.get("/admin/accounts/acc-admin-mission/meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    mission = res.json()["mission"]
+    assert mission["mission_id"] == "mission_002"
+    assert mission["display_name"] == "十刻"
+    assert mission["progress"] == 1
+    assert mission["target_count"] == 10
+    assert mission["progress_label"] == "1/10"
+    assert mission["recent_moments"] == ["地铁上的一次相视一笑"]
+
+
+def test_admin_get_meta_mission_none_for_unresolved_mission_id(client, fresh_db):
+    """account_mission 引用了未注册的 mission_id（脏数据/模板下线）：mission 字段降级为 None，不 500。"""
+    from app.db import assign_mission
+
+    _create_account("acc-admin-unknown-mission")
+    assign_mission(account_id="acc-admin-unknown-mission", mission_id="mission_999")
+
+    res = client.get("/admin/accounts/acc-admin-unknown-mission/meta", headers=ADMIN_HEADERS)
+
+    assert res.status_code == 200
+    assert res.json()["mission"] is None
+
+
 def test_admin_list_user_meta_returns_account_rows(client, fresh_db):
     from app.db import upsert_account_user_meta
 

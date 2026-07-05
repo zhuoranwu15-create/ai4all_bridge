@@ -164,7 +164,6 @@ def test_memory_write_receives_image_modality(monkeypatch, fresh_db):
     cap = _setup(monkeypatch, fresh_db)
     write_spy = MagicMock(return_value=None)
     monkeypatch.setattr(turn_service, "write_memory", write_spy)
-    monkeypatch.setattr(turn_service, "extract_commitment_from_turn", MagicMock())
     loop = MagicMock()
     turn_service.handle_openclaw_turn(
         OpenClawTurnRequest(**_image_payload("img-mem", text="hi")),

@@ -39,6 +39,7 @@ __all__ = [
     'create_phone_verification',
     'create_platform_user_session',
     'get_account',
+    'get_account_id_for_session_key',
     'get_account_onboarding_state',
     'get_daily_usage',
     'get_duplicate_reply',
@@ -848,6 +849,24 @@ def get_session(*, session_id: int) -> Optional[Dict[str, Any]]:
             (session_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_account_id_for_session_key(*, session_key: str) -> Optional[str]:
+    """按 session_key 反查已存在的 account_id（不校验 binding）。
+
+    仅供 openclaw_inbound_require_binding=False 的本地/测试兜底路径使用：
+    该开关关闭时，无 completed binding 的入站会直接把 session_key 当新
+    account_id，若此前已有账号（如 debug 建号）用同一 session_key 落过
+    session，会导致每次兜底都新建一个不同的影子账号。这里让兜底先复用
+    已存在的账号，只有真的从未出现过这个 session_key 时才新建。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT account_id FROM sessions WHERE session_key = ? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (session_key,),
+        ).fetchone()
+    return str(row["account_id"]) if row else None
 
 
 def list_sessions_for_account(*, account_id: str, limit: int = 50) -> List[Dict[str, Any]]:

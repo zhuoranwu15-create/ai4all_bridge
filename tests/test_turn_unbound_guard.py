@@ -73,3 +73,37 @@ def test_unbound_inbound_falls_back_when_guard_disabled(client, fresh_db):
     assert res.json()["status"] != "ignored"
     # 兜底创建的账号 id == session_key。
     assert get_account(account_id=session_key) is not None
+
+
+def test_unbound_inbound_reuses_existing_account_for_same_session_key(client, fresh_db):
+    """开关关闭时，若该 session_key 此前已落过账号（如 debug 建号未走
+    binding），兜底应复用该账号，而不是把 session_key 当新账号建一个
+    影子账号（此前 bug：debug 账号的 onboarding 状态永远停在 pending，
+    真实对话全落在影子账号上）。"""
+    from app.db import get_account, get_or_create_session
+
+    fresh_db.openclaw_inbound_require_binding = False
+    account_id = "debug-preexisting"
+    session_key = f"openclaw-weixin:{account_id}:debug-sender-{account_id}"
+
+    get_or_create_session(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id=f"debug-sender-{account_id}",
+        sender_name=None,
+        chat_id=f"debug-sender-{account_id}",
+        session_key=session_key,
+    )
+
+    with patch("app.turn_service.node_gateway.node_send_text", return_value={"messageId": "m1"}):
+        res = client.post(
+            "/openclaw/turn",
+            json=_unbound_payload(session_key),
+            headers=BRIDGE_HEADERS,
+        )
+
+    assert res.status_code == 200
+    assert res.json()["status"] != "ignored"
+    # 复用预先存在的账号，而不是新建一个以 session_key 为 id 的影子账号。
+    assert get_account(account_id=account_id) is not None
+    assert get_account(account_id=session_key) is None
