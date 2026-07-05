@@ -17,14 +17,37 @@
 | 部署分支 | `custom-multitenant` | 多租户改造分支 |
 | **部署 tag（锁版本）** | **`v0.3.6-ai4all-multitenant`** | 已推到 origin；两台节点都 checkout 这个 tag |
 | Gateway 监听 | `127.0.0.1:8420` | 只绑本地，AI4ALL 同机调用 |
-| 每台节点数据目录 | `/var/lib/ai4all/tdai`（建议） | **两节点各自独立，禁止共享** |
-| 鉴权 key | 生产用**强随机 secret**，两边完全一致 | 开发机验证时用的是弱 key `tdai1234`，**生产务必替换** |
-| Node | ≥ 22.16（开发机实测 v22.22 OK） | `package.json engines.node>=22.16.0` |
-| 包管理 | **`npm install`**（不是 `npm ci`） | `package-lock.json` 被 gitignore，新 clone 无 lockfile，`npm ci` 会失败 |
+| 每台节点数据目录 | 跟随**运行 gateway 的用户**：用户级托管（无 sudo，如 aliyun2）用 `~/.local/share/ai4all/tdai`；系统级托管（sudo，如 aliyun1 central）可用 `/var/lib/ai4all/tdai`（须 `chown` 给服务用户） | **两节点各自独立，禁止共享**。`/var/lib` 默认 root 拥有、普通用户不可写，纯 node 机不要照抄 |
+| 鉴权 key | 生产用**强随机 secret**，两边完全一致 | 开发机验证时用的是弱 key `tdai1234`，**生产务必替换**。aliyun2 当前临时用 `aliyun2025`（待统一换强 key 时两侧同步） |
+| Node | ≥ 22.16（aliyun2 实测系统 `node v24.16` OK；开发机 v22.22 OK） | `package.json engines.node>=22.16.0` |
+| 包管理 | **`npm install`**（不是 `npm ci`） | registry 走 `npmmirror`（国内快）。注：`v0.3.6` tag 实际含 `package-lock.json`，但仍用 `npm install` 即可（`@node-rs/jieba` 走预编译二进制，已实测自动拉取） |
 
 > 开发机参考路径（核对/排查用）：TDAI = `/Users/suchong/workspace/TencentDB-Agent-Memory`，AI4ALL = `/Users/suchong/workspace/ai4all/weixin_bot`。生产 AI4ALL 后端是 PostgreSQL（`DATABASE_URL` 非空）。
 
 **两边 key 必须一致**：TDAI 侧 `.env` 的 `TDAI_GATEWAY_API_KEY` == AI4ALL 侧 `.env` 的 `TDAI_GATEWAY_API_KEY`。不一致 → gateway 返回 401 → recall/capture 全部静默降级。
+
+---
+
+## 生产部署进度（按节点）
+
+> 实测记录，aliyun1 照此对照即可。
+
+| 节点 | TDAI 侧（阶段1） | AI4ALL 侧（阶段2） |
+|---|---|---|
+| **aliyun2**（node 角色，用户级托管） | ✅ **已完成 2026-06-30**：fork@`v0.3.6-ai4all-multitenant`(`1610504`) at `/home/jack/workspace/TencentDB-Agent-Memory`；`npm install` OK；`.env`(DATA_DIR=`~/.local/share/ai4all/tdai`，key=`aliyun2025`)；`systemctl --user tdai-gateway.service`(enabled, Linger=yes)；/health 四项达标、401 负向、官方 smoke ✅ PASS | ✅ **已完成 2026-06-30**：`TDAI_ENABLED=true` + 同 key；recall allowlist=`aid_956326343,aid_806382741`(本机有 956326343)；capture 全量。组织化 E2E 已验证：真实多轮 capture/recall 均 200、注入真实 persona+scene、warm 165–276ms |
+| **aliyun1**（central,node，**实测用户级托管**） | ✅ **已完成 2026-06-30**：同 fork/tag at `/home/jack/workspace/TencentDB-Agent-Memory`；`npm install` OK(postinstall 的 OpenClaw `[FAIL]` 属预期无害，已 `\|\| true` 吞掉)；`.env`(DATA_DIR=`~/.local/share/ai4all/tdai`，**强随机 key 48hex**，非弱 key)；`systemctl --user tdai-gateway.service`(enabled, Linger=yes，**单元无代理行=直连**)；/health 四项达标、401 负向、正向 200、官方 smoke ✅ PASS | ✅ **已完成 2026-06-30**：先 `git ff` 到 main(补 3 个 TDAI 提交，FF 前缺 `tdai_client.py`)→`test_tdai_client` 7 passed→`TDAI_ENABLED=true` + 同 key→`systemctl --user restart backend`(干净恢复、/health ok)。⚠️ **recall 在本机暂为「暗」**：allowlist 两账号都不在 aliyun1(956326343 在 aliyun2、806382741 仅 dev SQLite)，故 recall 不触发；capture 全量(61 账号)。组织化 recall 验证待挑一个真实 aliyun1 账号入名单(改真实用户回复行为，需决策) |
+
+**两节点相对本手册的偏差（实测）：**
+- **进程托管**：两机**都是 `systemctl --user`**（用户级，无 sudo），非手册默认的系统级 systemd。aliyun1 经本次实测确认为用户级，**与 `deployment_diff.md` S7「sudo 系统级」的说法不符——以实测为准**（memory `llm-timeout-and-aliyun1-svc` 同此）。gateway 单元随之放 `~/.config/systemd/user/`，并 `loginctl ... Linger=yes`。
+- **数据目录**：两机 `/var/lib` 均不可写、无免密 sudo → 都用 `~/.local/share/ai4all/tdai`。
+- **密钥来源**：DeepSeek key = AI4ALL `.env` 的 `LLM_API_KEY`（base=`api.deepseek.com`）；DashScope key = AI4ALL `.env` 的 `DASHSCOPE_API_KEY`。直接 shell 内同步，不另找。注意 TDAI 侧 `TDAI_LLM_MODEL` 固定 `deepseek-chat`，不跟随 AI4ALL 的 `LLM_MODEL`（aliyun1 是 `deepseek-v4-pro`）。
+- **出网（两机相反，务必实测）**：
+  - **aliyun2**：DeepSeek 直连不通 → gateway 单元带 `HTTP(S)_PROXY=http://127.0.0.1:7890` + `NO_PROXY=…,.aliyuncs.com`（DeepSeek 走 clash、DashScope 直连）。
+  - **aliyun1**：DeepSeek+DashScope **都能直连且更快**（实测 DeepSeek 直连 0.30s vs 代理 1.55s）→ gateway 单元**不放任何代理行**，systemd user 环境也无 proxy，直连。
+  - 结论：部署前用 `curl --noproxy '*'` vs `-x http://127.0.0.1:7890` 实测两个 endpoint 再定单元是否带代理。
+- **鉴权 key**：aliyun2 临时弱 key `aliyun2025`；**aliyun1 已用 `openssl rand -hex 24` 强随机 key**（48 hex，仅本机 localhost，TDAI↔AI4ALL 两侧一致）。key 为每节点独立，无需跨机一致。
+- **embedding 配置**：仓库自带 `tdai-gateway.yaml` 已是 DashScope `text-embedding-v3` + `recall.strategy: hybrid`，**无需新建/改动**，只要 `.env` 提供 `DASHSCOPE_API_KEY`。
+- **代码升级（aliyun1 特有）**：aliyun1 backend 代码 FF 前停在 PR#5、**不含 TDAI 接入**（`app/tdai_client.py` 缺失）。Phase 2 前必须先 `git fetch && git merge --ff-only origin/main` 补齐 3 个 TDAI 提交，并 `pytest tests/test_tdai_client.py` 验证后再重启。aliyun2 当时已在含 TDAI 的代码上，无此步。
 
 ---
 
@@ -73,14 +96,15 @@ git describe --tags          # 应输出 v0.3.6-ai4all-multitenant，确认版�
 
 ```env
 TDAI_MULTI_TENANT=true
-TDAI_DATA_DIR=/var/lib/ai4all/tdai          # 每台机器独立目录
+TDAI_DATA_DIR=~/.local/share/ai4all/tdai     # 用户级节点用户可写路径（aliyun2 实采）；系统级托管可用 /var/lib/ai4all/tdai（chown 给服务用户）
 TDAI_GATEWAY_HOST=127.0.0.1                  # 只绑本地，不对外
 TDAI_GATEWAY_PORT=8420
-TDAI_GATEWAY_API_KEY=<生产强随机 secret>      # 必须非空；与业务侧完全一致；开发机用的是 tdai1234，生产务必换强 key
+TDAI_GATEWAY_API_KEY=<生产强随机 secret>      # 必须非空；与业务侧完全一致；开发机用的是 tdai1234，生产务必换强 key（aliyun2 当前临时 aliyun2025）
+# 以下两个 key 直接同步自 AI4ALL .env：LLM_API_KEY（其 base=api.deepseek.com 即 DeepSeek）、DASHSCOPE_API_KEY
 TDAI_LLM_BASE_URL=https://api.deepseek.com/v1
-TDAI_LLM_API_KEY=<deepseek-key>
+TDAI_LLM_API_KEY=<= AI4ALL .env 的 LLM_API_KEY>
 TDAI_LLM_MODEL=deepseek-chat                  # 或 deepseek-v4-flash + TDAI_LLM_DISABLE_THINKING=deepseek-v4
-DASHSCOPE_API_KEY=<dashscope-key>
+DASHSCOPE_API_KEY=<= AI4ALL .env 的 DASHSCOPE_API_KEY>
 
 # 容量参数（单台 ~1000 DAU、日均 10 条；论证见 preflight §2.2）
 TDAI_MAX_CONCURRENT_EXTRACTIONS=4
@@ -106,7 +130,8 @@ cd /path/to/TencentDB-Agent-Memory   # 已 checkout v0.3.6-ai4all-multitenant
 #    @node-rs/jieba 是原生模块，必须在目标机（Linux x64）本地安装，不能从 macOS 拷 node_modules。
 npm install
 
-# 2. 放置 .env（§1.3）和 tdai-gateway.yaml（§1.4）到仓库根目录
+# 2. 放置 .env（§1.3）到仓库根目录并 chmod 600（含密钥）。
+#    tdai-gateway.yaml 仓库已自带且配置正确（DashScope text-embedding-v3 + hybrid），无需新建/改动。
 
 # 3. 启动
 node --env-file=.env --import tsx src/gateway/server.ts
@@ -115,6 +140,13 @@ node --env-file=.env --import tsx src/gateway/server.ts
 systemd 服务建议：`Restart=always`、`WorkingDirectory=/path/to/TencentDB-Agent-Memory`、
 `ExecStart=/usr/bin/node --env-file=.env --import tsx src/gateway/server.ts`；
 业务侧 AI4ALL 服务设 `After=tdai-gateway.service`（启动顺序：先 gateway 后 app）。
+
+**用户级托管（纯 node，如 aliyun2 — 实采）**：单元放 `~/.config/systemd/user/tdai-gateway.service`，
+`WantedBy=default.target`；启用 `systemctl --user enable --now tdai-gateway.service`；
+确认 `loginctl show-user <user> -p Linger` 为 `Linger=yes`（否则登出即停）。
+单元内按本机代理策略加 `Environment=HTTP_PROXY=…/HTTPS_PROXY=…/NO_PROXY=…,.aliyuncs.com`
+（DeepSeek 走代理、DashScope 直连）。**若某机为系统级托管**（走 `sudo systemctl`），
+DATA_DIR 可用 `/var/lib/ai4all/tdai` 并 `chown` 给服务用户。aliyun1 走哪种以**实测其 backend 托管层级**为准（见 §生产部署进度 的偏差说明）。
 
 ### 1.6 启动后健康检查 + smoke（必须 PASS 才放行业务）
 
@@ -144,7 +176,7 @@ TDAI_GATEWAY_URL=http://127.0.0.1:8420            # 同机调用
 TDAI_GATEWAY_API_KEY=<与 TDAI 侧完全一致>          # 开发机为 tdai1234；生产换强 key
 TDAI_RECALL_ENABLED=true
 TDAI_CAPTURE_ENABLED=true
-TDAI_RECALL_ACCOUNT_ALLOWLIST=<灰度账号运行时主键，逗号分隔>   # 见 §2.3；空=recall 对所有账号关闭
+TDAI_RECALL_ACCOUNT_ALLOWLIST=aid_956326343,aid_806382741   # 灰度账号运行时主键，逗号分隔；见 §2.3；空=recall 对所有账号关闭
 TDAI_RECALL_TIMEOUT_SECONDS=0.5                   # 热路径同步超时；权衡见 §6
 TDAI_CAPTURE_TIMEOUT_SECONDS=2.0
 TDAI_RECALL_MAX_CHARS=2500
