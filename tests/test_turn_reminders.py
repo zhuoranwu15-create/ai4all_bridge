@@ -170,7 +170,6 @@ def test_tool_turn_final_reply_is_sent_out_of_band(client, fresh_db):
         return "搜索后的最终答案", None
 
     with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate), \
-        patch("app.turn_service._make_tool_thinking_sender", return_value=lambda _names: None), \
         patch("app.turn_service.node_gateway.node_send_text", return_value={"messageId": "gw-final"}) as mock_send:
         resp = client.post(
             "/openclaw/turn",
