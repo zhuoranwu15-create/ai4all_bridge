@@ -175,6 +175,44 @@ def get_reminder_tools() -> list:
     ]
 
 
+def get_commitment_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_commitment",
+                "description": (
+                    "记录一件值得你未来主动关心、跟进的事——用户提到了但没有明确要求"
+                    "\"提醒我\"的场景（比如提到这周要面试、在准备考试、身体不舒服要复查）。"
+                    "不要用于用户已经明确要求提醒的场景（那种情况用 create_reminder，"
+                    "不要两个都调）。不要用于日常寒暄、情绪陪伴、泛泛建议、没有具体时间"
+                    "线索的话题；不要编造用户没有表达过的目标、事实或时间；不适用于医疗/"
+                    "法律/金融等高风险建议。due_at 必须是未来具体时间，"
+                    "格式 YYYY-MM-DD HH:MM:SS。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "未来主动发给用户的一条自然微信消息，最多 80 个中文字符",
+                        },
+                        "due_at": {
+                            "type": "string",
+                            "description": "跟进时间，格式 YYYY-MM-DD HH:MM:SS，必须是未来时间",
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "简短记录原因，可选",
+                        },
+                    },
+                    "required": ["text", "due_at"],
+                },
+            },
+        }
+    ]
+
+
 def get_web_search_tools() -> list:
     return [
         {
@@ -439,6 +477,50 @@ def get_proactive_message_settings_tools() -> list:
                         },
                     },
                     "required": [],
+                },
+            },
+        },
+    ]
+
+
+def get_mission_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "mission_status",
+                "description": (
+                    "查询你和这个用户当前正在推进的共同使命：使命内容、进度、记录门槛、"
+                    "探寻的命题，以及最近记录的几个瞬间。"
+                    "用于确认进度、避免记录相似的瞬间、或想在对话中提及使命时调用；"
+                    "不产生任何副作用，可随时调用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "record_mission_moment",
+                "description": (
+                    "当你判断当下这一刻真正配得上被记进你和用户共同的使命时调用——"
+                    "这是郑重的动作，不要轻易触发，只在真正符合门槛"
+                    "（见 mission_status 返回的 bar）时使用。"
+                    "记录后不可撤销或修改，调用前建议先用 mission_status 确认还有名额。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "这个瞬间的简短描述，第一人称视角，20-80 字左右",
+                        },
+                    },
+                    "required": ["content"],
                 },
             },
         },
