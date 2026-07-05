@@ -1,8 +1,6 @@
 import asyncio
 import logging
-import random
 import re
-import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -85,66 +83,6 @@ logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
 _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
-
-_TOOL_THINKING_MSGS_SEARCH = [
-    "稍等，我查一下~",
-    "我去找找，马上回来~",
-    "让我搜索一下，你别着急~",
-]
-_TOOL_THINKING_MSGS_DEFAULT = [
-    "稍等，我想想~",
-    "让我想一想，你别急~",
-    "嗯，我考虑一下~",
-]
-
-
-def _make_tool_thinking_sender(
-    *,
-    identity,
-    account_id: str,
-    openclaw_session_key: str,
-) -> Optional[Any]:
-    """返回一个 fire-and-forget 闭包：当 LLM 首次触发工具调用时，先发一条"思考中"消息给用户。
-
-    best-effort。统一经 node_gateway.node_send_text 按账号归属节点发送：本机账号直调 openclaw，
-    远程账号 HTTP push 到归属节点即时发（不再因「非本机」静默跳过，local/remote 行为一致）。
-    远程不可达等异常静默丢弃（暂态提示可丢，不进队列、不落库、不进审计/计费）。
-    """
-    to_user_id = (identity.chat_id or identity.sender_id or "").strip()
-    if not to_user_id:
-        return None
-
-    def _send(tool_names: List[str]) -> None:
-        is_search = any("search" in (n or "").lower() for n in tool_names)
-        pool = _TOOL_THINKING_MSGS_SEARCH if is_search else _TOOL_THINKING_MSGS_DEFAULT
-        msg = random.choice(pool)
-        # 计时锚点:回调触发(=工具检测)时刻,用于和 tool_thinking_sent 的 elapsed_ms 对比拆解延迟。
-        logger.info("tool_thinking_dispatch account=%s tools=%s", account_id, tool_names)
-        _dispatch_at = time.monotonic()
-
-        def _do_send() -> None:
-            # 纯 UX 暂态提示：不落 messages 表，不进审计/计费链路，不出现在 LLM 对话历史中。
-            try:
-                node_gateway.node_send_text(
-                    # 归属解析与 enqueue 一致:账号归属 > default_node_id;空 → 本机兜底。
-                    node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
-                    to_user_id=to_user_id,
-                    text=msg,
-                    gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
-                    account_id=identity.channel_account_id,
-                    session_key=openclaw_session_key,
-                    channel=identity.channel,
-                )
-                logger.info(
-                    "tool_thinking_sent account=%s tools=%s msg=%r elapsed_ms=%d",
-                    account_id, tool_names, msg, int((time.monotonic() - _dispatch_at) * 1000),
-                )
-            except Exception as _err:
-                logger.warning("tool_thinking send failed account=%s error=%s", account_id, _err)
-
-        threading.Thread(target=_do_send, daemon=True).start()
-
-    return _send
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -1429,13 +1367,8 @@ def _resolve_turn_reply(
                 if onboarding_state == ONBOARDING_PENDING:
                     reply = _ensure_pending_onboarding_question(reply)
             else:
-                tool_thinking_sender = _make_tool_thinking_sender(
-                    identity=identity,
-                    account_id=account_id,
-                    openclaw_session_key=openclaw_session_key,
-                )
-
                 def _on_tool_detected(tool_names: List[str]) -> None:
+                    # 记录本轮实际触发的工具名（进 debug_metadata + 回传 tool_names）。
                     cleaned = [
                         str(name).strip()
                         for name in (tool_names or [])
@@ -1443,8 +1376,6 @@ def _resolve_turn_reply(
                     ]
                     if cleaned:
                         tool_names_used.extend(cleaned)
-                    if tool_thinking_sender is not None:
-                        tool_thinking_sender(tool_names)
 
                 _round_traces = [] if debug_trace_enabled else None
                 try:
