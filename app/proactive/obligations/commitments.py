@@ -57,6 +57,20 @@ def _parse_due_at(value: Any) -> Optional[datetime]:
         return None
 
 
+def _commitment_max_days() -> int:
+    """`proactive_commitment_max_days` 的唯一读取点——LLM 抽取和工具直接创建两条路径
+    共用，避免各自内联默认值 14，未来改配置语义时漏改一处。
+    """
+    return int(getattr(settings, "proactive_commitment_max_days", 14) or 14)
+
+
+def _is_due_at_within_window(due_at: Optional[datetime], *, now: datetime) -> bool:
+    """未来时间，且不超过 `_commitment_max_days()` 天。"""
+    if due_at is None or due_at <= now:
+        return False
+    return due_at <= now + timedelta(days=max(_commitment_max_days(), 1))
+
+
 def _build_extraction_user_prompt(
     *,
     account_id: str,
@@ -92,10 +106,7 @@ def _normalize_commitment_payload(
     if not text:
         return None
     due_at = _parse_due_at(payload.get("due_at"))
-    if due_at is None or due_at <= now:
-        return None
-    max_days = int(getattr(settings, "proactive_commitment_max_days", 14) or 14)
-    if due_at > now + timedelta(days=max(max_days, 1)):
+    if not _is_due_at_within_window(due_at, now=now):
         return None
     confidence = float(payload.get("confidence") or 0)
     min_confidence = float(

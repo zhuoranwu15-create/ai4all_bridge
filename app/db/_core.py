@@ -1790,6 +1790,46 @@ def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
     )
 
 
+def _migration_0012_agent_mission(conn: Connection) -> None:
+    """使命子系统：账号级使命分配 + 记录的瞬间（agent_mission_and_orchestration_design.md §3）。
+
+    account_mission 一账号一行，mission_id 只写一次——不可更改性由 app 层"没有 update
+    函数"保证（见 app/db/mission.py），DB 层只用 INSERT ... ON CONFLICT(account_id)
+    DO NOTHING 兜底防覆盖，不是唯一防线。
+
+    mission_moments 是追加型内容集合，进度 = COUNT(*)（派生量，不另建计数字段，避免
+    与真实内容漂移）；mission_id 冗余存储在每条瞬间上，钉住记录时的使命版本，不受未来
+    模板措辞调整影响。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS account_mission (
+            account_id TEXT PRIMARY KEY,
+            mission_id TEXT NOT NULL,
+            assigned_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS mission_moments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id TEXT NOT NULL,
+            mission_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            session_id TEXT,
+            message_id TEXT,
+            recorded_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS ix_mission_moments_account
+            ON mission_moments(account_id, mission_id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1802,6 +1842,7 @@ _MIGRATIONS = [
     (9, _migration_0009_messages_account_id_index),
     (10, _migration_0010_sessions_rolling_summary),
     (11, _migration_0011_proactive_global_candidates),
+    (12, _migration_0012_agent_mission),
 ]
 
 

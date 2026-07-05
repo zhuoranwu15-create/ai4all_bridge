@@ -138,6 +138,17 @@ class TestPromptBuilderBasicBuild:
         assert "### MEMORY.md" in out
         assert "AI4ALL 个人助手" in out
 
+    def test_project_context_includes_mission(self):
+        """MISSION.md 与 SOUL/IDENTITY 同装载路径（agent_mission_and_orchestration_design.md §3.2）。"""
+        out = self.pb.build(
+            agent_context={
+                "SOUL": "# SOUL\n语气自然",
+                "MISSION": "# MISSION\n和用户一起记录十个瞬间",
+            }
+        )
+        assert "### MISSION.md" in out
+        assert "记录十个瞬间" in out
+
     def test_project_context_ignores_account_level_heartbeat_even_if_passed(self):
         out = self.pb.build(
             agent_context={
@@ -226,6 +237,11 @@ class TestPromptBuilderTruncation:
         out = self.pb.build(agent_context={"USER": long_user})
         assert "...[已截断]" in out
 
+    def test_mission_context_truncated_at_1500(self):
+        long_mission = "M" * 1501
+        out = self.pb.build(agent_context={"MISSION": long_mission})
+        assert "...[已截断]" in out
+
     def test_default_tools_context_not_truncated(self):
         from app.user_profiles import _default_system_templates
 
@@ -294,6 +310,51 @@ class TestPromptBuilderSkips:
         out = self.pb.build(skills=["写作辅助", "代码生成"])
         assert "写作辅助" in out
         assert "代码生成" in out
+
+
+class TestPromptBuilderAgentSelfState:
+    """agent_self_state block（agent_mission_and_orchestration_design.md §4.3）。"""
+
+    def setup_method(self):
+        self.pb = PromptBuilder()
+
+    def test_skip_when_none(self):
+        out = self.pb.build(agent_self_state=None)
+        assert "【当下的关系与心境】" not in out
+
+    def test_skip_when_blank(self):
+        out = self.pb.build(agent_self_state="   ")
+        assert "【当下的关系与心境】" not in out
+
+    def test_present_when_provided(self):
+        out = self.pb.build(agent_self_state="- 关系阶段：相识")
+        assert "【当下的关系与心境】" in out
+        assert "关系阶段：相识" in out
+
+    def test_truncated_at_1000(self):
+        out = self.pb.build(agent_self_state="S" * 1001)
+        assert "...[已截断]" in out
+
+    def test_not_truncated_at_1000(self):
+        exact = "S" * 1000
+        out = self.pb.build(agent_self_state=exact)
+        assert "...[已截断]" not in out
+        assert exact in out
+
+    def test_ordered_after_project_context_before_onboarding(self):
+        out = self.pb.build(
+            agent_context={"SOUL": "你是一个温柔的助手"},
+            agent_self_state="- 关系阶段：密友",
+            onboarding_context="【首次聊天引导】占位",
+        )
+        project_idx = out.index("你是一个温柔的助手")
+        self_state_idx = out.index("【当下的关系与心境】")
+        onboarding_idx = out.index("【首次聊天引导】")
+        assert project_idx < self_state_idx < onboarding_idx
+
+    def test_included_in_block_metrics(self):
+        result = self.pb.assemble(agent_self_state="- 关系阶段：相识")
+        assert result.included("agent_self_state")
 
 
 class TestPromptBuilderOverride:

@@ -10,3 +10,4 @@ from app.db.proactive import *  # noqa: F401,F403
 from app.db.lifecycle import *  # noqa: F401,F403
 from app.db.llm_config import *  # noqa: F401,F403
 from app.db.user_meta import *  # noqa: F401,F403
+from app.db.mission import *  # noqa: F401,F403

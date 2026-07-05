@@ -178,6 +178,7 @@ _CONTEXT_BLOCK_ORDER = (
     "IDENTITY",
     "USER",
     "MEMORY",
+    "MISSION",
 )
 
 _CONTEXT_BLOCK_LIMITS = {
@@ -187,6 +188,7 @@ _CONTEXT_BLOCK_LIMITS = {
     "USER": 2000,
     "TOOLS": 3000,
     "MEMORY": 3000,
+    "MISSION": 1500,
 }
 
 
@@ -213,6 +215,7 @@ class PromptBuilder:
         skills: Optional[List[str]] = None,
         agent_context: Optional[Dict[str, str]] = None,
         onboarding_context: Optional[str] = None,
+        agent_self_state: Optional[str] = None,
         model_name: str = "",
         today: Optional[str] = None,
         current_time: Optional[str] = None,
@@ -237,6 +240,7 @@ class PromptBuilder:
             skills=skills,
             agent_context=agent_context,
             onboarding_context=onboarding_context,
+            agent_self_state=agent_self_state,
             model_name=model_name,
             today=today,
             current_time=current_time,
@@ -263,6 +267,7 @@ class PromptBuilder:
         skills: Optional[List[str]] = None,
         agent_context: Optional[Dict[str, str]] = None,
         onboarding_context: Optional[str] = None,
+        agent_self_state: Optional[str] = None,
         model_name: str = "",
         today: Optional[str] = None,
         current_time: Optional[str] = None,
@@ -276,6 +281,10 @@ class PromptBuilder:
 
         block 顺序、标记文案、各 block 字符截断阈值与历史完全一致：token_budget=None（默认）时
         输出逐字不变。extra_blocks 在内置 block 之后追加（动态来源注入钩子）。
+
+        ``agent_self_state`` 是调用方（turn_service）预先渲染好的「当下的关系与心境」正文
+        （见 app.agent_self_state.build_agent_self_state_block），本函数不做任何状态计算或
+        DB 读取，只负责拼接/截断/裁剪，保持与其余 block 相同的纯组装职责。
         """
         blocks: List[ContextBlock] = []
 
@@ -378,6 +387,18 @@ class PromptBuilder:
         # Block 7: Project Context
         if project_context:
             _add("project_context", project_context, trim_priority=80)
+
+        # Block 7b: Agent self state — 关系阶段 + 主导需求驱动的行为指引（agent_self_prd.md）。
+        # 紧跟 project_context（先交代"这是谁"，再交代"此刻怎样"）；trim_priority 低于身份、
+        # 高于历史摘要类 block，token 压力下先丢历史摘要，最后才丢当下心境。
+        if agent_self_state and agent_self_state.strip():
+            self_state_text = _truncate(agent_self_state, 1000, "agent_self_state")
+            _add(
+                "agent_self_state",
+                f"【当下的关系与心境】\n{self_state_text}",
+                char_limit=1000,
+                trim_priority=65,
+            )
 
         # Block 8: Onboarding context (injected only during first-chat onboarding)
         if onboarding_context and onboarding_context.strip():

@@ -11,12 +11,14 @@ from datetime import datetime
 from app.time_utils import beijing_now, beijing_daypart_str, beijing_weekday_str
 from typing import Any, Dict, List, Optional, Union
 
+from app.agent_self_state import build_agent_self_state_block
 from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     connect as db_connect,
     count_context_messages_for_session,
+    get_account_id_for_session_key,
     get_account_onboarding_state,
     get_active_content_invitation,
     get_daily_usage,
@@ -38,6 +40,8 @@ from app.db import (
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.mission_assignment import assign_mission_if_absent
+from app.mission_state import resolve_account_mission
 from app.llm_providers import LLMProviderConfig
 from app.memory_writer import write_memory
 from app.relationship_state import maybe_update_relationship_state_after_turn
@@ -49,7 +53,6 @@ from app.moderation.service import (
 )
 from app.context_window import trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
-from app.proactive.obligations.commitments import extract_commitment_from_turn
 from app.proactive.store.account_state import ensure_account_state
 from app.rate_limiter import rate_limiter
 from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
@@ -320,11 +323,21 @@ def _summarize_history_rows(history_rows: List[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+# default_when_flag -> (available 时的 reason, disabled 时的 reason)；新增按 flag 门控的
+# 工具只需在此加一行，不必再手写一对 elif 分支（曾经是两条要手动保持同步的 elif 链）。
+_TOOL_GATE_REASONS: Dict[str, tuple] = {
+    "web_search_enabled": ("web_search_enabled", "web_search_disabled"),
+    "content_invitation_response_enabled": ("active_content_invitation", "no_active_content_invitation"),
+    "has_mission": ("has_mission", "no_mission_assigned"),
+}
+
+
 def _build_tooling_envelope(
     *,
     onboarding_active: bool,
     web_search_enabled: bool,
     active_content_invitation: Optional[dict],
+    has_mission: bool,
     text: str,
     include_tool_instructions: bool,
 ) -> Dict[str, Any]:
@@ -339,6 +352,7 @@ def _build_tooling_envelope(
         tools = get_default_tools(
             web_search_enabled=web_search_enabled,
             content_invitation_response_enabled=content_invitation_enabled,
+            has_mission=has_mission,
         )
         enabled_names = {_tool_name(schema) for schema in tools}
 
@@ -355,11 +369,7 @@ def _build_tooling_envelope(
             )
             continue
         if spec.name in enabled_names:
-            reason = "default"
-            if spec.default_when_flag == "web_search_enabled":
-                reason = "web_search_enabled"
-            elif spec.default_when_flag == "content_invitation_response_enabled":
-                reason = "active_content_invitation"
+            reason = _TOOL_GATE_REASONS.get(spec.default_when_flag, ("default", "disabled"))[0]
             available.append(
                 {
                     "name": spec.name,
@@ -369,11 +379,7 @@ def _build_tooling_envelope(
                 }
             )
             continue
-        reason = "disabled"
-        if spec.default_when_flag == "web_search_enabled":
-            reason = "web_search_disabled"
-        elif spec.default_when_flag == "content_invitation_response_enabled":
-            reason = "no_active_content_invitation"
+        reason = _TOOL_GATE_REASONS.get(spec.default_when_flag, ("default", "disabled"))[1]
         disabled.append(
             {
                 "name": spec.name,
@@ -395,6 +401,7 @@ def _build_tooling_envelope(
         "web_search_enabled": web_search_enabled,
         "content_invitation_response_enabled": content_invitation_enabled,
         "active_content_invitation_id": active_content_invitation.get("id") if active_content_invitation else None,
+        "has_mission": has_mission,
     }
 
 
@@ -533,12 +540,26 @@ def build_turn_llm_input(
         metadata["active_content_invitation_id"] = (
             active_content_invitation["id"] if active_content_invitation else None
         )
+    # has_mission 门控 mission_status/record_mission_moment 两个工具（未分配使命的存量
+    # 账号、onboarding 中、或 mission_id 不可解析（脏数据/模板下线）都不出现，不暴露
+    # "调了也只会失败"的工具，见 §6.3 与 app.mission_state.resolve_account_mission）。
+    resolved_mission = None if onboarding_active else resolve_account_mission(account_id=account_id)
+    has_mission = resolved_mission is not None
+    metadata["has_mission"] = has_mission
     tooling = _build_tooling_envelope(
         onboarding_active=onboarding_active,
         web_search_enabled=web_search_enabled,
         active_content_invitation=active_content_invitation,
+        has_mission=has_mission,
         text=text,
         include_tool_instructions=include_tool_instructions,
+    )
+
+    # Onboarding 期间尚未分配使命/关系状态未成形，跳过注入（agent_self_prd.md §4.4）。
+    agent_self_state_text = (
+        None
+        if onboarding_active
+        else build_agent_self_state_block(account_id=account_id, resolved_mission=resolved_mission)
     )
 
     onboarding_ctx = ""
@@ -571,6 +592,7 @@ def build_turn_llm_input(
         style=profile.get("style"),
         agent_context=agent_context.blocks,
         onboarding_context=onboarding_ctx,
+        agent_self_state=agent_self_state_text,
         today=today,
         current_time=current_time,
         weekday=beijing_weekday_str(_now),
@@ -815,8 +837,14 @@ def _prepare_turn(
                     "session_key": openclaw_session_key,
                 },
             )
-        # 开关关闭（本地调试/测试）：保留 session_key 兜底。
-        resolved_account_id = openclaw_session_key
+        # 开关关闭（本地调试/测试）：保留 session_key 兜底，但优先复用该
+        # session_key 已落过的账号（如 debug 建号直接写 sessions，没有走
+        # binding），避免每次兜底都新建一个不同的影子账号（session_key
+        # 本身也会变化，见 get_account_id_for_session_key 注释）。
+        resolved_account_id = (
+            get_account_id_for_session_key(session_key=openclaw_session_key)
+            or openclaw_session_key
+        )
     account_id = resolved_account_id
     sender_id = identity.sender_id
     message_id = payload.message_id or payload.event_id
@@ -1728,6 +1756,13 @@ def _finalize_turn(
                         onboarding_state,
                         new_state,
                     )
+                    if new_state == ONBOARDING_COMPLETE:
+                        # 使命分配与 SOUL/IDENTITY 首次生成同一时机（agent_mission_and_
+                        # orchestration_design.md §5.1）；幂等，失败不影响本轮回复。
+                        try:
+                            assign_mission_if_absent(account_id=account_id)
+                        except Exception as err:
+                            logger.error("mission assignment failed account=%s error=%s", account_id, err)
             except Exception as err:
                 logger.exception("onboarding state advance failed account=%s error=%s", account_id, err)
         _record_timing(timings, "onboarding_advance_ms", onboarding_advance_started)
@@ -1741,10 +1776,10 @@ def _finalize_turn(
     after_turn_enqueue_started = time.monotonic()
     if should_run_after_turn and background_loop is None:
         # 不再静默吞掉：无后台事件循环时（独立进程/脚本/测试显式 None）after-turn
-        # 记忆写入与 commitment 抽取会被跳过，至少记一条 warning 让数据丢失可观测。
+        # 记忆写入会被跳过，至少记一条 warning 让数据丢失可观测。
         logger.warning(
             "after-turn work skipped: no background loop "
-            "(daily memory + commitment extraction not run) account=%s",
+            "(daily memory not run) account=%s",
             account_id,
         )
     if should_run_after_turn and background_loop is not None:
@@ -1792,18 +1827,9 @@ def _finalize_turn(
                 ),
             )
         if normal_reply_generated:
-            background_loop.call_soon_threadsafe(
-                background_loop.create_task,
-                asyncio.to_thread(
-                    extract_commitment_from_turn,
-                    account_id=account_id,
-                    session_id=int(session["id"]),
-                    user_text=text,
-                    assistant_text=reply,
-                    source_message_id=message_id,
-                    source_reply_message_id=reply_message_id,
-                ),
-            )
+            # commitment 抽取已改为工具调用（create_commitment，见 app/tools/
+            # commitment_handlers.py），不再无条件跑隐藏分类器；extract_commitment_from_turn
+            # 保留供参考/单测，不在此处调度。
             # TDAI capture：把本轮 user/assistant 可见文本喂给 TDAI L0→L1→L2→L3 pipeline。
             # 跳过条件：TDAI 关闭、出站同步红线触发（reply 已换成安全话术）、onboarding 期间、图片理解失败兜底。
             # 注意：必须先检查 tdai_enabled，避免在 TDAI 关闭时创建未被 await 的 coroutine。

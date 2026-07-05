@@ -15,8 +15,10 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from app.tools.definitions import (
+    get_commitment_tools,
     get_content_invitation_generation_tools,
     get_content_invitation_response_tools,
+    get_mission_tools,
     get_proactive_message_settings_tools,
     get_read_tools,
     get_reminder_tools,
@@ -62,10 +64,19 @@ _META: Dict[str, tuple] = {
         CALL_PLAIN, None, _DEFAULT_ALWAYS,
     ),
     "create_reminder": ("app.tools.reminder_handlers", "handle_create_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "create_commitment": ("app.tools.commitment_handlers", "handle_create_commitment", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "list_reminders": ("app.tools.reminder_handlers", "handle_list_reminders", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "cancel_reminder": ("app.tools.reminder_handlers", "handle_cancel_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "update_reminder": ("app.tools.reminder_handlers", "handle_update_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "session_status": ("app.tools.session_status_handlers", "handle_session_status", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "mission_status": (
+        "app.tools.mission_handlers", "handle_mission_status",
+        CALL_PLAIN, None, "has_mission",
+    ),
+    "record_mission_moment": (
+        "app.tools.mission_handlers", "handle_record_mission_moment",
+        CALL_INVOCATION, None, "has_mission",
+    ),
     "get_proactive_message_settings": (
         "app.tools.proactive_settings_handlers", "handle_get_proactive_message_settings",
         CALL_PLAIN, None, _DEFAULT_ALWAYS,
@@ -97,13 +108,16 @@ _META: Dict[str, tuple] = {
 }
 
 # 分组 → schema 提供函数。顺序即默认工具集的装配顺序（保持与历史 get_default_tools 一致：
-# reminder → session_status → proactive_message_settings → web_search → content_invitation_response），
-# content_invitation_generation 仅供生成路径直接装载，放最后且永不进默认集。
+# reminder → session_status → mission → proactive_message_settings → web_search →
+# content_invitation_response），content_invitation_generation 仅供生成路径直接装载，
+# 放最后且永不进默认集。
 _GROUP_PROVIDERS: List[tuple] = [
     ("web_fetch", get_web_fetch_tools),
     ("read", get_read_tools),
     ("reminder", get_reminder_tools),
+    ("commitment", get_commitment_tools),
     ("session_status", get_session_status_tools),
+    ("mission", get_mission_tools),
     ("proactive_message_settings", get_proactive_message_settings_tools),
     ("web_search", get_web_search_tools),
     ("content_invitation_response", get_content_invitation_response_tools),
@@ -160,11 +174,13 @@ def get_default_tools(
     *,
     web_search_enabled: bool = False,
     content_invitation_response_enabled: bool = False,
+    has_mission: bool = False,
 ) -> list:
     """主对话默认工具集：按 default_when_flag gating 后返回 schema 列表（顺序稳定）。"""
     flags = {
         "web_search_enabled": web_search_enabled,
         "content_invitation_response_enabled": content_invitation_response_enabled,
+        "has_mission": has_mission,
     }
     out = []
     for spec in _SPECS:
