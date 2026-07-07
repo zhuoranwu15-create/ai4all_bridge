@@ -53,10 +53,12 @@ DREAMING_JSON_SCHEMA: Dict[str, Any] = {
     "properties": {
         "session_summary": {
             "type": "object",
-            "required": ["rough_summary", "carryover_summary"],
+            # 统一编排：rough_summary 停产，session_summary 收敛为单一 carryover_summary。
+            # rough_summary 属性保留（可选）仅为兼容旧输出，规范化时会折叠进 carryover。
+            "required": ["carryover_summary"],
             "properties": {
-                "rough_summary": {"type": "string"},
                 "carryover_summary": {"type": "string"},
+                "rough_summary": {"type": "string"},
                 "open_threads": {"type": "array"},
                 "tone_notes": {"type": "string"},
             },
@@ -174,20 +176,20 @@ def _normalize_dreaming_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     session_summary = payload.get("session_summary")
     if not isinstance(session_summary, dict):
         raise ValueError("session_summary must be an object")
-    rough_summary = _clean_text(session_summary.get("rough_summary"))
+    # 统一编排：carryover_summary 是唯一的 session 摘要产物。rough_summary 已停产，
+    # 但兼容旧 LLM 输出——只给了 rough 时折叠成 carryover。
     carryover_summary = _clean_text(session_summary.get("carryover_summary"))
-    if not rough_summary and carryover_summary:
-        rough_summary = carryover_summary
-    if not carryover_summary and rough_summary:
-        carryover_summary = rough_summary[:1200]
-    if not rough_summary and not carryover_summary:
-        raise ValueError("session_summary requires rough_summary or carryover_summary")
+    if not carryover_summary:
+        legacy_rough = _clean_text(session_summary.get("rough_summary"))
+        if legacy_rough:
+            carryover_summary = legacy_rough[:1200]
+    if not carryover_summary:
+        raise ValueError("session_summary requires carryover_summary")
 
     open_threads = session_summary.get("open_threads")
     if not isinstance(open_threads, list):
         open_threads = []
     normalized_summary = {
-        "rough_summary": rough_summary,
         "carryover_summary": carryover_summary,
         "open_threads": open_threads[:12],
         "tone_notes": _clean_text(session_summary.get("tone_notes")),
@@ -357,14 +359,12 @@ def _build_dreaming_prompt(
 {source_type}
 
 目标：
-1. 生成旧 session 的粗略摘要 rough_summary。
-2. 生成新 session 可直接承接使用的 carryover_summary。
-3. 排除敏感信息后，提取需要长期记住的用户方面信息，作为 long_term_memory_items。
+1. 生成新 session 可直接承接使用的 carryover_summary（旧 session 的唯一摘要）。
+2. 排除敏感信息后，提取需要长期记住的用户方面信息，作为 long_term_memory_items。
 
 输出要求：
 - 只输出 JSON。
-- rough_summary 必须忠于材料。
-- carryover_summary 要短、可直接注入后续聊天 prompt。
+- carryover_summary 要忠于材料、要短、可直接注入后续聊天 prompt。
 - long_term_memory_items 必须克制、去重、可追溯。
 - 如果没有长期记忆片段，输出空数组。
 
@@ -448,14 +448,11 @@ def _deterministic_payload(
         lines.append(f"daily notes 摘要材料: {compact_notes}")
     fallback = "\n".join(lines).strip()
     if fallback:
-        rough_summary = f"Deterministic fallback summary:\n{fallback}"
         carryover_summary = f"Recent carryover from previous session:\n{fallback}"
     else:
-        rough_summary = ""
         carryover_summary = ""
     return {
         "session_summary": {
-            "rough_summary": rough_summary,
             "carryover_summary": carryover_summary,
             "open_threads": [],
             "tone_notes": "",
@@ -778,7 +775,6 @@ def run_dreaming(
             status="succeeded",
             output={
                 "session_summary": {
-                    "rough_summary": "",
                     "carryover_summary": "",
                     "open_threads": [],
                     "tone_notes": "",
@@ -869,7 +865,8 @@ def run_dreaming(
     if source_session_id is not None:
         update_session_summary(
             session_id=source_session_id,
-            session_summary=summary.get("rough_summary"),
+            # rough_summary 停产后，session_summary 落库列统一写 carryover（单一摘要）。
+            session_summary=summary.get("carryover_summary"),
             carryover_summary=summary.get("carryover_summary"),
             summary_model=(active_llm_model if not used_fallback else "deterministic_fallback"),
             summary_prompt_version=DREAMING_PROMPT_VERSION,
@@ -1070,7 +1067,6 @@ def summarize_dreaming_run_for_debug(run: Dict[str, Any]) -> Dict[str, Any]:
         "llm_model": run.get("llm_model"),
         "input_hash": run.get("input_hash"),
         "error": run.get("error"),
-        "rough_summary_preview": redact_text(summary.get("rough_summary"), max_chars=120),
         "carryover_summary_preview": redact_text(summary.get("carryover_summary"), max_chars=120),
         "created_at": run.get("created_at"),
         "completed_at": run.get("completed_at"),

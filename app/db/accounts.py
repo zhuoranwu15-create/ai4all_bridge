@@ -45,6 +45,7 @@ __all__ = [
     'get_duplicate_reply',
     'get_first_user_message_at',
     'get_latest_active_verification',
+    'get_latest_closed_carryover_for_account',
     'get_latest_message_id_for_account',
     'get_message_raw',
     'get_platform_user_by_session_token',
@@ -66,6 +67,7 @@ __all__ = [
     'list_reactivation_outbound_messages_admin',
     'list_recent_message_raw',
     'list_recent_messages',
+    'list_recent_context_messages_for_session',
     'list_recent_messages_for_account',
     'list_recent_messages_for_account_since',
     'list_recent_reactivation_outbound_messages',
@@ -362,7 +364,7 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, session_id, message_id, role, content FROM messages
+            SELECT id, session_id, message_id, role, content, created_at FROM messages
             WHERE account_id = ?
               AND content IS NOT NULL
               AND content != ''
@@ -388,6 +390,8 @@ def list_recent_messages_for_account(*, account_id: str, limit: int) -> List[Dic
             "message_id": row["message_id"],
             "role": row["role"],
             "content": row["content"],
+            # created_at 供组装期给历史 user 轮注入绝对时间戳（见 turn_service L0 时间戳）。
+            "created_at": row["created_at"],
         }
         for row in reversed(rows)
     ]
@@ -625,19 +629,21 @@ def count_context_messages_for_session(*, session_id: int) -> int:
 
 
 def list_context_messages_for_session(
-    *, session_id: int, after_id: int = 0, limit: int = 1000
+    *, session_id: int, account_id: str, after_id: int = 0, limit: int = 1000
 ) -> List[Dict[str, Any]]:
-    """Return context-eligible messages of one session (id ASC), with id > after_id.
+    """Return context-eligible messages of one account/session (id ASC), with id > after_id.
 
-    带 id 返回，供 P3 滚动摘要推进水位线用；过滤口径与 count_context_messages_for_session 一致。
+    带 id 返回，供 P3 滚动摘要推进水位线用；显式按 account_id + session_id 双约束，
+    避免调用方误传 session_id 时跨账号读上下文。
     """
     if limit <= 0:
         return []
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, role, content FROM messages
+            SELECT id, session_id, message_id, role, content, created_at FROM messages
             WHERE session_id = ?
+              AND account_id = ?
               AND id > ?
               AND content IS NOT NULL
               AND content != ''
@@ -654,12 +660,98 @@ def list_context_messages_for_session(
             ORDER BY id ASC
             LIMIT ?
             """,
-            (session_id, after_id, _NON_CONTEXT_ASSISTANT_REPLY, MODERATION_BLOCKED_ERROR, limit),
+            (
+                session_id,
+                account_id,
+                after_id,
+                _NON_CONTEXT_ASSISTANT_REPLY,
+                MODERATION_BLOCKED_ERROR,
+                limit,
+            ),
         ).fetchall()
+    # 字段对齐 list_recent_context_messages_for_account（含 message_id 供 tool_evidence、created_at
+    # 供时间戳/压缩硬底），使 L0 组装期可直接以 after_id=水位线 取"水位线之后全部消息"。
     return [
-        {"id": row["id"], "role": row["role"], "content": row["content"]}
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "message_id": row["message_id"],
+            "role": row["role"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
         for row in rows
     ]
+
+
+def list_recent_context_messages_for_session(
+    *, session_id: int, account_id: str, limit: int
+) -> List[Dict[str, Any]]:
+    """Return the recent context-eligible tail of one account/session, oldest→newest.
+
+    L0 主取数（统一编排：原始尾窗改为 session-scoped，不再跨 session）。返回字段与
+    ``list_recent_messages_for_account`` 对齐（id/session_id/message_id/role/content/created_at），
+    以便 tool_evidence 回放、历史时间戳注入、metadata 汇总等下游逻辑无需改动即可复用。
+    过滤口径与 ``list_context_messages_for_session`` 一致；取尾部最近 *limit* 条（DESC 后反转）。
+    """
+    if limit <= 0:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, session_id, message_id, role, content, created_at FROM messages
+            WHERE session_id = ?
+              AND account_id = ?
+              AND content IS NOT NULL
+              AND content != ''
+              AND NOT (
+                role = 'assistant'
+                AND error IS NOT NULL
+                AND error != ''
+              )
+              AND NOT (
+                role = 'assistant'
+                AND content = ?
+              )
+              AND (error IS NULL OR error != ?)
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (session_id, account_id, _NON_CONTEXT_ASSISTANT_REPLY, MODERATION_BLOCKED_ERROR, limit),
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "session_id": row["session_id"],
+            "message_id": row["message_id"],
+            "role": row["role"],
+            "content": row["content"],
+            "created_at": row["created_at"],
+        }
+        for row in reversed(rows)
+    ]
+
+
+def get_latest_closed_carryover_for_account(*, account_id: str) -> Optional[str]:
+    """Return the carryover_summary of the account's **immediately-preceding** closed session.
+
+    取最近一个已关闭 session（不再往前挖）：其 carryover 即新 active session 应承接的上一段延续。
+    统一了「懒轮转」与「4 点 scheduler 关闭后懒建」两条路径的 seed 来源（carryover 在两种关闭里
+    都已落到被关闭的 session 行上）。若上一段是 `#重置` 之类的 replaced 关闭（无 carryover），返回
+    空/None → 不承接（不复活已被显式重置的上下文）。account 隔离。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT carryover_summary FROM sessions
+            WHERE account_id = ?
+              AND status = 'closed'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+    return row["carryover_summary"] if row else None
 
 
 def update_session_rolling_summary(

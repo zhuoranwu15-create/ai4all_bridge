@@ -58,10 +58,19 @@ class Settings(BaseSettings):
     llm_context_token_budget: int = 3000
     # 单条历史消息字符硬上限：>0 时超长单条截断加 ...[已截断]（只改喂 LLM 副本，不改落库）；0=关闭。
     llm_context_message_max_chars: int = 2000
-    # Token 压力滚动摘要总开关：涉及后台 LLM 调用成本，默认关，确认后按账号灰度开。
-    llm_rolling_summary_enabled: bool = False
-    # 本会话未被摘要覆盖的溢出消息达到该条数即触发后台滚动摘要（仅 rolling_summary 开启时生效）。
-    llm_rolling_summary_trigger_messages: int = 20
+    # 历史 user 轮加绝对时间戳前缀 `[周一 2026-07-06 11:39]`（只改喂 LLM 副本，不改落库；assistant 与
+    # 当前轮不加）。解决长间隔消息被误当成连续上下文的问题；默认开，可灰度回滚。
+    llm_history_timestamp_enabled: bool = True
+    # Token 压力滚动摘要总开关：统一编排后转为核心路径（carryover 亦作为其 seed），默认开；
+    # 保留开关作灰度回滚闸（涉及后台 LLM 调用成本）。
+    llm_rolling_summary_enabled: bool = True
+    # 后台压缩每次压掉的最老 chunk 目标 token（按整条消息截断，实际可能略高/略低）。超预算时
+    # 一次压 max(chunk, 溢出量)，压完留出 headroom，避免每轮都调摘要 LLM。见统一编排设计 §5.2。
+    rolling_summary_chunk_tokens: int = 1500
+    # 最近「硬底」：距 now ≤ N 分钟 且 ≤ M 轮 的原文永不被摘要/丢弃（硬底优先于 token 预算，
+    # kept 可能短暂超预算）。见 docs/tech_design/context_orchestration_unified_design.md §5.1。
+    llm_context_floor_minutes: int = 15
+    llm_context_floor_turns: int = 10
     llm_request_dump_enabled: bool = False
     llm_request_dump_dir: str = "tmp/llm_request_bodies/ai4all"
     # Agent runtime 对齐开关（Batch A）
@@ -96,6 +105,10 @@ class Settings(BaseSettings):
     conversation_session_business_day_start_hour: int = 4
     dreaming_scheduler_enabled: bool = False
     dreaming_scheduler_batch_size: int = 100
+    # 统一编排 P4：4 点 dreaming 扫描默认挂在 proactive-scheduler 单例进程（见
+    # scripts/run_proactive_scheduler.py）。与上面的 FastAPI in-process 开关互斥使用，避免重复扫描；
+    # 若改由 FastAPI 进程承担 dreaming，可将本项设为 false。
+    proactive_dreaming_scheduler_enabled: bool = True
     user_meta_scheduler_enabled: bool = False
     user_meta_scheduler_hour: int = 3
     user_meta_scheduler_page_size: int = 100
