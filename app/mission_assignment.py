@@ -7,6 +7,7 @@ assign_mission_if_absent，不直接操作 app.db.mission / app.user_profiles �
 import hashlib
 import logging
 
+from app.db.campaign import get_campaign_attribution
 from app.db.mission import assign_mission, get_account_mission
 from app.mission_registry import get_mission_template, list_mission_templates
 from app.user_profiles import write_context_file
@@ -38,7 +39,10 @@ def assign_mission_if_absent(*, account_id: str) -> str:
     if existing is not None:
         return existing["mission_id"]
 
-    mission_id = _pick_mission_id(account_id)
+    # 营销活码若在注册时指定了 mission_id，优先命中；否则回退现有哈希随机分配
+    # （campaign_codes_technical_design.md §4.1）。
+    attribution = get_campaign_attribution(account_id=account_id)
+    mission_id = (attribution or {}).get("mission_id") or _pick_mission_id(account_id)
     template = get_mission_template(mission_id)
 
     write_context_file(account_id, "MISSION.md", template.prose)

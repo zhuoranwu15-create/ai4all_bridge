@@ -135,6 +135,7 @@
       verifiedToken: null,
       resendTimer: null,
       prevBindingStatus: null,
+      campaignCode: '',
     };
 
     var terminalBindingStatuses = {
@@ -167,6 +168,14 @@
     }
     function normalizedInviteCode() {
       return document.getElementById('invite-code').value.trim().toUpperCase();
+    }
+    function normalizedCampaignCode() {
+      return (state.campaignCode || '').trim();
+    }
+
+    // 营销活码：从落地页链接静默采集，不展示 UI（不是用户手填的邀请码，无需可见/可编辑）。
+    function initCampaignCodeFromUrl() {
+      state.campaignCode = (new URLSearchParams(location.search).get('campaign_code') || '').trim();
     }
 
     async function webFetch(path, options) {
@@ -280,6 +289,7 @@
 
     window.addEventListener('load', function() {
       initInviteCodeFromUrl();
+      initCampaignCodeFromUrl();
       loadWebConfig()
         .then(initCaptcha)
         .catch(function(e) {
@@ -357,6 +367,7 @@
             otp_token: state.verifiedToken,
             channel: 'openclaw-weixin',
             invite_code: normalizedInviteCode() || null,
+            campaign_code: normalizedCampaignCode() || null,
           }),
         });
         state.sessionToken = data.session_token;

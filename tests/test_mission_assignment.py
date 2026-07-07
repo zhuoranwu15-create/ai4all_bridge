@@ -82,3 +82,35 @@ def test_different_accounts_can_get_different_missions(fresh_db):
         if len(seen) == 2:
             break
     assert len(seen) == 2
+
+
+# ---------------------------------------------------------------------------
+# 营销活码归因优先命中（campaign_codes_technical_design.md §4.1）
+# ---------------------------------------------------------------------------
+
+def test_campaign_attribution_mission_id_takes_priority(fresh_db):
+    from app.db.campaign import write_campaign_attribution
+
+    account_id = "acc-campaign-mission"
+    _create_account(account_id)
+    write_campaign_attribution(
+        account_id=account_id,
+        campaign_code="MCODE",
+        mission_id="mission_002",
+        onboarding_script_variant=None,
+        soul_preset_key=None,
+    )
+
+    # 即使哈希算出的默认值可能是另一个模板，归因指定的 mission_002 应始终优先命中。
+    assigned = assign_mission_if_absent(account_id=account_id)
+
+    assert assigned == "mission_002"
+
+
+def test_no_attribution_falls_back_to_hash_pick(fresh_db):
+    account_id = "acc-no-campaign"
+    _create_account(account_id)
+
+    assigned = assign_mission_if_absent(account_id=account_id)
+
+    assert assigned == _pick_mission_id(account_id)

@@ -119,6 +119,7 @@ var S = {
   sessionToken: null,
   bindingIntent: null,
   inviteCode: '',
+  campaignCode: '',
   pollTimer: null,
   resendTimer: null,
 };
@@ -149,6 +150,10 @@ function normalizedInviteCode() {
   return (S.inviteCode || '').trim();
 }
 
+function normalizedCampaignCode() {
+  return (S.campaignCode || '').trim();
+}
+
 function initInviteCode() {
   var params = new URLSearchParams(window.location.search);
   S.inviteCode = (params.get('invite_code') || '').trim();
@@ -156,6 +161,12 @@ function initInviteCode() {
   var hint = document.getElementById('invite-hint');
   hint.textContent = '已带入邀请码 ' + S.inviteCode.toUpperCase();
   show('invite-hint');
+}
+
+// 营销活码：从落地页链接静默采集，不展示 UI（不是用户手填的邀请码，无需可见/可编辑）。
+function initCampaignCode() {
+  var params = new URLSearchParams(window.location.search);
+  S.campaignCode = (params.get('campaign_code') || '').trim();
 }
 
 async function apiFetch(path, opts) {
@@ -208,6 +219,7 @@ function initCaptcha(config) {
 // ── 启动时检查已有 session ────────────────────
 window.addEventListener('load', function() {
   initInviteCode();
+  initCampaignCode();
 
   var token = localStorage.getItem('chaochao_session');
   if (token) {
@@ -315,6 +327,8 @@ async function doLogin() {
     var payload = { phone: S.phone, verified_token: S.verifiedToken };
     var inviteCode = normalizedInviteCode();
     if (inviteCode) payload.invite_code = inviteCode;
+    var campaignCode = normalizedCampaignCode();
+    if (campaignCode) payload.campaign_code = campaignCode;
     var data = await apiFetch('/web/login', {
       method: 'POST',
       body: JSON.stringify(payload),

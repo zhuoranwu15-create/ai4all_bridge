@@ -47,6 +47,7 @@ class WebRegisterAndBindingIntentRequest(BaseModel):
     otp_token: str
     channel: Optional[str] = "openclaw-weixin"
     invite_code: Optional[str] = None
+    campaign_code: Optional[str] = None
 
 
 class SendOtpRequest(BaseModel):
@@ -641,6 +642,7 @@ def web_config() -> dict:
             "mode": "open",
             "invite_required": False,
             "invite_code_param": "invite_code",
+            "campaign_code_param": "campaign_code",
         },
     }
 
@@ -865,6 +867,7 @@ def web_register_and_binding_intent(
             platform_user_id=platform_user["id"],
             display_name=None,
             plan="free",
+            campaign_code=payload.campaign_code,
         )
         wallet = get_wallet_summary(
             account_id=account_result["account"]["id"],
@@ -961,6 +964,7 @@ class WebLoginRequest(BaseModel):
     verified_token: str
     phone: str
     invite_code: Optional[str] = None
+    campaign_code: Optional[str] = None
 
 
 @router.post("/web/login")
@@ -984,6 +988,7 @@ def web_login(payload: WebLoginRequest) -> dict:
         platform_user_id=platform_user["id"],
         display_name=None,
         plan="free",
+        campaign_code=payload.campaign_code,
     )
     wallet = get_wallet_summary(
         account_id=account_result["account"]["id"],
