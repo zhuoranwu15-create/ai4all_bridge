@@ -102,6 +102,8 @@ def build_onboarding_prompt_context(
     user_name_ask_count: int,
     persona_ask_count: int,
     needs_confirmation: bool = False,
+    onboarding_script_override: Optional[str] = None,
+    has_forced_soul_preset: bool = False,
 ) -> str:
     """Build the onboarding guidance block to inject into the system prompt.
 
@@ -133,17 +135,30 @@ def build_onboarding_prompt_context(
 
     elif state == ONBOARDING_STEP1_SENT:
         # User is replying to "what should I call you?" — next ask the combined AI setup question.
-        if user_name:
+        if has_forced_soul_preset:
+            # 活码指定了强制 SOUL 人设，跳过"选人设"这一问，只问 AI 名字
+            # （campaign_codes_technical_design.md §4.3）。
+            if user_name:
+                lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后询问用户想怎么称呼你（AI）。不要询问或提及人设/性格选择。')
+            else:
+                lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，直接进入下一步：询问用户想怎么称呼你（AI）。不要询问或提及人设/性格选择。')
+        elif user_name:
             lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后合并询问用户想怎么称呼你（AI），以及希望你是什么样的陪伴。')
         else:
             lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，直接进入下一步：合并询问用户想怎么称呼你（AI），以及希望你是什么样的陪伴。')
-        lines.append("请在回复末尾自然列出以下候选。候选里的名字只是建议，用户可以沿用，也可以改成自己喜欢的名字：")
-        lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
-        lines.append("用户不用按固定格式回复，可以回复编号、候选名、改名后的候选，或直接自己描述。")
+        if not has_forced_soul_preset:
+            lines.append("请在回复末尾自然列出以下候选。候选里的名字只是建议，用户可以沿用，也可以改成自己喜欢的名字：")
+            lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
+            lines.append("用户不用按固定格式回复，可以回复编号、候选名、改名后的候选，或直接自己描述。")
 
     elif state == ONBOARDING_STEP2_SENT:
         # User is now replying to the combined AI-name/persona question.
-        if needs_confirmation:
+        if has_forced_soul_preset:
+            if ai_name:
+                lines.append(f"用户刚刚回复了你关于 AI 称呼的问题。已提取到 AI 称呼：{ai_name}。请**完全以你当前设定好的角色性格和语气**回复确认，这是你第一次用这个角色开口说话，让用户感受到角色的样子。然后自然进入正常聊天，不再追问 onboarding 问题。")
+            else:
+                lines.append("用户刚刚回复了你关于 AI 称呼的问题，但没有明确设定或选择了留白/跳过。请以你当前的角色语气自然接住，不再追问 onboarding 问题，可以表达之后慢慢相处中养成。")
+        elif needs_confirmation:
             # Extraction found something but it's ambiguous — do one light confirmation turn.
             known = []
             if ai_name:
@@ -174,6 +189,13 @@ def build_onboarding_prompt_context(
             lines.append(f'用户刚刚回复了你关于性格选择的问题。接收他们的选择，以"{ai_name}"的身份自然温暖地完成 onboarding，不需要再问任何 onboarding 问题。')
         else:
             lines.append("用户刚刚回复了你关于性格选择的问题。接收他们的选择，自然温暖地完成 onboarding，不需要再问任何 onboarding 问题。")
+
+    if onboarding_script_override and onboarding_script_override.strip():
+        lines += [
+            "",
+            "【本账号专属引导语（营销活码配置）】",
+            onboarding_script_override.strip(),
+        ]
 
     lines += [
         "",
@@ -299,10 +321,15 @@ def apply_extracted_onboarding_info(
     account_id: str,
     extracted: dict,
     current_state: str,
+    has_forced_soul_preset: bool = False,
 ) -> dict:
     """Write confirmed onboarding info to context files.
 
     Returns dict summarising what was written.
+
+    has_forced_soul_preset=True 时（营销活码强制指定了 SOUL 人设），即使 LLM 从用户回复里
+    抽出了 persona，也不再应用——避免覆盖账号创建时已写入的强制人设
+    （campaign_codes_technical_design.md §4.3）。
     """
     from app.user_profiles import (  # noqa: PLC0415
         apply_soul_preset,
@@ -330,7 +357,7 @@ def apply_extracted_onboarding_info(
             logger.error("write ai_name failed account=%s error=%s", account_id, err)
 
     persona = extracted.get("persona")
-    if persona and current_state in {ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT}:
+    if persona and not has_forced_soul_preset and current_state in {ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT}:
         preset = _resolve_persona_preset(persona)
         custom_desc = extracted.get("persona_custom") if persona == "custom" else None
 

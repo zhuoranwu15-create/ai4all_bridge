@@ -2063,6 +2063,7 @@ def create_ai4all_account_for_user(
     system_prompt: Optional[str] = None,
     plan: str = "free",
     require_display_name: bool = True,
+    campaign_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     from app.db.accounts import get_account, get_profile_for_account
     cleaned_display_name = _clean_text(display_name)
@@ -2133,6 +2134,43 @@ def create_ai4all_account_for_user(
         platform_user_id=platform_user_id,
     )
     retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
+
+    cleaned_campaign_code = _clean_text(campaign_code)
+    if cleaned_campaign_code:
+        # 营销活码校验失败（不存在/过期/disabled）静默失败：记 warning，注册流程正常继续，
+        # 不写归因——活码没有金钱奖励含义，不应因为一个失效的营销码挡住真实注册
+        # （campaign_codes_technical_design.md §3）。
+        from app.db.campaign import (
+            increment_campaign_code_used,
+            validate_campaign_code,
+            write_campaign_attribution,
+        )
+        try:
+            validation = validate_campaign_code(code=cleaned_campaign_code)
+            if validation.get("valid"):
+                write_campaign_attribution(
+                    account_id=account_id,
+                    campaign_code=cleaned_campaign_code,
+                    mission_id=validation.get("mission_id"),
+                    onboarding_script_variant=validation.get("onboarding_script_variant"),
+                    soul_preset_key=validation.get("soul_preset_key"),
+                )
+                increment_campaign_code_used(code=cleaned_campaign_code)
+                soul_preset_key = validation.get("soul_preset_key")
+                if soul_preset_key:
+                    from app.user_profiles import apply_soul_preset
+                    apply_soul_preset(account_id=account_id, preset_name=soul_preset_key)
+            else:
+                logger.warning(
+                    "campaign_code invalid, skip attribution account=%s code=%s reason=%s",
+                    account_id, cleaned_campaign_code, validation.get("reason"),
+                )
+        except Exception as err:
+            logger.error(
+                "campaign_code attribution failed account=%s code=%s error=%s",
+                account_id, cleaned_campaign_code, err,
+            )
+
     return {
         "account": get_account(account_id=account_id),
         "profile": get_profile_for_account(account_id=account_id),
@@ -2184,6 +2222,7 @@ def get_or_create_default_ai4all_account_for_user(
     platform_user_id: str,
     display_name: Optional[str] = None,
     plan: str = "free",
+    campaign_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     existing = get_first_active_account_for_user(platform_user_id=platform_user_id)
     if existing is not None:
@@ -2193,6 +2232,7 @@ def get_or_create_default_ai4all_account_for_user(
         display_name=_clean_default_account_display_name(display_name),
         system_prompt=None,
         plan=plan,
+        campaign_code=campaign_code,
         require_display_name=False,
     )
 

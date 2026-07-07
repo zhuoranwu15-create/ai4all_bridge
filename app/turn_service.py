@@ -43,6 +43,7 @@ from app.db import (
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.db.campaign import get_campaign_attribution
 from app.mission_assignment import assign_mission_if_absent
 from app.mission_state import resolve_account_mission
 from app.llm_providers import LLMProviderConfig
@@ -548,6 +549,9 @@ def build_turn_llm_input(
 
     onboarding_ctx = ""
     if onboarding_active:
+        # 营销活码归因（若有）：话术自由文本 override + 是否强制指定了 SOUL 人设
+        # （campaign_codes_technical_design.md §4.2/§4.3）。
+        campaign_attribution = get_campaign_attribution(account_id=account_id)
         onboarding_ctx = build_onboarding_prompt_context(
             state=onboarding_state,
             user_name=_extract_user_name_from_context(agent_context.blocks),
@@ -556,6 +560,8 @@ def build_turn_llm_input(
             user_name_ask_count=_count_user_name_asks(session.get("turn_count", 0), onboarding_state),
             persona_ask_count=0 if onboarding_state != ONBOARDING_STEP3_SENT else 1,
             needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
+            onboarding_script_override=(campaign_attribution or {}).get("onboarding_script_variant"),
+            has_forced_soul_preset=bool((campaign_attribution or {}).get("soul_preset_key")),
         )
 
     from app.skills import list_skill_catalog
@@ -1337,10 +1343,14 @@ def _resolve_turn_reply(
                     for key in ("user_name", "ai_name", "persona", "persona_custom")
                 )
                 if _has_onboarding_write:
+                    _campaign_attribution_for_extraction = get_campaign_attribution(account_id=account_id)
                     onboarding_pre_written = apply_extracted_onboarding_info(
                         account_id=account_id,
                         extracted=onboarding_pre_extracted,
                         current_state=onboarding_state,
+                        has_forced_soul_preset=bool(
+                            (_campaign_attribution_for_extraction or {}).get("soul_preset_key")
+                        ),
                     )
             llm_input = build_turn_llm_input(
                 account_id=account_id,

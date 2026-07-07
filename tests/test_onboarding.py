@@ -203,6 +203,104 @@ def test_prompt_context_empty_when_complete():
 
 
 # ---------------------------------------------------------------------------
+# 营销活码：onboarding 话术 override + 强制 SOUL 人设跳过选人设问句
+# （campaign_codes_technical_design.md §4.2/§4.3）
+# ---------------------------------------------------------------------------
+
+def test_prompt_context_appends_onboarding_script_override():
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="pending",
+        user_name=None,
+        ai_name=None,
+        persona=None,
+        user_name_ask_count=0,
+        persona_ask_count=0,
+        onboarding_script_override="欢迎参加618活动的朋友！",
+    )
+    assert "欢迎参加618活动的朋友！" in ctx
+    assert "本账号专属引导语" in ctx
+
+
+def test_prompt_context_no_override_section_when_absent():
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="pending",
+        user_name=None,
+        ai_name=None,
+        persona=None,
+        user_name_ask_count=0,
+        persona_ask_count=0,
+    )
+    assert "本账号专属引导语" not in ctx
+
+
+def test_prompt_context_step1_forced_soul_preset_skips_persona_options():
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="step1_sent",
+        user_name="小晨",
+        ai_name=None,
+        persona=None,
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=True,
+    )
+    assert "怎么称呼你（AI）" in ctx
+    assert "小太阳" not in ctx
+    assert "自己设定" not in ctx
+    assert "不要询问或提及人设" in ctx
+
+
+def test_prompt_context_step2_forced_soul_preset_only_confirms_ai_name():
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="step2_sent",
+        user_name="小晨",
+        ai_name="小满",
+        persona="xiaotaiyang",  # 即便被误提取，也不应出现在强制人设文案里
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=True,
+    )
+    assert "小满" in ctx
+    assert "不再追问 onboarding 问题" in ctx
+
+
+def test_apply_extracted_onboarding_info_forced_soul_preset_skips_persona(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app import profile_storage
+
+    account_id = "acc-forced-soul"
+    profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"persona": "xiaotaiyang", "ai_name": None, "user_name": None},
+        current_state="step2_sent",
+        has_forced_soul_preset=True,
+    )
+
+    assert "persona" not in written
+
+
+def test_apply_extracted_onboarding_info_applies_persona_without_forced_preset(tmp_path, fresh_db):
+    from app.onboarding import apply_extracted_onboarding_info
+    from app import profile_storage
+
+    account_id = "acc-normal-soul"
+    profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"persona": "xiaotaiyang", "ai_name": None, "user_name": None},
+        current_state="step2_sent",
+    )
+
+    assert written.get("persona") == "xiaotaiyang"
+
+
+# ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
 

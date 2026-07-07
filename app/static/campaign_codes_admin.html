@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>营销活码后台 – AI4ALL</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="back-link" href="index.html">← 返回后台入口</a>
+  <header class="admin-header">
+    <div>
+      <h1>营销活码后台</h1>
+      <p class="page-subtitle">创建/编辑内容创意营销活码，配置使命分配、onboarding 话术、SOUL 人设三项独立策略。与个人邀请码是两套独立体系。</p>
+    </div>
+    <span id="admin-user" class="pill">—</span>
+  </header>
+
+  <div class="card" id="create-card">
+    <h2>新建活码</h2>
+    <div class="filter-grid">
+      <div>
+        <label for="f-code">活码（拼进营销链接，仅限字母/数字/下划线/连字符）</label>
+        <input id="f-code" type="text" class="mono-input" placeholder="618A" pattern="[A-Za-z0-9_-]{1,64}">
+      </div>
+      <div>
+        <label for="f-campaign-key">活动名称</label>
+        <input id="f-campaign-key" type="text" placeholder="618种草视频A">
+      </div>
+      <div>
+        <label for="f-mission-id">指定 Mission ID（可空）</label>
+        <input id="f-mission-id" type="text" class="mono-input" placeholder="mission_001">
+      </div>
+      <div>
+        <label for="f-soul-preset">指定 SOUL 人设（可空）</label>
+        <input id="f-soul-preset" type="text" class="mono-input" placeholder="xiaotaiyang">
+      </div>
+      <div>
+        <label for="f-expires-at">有效期至（可空，留空默认创建时起 3 个月）</label>
+        <input id="f-expires-at" type="text" placeholder="2026-10-07 00:00:00">
+      </div>
+    </div>
+    <div>
+      <label for="f-script">Onboarding 专属引导语（可空，自由文本）</label>
+      <textarea id="f-script" class="textarea-small" placeholder="例如：欢迎参加618活动的朋友，可以多聊聊这次活动看到的内容～"></textarea>
+    </div>
+    <div class="toolbar" style="margin-top: 10px;">
+      <button class="primary" onclick="createCampaignCode()">创建</button>
+      <span id="create-status" class="status-msg"></span>
+    </div>
+  </div>
+
+  <div class="card" id="edit-card" style="display:none">
+    <h2>编辑活码 <span id="edit-code-label" class="mono"></span></h2>
+    <div class="filter-grid">
+      <div>
+        <label for="e-campaign-key">活动名称</label>
+        <input id="e-campaign-key" type="text">
+      </div>
+      <div>
+        <label for="e-status">状态</label>
+        <select id="e-status">
+          <option value="active">active</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </div>
+      <div>
+        <label for="e-mission-id">指定 Mission ID（可空）</label>
+        <input id="e-mission-id" type="text" class="mono-input">
+      </div>
+      <div>
+        <label for="e-soul-preset">指定 SOUL 人设（可空）</label>
+        <input id="e-soul-preset" type="text" class="mono-input">
+      </div>
+      <div>
+        <label for="e-valid-from">生效起始（可空）</label>
+        <input id="e-valid-from" type="text" placeholder="2026-07-07 00:00:00">
+      </div>
+      <div>
+        <label for="e-expires-at">有效期至（可空）</label>
+        <input id="e-expires-at" type="text" placeholder="2026-10-07 00:00:00">
+      </div>
+    </div>
+    <div>
+      <label for="e-script">Onboarding 专属引导语（可空，自由文本）</label>
+      <textarea id="e-script" class="textarea-small"></textarea>
+    </div>
+    <div class="toolbar" style="margin-top: 10px;">
+      <button class="primary" onclick="saveCampaignCodeEdit()">保存</button>
+      <button onclick="closeEdit()">取消</button>
+      <span id="edit-status" class="status-msg"></span>
+    </div>
+  </div>
+
+  <div class="card" id="list-card">
+    <div class="card-title-row">
+      <h2>活码列表</h2>
+      <span class="card-note">
+        <select id="status-filter" onchange="loadCampaignCodes()">
+          <option value="">全部状态</option>
+          <option value="active">active</option>
+          <option value="disabled">disabled</option>
+        </select>
+      </span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>活码</th>
+          <th>活动名称</th>
+          <th>状态</th>
+          <th>Mission</th>
+          <th>SOUL 人设</th>
+          <th>Onboarding 话术</th>
+          <th>已用次数</th>
+          <th>有效期至</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="9">加载中…</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script src="admin.js"></script>
+  <script>
+    // 当前列表数据，供"编辑"按钮回填表单用——不把 code 拼进内联 onclick/HTML 属性值，
+    // 按钮只带 data-code，实际数据从这里按 code 查（安全 + 简洁，见 admin 活码 XSS 修复）。
+    var currentCodes = [];
+
+    function show(id) { document.getElementById(id).style.display = ''; }
+    function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+    (async function load() {
+      await loadAdminMe();
+      loadCampaignCodes();
+    })();
+
+    document.getElementById('tbody').addEventListener('click', function(e) {
+      var btn = e.target.closest('button[data-code]');
+      if (!btn) return;
+      var code = btn.getAttribute('data-code');
+      if (btn.dataset.action === 'edit') {
+        openEdit(code);
+      } else if (btn.dataset.action === 'toggle') {
+        toggleStatus(code, btn.getAttribute('data-next-status'));
+      }
+    });
+
+    async function createCampaignCode() {
+      var statusEl = document.getElementById('create-status');
+      var payload = {
+        code: document.getElementById('f-code').value.trim(),
+        campaign_key: document.getElementById('f-campaign-key').value.trim(),
+        mission_id: document.getElementById('f-mission-id').value.trim() || null,
+        soul_preset_key: document.getElementById('f-soul-preset').value.trim() || null,
+        expires_at: document.getElementById('f-expires-at').value.trim() || null,
+        onboarding_script_variant: document.getElementById('f-script').value.trim() || null,
+      };
+      if (!payload.code || !payload.campaign_key) {
+        showStatus(statusEl, '活码和活动名称必填', true);
+        return;
+      }
+      try {
+        await apiFetch('/admin/campaign-codes', { method: 'POST', body: JSON.stringify(payload) });
+        showStatus(statusEl, '创建成功', false);
+        loadCampaignCodes();
+      } catch (e) {
+        showStatus(statusEl, e.message, true);
+      }
+    }
+
+    async function loadCampaignCodes() {
+      var tbody = document.getElementById('tbody');
+      var status = document.getElementById('status-filter').value;
+      try {
+        var qs = status ? ('?status=' + encodeURIComponent(status)) : '';
+        var data = await apiFetch('/admin/campaign-codes' + qs);
+        currentCodes = data.campaign_codes || [];
+        if (!currentCodes.length) {
+          tbody.innerHTML = '<tr><td colspan="9">暂无活码</td></tr>';
+          return;
+        }
+        tbody.innerHTML = currentCodes.map(function(c) {
+          var nextStatus = c.status === 'active' ? 'disabled' : 'active';
+          var toggleLabel = c.status === 'active' ? '下线' : '启用';
+          var toggleClass = c.status === 'active' ? 'danger' : 'primary';
+          return '<tr>'
+            + '<td class="mono">' + esc(c.code) + '</td>'
+            + '<td>' + esc(c.campaign_key) + '</td>'
+            + '<td class="status-' + esc(c.status) + '">' + esc(c.status) + '</td>'
+            + '<td class="mono">' + esc(c.mission_id || '—') + '</td>'
+            + '<td class="mono">' + esc(c.soul_preset_key || '—') + '</td>'
+            + '<td class="wrap">' + esc(c.onboarding_script_variant || '—') + '</td>'
+            + '<td>' + esc(String(c.used_count)) + '</td>'
+            + '<td>' + esc(c.expires_at || '—') + '</td>'
+            + '<td>'
+            + '<button data-code="' + esc(c.code) + '" data-action="edit">编辑</button> '
+            + '<button class="' + toggleClass + '" data-code="' + esc(c.code) + '" data-action="toggle" data-next-status="' + esc(nextStatus) + '">' + toggleLabel + '</button>'
+            + '</td>'
+            + '</tr>';
+        }).join('');
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="9" class="status-msg error">' + esc(e.message) + '</td></tr>';
+      }
+    }
+
+    async function toggleStatus(code, nextStatus) {
+      try {
+        await apiFetch('/admin/campaign-codes/' + encodeURIComponent(code), {
+          method: 'PATCH',
+          body: JSON.stringify({ status: nextStatus }),
+        });
+        loadCampaignCodes();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function openEdit(code) {
+      var campaign = currentCodes.filter(function(c) { return c.code === code; })[0];
+      if (!campaign) return;
+      document.getElementById('edit-card').dataset.code = code;
+      document.getElementById('edit-code-label').textContent = code;
+      document.getElementById('e-campaign-key').value = campaign.campaign_key || '';
+      document.getElementById('e-status').value = campaign.status || 'active';
+      document.getElementById('e-mission-id').value = campaign.mission_id || '';
+      document.getElementById('e-soul-preset').value = campaign.soul_preset_key || '';
+      document.getElementById('e-valid-from').value = campaign.valid_from || '';
+      document.getElementById('e-expires-at').value = campaign.expires_at || '';
+      document.getElementById('e-script').value = campaign.onboarding_script_variant || '';
+      document.getElementById('edit-status').textContent = '';
+      show('edit-card');
+    }
+
+    function closeEdit() {
+      hide('edit-card');
+    }
+
+    async function saveCampaignCodeEdit() {
+      var code = document.getElementById('edit-card').dataset.code;
+      var statusEl = document.getElementById('edit-status');
+      var payload = {
+        campaign_key: document.getElementById('e-campaign-key').value.trim(),
+        status: document.getElementById('e-status').value,
+        mission_id: document.getElementById('e-mission-id').value.trim() || null,
+        soul_preset_key: document.getElementById('e-soul-preset').value.trim() || null,
+        valid_from: document.getElementById('e-valid-from').value.trim() || null,
+        expires_at: document.getElementById('e-expires-at').value.trim() || null,
+        onboarding_script_variant: document.getElementById('e-script').value.trim() || null,
+      };
+      try {
+        await apiFetch('/admin/campaign-codes/' + encodeURIComponent(code), {
+          method: 'PATCH',
+          body: JSON.stringify(payload),
+        });
+        showStatus(statusEl, '保存成功', false);
+        closeEdit();
+        loadCampaignCodes();
+      } catch (e) {
+        showStatus(statusEl, e.message, true);
+      }
+    }
+  </script>
+</body>
+</html>

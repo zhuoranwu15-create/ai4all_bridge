@@ -1830,6 +1830,48 @@ def _migration_0012_agent_mission(conn: Connection) -> None:
     )
 
 
+def _migration_0013_campaign_codes(conn: Connection) -> None:
+    """内容创意营销活码：campaign_codes（可编辑配置）+ account_campaign_attribution（注册时策略快照）。
+
+    见 docs/tech_design/campaign_codes_technical_design.md §1。account_campaign_attribution
+    存的是注册时刻解析出的策略快照，不实时 join campaign_codes——活码后续被编辑/下线不影响
+    已归因账号，只影响新注册；这与 account_mission「一经分配不可更改」的不可变语义不同，
+    这里可变的是 campaign_codes 本身，不可变的只是归因快照这张表。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS campaign_codes (
+            id TEXT PRIMARY KEY,
+            code TEXT NOT NULL UNIQUE,
+            campaign_key TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            valid_from TEXT,
+            expires_at TEXT,
+            mission_id TEXT,
+            onboarding_script_variant TEXT,
+            soul_preset_key TEXT,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            created_by_admin_user_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE INDEX IF NOT EXISTS ix_campaign_codes_status ON campaign_codes(status);
+
+        CREATE TABLE IF NOT EXISTS account_campaign_attribution (
+            account_id TEXT PRIMARY KEY,
+            campaign_code TEXT NOT NULL,
+            mission_id TEXT,
+            onboarding_script_variant TEXT,
+            soul_preset_key TEXT,
+            attributed_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_account_campaign_attribution_code ON account_campaign_attribution(campaign_code);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1843,6 +1885,7 @@ _MIGRATIONS = [
     (10, _migration_0010_sessions_rolling_summary),
     (11, _migration_0011_proactive_global_candidates),
     (12, _migration_0012_agent_mission),
+    (13, _migration_0013_campaign_codes),
 ]
 
 

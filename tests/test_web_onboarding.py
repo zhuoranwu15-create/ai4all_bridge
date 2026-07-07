@@ -134,6 +134,21 @@ def test_home_carries_invite_code_to_login():
     assert "/web/login" in html
 
 
+def test_home_carries_campaign_code_to_login():
+    html = Path("app/static/home.html").read_text(encoding="utf-8")
+
+    assert "params.get('campaign_code')" in html
+    assert "payload.campaign_code = campaignCode" in html
+
+
+def test_onboarding_page_carries_campaign_code_to_register():
+    html = Path("app/static/onboarding.html").read_text(encoding="utf-8")
+
+    assert "location.search).get('campaign_code')" in html
+    assert "campaign_code: normalizedCampaignCode() || null" in html
+    assert "/web/register-and-binding-intent" in html
+
+
 def test_web_register_creates_and_reuses_platform_user(client):
     first = client.post(
         "/web/register",
