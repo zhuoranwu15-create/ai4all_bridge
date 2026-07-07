@@ -1,0 +1,60 @@
+# /etc/sudoers.d/ai4all-devops  —— devops 组对 ai4all_bridge systemd 单元的有限免密授权
+# 生成 2026-07-07（aliyun1）。仅限下列固定单元；绝不赋予其它 root 权限。
+# 安全说明：systemctl 动作【精确枚举、不带尾部通配】，避免利用 sudoers 中 '*' 吞空格
+#           夹带其它单元名（如 `restart ai4all-x sshd`）造成提权。
+#
+# 覆盖单元：
+#   ai4all-weixin-backend.service
+#   ai4all-weixin-proactive-scheduler.service
+#   ai4all-monitor-health.{service,timer}
+#   ai4all-backup.{service,timer}
+
+# ---- 控制：start / stop / restart（需 root）----
+Cmnd_Alias AI4ALL_CTL = \
+  /usr/bin/systemctl start ai4all-weixin-backend, \
+  /usr/bin/systemctl start ai4all-weixin-backend.service, \
+  /usr/bin/systemctl stop ai4all-weixin-backend, \
+  /usr/bin/systemctl stop ai4all-weixin-backend.service, \
+  /usr/bin/systemctl restart ai4all-weixin-backend, \
+  /usr/bin/systemctl restart ai4all-weixin-backend.service, \
+  /usr/bin/systemctl start ai4all-weixin-proactive-scheduler, \
+  /usr/bin/systemctl start ai4all-weixin-proactive-scheduler.service, \
+  /usr/bin/systemctl stop ai4all-weixin-proactive-scheduler, \
+  /usr/bin/systemctl stop ai4all-weixin-proactive-scheduler.service, \
+  /usr/bin/systemctl restart ai4all-weixin-proactive-scheduler, \
+  /usr/bin/systemctl restart ai4all-weixin-proactive-scheduler.service, \
+  /usr/bin/systemctl start ai4all-monitor-health.timer, \
+  /usr/bin/systemctl stop ai4all-monitor-health.timer, \
+  /usr/bin/systemctl restart ai4all-monitor-health.timer, \
+  /usr/bin/systemctl start ai4all-backup.timer, \
+  /usr/bin/systemctl stop ai4all-backup.timer, \
+  /usr/bin/systemctl restart ai4all-backup.timer
+
+# ---- 状态查看（精确，无通配；systemctl status 本不需 root，此处纳入方便统一）----
+Cmnd_Alias AI4ALL_STATUS = \
+  /usr/bin/systemctl status ai4all-weixin-backend, \
+  /usr/bin/systemctl status ai4all-weixin-backend.service, \
+  /usr/bin/systemctl status ai4all-weixin-proactive-scheduler, \
+  /usr/bin/systemctl status ai4all-weixin-proactive-scheduler.service, \
+  /usr/bin/systemctl status ai4all-monitor-health.timer, \
+  /usr/bin/systemctl status ai4all-monitor-health.service, \
+  /usr/bin/systemctl status ai4all-backup.timer, \
+  /usr/bin/systemctl status ai4all-backup.service, \
+  /usr/bin/systemctl is-active ai4all-weixin-backend, \
+  /usr/bin/systemctl is-active ai4all-weixin-backend.service, \
+  /usr/bin/systemctl is-active ai4all-weixin-proactive-scheduler, \
+  /usr/bin/systemctl is-active ai4all-weixin-proactive-scheduler.service
+
+# ---- 日志查看：固定单元 + 允许尾随参数（-f / -n / --since 等）----
+# 注：尾部 '*' 会吞空格，理论上可再夹带 -u 查看其它单元日志（只读、低危）；团队内部可接受。
+Cmnd_Alias AI4ALL_LOG = \
+  /usr/bin/journalctl -u ai4all-weixin-backend, \
+  /usr/bin/journalctl -u ai4all-weixin-backend *, \
+  /usr/bin/journalctl -u ai4all-weixin-proactive-scheduler, \
+  /usr/bin/journalctl -u ai4all-weixin-proactive-scheduler *, \
+  /usr/bin/journalctl -u ai4all-monitor-health, \
+  /usr/bin/journalctl -u ai4all-monitor-health *, \
+  /usr/bin/journalctl -u ai4all-backup, \
+  /usr/bin/journalctl -u ai4all-backup *
+
+%devops ALL=(root) NOPASSWD: AI4ALL_CTL, AI4ALL_STATUS, AI4ALL_LOG

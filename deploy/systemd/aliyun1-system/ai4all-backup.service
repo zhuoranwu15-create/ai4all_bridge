@@ -1,0 +1,13 @@
+[Unit]
+Description=AI4ALL data backup (aliyun1, system)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+EnvironmentFile=/opt/workspace/ai4all_bridge/.env
+Environment=HOME=/home/jack
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jack/.local/bin:/home/jack/.npm-global/bin:/home/jack/bin
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python scripts/backup_data.py

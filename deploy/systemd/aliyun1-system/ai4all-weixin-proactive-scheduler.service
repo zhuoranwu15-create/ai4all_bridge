@@ -1,0 +1,22 @@
+[Unit]
+Description=AI4ALL Weixin Bot Proactive Scheduler (aliyun1, system)
+After=ai4all-weixin-backend.service
+Requires=ai4all-weixin-backend.service
+
+[Service]
+Type=simple
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+EnvironmentFile=/opt/workspace/ai4all_bridge/.env
+Environment=HOME=/home/jack
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jack/.local/bin:/home/jack/.npm-global/bin:/home/jack/bin
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python scripts/run_proactive_scheduler.py
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai4all-weixin-proactive-scheduler
+
+[Install]
+WantedBy=multi-user.target

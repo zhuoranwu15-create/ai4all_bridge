@@ -80,7 +80,7 @@ WantedBy=multi-user.target
 
 如果仓库实际部署路径不是 `/opt/ai4all-weixin-bot`，同步替换
 `WorkingDirectory`、`EnvironmentFile` 和 `ExecStart`。本次阿里云节点实测路径为
-`/home/jack/workspace/ai4all_bridge`，服务用户为 `jack`。
+`/opt/workspace/ai4all_bridge`，服务用户为 `jack`。
 
 启动：
 
@@ -182,7 +182,7 @@ WantedBy=timers.target
 
 如果仓库实际部署路径不是 `/opt/ai4all-weixin-bot`，同步替换
 `WorkingDirectory`、`EnvironmentFile`、`ExecStart`、`User` 和 `Group`。本次阿里云节点实测路径为
-`/home/jack/workspace/ai4all_bridge`，服务用户为 `jack`。
+`/opt/workspace/ai4all_bridge`，服务用户为 `jack`。
 
 启用前先 dry-run：
 

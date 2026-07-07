@@ -1,0 +1,11 @@
+[Unit]
+Description=Run AI4ALL health monitor every minute (aliyun1, system)
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=ai4all-monitor-health.service
+
+[Install]
+WantedBy=timers.target
