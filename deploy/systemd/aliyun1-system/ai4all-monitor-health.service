@@ -1,0 +1,17 @@
+[Unit]
+Description=AI4ALL health monitor (aliyun1, system)
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+EnvironmentFile=/opt/workspace/ai4all_bridge/.env
+Environment=HOME=/home/jack
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jack/.local/bin:/home/jack/.npm-global/bin:/home/jack/bin
+Environment=MONITOR_READY_URL=http://127.0.0.1:8180/health/ready
+Environment=MONITOR_SCHEDULERS=proactive_scheduler:90,dreaming_scheduler:900
+Environment=MONITOR_CHECK_OPENCLAW=true
+Environment=MONITOR_OPENCLAW_CHANNEL=openclaw-weixin
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python scripts/monitor_health.py
