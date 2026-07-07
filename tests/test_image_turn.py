@@ -76,7 +76,8 @@ def _setup(monkeypatch, fresh_db, *, describe_return="一只橘猫趴在窗台�
 
 
 def _last_user_content(account_id):
-    rows = turn_service.list_recent_messages_for_account(account_id=account_id, limit=50)
+    from app.db import list_recent_messages_for_account
+    rows = list_recent_messages_for_account(account_id=account_id, limit=50)
     users = [r for r in rows if r["role"] == "user"]
     return users[-1]["content"] if users else None
 
@@ -155,7 +156,8 @@ def test_account_isolation(monkeypatch, fresh_db):
     acct_a = res_a.metadata["account_id"]
     acct_b = res_b.metadata["account_id"]
     assert acct_a != acct_b
-    rows_b = turn_service.list_recent_messages_for_account(account_id=acct_b, limit=50)
+    from app.db import list_recent_messages_for_account
+    rows_b = list_recent_messages_for_account(account_id=acct_b, limit=50)
     assert all("A 账号的猫" not in (r["content"] or "") for r in rows_b)
 
 

@@ -130,7 +130,6 @@ def test_settings(tmp_path, db_dsn):
     s.llm_context_token_budget = 0
     s.llm_context_message_max_chars = 0
     s.llm_rolling_summary_enabled = False
-    s.llm_rolling_summary_trigger_messages = 20
     s.debug_trace_account_ids = ""
     s.rate_limit_daily = 3
     s.rate_limit_rpm = 10

@@ -78,28 +78,43 @@ def test_previous_full_tools_default_is_known_and_upgradable():
     from app.user_profiles import (
         _PREV_DEFAULT_TOOLS_V1,
         _PREV_DEFAULT_TOOLS_V2,
+        _PREV_DEFAULT_TOOLS_V4,
         _known_default_tools_templates_cached,
     )
 
     assert _PREV_DEFAULT_TOOLS_V1.strip() in _known_default_tools_templates_cached()
     assert _PREV_DEFAULT_TOOLS_V2.strip() in _known_default_tools_templates_cached()
+    # V4：精简提醒/跟进/主动消息三节前的上一版默认，现网默认文件应可自愈升级到瘦身版。
+    assert _PREV_DEFAULT_TOOLS_V4.strip() in _known_default_tools_templates_cached()
 
 
-def test_default_tools_template_mentions_default_chat_tools():
+def test_default_chat_tools_have_trigger_guidance_somewhere():
+    """每个默认工具的触发指引至少存在于一处：工具 schema description 或 TOOLS.md。
+
+    触发条件已下沉到各工具 schema description 作为单一事实源（见
+    system-prompt-size-optimization-investigation）；TOOLS.md 不再要求逐工具重复，
+    提醒 / 跟进 / 主动消息三节已去除与 schema 重复的触发描述。本测试放宽了旧的
+    "每个默认工具名都必须出现在 TOOLS.md" 不变量，改为确保没有任何默认工具落到
+    "schema 与 TOOLS.md 两处都没有触发说明" 的空档。
+    """
     from app.tools import get_default_tools
     from app.user_profiles import _default_system_templates
 
     tools_text = _default_system_templates()["TOOLS.md"]
-    tool_names = {
-        tool["function"]["name"]
-        for tool in get_default_tools(
-            web_search_enabled=True,
-            content_invitation_response_enabled=True,
+    default_tools = get_default_tools(
+        web_search_enabled=True,
+        content_invitation_response_enabled=True,
+    )
+    for tool in default_tools:
+        fn = tool["function"]
+        name = fn["name"]
+        has_schema_desc = bool((fn.get("description") or "").strip())
+        mentioned_in_tools_md = name in tools_text
+        assert has_schema_desc or mentioned_in_tools_md, (
+            f"默认工具 {name} 在 schema description 和 TOOLS.md 里都没有触发说明"
         )
-    }
 
-    missing = sorted(name for name in tool_names if name not in tools_text)
-    assert missing == []
+    # 能力边界（schema 覆盖不到，TOOLS.md 独有）仍必须保留。
     assert "图片理解能力" in tools_text
     assert "可以接收并理解用户在当前微信对话里发来的图片" in tools_text
     assert "不能发送或生成图片" in tools_text
@@ -354,6 +369,31 @@ def test_previous_default_tools_file_without_image_capability_is_upgraded(tmp_pa
         assert updated.strip() == _default_system_templates()["TOOLS.md"].strip()
         assert "图片理解能力" in updated
         assert "不能发送或生成图片" in updated
+
+
+def test_previous_default_tools_file_before_dedup_slim_is_upgraded(tmp_path):
+    """精简提醒/跟进/主动消息三节前的默认（V4）应被识别为已知默认并自愈升级到瘦身版。"""
+    s = _settings(tmp_path)
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import (
+            _PREV_DEFAULT_TOOLS_V4,
+            _default_system_templates,
+            ensure_system_context_files,
+        )
+
+        system_dir = tmp_path / "system"
+        system_dir.mkdir(parents=True, exist_ok=True)
+        tools_path = system_dir / "TOOLS.md"
+        tools_path.write_text(_PREV_DEFAULT_TOOLS_V4.strip() + "\n", encoding="utf-8")
+
+        created = ensure_system_context_files()
+
+        updated = tools_path.read_text(encoding="utf-8")
+        assert created["TOOLS.md"] is False
+        assert updated.strip() == _default_system_templates()["TOOLS.md"].strip()
+        # 精简掉的重复触发描述不应再出现在升级后的默认里。
+        assert "取消、修改、核对提醒前先 list" not in updated
+        assert "## 跟进记录工具" not in updated
 
 
 def test_custom_system_tools_file_is_not_overwritten(tmp_path):

@@ -8,9 +8,11 @@ from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     close_session,
+    get_latest_closed_carryover_for_account,
     get_or_create_session,
     get_session,
     list_active_sessions_for_business_day_before,
+    update_session_rolling_summary,
 )
 
 
@@ -68,7 +70,8 @@ def _fallback_close_summary(
     from app.llm import get_active_llm_model
 
     return {
-        "session_summary": str(summary.get("rough_summary") or ""),
+        # rough_summary 停产后，session_summary 统一取 carryover（单一摘要）。
+        "session_summary": str(summary.get("carryover_summary") or ""),
         "carryover_summary": str(summary.get("carryover_summary") or ""),
         "summary_model": "deterministic_fallback"
         if result.get("reason") == "fallback_used"
@@ -130,6 +133,9 @@ def get_or_create_account_active_session_with_dreaming(
         business_day=business_day,
     )
     if not close_reason:
+        # 非本次轮转。但若这是 scheduler 关闭旧 session 后懒创建的空 active session，补种上一段
+        # carryover（否则 scheduler 路径会丢失前一天的延续，见 _maybe_seed_new_session_from_last_closed）。
+        _maybe_seed_new_session_from_last_closed(session)
         return initial
 
     summary = _rotate_session_with_dreaming(
@@ -147,9 +153,35 @@ def get_or_create_account_active_session_with_dreaming(
         carryover_summary=summary.get("carryover_summary"),
         metadata={"created_reason": close_reason},
     )
+    _maybe_seed_new_session_from_last_closed(next_state["session"])
     if summary.get("dreaming_result") is not None:
         next_state["dreaming_result"] = summary["dreaming_result"]
     return next_state
+
+
+def _maybe_seed_new_session_from_last_closed(session: Dict[str, Any]) -> None:
+    """为「刚创建、尚无消息、尚无 rolling」的新 active session 补种上一段 carryover 作为 rolling seed。
+
+    统一的 seed 入口：无论新 session 是懒轮转刚建、还是 4 点 scheduler 关闭旧 session 后由下条消息
+    懒建，carryover 都已落在被关闭的 session 行上（`close_session(carryover_summary=…)`），故一律从
+    最近一个已关闭 session 回填。守卫「无 rolling 且 turn_count==0」确保只在新 session 首条消息时补种、
+    绝不污染进行中的会话（首条后 turn_count>0 即短路，不再查库）。upto_id=0：新 session 尚无消息，seed
+    不对应任何消息 id；此后会话内溢出从 0 起继续 merge。回写 session dict 使本轮组装立即看到 seed。
+    """
+    if (session.get("rolling_summary") or "").strip():
+        return
+    if int(session.get("turn_count") or 0) > 0:
+        return
+    seed = (get_latest_closed_carryover_for_account(account_id=str(session["account_id"])) or "").strip()
+    if not seed:
+        return
+    update_session_rolling_summary(
+        session_id=int(session["id"]),
+        rolling_summary=seed,
+        rolling_summary_upto_id=0,
+    )
+    session["rolling_summary"] = seed
+    session["rolling_summary_upto_id"] = 0
 
 
 def run_daily_dreaming_scan(

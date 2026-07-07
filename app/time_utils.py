@@ -71,6 +71,40 @@ def beijing_weekday_str(now: datetime) -> str:
     return _WEEKDAY_CN[now.weekday()]
 
 
+def parse_db_timestamp(value) -> Optional[datetime]:
+    """把消息 ``created_at``（北京裸串 / datetime）解析成 naive datetime，失败返回 None。
+
+    单一真相源：兼容 'YYYY-MM-DD HH:MM:SS'（本系统 DB 裸串）、带 'T' 的 ISO、带微秒后缀，
+    也兼容驱动直接返回的 datetime。供历史时间戳渲染与压缩硬底计算共用（见 format_history_timestamp、
+    context_window.compute_floor_count）。
+    """
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    if not value:
+        return None
+    text = str(value).strip().replace("T", " ")
+    try:
+        return datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+    except (ValueError, TypeError):
+        try:
+            return datetime.strptime(text[:16], "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return None
+
+
+def format_history_timestamp(created_at) -> str:
+    """把消息 ``created_at`` 渲染成历史轮的绝对时间戳标签：``周一 2026-07-06 11:39``。
+
+    用于组装期给历史 user 消息盖时间戳（借鉴 OpenClaw：显式给出星期几，小模型不擅自推算；
+    只到分钟、丢秒，绝对时间无相对量）。**解析失败一律返回空串**，由调用方决定不加前缀，
+    绝不因脏时间戳中断组装。
+    """
+    dt = parse_db_timestamp(created_at)
+    if dt is None:
+        return ""
+    return f"{beijing_weekday_str(dt)} {dt.strftime('%Y-%m-%d %H:%M')}"
+
+
 def beijing_daypart_str(now: datetime) -> str:
     """Return a coarse Chinese day-part label for *now*'s hour (Beijing buckets)."""
     h = now.hour

@@ -17,21 +17,19 @@ import logging
 from typing import Any, Dict, List
 
 from app.config import settings
-from app.context_window import trim_history_rows
+from app.context_window import ROLLING_SUMMARY_MAX_CHARS, compute_floor_count, estimate_tokens
 from app.db import (
     get_session,
     list_context_messages_for_session,
-    list_recent_messages_for_account,
     update_session_rolling_summary,
 )
+from app.time_utils import beijing_now
 
 logger = logging.getLogger("ai4all.context_summarizer")
 
-# 喂给摘要 LLM 的单条消息字符上限与最多条数，避免摘要请求本身过大。
+# 喂给摘要 LLM 的单条消息字符上限（逐条截断，避免个别超长消息撑大摘要请求）。
+# 摘要产物字符上限直接用 context_window.ROLLING_SUMMARY_MAX_CHARS（单一真相源，与注入端同值）。
 _SUMMARY_INPUT_PER_MSG_CHARS = 300
-_SUMMARY_INPUT_MAX_MSGS = 80
-# 摘要产物字符上限（与 prompt_builder 注入 block 的 2000 截断对齐，留余量）。
-_SUMMARY_OUTPUT_MAX_CHARS = 1000
 
 _SUMMARY_SYSTEM_PROMPT = (
     "你是对话记忆压缩器。把较早的聊天记录压成简洁的中文摘要，供后续对话延续使用。"
@@ -41,10 +39,13 @@ _SUMMARY_SYSTEM_PROMPT = (
 
 
 def _format_transcript(messages: List[Dict[str, Any]]) -> str:
-    """把消息列表压成紧凑 transcript（取尾部 N 条、逐条截断）。"""
-    tail = messages[-_SUMMARY_INPUT_MAX_MSGS:]
+    """把待压缩的整个 chunk 压成紧凑 transcript（**覆盖全部 chunk**、逐条截断）。
+
+    不再按条数截尾——因为水位线会前移过整个 chunk，若这里丢掉最老几条，会造成"水位线覆盖 >
+    实际进摘要"的信息缺口。逐条 300 字上限已足够约束单条超长；chunk 本身由 token 目标封顶。
+    """
     lines: List[str] = []
-    for m in tail:
+    for m in messages:
         role = "用户" if m.get("role") == "user" else "AI"
         content = str(m.get("content") or "").strip()
         if not content:
@@ -63,7 +64,7 @@ def _deterministic_summary(transcript: str, prev_summary: str) -> str:
     if transcript:
         parts.append("较早对话片段：\n" + transcript)
     text = "\n\n".join(parts).strip()
-    return text[:_SUMMARY_OUTPUT_MAX_CHARS]
+    return text[:ROLLING_SUMMARY_MAX_CHARS]
 
 
 def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
@@ -82,7 +83,7 @@ def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
             f"已有摘要（可能为空）：\n{prev_summary or '（无）'}\n\n"
             f"需要并入摘要的更早对话：\n{transcript or '（无）'}\n\n"
             "要求：在已有摘要基础上吸收新片段，保留关键事实与未完成话题，去重，"
-            f"输出一段纯文本，不超过约 {_SUMMARY_OUTPUT_MAX_CHARS} 字。"
+            f"输出一段纯文本，不超过约 {ROLLING_SUMMARY_MAX_CHARS} 字。"
         )
         raw, _usage = generate_completion_with_usage(
             [
@@ -92,26 +93,22 @@ def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
         )
         text = str(raw or "").strip()
         # LLM 空响应与异常走同一确定性兜底。
-        return (text or _deterministic_summary(transcript, prev_summary))[:_SUMMARY_OUTPUT_MAX_CHARS]
+        return (text or _deterministic_summary(transcript, prev_summary))[:ROLLING_SUMMARY_MAX_CHARS]
     except Exception:
         logger.warning("rolling summary LLM call failed; using deterministic fallback", exc_info=True)
         return _deterministic_summary(transcript, prev_summary)
 
 
 def maybe_update_rolling_summary(*, account_id: str, session_id: int) -> Dict[str, Any]:
-    """按需为本会话生成/更新滚动摘要（后台调用，幂等、容错）。
+    """按需为本会话做「chunk 压缩」更新滚动摘要（后台调用，幂等、容错）。
 
-    流程：
-    1. 读 session 的水位线 rolling_summary_upto_id 与现有 rolling_summary。
-    2. 用与同步链路**完全相同**的口径重算「live window 最旧 id」作为溢出分界：
-       取该账号最近 llm_context_messages 条，经 trim_history_rows（token 预算 + 单条上限）
-       裁剪后，kept 中最小 id 即 prompt 仍在喂的最旧消息；id < 该分界的本会话消息即已溢出。
-       （修复：旧实现按 llm_context_messages 条数判溢出，与同步的 token 预算裁剪不一致——
-       被 token 预算丢掉、但条数未超的消息会漏摘要。）
-    3. 待摘要候选 = 本会话中「id > 水位线」且「id < live window 最旧 id」的消息；
-       查询以 after_id=水位线 分页推进（修复：旧实现 after_id=0 固定取头 1000 条，
-       session 超 1000 条后水位线卡死、后续真实溢出永不被摘要）。
-    4. 候选条数 < 触发阈值 → 跳过；否则摘要、推进水位线、落库。
+    统一编排（token chunk + 水位线不变量）：
+    1. 读水位线 rolling_summary_upto_id 与现有 rolling_summary。
+    2. 尾窗 = 本 session「id > 水位线」的消息（ASC）——即组装期仍以原文喂给 LLM 的那部分。
+    3. 尾窗 token ≤ 预算 → 无溢出，跳过（不压）。
+    4. 否则一次压掉最老 `max(chunk_tokens, 溢出量)` token 对应的**整条消息**（但绝不碰硬底 F
+       保护的最近原文）；把这批 merge 进 rolling、水位线前移过这批、落库。压完留出 headroom，
+       下次要等尾窗重新涨过预算才再压 → 既不丢信息（组装期永不丢水位线之后的原文），又不必每轮调 LLM。
 
     返回处理状态 dict（仅供日志/调试）。开关关闭或任何异常都安全返回，不影响调用方。
     """
@@ -125,44 +122,66 @@ def maybe_update_rolling_summary(*, account_id: str, session_id: int) -> Dict[st
 
         upto_id = int(session.get("rolling_summary_upto_id") or 0)
         prev_summary = (session.get("rolling_summary") or "").strip()
+        budget = int(getattr(settings, "llm_context_token_budget", 0) or 0)
+        if budget <= 0:
+            # 压缩是预算驱动的：无 token 预算即无"溢出"概念，不压。
+            return {"status": "skip", "reason": "no_budget"}
 
-        # 与 build_turn_llm_input 同口径重算 live window：account-scoped 取数 + 相同预算裁剪。
-        recent_rows = list_recent_messages_for_account(
+        # 尾窗 = 水位线之后的消息（ASC）——组装期以原文注入的那部分，也是唯一"未进摘要"的部分。
+        tail = list_context_messages_for_session(
+            session_id=session_id,
             account_id=account_id,
-            limit=max(1, int(getattr(settings, "llm_context_messages", 100) or 100)),
+            after_id=upto_id,
         )
-        kept_rows = trim_history_rows(
-            recent_rows,
-            token_budget=int(getattr(settings, "llm_context_token_budget", 0) or 0),
-            per_message_max_chars=int(getattr(settings, "llm_context_message_max_chars", 0) or 0),
-        )["kept"]
-        if not kept_rows:
-            # 账号无近期消息：无 live window，无可摘要的溢出。
-            return {"status": "skip", "reason": "below_window", "total": 0}
-        # live window 最旧 id：仍在 prompt 中的最早消息 id；本会话中早于它的即已溢出。
-        window_oldest_id = min(int(r["id"]) for r in kept_rows)
+        if not tail:
+            return {"status": "skip", "reason": "empty_tail"}
+        # 每条 token 估算只算一次，供溢出判断与下方 chunk 累加复用。
+        tail_tokens = [estimate_tokens(m.get("content")) for m in tail]
+        raw_tokens = sum(tail_tokens)
+        if raw_tokens <= budget:
+            # 尾窗仍在预算内 → 无溢出，无需压缩。
+            return {"status": "skip", "reason": "within_budget", "raw_tokens": raw_tokens}
 
-        # 从水位线分页取本会话候选，再以 live window 分界裁掉仍在窗口内的消息。
-        session_msgs = list_context_messages_for_session(session_id=session_id, after_id=upto_id)
-        candidates = [m for m in session_msgs if int(m["id"]) < window_oldest_id]
-        if not candidates:
-            # 本会话尚无新溢出消息（全部仍在 live window 内或已摘要）。
-            return {"status": "skip", "reason": "below_window", "total": len(session_msgs)}
-        trigger = max(1, int(getattr(settings, "llm_rolling_summary_trigger_messages", 20) or 20))
-        if len(candidates) < trigger:
-            return {"status": "skip", "reason": "below_trigger", "pending": len(candidates)}
+        # 硬底：最近 floor_count 条原文永不被压缩（与组装期同口径，保护近场对话）。
+        floor_count = compute_floor_count(
+            tail,
+            now=beijing_now(),
+            floor_minutes=int(getattr(settings, "llm_context_floor_minutes", 15) or 0),
+            floor_turns=int(getattr(settings, "llm_context_floor_turns", 10) or 0),
+        )
+        compressible_count = max(0, len(tail) - floor_count)
+        if compressible_count == 0:
+            # 溢出全落在硬底内（近场超预算）——不压，宁可短暂超预算（与组装期硬底优先一致）。
+            return {"status": "skip", "reason": "all_within_floor", "raw_tokens": raw_tokens}
 
-        new_summary = _summarize(candidates, prev_summary)
+        # 一次压最老 max(chunk, 溢出量) token 对应的整条消息；压完留 headroom。
+        chunk_tokens = max(1, int(getattr(settings, "rolling_summary_chunk_tokens", 1500) or 1500))
+        target = max(chunk_tokens, raw_tokens - budget)
+        gathered: List[Dict[str, Any]] = []
+        acc = 0
+        for i in range(compressible_count):
+            gathered.append(tail[i])
+            acc += tail_tokens[i]  # 复用上面已算的 per-row token
+            if acc >= target:
+                break
+
+        new_summary = _summarize(gathered, prev_summary)
         if not new_summary:
             return {"status": "skip", "reason": "empty_summary"}
 
-        new_upto = int(candidates[-1]["id"])
+        new_upto = int(gathered[-1]["id"])
         update_session_rolling_summary(
             session_id=session_id,
             rolling_summary=new_summary,
             rolling_summary_upto_id=new_upto,
         )
-        return {"status": "updated", "summarized": len(candidates), "upto_id": new_upto}
+        return {
+            "status": "updated",
+            "summarized": len(gathered),
+            "upto_id": new_upto,
+            "compressed_tokens": acc,
+            "raw_tokens": raw_tokens,
+        }
     except Exception:
         logger.warning(
             "rolling summary update failed account=%s session=%s",

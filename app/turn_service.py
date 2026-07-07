@@ -4,9 +4,14 @@ import re
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from app.time_utils import beijing_now, beijing_daypart_str, beijing_weekday_str
+from app.time_utils import (
+    beijing_now,
+    beijing_daypart_str,
+    beijing_weekday_str,
+    format_history_timestamp,
+)
 from typing import Any, Dict, List, Optional, Union
 
 from app.agent_self_state import build_agent_self_state_block
@@ -15,7 +20,6 @@ from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     connect as db_connect,
-    count_context_messages_for_session,
     get_account_id_for_session_key,
     get_account_onboarding_state,
     get_active_content_invitation,
@@ -25,7 +29,8 @@ from app.db import (
     increment_daily_usage,
     insert_debug_trace,
     insert_message,
-    list_recent_messages_for_account,
+    list_context_messages_for_session,
+    list_recent_context_messages_for_session,
     mark_message_moderation_blocked,
     process_referral_message_for_account,
     record_chat_usage_charge,
@@ -49,7 +54,7 @@ from app.moderation.service import (
     enqueue_message_for_moderation,
     screen_inbound_message_sync,
 )
-from app.context_window import trim_history_rows
+from app.context_window import compute_floor_count, trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
 from app.proactive.store.account_state import ensure_account_state
 from app.rate_limiter import rate_limiter
@@ -82,6 +87,12 @@ from app.user_profiles import (
 logger = logging.getLogger("ai4all.turn_service")
 
 _SPECIAL_COMMANDS = {"#重置会话", "#状态"}
+# 组装期取"水位线之后全部消息"的宽松上限（rolling 开）。正常态由后台 chunk 压缩把水位线之后 token
+# 维持在预算内、条数远低于此；此值仅作极端（压缩长期失败 + 大量碎消息）下的防爆兜底。
+_ABOVE_WATERMARK_FETCH_LIMIT = 2000
+# 组装期能容忍原文尾窗超预算多少倍：仅当后台压缩长期落后时才由此硬顶从最旧端丢弃（floor 仍护最近），
+# 防 prompt 无界膨胀。正常态压缩把尾窗维持在预算内，永不触发。
+_HARD_CEILING_BUDGET_MULTIPLIER = 2
 _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
 
 
@@ -210,29 +221,6 @@ def _tool_instructions(
         "- 本轮提供内容邀请回复工具：send_content_invitation_titles、record_content_invitation_feedback。",
     ]
     return "\n".join(instructions)
-
-
-def _history_covers_previous_session(
-    *,
-    current_session_id: int,
-    history_rows: List[Dict[str, Any]],
-) -> bool:
-    """Return True when history fully includes the latest prior session present."""
-    included_by_session: Dict[int, int] = {}
-    for row in history_rows:
-        session_id = row.get("session_id")
-        if session_id is None:
-            continue
-        session_id = int(session_id)
-        if session_id == current_session_id:
-            continue
-        included_by_session[session_id] = included_by_session.get(session_id, 0) + 1
-    if not included_by_session:
-        return False
-
-    previous_session_id = max(included_by_session)
-    total = count_context_messages_for_session(session_id=previous_session_id)
-    return total > 0 and included_by_session[previous_session_id] >= total
 
 
 def _tool_name(schema: Dict[str, Any]) -> str:
@@ -390,23 +378,80 @@ def build_turn_llm_input(
     _now = now or beijing_now()
     selected_llm_provider = llm_provider or resolve_active_llm_provider()
     current_session_id = int(session["id"])
-    history_rows = list_recent_messages_for_account(
-        account_id=account_id,
-        limit=settings.llm_context_messages,
+    # L0 原始尾窗：统一编排后改为 **session-scoped**（不再跨 session）——轮转即真正重置原文，
+    # 跨 session 的长期连续性交给 rolling_summary（其 seed 为上一段 dreaming 的 carryover）。
+    _rolling_enabled = getattr(settings, "llm_rolling_summary_enabled", True)
+    _budget = int(getattr(settings, "llm_context_token_budget", 0) or 0)
+    _watermark = int(session.get("rolling_summary_upto_id") or 0)
+    if _rolling_enabled:
+        # 水位线不变量：摘要覆盖到水位线，原文 = 水位线**之后**的全部消息——**永不丢弃尚未进摘要
+        # 的消息**（关掉「已丢出窗口但还没压缩」的信息缺口）。故按 after_id=水位线 取**其后全部**消息
+        # （而非"最近 N 条"——否则水位线老、其后消息条数超过 N 时最老的未摘要消息会漏掉）。取数上限
+        # 设一个宽松值；正常态由后台 chunk 压缩把水位线之后 token 维持在预算内、条数远低于此。
+        # 预算不靠组装期丢弃维持；若压缩持续失败致 raw 无界，用 2× 预算硬顶兜底（floor 仍护最近）。
+        pool = list_context_messages_for_session(
+            session_id=current_session_id,
+            account_id=account_id,
+            after_id=_watermark,
+            limit=_ABOVE_WATERMARK_FETCH_LIMIT,
+        )
+        if not pool:
+            # 兜底：水位线 ≥ 最新消息（异常）→ 至少保留最后一条原文。
+            pool = list_recent_context_messages_for_session(
+                session_id=current_session_id,
+                account_id=account_id,
+                limit=1,
+            )
+        effective_budget = _budget * _HARD_CEILING_BUDGET_MULTIPLIER if _budget > 0 else 0
+    else:
+        # rolling 关闭（无摘要兜底）：取最近 N 条 + 按 token 预算从最旧端整条丢弃 + 硬底，防 prompt 无界。
+        pool = list_recent_context_messages_for_session(
+            session_id=current_session_id,
+            account_id=account_id,
+            limit=settings.llm_context_messages,
+        )
+        effective_budget = _budget
+    # 最近「硬底」：距 now ≤ N 分钟 且 ≤ M 轮 的原文永不被丢弃（硬底优先于 token 预算，可短暂超）。
+    floor_count = compute_floor_count(
+        pool,
+        now=_now,
+        floor_minutes=int(getattr(settings, "llm_context_floor_minutes", 15) or 0),
+        floor_turns=int(getattr(settings, "llm_context_floor_turns", 10) or 0),
     )
-    # Token 预算 + 单消息硬上限裁剪（默认开；仅作用于对话历史，不含 system prompt）。
-    # 关键：tool_evidence / carryover 抑制 / history_metadata 一律基于裁剪后的 kept_rows，
-    # 保证"实际丢了哪些消息"与各下游判断一致，避免既丢原文又抑制摘要的上下文双丢。
+    # 单消息硬上限 + （仅在需要时）token 裁剪。tool_evidence / history_metadata 基于裁剪后的 kept_rows。
     trim_result = trim_history_rows(
-        history_rows,
-        token_budget=int(getattr(settings, "llm_context_token_budget", 0) or 0),
+        pool,
+        token_budget=effective_budget,
         per_message_max_chars=int(getattr(settings, "llm_context_message_max_chars", 0) or 0),
+        min_keep=floor_count,
     )
     kept_rows = trim_result["kept"]
-    history = [
-        {"role": row["role"], "content": row["content"]}
-        for row in kept_rows
-    ]
+    # L0 历史时间戳：给历史 user 轮的 content 前缀绝对时间戳 `[周一 2026-07-06 11:39]`
+    # （仅作用于喂 LLM 的副本，落库 content 不变；assistant 不盖）。当前一轮的 user 消息已
+    # 由 <current_message> envelope + 运行时块覆盖 now，故跳过它，避免与 runtime 冗余——
+    # 生产路径当前消息已预插入、是 kept_rows 里最后一条 user 行；debug_dry_run 时当前文本另行
+    # 追加（见下方），history 内全是历史消息，故不跳过。前缀在 token/字符裁剪之后注入，几乎不占预算。
+    _history_timestamp_enabled = getattr(settings, "llm_history_timestamp_enabled", True)
+    _skip_current_user_idx = None
+    if _history_timestamp_enabled and not debug_dry_run:
+        for _i in range(len(kept_rows) - 1, -1, -1):
+            if kept_rows[_i].get("role") == "user":
+                _skip_current_user_idx = _i
+                break
+    history = []
+    _history_timestamped_count = 0
+    for _i, row in enumerate(kept_rows):
+        content = row["content"]
+        if (
+            _history_timestamp_enabled
+            and row.get("role") == "user"
+            and _i != _skip_current_user_idx
+        ):
+            ts = format_history_timestamp(row.get("created_at"))
+            if ts:
+                content = f"[{ts}]\n{content}"
+                _history_timestamped_count += 1
+        history.append({"role": row["role"], "content": content})
     if getattr(settings, "llm_tool_evidence_replay_enabled", True):
         from app.tool_evidence_replay import inject_tool_evidence_replay
         # history 由 kept_rows 构建，inject 内部 zip(history, rows) 需 1:1 对齐，故同传 kept_rows。
@@ -426,30 +471,31 @@ def build_turn_llm_input(
         account_id,
         display_name=account.get("display_name"),
     )
-    suppress_carryover = _history_covers_previous_session(
-        current_session_id=current_session_id,
-        history_rows=kept_rows,
-    )
-    carryover_summary = None if suppress_carryover else session.get("carryover_summary")
-    # Token 压力滚动摘要（P3，默认关）：摘要只覆盖已滑出窗口的本会话头部消息，
-    # 一旦生成即不在当前窗口内，故 session.rolling_summary 非空时直接注入。
+    # 统一编排：carryover 不再作为独立 block 注入，而是在 session 轮转时 seed 进新 session 的
+    # rolling_summary（见 session_lifecycle），此后会话内溢出继续 merge 进同一条水位线。
+    # 因此这里只注入单一 rolling_summary（【更早对话摘要】），不再单独处理 carryover / 抑制逻辑。
     rolling_summary = None
-    if getattr(settings, "llm_rolling_summary_enabled", False):
+    if getattr(settings, "llm_rolling_summary_enabled", True):
         rolling_summary = (session.get("rolling_summary") or "").strip() or None
     history_metadata = _summarize_history_rows(kept_rows)
     carryover_metadata = {
+        # carryover 源文仍存在 session 上（dreaming 产出），但已折叠进 rolling 水位线，不再单独注入。
         "source_chars": len(session.get("carryover_summary") or ""),
-        "included": bool(carryover_summary),
-        "suppressed_by_history": suppress_carryover,
+        "included": False,
+        "suppressed_by_history": False,
+        "folded_into_rolling": True,
     }
 
     metadata: Dict[str, Any] = {
         "history_count": len(history),
-        "history_cross_session": True,
+        "history_cross_session": False,
         "history_session_count": history_metadata["session_count"],
+        "history_floor_count": floor_count,
         "history": history_metadata,
         "history_dropped_count": trim_result["metrics"]["dropped_count"],
+        "history_watermark_upto_id": _watermark,
         "history_truncated_count": trim_result["metrics"]["truncated_count"],
+        "history_timestamped_count": _history_timestamped_count,
         "history_est_tokens": trim_result["metrics"]["kept_est_tokens"],
         "rolling_summary_included": bool(rolling_summary),
         "soul_chars": len(soul),
@@ -462,8 +508,8 @@ def build_turn_llm_input(
         "onboarding_pre_written": onboarding_pre_written or {},
         "onboarding_active": onboarding_active,
         "onboarding_state": onboarding_state,
-        "carryover_summary_included": bool(carryover_summary),
-        "carryover_summary_suppressed_by_history": suppress_carryover,
+        "carryover_summary_included": False,
+        "carryover_summary_folded_into_rolling": True,
         "carryover": carryover_metadata,
     }
     if debug_dry_run:
@@ -524,7 +570,6 @@ def build_turn_llm_input(
         user_prefs=user_prefs,
         long_term_memory=long_term_memory,
         daily_notes=None,
-        carryover_summary=carryover_summary,
         rolling_summary=rolling_summary,
         system_prompt_override=profile.get("system_prompt"),
         style=profile.get("style"),
@@ -1280,10 +1325,6 @@ def _resolve_turn_reply(
 
         try:
             prompt_started = time.monotonic()
-            agent_context = read_agent_context(
-                account_id,
-                display_name=account.get("display_name"),
-            )
             onboarding_pre_written = {}
             if onboarding_active and onboarding_state in {ONBOARDING_STEP1_SENT, ONBOARDING_STEP2_SENT, ONBOARDING_STEP3_SENT}:
                 onboarding_pre_extracted = _extract_onboarding_info_sync(
@@ -1301,11 +1342,6 @@ def _resolve_turn_reply(
                         extracted=onboarding_pre_extracted,
                         current_state=onboarding_state,
                     )
-                    if onboarding_pre_written:
-                        agent_context = read_agent_context(
-                            account_id,
-                            display_name=account.get("display_name"),
-                        )
             llm_input = build_turn_llm_input(
                 account_id=account_id,
                 account=account,

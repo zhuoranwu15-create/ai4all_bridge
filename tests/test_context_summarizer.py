@@ -71,32 +71,62 @@ def test_rolling_summary_disabled_by_default(fresh_db):
     assert result["status"] == "disabled"
 
 
-def test_rolling_summary_generates_when_overflow(fresh_db):
+def test_rolling_summary_compresses_oldest_chunk_on_overflow(fresh_db):
+    """token chunk：尾窗超预算时，压最老 max(chunk, 溢出量) token 的整条消息，压完把 raw 降到预算内。"""
     from app.context_summarizer import maybe_update_rolling_summary
     from app.db import get_session
 
     account_id = "acc-rolling"
     sess = _session(account_id, "s1")
     session_id = int(sess["session"]["id"])
-    for i in range(12):
-        _add_message(account_id, session_id, f"m{i}", "user" if i % 2 == 0 else "assistant", f"消息{i}")
+    # 10 条，每条 30 字 → estimate_tokens=ceil(30/1.5)=20，共 200 token。
+    for i in range(10):
+        _add_message(account_id, session_id, f"m{i}", "user" if i % 2 == 0 else "assistant", "消" * 30)
 
     fresh_db.llm_rolling_summary_enabled = True
-    fresh_db.llm_context_messages = 5          # keep_recent=5 → 滑出 7 条
-    fresh_db.llm_rolling_summary_trigger_messages = 3
+    fresh_db.llm_context_token_budget = 60     # 预算 60 → 溢出 140
+    fresh_db.rolling_summary_chunk_tokens = 45
+    fresh_db.llm_context_floor_minutes = 0     # 关硬底，单验 chunk 逻辑
+    fresh_db.llm_context_floor_turns = 0
     # LLM 未配置 → _summarize 走确定性兜底，无外部调用。
     with patch("app.context_summarizer.settings", fresh_db), \
          patch("app.llm.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
 
     assert result["status"] == "updated"
+    # target=max(45,140)=140 → 压最老 7 条（7*20=140），剩 3 条(60 token)=预算内。
     assert result["summarized"] == 7
     updated = get_session(session_id=session_id)
     assert (updated.get("rolling_summary") or "").strip() != ""
     assert int(updated.get("rolling_summary_upto_id") or 0) > 0
 
 
-def test_rolling_summary_skips_below_window(fresh_db):
+def test_rolling_summary_chunk_leaves_headroom_when_overflow_small(fresh_db):
+    """溢出 < chunk 时也压满一个 chunk，留出 headroom，避免下轮又立刻压。"""
+    from app.context_summarizer import maybe_update_rolling_summary
+
+    account_id = "acc-rolling-headroom"
+    sess = _session(account_id, "s1")
+    session_id = int(sess["session"]["id"])
+    for i in range(10):
+        _add_message(account_id, session_id, f"m{i}", "user" if i % 2 == 0 else "assistant", "消" * 30)
+
+    fresh_db.llm_rolling_summary_enabled = True
+    fresh_db.llm_context_token_budget = 180    # raw=200 → 溢出仅 20
+    fresh_db.rolling_summary_chunk_tokens = 80  # chunk 远大于溢出
+    fresh_db.llm_context_floor_minutes = 0
+    fresh_db.llm_context_floor_turns = 0
+    with patch("app.context_summarizer.settings", fresh_db), \
+         patch("app.llm.settings", fresh_db):
+        result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
+
+    # target=max(80,20)=80 → 压最老 4 条(80 token)，剩 6 条(120 token)远低于 180 → 有 headroom。
+    assert result["status"] == "updated"
+    assert result["summarized"] == 4
+
+
+def test_rolling_summary_skips_within_budget(fresh_db):
+    """尾窗 token 在预算内 → 不压。"""
     from app.context_summarizer import maybe_update_rolling_summary
 
     account_id = "acc-rolling-small"
@@ -106,11 +136,32 @@ def test_rolling_summary_skips_below_window(fresh_db):
         _add_message(account_id, session_id, f"m{i}", "user", f"消息{i}")
 
     fresh_db.llm_rolling_summary_enabled = True
-    fresh_db.llm_context_messages = 100        # 远大于消息数 → 无溢出
+    fresh_db.llm_context_token_budget = 1000   # 远大于 3 条短消息 → 无溢出
     with patch("app.context_summarizer.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
     assert result["status"] == "skip"
-    assert result["reason"] == "below_window"
+    assert result["reason"] == "within_budget"
+
+
+def test_rolling_summary_skips_when_overflow_within_floor(fresh_db):
+    """溢出全落在硬底（近场）内 → 不压，宁可短暂超预算（与组装期硬底优先一致）。"""
+    from app.context_summarizer import maybe_update_rolling_summary
+
+    account_id = "acc-rolling-floor"
+    sess = _session(account_id, "s1")
+    session_id = int(sess["session"]["id"])
+    for i in range(4):
+        _add_message(account_id, session_id, f"m{i}", "user" if i % 2 == 0 else "assistant", "消" * 30)
+
+    fresh_db.llm_rolling_summary_enabled = True
+    fresh_db.llm_context_token_budget = 40     # raw=80 超预算
+    fresh_db.llm_context_floor_minutes = 15    # 4 条都在 15min 内、≤10 轮 → 全被硬底保护
+    fresh_db.llm_context_floor_turns = 10
+    with patch("app.context_summarizer.settings", fresh_db), \
+         patch("app.llm.settings", fresh_db):
+        result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
+    assert result["status"] == "skip"
+    assert result["reason"] == "all_within_floor"
 
 
 def test_rolling_summary_covers_token_budget_dropped_messages(fresh_db):
@@ -132,7 +183,8 @@ def test_rolling_summary_covers_token_budget_dropped_messages(fresh_db):
     fresh_db.llm_context_messages = 100        # 条数窗口远大于消息数：旧逻辑必判 below_window
     fresh_db.llm_context_token_budget = 2      # token 预算极小 → live window 只剩最后 1 条
     fresh_db.llm_context_message_max_chars = 0
-    fresh_db.llm_rolling_summary_trigger_messages = 3
+    fresh_db.llm_context_floor_minutes = 0     # 隔离：关硬底，单验 token 预算溢出口径
+    fresh_db.llm_context_floor_turns = 0
     with patch("app.context_summarizer.settings", fresh_db), \
          patch("app.llm.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
@@ -167,14 +219,20 @@ def test_rolling_summary_pages_from_watermark(fresh_db):
     fresh_db.llm_context_messages = 100
     fresh_db.llm_context_token_budget = 2      # live window 只剩最后 1 条 → 前面均溢出
     fresh_db.llm_context_message_max_chars = 0
-    fresh_db.llm_rolling_summary_trigger_messages = 1
+    fresh_db.llm_context_floor_minutes = 0     # 隔离：关硬底，单验水位线分页
+    fresh_db.llm_context_floor_turns = 0
 
     seen_after_ids = []
     real_fn = cs.list_context_messages_for_session
 
-    def _spy(*, session_id, after_id=0, limit=1000):
+    def _spy(*, session_id, account_id, after_id=0, limit=1000):
         seen_after_ids.append(after_id)
-        return real_fn(session_id=session_id, after_id=after_id, limit=limit)
+        return real_fn(
+            session_id=session_id,
+            account_id=account_id,
+            after_id=after_id,
+            limit=limit,
+        )
 
     with patch("app.context_summarizer.settings", fresh_db), \
          patch("app.llm.settings", fresh_db), \
