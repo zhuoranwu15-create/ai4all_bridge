@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # token 估算口径与历史裁剪共用同一实现，避免两处 len/1.5 公式漂移（见 context_window）。
+from app.context_window import ROLLING_SUMMARY_MAX_CHARS
 from app.context_window import estimate_tokens as _estimate_tokens
 
 
@@ -171,9 +172,15 @@ _CONTEXT_EVIDENCE_DISCIPLINE = (
     "- 回答外部资料时优先总结和归纳，不大段照搬原文。"
 )
 
-_CONTEXT_BLOCK_ORDER = (
+# 全局静态文件（system_dir 共享，几乎所有账号、几乎每轮都相同）与账号级文件
+# （SOUL/IDENTITY/USER/MEMORY/MISSION，MEMORY 每轮后可能被 memory_writer 改写）分开
+# 装配成两个 ContextBlock，避免账号级内容变化导致全局部分也无法命中前缀缓存。
+_CONTEXT_BLOCK_ORDER_GLOBAL = (
     "AGENTS",
     "TOOLS",
+)
+
+_CONTEXT_BLOCK_ORDER_ACCOUNT = (
     "SOUL",
     "IDENTITY",
     "USER",
@@ -207,7 +214,6 @@ class PromptBuilder:
         user_prefs: Optional[str] = None,
         long_term_memory: Optional[str] = None,
         daily_notes: Optional[str] = None,
-        carryover_summary: Optional[str] = None,
         rolling_summary: Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         style: Optional[str] = None,
@@ -232,7 +238,6 @@ class PromptBuilder:
             user_prefs=user_prefs,
             long_term_memory=long_term_memory,
             daily_notes=daily_notes,
-            carryover_summary=carryover_summary,
             rolling_summary=rolling_summary,
             system_prompt_override=system_prompt_override,
             style=style,
@@ -259,7 +264,6 @@ class PromptBuilder:
         user_prefs: Optional[str] = None,
         long_term_memory: Optional[str] = None,
         daily_notes: Optional[str] = None,
-        carryover_summary: Optional[str] = None,
         rolling_summary: Optional[str] = None,
         system_prompt_override: Optional[str] = None,
         style: Optional[str] = None,
@@ -370,6 +374,12 @@ class PromptBuilder:
                 section=_SECTION_STABLE,
             )
 
+        # Block 4b: Project Context (Global) — AGENTS.md/TOOLS.md，全局共享、几乎不变，
+        # 独立于账号级 project_context，避免 MEMORY.md 等每轮变化的内容拖累前缀缓存命中。
+        project_context_global = self._build_project_context_global(agent_context)
+        if project_context_global:
+            _add("project_context_global", project_context_global, section=_SECTION_STABLE)
+
         project_context = self._build_project_context(agent_context)
         if not project_context:
             # Legacy profile fallback. New accounts should use AGENTS/SOUL/etc.
@@ -414,16 +424,13 @@ class PromptBuilder:
             mem_text = _truncate(long_term_memory, 3000, "long_term_memory")
             _add("legacy_long_term_memory", f"【长期记忆】\n{mem_text}", char_limit=3000, trim_priority=30)
 
-        # Block 11: Session Carryover
-        if carryover_summary and carryover_summary.strip():
-            carryover_text = _truncate(carryover_summary, 2000, "carryover_summary")
-            _add("carryover_summary", f"【会话延续摘要】\n{carryover_text}", char_limit=2000, trim_priority=20)
-
-        # Block 11b: Rolling intra-session summary (token 压力下已滑出窗口的本会话头部消息摘要)。
-        # 与 carryover（跨 session）语义不同、并存不互斥；trim_priority 介于二者与长期记忆之间。
+        # Block 11: Rolling summary —— 统一编排后**唯一**的摘要 block（【更早对话摘要】）：
+        # 既覆盖 token 压力下滑出本会话窗口的头部消息，也承接上一段 dreaming 的 carryover（作为 seed，
+        # 在 session 轮转时写入新 session 的 rolling_summary，见 session_lifecycle / turn_service）。
+        # 原独立的【会话延续摘要】(carryover) block 已随统一编排移除。
         if rolling_summary and rolling_summary.strip():
-            rolling_text = _truncate(rolling_summary, 1000, "rolling_summary")
-            _add("rolling_summary", f"【更早对话摘要】\n{rolling_text}", char_limit=1000, trim_priority=25)
+            rolling_text = _truncate(rolling_summary, ROLLING_SUMMARY_MAX_CHARS, "rolling_summary")
+            _add("rolling_summary", f"【更早对话摘要】\n{rolling_text}", char_limit=ROLLING_SUMMARY_MAX_CHARS, trim_priority=25)
 
         # Block 12: Daily Notes
         if daily_notes and daily_notes.strip():
@@ -472,12 +479,14 @@ class PromptBuilder:
         ]
         return BuildResult(prompt=prompt, blocks=metrics)
 
-    def _build_project_context(self, agent_context: Optional[Dict[str, str]]) -> str:
+    def _build_context_section(
+        self, agent_context: Optional[Dict[str, str]], keys: tuple, header: str
+    ) -> str:
         if not agent_context:
             return ""
 
         sections: List[str] = []
-        for key in _CONTEXT_BLOCK_ORDER:
+        for key in keys:
             text = (agent_context.get(key) or "").strip()
             if not text:
                 continue
@@ -486,4 +495,14 @@ class PromptBuilder:
             sections.append(f"### {key}.md\n{body}")
         if not sections:
             return ""
-        return "【Project Context】\n" + "\n\n".join(sections)
+        return f"{header}\n" + "\n\n".join(sections)
+
+    def _build_project_context_global(self, agent_context: Optional[Dict[str, str]]) -> str:
+        return self._build_context_section(
+            agent_context, _CONTEXT_BLOCK_ORDER_GLOBAL, "【Project Context · Global】"
+        )
+
+    def _build_project_context(self, agent_context: Optional[Dict[str, str]]) -> str:
+        return self._build_context_section(
+            agent_context, _CONTEXT_BLOCK_ORDER_ACCOUNT, "【Project Context】"
+        )

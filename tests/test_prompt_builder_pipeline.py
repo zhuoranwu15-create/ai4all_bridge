@@ -53,7 +53,7 @@ def test_extra_blocks_injected_and_noop_when_absent():
 def test_token_budget_none_is_noop():
     pb = _pb()
     kwargs = dict(
-        display_name="X", soul="Y", carryover_summary="上次说到签证",
+        display_name="X", soul="Y", rolling_summary="上次说到签证",
         daily_notes="买菜", today="2026-06-16", model_name="m",
     )
     assert pb.assemble(**kwargs, token_budget=None).prompt == pb.build(**kwargs)
@@ -64,7 +64,7 @@ def test_token_budget_drops_low_priority_volatile_keeps_stable():
     # 给若干 volatile block + 一个很小的预算，迫使裁剪。
     res = pb.assemble(
         agent_context={"MEMORY": "记忆内容" * 50},  # project_context (volatile, prio 80)
-        carryover_summary="延续摘要" * 50,            # carryover (volatile, prio 20)
+        rolling_summary="延续摘要" * 50,             # rolling_summary (volatile, prio 25)
         daily_notes="今日备注" * 50,                  # daily_notes (volatile, prio 10 → 最先丢)
         today="2026-06-16",
         token_budget=120,
@@ -81,5 +81,5 @@ def test_token_budget_drops_low_priority_volatile_keeps_stable():
 def test_token_budget_keeps_all_when_within():
     pb = _pb()
     # 极大预算 → 不裁剪，等价于无预算。
-    kwargs = dict(daily_notes="买菜", carryover_summary="签证", today="2026-06-16")
+    kwargs = dict(daily_notes="买菜", rolling_summary="签证", today="2026-06-16")
     assert pb.assemble(**kwargs, token_budget=10_000_000).prompt == pb.build(**kwargs)
