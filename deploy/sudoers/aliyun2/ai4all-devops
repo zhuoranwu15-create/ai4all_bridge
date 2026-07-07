@@ -1,0 +1,34 @@
+# /etc/sudoers.d/ai4all-devops  —— aliyun2：devops 组对 ai4all_bridge 应用单元的有限免密授权
+# 生成 2026-07-07（aliyun2）。仅 backend + access-node 两个单元；绝不赋予其它 root 权限。
+# 安全：systemctl 动作精确枚举、不带尾部通配（避免 sudoers '*' 吞空格夹带其它单元名提权）。
+# 注意：本机 pg-standby 单元【不在】授权范围，devops 无权操作它。
+
+Cmnd_Alias AI4ALL_CTL = \
+  /usr/bin/systemctl start ai4all-weixin-backend, \
+  /usr/bin/systemctl start ai4all-weixin-backend.service, \
+  /usr/bin/systemctl stop ai4all-weixin-backend, \
+  /usr/bin/systemctl stop ai4all-weixin-backend.service, \
+  /usr/bin/systemctl restart ai4all-weixin-backend, \
+  /usr/bin/systemctl restart ai4all-weixin-backend.service, \
+  /usr/bin/systemctl start ai4all-weixin-node, \
+  /usr/bin/systemctl start ai4all-weixin-node.service, \
+  /usr/bin/systemctl stop ai4all-weixin-node, \
+  /usr/bin/systemctl stop ai4all-weixin-node.service, \
+  /usr/bin/systemctl restart ai4all-weixin-node, \
+  /usr/bin/systemctl restart ai4all-weixin-node.service
+
+Cmnd_Alias AI4ALL_STATUS = \
+  /usr/bin/systemctl status ai4all-weixin-backend, \
+  /usr/bin/systemctl status ai4all-weixin-backend.service, \
+  /usr/bin/systemctl status ai4all-weixin-node, \
+  /usr/bin/systemctl status ai4all-weixin-node.service, \
+  /usr/bin/systemctl is-active ai4all-weixin-backend, \
+  /usr/bin/systemctl is-active ai4all-weixin-node
+
+Cmnd_Alias AI4ALL_LOG = \
+  /usr/bin/journalctl -u ai4all-weixin-backend, \
+  /usr/bin/journalctl -u ai4all-weixin-backend *, \
+  /usr/bin/journalctl -u ai4all-weixin-node, \
+  /usr/bin/journalctl -u ai4all-weixin-node *
+
+%devops ALL=(root) NOPASSWD: AI4ALL_CTL, AI4ALL_STATUS, AI4ALL_LOG
