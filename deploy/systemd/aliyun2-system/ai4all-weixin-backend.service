@@ -1,0 +1,32 @@
+[Unit]
+Description=AI4ALL Weixin Backend (aliyun2, node role, thick-node :8180, system)
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+# 原 user 单元含 After=openclaw-gateway.service（openclaw-gateway 为 user 级服务，
+# system 级无法排序引用，已去除；backend 经 localhost 调用 + Restart 容错）。
+# 应用连远程 aliyun1 central PG (172.24.16.141:5432)，不依赖本地 pg-standby，故不加本地 PG 依赖。
+
+[Service]
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8180
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=60
+SuccessExitStatus=0 143
+KillMode=control-group
+Environment=HOME=/home/jack
+Environment=TMPDIR=/tmp
+Environment=PATH=/usr/bin:/home/jack/.npm-global/bin:/home/jack/.local/bin:/home/jack/bin:/home/jack/.nix-profile/bin:/usr/local/bin:/bin
+Environment=NO_PROXY=aliyun1,172.24.16.141,localhost,127.0.0.1,::1
+Environment=no_proxy=aliyun1,172.24.16.141,localhost,127.0.0.1,::1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai4all-weixin-backend
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,31 @@
+[Unit]
+Description=AI4ALL Weixin Access Node (aliyun2, node-only, system)
+After=network-online.target
+Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
+# 原 user 单元含 After=openclaw-gateway.service（user 级），system 级无法排序引用，已去除。
+
+[Service]
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python scripts/run_access_node.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+TimeoutStartSec=30
+SuccessExitStatus=0 143
+KillMode=control-group
+Environment=HOME=/home/jack
+Environment=TMPDIR=/tmp
+Environment=PATH=/usr/bin:/home/jack/.npm-global/bin:/home/jack/.local/bin:/home/jack/bin:/home/jack/.nix-profile/bin:/usr/local/bin:/bin
+# 出站到中心走内网直连；显式绕过任何全局代理（VPC 内网 IP 代理路由不到会 502）。
+Environment=NO_PROXY=aliyun1,172.24.16.141,localhost,127.0.0.1,::1
+Environment=no_proxy=aliyun1,172.24.16.141,localhost,127.0.0.1,::1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai4all-weixin-node
+
+[Install]
+WantedBy=multi-user.target

@@ -63,7 +63,7 @@ OpenClaw（`/home/jack/workspace/openclaw`）是**上游第三方仓库**（`ope
 **A. 正规路线 —— 从源码重新构建 OpenClaw 核心：**
 ```bash
 cd /home/jack/workspace/openclaw
-git apply /home/jack/workspace/ai4all_bridge/patches/openclaw-before-agent-reply-media.patch
+git apply /opt/workspace/ai4all_bridge/patches/openclaw-before-agent-reply-media.patch
 pnpm build           # 再把 dist 部署到运行位置
 ```
 （patch 行号对应源码树 2026.6.2，可干净 apply。）
