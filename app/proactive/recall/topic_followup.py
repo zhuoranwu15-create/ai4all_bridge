@@ -13,6 +13,7 @@ from app.db import (
 )
 from app.llm import generate_completion, is_llm_configured
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context
 from app.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP
 from app.proactive.contract.prompts import TOPIC_FOLLOWUP_SYSTEM_PROMPT
@@ -108,6 +109,8 @@ def generate_topic_followup_candidate(
         return _no_op(account_id=account_id, reason="account_not_found", now=current)
     if account.get("status") != "active":
         return _no_op(account_id=account_id, reason="account_not_active", now=current)
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
 
     state = get_proactive_account_state(account_id=account_id)
     if state is None:

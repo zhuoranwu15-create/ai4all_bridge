@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
+
+from app.time_utils import beijing_naive_now
 
 
 def _create_account(account_id: str) -> None:
@@ -12,6 +14,24 @@ def _create_account(account_id: str) -> None:
         sender_name=None,
         chat_id="chat",
         session_key=f"session-{account_id}",
+    )
+
+
+def _create_route(account_id: str) -> None:
+    """登记一条最近入站的 channel_binding，使 get_account_touch_state() 判定为 reachable。
+
+    不传则账号无任何 channel_binding，会被判 stale，触发 dispatch_reminder 的送达窗口跳过分支。
+    """
+    from app.db import upsert_channel_binding
+
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        session_key=f"session-{account_id}",
+        channel_account_id="bot-1",
+        sender_id="sender",
+        chat_id="user@im.wechat",
+        raw_identity={"source": "test"},
     )
 
 
@@ -87,6 +107,7 @@ def test_dispatch_due_reminders_sends_due_one_shot(fresh_db):
         ) as mock_send,
     ):
         _create_account("acc-dispatch")
+        _create_route("acc-dispatch")
         create_reminder(
             reminder_id="rem-dispatch",
             account_id="acc-dispatch",
@@ -162,6 +183,7 @@ def test_dispatch_due_reminder_bypasses_quiet_hours(fresh_db):
         ) as mock_send,
     ):
         _create_account("acc-quiet-rem")
+        _create_route("acc-quiet-rem")
         create_reminder(
             reminder_id="rem-quiet",
             account_id="acc-quiet-rem",
@@ -196,6 +218,7 @@ def test_dispatch_due_reminder_marks_gateway_failure(fresh_db):
         ),
     ):
         _create_account("acc-fail-rem")
+        _create_route("acc-fail-rem")
         create_reminder(
             reminder_id="rem-fail",
             account_id="acc-fail-rem",
@@ -245,12 +268,48 @@ def test_reminder_recur_columns_exist(fresh_db):
         assert r["last_sent_at"] is None
 
 
+def test_mark_reminder_sent_recurring_clears_previous_stale_error(fresh_db):
+    """周期提醒曾因送达窗口跳过而写入 error='proactive_touch_stale'；下一周期正常发送成功后，
+    这个旧 error 必须被清空，否则一个已恢复正常的提醒会在 admin/监控视图里被误判为持续异常。"""
+    from app.db import create_reminder, get_reminder, mark_reminder_sent, reschedule_reminder_stale_touch
+
+    with patch("app.db.settings", fresh_db):
+        _create_account("acc-rem-error-clear")
+        create_reminder(
+            reminder_id="rem-error-clear",
+            account_id="acc-rem-error-clear",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rem-error-clear",
+            text="每天提醒",
+            due_at="2026-06-01 09:00:00",
+            recur_rule="daily",
+        )
+        reschedule_reminder_stale_touch(
+            reminder_id="rem-error-clear",
+            next_due_at="2026-06-02 09:00:00",
+            error="proactive_touch_stale",
+        )
+        skipped = get_reminder(reminder_id="rem-error-clear")
+        assert skipped["error"] == "proactive_touch_stale"
+
+        sent = mark_reminder_sent(
+            reminder_id="rem-error-clear",
+            outbound_message_id=None,
+            next_due_at="2026-06-03 09:00:00",
+        )
+
+    assert sent["error"] is None
+
+
 def test_recurring_reminder_resets_after_dispatch(fresh_db):
     from unittest.mock import patch, MagicMock
     from app.db import create_reminder, get_reminder
 
     with patch("app.db.settings", fresh_db):
         _create_account("acc-recur-dispatch")
+        _create_route("acc-recur-dispatch")
         create_reminder(
             reminder_id="rem-recur-1",
             account_id="acc-recur-dispatch",
@@ -301,6 +360,7 @@ def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
         ) as mock_send,
     ):
         _create_account("acc-recur-twice")
+        _create_route("acc-recur-twice")
         create_reminder(
             reminder_id="rem-recur-twice",
             account_id="acc-recur-twice",
@@ -337,3 +397,127 @@ def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
         "reminder-rem-recur-twice-20260530090000",
         "reminder-rem-recur-twice-20260606090000",
     }
+
+
+def test_dispatch_one_shot_reminder_skips_when_touch_stale(fresh_db):
+    """一次性提醒：账号超过 24 小时送达窗口时不再触发，直接终态 cancelled，不调用网关。"""
+    from app.db import create_reminder, get_reminder
+    from app.proactive.obligations.reminders import dispatch_reminder
+
+    with patch("app.db.settings", fresh_db):
+        now0 = beijing_naive_now()
+        _create_account("acc-rem-stale")
+        _create_route("acc-rem-stale")
+        create_reminder(
+            reminder_id="rem-stale",
+            account_id="acc-rem-stale",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rem-stale",
+            text="很久没聊了的提醒",
+            due_at=now0.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S"),
+        )
+
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+    ):
+        result = dispatch_reminder(
+            reminder_id="rem-stale",
+            now=now0 + timedelta(hours=25),
+        )
+        reminder = get_reminder(reminder_id="rem-stale")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "proactive_touch_stale"
+    assert reminder["status"] == "cancelled"
+    assert reminder["error"] == "proactive_touch_stale"
+    mock_send.assert_not_called()
+
+
+def test_dispatch_recurring_reminder_skips_and_advances_when_touch_stale(fresh_db):
+    """周期提醒：送达窗口过期时跳过本次，不计入 sent_count，但正常推进到下一周期。"""
+    from app.db import create_reminder, get_reminder
+    from app.proactive.obligations.reminders import dispatch_reminder
+
+    with patch("app.db.settings", fresh_db):
+        now0 = beijing_naive_now()
+        due_at = now0.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        _create_account("acc-rem-recur-stale")
+        _create_route("acc-rem-recur-stale")
+        create_reminder(
+            reminder_id="rem-recur-stale",
+            account_id="acc-rem-recur-stale",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rem-recur-stale",
+            text="每天提醒",
+            due_at=due_at,
+            recur_rule="daily",
+        )
+
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+    ):
+        result = dispatch_reminder(
+            reminder_id="rem-recur-stale",
+            now=now0 + timedelta(hours=25),
+        )
+        reminder = get_reminder(reminder_id="rem-recur-stale")
+
+    expected_next_due = (datetime.strptime(due_at, "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    assert result["status"] == "skipped"
+    assert result["reason"] == "proactive_touch_stale"
+    assert reminder["status"] == "pending"
+    assert reminder["due_at"] == expected_next_due
+    assert reminder["sent_count"] == 0
+    assert reminder["error"] == "proactive_touch_stale"
+    mock_send.assert_not_called()
+
+
+def test_dispatch_recurring_reminder_with_malformed_recur_rule_cancels_instead_of_crashing(fresh_db):
+    """recur_rule 数据非法（如经 /debug 补丁写入，绕过了工具侧的 validate_recur_rule）时，
+    送达窗口过期分支必须优雅降级为 cancelled，而不是让 compute_next_due_at 抛异常炸掉整批调度。"""
+    from app.db import create_reminder, get_reminder
+    from app.proactive.obligations.reminders import dispatch_reminder
+
+    with patch("app.db.settings", fresh_db):
+        now0 = beijing_naive_now()
+        due_at = now0.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        _create_account("acc-rem-bad-rule")
+        _create_route("acc-rem-bad-rule")
+        create_reminder(
+            reminder_id="rem-bad-rule",
+            account_id="acc-rem-bad-rule",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-rem-bad-rule",
+            text="坏掉的周期规则",
+            due_at=due_at,
+            recur_rule="not-a-real-rule",
+        )
+
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+    ):
+        result = dispatch_reminder(
+            reminder_id="rem-bad-rule",
+            now=now0 + timedelta(hours=25),
+        )
+        reminder = get_reminder(reminder_id="rem-bad-rule")
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "proactive_touch_stale"
+    assert reminder["status"] == "cancelled"
+    assert reminder["error"] == "proactive_touch_stale"
+    mock_send.assert_not_called()

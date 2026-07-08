@@ -15,6 +15,20 @@ def _create_account(account_id: str) -> None:
     )
 
 
+def _create_route(account_id: str) -> None:
+    from app.db import upsert_channel_binding
+
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        session_key=f"session-{account_id}",
+        channel_account_id="bot-1",
+        sender_id="sender",
+        chat_id="user@im.wechat",
+        raw_identity={"source": "test"},
+    )
+
+
 def test_proactive_account_state_due_scan_is_opt_in(fresh_db):
     from app.proactive.store.account_state import (
         ensure_account_state,
@@ -127,6 +141,7 @@ def test_scan_due_proactive_account_checks_claims_and_marks_no_op(fresh_db):
 
     now = datetime(2026, 5, 22, 10, 0)
     _create_account("acc-account-check-shell")
+    _create_route("acc-account-check-shell")
     ensure_account_state(
         account_id="acc-account-check-shell",
         next_scan_at=datetime(2026, 5, 22, 9, 0),
@@ -172,6 +187,7 @@ def test_due_reminder_dispatch_does_not_require_proactive_account_state(fresh_db
         ),
     ):
         _create_account("acc-reminder-no-state")
+        _create_route("acc-reminder-no-state")
         create_reminder(
             reminder_id="rem-no-state",
             account_id="acc-reminder-no-state",

@@ -345,6 +345,44 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
     ) == 1
 
 
+def test_dispatch_reactivation_skips_when_touch_stale_at_send_time(fresh_db):
+    """候选生成后经 avoidance/失败改期跨过 24 小时窗口：真正派发前必须重新判定 touch_state，
+    不能只信任生成时的判断（见 dispatch_reactivation_candidate 里新增的复核）。"""
+    from datetime import timedelta
+
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.time_utils import beijing_naive_now
+
+    _create_account("acc-react-stale")
+    _create_route("acc-react-stale")
+    ensure_account_state(account_id="acc-react-stale")
+    now0 = beijing_naive_now()
+    upsert_reactivation_candidate(
+        account_id="acc-react-stale",
+        candidate={
+            "id": "react-stale-1",
+            "type": "topic_followup",
+            "text": "很久没聊了，看看你最近怎么样。",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": now0.strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+
+    with patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send:
+        result = dispatch_reactivation_candidate(
+            account_id="acc-react-stale",
+            now=now0 + timedelta(hours=25),
+            dry_run=False,
+        )
+
+    assert result["action"] == "no_op"
+    assert result["reason"] == "proactive_touch_stale"
+    assert get_reactivation_candidate(account_id="acc-react-stale") is None
+    mock_send.assert_not_called()
+
+
 def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     from app.db import (
         create_content_invitation,
