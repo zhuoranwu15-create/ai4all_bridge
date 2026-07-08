@@ -39,6 +39,26 @@ body {
 }
 .brand-cx   { font-weight: 800; color: var(--brand); }
 .brand-xb   { font-weight: 300; color: var(--text-sub); letter-spacing: .08em; }
+.brand-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.beta-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 1px solid #DDE7F3;
+  border-radius: 999px;
+  background: #F7FAFD;
+  color: #3B658A;
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
 
 /* ── 顶栏 ────────────────────────────────────── */
 .site-nav {
@@ -191,6 +211,17 @@ body {
   padding: 60px 32px 48px;
 }
 .hero-text { flex: 1; }
+.hero-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-sub);
+  font-size: .88rem;
+}
+.hero-beta {
+  font-size: .78rem;
+}
 .hero-title {
   font-size: 2.6rem;
   font-weight: 400;
@@ -220,8 +251,14 @@ body {
 .register-section .card-title {
   font-size: 1.1rem;
   font-weight: 600;
-  margin-bottom: 24px;
+  margin-bottom: 8px;
   color: var(--text);
+}
+.beta-note {
+  margin-bottom: 22px;
+  color: var(--text-hint);
+  font-size: .84rem;
+  line-height: 1.6;
 }
 .invite-hint {
   margin: -12px 0 20px;
