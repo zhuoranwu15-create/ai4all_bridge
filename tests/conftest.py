@@ -167,6 +167,10 @@ def test_settings(tmp_path, db_dsn):
     s.proactive_quiet_hours_start = "22:00"
     s.proactive_quiet_hours_end = "08:00"
     s.companion_followup_daily_limit = 1
+    s.new_user_reactivation_daily_limit = 4
+    s.new_user_reactivation_window_hours = 24
+    s.new_user_reactivation_idle_hours = 2
+    s.new_user_reactivation_cooldown_hours = 6
     s.proactive_avoidance_window_hours = 6
     s.content_invitation_rejection_cooldown_days = 30
     s.content_invitation_expire_hours = 24
@@ -339,6 +343,7 @@ def fresh_db(test_settings):
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
         patch("app.proactive.delivery.policy.settings", test_settings),
+        patch("app.proactive.orchestration.planning.settings", test_settings),
         patch("app.proactive.store.candidates.settings", test_settings),
         patch("app.proactive.slots.settings", test_settings),
         patch("app.proactive.delivery.dispatch.settings", test_settings),

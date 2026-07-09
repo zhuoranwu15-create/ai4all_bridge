@@ -145,6 +145,10 @@ class Settings(BaseSettings):
     proactive_quiet_hours_start: str = "22:00"
     proactive_quiet_hours_end: str = "08:00"
     companion_followup_daily_limit: int = 1
+    new_user_reactivation_daily_limit: int = 4
+    new_user_reactivation_window_hours: int = 24
+    new_user_reactivation_idle_hours: int = 2
+    new_user_reactivation_cooldown_hours: int = 6
     # 内容邀请日上限（含原拉活内容唤回，已合并入本分类）。原名 reactivation_daily_limit。
     content_invitation_daily_limit: int = 1
     proactive_avoidance_window_hours: int = 6

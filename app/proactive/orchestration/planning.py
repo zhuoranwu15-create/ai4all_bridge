@@ -4,10 +4,18 @@ scan_due_proactive_account_checks：扫到期账号 → claim → 发到期 comp
 刷新 reactivation 候选（已有 pending 则不覆盖）。零行为变更迁移；旧路径
 `from app.proactive.store.account_state import scan_due_proactive_account_checks` 仍可用（state 惰性再导出）。
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from app.time_utils import beijing_naive_now
+from app.config import settings
+from app.db import (
+    get_account,
+    get_account_last_inbound_at,
+    get_account_onboarding_state,
+    upsert_proactive_account_state,
+)
+from app.onboarding import is_onboarding_done
+from app.time_utils import beijing_naive_now, parse_db_timestamp
 from app.proactive.contract.common import format_reactivation_time
 from app.proactive.contract.candidate import ProactiveCandidate
 from app.proactive.selection.ranker import ranked_kinds
@@ -24,6 +32,7 @@ from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
     REACTIVATION_TYPE_HOT_TOPIC,
     REACTIVATION_TYPE_TOPIC_FOLLOWUP,
+    clear_reactivation_candidate,
     get_reactivation_candidate,
     get_reactivation_candidate_from_metadata,
     normalize_reactivation_candidate,
@@ -39,6 +48,8 @@ from app.proactive.store.account_state import (
 
 
 ReactivationGenerator = Callable[..., Dict[str, Any]]
+
+NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY = "new_user_reactivation_last_triggered_at"
 
 
 def _no_op(
@@ -79,6 +90,109 @@ def _candidate_from_content_invitation(
     )
 
 
+def _int_setting(name: str, default: int) -> int:
+    try:
+        return int(getattr(settings, name, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _candidate_with_schedule_and_metadata(
+    candidate: ProactiveCandidate,
+    *,
+    now: datetime,
+    schedule_from: Optional[datetime],
+    allowed_windows: List[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    legacy = candidate.to_legacy()
+    if metadata:
+        legacy["metadata"] = {
+            **(legacy.get("metadata") if isinstance(legacy.get("metadata"), dict) else {}),
+            **metadata,
+        }
+    return _with_default_schedule(
+        legacy,
+        now=schedule_from or now,
+        allowed_windows=allowed_windows,
+    )
+
+
+def _new_user_reactivation_eligibility(
+    *,
+    account_id: str,
+    now: datetime,
+) -> Dict[str, Any]:
+    """Return whether this account should get a first-24h idle nudge plan."""
+    account = get_account(account_id=account_id)
+    if account is None:
+        return {"eligible": False, "reason": "account_not_found"}
+
+    onboarding_state = get_account_onboarding_state(account_id=account_id)
+    if not is_onboarding_done(onboarding_state):
+        return {
+            "eligible": False,
+            "reason": "onboarding_active",
+            "onboarding_state": onboarding_state,
+        }
+
+    created_at = parse_db_timestamp(account.get("created_at"))
+    last_inbound_at = parse_db_timestamp(get_account_last_inbound_at(account_id=account_id))
+    if created_at is None:
+        return {"eligible": False, "reason": "account_created_at_missing"}
+    if last_inbound_at is None:
+        return {"eligible": False, "reason": "last_inbound_missing"}
+
+    window_hours = max(1, _int_setting("new_user_reactivation_window_hours", 24))
+    idle_hours = max(1, _int_setting("new_user_reactivation_idle_hours", 2))
+    cooldown_hours = max(1, _int_setting("new_user_reactivation_cooldown_hours", 6))
+    window_end = created_at + timedelta(hours=window_hours)
+    if now > window_end:
+        return {
+            "eligible": False,
+            "reason": "new_user_window_elapsed",
+            "window_end": format_reactivation_time(window_end),
+        }
+
+    earliest_send_at = last_inbound_at + timedelta(hours=idle_hours)
+    if now < earliest_send_at:
+        return {
+            "eligible": False,
+            "reason": "idle_threshold_not_met",
+            "earliest_send_at": format_reactivation_time(earliest_send_at),
+        }
+
+    from app.proactive.store.account_state import get_account_state
+
+    state = get_account_state(account_id=account_id)
+    metadata = (state or {}).get("metadata") or {}
+    last_triggered_at = parse_db_timestamp(
+        metadata.get(NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY)
+    )
+    next_allowed_at = (
+        last_triggered_at + timedelta(hours=cooldown_hours)
+        if last_triggered_at is not None
+        else None
+    )
+    if next_allowed_at is not None and now < next_allowed_at:
+        return {
+            "eligible": False,
+            "reason": "new_user_reactivation_cooldown",
+            "next_allowed_at": format_reactivation_time(next_allowed_at),
+        }
+
+    return {
+        "eligible": True,
+        "reason": "eligible",
+        "created_at": format_reactivation_time(created_at),
+        "window_end": format_reactivation_time(window_end),
+        "last_inbound_at": format_reactivation_time(last_inbound_at),
+        "earliest_send_at": format_reactivation_time(earliest_send_at),
+        "idle_hours": round((now - last_inbound_at).total_seconds() / 3600.0, 3),
+        "cooldown_hours": cooldown_hours,
+    }
+
+
 def plan_reactivation_candidate(
     *,
     account_id: str,
@@ -86,6 +200,8 @@ def plan_reactivation_candidate(
     topic_followup_generator: Optional[ReactivationGenerator] = None,
     content_invitation_generator: Optional[ReactivationGenerator] = None,
     hot_topic_generator: Optional[ReactivationGenerator] = None,
+    schedule_from: Optional[datetime] = None,
+    candidate_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Refresh the unified reactivation candidate for one account.
 
@@ -169,11 +285,16 @@ def plan_reactivation_candidate(
     topic_result = selection.outcomes[REACTIVATION_TYPE_TOPIC_FOLLOWUP].result
 
     if selection.chosen_kind is not None:
+        candidate = _candidate_with_schedule_and_metadata(
+            selection.candidate,
+            now=current,
+            schedule_from=schedule_from,
+            allowed_windows=allowed_windows,
+            metadata=candidate_metadata,
+        )
         state = upsert_reactivation_candidate(
             account_id=account_id,
-            candidate=_with_default_schedule(
-                selection.candidate.to_legacy(), now=current, allowed_windows=allowed_windows
-            ),
+            candidate=candidate,
         )
         content_outcome = selection.outcomes.get(REACTIVATION_TYPE_CONTENT_INVITATION)
         # content 被 topic 抢占未执行时，沿用原实现的合成 no_op。
@@ -227,6 +348,84 @@ def plan_reactivation_candidate(
         "evaluated_at": format_reactivation_time(current),
         "metadata": {},
     }
+
+
+def plan_new_user_reactivation_candidate(
+    *,
+    account_id: str,
+    now: Optional[datetime] = None,
+    topic_followup_generator: Optional[ReactivationGenerator] = None,
+    hot_topic_generator: Optional[ReactivationGenerator] = None,
+) -> Dict[str, Any]:
+    """Plan the first-24h idle nudge, using topic_followup first and hot_topic fallback."""
+    current = now or beijing_naive_now()
+    eligibility = _new_user_reactivation_eligibility(
+        account_id=account_id,
+        now=current,
+    )
+    if not eligibility.get("eligible"):
+        reason = str(eligibility.get("reason") or "not_eligible")
+        if reason in {"new_user_window_elapsed", "account_created_at_missing"}:
+            return _no_op(
+                account_id=account_id,
+                reason="new_user_reactivation_not_applicable",
+                now=current,
+                metadata={"eligibility": eligibility},
+            )
+        return _no_op(
+            account_id=account_id,
+            reason=reason,
+            now=current,
+            metadata={"eligibility": eligibility},
+        )
+
+    earliest_send_at = parse_db_timestamp(eligibility.get("earliest_send_at")) or current
+    schedule_from = max(current, earliest_send_at)
+    metadata = {
+        "new_user_reactivation": True,
+        "new_user_reactivation_version": 1,
+        "new_user_reactivation_eligibility": eligibility,
+    }
+    result = plan_reactivation_candidate(
+        account_id=account_id,
+        now=current,
+        topic_followup_generator=topic_followup_generator,
+        content_invitation_generator=None,
+        hot_topic_generator=hot_topic_generator,
+        schedule_from=schedule_from,
+        candidate_metadata=metadata,
+    )
+    if result.get("action") != "reactivation_candidate_planned":
+        result["new_user_reactivation"] = eligibility
+        return result
+
+    candidate = result.get("reactivation_candidate") or {}
+    scheduled_at = parse_db_timestamp(candidate.get("scheduled_at"))
+    window_end = parse_db_timestamp(eligibility.get("window_end"))
+    if scheduled_at is not None and window_end is not None and scheduled_at > window_end:
+        clear_reactivation_candidate(
+            account_id=account_id,
+            reason="new_user_reactivation_no_slot_before_window_end",
+            now=current,
+        )
+        return _no_op(
+            account_id=account_id,
+            reason="new_user_reactivation_no_slot_before_window_end",
+            now=current,
+            metadata={
+                "eligibility": eligibility,
+                "scheduled_at": candidate.get("scheduled_at"),
+            },
+        )
+
+    upsert_proactive_account_state(
+        account_id=account_id,
+        metadata_patch={
+            NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY: format_reactivation_time(current)
+        },
+    )
+    result["new_user_reactivation"] = eligibility
+    return result
 
 
 def scan_due_proactive_account_checks(
@@ -304,13 +503,25 @@ def scan_due_proactive_account_checks(
             }
             content_invitation_generation = reactivation_planning
         else:
-            reactivation_planning = plan_reactivation_candidate(
+            new_user_planning = plan_new_user_reactivation_candidate(
                 account_id=claimed["account_id"],
                 now=current,
                 topic_followup_generator=generate_topic_followup_candidate,
-                content_invitation_generator=generate_content_invitation_candidate,
                 hot_topic_generator=select_hot_topic_candidate,
             )
+            if new_user_planning.get("reason") == "new_user_reactivation_not_applicable":
+                reactivation_planning = plan_reactivation_candidate(
+                    account_id=claimed["account_id"],
+                    now=current,
+                    topic_followup_generator=generate_topic_followup_candidate,
+                    content_invitation_generator=generate_content_invitation_candidate,
+                    hot_topic_generator=select_hot_topic_candidate,
+                )
+                reactivation_planning["new_user_reactivation"] = (
+                    new_user_planning.get("metadata") or {}
+                ).get("eligibility")
+            else:
+                reactivation_planning = new_user_planning
             content_invitation_generation = reactivation_planning.get(
                 "content_invitation_generation",
                 reactivation_planning,

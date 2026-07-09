@@ -45,6 +45,11 @@ from app.proactive.store.candidates import (
 DedupeChecker = Callable[..., Dict[str, Any]]
 
 
+def _is_new_user_reactivation(candidate: Dict[str, Any]) -> bool:
+    metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+    return bool(metadata.get("new_user_reactivation"))
+
+
 def _no_op(
     *,
     account_id: str,
@@ -93,7 +98,11 @@ def dispatch_reactivation_candidate(
             "evaluated_at": format_reactivation_time(current),
         }
 
-    if _has_sent_reactivation_today(account_id=account_id, now=current):
+    is_new_user_reactivation = _is_new_user_reactivation(candidate)
+    if (not is_new_user_reactivation) and _has_sent_reactivation_today(
+        account_id=account_id,
+        now=current,
+    ):
         clear_reactivation_candidate(
             account_id=account_id,
             reason="reactivation_daily_limit_already_sent",
@@ -181,9 +190,17 @@ def dispatch_reactivation_candidate(
         candidate={**candidate, "dedupe": dedupe},
         sent_at=current,
         extra={
-            "source": "reactivation_scheduler",
+            "source": (
+                "new_user_reactivation_scheduler"
+                if is_new_user_reactivation
+                else "reactivation_scheduler"
+            ),
             "policy": {
-                "daily_limit_key": "reactivation",
+                "daily_limit_key": (
+                    "new_user_reactivation"
+                    if is_new_user_reactivation
+                    else "reactivation"
+                ),
                 "avoidance_applied": False,
             },
             "channel_binding_id": route.get("channel_binding_id"),
@@ -202,8 +219,10 @@ def dispatch_reactivation_candidate(
 
     # per-type hot_topic dry_run gate：hot_topic_dispatch_dry_run=True（默认）时只记录
     # would_send，其他候选类型不受影响。两个开关都 false 才真实发热点消息。
-    if candidate.get("type") == REACTIVATION_TYPE_HOT_TOPIC and bool(
-        getattr(settings, "hot_topic_dispatch_dry_run", True)
+    if (
+        not is_new_user_reactivation
+        and candidate.get("type") == REACTIVATION_TYPE_HOT_TOPIC
+        and bool(getattr(settings, "hot_topic_dispatch_dry_run", True))
     ):
         return {
             "action": "would_send",
@@ -247,11 +266,15 @@ def dispatch_reactivation_candidate(
         channel_account_id=route.get("channel_account_id"),
         to_user_id=route["to_user_id"],
         session_key=route.get("session_key"),
-        source="reactivation",
+        source="new_user_reactivation" if is_new_user_reactivation else "reactivation",
         text=candidate["text"],
         idempotency_key=f"reactivation-{account_id}-{candidate['id']}-{current.date().isoformat()}",
         now=current,
-        product_category=_reactivation_product_category(candidate["type"]),
+        product_category=(
+            "new_user_reactivation"
+            if is_new_user_reactivation
+            else _reactivation_product_category(candidate["type"])
+        ),
         metadata=outbound_metadata,
     )
     outbound_status = outbound.get("status")

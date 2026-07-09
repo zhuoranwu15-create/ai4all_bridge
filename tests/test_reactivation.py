@@ -902,6 +902,147 @@ def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
     assert candidate["text"] == "昨晚小家伙睡得乖不乖？"
 
 
+def test_plan_new_user_reactivation_after_two_idle_hours(fresh_db):
+    from app.db import connect, get_proactive_account_state, set_account_onboarding_state
+    from app.proactive.orchestration.planning import (
+        NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY,
+        plan_new_user_reactivation_candidate,
+    )
+    from app.proactive.store.account_state import ensure_account_state
+    from app.proactive.store.candidates import get_reactivation_candidate
+
+    fresh_db.reactivation_send_jitter_min_seconds = 0
+    fresh_db.reactivation_send_jitter_max_seconds = 0
+    _create_account("acc-new-user-plan")
+    _create_route("acc-new-user-plan")
+    ensure_account_state(account_id="acc-new-user-plan")
+    set_account_onboarding_state(account_id="acc-new-user-plan", state="complete")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET created_at = ? WHERE id = ?",
+            ("2026-06-05 09:00:00", "acc-new-user-plan"),
+        )
+        conn.execute(
+            "UPDATE channel_bindings SET last_seen_at = ? WHERE account_id = ?",
+            ("2026-06-05 10:00:00", "acc-new-user-plan"),
+        )
+    _insert_inbound(account_id="acc-new-user-plan", created_at="2026-06-05 10:00:00")
+
+    def fake_topic_generator(*, account_id, now):
+        return {
+            "action": "topic_followup_candidate_created",
+            "account_id": account_id,
+            "reactivation_candidate": {
+                "id": "react-new-user-topic-1",
+                "type": "topic_followup",
+                "topic": "破冰续聊",
+                "text": "刚刚那个话题我还挺想听你多说两句的。",
+                "generated_at": "2026-06-05 12:05:00",
+            },
+        }
+
+    result = plan_new_user_reactivation_candidate(
+        account_id="acc-new-user-plan",
+        now=datetime(2026, 6, 5, 12, 5),
+        topic_followup_generator=fake_topic_generator,
+        hot_topic_generator=lambda **_: {"action": "no_op", "reason": "unused"},
+    )
+    candidate = get_reactivation_candidate(account_id="acc-new-user-plan")
+    state = get_proactive_account_state(account_id="acc-new-user-plan")
+
+    assert result["action"] == "reactivation_candidate_planned"
+    assert result["reactivation_type"] == "topic_followup"
+    assert candidate["scheduled_at"] == "2026-06-05 12:15:00"
+    assert candidate["metadata"]["new_user_reactivation"] is True
+    assert candidate["metadata"]["new_user_reactivation_eligibility"]["last_inbound_at"] == "2026-06-05 10:00:00"
+    assert state["metadata"][NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY] == "2026-06-05 12:05:00"
+
+
+def test_plan_new_user_reactivation_respects_six_hour_cooldown(fresh_db):
+    from app.db import connect, set_account_onboarding_state
+    from app.proactive.orchestration.planning import (
+        NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY,
+        plan_new_user_reactivation_candidate,
+    )
+    from app.proactive.store.account_state import ensure_account_state
+    from app.proactive.store.candidates import get_reactivation_candidate
+
+    _create_account("acc-new-user-cooldown")
+    _create_route("acc-new-user-cooldown")
+    ensure_account_state(
+        account_id="acc-new-user-cooldown",
+        metadata={NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY: "2026-06-05 12:00:00"},
+    )
+    set_account_onboarding_state(account_id="acc-new-user-cooldown", state="complete")
+    with connect() as conn:
+        conn.execute(
+            "UPDATE accounts SET created_at = ? WHERE id = ?",
+            ("2026-06-05 09:00:00", "acc-new-user-cooldown"),
+        )
+        conn.execute(
+            "UPDATE channel_bindings SET last_seen_at = ? WHERE account_id = ?",
+            ("2026-06-05 10:00:00", "acc-new-user-cooldown"),
+        )
+    _insert_inbound(account_id="acc-new-user-cooldown", created_at="2026-06-05 10:00:00")
+
+    result = plan_new_user_reactivation_candidate(
+        account_id="acc-new-user-cooldown",
+        now=datetime(2026, 6, 5, 17, 59),
+        topic_followup_generator=lambda **_: (_ for _ in ()).throw(AssertionError("should not generate")),
+        hot_topic_generator=lambda **_: (_ for _ in ()).throw(AssertionError("should not generate")),
+    )
+
+    assert result["action"] == "no_op"
+    assert result["reason"] == "new_user_reactivation_cooldown"
+    assert result["metadata"]["eligibility"]["next_allowed_at"] == "2026-06-05 18:00:00"
+    assert get_reactivation_candidate(account_id="acc-new-user-cooldown") is None
+
+
+def test_new_user_hot_topic_dispatch_uses_independent_category(fresh_db):
+    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.proactive.store.account_state import ensure_account_state
+    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.db import list_outbound_messages
+
+    fresh_db.proactive_quiet_hours_start = "00:00"
+    fresh_db.proactive_quiet_hours_end = "00:00"
+    fresh_db.hot_topic_dispatch_dry_run = True
+    _create_account("acc-new-user-dispatch")
+    _create_route("acc-new-user-dispatch")
+    ensure_account_state(account_id="acc-new-user-dispatch")
+    _insert_inbound(account_id="acc-new-user-dispatch", created_at="2026-06-05 10:00:00")
+    upsert_reactivation_candidate(
+        account_id="acc-new-user-dispatch",
+        candidate={
+            "id": "react-new-user-hot-1",
+            "type": "hot_topic",
+            "topic": "今日轻话题",
+            "text": "刚看到个挺适合闲聊的小话题，想听听你怎么看。",
+            "generated_at": "2026-06-05 11:00:00",
+            "scheduled_slot": "slot_1",
+            "scheduled_at": "2026-06-05 12:15:00",
+            "metadata": {"new_user_reactivation": True},
+        },
+    )
+
+    with patch(
+        "app.proactive.delivery.outbound.send_weixin_text",
+        return_value={"messageId": "openclaw-weixin:new-user-hot"},
+    ):
+        result = dispatch_reactivation_candidate(
+            account_id="acc-new-user-dispatch",
+            now=datetime(2026, 6, 5, 12, 15),
+            dry_run=False,
+            dedupe_checker=lambda **_: {"duplicate": False},
+        )
+    outbound = list_outbound_messages(account_id="acc-new-user-dispatch")
+
+    assert result["action"] == "sent"
+    assert outbound[0]["source"] == "new_user_reactivation"
+    assert outbound[0]["product_category"] == "new_user_reactivation"
+    assert outbound[0]["metadata"]["reactivation_type"] == "hot_topic"
+
+
 def _create_pending_reminder(account_id: str, *, due_at: str) -> None:
     """插入一条 pending 用户提醒，用于触发 policy 的 avoidance 拦截（bug B 复现）。"""
     from app.db import create_reminder
