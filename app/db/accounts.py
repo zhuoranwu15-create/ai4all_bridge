@@ -40,6 +40,7 @@ __all__ = [
     'create_platform_user_session',
     'get_account',
     'get_account_id_for_session_key',
+    'get_account_last_inbound_at',
     'get_account_onboarding_state',
     'get_daily_usage',
     'get_duplicate_reply',
@@ -1128,6 +1129,24 @@ def get_account_onboarding_state(*, account_id: str) -> str:
     if row is None:
         return "pending"
     return row["onboarding_state"] or "pending"
+
+
+def get_account_last_inbound_at(*, account_id: str) -> Optional[str]:
+    """Return the most recent `channel_bindings.last_seen_at` across all of this
+    account's bindings, or None if it has none.
+
+    Only real inbound turns refresh `last_seen_at` (see `upsert_channel_binding`
+    callers) — unlike the `messages`-table `MAX(created_at)` aggregates used
+    elsewhere for display, this is not contaminated by the bot's own outbound
+    messages, so it is a clean signal for "has this account sent an inbound
+    message, and when" (used by new-user-reactivation idle-hours eligibility).
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT MAX(last_seen_at) AS last_seen_at FROM channel_bindings WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    return row["last_seen_at"] if row and row["last_seen_at"] else None
 
 
 def record_analytics_event(

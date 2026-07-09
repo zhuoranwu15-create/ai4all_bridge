@@ -76,6 +76,14 @@ PERSONA_OPTION_LINES_WITH_PRESET_NAMES = [
 
 ONBOARDING_TIMEOUT_MINUTES = 15
 
+ONBOARDING_ICEBREAKING_MENU_INSTRUCTION = (
+    "完成确认后，请在回复末尾给用户一个清楚的菜单式破冰入口，用你当前人设的语气讲出来。"
+    "必须保留 1-4 的编号菜单感，但具体措辞不要照搬模板、要像角色本人在说。四个选项含义分别是："
+    "1）说说今天开心或想吐槽的事；2）说一个不常跟人说的自己的历史或爱好；"
+    "3）发一张手机里最近拍的自拍或随手拍；4）做一个偏娱乐陪伴向的心理测试，或聊聊星座/八字。"
+    "心理测试、星座和八字只能作为娱乐和自我理解入口，不要做确定性判断或现实决策建议。"
+)
+
 # Question ask limits
 USER_NAME_ASK_LIMIT = 2
 PERSONA_ASK_LIMIT = 1
@@ -158,8 +166,11 @@ def build_onboarding_prompt_context(
                 lines.append(f"用户刚刚回复了你关于 AI 称呼的问题。已提取到 AI 称呼：{ai_name}。请**完全以你当前设定好的角色性格和语气**回复确认，这是你第一次用这个角色开口说话，让用户感受到角色的样子。然后自然进入正常聊天，不再追问 onboarding 问题。")
             else:
                 lines.append("用户刚刚回复了你关于 AI 称呼的问题，但没有明确设定或选择了留白/跳过。请以你当前的角色语气自然接住，不再追问 onboarding 问题，可以表达之后慢慢相处中养成。")
+            lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
         elif needs_confirmation:
             # Extraction found something but it's ambiguous — do one light confirmation turn.
+            # Onboarding 尚未完成（还在等用户确认），本轮不追加破冰菜单，避免和确认问题同时出现；
+            # 等下一轮用户确认后进入其它分支时再展示。
             known = []
             if ai_name:
                 known.append(f'AI 称呼：{ai_name}')
@@ -180,8 +191,10 @@ def build_onboarding_prompt_context(
             if persona:
                 known.append(f'人设：{PERSONA_PRESET_NAMES_ZH.get(persona, persona)}')
             lines.append(f"用户刚刚回复了你关于 AI 称呼和人设的问题。已提取到：{'、'.join(known)}。请**完全以你刚被设定的角色性格和语气**回复确认，这是你第一次用这个角色开口说话，让用户感受到角色的样子。然后自然进入正常聊天，不再追问 onboarding 问题。")
+            lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
         else:
             lines.append("用户刚刚回复了你关于 AI 称呼和人设的问题，但没有明确设定或选择了留白/跳过。请以你当前的角色语气自然接住，不再追问 onboarding 问题，可以表达之后慢慢相处中养成。")
+            lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
 
     elif state == ONBOARDING_STEP3_SENT:
         # Legacy state from the old three-step flow. Acknowledge and complete.
@@ -189,6 +202,7 @@ def build_onboarding_prompt_context(
             lines.append(f'用户刚刚回复了你关于性格选择的问题。接收他们的选择，以"{ai_name}"的身份自然温暖地完成 onboarding，不需要再问任何 onboarding 问题。')
         else:
             lines.append("用户刚刚回复了你关于性格选择的问题。接收他们的选择，自然温暖地完成 onboarding，不需要再问任何 onboarding 问题。")
+        lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
 
     if onboarding_script_override and onboarding_script_override.strip():
         lines += [

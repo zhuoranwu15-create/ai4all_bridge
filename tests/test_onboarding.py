@@ -186,6 +186,8 @@ def test_prompt_context_step3_is_wrapup():
         persona_ask_count=1,
     )
     assert "onboarding" in ctx
+    assert "菜单式破冰入口" in ctx
+    assert "1-4 的编号菜单感" in ctx
     assert "小太阳" not in ctx  # persona options not shown at wrap-up stage
 
 
@@ -691,6 +693,10 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
     assert "小满" in soul
     assert "小精灵" in soul
     assert "不再追问 onboarding 问题" in captured["system_prompt"]
+    assert "菜单式破冰入口" in captured["system_prompt"]
+    assert "1-4 的编号菜单感" in captured["system_prompt"]
+    assert "自拍或随手拍" in captured["system_prompt"]
+    assert "星座/八字" in captured["system_prompt"]
     assert "1. 先留白" not in captured["system_prompt"]
     assert get_account_onboarding_state(account_id=session_key) == "complete"
 

@@ -17,6 +17,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 class OutboundCategory(str, Enum):
     USER_REMINDER = "user_reminder"
     COMPANION_FOLLOWUP = "companion_followup"
+    NEW_USER_REACTIVATION = "new_user_reactivation"
     CONTENT_INVITATION = "content_invitation"
     CONTENT_INVITATION_RESPONSE = "content_invitation_response"
     TASK_RESULT = "task_result"
@@ -70,6 +71,19 @@ CATEGORY_SPECS: Tuple[CategorySpec, ...] = (
         avoidance_window=True,
         avoidance_check_companion=False,
         label="陪伴跟进",
+    ),
+    CategorySpec(
+        category=OutboundCategory.NEW_USER_REACTIVATION,
+        sources=("new_user_reactivation",),
+        exempt=False,
+        daily_limit_setting="new_user_reactivation_daily_limit",
+        daily_limit_default=4,
+        user_configurable=False,
+        frequency_bucket="new_user_reactivation",
+        content_preference_check=False,
+        avoidance_window=True,
+        avoidance_check_companion=False,
+        label="新用户破冰唤回",
     ),
     CategorySpec(
         category=OutboundCategory.CONTENT_INVITATION,
