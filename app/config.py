@@ -46,10 +46,10 @@ class Settings(BaseSettings):
     llm_anthropic_base_url: str = "https://api.anthropic.com"
     llm_anthropic_model: str = "claude-sonnet-4-6"
     llm_anthropic_api_key: str = ""
-    llm_timeout_seconds: float = 40.0
+    llm_timeout_seconds: float = 50.0
     llm_connect_timeout_seconds: float = 5.0
     llm_max_retries: int = 1
-    llm_max_tool_rounds: int = 3
+    llm_max_tool_rounds: int = 4
     llm_force_ipv4: bool = True
     llm_context_messages: int = 100
     # 短期对话历史裁剪（仅作用于对话 history，不含 system prompt；详见
