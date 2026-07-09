@@ -11,9 +11,12 @@
 
 <!-- 顶栏 -->
 <nav class="site-nav">
-  <a class="brand-logo" href="/">
-    <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
-  </a>
+  <div class="brand-group">
+    <a class="brand-logo" href="/">
+      <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
+    </a>
+    <span class="beta-badge">Beta 测试版</span>
+  </div>
   <div class="nav-actions">
     <a class="btn btn-ghost btn-sm" href="faq.html">常见问题</a>
     <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">用户中心</a>
@@ -23,6 +26,7 @@
 <!-- Hero -->
 <section class="hero">
   <div class="hero-text">
+    <p class="hero-kicker"><span class="beta-badge hero-beta">Beta 测试版</span> 当前处于小范围测试阶段</p>
     <h1 class="hero-title">
       <span class="cx">朝夕</span><span class="xb">相伴</span>
     </h1>
@@ -41,6 +45,7 @@
 <section class="register-section">
   <div class="card">
     <p class="card-title" id="card-title">手机号注册 / 登录</p>
+    <p class="beta-note">如果你正在手机浏览器中打开，请长按二维码完成绑定，或截图保存后，再到微信中识别二维码完成绑定。</p>
     <div class="invite-hint" id="invite-hint" style="display:none"></div>
 
     <!-- 步骤指示器 -->
@@ -190,6 +195,81 @@ function saveSession(token) {
   localStorage.setItem('chaochao_session', token);
 }
 
+function showBindingQr(intent) {
+  S.bindingIntent = intent;
+  hide('step-phone');
+  hide('step-otp');
+  hide('step-done');
+  show('step-qr');
+  document.getElementById('card-title').textContent = '扫码绑定微信';
+  clearMsg('msg-send');
+  clearMsg('msg-otp');
+  if (S.bindingIntent) renderQr();
+  startPolling();
+}
+
+var BINDING_INTENT_CACHE_KEY = 'chaochao_binding_intent_id';
+
+async function createBindingQrForSession() {
+  // 避免刷新页面/多次触发时每次都新建一个 binding_intent 并触发一次真实的 OpenClaw
+  // 扫码会话：先尝试复用本 tab 内还没过期/完成的上一个 intent。
+  var cachedId = sessionStorage.getItem(BINDING_INTENT_CACHE_KEY);
+  if (cachedId) {
+    try {
+      var cached = await apiFetch('/web/binding-intents/' + cachedId);
+      var status = cached.binding_intent && cached.binding_intent.status;
+      if (status === 'created' || status === 'qr_created') {
+        showBindingQr(cached.binding_intent);
+        return;
+      }
+    } catch (e) {
+      // 查不到或已不属于当前用户，走下面重新创建。
+    }
+    sessionStorage.removeItem(BINDING_INTENT_CACHE_KEY);
+  }
+
+  showMsg('msg-send', '检测到你已登录，正在生成微信绑定二维码…', 'info');
+  var data = await apiFetch('/web/binding-intents', {
+    method: 'POST',
+    body: JSON.stringify({ channel: 'openclaw-weixin' }),
+  });
+  sessionStorage.setItem(BINDING_INTENT_CACHE_KEY, data.binding_intent.id);
+  showBindingQr(data.binding_intent);
+}
+
+async function resumeExistingSession() {
+  var token = localStorage.getItem('chaochao_session');
+  if (!token) return;
+
+  S.sessionToken = token;
+  try {
+    var me = await apiFetch('/web/me');
+    if (!me || !me.platform_user) return;
+  } catch(e) {
+    localStorage.removeItem('chaochao_session');
+    S.sessionToken = null;
+    return;
+  }
+
+  try {
+    var data = await apiFetch('/web/me/bindings');
+    var bindings = data.bindings || [];
+    if (bindings.length > 0) {
+      window.location.href = '/user/dashboard.html';
+      return;
+    }
+  } catch(e) {
+    showMsg('msg-send', '读取微信绑定状态失败：' + e.message, 'err');
+    return;
+  }
+
+  try {
+    await createBindingQrForSession();
+  } catch(e) {
+    showMsg('msg-send', '创建微信绑定二维码失败：' + e.message, 'err');
+  }
+}
+
 function initCaptcha(config) {
   var captcha = config && config.captcha;
   if (!captcha || !captcha.configured || !captcha.scene_id || !captcha.prefix) {
@@ -221,18 +301,7 @@ window.addEventListener('load', function() {
   initInviteCode();
   initCampaignCode();
 
-  var token = localStorage.getItem('chaochao_session');
-  if (token) {
-    S.sessionToken = token;
-    apiFetch('/web/me').then(function(data) {
-      if (data && data.platform_user) {
-        window.location.href = '/user/dashboard.html';
-      }
-    }).catch(function() {
-      localStorage.removeItem('chaochao_session');
-      S.sessionToken = null;
-    });
-  }
+  resumeExistingSession();
 
   // 初始化阿里云验证码
   apiFetch('/web/config')
@@ -344,13 +413,7 @@ async function doLogin() {
       setTimeout(function() { window.location.href = '/user/dashboard.html'; }, 1200);
     } else {
       // 未绑定 → 展示二维码
-      S.bindingIntent = data.binding_intent;
-      hide('step-phone');
-      hide('step-otp');
-      show('step-qr');
-      document.getElementById('card-title').textContent = '扫码绑定微信';
-      if (S.bindingIntent) renderQr();
-      startPolling();
+      showBindingQr(data.binding_intent);
     }
   } catch(e) {
     showMsg('msg-otp', e.message, 'err');

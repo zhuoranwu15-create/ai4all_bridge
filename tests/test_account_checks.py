@@ -29,6 +29,23 @@ def _create_route(account_id: str) -> None:
     )
 
 
+def _create_reachable_binding_without_route(account_id: str) -> None:
+    """模拟扫码绑定刚完成、还没有任何入站消息的场景：last_seen_at 已刷新（touch_state
+    reachable），但 chat_id/channel_account_id 还没有真正到位，_select_route 应仍判定
+    missing_channel_route（见 app/routers/web.py 的绑定完成回调）。"""
+    from app.db import upsert_channel_binding
+
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        session_key=f"session-{account_id}",
+        channel_account_id=None,
+        sender_id=None,
+        chat_id=None,
+        raw_identity={"source": "test"},
+    )
+
+
 def _create_state(account_id: str, metadata=None) -> None:
     from app.proactive.store.account_state import ensure_account_state
 
@@ -62,6 +79,7 @@ def test_decide_account_check_no_state_no_op(fresh_db):
     from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-no-state")
+    _create_route("acc-hb-no-state")
 
     decision = decide_account_check_action(
         account_id="acc-hb-no-state",
@@ -70,6 +88,37 @@ def test_decide_account_check_no_state_no_op(fresh_db):
 
     assert decision["action"] == "no_op"
     assert decision["reason"] == "proactive_state_missing"
+
+
+def test_decide_account_check_skips_when_touch_stale(fresh_db):
+    """账号超过 24 小时送达窗口时，account_check 的决策阶段应直接短路，不再往下判断
+    proactive_state/candidate（见 decide_account_check_action 新增的 touch_state 复核）。"""
+    from datetime import timedelta
+
+    from app.proactive.delivery.account_check import decide_account_check_action
+    from app.time_utils import beijing_naive_now
+
+    _create_account("acc-hb-touch-stale")
+    _create_route("acc-hb-touch-stale")
+    _create_state(
+        "acc-hb-touch-stale",
+        metadata={
+            "account_check_candidate": {
+                "id": "candidate-stale",
+                "text": "很久没聊了。",
+                "source": "test",
+                "reason": "manual_test",
+            }
+        },
+    )
+
+    decision = decide_account_check_action(
+        account_id="acc-hb-touch-stale",
+        now=beijing_naive_now() + timedelta(hours=25),
+    )
+
+    assert decision["action"] == "no_op"
+    assert decision["reason"] == "proactive_touch_stale"
 
 
 def test_decide_account_check_no_candidate_no_op(fresh_db):
@@ -125,6 +174,7 @@ def test_decide_account_check_candidate_requires_route(fresh_db):
     from app.proactive.delivery.account_check import decide_account_check_action
 
     _create_account("acc-hb-missing-route")
+    _create_reachable_binding_without_route("acc-hb-missing-route")
     _create_state(
         "acc-hb-missing-route",
         metadata={"account_check_candidate_text": "没有路由就不能发。"},

@@ -7,8 +7,10 @@ from app.db import (
     list_due_reminders,
     mark_reminder_failed,
     mark_reminder_sent,
+    reschedule_reminder_stale_touch,
 )
 from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.reminder_utils import compute_next_due_at
 from app.time_utils import beijing_naive_now
 
@@ -50,6 +52,34 @@ def dispatch_reminder(
             "status": "skipped",
             "reason": "not_due_or_already_claimed",
             "reminder_id": reminder_id,
+        }
+
+    if get_account_touch_state(account_id=claimed["account_id"], now=current) == STALE:
+        recur_rule = claimed.get("recur_rule")
+        next_due_at = None
+        if recur_rule:
+            try:
+                last_due = datetime.strptime(claimed["due_at"], "%Y-%m-%d %H:%M:%S")
+                next_due_at = compute_next_due_at(recur_rule, last_due).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, IndexError):
+                # recur_rule 格式非法（如经 /debug 补丁写入）：不让一条脏数据阻断整批调度，
+                # 降级为一次性终止而不是抛出异常。
+                next_due_at = None
+        if next_due_at:
+            reminder = reschedule_reminder_stale_touch(
+                reminder_id=claimed["id"],
+                next_due_at=next_due_at,
+                error="proactive_touch_stale",
+            )
+        else:
+            reminder = cancel_reminder(
+                reminder_id=claimed["id"],
+                error="proactive_touch_stale",
+            )
+        return {
+            "status": "skipped",
+            "reason": "proactive_touch_stale",
+            "reminder": reminder,
         }
 
     try:

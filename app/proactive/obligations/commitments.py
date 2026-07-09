@@ -18,6 +18,7 @@ from app.llm import generate_completion, is_llm_configured
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.contract.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
 from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.proactive.store.account_state import mark_account_proactive_sent
 
 
@@ -248,6 +249,17 @@ def dispatch_commitment(
         return {
             "status": "failed",
             "reason": "missing_channel_route",
+            "commitment": commitment,
+        }
+
+    if get_account_touch_state(account_id=claimed["account_id"], now=current) == STALE:
+        commitment = cancel_proactive_commitment(
+            commitment_id=claimed["id"],
+            error="proactive_touch_stale",
+        )
+        return {
+            "status": "skipped",
+            "reason": "proactive_touch_stale",
             "commitment": commitment,
         }
 

@@ -82,6 +82,7 @@ def get_reminder_tools() -> list:
                     "recur_rule 可选：daily（每天）、weekly:N（每周，N=0 周一…6 周日）、"
                     "monthly:D（每月第 D 日）。不填为一次性提醒。"
                     "时间不明确时不要猜测，告知用户需要补充具体日期和时间。"
+                    "due_at 距现在超过约 1 天时，确认回复里自然带一句提醒用户这段时间保持联系。"
                 ),
                 "parameters": {
                     "type": "object",
@@ -189,6 +190,8 @@ def get_commitment_tools() -> list:
                     "线索的话题；不要编造用户没有表达过的目标、事实或时间；不适用于医疗/"
                     "法律/金融等高风险建议。due_at 必须是未来具体时间，"
                     "格式 YYYY-MM-DD HH:MM:SS。"
+                    "commitment 是隐性记录，一般不需要额外提示用户；"
+                    "due_at 明显较远（超过几天）时可顺带自然提一句保持联系，不用刻意强调。"
                 ),
                 "parameters": {
                     "type": "object",

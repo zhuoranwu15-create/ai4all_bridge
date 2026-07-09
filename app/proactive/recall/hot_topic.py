@@ -32,6 +32,7 @@ from app.llm import generate_completion, is_llm_configured
 from app.user_profiles import read_agent_context
 from app.tools.web_search_handlers import run_headless_web_search
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.proactive.contract.prompts import (
     HOT_TOPIC_PERSONALIZE_SYSTEM_PROMPT,
     HOT_TOPIC_RANK_SYSTEM_PROMPT,
@@ -408,6 +409,8 @@ def select_hot_topic_candidate(
         return _no_op(account_id=account_id, reason="account_not_found", now=current)
     if account.get("status") != "active":
         return _no_op(account_id=account_id, reason="account_not_active", now=current)
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
 
     state = get_proactive_account_state(account_id=account_id)
     if state is None:

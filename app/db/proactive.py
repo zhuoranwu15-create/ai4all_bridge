@@ -76,6 +76,7 @@ __all__ = [
     'mark_reminder_sent',
     'pick_node',
     'release_content_invitation_claim',
+    'reschedule_reminder_stale_touch',
     'resolve_node_for_account',
     'set_account_assigned_node',
     'should_inline_dispatch_for_account',
@@ -923,6 +924,7 @@ def mark_reminder_sent(
                     last_sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
                     claimed_at = NULL,
                     outbound_message_id = ?,
+                    error = NULL,
                     updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
@@ -943,6 +945,35 @@ def mark_reminder_sent(
                 """,
                 (outbound_message_id, reminder_id),
             )
+        row = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?",
+            (reminder_id,),
+        ).fetchone()
+    return _decode_reminder(row) if row else None
+
+
+def reschedule_reminder_stale_touch(
+    *,
+    reminder_id: str,
+    next_due_at: str,
+    error: str,
+) -> Optional[Dict[str, Any]]:
+    """周期提醒因微信送达窗口过期跳过本次触发：不计入 sent_count/last_sent_at（没有真的发送），
+    只把 due_at 推进到下一周期，序列继续（见 docs/plans/主动消息送达窗口对齐.md）。
+    """
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE reminders
+            SET status = 'pending',
+                due_at = ?,
+                claimed_at = NULL,
+                error = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (next_due_at, error, reminder_id),
+        )
         row = conn.execute(
             "SELECT * FROM reminders WHERE id = ?",
             (reminder_id,),

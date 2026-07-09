@@ -161,6 +161,24 @@ def upsert_channel_binding(
     return item
 
 
+def get_account_last_inbound_at(*, account_id: str) -> Optional[str]:
+    """Return the most recent `channel_bindings.last_seen_at` across all of this
+    account's bindings, or None if it has none.
+
+    Only real inbound turns refresh `last_seen_at` (see `upsert_channel_binding`
+    callers) — unlike the `messages`-table `MAX(created_at)` aggregates used
+    elsewhere for display, this is not contaminated by the bot's own outbound
+    messages, so it is the clean signal for "is this account currently reachable
+    for a proactive WeChat send" (see docs/plans/主动消息送达窗口对齐.md).
+    """
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT MAX(last_seen_at) AS last_seen_at FROM channel_bindings WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    return row["last_seen_at"] if row and row["last_seen_at"] else None
+
+
 def list_channel_bindings_for_account(*, account_id: str) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(

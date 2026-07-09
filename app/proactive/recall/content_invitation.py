@@ -17,6 +17,7 @@ from app.db import (
 )
 from app.llm import generate_reply_with_tools, is_llm_configured
 from app.proactive.contract.common import _clean_text, _select_route, _truncate_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
 from app.turn_context import TurnContext
@@ -71,6 +72,8 @@ def generate_content_invitation_candidate(
         return _no_op(account_id=account_id, reason="account_not_found", now=current)
     if account.get("status") != "active":
         return _no_op(account_id=account_id, reason="account_not_active", now=current)
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
 
     state = get_proactive_account_state(account_id=account_id)
     if state is None:

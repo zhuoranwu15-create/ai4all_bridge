@@ -141,6 +141,45 @@ def test_home_carries_campaign_code_to_login():
     assert "payload.campaign_code = campaignCode" in html
 
 
+def test_home_existing_session_without_binding_creates_qr():
+    html = Path("app/static/home.html").read_text(encoding="utf-8")
+
+    resume_fn = _extract_js_function(html, "resumeExistingSession")
+    create_qr_fn = _extract_js_function(html, "createBindingQrForSession")
+    login_fn = _extract_js_function(html, "doLogin")
+
+    assert "apiFetch('/web/me')" in resume_fn
+    assert "apiFetch('/web/me/bindings')" in resume_fn
+    assert "await createBindingQrForSession()" in resume_fn
+    assert "window.location.href = '/user/dashboard.html';" in resume_fn
+    assert "apiFetch('/web/me').then" not in html
+
+    assert "apiFetch('/web/binding-intents'" in create_qr_fn
+    assert "showBindingQr(data.binding_intent)" in create_qr_fn
+    assert "showBindingQr(data.binding_intent)" in login_fn
+
+
+def test_create_binding_qr_reuses_cached_pending_intent():
+    """resumeExistingSession 在每次刷新页面时都会调用 createBindingQrForSession；若每次都
+    直接 POST /web/binding-intents，会对同一个还没扫码的用户重复建行 + 重复触发真实的
+    OpenClaw 扫码会话。必须先尝试复用本 tab 内缓存的、还没过期/完成的上一个 intent。"""
+    html = Path("app/static/home.html").read_text(encoding="utf-8")
+    create_qr_fn = _extract_js_function(html, "createBindingQrForSession")
+
+    assert "sessionStorage.getItem(BINDING_INTENT_CACHE_KEY)" in create_qr_fn
+    assert "sessionStorage.setItem(BINDING_INTENT_CACHE_KEY" in create_qr_fn
+    assert "showBindingQr(cached.binding_intent)" in create_qr_fn
+
+
+def test_public_site_shows_beta_badge():
+    for path in ["app/static/home.html", "app/static/faq.html", "app/static/dashboard.html"]:
+        html = Path(path).read_text(encoding="utf-8")
+        assert "Beta 测试版" in html
+
+    css = Path("app/static/site.css").read_text(encoding="utf-8")
+    assert ".beta-badge" in css
+
+
 def test_onboarding_page_carries_campaign_code_to_register():
     html = Path("app/static/onboarding.html").read_text(encoding="utf-8")
 

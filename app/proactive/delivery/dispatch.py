@@ -21,6 +21,7 @@ from app.db import (
 )
 from app.proactive.contract.common import _select_route
 from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.time_utils import beijing_naive_now
 from app.proactive.slots import _account_allowed_windows, _next_slot_after
 from app.proactive.contract.common import format_reactivation_time
@@ -181,6 +182,16 @@ def dispatch_reactivation_candidate(
             now=current,
             metadata={"dedupe": dedupe},
         )
+
+    # 候选可能因 avoidance/失败已被多次改期到更晚的 slot，生成时的 touch_state 检查已经
+    # 过期，真正要发送前必须重新判定一次（见 docs/plans/主动消息送达窗口对齐.md）。
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+        clear_reactivation_candidate(
+            account_id=account_id,
+            reason="proactive_touch_stale",
+            now=current,
+        )
+        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
 
     route = _select_route(account_id)
     if route is None:

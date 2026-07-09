@@ -177,6 +177,7 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_reminder(client, fres
         ) as mock_send,
     ):
         _create_account("acc-scheduler")
+        _create_route("acc-scheduler")
         create_reminder(
             reminder_id="rem-scheduler",
             account_id="acc-scheduler",
@@ -265,6 +266,7 @@ def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db)
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
     _create_account("acc-scan-admin")
+    _create_route("acc-scan-admin")
     ensure_account_state(
         account_id="acc-scan-admin",
         next_scan_at=datetime(2000, 1, 1, 0, 0),

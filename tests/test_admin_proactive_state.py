@@ -56,6 +56,7 @@ def test_admin_proactive_state_create_get_and_scan_no_op(client, fresh_db):
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
     _create_account("acc-admin-proactive")
+    _create_route("acc-admin-proactive")
 
     before = client.get(
         "/admin/accounts/acc-admin-proactive/proactive-state",

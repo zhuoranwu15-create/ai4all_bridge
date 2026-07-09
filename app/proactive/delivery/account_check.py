@@ -6,6 +6,7 @@ from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
 from app.proactive.contract.common import _select_route
 from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.proactive.recall._shared import (
     ACCOUNT_CHECK_CANDIDATE_KEY,
     ACCOUNT_CHECK_SOURCE,
@@ -29,6 +30,8 @@ def decide_account_check_action(
         return _no_op(account_id=account_id, reason="account_not_found", now=current)
     if account.get("status") != "active":
         return _no_op(account_id=account_id, reason="account_not_active", now=current)
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
 
     state = get_proactive_account_state(account_id=account_id)
     if state is None:

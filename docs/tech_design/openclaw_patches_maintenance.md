@@ -132,6 +132,25 @@ bash scripts/patch_openclaw_accountid.sh                 # 打补丁 + 重启 ga
 
 **升级/重装必查**：`grep -c 'sessionCtx.AccountId ?? ctx.AccountId' ~/.npm-global/lib/node_modules/openclaw/dist/get-reply-*.js`，返回 0 则重打。
 
+## 2.7 ⚠️ 第 5 个补丁（尚未固化为正式 patch 文件）：context_token 送达回执透传（2026-07-03）
+
+**为什么需要**：排查发现微信静默拒收陈旧 `context_token` 的发送（详见 [`weixin_context_token_send_semantics.md`](../troubleshooting/weixin_context_token_send_semantics.md)），而插件 `sendMessage()` 从不解析 iLink 响应体、核心 `send` RPC 的白名单也裁掉了 `meta` 字段，导致这类静默拒收在 ai4all 侧被误判为"已发送"（`messageId` 恒非空）。
+
+**改了什么（四层，源码已就绪，见 troubleshooting 文档 §5 完整 diff）**：
+1. 插件 `api.ts`：`sendMessage` 解析响应体、透出 `ret/errcode/errmsg`。
+2. 插件 `send.ts`：把业务码装进 `meta`。
+3. 插件 `channel.ts`：透传 `meta` 到发送结果。
+4. **核心** `send.ts` 的 `buildGatewayDeliveryPayload` 白名单新增放行 `meta`（此前只放行 `runId/messageId/channel/...`，是 `ret` 到不了 ai4all 的最后一道墙）。
+5. `app/openclaw_gateway.py` 的 `_extract_send_result_error` 改为业务码优先，不再被恒非空的 `messageId` 短路。
+
+**当前状态（⚠️ 与其它 4 个补丁不同，尚未达到同等耐久化水平）**：
+- 仅**手术式**改了 aliyun1 运行中的 4 个 dist 文件（备份后缀 `.bak-ctxret-20260703`），已端到端验证（31 个陈旧账号全部从"假成功"变为显式 `OpenClawRateLimited`）。
+- **未**沉淀成 `patches/*.patch` 文件，**未**有配套的 `deploy_*.sh`/`rollback_*.sh` 脚本（对比 §2.2/§2.6 的其它补丁）。
+- **aliyun2 是否已打同一补丁未经确认**——多机路由下账号可能归属 aliyun2 节点，若该机未打补丁，其账号仍会退回"假成功"语义，且两台机器的可观测性口径不一致。
+- 任何一次 OpenClaw 核心或 openclaw-weixin 插件的升级/重装都会静默抹掉这 4 处手术改动，**且症状隐蔽**：不会报错，只是重新开始把静默拒收误判为已发送。
+
+**待办（详见 §5 TODO）**：把 4 处 dist 改动整理成正式 `patches/*.patch` + 幂等部署/回滚脚本；确认并按需补打 aliyun2；升级后必查清单（§3）补一条针对本补丁的 grep 检测。
+
 ## 3. ⚠️ 升级 OpenClaw 后必查（重点）
 
 OpenClaw 升级/重装会覆盖 dist，图片理解会**静默退回成空文本（不报错）**。届时需重新部署。当前已知脆弱点：
@@ -145,6 +164,7 @@ OpenClaw 升级/重装会覆盖 dist，图片理解会**静默退回成空文本
 6. **解绑登出 patch 同理且更脆弱**：插件升级覆盖 `node_modules` 后 `logoutAccount` 丢失，解绑会退回留孤儿 bot。升级后必查：
    `grep -c logoutAccount ~/.openclaw/npm/projects/tencent-weixin-openclaw-weixin-*/node_modules/@tencent-weixin/openclaw-weixin/dist/src/channel.js`，返回 0 则重打 `patches/openclaw-weixin-logout-account-runtime.patch`。详见 [专门文档](openclaw_weixin_gateway_logout_patch.md)。
 7. **多机账号路由 patch（§2.6，core，v2026.6.5+ 必需）**：core 升级覆盖 dist 后 `accountId` 注入丢失 → 多机入站全部 `no_binding` 静默不回复（**症状隐蔽，无报错**）。升级后必查：`grep -c 'sessionCtx.AccountId ?? ctx.AccountId' ~/.npm-global/lib/node_modules/openclaw/dist/get-reply-*.js`，返回 0 则按 §2.6 重打。**aliyun1 从 5.28 升到 6.5 时同样要打。**
+8. **context_token 送达回执透传 patch（§2.7，插件+core，2026-07-03）**：升级/重装插件或核心会同时抹掉 4 处手术改动，退回"假成功"语义（**症状隐蔽，无报错，只是静默拒收又被误判为已发送**）。升级后必查：`grep -c classifySendMessageResp <PLUG>/dist/src/api/api.js` 与 `grep -c 'params.result.meta' <核心 send 主 chunk>`，任一返回 0 则按 §2.7 重打。**aliyun2 当前是否已打未经确认，需先补一次核查。**
 
 ---
 
@@ -170,3 +190,4 @@ journalctl -u ai4all-weixin-backend.service -n 80 --no-pager | grep "openclaw_tu
 - [ ] **统一 OpenClaw 安装标准**：新机优先官方安装器；装不通则 npm-g + 锁 node v22.x（见 §0 多机表）。
 - [ ] 评估长期方案：是否统一从源码树构建并部署 OpenClaw（消除版本漂移与哈希 dist 手术补丁的脆弱性）。
 - [ ] 确认旧 weixin patch 当前在运行环境的生效状态与留档完整性。
+- [ ] **（新增，2026-07-08）context_token 送达回执透传（§2.7）耐久化**：整理成 `patches/*.patch` + 幂等 `deploy_*.sh`/`rollback_*.sh`（参考 §2.6 的 `patch_openclaw_accountid.sh`）；确认 aliyun2 是否已打并按需补打；补进 `patches/README.md`。

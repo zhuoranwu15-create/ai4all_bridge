@@ -1,5 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from unittest.mock import patch
+
+from app.time_utils import beijing_naive_now
 
 
 def _create_account(account_id: str) -> int:
@@ -203,3 +205,38 @@ def test_due_commitment_requires_enabled_proactive_state(fresh_db):
     )
 
     assert due == []
+
+
+def test_dispatch_due_commitment_skips_when_touch_stale(fresh_db):
+    """账号超过 24 小时送达窗口时，承诺也不再触发，直接终态 cancelled，不调用网关。"""
+    from app.db import create_proactive_commitment, get_proactive_commitment
+    from app.proactive.obligations.commitments import dispatch_due_commitments
+
+    now0 = beijing_naive_now()
+    due_at = now0.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+    _create_account("acc-com-stale")
+    _create_route("acc-com-stale")
+    _create_state("acc-com-stale")
+    create_proactive_commitment(
+        commitment_id="com-stale",
+        account_id="acc-com-stale",
+        text="很久没聊了的跟进。",
+        due_at=due_at,
+        confidence=0.96,
+    )
+
+    with (
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+    ):
+        result = dispatch_due_commitments(
+            now=now0 + timedelta(hours=25),
+            limit=10,
+        )
+        commitment = get_proactive_commitment(commitment_id="com-stale")
+
+    assert result[0]["status"] == "skipped"
+    assert result[0]["reason"] == "proactive_touch_stale"
+    assert commitment["status"] == "cancelled"
+    assert commitment["error"] == "proactive_touch_stale"
+    mock_send.assert_not_called()
