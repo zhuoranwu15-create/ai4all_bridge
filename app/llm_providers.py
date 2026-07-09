@@ -38,7 +38,7 @@ class LLMProviderConfig:
     api_key_env: str = ""
     enabled: bool = True
     supports_tools: bool = True
-    timeout_seconds: float = 40.0
+    timeout_seconds: float = 50.0
     connect_timeout_seconds: float = 5.0
     max_retries: int = 1
     force_ipv4: bool = True
@@ -158,7 +158,7 @@ def _provider_from_dict(
         api_key_env=api_key_env,
         enabled=_clean_bool(raw.get("enabled"), True),
         supports_tools=_clean_bool(raw.get("supports_tools"), True),
-        timeout_seconds=max(1.0, _clean_float(raw.get("timeout_seconds"), _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 40.0), 40.0))),
+        timeout_seconds=max(1.0, _clean_float(raw.get("timeout_seconds"), _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 50.0), 50.0))),
         connect_timeout_seconds=max(0.1, _clean_float(raw.get("connect_timeout_seconds"), _clean_float(_safe_get(settings_obj, "llm_connect_timeout_seconds", 5.0), 5.0))),
         max_retries=max(0, _clean_int(raw.get("max_retries"), _clean_int(_safe_get(settings_obj, "llm_max_retries", 1), 1))),
         force_ipv4=_clean_bool(raw.get("force_ipv4"), _clean_bool(_safe_get(settings_obj, "llm_force_ipv4", True), True)),
@@ -188,7 +188,7 @@ def _legacy_provider(settings_obj: Any) -> LLMProviderConfig:
         api_key_env="LLM_API_KEY",
         enabled=True,
         supports_tools=True,
-        timeout_seconds=max(1.0, _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 40.0), 40.0)),
+        timeout_seconds=max(1.0, _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 50.0), 50.0)),
         connect_timeout_seconds=max(0.1, _clean_float(_safe_get(settings_obj, "llm_connect_timeout_seconds", 5.0), 5.0)),
         max_retries=max(0, _clean_int(_safe_get(settings_obj, "llm_max_retries", 1), 1)),
         force_ipv4=_clean_bool(_safe_get(settings_obj, "llm_force_ipv4", True), True),
