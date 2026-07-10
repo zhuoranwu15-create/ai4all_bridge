@@ -43,6 +43,7 @@ from app.db import (
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.llm_providers import TASK_MAIN_REPLY, tier_for_task
 from app.db.campaign import get_campaign_attribution
 from app.mission_assignment import assign_mission_if_absent
 from app.mission_state import resolve_account_mission
@@ -377,7 +378,7 @@ def build_turn_llm_input(
     pre-writes or message insertion must do that before invoking it.
     """
     _now = now or beijing_now()
-    selected_llm_provider = llm_provider or resolve_active_llm_provider()
+    selected_llm_provider = llm_provider or resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY))
     current_session_id = int(session["id"])
     # L0 原始尾窗：统一编排后改为 **session-scoped**（不再跨 session）——轮转即真正重置原文，
     # 跨 session 的长期连续性交给 rolling_summary（其 seed 为上一段 dreaming 的 carryover）。
@@ -562,6 +563,7 @@ def build_turn_llm_input(
             needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
             onboarding_script_override=(campaign_attribution or {}).get("onboarding_script_variant"),
             has_forced_soul_preset=bool((campaign_attribution or {}).get("soul_preset_key")),
+            has_forced_ai_name=bool((campaign_attribution or {}).get("ai_name_preset")),
         )
 
     from app.skills import list_skill_catalog
@@ -909,6 +911,49 @@ def _prepare_turn(
                 "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",
                 account_id, welcome_to_user_id, sender_id, identity.chat_id,
             )
+            # 本轮被吸收、不走下面的 _persist_and_screen_inbound / LLM 回复落库，
+            # 这里补写这一问一答，否则 messages 表会漏掉用户的第一条消息和欢迎语。
+            try:
+                insert_message(
+                    account_id=account_id,
+                    session_id=session["id"],
+                    message_id=message_id,
+                    reply_to_message_id=None,
+                    direction="inbound",
+                    role="user",
+                    message_type=payload.message_type,
+                    content=payload.text or "",
+                    raw=_turn_message_raw(
+                        source="openclaw_turn",
+                        identity=identity,
+                        account_id=account_id,
+                        binding=binding,
+                        raw_payload=payload.raw,
+                        extra={"message_id": message_id, "onboarding_action": "absorbed_first_message"},
+                    ),
+                )
+                insert_message(
+                    account_id=account_id,
+                    session_id=session["id"],
+                    message_id=None,
+                    reply_to_message_id=message_id,
+                    direction="outbound",
+                    role="assistant",
+                    message_type="text",
+                    content=ONBOARDING_WELCOME_TEXT,
+                    raw=_turn_message_raw(
+                        source="onboarding_welcome",
+                        identity=identity,
+                        account_id=account_id,
+                        binding=binding,
+                        extra={"onboarding_action": "welcome_sent_on_first_message"},
+                    ),
+                )
+            except Exception as log_err:
+                logger.error(
+                    "onboarding welcome message logging failed account=%s error=%s",
+                    account_id, log_err,
+                )
             latency_ms = int((time.monotonic() - started_at) * 1000)
             return OpenClawTurnResponse(
                 status="ok",
@@ -1021,7 +1066,7 @@ def _prepare_turn(
         debug_trace_enabled=debug_trace_enabled,
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
-        llm_provider=resolve_active_llm_provider(),
+        llm_provider=resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)),
     )
 
 
@@ -1351,6 +1396,9 @@ def _resolve_turn_reply(
                         has_forced_soul_preset=bool(
                             (_campaign_attribution_for_extraction or {}).get("soul_preset_key")
                         ),
+                        has_forced_ai_name=bool(
+                            (_campaign_attribution_for_extraction or {}).get("ai_name_preset")
+                        ),
                     )
             llm_input = build_turn_llm_input(
                 account_id=account_id,
@@ -1512,7 +1560,7 @@ def _finalize_turn(
     active_llm_provider = (
         result.llm_provider.redacted()
         if result.llm_provider is not None
-        else resolve_active_llm_provider().redacted()
+        else resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)).redacted()
     )
     active_llm_model = str(active_llm_provider.get("model") or "")
     debug_metadata.setdefault("llm_provider_id", active_llm_provider.get("id"))
@@ -1718,12 +1766,20 @@ def _finalize_turn(
                     if onboarding_state == ONBOARDING_STEP2_SENT
                     else 0
                 )
+                # 强制 AI 身份账号：step1_sent 收到用户称呼后无更多可问，直接完成 onboarding（§4.4）。
+                _attribution_for_advance = get_campaign_attribution(account_id=account_id)
                 new_state = next_onboarding_state(
                     current_state=onboarding_state,
                     extracted=onboarding_pre_extracted,
                     user_name_ask_count=0,
                     persona_ask_count=0,
                     confirmation_ask_count=_confirmation_ask_count,
+                    has_forced_soul_preset=bool(
+                        (_attribution_for_advance or {}).get("soul_preset_key")
+                    ),
+                    has_forced_ai_name=bool(
+                        (_attribution_for_advance or {}).get("ai_name_preset")
+                    ),
                 )
                 if new_state != onboarding_state:
                     set_account_onboarding_state(account_id=account_id, state=new_state)

@@ -10,9 +10,9 @@ from app.db import get_account, get_account_user_meta, get_daily_usage, get_plat
 from app.mission_state import build_admin_mission_view
 from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
 from app.relationship_state import render_relationship_view
-from app.time_utils import beijing_now_str
+from app.time_utils import beijing_now, beijing_now_str
 from app.user_profiles import ensure_user_profile, read_agent_context, read_user_profile
-from datetime import date as date_cls, datetime
+from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger("ai4all")
@@ -297,7 +297,9 @@ def admin_account_usage(
 ) -> dict:
     if get_account(account_id=account_id) is None:
         raise HTTPException(status_code=404, detail="account not found")
-    today = date_cls.today().isoformat()
+    # daily_usage 行按北京日期落库（increment_daily_usage 用 beijing_now().date()）；
+    # 这里必须同样用北京日期查询，否则宿主机非 UTC+8 时（如 CI 跨零点）会查不到当天行。
+    today = beijing_now().date().isoformat()
     return {
         "account_id": account_id,
         "today": {

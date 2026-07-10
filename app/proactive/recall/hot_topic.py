@@ -29,6 +29,7 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.llm import generate_completion, is_llm_configured
+from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.user_profiles import read_agent_context
 from app.tools.web_search_handlers import run_headless_web_search
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
@@ -106,7 +107,7 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
     if slot_key is None:
         return _no_op(account_id="", reason="hot_topic_pool_refresh_not_due", now=current)
 
-    if not is_llm_configured():
+    if not is_llm_configured(tier_for_task(TASK_PROACTIVE_RECALL)):
         return _no_op(account_id="", reason="llm_disabled", now=current)
 
     # 数据来源门控：热榜或 web search 至少配置一个
@@ -194,7 +195,7 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
         },
     ]
     try:
-        raw = generate_completion(messages)
+        raw = generate_completion(messages, tier=tier_for_task(TASK_PROACTIVE_RECALL))
         payload = _extract_json_object(raw)
         themes = payload.get("themes") if isinstance(payload, dict) else None
     except Exception as err:  # noqa: BLE001 — 抽取失败按空处理，不抛断整轮调度
@@ -316,7 +317,7 @@ def _personalize_hot_topic_batch(
         {"role": "user", "content": user_prompt},
     ]
     try:
-        raw = generate_completion(messages)
+        raw = generate_completion(messages, tier=tier_for_task(TASK_PROACTIVE_RECALL))
         payload = _extract_json_object(raw)
         rewritten = payload.get("items") if isinstance(payload, dict) else None
     except Exception:  # noqa: BLE001 — 批量个性化失败不阻断发送，调用方按条回退 base_text
@@ -418,7 +419,7 @@ def select_hot_topic_candidate(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not is_llm_configured():
+    if not is_llm_configured(tier_for_task(TASK_PROACTIVE_RECALL)):
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
     if _select_route(account_id) is None:
         return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
@@ -478,7 +479,7 @@ def select_hot_topic_candidate(
         },
     ]
     try:
-        raw = generate_completion(messages)
+        raw = generate_completion(messages, tier=tier_for_task(TASK_PROACTIVE_RECALL))
         payload = _extract_json_object(raw)
         ranked = payload.get("ranked") if isinstance(payload, dict) else None
     except Exception as err:  # noqa: BLE001

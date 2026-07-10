@@ -15,6 +15,7 @@ from app.db import (
     mark_proactive_commitment_sent,
 )
 from app.llm import generate_completion, is_llm_configured
+from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.contract.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
 from app.proactive.delivery.outbound import dispatch_proactive_text
@@ -150,7 +151,7 @@ def extract_commitment_from_turn(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not is_llm_configured():
+    if not is_llm_configured(tier_for_task(TASK_PROACTIVE_RECALL)):
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     if _select_route(account_id) is None:
@@ -180,7 +181,7 @@ def extract_commitment_from_turn(
     ]
 
     try:
-        raw = generate_completion(messages)
+        raw = generate_completion(messages, tier=tier_for_task(TASK_PROACTIVE_RECALL))
         payload = _extract_json_object(raw)
         commitment = _normalize_commitment_payload(payload, now=current)
     except Exception as err:

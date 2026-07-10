@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.llm import generate_completion, get_active_llm_model
+from app.llm_providers import TASK_MODERATION, tier_for_task
 from app.moderation.models import MachineReviewResult, normalize_risk_level
 
 logger = logging.getLogger("ai4all.moderation.llm_review")
@@ -67,7 +68,8 @@ def review_text_with_llm(
 
     if not bool(getattr(settings, "moderation_llm_enabled", False)):
         return None
-    model = get_active_llm_model()
+    tier = tier_for_task(TASK_MODERATION)
+    model = get_active_llm_model(tier)
 
     user_payload = {
         "account_id": account_id,
@@ -83,7 +85,7 @@ def review_text_with_llm(
     ]
     started = time.monotonic()
     try:
-        content = generate_completion(messages)
+        content = generate_completion(messages, tier=tier)
     except Exception as err:  # noqa: BLE001 - moderation worker records machine-review errors
         logger.warning("moderation llm request/parse failed error=%s", err)
         return MachineReviewResult(

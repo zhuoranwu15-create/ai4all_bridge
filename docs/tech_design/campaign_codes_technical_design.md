@@ -126,6 +126,28 @@ get_campaign_attribution(*, account_id) -> Optional[dict]
 
 `turn_service.py` 需要在调用 `build_onboarding_prompt_context`/`apply_extracted_onboarding_info` 前各查一次归因，透传 `has_forced_soul_preset`（可与 4.2 的归因查询合并为一次调用，结果复用）。
 
+### 4.4 AI 名字——强制指定（migration 19）
+
+第四个策略旋钮 `ai_name_preset`（活码 + 归因快照各加一列，见 migration 19；14–18 为空号/废弃，不再回填）。它是运营在 UI 上**自由填写的短字符串**（AI 的名字，如"小满"），不是白名单枚举；校验只做 strip + 单行 + 长度上限 24（`campaign.py::_normalize_ai_name_preset`），防止多行文本注入 IDENTITY.md/SOUL.md。
+
+若账号归因快照里 `ai_name_preset` 非空：
+
+1. `apply_campaign_code_attribution` 写归因快照后**先** `write_ai_name_to_identity(account_id, ai_name_preset)`、**再** `apply_soul_preset`——顺序不能反：`render_soul_preset` 会从 IDENTITY.md 读 AI 名字拼进人设自称，反了则强制人设首轮自称仍是"我"；
+2. `build_onboarding_prompt_context`/`next_onboarding_state`/`apply_extracted_onboarding_info` 新增 `has_forced_ai_name: bool` 形参，onboarding 跳过"问 AI 名字"这一步，且用户回复里抽出的 ai_name / 预设默认名回填都对这类账号短路，不覆盖已定死的名字。
+
+**四种组合的 onboarding 行为**（user_name 始终问，活码只覆盖 AI 侧身份）：
+
+| soul 强制 | ai_name 强制 | `step1_sent` 之后问什么 | 状态推进 |
+|:---:|:---:|---|---|
+| ✗ | ✗ | AI 名字 + 人设菜单（默认） | → step2 |
+| ✓ | ✗ | 只问 AI 名字（§4.3） | → step2 |
+| ✗ | ✓ | 只给人设菜单，不问 AI 名字（名字-only 简化处理） | → step2 |
+| ✓ | ✓ | AI 身份全定：确认用户称呼 + 以强制身份自我介绍 + 破冰 | **step1_sent → complete**（少问一轮） |
+
+两者都强制时 `next_onboarding_state` 让 `step1_sent` 直接跳 `complete`——收到用户称呼后已无 AI 相关问题可问，本轮即收尾并触发使命分配。
+
+调试面板 reset（`debug.py::debug_reset_onboarding`）重建默认文件后，按归因快照**同序重放** `ai_name_preset` + `soul_preset_key`（先 IDENTITY 名字再 SOUL），返回 `restored_ai_name`/`restored_soul_preset`，避免重跑模拟漂移到空白模板。
+
 ## 5. Admin API + 管理 UI
 
 ### 5.1 API

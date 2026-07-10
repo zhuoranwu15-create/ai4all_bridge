@@ -2135,41 +2135,15 @@ def create_ai4all_account_for_user(
     )
     retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
 
-    cleaned_campaign_code = _clean_text(campaign_code)
-    if cleaned_campaign_code:
-        # 营销活码校验失败（不存在/过期/disabled）静默失败：记 warning，注册流程正常继续，
-        # 不写归因——活码没有金钱奖励含义，不应因为一个失效的营销码挡住真实注册
-        # （campaign_codes_technical_design.md §3）。
-        from app.db.campaign import (
-            increment_campaign_code_used,
-            validate_campaign_code,
-            write_campaign_attribution,
-        )
-        try:
-            validation = validate_campaign_code(code=cleaned_campaign_code)
-            if validation.get("valid"):
-                write_campaign_attribution(
-                    account_id=account_id,
-                    campaign_code=cleaned_campaign_code,
-                    mission_id=validation.get("mission_id"),
-                    onboarding_script_variant=validation.get("onboarding_script_variant"),
-                    soul_preset_key=validation.get("soul_preset_key"),
-                )
-                increment_campaign_code_used(code=cleaned_campaign_code)
-                soul_preset_key = validation.get("soul_preset_key")
-                if soul_preset_key:
-                    from app.user_profiles import apply_soul_preset
-                    apply_soul_preset(account_id=account_id, preset_name=soul_preset_key)
-            else:
-                logger.warning(
-                    "campaign_code invalid, skip attribution account=%s code=%s reason=%s",
-                    account_id, cleaned_campaign_code, validation.get("reason"),
-                )
-        except Exception as err:
-            logger.error(
-                "campaign_code attribution failed account=%s code=%s error=%s",
-                account_id, cleaned_campaign_code, err,
-            )
+    # 营销活码归因：校验 → 写快照 → 计数 → 应用强制 SOUL 人设。与 onboarding 调试建号
+    # 共用 apply_campaign_code_attribution（后者 increment_usage=False），确保调试忠实复现
+    # 真实注册效果。校验失败/异常 fail-open，不阻断注册（campaign_codes_technical_design.md §3）。
+    from app.db.campaign import apply_campaign_code_attribution
+    apply_campaign_code_attribution(
+        account_id=account_id,
+        campaign_code=campaign_code,
+        increment_usage=True,
+    )
 
     return {
         "account": get_account(account_id=account_id),

@@ -101,8 +101,8 @@ def test_settings(tmp_path, db_dsn):
     s.app_env = "test"
     s.llm_api_key = ""
     s.llm_base_url = "http://fake-llm"
-    s.llm_model = "test-model"
-    s.llm_default_provider_id = "deepseek-v4-pro"
+    s.llm_active_family = "deepseek"
+    s.llm_task_tiers = ""
     s.llm_providers_json = ""
     s.llm_openai_base_url = "https://api.openai.com"
     s.llm_openai_model = "gpt-4o-mini"
@@ -339,6 +339,7 @@ def fresh_db(test_settings):
         patch("app.routers.admin_ops.settings", test_settings),
         patch("app.routers.admin_llm.settings", test_settings),
         patch("app.llm.settings", test_settings),
+        patch("app.llm_providers.settings", test_settings),
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
@@ -410,6 +411,7 @@ def client(fresh_db):
         patch("app.routers.admin_ops.settings", fresh_db),
         patch("app.routers.admin_llm.settings", fresh_db),
         patch("app.llm.settings", fresh_db),
+        patch("app.llm_providers.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
         patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch("app.proactive.recall.hot_topic.settings", fresh_db),

@@ -32,6 +32,7 @@ class CampaignCodeCreateRequest(BaseModel):
     mission_id: Optional[str] = None
     onboarding_script_variant: Optional[str] = None
     soul_preset_key: Optional[str] = None
+    ai_name_preset: Optional[str] = None
 
 
 class CampaignCodeUpdateRequest(BaseModel):
@@ -42,6 +43,7 @@ class CampaignCodeUpdateRequest(BaseModel):
     mission_id: Optional[str] = None
     onboarding_script_variant: Optional[str] = None
     soul_preset_key: Optional[str] = None
+    ai_name_preset: Optional[str] = None
 
 
 @router.post("/admin/campaign-codes")
@@ -59,6 +61,7 @@ def admin_create_campaign_code(
             mission_id=payload.mission_id,
             onboarding_script_variant=payload.onboarding_script_variant,
             soul_preset_key=payload.soul_preset_key,
+            ai_name_preset=payload.ai_name_preset,
             created_by_admin_user_id=str(admin_user["id"]),
         )
     except ValueError as err:

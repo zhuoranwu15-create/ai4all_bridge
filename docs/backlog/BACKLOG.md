@@ -71,7 +71,13 @@
 | BUG-11 | P3 | 🔴 | `capture_turn` 每次新建 `httpx.AsyncClient`,高并发 background 任务下连接/端口耗尽 → 复用模块级连接池 | `tdai_client.py:131` |
 | BUG-12 | P3 | 🔴 | `context_summarizer` `window_oldest_id` 取跨 session 全局 min,老 session 压低致滚动摘要不触发(功能默认关) | `context_summarizer.py:130` |
 
-## 4. 已完成存档
+## 4. 产品 / Onboarding 体验
+
+| ID | 优先级 | 状态 | 条目 | 来源 |
+|---|---|---|---|---|
+| OB-1 | P2 | 🔴 | 绑定后 bot 主动问候(Path A)常失效(拿不到用户 wxid);调研 wxid 回填能否实现「绑定即主动问候」,当前退化为用户先开口(Path B) | `backlog/onboarding_welcome_wxid_followup.md` |
+
+## 5. 已完成存档
 
 | ID | 状态 | 条目 | 完成 |
 |---|---|---|---|

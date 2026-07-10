@@ -6,6 +6,7 @@ selection and protocol/model details out of turn/proactive/dreaming code.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional
@@ -13,9 +14,40 @@ from typing import Any, Dict, Iterable, List, Optional
 from app.config import settings
 
 
+logger = logging.getLogger("ai4all.llm")
+
 SUPPORTED_LLM_PROTOCOLS = {"openai_chat", "openai_responses", "anthropic_messages"}
-_DEFAULT_PROVIDER_ID = "deepseek"
 _DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
+_DEFAULT_FAMILY = "deepseek"
+
+# ---- 两层模型：档位（tier）与任务→档位路由（task→tier） --------------------
+TIER_PRO = "pro"
+TIER_FLASH = "flash"
+SUPPORTED_TIERS = {TIER_PRO, TIER_FLASH}
+
+# 调用点声明的 task kind 常量（避免各处拼裸字符串）。
+TASK_MAIN_REPLY = "main_reply"
+TASK_ONBOARDING_EXTRACTION = "onboarding_extraction"
+TASK_MODERATION = "moderation"
+TASK_ROLLING_SUMMARY = "rolling_summary"
+TASK_DREAMING = "dreaming"
+TASK_USER_META = "user_meta"
+TASK_RELATIONSHIP_STATE = "relationship_state"
+TASK_PROACTIVE_RECALL = "proactive_recall"
+TASK_WEB_COMPLETION = "web_completion"
+
+# 默认路由：主对话用 pro，后台任务用 flash。可被 settings.llm_task_tiers(JSON) 逐项覆盖。
+_TASK_TIER_DEFAULTS: Dict[str, str] = {
+    TASK_MAIN_REPLY: TIER_PRO,
+    TASK_ONBOARDING_EXTRACTION: TIER_FLASH,
+    TASK_MODERATION: TIER_FLASH,
+    TASK_ROLLING_SUMMARY: TIER_FLASH,
+    TASK_DREAMING: TIER_FLASH,
+    TASK_USER_META: TIER_FLASH,
+    TASK_RELATIONSHIP_STATE: TIER_FLASH,
+    TASK_PROACTIVE_RECALL: TIER_FLASH,
+    TASK_WEB_COMPLETION: TIER_FLASH,
+}
 _KEY_FIELD_ALIASES = {
     "LLM_API_KEY": "llm_api_key",
     "DEEPSEEK_API_KEY": "llm_api_key",
@@ -36,6 +68,8 @@ class LLMProviderConfig:
     model: str
     api_key: str
     api_key_env: str = ""
+    family: str = ""
+    tier: str = TIER_PRO
     enabled: bool = True
     supports_tools: bool = True
     timeout_seconds: float = 50.0
@@ -54,6 +88,8 @@ class LLMProviderConfig:
             "protocol": self.protocol,
             "base_url": self.base_url,
             "model": self.model,
+            "family": self.family,
+            "tier": self.tier,
             "enabled": self.enabled,
             "supports_tools": self.supports_tools,
             "configured": bool(self.api_key),
@@ -148,6 +184,10 @@ def _provider_from_dict(
     api_key_env = _clean_str(raw.get("api_key_env"))
     api_key = _api_key_from_ref(settings_obj, api_key_env)
     label = _clean_str(raw.get("label"), provider_id)
+    family = _clean_str(raw.get("family"))
+    tier = _clean_str(raw.get("tier"), TIER_PRO).lower()
+    if tier not in SUPPORTED_TIERS:
+        raise ValueError(f"unsupported LLM tier for provider {provider_id!r}: {tier}")
     return LLMProviderConfig(
         id=provider_id,
         label=label,
@@ -156,6 +196,8 @@ def _provider_from_dict(
         model=model,
         api_key=api_key,
         api_key_env=api_key_env,
+        family=family,
+        tier=tier,
         enabled=_clean_bool(raw.get("enabled"), True),
         supports_tools=_clean_bool(raw.get("supports_tools"), True),
         timeout_seconds=max(1.0, _clean_float(raw.get("timeout_seconds"), _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 50.0), 50.0))),
@@ -168,34 +210,6 @@ def _provider_from_dict(
     )
 
 
-def _legacy_provider(settings_obj: Any) -> LLMProviderConfig:
-    base_url = _clean_str(_safe_get(settings_obj, "llm_base_url", ""), "https://api.deepseek.com")
-    model = _clean_str(_safe_get(settings_obj, "llm_model", ""), _DEFAULT_DEEPSEEK_MODEL)
-    label = (
-        "DeepSeek V4 Flash"
-        if model == _DEFAULT_DEEPSEEK_MODEL
-        else "DeepSeek"
-        if "deepseek" in (base_url + " " + model).lower()
-        else "Default LLM"
-    )
-    return LLMProviderConfig(
-        id=_DEFAULT_PROVIDER_ID,
-        label=label,
-        protocol="openai_chat",
-        base_url=base_url,
-        model=model,
-        api_key=_clean_str(_safe_get(settings_obj, "llm_api_key", "")),
-        api_key_env="LLM_API_KEY",
-        enabled=True,
-        supports_tools=True,
-        timeout_seconds=max(1.0, _clean_float(_safe_get(settings_obj, "llm_timeout_seconds", 50.0), 50.0)),
-        connect_timeout_seconds=max(0.1, _clean_float(_safe_get(settings_obj, "llm_connect_timeout_seconds", 5.0), 5.0)),
-        max_retries=max(0, _clean_int(_safe_get(settings_obj, "llm_max_retries", 1), 1)),
-        force_ipv4=_clean_bool(_safe_get(settings_obj, "llm_force_ipv4", True), True),
-        source="legacy",
-    )
-
-
 def _model_provider_item(
     *,
     provider_id: str,
@@ -204,9 +218,11 @@ def _model_provider_item(
     base_url: str,
     api_key_env: str,
     model: str,
+    family: str,
+    tier: str,
     supports_tools: bool = True,
 ) -> Dict[str, Any]:
-    """Create a provider entry for one selectable model variant."""
+    """Create a provider entry for one selectable family×tier cell."""
     return {
         "id": provider_id,
         "label": label,
@@ -214,12 +230,18 @@ def _model_provider_item(
         "base_url": base_url,
         "api_key_env": api_key_env,
         "model": model,
+        "family": family,
+        "tier": tier,
         "supports_tools": supports_tools,
     }
 
 
-def _builtin_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
-    """Return common provider templates exposed in admin even before JSON overrides."""
+def _builtin_provider_items(settings_obj: Any) -> List[Dict[str, Any]]:
+    """Built-in family×tier matrix, exposed in admin even before JSON overrides.
+
+    deepseek 内置 pro+flash 两档（已知可用对）；openai/anthropic 各给 pro 一档，
+    flash 由 LLM_PROVIDERS_JSON 补（每条带 family/tier）。
+    """
     deepseek_base_url = _clean_str(
         _safe_get(settings_obj, "llm_base_url", ""),
         "https://api.deepseek.com",
@@ -234,12 +256,24 @@ def _builtin_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
     )
     return [
         _model_provider_item(
+            provider_id="deepseek",
+            label="DeepSeek V4 Flash",
+            protocol="openai_chat",
+            base_url=deepseek_base_url,
+            api_key_env="LLM_API_KEY",
+            model=_DEFAULT_DEEPSEEK_MODEL,
+            family="deepseek",
+            tier=TIER_FLASH,
+        ),
+        _model_provider_item(
             provider_id="deepseek-v4-pro",
             label="DeepSeek V4 Pro",
             protocol="openai_chat",
             base_url=deepseek_base_url,
             api_key_env="LLM_API_KEY",
             model="deepseek-v4-pro",
+            family="deepseek",
+            tier=TIER_PRO,
         ),
         _model_provider_item(
             provider_id="chatgpt",
@@ -251,6 +285,8 @@ def _builtin_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
                 _safe_get(settings_obj, "llm_openai_model", ""),
                 "gpt-4o-mini",
             ),
+            family="openai",
+            tier=TIER_PRO,
         ),
         _model_provider_item(
             provider_id="claude",
@@ -262,13 +298,10 @@ def _builtin_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
                 _safe_get(settings_obj, "llm_anthropic_model", ""),
                 "claude-sonnet-4-6",
             ),
+            family="anthropic",
+            tier=TIER_PRO,
         ),
     ]
-
-
-def get_legacy_llm_provider(settings_obj: Any = settings) -> LLMProviderConfig:
-    """Return the legacy single-provider config without parsing LLM_PROVIDERS_JSON."""
-    return _legacy_provider(settings_obj)
 
 
 def _raw_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
@@ -292,35 +325,126 @@ def _raw_provider_items(settings_obj: Any) -> Iterable[Dict[str, Any]]:
 
 
 def list_llm_providers(settings_obj: Any = settings) -> List[LLMProviderConfig]:
-    """Return provider choices, with JSON config overriding built-in templates."""
-    providers = [_legacy_provider(settings_obj)]
-    seen = {providers[0].id}
+    """Return the family×tier provider matrix, with JSON entries overriding built-ins by id.
 
+    JSON 条目必须自带 family/tier（省略则默认 family=""、tier="pro"）——覆盖内置 id 时也要显式声明，
+    不做隐式继承，避免"改了 model 却忘了 tier"这类隐蔽错配。
+    """
+    providers: List[LLMProviderConfig] = []
+    seen: Dict[str, int] = {}
     for item in _builtin_provider_items(settings_obj):
         provider = _provider_from_dict(item, settings_obj=settings_obj, source="builtin")
         if provider is None or provider.id in seen:
             continue
+        seen[provider.id] = len(providers)
         providers.append(provider)
-        seen.add(provider.id)
 
     for item in _raw_provider_items(settings_obj):
         provider = _provider_from_dict(item, settings_obj=settings_obj, source="json")
         if provider is None:
             continue
         if provider.id in seen:
-            providers = [provider if existing.id == provider.id else existing for existing in providers]
+            providers[seen[provider.id]] = provider
         else:
+            seen[provider.id] = len(providers)
             providers.append(provider)
-            seen.add(provider.id)
     return providers
 
 
 def get_llm_provider(provider_id: Optional[str] = None, settings_obj: Any = settings) -> LLMProviderConfig:
-    """Resolve one provider by id; when omitted, use settings' default provider id."""
+    """Resolve one provider by explicit id; when omitted, use the active family's pro tier."""
     providers = list_llm_providers(settings_obj)
-    fallback_id = _clean_str(_safe_get(settings_obj, "llm_default_provider_id", ""), providers[0].id)
-    target_id = _clean_str(provider_id, fallback_id)
+    target_id = _clean_str(provider_id)
+    if not target_id:
+        return resolve_provider_for_tier(TIER_PRO, settings_obj=settings_obj)
     for provider in providers:
         if provider.id == target_id:
             return provider
     raise ValueError(f"unknown LLM provider: {target_id}")
+
+
+def _safe_list_providers(settings_obj: Any) -> List[LLMProviderConfig]:
+    """list_llm_providers, but on invalid JSON fall back to the built-in matrix (runtime resilience)."""
+    try:
+        return list_llm_providers(settings_obj)
+    except ValueError as err:
+        logger.error("LLM_PROVIDERS_JSON invalid (%s); falling back to built-in matrix only", err)
+        out: List[LLMProviderConfig] = []
+        seen = set()
+        for item in _builtin_provider_items(settings_obj):
+            provider = _provider_from_dict(item, settings_obj=settings_obj, source="builtin")
+            if provider is not None and provider.id not in seen:
+                seen.add(provider.id)
+                out.append(provider)
+        return out
+
+
+def resolve_provider_for_tier(
+    tier: str,
+    *,
+    family: Optional[str] = None,
+    override_provider_id: Optional[str] = None,
+    settings_obj: Any = settings,
+) -> LLMProviderConfig:
+    """Resolve the provider serving a tier: per-tier override → active family × tier → fallbacks.
+
+    override_provider_id / family 由调用方（app.llm）从运行时绑定读出后传入，本模块保持无 DB 依赖。
+    """
+    tier = tier if tier in SUPPORTED_TIERS else TIER_PRO
+    providers = _safe_list_providers(settings_obj)
+    if not providers:
+        raise ValueError("no LLM providers configured")
+
+    # 1. 该 tier 若有运行时 override provider id，直接返回该 provider。
+    override_id = _clean_str(override_provider_id)
+    if override_id:
+        for provider in providers:
+            if provider.id == override_id:
+                return provider
+        logger.warning("llm tier override provider not found id=%s tier=%s", override_id, tier)
+
+    # 2. 确定 active family。
+    fam = _clean_str(family) or _clean_str(_safe_get(settings_obj, "llm_active_family", "")) or _DEFAULT_FAMILY
+
+    # 3. 命中 (family, tier)；否则依次兜底：该 family 的 pro → 任意同 tier → 列表首个。
+    for provider in providers:
+        if provider.family == fam and provider.tier == tier:
+            return provider
+    for provider in providers:
+        if provider.family == fam and provider.tier == TIER_PRO:
+            return provider
+    for provider in providers:
+        if provider.tier == tier:
+            return provider
+    return providers[0]
+
+
+def _parse_task_tiers(settings_obj: Any) -> Dict[str, str]:
+    raw = _clean_str(_safe_get(settings_obj, "llm_task_tiers", ""))
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("LLM_TASK_TIERS is not valid JSON; ignoring")
+        return {}
+    if not isinstance(data, dict):
+        logger.warning("LLM_TASK_TIERS must be a JSON object; ignoring")
+        return {}
+    out: Dict[str, str] = {}
+    for key, value in data.items():
+        tier = str(value).strip().lower()
+        if tier in SUPPORTED_TIERS:
+            out[str(key)] = tier
+        else:
+            logger.warning("LLM_TASK_TIERS ignoring unknown tier %r for task %r", value, key)
+    return out
+
+
+def tier_for_task(task_kind: str, *, settings_obj: Any = settings) -> str:
+    """Map a task kind to a tier: default table (main_reply=pro, 其余=flash) overridden by LLM_TASK_TIERS."""
+    default = _TASK_TIER_DEFAULTS.get(task_kind)
+    if default is None:
+        logger.warning("tier_for_task unknown task kind=%s; defaulting to flash", task_kind)
+        default = TIER_FLASH
+    return _parse_task_tiers(settings_obj).get(task_kind, default)

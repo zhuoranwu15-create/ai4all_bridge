@@ -18,6 +18,7 @@ from app.db import (
     update_account_user_meta_relationship,
 )
 from app.llm import generate_completion
+from app.llm_providers import TASK_RELATIONSHIP_STATE, tier_for_task
 from app.prompts.user_meta_relationship import (
     build_relationship_eval_prompt,
     parse_relationship_payload,
@@ -235,7 +236,10 @@ def classify_relationship_state_llm(
     if not messages:
         raise ValueError("messages are required")
     prompt = build_relationship_eval_prompt(messages=messages, current_state=current_state)
-    raw = generate_completion([{"role": "user", "content": prompt}])
+    raw = generate_completion(
+        [{"role": "user", "content": prompt}],
+        tier=tier_for_task(TASK_RELATIONSHIP_STATE),
+    )
     return parse_relationship_payload(raw)
 
 
