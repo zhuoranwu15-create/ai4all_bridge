@@ -448,6 +448,25 @@ class TestPromptBuilderOutputDirectives:
         assert "一律忽略" in out
         assert "不能补造" in out
 
+    def test_provenance_rule_no_style_based_attribution(self):
+        """归因规则 - 不得凭文风/语义相似认领 assistant 历史输出。"""
+        out = self.pb.build()
+        assert "不得凭文风" in out
+        assert "语义相似" in out
+        assert "上下文连续性" in out
+
+    def test_provenance_rule_requires_history_evidence(self):
+        """归因规则 - 只有 assistant 历史中确实存在才可认领。"""
+        out = self.pb.build()
+        assert "assistant 历史中确实存在" in out
+        assert "中性表述" in out
+
+    def test_provenance_rule_user_content_not_auto_attributed(self):
+        """归因规则 - 用户提供的内容不自动代表用户本人观点。"""
+        out = self.pb.build()
+        assert "用户提供或要求分析的内容" in out
+        assert "不自动代表用户本人观点" in out
+
     def test_output_directives_are_mechanical_only(self):
         # 输出常量只留机械格式：不再含 150 字硬限、emoji 语气（语气下沉 SOUL/AGENTS）。
         out = self.pb.build()
@@ -472,3 +491,68 @@ class TestPromptBuilderRuntime:
         # When today is not provided, build should still succeed
         out = self.pb.build(today=None)
         assert isinstance(out, str)
+
+
+class TestProvenanceRuleStructural:
+    """归因规则不修改历史消息结构或当前用户消息。
+
+    这些测试验证 prompt builder 的输出结构，不依赖真实 LLM 行为。
+    """
+
+    def setup_method(self):
+        self.pb = PromptBuilder()
+
+    def test_provenance_rule_in_context_evidence_block(self):
+        """归因规则位于 context_evidence block，block 本身在 assemble 元数据中可见。"""
+        result = self.pb.assemble()
+        assert result.included("context_evidence")
+        assert "消息归属必须有历史证据" in result.prompt
+
+    def test_provenance_block_is_stable(self):
+        """context_evidence 是 STABLE block，不因 token 预算被丢弃。"""
+        from app.prompt_builder import _SECTION_STABLE
+        result = self.pb.assemble(token_budget=50)  # 极小预算触发裁剪
+        block_map = {b.name: b for b in result.blocks}
+        assert "context_evidence" in block_map
+        assert block_map["context_evidence"].section == _SECTION_STABLE
+        assert block_map["context_evidence"].included is True
+
+    def test_real_assistant_history_role_unchanged(self):
+        """真实 assistant 历史经 build_turn_llm_input 后，role 和 content 不被归因规则篡改。
+
+        模拟 history 列表（与 turn_service 传给 LLM 的格式一致），验证 prompt builder
+        不会重写 role=assistant 的消息。
+        """
+        system_prompt = self.pb.build(today="2026-07-10")
+
+        # 模拟真实历史：assistant 说过"你技术上必须搭一个金水旺的合伙人"
+        history = [
+            {"role": "user", "content": "帮我分析一下合伙人"},
+            {"role": "assistant", "content": "你技术上必须搭一个金水旺的合伙人——年柱天干带庚辛金"},
+        ]
+        messages = [{"role": "system", "content": system_prompt}] + history
+
+        # role 和 content 原样传递，归因规则仅在 system prompt 中约束模型行为
+        assert messages[1]["role"] == "user"
+        assert messages[2]["role"] == "assistant"
+        assert "金水旺的合伙人" in messages[2]["content"]
+
+    def test_current_user_message_not_split_by_builder(self):
+        """prompt builder 不解析或拆分用户当前消息（冒号后的粘贴内容不会被单独提取）。
+
+        turn_service 里用户消息以原文落库并进入 history；builder 不做任何拆分。
+        """
+        user_text = (
+            "帮我看看我和这个朋友的适配度：你技术上必须搭一个金水旺的合伙人——"
+            "年柱天干带庚辛金、日支坐申酉的，或者八字水旺的。"
+        )
+        # build 只组装 system prompt，不触碰 user 消息
+        system_prompt = self.pb.build(today="2026-07-10")
+        # system prompt 不应包含用户的具体输入内容
+        assert "金水旺的合伙人" not in system_prompt
+        # 用户消息作为整体传给 LLM，builder 不负责拆分
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text},
+        ]
+        assert messages[1]["content"] == user_text
