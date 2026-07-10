@@ -485,11 +485,14 @@ def _parse_faq_moderation_json(raw: str) -> dict:
 def _moderate_faq_message(content: str) -> dict:
     """Use a one-shot LLM moderation pass for public FAQ messages."""
     try:
+        from app.llm_providers import TASK_WEB_COMPLETION, tier_for_task
+
         raw = generate_completion(
             [
                 {"role": "system", "content": _FAQ_MODERATION_SYSTEM_PROMPT},
                 {"role": "user", "content": content},
-            ]
+            ],
+            tier=tier_for_task(TASK_WEB_COMPLETION),
         )
         payload = _parse_faq_moderation_json(raw)
     except Exception as err:

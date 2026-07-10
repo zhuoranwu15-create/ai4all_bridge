@@ -43,6 +43,7 @@ from app.db import (
 from app.identity import identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.llm_providers import TASK_MAIN_REPLY, tier_for_task
 from app.db.campaign import get_campaign_attribution
 from app.mission_assignment import assign_mission_if_absent
 from app.mission_state import resolve_account_mission
@@ -377,7 +378,7 @@ def build_turn_llm_input(
     pre-writes or message insertion must do that before invoking it.
     """
     _now = now or beijing_now()
-    selected_llm_provider = llm_provider or resolve_active_llm_provider()
+    selected_llm_provider = llm_provider or resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY))
     current_session_id = int(session["id"])
     # L0 原始尾窗：统一编排后改为 **session-scoped**（不再跨 session）——轮转即真正重置原文，
     # 跨 session 的长期连续性交给 rolling_summary（其 seed 为上一段 dreaming 的 carryover）。
@@ -1022,7 +1023,7 @@ def _prepare_turn(
         debug_trace_enabled=debug_trace_enabled,
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
-        llm_provider=resolve_active_llm_provider(),
+        llm_provider=resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)),
     )
 
 
@@ -1516,7 +1517,7 @@ def _finalize_turn(
     active_llm_provider = (
         result.llm_provider.redacted()
         if result.llm_provider is not None
-        else resolve_active_llm_provider().redacted()
+        else resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)).redacted()
     )
     active_llm_model = str(active_llm_provider.get("model") or "")
     debug_metadata.setdefault("llm_provider_id", active_llm_provider.get("id"))

@@ -335,9 +335,9 @@
         status.textContent = '加载中';
         var data = await apiFetch('/admin/llm/providers');
         llmProviders = data.providers || [];
-        var effectiveId = data.effective_provider_id || data.active_provider_id;
+        var effectiveId = (data.pro_provider && data.pro_provider.id) || '';
         renderLlmProviderSelect(effectiveId);
-        status.textContent = effectiveId || '—';
+        status.textContent = (data.active_family ? data.active_family + ' · pro=' : '') + (effectiveId || '—');
       } catch (e) {
         status.textContent = '加载失败';
         detail.textContent = e.message;
@@ -386,13 +386,13 @@
         item.textContent = line;
         detail.appendChild(item);
       });
-      button.disabled = provider.active || !provider.enabled || !provider.configured;
+      button.disabled = provider.serves_pro || !provider.enabled || !provider.configured;
     }
 
     function providerLlmStatus(provider) {
       if (!provider.enabled) return 'disabled';
       if (!provider.configured) return 'unavailable';
-      if (provider.active) return 'active';
+      if (provider.serves_pro) return 'active (pro)';
       return 'ready';
     }
 
@@ -402,12 +402,12 @@
       if (!provider) return;
       try {
         status.textContent = '切换中...';
-        await apiFetch('/admin/llm/active-provider', {
+        await apiFetch('/admin/llm/active-family', {
           method: 'PATCH',
-          body: JSON.stringify({ provider_id: provider.id }),
+          body: JSON.stringify({ family: provider.family }),
         });
         await loadLlmProviders();
-        status.textContent = '已切换到 ' + provider.id;
+        status.textContent = '已切换 active 家族到 ' + provider.family;
       } catch (e) {
         status.textContent = e.message;
       }

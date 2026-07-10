@@ -11,25 +11,22 @@
   <header class="admin-header">
     <div>
       <h1>LLM Provider 管理</h1>
-      <p class="page-subtitle">Settings 提供默认模型；后台切换只写运行时 override，可随时恢复默认。</p>
+      <p class="page-subtitle">两层模型：family(厂商家族) × tier(pro/flash)。切家族一键把两档设为该家族默认；也可对单档 override 到任意 provider（含跨家族）。</p>
     </div>
     <span id="admin-user" class="pill">—</span>
   </header>
 
   <div class="card">
     <div class="card-title-row">
-      <h2>当前 Provider</h2>
+      <h2>当前档位</h2>
       <span id="status" class="status-msg"></span>
     </div>
-    <div id="active-provider" class="empty-note">加载中…</div>
-    <div class="toolbar-row">
-      <button id="clear-override" disabled>恢复 settings 默认</button>
-    </div>
+    <div id="active-binding" class="empty-note">加载中…</div>
   </div>
 
   <div class="card">
     <div class="card-title-row">
-      <h2>可选 Provider</h2>
+      <h2>可选 Provider（family × tier 矩阵）</h2>
       <span class="card-note">密钥只显示是否已配置。</span>
     </div>
     <div class="compact-table">
@@ -37,6 +34,8 @@
         <thead>
           <tr>
             <th>ID</th>
+            <th>Family</th>
+            <th>Tier</th>
             <th>模型</th>
             <th>协议</th>
             <th>状态</th>
@@ -45,7 +44,7 @@
           </tr>
         </thead>
         <tbody id="providers">
-          <tr><td colspan="6">加载中…</td></tr>
+          <tr><td colspan="8">加载中…</td></tr>
         </tbody>
       </table>
     </div>
@@ -69,29 +68,43 @@
       } else if (!provider.configured) {
         span.className += ' status-pill-missing';
         span.textContent = 'missing key';
-      } else if (provider.active) {
-        span.className += ' status-pill-active';
-        span.textContent = 'active';
       } else {
+        span.className += ' status-pill-active';
         span.textContent = 'ready';
       }
       return span;
     }
 
-    function renderActive(data) {
-      var provider = data.effective_provider || data.active_provider;
-      var el = document.getElementById('active-provider');
-      var overrideId = data.runtime_override_provider_id || data.stored_active_provider_id || '';
-      var defaultId = data.settings_default_provider_id || data.default_provider_id || '';
-      el.innerHTML = '<div class="binding-grid">'
-        + '<div><label>Effective ID</label><div class="mono">' + esc(provider.id) + '</div></div>'
+    function tierRow(label, provider, overrideId, tier) {
+      var wrap = document.createElement('div');
+      wrap.className = 'binding-grid';
+      wrap.innerHTML =
+          '<div><label>' + esc(label) + ' 档 provider</label><div class="mono">' + esc(provider.id) + '</div></div>'
         + '<div><label>模型</label><div class="mono">' + esc(provider.model) + '</div></div>'
         + '<div><label>协议</label><div class="mono">' + esc(provider.protocol) + '</div></div>'
-        + '<div><label>密钥</label><div>' + (provider.configured ? '已配置' : '未配置') + '</div></div>'
-        + '<div><label>Settings Default</label><div class="mono">' + esc(defaultId || '—') + '</div></div>'
-        + '<div><label>Runtime Override</label><div class="mono">' + esc(overrideId || '—') + '</div></div>'
-        + '</div>';
-      document.getElementById('clear-override').disabled = !overrideId;
+        + '<div><label>Runtime Override</label><div class="mono">' + esc(overrideId || '—（跟随家族默认）') + '</div></div>';
+      var actionWrap = document.createElement('div');
+      var clearBtn = document.createElement('button');
+      clearBtn.id = 'clear-' + tier + '-override';
+      clearBtn.textContent = '恢复家族默认';
+      clearBtn.disabled = !overrideId;
+      clearBtn.addEventListener('click', function() { clearTierOverride(tier); });
+      actionWrap.appendChild(clearBtn);
+      wrap.appendChild(actionWrap);
+      return wrap;
+    }
+
+    function renderActive(data) {
+      var el = document.getElementById('active-binding');
+      el.textContent = '';
+      var head = document.createElement('div');
+      head.className = 'binding-grid';
+      head.innerHTML =
+          '<div><label>Active Family</label><div class="mono">' + esc(data.active_family || '—') + '</div></div>'
+        + '<div><label>Settings 默认 Family</label><div class="mono">' + esc(data.settings_default_family || '—') + '</div></div>';
+      el.appendChild(head);
+      el.appendChild(tierRow('pro', data.pro_provider || {}, data.pro_override_provider_id, 'pro'));
+      el.appendChild(tierRow('flash', data.flash_provider || {}, data.flash_override_provider_id, 'flash'));
     }
 
     function renderProviders(data) {
@@ -103,15 +116,14 @@
       if (!providers.length) {
         var emptyRow = document.createElement('tr');
         var emptyCell = document.createElement('td');
-        emptyCell.colSpan = 6;
+        emptyCell.colSpan = 8;
         emptyCell.textContent = '暂无 provider';
         emptyRow.appendChild(emptyCell);
         tbody.appendChild(emptyRow);
         return;
       }
       providers.forEach(function(provider) {
-        var canSwitch = provider.enabled && provider.configured && !provider.active;
-        var canProbe = provider.enabled && provider.configured;
+        var canUse = provider.enabled && provider.configured;
         var row = document.createElement('tr');
 
         var idCell = document.createElement('td');
@@ -121,14 +133,17 @@
         var labelText = document.createElement('div');
         labelText.className = 'empty-note';
         var badges = [];
-        if (provider.settings_default) badges.push('settings default');
-        if (provider.runtime_override) badges.push('runtime override');
+        if (provider.active_family) badges.push('active family');
+        if (provider.serves_pro) badges.push('serving pro');
+        if (provider.serves_flash) badges.push('serving flash');
+        if (provider.pro_override) badges.push('pro override');
+        if (provider.flash_override) badges.push('flash override');
         labelText.textContent = (provider.label || '') + (badges.length ? ' · ' + badges.join(' · ') : '');
         idCell.appendChild(idText);
         idCell.appendChild(labelText);
         row.appendChild(idCell);
 
-        ['model', 'protocol'].forEach(function(key) {
+        ['family', 'tier', 'model', 'protocol'].forEach(function(key) {
           var cell = document.createElement('td');
           cell.className = 'mono';
           cell.textContent = provider[key] || '';
@@ -149,22 +164,28 @@
         row.appendChild(baseUrlCell);
 
         var actionCell = document.createElement('td');
-        if (canSwitch) {
-          var switchButton = document.createElement('button');
-          switchButton.className = 'primary';
-          switchButton.textContent = '切换';
-          switchButton.addEventListener('click', function() {
-            switchProvider(provider.id);
-          });
-          actionCell.appendChild(switchButton);
+        if (provider.family && !provider.active_family) {
+          var famBtn = document.createElement('button');
+          famBtn.className = 'primary';
+          famBtn.textContent = '设为 active 家族';
+          famBtn.addEventListener('click', function() { switchFamily(provider.family); });
+          actionCell.appendChild(famBtn);
           actionCell.appendChild(document.createTextNode(' '));
         }
-        if (canProbe) {
+        if (canUse) {
+          var proBtn = document.createElement('button');
+          proBtn.textContent = '设为 pro';
+          proBtn.addEventListener('click', function() { setTierOverride('pro', provider.id); });
+          actionCell.appendChild(proBtn);
+          actionCell.appendChild(document.createTextNode(' '));
+          var flashBtn = document.createElement('button');
+          flashBtn.textContent = '设为 flash';
+          flashBtn.addEventListener('click', function() { setTierOverride('flash', provider.id); });
+          actionCell.appendChild(flashBtn);
+          actionCell.appendChild(document.createTextNode(' '));
           var probeButton = document.createElement('button');
           probeButton.textContent = '测试';
-          probeButton.addEventListener('click', function() {
-            probeProvider(provider.id);
-          });
+          probeButton.addEventListener('click', function() { probeProvider(provider.id); });
           actionCell.appendChild(probeButton);
         }
         row.appendChild(actionCell);
@@ -183,25 +204,39 @@
       }
     }
 
-    async function switchProvider(id) {
+    async function switchFamily(family) {
       var status = document.getElementById('status');
       try {
-        await apiFetch('/admin/llm/active-provider', {
+        await apiFetch('/admin/llm/active-family', {
           method: 'PATCH',
-          body: JSON.stringify({ provider_id: id }),
+          body: JSON.stringify({ family: family }),
         });
-        showStatus(status, '已切换到 ' + id, false);
+        showStatus(status, '已切换 active 家族到 ' + family, false);
         await loadProviders();
       } catch (e) {
         showStatus(status, e.message, true);
       }
     }
 
-    async function clearOverride() {
+    async function setTierOverride(tier, id) {
       var status = document.getElementById('status');
       try {
-        await apiFetch('/admin/llm/active-provider', { method: 'DELETE' });
-        showStatus(status, '已恢复 settings 默认', false);
+        await apiFetch('/admin/llm/tier-override/' + encodeURIComponent(tier), {
+          method: 'PATCH',
+          body: JSON.stringify({ provider_id: id }),
+        });
+        showStatus(status, tier + ' 档已 override 到 ' + id, false);
+        await loadProviders();
+      } catch (e) {
+        showStatus(status, e.message, true);
+      }
+    }
+
+    async function clearTierOverride(tier) {
+      var status = document.getElementById('status');
+      try {
+        await apiFetch('/admin/llm/tier-override/' + encodeURIComponent(tier), { method: 'DELETE' });
+        showStatus(status, tier + ' 档已恢复家族默认', false);
         await loadProviders();
       } catch (e) {
         showStatus(status, e.message, true);
@@ -221,8 +256,6 @@
         showStatus(status, e.message, true);
       }
     }
-
-    document.getElementById('clear-override').addEventListener('click', clearOverride);
   </script>
 </body>
 </html>

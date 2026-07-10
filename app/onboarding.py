@@ -321,11 +321,14 @@ async def extract_onboarding_info_async(
 
     try:
         from app.llm import generate_completion  # noqa: PLC0415  (lazy import, avoid circular)
+        from app.llm_providers import TASK_ONBOARDING_EXTRACTION, tier_for_task
         messages = [
             {"role": "system", "content": _EXTRACT_SYSTEM},
             {"role": "user", "content": f"当前步骤：{current_state}\n用户消息：{user_text}"},
         ]
-        raw = await asyncio.to_thread(generate_completion, messages)
+        raw = await asyncio.to_thread(
+            generate_completion, messages, tier=tier_for_task(TASK_ONBOARDING_EXTRACTION)
+        )
         raw = raw.strip()
         if raw.startswith("```"):
             raw = raw.split("```", 2)[1]

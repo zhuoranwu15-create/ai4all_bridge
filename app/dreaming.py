@@ -408,8 +408,10 @@ def _call_dreaming_llm(
     daily_notes: str,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Optional[int]]]]:
     from app.llm import generate_completion_with_usage, is_llm_configured
+    from app.llm_providers import TASK_DREAMING, tier_for_task
 
-    if not is_llm_configured():
+    tier = tier_for_task(TASK_DREAMING)
+    if not is_llm_configured(tier):
         raise RuntimeError("llm_disabled")
 
     messages = [
@@ -426,7 +428,7 @@ def _call_dreaming_llm(
             ),
         },
     ]
-    raw, usage = generate_completion_with_usage(messages)
+    raw, usage = generate_completion_with_usage(messages, tier=tier)
     return _normalize_dreaming_payload(_extract_json_object(raw)), usage
 
 
@@ -734,10 +736,11 @@ def run_dreaming(
 ) -> Dict[str, object]:
     """Run LLM Dreaming for one account and auto-apply eligible memory items."""
     from app.llm import get_active_llm_model
+    from app.llm_providers import TASK_DREAMING, tier_for_task
 
     today = today or date.today().isoformat()
     days = max(1, min(days, 30))
-    active_llm_model = get_active_llm_model()
+    active_llm_model = get_active_llm_model(tier_for_task(TASK_DREAMING))
 
     (
         session_metadata,

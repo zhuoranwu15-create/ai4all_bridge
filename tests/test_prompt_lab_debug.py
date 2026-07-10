@@ -234,8 +234,8 @@ def test_prompt_lab_page_shows_prompt_and_messages_lengths():
     assert "function loadLlmProviders()" in html
     assert "function providerLlmStatus(provider)" in html
     assert "未配置 key" in html
-    assert "provider_id: provider.id" in html
-    assert "/admin/llm/active-provider" in html
+    assert "family: provider.family" in html
+    assert "/admin/llm/active-family" in html
     assert html.index(
         '<button class="primary" onclick="replayPrompt()">Replay</button>'
     ) < html.index("<h3>LLM Provider</h3>")

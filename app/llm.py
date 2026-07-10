@@ -6,7 +6,13 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.config import settings
 from app.llm_adapters import chat_completion
-from app.llm_providers import LLMProviderConfig, get_legacy_llm_provider, get_llm_provider
+from app.llm_providers import (
+    TIER_PRO,
+    LLMProviderConfig,
+    get_llm_provider,
+    resolve_provider_for_tier,
+    tier_for_task,
+)
 from app.tools.external_content import project_tool_result_for_llm
 
 
@@ -32,59 +38,63 @@ def _is_mock_settings() -> bool:
     return type(settings).__module__.startswith("unittest.mock")
 
 
-def _stored_provider_override_id() -> Optional[str]:
+def _runtime_bindings() -> Dict[str, Optional[str]]:
+    """Read runtime bindings (active family + per-tier overrides); empty on mock/error."""
     if _is_mock_settings():
-        return None
+        return {}
     try:
-        from app.db import get_llm_provider_override_id
+        from app.db import get_llm_runtime_bindings
 
-        return get_llm_provider_override_id()
+        return get_llm_runtime_bindings()
     except Exception as err:
-        logger.debug("llm provider override lookup skipped error=%s", err)
-        return None
+        logger.debug("llm runtime bindings lookup skipped error=%s", err)
+        return {}
 
 
-def _stored_active_provider_id() -> Optional[str]:
-    """Backward-compatible alias for the stored runtime provider override."""
-    return _stored_provider_override_id()
-
-
-def _active_llm_provider(provider_id: Optional[str] = None) -> LLMProviderConfig:
-    selected_id = provider_id or _stored_provider_override_id()
-    try:
-        provider = get_llm_provider(selected_id, settings_obj=settings)
-    except ValueError as err:
-        logger.warning("active llm provider invalid provider_id=%s error=%s", selected_id, err)
+def _active_llm_provider(
+    tier: str = TIER_PRO,
+    *,
+    provider_id: Optional[str] = None,
+) -> LLMProviderConfig:
+    """Resolve the provider for a tier (default pro). explicit provider_id selects an exact provider."""
+    if provider_id:
         try:
-            provider = get_llm_provider(None, settings_obj=settings)
-        except ValueError as fallback_err:
-            logger.error(
-                "default llm provider invalid; falling back to legacy provider error=%s",
-                fallback_err,
-            )
-            provider = get_legacy_llm_provider(settings_obj=settings)
-    return provider
+            return get_llm_provider(provider_id, settings_obj=settings)
+        except ValueError as err:
+            logger.warning("explicit llm provider invalid provider_id=%s error=%s", provider_id, err)
+    bindings = _runtime_bindings()
+    override_key = "pro_provider_id" if tier == TIER_PRO else "flash_provider_id"
+    return resolve_provider_for_tier(
+        tier,
+        family=bindings.get("active_family"),
+        override_provider_id=bindings.get(override_key),
+        settings_obj=settings,
+    )
 
 
-def resolve_active_llm_provider(provider_id: Optional[str] = None) -> LLMProviderConfig:
+def resolve_active_llm_provider(
+    tier: str = TIER_PRO,
+    *,
+    provider_id: Optional[str] = None,
+) -> LLMProviderConfig:
     """Resolve the active provider once so callers can reuse a request-level snapshot."""
-    return _active_llm_provider(provider_id)
+    return _active_llm_provider(tier, provider_id=provider_id)
 
 
-def get_active_llm_provider_metadata(provider_id: Optional[str] = None) -> Dict[str, Any]:
+def get_active_llm_provider_metadata(tier: str = TIER_PRO) -> Dict[str, Any]:
     """Return active provider metadata without exposing API keys."""
-    return _active_llm_provider(provider_id).redacted()
+    return _active_llm_provider(tier).redacted()
 
 
-def get_active_llm_model(provider_id: Optional[str] = None) -> str:
-    """Return the model name for the currently active LLM provider."""
-    return _active_llm_provider(provider_id).model
+def get_active_llm_model(tier: str = TIER_PRO) -> str:
+    """Return the model name for the provider serving the given tier (default pro)."""
+    return _active_llm_provider(tier).model
 
 
-def is_llm_configured(provider_id: Optional[str] = None) -> bool:
-    """Return whether the selected provider can be called by runtime code."""
+def is_llm_configured(tier: str = TIER_PRO) -> bool:
+    """Return whether the selected tier's provider can be called by runtime code."""
     try:
-        provider = _active_llm_provider(provider_id)
+        provider = _active_llm_provider(tier)
         return bool(provider.enabled and provider.api_key)
     except Exception:
         return False
@@ -200,8 +210,9 @@ def generate_reply(
     system_prompt: Optional[str] = None,
     messages: Optional[List[Dict[str, str]]] = None,
     provider: Optional[LLMProviderConfig] = None,
+    tier: str = TIER_PRO,
 ) -> str:
-    selected_provider = provider or _active_llm_provider()
+    selected_provider = provider or _active_llm_provider(tier)
     if not _llm_api_key(selected_provider):
         return _missing_api_key_reply(user_text, messages)
     if messages is not None:
@@ -216,9 +227,10 @@ def generate_completion(
     messages: List[Dict[str, str]],
     *,
     provider: Optional[LLMProviderConfig] = None,
+    tier: str = TIER_PRO,
 ) -> str:
     """One-shot LLM call with an explicit messages list. Returns '' if no API key."""
-    selected_provider = provider or _active_llm_provider()
+    selected_provider = provider or _active_llm_provider(tier)
     if not _llm_api_key(selected_provider):
         return ""
     return _http_chat(messages, provider=selected_provider)
@@ -228,12 +240,13 @@ def generate_completion_with_usage(
     messages: List[Dict[str, str]],
     *,
     provider: Optional[LLMProviderConfig] = None,
+    tier: str = TIER_PRO,
 ) -> Tuple[str, Optional[Dict[str, Optional[int]]]]:
     """同 generate_completion，但额外返回 token 用量 {'input','output'}（缺失为 None）。
 
     无 API key 时返回 ('', None)。供需要计量 token 的旁路（如 dreaming）使用。
     """
-    selected_provider = provider or _active_llm_provider()
+    selected_provider = provider or _active_llm_provider(tier)
     if not _llm_api_key(selected_provider):
         return "", None
     payload = _http_chat_payload(messages, provider=selected_provider)
@@ -371,6 +384,7 @@ def generate_reply_with_tools(
     first_round_tool_choice: Any = "auto",
     messages: Optional[List[Dict]] = None,
     provider: Optional[LLMProviderConfig] = None,
+    tier: str = TIER_PRO,
     on_tool_detected: Optional[Callable[[List[str]], None]] = None,
     round_trace_collector: Optional[List[Dict]] = None,
 ) -> tuple:
@@ -379,7 +393,7 @@ def generate_reply_with_tools(
     first_round_tool_choice 由调用方显式传入：第一轮的 tool_choice。默认 "auto"。
     主对话 turn 路径在检测到"主动设置更新"意图时传入强制工具；主动消息生成等
     其它调用方不传（默认 auto），因此不会被内嵌的历史聊天文本误判（曾导致 400）。"""
-    selected_provider = provider or _active_llm_provider()
+    selected_provider = provider or _active_llm_provider(tier)
     if not _llm_api_key(selected_provider):
         try:
             return _missing_api_key_reply(user_text, messages), None

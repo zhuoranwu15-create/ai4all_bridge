@@ -12,6 +12,7 @@ from app.db import (
     list_recent_reactivation_outbound_messages,
 )
 from app.llm import generate_completion, is_llm_configured
+from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context
@@ -118,7 +119,7 @@ def generate_topic_followup_candidate(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not is_llm_configured():
+    if not is_llm_configured(tier_for_task(TASK_PROACTIVE_RECALL)):
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     if _select_route(account_id) is None:
@@ -185,7 +186,7 @@ def generate_topic_followup_candidate(
         },
     ]
     try:
-        raw = generate_completion(messages)
+        raw = generate_completion(messages, tier=tier_for_task(TASK_PROACTIVE_RECALL))
         payload = _extract_json_object(raw)
         source_cutoff = max((int(item["id"]) for item in history if item.get("id") is not None), default=None)
         candidate = _normalize_topic_followup_candidate(

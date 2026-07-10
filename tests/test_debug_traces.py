@@ -103,14 +103,21 @@ def test_turn_debug_trace_uses_provider_snapshot_when_active_provider_changes(cl
             }
         ]
     )
-    active_provider_id = {"value": "chatgpt"}
+    pro_override = {"value": "chatgpt"}
 
     def fake_generate(**kwargs):
         assert kwargs["provider"].id == "chatgpt"
-        active_provider_id["value"] = "deepseek"
+        pro_override["value"] = "deepseek"
         return "snapshot reply", None
 
-    with patch("app.llm._stored_provider_override_id", side_effect=lambda: active_provider_id["value"]):
+    def fake_bindings():
+        return {
+            "active_family": "deepseek",
+            "pro_provider_id": pro_override["value"],
+            "flash_provider_id": None,
+        }
+
+    with patch("app.llm._runtime_bindings", side_effect=fake_bindings):
         with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate):
             res = client.post(
                 "/openclaw/turn",

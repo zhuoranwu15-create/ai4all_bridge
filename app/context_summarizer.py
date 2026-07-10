@@ -74,8 +74,10 @@ def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
         return ""
     try:
         from app.llm import generate_completion_with_usage, is_llm_configured
+        from app.llm_providers import TASK_ROLLING_SUMMARY, tier_for_task
 
-        if not is_llm_configured():
+        tier = tier_for_task(TASK_ROLLING_SUMMARY)
+        if not is_llm_configured(tier):
             return _deterministic_summary(transcript, prev_summary)
 
         user_prompt = (
@@ -89,7 +91,8 @@ def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
             [
                 {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
-            ]
+            ],
+            tier=tier,
         )
         text = str(raw or "").strip()
         # LLM 空响应与异常走同一确定性兜底。

@@ -16,6 +16,7 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.llm import generate_reply_with_tools, is_llm_configured
+from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context
@@ -81,7 +82,7 @@ def generate_content_invitation_candidate(
     if not state.get("enabled"):
         return _no_op(account_id=account_id, reason="proactive_disabled", now=current)
 
-    if not is_llm_configured():
+    if not is_llm_configured(tier_for_task(TASK_PROACTIVE_RECALL)):
         return _no_op(account_id=account_id, reason="llm_disabled", now=current)
 
     route = _select_route(account_id)
@@ -206,6 +207,7 @@ def generate_content_invitation_candidate(
         max_tool_rounds=int(
             getattr(settings, "proactive_content_invitation_tool_rounds", 5) or 5
         ),
+        tier=tier_for_task(TASK_PROACTIVE_RECALL),
     )
     if error:
         return _no_op(

@@ -17,6 +17,7 @@ from app.db import (
     upsert_account_user_meta,
 )
 from app.llm import generate_completion
+from app.llm_providers import TASK_USER_META, tier_for_task
 from app.prompts.user_meta_companion_type import (
     COMPANION_TYPE_ENUM,
     build_companion_classify_prompt,
@@ -127,7 +128,10 @@ def classify_companion_type(*, messages: List[Dict[str, Any]]) -> Dict[str, Any]
     if not messages:
         raise ValueError("messages are required")
     prompt = build_companion_classify_prompt(messages=messages)
-    raw = generate_completion([{"role": "user", "content": prompt}])
+    raw = generate_completion(
+        [{"role": "user", "content": prompt}],
+        tier=tier_for_task(TASK_USER_META),
+    )
     return _normalize_companion_payload(_extract_json_object(raw))
 
 
