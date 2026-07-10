@@ -5,7 +5,8 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.config import settings
-from app.time_utils import beijing_naive_now
+from app.time_utils import beijing_naive_now, beijing_now
+from app.session_lifecycle import business_day_for
 from app.db import (
     claim_pending_outbound_message,
     create_outbound_message,
@@ -27,6 +28,47 @@ from app.proactive.delivery.policy import (
 
 
 logger = logging.getLogger("ai4all.proactive.messaging")
+
+
+def record_outbound_message_sent(
+    *,
+    outbound_message_id: int,
+    gateway_message_id: Optional[str],
+    fallback: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """主动消息「已发送(sent)」的**唯一记录入口**：翻转状态为 sent + 写入账号会话时间线。
+
+    口径对齐 get_ops_metrics（运营报告）的 ``outbound_messages.status='sent'``——即"网关未回
+    业务错误"。直发路径与节点回报路径都经此一处，避免"运营报告算已发、会话时间线却没这条"
+    （或反之）的漂移。会话落库带上与 turn_service 相同口径的 business_day，使主动创建的 session
+    也能进入正常的每日轮转 / dreaming（否则 business_day 为空会让 session 永不轮转）。
+
+    注意：这里的"已发送"仅代表**网关接受、未回业务错误**，并非用户端 100% 收到（受微信 24 小时
+    送达窗口等影响，仍可能软丢）。当前这是可得的最准口径；日后若网关侧能提供可靠送达回执，
+    应在此处收紧判断（例如仅在确信送达时才写入会话时间线）。
+
+    insert 失败只记日志、不影响已 sent 的状态与调用方返回（保留原 bridge 容错语义）。
+    """
+    sent = mark_outbound_message_sent(
+        outbound_message_id=outbound_message_id,
+        gateway_message_id=gateway_message_id,
+    ) or fallback
+    if sent is None:
+        return None
+    try:
+        business_day = business_day_for(
+            beijing_now(),
+            start_hour=int(
+                getattr(settings, "conversation_session_business_day_start_hour", 4)
+            ),
+        )
+        insert_outbound_delivery_message(outbound_message=sent, business_day=business_day)
+    except Exception:
+        logger.exception(
+            "record_outbound_message_sent delivery insert failed id=%s",
+            outbound_message_id,
+        )
+    return sent
 
 
 def enqueue_proactive_text(
@@ -276,12 +318,12 @@ def send_proactive_text(
     assert result is not None  # 循环要么 break 成功，要么在 except 内 return
 
     gateway_message_id = result.get("messageId") if isinstance(result, dict) else None
-    sent = mark_outbound_message_sent(
+    sent = record_outbound_message_sent(
         outbound_message_id=int(claimed["id"]),
         gateway_message_id=str(gateway_message_id) if gateway_message_id else None,
-    ) or claimed
-    insert_outbound_delivery_message(outbound_message=sent)
-    return sent
+        fallback=claimed,
+    )
+    return sent or claimed
 
 
 def dispatch_proactive_text(

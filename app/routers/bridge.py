@@ -27,15 +27,14 @@ from app.db import (
     get_content_invitation,
     get_or_create_session,
     insert_debug_trace,
-    insert_outbound_delivery_message,
     mark_content_invitation_invited,
     mark_outbound_message_failed,
-    mark_outbound_message_sent,
     release_content_invitation_claim,
     resolve_account_id_for_inbound_channel_identity,
     upsert_access_node,
     upsert_channel_binding,
 )
+from app.proactive.delivery.outbound import record_outbound_message_sent
 from app.proactive.store.candidates import (
     REACTIVATION_TYPE_CONTENT_INVITATION,
     clear_reactivation_candidate,
@@ -206,19 +205,12 @@ def node_outbound_result(
 ) -> dict:
     """节点回报发送结果。sent → 标记已发 + 落交付记录;否则标记失败(stale 回收/下轮重领)。"""
     if payload.status == "sent":
-        sent = mark_outbound_message_sent(
+        # 与直发路径共用唯一入口：翻转 sent + 落会话时间线(带 business_day)，口径归一、内部容错。
+        sent = record_outbound_message_sent(
             outbound_message_id=outbound_message_id,
             gateway_message_id=payload.gateway_message_id,
         )
         if sent is not None:
-            try:
-                insert_outbound_delivery_message(outbound_message=sent)
-            except Exception as err:  # 落交付记录失败不应翻车发送结果
-                logger.exception(
-                    "node_outbound_result delivery insert failed id=%s error=%s",
-                    outbound_message_id,
-                    err,
-                )
             _complete_reactivation_content_invitation_outbound(
                 outbound_message=sent,
                 final_status="sent",
