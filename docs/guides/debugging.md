@@ -167,6 +167,10 @@ cat data/user_profiles/<account_id>/MEMORY.md
 **推荐用 UI：** `http://localhost:8180/ui/onboarding_debug.html`  
 （支持创建测试用户、模拟对话、一键 Reset、跳步骤、实时 prompt 预览）
 
+**模拟带营销活码进入（活码强制人设/AI名字/使命/引导语分支）：** 新建测试用户时可在下拉框选一个已配置的活码（来自 `/ui/campaign_codes_admin.html`），建号时会与生产注册共用 `apply_campaign_code_attribution` 写入归因快照并应用强制 SOUL 人设 / 强制 AI 名字，从而复现"用户扫这个活码进来"之后的 onboarding 分支（跳过人设菜单/跳过问 AI 名字、专属引导语、强制身份首次开口）。活码同时强制人设与 AI 名字时，onboarding 会在收到用户称呼后**直接完成**（少问一轮）。调试流量不计入活码转化统计（`increment_usage=False`）。不选活码则走默认 onboarding 流程。带活码账号点 Reset 会按注册快照重新落地强制 AI 名字 + 人设，不会退回空白模板。
+
+> **前置开关**：这个面板通过合成 `session_key` 打到真实 `/openclaw/turn` 管线，依赖服务端 `OPENCLAW_INBOUND_REQUIRE_BINDING=false` 才能命中调试账号（未绑定入站不被收口）。它是 dev 专用工具，开发机 `.env`（`APP_ENV=local`）默认已置 false。若指向一台按生产默认值（`true`）配置的服务器，面板会静默显示"（无回复）"。
+
 **API：**
 
 ```bash

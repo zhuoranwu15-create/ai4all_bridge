@@ -271,3 +271,71 @@ def test_write_campaign_attribution_does_not_overwrite(fresh_db):
     )
     attribution = get_campaign_attribution(account_id="acc-attr-3")
     assert attribution["campaign_code"] == "FIRST"
+
+
+# ---------------------------------------------------------------------------
+# ai_name_preset（AI 名字预设，migration 19 / §4.4）
+# ---------------------------------------------------------------------------
+
+def test_create_with_ai_name_preset_persists_and_validates(fresh_db):
+    from app.db.campaign import get_campaign_code
+
+    created = create_campaign_code(code="AINAME1", campaign_key="a", ai_name_preset="小满")
+    assert created["ai_name_preset"] == "小满"
+    assert get_campaign_code(code="AINAME1")["ai_name_preset"] == "小满"
+
+    validation = validate_campaign_code(code="AINAME1")
+    assert validation["valid"] is True
+    assert validation["ai_name_preset"] == "小满"
+
+
+def test_create_ai_name_preset_strips_and_empty_becomes_null(fresh_db):
+    created = create_campaign_code(code="AINAME2", campaign_key="a", ai_name_preset="  小满  ")
+    assert created["ai_name_preset"] == "小满"
+    created_blank = create_campaign_code(code="AINAME3", campaign_key="a", ai_name_preset="   ")
+    assert created_blank["ai_name_preset"] is None
+
+
+def test_create_ai_name_preset_rejects_multiline(fresh_db):
+    with pytest.raises(ValueError):
+        create_campaign_code(code="AINAMEML", campaign_key="a", ai_name_preset="小满\n注入行")
+
+
+def test_create_ai_name_preset_rejects_too_long(fresh_db):
+    with pytest.raises(ValueError):
+        create_campaign_code(code="AINAMELONG", campaign_key="a", ai_name_preset="名" * 25)
+
+
+def test_update_ai_name_preset(fresh_db):
+    from app.db.campaign import get_campaign_code
+
+    create_campaign_code(code="AINAMEUPD", campaign_key="a")
+    update_campaign_code(code="AINAMEUPD", ai_name_preset="小月")
+    assert get_campaign_code(code="AINAMEUPD")["ai_name_preset"] == "小月"
+    # 更新为空串 → 归一化为 None
+    update_campaign_code(code="AINAMEUPD", ai_name_preset="  ")
+    assert get_campaign_code(code="AINAMEUPD")["ai_name_preset"] is None
+
+
+def test_apply_attribution_writes_forced_ai_name_to_identity(fresh_db):
+    from app.db.campaign import apply_campaign_code_attribution, get_campaign_attribution
+    from app.user_profiles import read_context_file
+
+    create_campaign_code(
+        code="AINAMEATT", campaign_key="a", soul_preset_key="xiaotaiyang", ai_name_preset="小满"
+    )
+    _create_account("acc-ainame-att")
+    result = apply_campaign_code_attribution(
+        account_id="acc-ainame-att", campaign_code="AINAMEATT", increment_usage=False
+    )
+    assert result["applied"] is True
+    assert result["ai_name_preset"] == "小满"
+
+    stored = get_campaign_attribution(account_id="acc-ainame-att")
+    assert stored["ai_name_preset"] == "小满"
+
+    # IDENTITY.md 写入了强制 AI 名字；SOUL 自称也应带上该名字（先写 IDENTITY 再渲染 SOUL）
+    identity = read_context_file("acc-ainame-att", "IDENTITY.md") or ""
+    assert "小满" in identity
+    soul = read_context_file("acc-ainame-att", "SOUL.md") or ""
+    assert "小满" in soul

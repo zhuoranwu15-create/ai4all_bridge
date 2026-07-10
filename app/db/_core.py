@@ -1872,6 +1872,22 @@ def _migration_0013_campaign_codes(conn: Connection) -> None:
     )
 
 
+def _migration_0019_campaign_ai_name_preset(conn: Connection) -> None:
+    """活码新增"AI 称呼（名字）"预设列 ai_name_preset。
+
+    campaign_codes（可编辑配置）与 account_campaign_attribution（注册快照）各加一列：
+    活码设定该值时，建号即把 AI 名字写入 IDENTITY.md，onboarding 不再问用户"想怎么称呼 AI"
+    （见 campaign_codes_technical_design.md §4.4）。与 soul_preset_key 并列的第四个策略旋钮，
+    双后端通用（SQLite/PG 均支持 ADD COLUMN）。
+
+    编号说明：14–18 曾被未合并实验分支预留，现明确保留为空号/废弃，不再回填。
+    迁移框架按 `version > MAX(已应用)` 判定，版本号不要求连续；本迁移固定为 19，
+    后续新增迁移从 20 继续，避免已应用 19 的库再遇到 14–18 时被静默跳过。
+    """
+    _ensure_column(conn, "campaign_codes", "ai_name_preset", "TEXT")
+    _ensure_column(conn, "account_campaign_attribution", "ai_name_preset", "TEXT")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1886,6 +1902,7 @@ _MIGRATIONS = [
     (11, _migration_0011_proactive_global_candidates),
     (12, _migration_0012_agent_mission),
     (13, _migration_0013_campaign_codes),
+    (19, _migration_0019_campaign_ai_name_preset),
 ]
 
 

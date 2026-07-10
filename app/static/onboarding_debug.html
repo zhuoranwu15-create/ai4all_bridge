@@ -144,7 +144,12 @@
         <input type="text" id="newSessionId" placeholder="eg. test-alice" />
         <button class="btn btn-primary btn-sm" onclick="createSession()">创建</button>
       </div>
-      <div style="font-size:11px;color:#999;">留空则自动生成 ID</div>
+      <div class="input-row">
+        <select id="newSessionCampaignCode">
+          <option value="">不带活码（默认 onboarding 流程）</option>
+        </select>
+      </div>
+      <div style="font-size:11px;color:#999;">留空 ID 则自动生成；选择活码可模拟该活码强制人设/AI名字/使命/引导语进入后的 onboarding 分支</div>
     </div>
 
     <!-- Existing Accounts -->
@@ -175,6 +180,12 @@
         <div class="collected-item"><span class="key">用户称呼</span><span class="val" id="collectedUserName">-</span></div>
         <div class="collected-item"><span class="key">AI 名字</span><span class="val" id="collectedAiName">-</span></div>
         <div class="collected-item"><span class="key">Soul 字数</span><span class="val" id="collectedSoul">-</span></div>
+        <div id="campaignAttributionBlock" style="display:none;margin-top:8px;padding-top:8px;border-top:1px dashed #eee;">
+          <div class="collected-item"><span class="key">活码</span><span class="val" id="collectedCampaignCode">-</span></div>
+          <div class="collected-item"><span class="key">强制人设</span><span class="val" id="collectedCampaignSoul">-</span></div>
+          <div class="collected-item"><span class="key">AI 名字</span><span class="val" id="collectedCampaignAiName">-</span></div>
+          <div class="collected-item"><span class="key">使命</span><span class="val" id="collectedCampaignMission">-</span></div>
+        </div>
         <div style="margin-top:10px;">
           <div class="section-title">跳转步骤</div>
           <div class="jump-states">
@@ -309,18 +320,46 @@ function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ─── Campaign codes ────────────────────────────────────────────────────────────
+
+async function loadCampaignCodes() {
+  const select = document.getElementById('newSessionCampaignCode');
+  if (!select) return;
+  try {
+    const data = await api('GET', '/admin/campaign-codes?status=active');
+    const codes = data.campaign_codes || [];
+    const placeholder = '<option value="">不带活码（默认 onboarding 流程）</option>';
+    select.innerHTML = placeholder + codes.map(c => {
+      const label = `${c.code} — ${c.campaign_key || ''}`.trim();
+      return `<option value="${escHtml(c.code)}">${escHtml(label)}</option>`;
+    }).join('');
+  } catch (e) {
+    // Token 未配置或接口失败时静默跳过，不影响不带活码的默认流程
+  }
+}
+
 // ─── Create new test session ──────────────────────────────────────────────────
 
 async function createSession() {
   let id = document.getElementById('newSessionId').value.trim();
   if (!id) id = `debug-${Date.now()}`;
-  showToast(`正在创建账号 ${id}…`);
+  const campaignCode = document.getElementById('newSessionCampaignCode').value.trim();
+  showToast(campaignCode ? `正在创建账号 ${id}（活码 ${campaignCode}）…` : `正在创建账号 ${id}…`);
   try {
-    const res = await api('POST', '/debug/accounts/create', { account_id: id });
+    const body = { account_id: id };
+    if (campaignCode) body.campaign_code = campaignCode;
+    const res = await api('POST', '/debug/accounts/create', body);
     document.getElementById('newSessionId').value = '';
     await loadAccounts();
     await selectAccount(res.account_id, res.account_id);
-    showToast(`账号 ${res.account_id} 已创建（onboarding: pending）`);
+    const attribution = res.campaign_attribution;
+    if (!campaignCode) {
+      showToast(`账号 ${res.account_id} 已创建（onboarding: pending）`);
+    } else if (attribution && attribution.applied) {
+      showToast(`账号 ${res.account_id} 已创建，已应用活码 ${attribution.campaign_code}（人设=${attribution.soul_preset_key || '—'}，AI名字=${attribution.ai_name_preset || '—'}，使命=${attribution.mission_id || '—'}）`);
+    } else {
+      showToast(`账号 ${res.account_id} 已创建，但活码无效已忽略（原因: ${attribution ? attribution.reason : '未知'}）`);
+    }
   } catch (e) {
     showToast(`创建失败: ${e.message}`);
   }
@@ -386,6 +425,18 @@ async function refreshState() {
     document.getElementById('collectedUserName').textContent = c.user_name || '—';
     document.getElementById('collectedAiName').textContent = c.ai_name || '—';
     document.getElementById('collectedSoul').textContent = c.soul_chars > 0 ? `${c.soul_chars} 字` : '—';
+
+    const attribution = data.campaign_attribution;
+    const attrBlock = document.getElementById('campaignAttributionBlock');
+    if (attribution) {
+      attrBlock.style.display = 'block';
+      document.getElementById('collectedCampaignCode').textContent = attribution.campaign_code || '—';
+      document.getElementById('collectedCampaignSoul').textContent = attribution.soul_preset_key || '—';
+      document.getElementById('collectedCampaignAiName').textContent = attribution.ai_name_preset || '—';
+      document.getElementById('collectedCampaignMission').textContent = attribution.mission_id || '—';
+    } else {
+      attrBlock.style.display = 'none';
+    }
 
     // Prompt preview
     const preview = document.getElementById('promptPreview');
@@ -572,6 +623,7 @@ function showToast(msg) {
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 loadAccounts();
+loadCampaignCodes();
 </script>
 </body>
 </html>

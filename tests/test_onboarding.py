@@ -636,6 +636,18 @@ def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_
     assert "专属的陪伴" in soul
     assert "个人 AI 陪伴与生活助理" not in soul
 
+    from app.db import connect
+
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT direction, role, content FROM messages WHERE account_id = ? ORDER BY id ASC",
+            (session_key,),
+        ).fetchall()
+    assert [(r["direction"], r["role"], r["content"]) for r in rows] == [
+        ("inbound", "user", "你好"),
+        ("outbound", "assistant", "你好，很高兴能成为微信好友，你希望我怎么称呼你？"),
+    ]
+
 
 def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db):
     from app.db import get_account_onboarding_state
@@ -774,3 +786,133 @@ def test_write_user_name_migrates_legacy_format_in_place(tmp_path, fresh_db):
     assert "老薛" not in content
     assert "用户是球迷" in content
     assert content.count("用户称呼") == 1
+
+
+# ---------------------------------------------------------------------------
+# 活码强制 AI 名字（ai_name_preset，§4.4）——四种组合分支
+# ---------------------------------------------------------------------------
+
+def test_next_state_both_forced_step1_jumps_to_complete():
+    """soul + ai_name 都强制：step1_sent 收到用户称呼后无更多可问，直接完成。"""
+    from app.onboarding import next_onboarding_state
+    result = next_onboarding_state(
+        current_state="step1_sent",
+        extracted={"user_name": "小明", "skip": False},
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=True,
+        has_forced_ai_name=True,
+    )
+    assert result == "complete"
+
+
+def test_next_state_ai_name_only_still_goes_step2():
+    """仅强制 ai_name（人设未定）：仍需在 step2 问人设，不提前完成。"""
+    from app.onboarding import next_onboarding_state
+    result = next_onboarding_state(
+        current_state="step1_sent",
+        extracted={"user_name": "小明", "skip": False},
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=False,
+        has_forced_ai_name=True,
+    )
+    assert result == "step2_sent"
+
+
+def test_prompt_context_step1_both_forced_asks_nothing_self_intro():
+    """两者都强制：step1 不问 AI 名字/人设，确认用户称呼 + 自我介绍 + 破冰。"""
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="step1_sent",
+        user_name="小晨",
+        ai_name=None,
+        persona=None,
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=True,
+        has_forced_ai_name=True,
+    )
+    assert "小晨" in ctx
+    assert "怎么称呼你（AI）" not in ctx  # 不问 AI 名字
+    assert "小太阳" not in ctx            # 不展示人设菜单
+    assert "自我介绍" in ctx
+    assert "破冰" in ctx or "菜单" in ctx
+
+
+def test_prompt_context_step1_ai_name_only_shows_persona_menu_no_name_question():
+    """仅强制 ai_name：给人设菜单，但不问 AI 名字、不邀请改名（名字-only 简化处理）。"""
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="step1_sent",
+        user_name="小晨",
+        ai_name=None,
+        persona=None,
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=False,
+        has_forced_ai_name=True,
+    )
+    assert "小太阳" in ctx                 # 人设菜单仍展示
+    assert "怎么称呼你（AI）" not in ctx    # 不问 AI 名字
+    assert "名字已经定好" in ctx
+
+
+def test_prompt_context_step2_ai_name_only_confirms_persona_keeps_name():
+    """仅强制 ai_name：step2 处理人设选择，确认时不改名。"""
+    from app.onboarding import build_onboarding_prompt_context
+    ctx = build_onboarding_prompt_context(
+        state="step2_sent",
+        user_name="小晨",
+        ai_name=None,
+        persona="xiaotaiyang",
+        user_name_ask_count=1,
+        persona_ask_count=0,
+        has_forced_soul_preset=False,
+        has_forced_ai_name=True,
+    )
+    assert "不再追问 onboarding 问题" in ctx
+    assert "不要更改或重新询问你的名字" in ctx
+
+
+def test_apply_extracted_forced_ai_name_does_not_overwrite_identity(fresh_db):
+    """强制 ai_name 账号：用户回复里抽出的 ai_name 不应写 IDENTITY 覆盖已定死的名字。"""
+    from app.onboarding import apply_extracted_onboarding_info
+    from app import profile_storage
+
+    account_id = "acc-forced-ainame"
+    profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"ai_name": "别名想改", "persona": None, "user_name": None},
+        current_state="step2_sent",
+        has_forced_ai_name=True,
+    )
+
+    assert "ai_name" not in written
+    identity = profile_storage.read_file(account_id, "IDENTITY.md")
+    assert "小满" in identity
+    assert "别名想改" not in identity
+
+
+def test_apply_extracted_forced_ai_name_skips_preset_default_name(fresh_db):
+    """强制 ai_name 账号选了带名字预设（人设未强制）：不应用预设默认名回填覆盖强制名字。"""
+    from app.onboarding import apply_extracted_onboarding_info
+    from app import profile_storage
+
+    account_id = "acc-forced-ainame-preset"
+    profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")
+
+    written = apply_extracted_onboarding_info(
+        account_id=account_id,
+        extracted={"ai_name": None, "persona": "xiaotaiyang", "user_name": None},
+        current_state="step2_sent",
+        has_forced_soul_preset=False,
+        has_forced_ai_name=True,
+    )
+
+    # persona 仍会应用（人设未强制），但 ai_name 不应被预设默认名"小太阳"回填
+    assert written.get("ai_name") != "小太阳"
+    identity = profile_storage.read_file(account_id, "IDENTITY.md")
+    assert "小满" in identity

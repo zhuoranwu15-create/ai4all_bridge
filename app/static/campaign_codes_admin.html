@@ -11,7 +11,7 @@
   <header class="admin-header">
     <div>
       <h1>营销活码后台</h1>
-      <p class="page-subtitle">创建/编辑内容创意营销活码，配置使命分配、onboarding 话术、SOUL 人设三项独立策略。与个人邀请码是两套独立体系。</p>
+      <p class="page-subtitle">创建/编辑内容创意营销活码，配置使命分配、onboarding 话术、SOUL 人设、AI 名字四项独立策略。与个人邀请码是两套独立体系。</p>
     </div>
     <span id="admin-user" class="pill">—</span>
   </header>
@@ -34,6 +34,10 @@
       <div>
         <label for="f-soul-preset">指定 SOUL 人设（可空）</label>
         <input id="f-soul-preset" type="text" class="mono-input" placeholder="xiaotaiyang">
+      </div>
+      <div>
+        <label for="f-ai-name">指定 AI 名字（可空，设定后 onboarding 不再问用户）</label>
+        <input id="f-ai-name" type="text" placeholder="小满（≤24 字，单行）">
       </div>
       <div>
         <label for="f-expires-at">有效期至（可空，留空默认创建时起 3 个月）</label>
@@ -71,6 +75,10 @@
       <div>
         <label for="e-soul-preset">指定 SOUL 人设（可空）</label>
         <input id="e-soul-preset" type="text" class="mono-input">
+      </div>
+      <div>
+        <label for="e-ai-name">指定 AI 名字（可空）</label>
+        <input id="e-ai-name" type="text" placeholder="≤24 字，单行；留空为不指定">
       </div>
       <div>
         <label for="e-valid-from">生效起始（可空）</label>
@@ -111,6 +119,7 @@
           <th>状态</th>
           <th>Mission</th>
           <th>SOUL 人设</th>
+          <th>AI 名字</th>
           <th>Onboarding 话术</th>
           <th>已用次数</th>
           <th>有效期至</th>
@@ -118,7 +127,7 @@
         </tr>
       </thead>
       <tbody id="tbody">
-        <tr><td colspan="9">加载中…</td></tr>
+        <tr><td colspan="10">加载中…</td></tr>
       </tbody>
     </table>
   </div>
@@ -155,6 +164,7 @@
         campaign_key: document.getElementById('f-campaign-key').value.trim(),
         mission_id: document.getElementById('f-mission-id').value.trim() || null,
         soul_preset_key: document.getElementById('f-soul-preset').value.trim() || null,
+        ai_name_preset: document.getElementById('f-ai-name').value.trim() || null,
         expires_at: document.getElementById('f-expires-at').value.trim() || null,
         onboarding_script_variant: document.getElementById('f-script').value.trim() || null,
       };
@@ -179,7 +189,7 @@
         var data = await apiFetch('/admin/campaign-codes' + qs);
         currentCodes = data.campaign_codes || [];
         if (!currentCodes.length) {
-          tbody.innerHTML = '<tr><td colspan="9">暂无活码</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="10">暂无活码</td></tr>';
           return;
         }
         tbody.innerHTML = currentCodes.map(function(c) {
@@ -192,6 +202,7 @@
             + '<td class="status-' + esc(c.status) + '">' + esc(c.status) + '</td>'
             + '<td class="mono">' + esc(c.mission_id || '—') + '</td>'
             + '<td class="mono">' + esc(c.soul_preset_key || '—') + '</td>'
+            + '<td>' + esc(c.ai_name_preset || '—') + '</td>'
             + '<td class="wrap">' + esc(c.onboarding_script_variant || '—') + '</td>'
             + '<td>' + esc(String(c.used_count)) + '</td>'
             + '<td>' + esc(c.expires_at || '—') + '</td>'
@@ -202,7 +213,7 @@
             + '</tr>';
         }).join('');
       } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="9" class="status-msg error">' + esc(e.message) + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="10" class="status-msg error">' + esc(e.message) + '</td></tr>';
       }
     }
 
@@ -227,6 +238,7 @@
       document.getElementById('e-status').value = campaign.status || 'active';
       document.getElementById('e-mission-id').value = campaign.mission_id || '';
       document.getElementById('e-soul-preset').value = campaign.soul_preset_key || '';
+      document.getElementById('e-ai-name').value = campaign.ai_name_preset || '';
       document.getElementById('e-valid-from').value = campaign.valid_from || '';
       document.getElementById('e-expires-at').value = campaign.expires_at || '';
       document.getElementById('e-script').value = campaign.onboarding_script_variant || '';
@@ -246,6 +258,7 @@
         status: document.getElementById('e-status').value,
         mission_id: document.getElementById('e-mission-id').value.trim() || null,
         soul_preset_key: document.getElementById('e-soul-preset').value.trim() || null,
+        ai_name_preset: document.getElementById('e-ai-name').value.trim() || null,
         valid_from: document.getElementById('e-valid-from').value.trim() || null,
         expires_at: document.getElementById('e-expires-at').value.trim() || null,
         onboarding_script_variant: document.getElementById('e-script').value.trim() || null,

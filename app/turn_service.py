@@ -562,6 +562,7 @@ def build_turn_llm_input(
             needs_confirmation=bool((onboarding_pre_extracted or {}).get("needs_confirmation")),
             onboarding_script_override=(campaign_attribution or {}).get("onboarding_script_variant"),
             has_forced_soul_preset=bool((campaign_attribution or {}).get("soul_preset_key")),
+            has_forced_ai_name=bool((campaign_attribution or {}).get("ai_name_preset")),
         )
 
     from app.skills import list_skill_catalog
@@ -1351,6 +1352,9 @@ def _resolve_turn_reply(
                         has_forced_soul_preset=bool(
                             (_campaign_attribution_for_extraction or {}).get("soul_preset_key")
                         ),
+                        has_forced_ai_name=bool(
+                            (_campaign_attribution_for_extraction or {}).get("ai_name_preset")
+                        ),
                     )
             llm_input = build_turn_llm_input(
                 account_id=account_id,
@@ -1718,12 +1722,20 @@ def _finalize_turn(
                     if onboarding_state == ONBOARDING_STEP2_SENT
                     else 0
                 )
+                # 强制 AI 身份账号：step1_sent 收到用户称呼后无更多可问，直接完成 onboarding（§4.4）。
+                _attribution_for_advance = get_campaign_attribution(account_id=account_id)
                 new_state = next_onboarding_state(
                     current_state=onboarding_state,
                     extracted=onboarding_pre_extracted,
                     user_name_ask_count=0,
                     persona_ask_count=0,
                     confirmation_ask_count=_confirmation_ask_count,
+                    has_forced_soul_preset=bool(
+                        (_attribution_for_advance or {}).get("soul_preset_key")
+                    ),
+                    has_forced_ai_name=bool(
+                        (_attribution_for_advance or {}).get("ai_name_preset")
+                    ),
                 )
                 if new_state != onboarding_state:
                     set_account_onboarding_state(account_id=account_id, state=new_state)

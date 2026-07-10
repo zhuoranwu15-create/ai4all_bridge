@@ -7,6 +7,7 @@ account_campaign_attribution 是注册时刻的策略快照：活码后续被编
 账号，只影响新注册——因此本模块不提供“重算归因”之类的函数，写入即定型。
 """
 import calendar
+import logging
 import re
 import uuid
 from datetime import datetime
@@ -14,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from app.db._core import _clean_text, connect
 from app.time_utils import beijing_now_str
+
+logger = logging.getLogger("ai4all")
 
 __all__ = [
     "create_campaign_code",
@@ -24,6 +27,7 @@ __all__ = [
     "increment_campaign_code_used",
     "write_campaign_attribution",
     "get_campaign_attribution",
+    "apply_campaign_code_attribution",
 ]
 
 _EDITABLE_FIELDS = (
@@ -34,6 +38,7 @@ _EDITABLE_FIELDS = (
     "mission_id",
     "onboarding_script_variant",
     "soul_preset_key",
+    "ai_name_preset",
 )
 
 # 活码要拼进营销链接，限定 URL-safe 短码字符集——同时堵住管理 UI 把 code 拼进
@@ -106,6 +111,23 @@ def _validate_soul_preset_key(soul_preset_key: Optional[str]) -> None:
         raise ValueError(f"unknown soul_preset_key: {soul_preset_key}")
 
 
+# AI 名字预设是运营自由填写的短字符串（会写进 IDENTITY.md/SOUL.md 自称），不是白名单枚举。
+# 限定单行 + 长度上限，堵住多行文本注入 profile 文件的面（与活码 code 字符集限制同理）。
+_MAX_AI_NAME_PRESET_LEN = 24
+
+
+def _normalize_ai_name_preset(ai_name_preset: Optional[str]) -> Optional[str]:
+    """校验并规范化 AI 名字预设：strip；空→None；含换行或超长→ValueError。"""
+    cleaned = _clean_text(ai_name_preset)
+    if not cleaned:
+        return None
+    if "\n" in cleaned or "\r" in cleaned:
+        raise ValueError("ai_name_preset must be single line")
+    if len(cleaned) > _MAX_AI_NAME_PRESET_LEN:
+        raise ValueError(f"ai_name_preset must be at most {_MAX_AI_NAME_PRESET_LEN} characters")
+    return cleaned
+
+
 def _row_to_dict(row) -> Dict[str, Any]:
     return dict(row)
 
@@ -120,6 +142,7 @@ def create_campaign_code(
     mission_id: Optional[str] = None,
     onboarding_script_variant: Optional[str] = None,
     soul_preset_key: Optional[str] = None,
+    ai_name_preset: Optional[str] = None,
     created_by_admin_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     cleaned_code = _clean_text(code)
@@ -132,6 +155,7 @@ def create_campaign_code(
     _validate_status(status)
     _validate_mission_id(mission_id)
     _validate_soul_preset_key(soul_preset_key)
+    normalized_ai_name_preset = _normalize_ai_name_preset(ai_name_preset)
 
     now = beijing_now_str()
     resolved_expires_at = expires_at if expires_at is not None else _default_expires_at(now)
@@ -148,9 +172,9 @@ def create_campaign_code(
             """
             INSERT INTO campaign_codes (
                 id, code, campaign_key, status, valid_from, expires_at,
-                mission_id, onboarding_script_variant, soul_preset_key,
+                mission_id, onboarding_script_variant, soul_preset_key, ai_name_preset,
                 created_by_admin_user_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 campaign_id,
@@ -162,6 +186,7 @@ def create_campaign_code(
                 mission_id,
                 onboarding_script_variant,
                 soul_preset_key,
+                normalized_ai_name_preset,
                 created_by_admin_user_id,
                 now,
                 now,
@@ -217,6 +242,8 @@ def update_campaign_code(*, code: str, **fields: Any) -> Dict[str, Any]:
         _validate_mission_id(fields["mission_id"])
     if "soul_preset_key" in fields:
         _validate_soul_preset_key(fields["soul_preset_key"])
+    if "ai_name_preset" in fields:
+        fields["ai_name_preset"] = _normalize_ai_name_preset(fields["ai_name_preset"])
     if "valid_from" in fields or "expires_at" in fields:
         effective_valid_from = fields.get("valid_from", existing["valid_from"])
         effective_expires_at = fields.get("expires_at", existing["expires_at"])
@@ -253,6 +280,7 @@ def validate_campaign_code(*, code: str) -> Dict[str, Any]:
         "mission_id": record.get("mission_id"),
         "onboarding_script_variant": record.get("onboarding_script_variant"),
         "soul_preset_key": record.get("soul_preset_key"),
+        "ai_name_preset": record.get("ai_name_preset"),
     }
 
 
@@ -274,6 +302,7 @@ def write_campaign_attribution(
     mission_id: Optional[str],
     onboarding_script_variant: Optional[str],
     soul_preset_key: Optional[str],
+    ai_name_preset: Optional[str] = None,
 ) -> None:
     cleaned_account_id = _clean_text(account_id)
     if not cleaned_account_id:
@@ -288,8 +317,8 @@ def write_campaign_attribution(
             """
             INSERT INTO account_campaign_attribution (
                 account_id, campaign_code, mission_id, onboarding_script_variant,
-                soul_preset_key, attributed_at, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                soul_preset_key, ai_name_preset, attributed_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id) DO NOTHING
             """,
             (
@@ -298,6 +327,7 @@ def write_campaign_attribution(
                 mission_id,
                 onboarding_script_variant,
                 soul_preset_key,
+                ai_name_preset,
                 now,
                 now,
             ),
@@ -314,3 +344,74 @@ def get_campaign_attribution(*, account_id: str) -> Optional[Dict[str, Any]]:
             (cleaned_account_id,),
         ).fetchone()
     return _row_to_dict(row) if row else None
+
+
+def apply_campaign_code_attribution(
+    *,
+    account_id: str,
+    campaign_code: Optional[str],
+    increment_usage: bool = True,
+) -> Dict[str, Any]:
+    """校验营销活码并落地其注册效果：写归因快照 + 应用强制 AI 名字（IDENTITY.md）与强制 SOUL 人设。
+
+    生产注册（app/db/billing.py，increment_usage=True）与 onboarding 调试建号
+    （app/routers/debug.py，increment_usage=False，调试流量不进活码转化统计）共用此函数，
+    确保调试面板忠实复现真实注册效果，避免两处逻辑抄写漂移。
+
+    返回 {applied: bool, reason?: str, campaign_code?, mission_id?, onboarding_script_variant?,
+    soul_preset_key?}。语义：
+    - 空 code → applied=False, reason=empty，不处理。
+    - 账号已归因过 → applied=False, reason=already_attributed，直接跳过（写入即定型，
+      不重复写快照、不覆盖 SOUL）。
+    - 活码无效（不存在/过期/disabled）→ 记 warning，applied=False，调用方主流程照常继续。
+    - 任何意外异常 → 记 error，applied=False，fail-open，绝不阻断调用方主流程
+      （活码无金钱奖励含义，不应因失效码挡住真实注册）。
+    """
+    cleaned_campaign_code = _clean_text(campaign_code)
+    if not cleaned_campaign_code:
+        return {"applied": False, "reason": "empty"}
+    # 幂等/写入即定型：已归因账号不重复应用，避免二次不同活码覆盖 SOUL 与快照漂移。
+    if get_campaign_attribution(account_id=account_id) is not None:
+        return {"applied": False, "reason": "already_attributed"}
+    try:
+        validation = validate_campaign_code(code=cleaned_campaign_code)
+        if not validation.get("valid"):
+            logger.warning(
+                "campaign_code invalid, skip attribution account=%s code=%s reason=%s",
+                account_id, cleaned_campaign_code, validation.get("reason"),
+            )
+            return {"applied": False, "reason": validation.get("reason")}
+        write_campaign_attribution(
+            account_id=account_id,
+            campaign_code=cleaned_campaign_code,
+            mission_id=validation.get("mission_id"),
+            onboarding_script_variant=validation.get("onboarding_script_variant"),
+            soul_preset_key=validation.get("soul_preset_key"),
+            ai_name_preset=validation.get("ai_name_preset"),
+        )
+        if increment_usage:
+            increment_campaign_code_used(code=cleaned_campaign_code)
+        ai_name_preset = validation.get("ai_name_preset")
+        soul_preset_key = validation.get("soul_preset_key")
+        # 先写 AI 名字进 IDENTITY.md，再渲染 SOUL——render_soul_preset 会从 IDENTITY 读取
+        # AI 名字拼进人设自称，顺序反了则强制人设首轮自称仍是"我"。
+        if ai_name_preset:
+            from app.user_profiles import write_ai_name_to_identity  # noqa: PLC0415 (lazy, avoid circular)
+            write_ai_name_to_identity(account_id=account_id, name=ai_name_preset)
+        if soul_preset_key:
+            from app.user_profiles import apply_soul_preset  # noqa: PLC0415 (lazy, avoid circular)
+            apply_soul_preset(account_id=account_id, preset_name=soul_preset_key)
+        return {
+            "applied": True,
+            "campaign_code": cleaned_campaign_code,
+            "mission_id": validation.get("mission_id"),
+            "onboarding_script_variant": validation.get("onboarding_script_variant"),
+            "soul_preset_key": soul_preset_key,
+            "ai_name_preset": ai_name_preset,
+        }
+    except Exception as err:
+        logger.error(
+            "campaign_code attribution failed account=%s code=%s error=%s",
+            account_id, cleaned_campaign_code, err,
+        )
+        return {"applied": False, "reason": "error"}

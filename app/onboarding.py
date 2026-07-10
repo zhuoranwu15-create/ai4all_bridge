@@ -112,6 +112,7 @@ def build_onboarding_prompt_context(
     needs_confirmation: bool = False,
     onboarding_script_override: Optional[str] = None,
     has_forced_soul_preset: bool = False,
+    has_forced_ai_name: bool = False,
 ) -> str:
     """Build the onboarding guidance block to inject into the system prompt.
 
@@ -142,30 +143,58 @@ def build_onboarding_prompt_context(
         lines.append('参考话术（仅供参考，请按你的性格自然表达）：你好，很高兴能成为微信好友，你希望我怎么称呼你？')
 
     elif state == ONBOARDING_STEP1_SENT:
-        # User is replying to "what should I call you?" — next ask the combined AI setup question.
-        if has_forced_soul_preset:
+        # User is replying to "what should I call you?" — decide the next AI-setup question
+        # based on which identity knobs the campaign code已经强制定死（§4.3/§4.4）。
+        if has_forced_soul_preset and has_forced_ai_name:
+            # AI 名字与人设都由活码定死，已无 AI 相关问题可问：确认用户称呼 + 以强制身份自我介绍
+            # + 破冰，本轮即为 onboarding 收尾（next_onboarding_state 会 step1_sent → complete）。
+            if user_name:
+                lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后**完全以你当前设定好的角色性格、名字和语气**做一次简短自我介绍，这是你第一次用这个角色开口说话，让用户感受到角色的样子。不要询问或提及 AI 名字，也不要询问或提及人设/性格选择。')
+            else:
+                lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，也绝不要把用户刚才说的话当作 AI 自己的名字来使用或确认；直接**以你当前设定好的角色性格、名字和语气**做一次简短自我介绍，让用户感受到角色的样子。不要询问或提及 AI 名字，也不要询问或提及人设/性格选择。')
+            lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
+        elif has_forced_soul_preset:
             # 活码指定了强制 SOUL 人设，跳过"选人设"这一问，只问 AI 名字
             # （campaign_codes_technical_design.md §4.3）。
             if user_name:
                 lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后询问用户想怎么称呼你（AI）。不要询问或提及人设/性格选择。')
             else:
-                lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，直接进入下一步：询问用户想怎么称呼你（AI）。不要询问或提及人设/性格选择。')
+                lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，也绝不要把用户刚才说的话当作 AI 自己的名字来使用或确认，不要对那句话做任何命名/确认动作；直接自然过渡到下一步：询问用户想怎么称呼你（AI）。不要询问或提及人设/性格选择。')
+        elif has_forced_ai_name:
+            # 活码把 AI 名字定死，跳过"问 AI 名字"，但人设仍由用户选：只展示人设菜单（§4.4）。
+            if user_name:
+                lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后询问用户希望你是什么样的陪伴（性格气质）。你的名字已经定好，不要再问用户想怎么称呼你，也不要邀请用户给你改名。')
+            else:
+                lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼；直接自然过渡到下一步：询问用户希望你是什么样的陪伴（性格气质）。你的名字已经定好，不要再问用户想怎么称呼你，也不要邀请用户给你改名。')
+            lines.append("请在回复末尾自然列出以下人设候选（候选里的名字仅代表性格气质示例，你的名字已定，用户不用、也不要给你改名）：")
+            lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
+            lines.append("用户不用按固定格式回复，可以回复编号、候选名，或直接自己描述想要的性格。")
         elif user_name:
             lines.append(f'用户刚才回复了你问的称呼问题，他们想被你称为"{user_name}"。请自然确认这个称呼，然后合并询问用户想怎么称呼你（AI），以及希望你是什么样的陪伴。')
+            lines.append("请在回复末尾自然列出以下候选。候选里的名字只是建议，用户可以沿用，也可以改成自己喜欢的名字：")
+            lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
+            lines.append("用户不用按固定格式回复，可以回复编号、候选名、改名后的候选，或直接自己描述。")
         else:
-            lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，直接进入下一步：合并询问用户想怎么称呼你（AI），以及希望你是什么样的陪伴。')
-        if not has_forced_soul_preset:
+            lines.append('用户刚刚回复了你的问题（你问的是"你希望我怎么称呼你？"），但尚未明确提取到用户称呼。请不要硬猜用户称呼，也绝不要把用户刚才说的话当作 AI 自己的名字来使用或确认，不要对那句话做任何命名/确认动作；直接自然过渡到下一步：合并询问用户想怎么称呼你（AI），以及希望你是什么样的陪伴。')
             lines.append("请在回复末尾自然列出以下候选。候选里的名字只是建议，用户可以沿用，也可以改成自己喜欢的名字：")
             lines.extend(PERSONA_OPTION_LINES_WITH_PRESET_NAMES)
             lines.append("用户不用按固定格式回复，可以回复编号、候选名、改名后的候选，或直接自己描述。")
 
     elif state == ONBOARDING_STEP2_SENT:
-        # User is now replying to the combined AI-name/persona question.
+        # User is now replying to whatever AI-setup question we asked at step1.
         if has_forced_soul_preset:
+            # 强制人设账号：step1 只问了 AI 名字（名字未强制时），这里处理 AI 名字回复。
             if ai_name:
                 lines.append(f"用户刚刚回复了你关于 AI 称呼的问题。已提取到 AI 称呼：{ai_name}。请**完全以你当前设定好的角色性格和语气**回复确认，这是你第一次用这个角色开口说话，让用户感受到角色的样子。然后自然进入正常聊天，不再追问 onboarding 问题。")
             else:
                 lines.append("用户刚刚回复了你关于 AI 称呼的问题，但没有明确设定或选择了留白/跳过。请以你当前的角色语气自然接住，不再追问 onboarding 问题，可以表达之后慢慢相处中养成。")
+            lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
+        elif has_forced_ai_name:
+            # 名字已定、人设未定：step1 只展示了人设菜单，这里处理人设选择回复（§4.4，名字-only 简化处理）。
+            if persona:
+                lines.append(f"用户刚刚回复了你关于性格气质的问题。已提取到人设：{PERSONA_PRESET_NAMES_ZH.get(persona, persona)}。请**完全以你被设定好的名字和这个性格气质**回复确认，这是你第一次用这个角色开口说话，让用户感受到角色的样子。不要更改或重新询问你的名字。然后自然进入正常聊天，不再追问 onboarding 问题。")
+            else:
+                lines.append("用户刚刚回复了你关于性格气质的问题，但没有明确选择或选择了留白/跳过。请以你被设定好的名字自然接住，不再追问 onboarding 问题，可以表达性格之后慢慢相处中养成。不要更改或重新询问你的名字。")
             lines.append(ONBOARDING_ICEBREAKING_MENU_INSTRUCTION)
         elif needs_confirmation:
             # Extraction found something but it's ambiguous — do one light confirmation turn.
@@ -240,7 +269,8 @@ _EXTRACT_SYSTEM = """你是一个信息提取助手。从用户的消息中提�
 }
 
 名字提取规则：
-- 只有用户明确表达"叫我 X / 你叫 X / 以后叫你 X / 我想叫你 X"时才填写名字。
+- 用户明确表达"叫我 X / 你叫 X / 以后叫你 X / 我想叫你 X"时，填写名字。
+- 当前步骤是 pending 或 step1_sent 时，上一句 AI 问的是"你希望我怎么称呼你？"：如果用户消息本身就是一个简短的称呼/昵称（例如两三个字的中文名、英文名），不是完整的疑问句或闲聊内容，也不是"你好""在的""哈喽""嗯"这类问候/应答词，直接把这条消息整体当作 user_name，不要求必须带"叫我"这类动词。
 - 不要把普通聊天内容、问题、句子里的泛称或你猜测出来的昵称当名字。
 - "随便"、"都行"、"不设"、"跳过"、"无所谓"、"先空着"、"先留白" 等 → skip=true，未明确字段为 null。
 
@@ -336,6 +366,7 @@ def apply_extracted_onboarding_info(
     extracted: dict,
     current_state: str,
     has_forced_soul_preset: bool = False,
+    has_forced_ai_name: bool = False,
 ) -> dict:
     """Write confirmed onboarding info to context files.
 
@@ -344,6 +375,10 @@ def apply_extracted_onboarding_info(
     has_forced_soul_preset=True 时（营销活码强制指定了 SOUL 人设），即使 LLM 从用户回复里
     抽出了 persona，也不再应用——避免覆盖账号创建时已写入的强制人设
     （campaign_codes_technical_design.md §4.3）。
+
+    has_forced_ai_name=True 时（活码强制指定了 AI 名字），即使 LLM 从用户回复里抽出了 ai_name
+    （或选了带名字的预设需回填默认名），也不再写 IDENTITY.md——避免覆盖建号时已写入的强制名字
+    （§4.4）。
     """
     from app.user_profiles import (  # noqa: PLC0415
         apply_soul_preset,
@@ -363,7 +398,7 @@ def apply_extracted_onboarding_info(
             logger.error("write user_name failed account=%s error=%s", account_id, err)
 
     ai_name = extracted.get("ai_name")
-    if ai_name and current_state == ONBOARDING_STEP2_SENT:
+    if ai_name and not has_forced_ai_name and current_state == ONBOARDING_STEP2_SENT:
         try:
             write_ai_name_to_identity(account_id=account_id, name=ai_name)
             written["ai_name"] = ai_name
@@ -375,8 +410,9 @@ def apply_extracted_onboarding_info(
         preset = _resolve_persona_preset(persona)
         custom_desc = extracted.get("persona_custom") if persona == "custom" else None
 
-        # If user chose a named preset but never gave the AI a name, use the preset name
-        if preset in _PRESET_DEFAULT_NAMES and "ai_name" not in written:
+        # If user chose a named preset but never gave the AI a name, use the preset name.
+        # 强制名字账号短路：不用预设默认名回填 / 覆盖已定死的 AI 名字。
+        if preset in _PRESET_DEFAULT_NAMES and "ai_name" not in written and not has_forced_ai_name:
             identity_text = read_context_file(account_id, "IDENTITY.md")
             has_name = bool(identity_text) and "AI 名字" in identity_text
             if not has_name:
@@ -448,17 +484,25 @@ def next_onboarding_state(
     user_name_ask_count: int,
     persona_ask_count: int,
     confirmation_ask_count: int = 0,
+    has_forced_soul_preset: bool = False,
+    has_forced_ai_name: bool = False,
 ) -> str:
     """Determine next onboarding state after a turn.
 
     The caller is responsible for checking if the transition is appropriate.
     Returns the next state string.
+
+    当活码把 AI 名字与人设都强制定死（has_forced_soul_preset and has_forced_ai_name）时，
+    step1_sent 收到用户称呼后已无 AI 相关问题可问，直接完成 onboarding，比默认流程少问一轮
+    （campaign_codes_technical_design.md §4.4）。
     """
     if current_state == ONBOARDING_PENDING:
         return ONBOARDING_STEP1_SENT
 
     if current_state == ONBOARDING_STEP1_SENT:
         # Got user's reply to step 1 (asked user name)
+        if has_forced_soul_preset and has_forced_ai_name:
+            return ONBOARDING_COMPLETE
         # Advance to step2 regardless of whether we extracted a name
         return ONBOARDING_STEP2_SENT
 

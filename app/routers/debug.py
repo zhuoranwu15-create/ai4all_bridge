@@ -626,6 +626,10 @@ def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) 
     if m:
         user_name = m.group(1).strip()
 
+    from app.db.campaign import get_campaign_attribution
+
+    campaign_attribution = get_campaign_attribution(account_id=account_id)
+
     prompt_ctx = build_onboarding_prompt_context(
         state=state,
         user_name=user_name,
@@ -633,12 +637,15 @@ def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) 
         persona=None,
         user_name_ask_count=0,
         persona_ask_count=0,
+        has_forced_soul_preset=bool((campaign_attribution or {}).get("soul_preset_key")),
+        has_forced_ai_name=bool((campaign_attribution or {}).get("ai_name_preset")),
     )
 
     return {
         "account_id": account_id,
         "onboarding_state": state,
         "onboarding_active": is_onboarding_active(state),
+        "campaign_attribution": campaign_attribution,
         "collected": {
             "user_name": user_name,
             "ai_name": ai_name,
@@ -681,6 +688,7 @@ def debug_set_onboarding_state(
 class DebugCreateAccountRequest(BaseModel):
     account_id: Optional[str] = None
     display_name: Optional[str] = None
+    campaign_code: Optional[str] = None
 
 
 @router.post("/debug/accounts/create")
@@ -688,7 +696,13 @@ def debug_create_account(
     payload: DebugCreateAccountRequest,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    """Create a bare test account directly (no turn, no LLM call, state stays pending)."""
+    """Create a bare test account directly (no turn, no LLM call, state stays pending).
+
+    campaign_code 可选：带上后与生产注册共用 apply_campaign_code_attribution 写入
+    account_campaign_attribution 快照并应用强制 SOUL 人设，模拟"用户扫这个活码进来"之后
+    onboarding 的分支行为；不带则和之前一样走默认 onboarding 流程。increment_usage=False：
+    调试流量不进活码转化统计。
+    """
     from app.user_profiles import ensure_user_profile, ensure_agent_context_files
     account_id = (payload.account_id or "").strip() or f"debug-{int(time.time())}"
     get_or_create_session(
@@ -703,7 +717,23 @@ def debug_create_account(
     ensure_user_profile(account_id)
     ensure_agent_context_files(account_id, display_name=payload.display_name or None)
     set_account_debug_flag(account_id=account_id, is_debug=True)
-    return {"account_id": account_id, "status": "created", "onboarding_state": "pending", "is_debug": True}
+
+    campaign_attribution = None
+    if (payload.campaign_code or "").strip():
+        from app.db.campaign import apply_campaign_code_attribution
+        campaign_attribution = apply_campaign_code_attribution(
+            account_id=account_id,
+            campaign_code=payload.campaign_code,
+            increment_usage=False,
+        )
+
+    return {
+        "account_id": account_id,
+        "status": "created",
+        "onboarding_state": "pending",
+        "is_debug": True,
+        "campaign_attribution": campaign_attribution,
+    }
 
 
 class OnboardingResetRequest(BaseModel):
@@ -734,6 +764,8 @@ def debug_reset_onboarding(
     cleared_messages = clear_all_messages_for_account(account_id=account_id)
 
     cleared = []
+    restored_soul_preset = None
+    restored_ai_name = None
     if payload.clear_context_files:
         for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
             if delete_context_file(account_id, filename):
@@ -746,6 +778,19 @@ def debug_reset_onboarding(
             cleared.append("memory/")
         # Re-create defaults
         ensure_agent_context_files(account_id, display_name=account.get("display_name"))
+        # 若账号带营销活码强制身份，重建默认文件后按注册快照重新落地 AI 名字 + SOUL 人设——否则
+        # 空白模板会与 onboarding "已强制身份、跳过对应问句" 分支逻辑漂移，重跑出来的模拟就是错的。
+        # 顺序与 apply_campaign_code_attribution 一致：先写 IDENTITY 名字，再渲染 SOUL（§4.4）。
+        from app.db.campaign import get_campaign_attribution
+        _reset_attribution = get_campaign_attribution(account_id=account_id) or {}
+        restored_ai_name = _reset_attribution.get("ai_name_preset")
+        restored_soul_preset = _reset_attribution.get("soul_preset_key")
+        if restored_ai_name:
+            from app.user_profiles import write_ai_name_to_identity
+            write_ai_name_to_identity(account_id=account_id, name=restored_ai_name)
+        if restored_soul_preset:
+            from app.user_profiles import apply_soul_preset
+            apply_soul_preset(account_id=account_id, preset_name=restored_soul_preset)
 
     return {
         "status": "ok",
@@ -753,6 +798,8 @@ def debug_reset_onboarding(
         "onboarding_state": "pending",
         "cleared_files": cleared,
         "cleared_messages": cleared_messages,
+        "restored_soul_preset": restored_soul_preset,
+        "restored_ai_name": restored_ai_name,
     }
 
 
