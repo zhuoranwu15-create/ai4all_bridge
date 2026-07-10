@@ -911,6 +911,49 @@ def _prepare_turn(
                 "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",
                 account_id, welcome_to_user_id, sender_id, identity.chat_id,
             )
+            # 本轮被吸收、不走下面的 _persist_and_screen_inbound / LLM 回复落库，
+            # 这里补写这一问一答，否则 messages 表会漏掉用户的第一条消息和欢迎语。
+            try:
+                insert_message(
+                    account_id=account_id,
+                    session_id=session["id"],
+                    message_id=message_id,
+                    reply_to_message_id=None,
+                    direction="inbound",
+                    role="user",
+                    message_type=payload.message_type,
+                    content=payload.text or "",
+                    raw=_turn_message_raw(
+                        source="openclaw_turn",
+                        identity=identity,
+                        account_id=account_id,
+                        binding=binding,
+                        raw_payload=payload.raw,
+                        extra={"message_id": message_id, "onboarding_action": "absorbed_first_message"},
+                    ),
+                )
+                insert_message(
+                    account_id=account_id,
+                    session_id=session["id"],
+                    message_id=None,
+                    reply_to_message_id=message_id,
+                    direction="outbound",
+                    role="assistant",
+                    message_type="text",
+                    content=ONBOARDING_WELCOME_TEXT,
+                    raw=_turn_message_raw(
+                        source="onboarding_welcome",
+                        identity=identity,
+                        account_id=account_id,
+                        binding=binding,
+                        extra={"onboarding_action": "welcome_sent_on_first_message"},
+                    ),
+                )
+            except Exception as log_err:
+                logger.error(
+                    "onboarding welcome message logging failed account=%s error=%s",
+                    account_id, log_err,
+                )
             latency_ms = int((time.monotonic() - started_at) * 1000)
             return OpenClawTurnResponse(
                 status="ok",
