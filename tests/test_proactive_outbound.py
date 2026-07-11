@@ -182,6 +182,39 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
     assert usage == 1
 
 
+def test_failed_outbound_does_not_record_session_delivery(fresh_db):
+    """发送失败不应建 session、不应把这条主动消息写入会话时间线（口径：仅 sent 才记录）。"""
+    from app.db import list_sessions_for_account
+    from app.proactive.delivery.outbound import send_proactive_text
+
+    now = datetime(2026, 5, 22, 10, 0)
+    with (
+        patch("app.db.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch(
+            "app.proactive.delivery.outbound.send_weixin_text",
+            side_effect=RuntimeError("gateway down"),
+        ),
+    ):
+        _create_account("acc-nofail")
+        failed = send_proactive_text(
+            account_id="acc-nofail",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@im.wechat",
+            session_key="session-acc-nofail",
+            source="reminder",
+            text="会失败",
+            idempotency_key="nofail-1",
+            now=now,
+        )
+        sessions = list_sessions_for_account(account_id="acc-nofail")
+
+    assert failed["status"] == "failed"
+    # 发送失败：insert_outbound_delivery_message 从不被调用 → 不应存在 account-active session。
+    assert not any(s["session_key"] == "__account_active__" for s in sessions)
+
+
 def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
     """被限速时退避重试，重试用尽后落 failed（不再静默标 sent）。"""
     from app.openclaw_gateway import OpenClawRateLimited
@@ -265,6 +298,7 @@ def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
     with (
         patch("app.db.settings", fresh_db),
         patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.proactive.delivery.outbound.beijing_now", return_value=now),
         patch(
             "app.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:msg-1"},
@@ -292,6 +326,8 @@ def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
     assert messages[-1]["message_id"] == f"outbound-{row['id']}"
     assert messages[-1]["role"] == "assistant"
     assert messages[-1]["content"] == "主动提醒"
+    # 主动创建的 active session 必须带上 business_day（口径同 turn_service），否则会永不轮转/无 dreaming。
+    assert active_session["business_day"] == "2026-05-22"
     mock_send.assert_called_once_with(
         to_user_id="user@im.wechat",
         text="主动提醒",

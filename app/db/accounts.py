@@ -281,8 +281,15 @@ def mark_message_moderation_blocked(
 def insert_outbound_delivery_message(
     *,
     outbound_message: Dict[str, Any],
+    business_day: Optional[str] = None,
 ) -> Optional[int]:
-    """Persist a delivered proactive outbound text into the account conversation timeline."""
+    """Persist a delivered proactive outbound text into the account conversation timeline.
+
+    ``business_day`` 由调用方（service 层）按与 turn_service 相同的口径算好后注入；
+    仅在目标 session 尚无 business_day 时生效（get_or_create_session 内 COALESCE 写一次）。
+    缺省 None 时保持旧行为（session business_day 留空）——但主动路径若不传，会造成 session
+    因 business_day 为空而永不轮转/不做每日 dreaming，故 record_outbound_message_sent 恒传值。
+    """
     from app.db.billing import get_or_create_session
     account_id = _clean_text(outbound_message.get("account_id"))
     channel = _clean_text(outbound_message.get("channel"))
@@ -298,6 +305,7 @@ def insert_outbound_delivery_message(
         sender_name=None,
         chat_id=to_user_id,
         session_key=ACCOUNT_ACTIVE_SESSION_KEY,
+        business_day=_clean_text(business_day) or None,
         metadata={"created_reason": "proactive_outbound"},
     )
     session = session_state["session"]
