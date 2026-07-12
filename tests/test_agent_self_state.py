@@ -69,7 +69,7 @@ def test_renders_trust_for_icebreaking(fresh_db):
     result = build_agent_self_state_block(account_id="acc-icebreak")
 
     assert result is not None
-    assert "破冰" in result
+    assert "初识" in result
     assert "被信任" in result
     assert "充值" not in result
 
@@ -87,7 +87,7 @@ def test_renders_growth_for_deep_bond(fresh_db):
     result = build_agent_self_state_block(account_id="acc-deep")
 
     assert result is not None
-    assert "密友" in result
+    assert "亲近" in result
     assert "成长" in result
 
 
@@ -126,8 +126,8 @@ def test_account_isolation(fresh_db):
     result_a = build_agent_self_state_block(account_id="acc-a")
     result_b = build_agent_self_state_block(account_id="acc-b")
 
-    assert "密友" in result_a
-    assert "破冰" in result_b
+    assert "亲近" in result_a
+    assert "初识" in result_b
 
 
 # ---------------------------------------------------------------------------

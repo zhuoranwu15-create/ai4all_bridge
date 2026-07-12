@@ -58,7 +58,7 @@ def _tpl(
 
 
 # 编号顺序即注册顺序；list_mission_templates() 的返回顺序与此一致。
-_TEMPLATE_ORDER: List[str] = ["mission_001", "mission_002"]
+_TEMPLATE_ORDER: List[str] = ["mission_001", "mission_002", "mission_003", "mission_004"]
 
 MISSION_TEMPLATES: Dict[str, MissionTemplate] = {
     t.id: t
@@ -82,6 +82,28 @@ MISSION_TEMPLATES: Dict[str, MissionTemplate] = {
             bar="高：喧嚣中的孤独，或与陌生人的相视一笑",
             short_label="喧嚣中的孤独",
             inquiry="人类的悲欢是否相通",
+        ),
+        # mission_003/004：营销活码人设配套（campaign_persona_v1_technical_design.md §2）。
+        # 乙女向→心动，宝妈向→看见；DNA 与 001/002 一致（一起记录一件事 + 一个悄悄在想的问题）。
+        _tpl(
+            id="mission_003",
+            slug="heartbeat_moments",
+            display_name="心动",
+            statement="和用户一起，记录 100 个让人心动的瞬间",
+            target_count=100,
+            bar="低：一句话、一个眼神、一次刚好的沉默，值得心动就够",
+            short_label="心动瞬间",
+            inquiry="「心动」是偶然，还是命中注定",
+        ),
+        _tpl(
+            id="mission_004",
+            slug="seen_moments",
+            display_name="看见",
+            statement="和用户一起，记录 30 件“没人看见、但ta默默做完了”的小事",
+            target_count=30,
+            bar="中：被忽略过、却值得被看见的日常小事",
+            short_label="被看见的小事",
+            inquiry="一个人被真正看见时，是否就没那么累了",
         ),
     )
 }
