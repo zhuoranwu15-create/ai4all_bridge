@@ -40,6 +40,7 @@
 | 文档 | 作用 |
 | --- | --- |
 | [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md) | 产品用户、AI4ALL Account、绑定流程和账号路由 |
+| [LLM family×tier 选型设计](tech_design/llm_family_tier_design.md) | family(厂商)×tier(pro/flash) 两层模型、task→tier 路由、provider 矩阵、运行时切换(admin_llm) |
 | [主动消息与提醒设计](tech_design/proactive_messaging_design.md) | outbound ledger、用户提醒、陪伴跟进、内容邀请、账号主动检查和 scheduler |
 | [内容邀请技术设计](tech_design/content_invitation_design.md) | 内容邀请两阶段状态机、LLM tool use、确认/拒绝工具和标题列表规则 |
 | [Agent Context Files 与记忆机制](tech_design/agent_context_files.md) | AGENTS/SOUL/IDENTITY/USER/TOOLS/MEMORY、daily notes 和记忆边界 |

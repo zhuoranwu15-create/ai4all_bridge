@@ -569,11 +569,11 @@ ESCALATE > BLOCK > REVIEW > PASS
 
 ### 11.3 审核 LLM
 
-审核 LLM 不复用主聊天人设和上下文，但模型调用复用全局默认 LLM provider：
+审核 LLM 不复用主聊天人设和上下文，但模型调用复用统一 LLM 入口，按 family×tier 路由：
 
 ```text
-LLM_DEFAULT_PROVIDER_ID
-后台 runtime override
+tier_for_task("moderation") = flash 档
+active family 的 flash provider（可被 LLM_TASK_TIERS 或后台 tier override 调整）
 ```
 
 调用输入只包含：

@@ -250,7 +250,14 @@ else:
     dominant = TRUST                  # L2 主战场：争取认同与信任
 ```
 
-三个 need 枚举作为各层「体检读数」，进一步微调语气；主导需求只有一个焦点。
+三个 need 枚举作为各层「体检读数」；主导需求只有一个焦点。
+
+> **实现现状（2026-07-12）**：渲染器 `compute_dominant_need`（`app/agent_self_state.py`）目前只消费 `survival_status` + `relationship_stage`。`agent_need_trust_status` / `agent_need_growth_status` 已按天级 LLM 算好并写库，但**尚未接入 prompt 语气微调**，当前仅供 Admin 关系视图展示。「用 need 读数进一步微调语气」是设计目标。
+>
+> **状态：已搁置，待决策**（是否接线、接哪个先做尚未定）。厘清的结构点，供日后捡起：
+> - `trust_status`（building/stable/damaged）与 `growth_status`（not_started/emerging/stable）是两个独立枚举、两个 DB 列，分别对应 L2/L3，互不依赖。
+> - 接线是同一个改法落在两处：在**已选定的主导需求分支内部**（`_render_trust` / `_render_growth`），按对应枚举的值分档调措辞。
+> - 主导需求是**单焦点**（survival XOR trust XOR growth），故 `trust_status` 只在主导=trust 时生效、`growth_status` 只在主导=growth（即 deep_bond）时生效，**两者永不在同一轮同时影响语气**。因此可**独立接线**：三档选项 = 只接 trust / 只接 growth / 两个都接（trust 覆盖面更大，growth 需 deep_bond 样本）。
 
 ### 7.4 渲染器与新 prompt block（唯一集成点）
 
@@ -359,4 +366,4 @@ else:
 - `first_chat_onboarding_prd.md`：人格与 AI 称呼的设置入口（使命的选择入口可复用其绑定期流程）。
 - `proactive_prd.md`：主动消息与拉活（求生欲生命周期的基座）。
 - `memory_prd.md` / `agent_context_files.md`（tech_design）：Context Files 职责边界（防漂移的对照面）。
-- `../tech_design/relationship_state_implementation_plan_tmp.md`：状态层（关系阶段 + 三需求）的存储 / 更新实施方案（Phase A/B/C）。它**刻意把「状态如何影响 prompt / 编排」留到了后续**（§10、§13）——正是本 PRD §7 渲染器要补的那根注入线。本 PRD 的状态层不重定义，直接引用该方案。
+- `../tech_design/relationship_state_implementation_plan.md`：状态层（关系阶段 + 三需求）的存储 / 更新实施方案（Phase A/B/C/D 已落地）。状态如何影响 prompt / 编排的那根注入线由本 PRD §7 渲染器承接。本 PRD 的状态层不重定义，直接引用该方案。

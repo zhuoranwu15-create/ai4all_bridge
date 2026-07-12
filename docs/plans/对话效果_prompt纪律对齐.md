@@ -1,6 +1,6 @@
 # 对话效果 / Prompt 纪律对齐：技术设计文档
 
-> 状态：设计文档，待实现。
+> 状态：**已落地**（2026-07-12 核实）。三个短 block —【事实准确与核实纪律】【上下文与外部证据纪律】【微信回复呈现】— 均已在 `app/prompt_builder.py`；静态文件分层（`TOOLS.md` 只列触发条件、事实核实交给系统 block）也已在 `app/user_profiles.py` / `data/system/TOOLS.md` 生效。本文保留为设计依据。
 > 定位：OpenClaw 对标落地的第 2 线，只负责模型“怎么说、什么时候不能编、如何使用上下文”的行为契约。
 > 非目标：不实现 tool loop、工具真值、`web_fetch`、外部内容信封、tool evidence replay、当前消息 envelope、动态记忆召回或 prompt cache。
 > 主要依据：OpenClaw 源码 `src/agents/system-prompt.ts`、`src/security/external-content.ts`、`src/auto-reply/reply/inbound-meta.ts`、`src/gateway/agent-prompt.ts`；本项目 `app/prompt_builder.py`、`app/user_profiles.py`、`app/turn_service.py`、`app/dreaming.py` 现状；`docs/plans/agent_runtime对齐.md`、`docs/plans/记忆机制_tdai化对齐.md`。

@@ -45,16 +45,17 @@
 | `mission_id` | 可空。为空则新用户回退现有哈希随机分配，不影响老逻辑 |
 | `onboarding_script_variant` | 可空，指定 onboarding 话术变体 key |
 | `soul_preset_key` | 可空，指定 SOUL 人设预设 key |
+| `ai_name_preset` | 可空，强制 AI 的名字（注册/onboarding 时写入 `IDENTITY.md`）；见技术设计 §4.4（migration 19） |
 | `used_count` | 累计使用次数 |
 | `created_by_admin_user_id` / `created_at` / `updated_at` | 审计字段 |
 
-三个策略字段互相独立、各自可选（管理员可以只配 mission，不配 soul，onboarding 话术走默认）。
+四个策略字段互相独立、各自可选（管理员可以只配 mission，不配 soul，onboarding 话术走默认，AI 名字走默认）。
 
 ### 4.2 新表 `account_campaign_attribution`
 
 `account_id` 唯一，注册时一次性写入：
 - `campaign_code`
-- 当时解析出的**策略快照**：`mission_id` / `onboarding_script_variant` / `soul_preset_key`
+- 当时解析出的**策略快照**：`mission_id` / `onboarding_script_variant` / `soul_preset_key` / `ai_name_preset`
 
 **关键设计原则：快照而非实时关联查询。** 活码后续被管理员编辑或下线，不应该影响已经归因 / 正在 onboarding 中用户的既定策略——只有新注册用户才会看到活码的最新配置。这与 mission 系统已有的"账号只存 mission_id，一经分配不可更改"原则一致（见 [`agent_self_prd.md`](./agent_self_prd.md)）。
 

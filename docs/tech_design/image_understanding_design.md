@@ -32,7 +32,7 @@
 
 - 入口：`app/turn_service.py::handle_openclaw_turn`。全程只用 `payload.text`；对非文本消息只存一条 content（语音会兜底成 `[voice message]`，图片则是空串）。
 - 入参 schema：`app/schemas.py::OpenClawTurnRequest` **已预留** `message_type` 和 `media: MediaPayload{media_id,url,path,format,duration_ms}`，但 turn_service 未消费 `media`。
-- LLM：`app/llm.py`，`generate_reply_with_tools` 走 OpenAI 兼容 `/chat/completions`，模型 `settings.llm_model`（当前 `gpt-4o-mini`，可配）。
+- LLM：`app/llm.py`，`generate_reply_with_tools` 走主对话 LLM，模型由 family×tier 解析（`tier_for_task("main_reply")`=active family 的 pro 档，当前生产 `deepseek-v4-pro`），不再读已废弃的 `settings.llm_model`。见 [LLM family×tier 设计](llm_family_tier_design.md)。
 - Bridge：`openclaw-bridge/index.js:481-482` 写死 `message_type:"text"`、`text: event.cleanedBody || ""`；payload 里 `raw:{ctx,event}` 原样透传给后端。
 - VL 验证脚本：`test3.py` —— 已跑通 DashScope `qwen3-vl-plus` 的 OpenAI 兼容接口（`https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`），`settings.dashscope_api_key` 已就位（`app/config.py:95`）。
 

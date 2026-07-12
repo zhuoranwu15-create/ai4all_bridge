@@ -1,6 +1,6 @@
 # Agent Runtime 对齐：技术设计文档
 
-> 状态：设计文档，待实现。
+> 状态：**基本已落地**（2026-07-12 核实）。Batch A（runtime 能力真值 + 外部证据投喂）、Batch B（`web_fetch` + 受控 `read` + skills catalog + weather skill）、Batch C（tool evidence replay）均已在代码中：`app/tools/external_content.py`、`app/tools/web_fetch_handlers.py`、`app/tools/read_handlers.py`、`app/skills/*/SKILL.md`、`app/tool_evidence_replay.py`（接入 `turn_service.py`）。Batch D（当前消息 typed envelope）待复核。本文保留为设计依据与验收基线。
 > 目标：对齐 OpenClaw Agent Runtime 的核心 substrate：本轮能力真值、tool loop、工具结果投喂、skills catalog + `read` 渐进加载、外部证据信任边界、短期工具证据回灌、当前消息信封。
 > 非目标：不照搬 OpenClaw 的 68 个工具、会话树、MCP/插件生态、HEARTBEAT 主动机制；`exec/write/edit/browser/MCP` 等工程型高风险工具暂缓，不等于排除 `read` 这类 runtime 基础工具。
 > 主要依据：`openclaw_study/01-05`、OpenClaw 源码关键路径、weixin_bot 当前代码核实。

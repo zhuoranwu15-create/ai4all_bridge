@@ -1,6 +1,6 @@
 # 记忆机制 / TDAI 化对齐：技术设计文档
 
-> 状态：设计文档，待实现。
+> 状态：**方案已被取代**（2026-07-12 核实）。本文提出的「在现有栈上自建最小等价层（结构化 memory records + account-level persona snapshot + query-time recall）」最终**未采用**；query-time 记忆召回改由 **TDAI sidecar 集成**实现——`app/tdai_client.py::recall` 已接入 `app/turn_service.py`（热路径严格超时降级），capture/recall 开关见 `.env` 的 `TDAI_*` 与 [`tdai_multitenant_design.md`](../tech_design/tdai_multitenant_design.md)。本文的 L3 persona / L1 records 具体设计仅作历史参考，实际以 TDAI 集成文档为准。
 > 定位：OpenClaw 对标落地的第 3 线，负责长期用户理解、结构化记忆、query-time 召回、动态用户画像和召回防污染。
 > 非目标：不实现 runtime tool evidence replay、不新增 `web_fetch/read_skill`、不定义事实纪律 wording、不改投递层、不处理 provider prompt cache。
 > 主要依据：`openclaw_study/04_2_memory_study.md`、`04_2_1_tdai_memory_internal_study.md`、`05_对话效果对齐_综合清单.md`、本项目 `memory_writer.py`、`dreaming.py`、`prompt_builder.py`、`user_profiles.py`、`account_user_meta` 现状。

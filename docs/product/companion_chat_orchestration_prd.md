@@ -2,7 +2,7 @@
 
 > ⚠️ **本文档暂未订正，不可作为参考。**
 > 其中的关系阶段 / 需求满足状态口径、字段命名与编排规则可能与现行实现及
-> [`docs/tech_design/relationship_state_implementation_plan_tmp.md`](../tech_design/relationship_state_implementation_plan_tmp.md)
+> [`docs/tech_design/relationship_state_implementation_plan.md`](../tech_design/relationship_state_implementation_plan.md)
 > 不一致。订正完成前，请勿据此开发或评审。
 
 更新时间：2026-06-22
