@@ -144,3 +144,89 @@ def test_scheduler_close_then_next_message_seeds_from_last_closed(fresh_db):
     assert (persisted.get("rolling_summary") or "").strip() == seed
 
 
+def test_daily_scan_rotates_both_weixin_and_web_scopes(fresh_db):
+    """§7.1 / Codex ②：dreaming 每日轮转必须同扫微信与 Web 两个 scope，各自按自身
+    active key 归档，各自生成 carryover。否则 __web_active__ 永不轮转。"""
+    from app.session_lifecycle import (
+        get_or_create_account_active_session_with_dreaming,
+        run_daily_dreaming_scan,
+    )
+    from app.db import (
+        ACCOUNT_ACTIVE_SESSION_KEY,
+        WEB_ACTIVE_SESSION_KEY,
+        insert_message,
+        get_session,
+    )
+
+    account_id = "acc-dualscope"
+    # day1：同一账号分别在微信 scope 与 Web scope 各开一条 active session。
+    wx = get_or_create_account_active_session_with_dreaming(
+        account_id=account_id, channel="openclaw-weixin", sender_id="s",
+        sender_name=None, chat_id="c", business_day="2026-05-24",
+    )["session"]
+    web = get_or_create_account_active_session_with_dreaming(
+        account_id=account_id, channel="web", sender_id="s",
+        sender_name=None, chat_id=None, business_day="2026-05-24",
+        active_session_key=WEB_ACTIVE_SESSION_KEY,
+    )["session"]
+    assert wx["session_key"] == ACCOUNT_ACTIVE_SESSION_KEY
+    assert web["session_key"] == WEB_ACTIVE_SESSION_KEY
+    assert wx["id"] != web["id"]
+    for sid, content in ((wx["id"], "微信侧昨天的对话"), (web["id"], "Web 侧昨天的对话")):
+        insert_message(
+            account_id=account_id, session_id=int(sid), message_id=f"m-{sid}",
+            reply_to_message_id=None, direction="inbound", role="user",
+            message_type="text", content=content,
+        )
+
+    # day2 04:05 scheduler 扫描：两 scope 的到期 active 都应被关闭。
+    scan = run_daily_dreaming_scan(now=datetime(2026, 5, 25, 4, 5, 0))
+    assert scan["scanned"] >= 2
+
+    closed_wx = get_session(session_id=int(wx["id"]))
+    closed_web = get_session(session_id=int(web["id"]))
+    assert closed_wx["status"] == "closed"
+    assert closed_web["status"] == "closed"
+    # 各自按自身 scope 前缀归档（互不串）。
+    assert closed_wx["session_key"] == f"{ACCOUNT_ACTIVE_SESSION_KEY}:{wx['id']}"
+    assert closed_web["session_key"] == f"{WEB_ACTIVE_SESSION_KEY}:{web['id']}"
+
+
+def test_carryover_seed_isolated_by_scope(fresh_db):
+    """§7.2 Model B：新 active session 只承接**同 scope** 的上一段 carryover。
+    微信关闭的 session carryover 不得被 Web 首开的新 session 继承（反之亦然）。"""
+    from app.db import (
+        ACCOUNT_ACTIVE_SESSION_KEY,
+        WEB_ACTIVE_SESSION_KEY,
+        get_latest_closed_carryover_for_account,
+        get_or_create_session,
+        close_session,
+    )
+
+    account_id = "acc-carryover-scope"
+    # 造一个微信 scope 的 closed session，带 carryover。
+    wx = get_or_create_session(
+        account_id=account_id, channel="openclaw-weixin", sender_id="s",
+        sender_name=None, chat_id="c", session_key=ACCOUNT_ACTIVE_SESSION_KEY,
+        business_day="2026-05-24",
+    )["session"]
+    close_session(
+        session_id=int(wx["id"]), close_reason="daily_dreaming",
+        archived_session_key=f"{ACCOUNT_ACTIVE_SESSION_KEY}:{wx['id']}",
+        carryover_summary="微信侧的延续摘要",
+    )
+
+    # 微信 scope 查询：拿得到微信 carryover。
+    assert get_latest_closed_carryover_for_account(
+        account_id=account_id, active_session_key=ACCOUNT_ACTIVE_SESSION_KEY
+    ) == "微信侧的延续摘要"
+    # Web scope 查询：无同 scope closed session → None（不跨渠道继承）。
+    assert get_latest_closed_carryover_for_account(
+        account_id=account_id, active_session_key=WEB_ACTIVE_SESSION_KEY
+    ) is None
+    # 不传 scope（现状口径）：仍拿到最近任意 closed（微信单渠道下等价）。
+    assert get_latest_closed_carryover_for_account(
+        account_id=account_id
+    ) == "微信侧的延续摘要"
+
+

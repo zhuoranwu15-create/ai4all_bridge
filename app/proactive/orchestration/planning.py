@@ -7,6 +7,7 @@ scan_due_proactive_account_checks：扫到期账号 → claim → 发到期 comp
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
+from app.channels import CHANNEL_WEIXIN
 from app.config import settings
 from app.db import (
     get_account,
@@ -137,7 +138,10 @@ def _new_user_reactivation_eligibility(
         }
 
     created_at = parse_db_timestamp(account.get("created_at"))
-    last_inbound_at = parse_db_timestamp(get_account_last_inbound_at(account_id=account_id))
+    # 新用户拉活的 idle-hours 资格只看微信入站时间，不被其它渠道活跃污染（§7.5）。
+    last_inbound_at = parse_db_timestamp(
+        get_account_last_inbound_at(account_id=account_id, channel=CHANNEL_WEIXIN)
+    )
     if created_at is None:
         return {"eligible": False, "reason": "account_created_at_missing"}
     if last_inbound_at is None:

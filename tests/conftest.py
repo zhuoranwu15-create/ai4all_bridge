@@ -47,14 +47,33 @@ _SQLITE_ONLY_TESTS = frozenset({
 })
 
 
+# 判定为「db 档」的 fixture：请求其一即视为依赖真实 DB（建库+迁移）。client 不在此列，
+# 因为含 client 的用例统一归为 integration（client 依赖 fresh_db，故须先判 client）。
+_DB_FIXTURES = frozenset({
+    "fresh_db", "test_settings", "db_dsn", "postgresql_db", "postgresql_proc",
+})
+
+
 def pytest_collection_modifyitems(config, items):
-    """PG 档下自动跳过验证 SQLite 专有基础设施的测试（WAL/文件拷贝/PRAGMA 内省）。"""
-    if not _PG_MODE:
-        return
-    skip = pytest.mark.skip(reason="SQLite 专有基础设施，PG 档不适用")
+    """两件事：
+    1) 按 fixture 依赖自动派生互斥主档 marker（unit/db/integration）——一处覆盖全部用例，
+       新增测试按其请求的 fixture 自动归档，无需逐文件手写 marker。
+    2) PG 档下跳过验证 SQLite 专有基础设施的测试（WAL/文件拷贝/PRAGMA 内省）。
+    """
     for item in items:
-        if item.originalname in _SQLITE_ONLY_TESTS or item.name in _SQLITE_ONLY_TESTS:
-            item.add_marker(skip)
+        fx = set(getattr(item, "fixturenames", ()))
+        if "client" in fx:
+            item.add_marker("integration")
+        elif fx & _DB_FIXTURES:
+            item.add_marker("db")
+        else:
+            item.add_marker("unit")
+
+    if _PG_MODE:
+        skip = pytest.mark.skip(reason="SQLite 专有基础设施，PG 档不适用")
+        for item in items:
+            if item.originalname in _SQLITE_ONLY_TESTS or item.name in _SQLITE_ONLY_TESTS:
+                item.add_marker(skip)
 
 
 def _dsn_from_conn(conn) -> str:

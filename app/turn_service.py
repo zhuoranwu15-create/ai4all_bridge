@@ -15,6 +15,7 @@ from app.time_utils import (
 from typing import Any, Dict, List, Optional, Union
 
 from app.agent_self_state import build_agent_self_state_block
+from app.channels import CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
@@ -259,6 +260,13 @@ _TOOL_GATE_REASONS: Dict[str, tuple] = {
     "has_mission": ("has_mission", "no_mission_assigned"),
 }
 
+# 「产生未来投递」的工具：为提醒/承诺埋下将来主动外呼的动作。渠道不支持主动消息
+# （ChannelCapability.supports_proactive=False，如 Web V1）时从工具集剔除——否则模型会
+# 承诺一条永不送达的提醒（§8.3）。微信 supports_proactive=True，集合原样不变（字节级等价）。
+_PROACTIVE_DELIVERY_TOOLS: frozenset = frozenset(
+    {"create_reminder", "create_commitment", "update_reminder", "list_reminders", "cancel_reminder"}
+)
+
 
 def _build_tooling_envelope(
     *,
@@ -268,8 +276,13 @@ def _build_tooling_envelope(
     has_mission: bool,
     text: str,
     include_tool_instructions: bool,
+    cap: ChannelCapability,
 ) -> Dict[str, Any]:
-    """Return tool schemas plus debug metadata for the main chat tool set."""
+    """Return tool schemas plus debug metadata for the main chat tool set.
+
+    ``cap`` 携带渠道能力：``supports_proactive=False`` 的渠道剔除「产生未来投递」工具
+    （见 ``_PROACTIVE_DELIVERY_TOOLS``）。微信 cap 全 True → 工具集与历史逐字节一致。
+    """
     content_invitation_enabled = bool(active_content_invitation)
     tools: List[Dict[str, Any]] = []
     available: List[Dict[str, Any]] = []
@@ -282,6 +295,8 @@ def _build_tooling_envelope(
             content_invitation_response_enabled=content_invitation_enabled,
             has_mission=has_mission,
         )
+        if not cap.supports_proactive:
+            tools = [s for s in tools if _tool_name(s) not in _PROACTIVE_DELIVERY_TOOLS]
         enabled_names = {_tool_name(schema) for schema in tools}
 
     for spec in iter_specs():
@@ -371,13 +386,18 @@ def build_turn_llm_input(
     llm_provider: Optional[LLMProviderConfig] = None,
     message_type: str = "text",
     extra_blocks: Optional[List[ContextBlock]] = None,
+    cap: Optional[ChannelCapability] = None,
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
     This helper has no persistence side effects: callers that need onboarding
     pre-writes or message insertion must do that before invoking it.
+
+    ``cap`` 选定渠道能力（工具集裁剪等）；缺省回落微信 cap，故既有调用方（debug/脚本/
+    测试）行为逐字节不变。
     """
     _now = now or beijing_now()
+    cap = cap or get_channel_capability(CHANNEL_WEIXIN)
     selected_llm_provider = llm_provider or resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY))
     current_session_id = int(session["id"])
     # L0 原始尾窗：统一编排后改为 **session-scoped**（不再跨 session）——轮转即真正重置原文，
@@ -539,6 +559,7 @@ def build_turn_llm_input(
         has_mission=has_mission,
         text=text,
         include_tool_instructions=include_tool_instructions,
+        cap=cap,
     )
 
     # Onboarding 期间尚未分配使命/关系状态未成形，跳过注入（agent_self_prd.md §4.4）。
@@ -757,6 +778,9 @@ class _TurnSetup:
     onboarding_state: str
     onboarding_active: bool
     llm_provider: LLMProviderConfig
+    # 渠道能力（onboarding/active-scope/工具/TDAI/投递 的单一开关来源）。微信 cap 全 True，
+    # 下游按 cap 分支后取值与历史逐字节一致；Web 等渠道由此获得保守行为而无需散落的 if channel==。
+    cap: ChannelCapability
 
 
 @dataclass
@@ -800,6 +824,9 @@ def _prepare_turn(
         chat_id=payload.chat_id,
     )
     openclaw_session_key = identity.session_key
+    # 渠道能力：单一开关来源，下游 onboarding/active-scope/工具/TDAI/投递 均由此分支。
+    # 微信 cap 全 True，取值与历史等价；未知渠道回落微信 cap（get_channel_capability）。
+    cap = get_channel_capability(identity.channel)
     resolved_account_id = resolve_account_id_for_inbound_channel_identity(
         channel=identity.channel,
         session_key=identity.session_key,
@@ -866,6 +893,7 @@ def _prepare_turn(
         sender_name=payload.sender_name,
         chat_id=identity.chat_id,
         business_day=business_day,
+        active_session_key=cap.active_session_key,
     )
     binding = upsert_channel_binding(
         account_id=account_id,
@@ -884,7 +912,8 @@ def _prepare_turn(
     debug_trace_enabled = _is_debug_trace_account(account_id)
 
     onboarding_state = get_account_onboarding_state(account_id=account_id)
-    onboarding_channel_enabled = identity.channel == "openclaw-weixin"
+    # onboarding 由渠道能力开关（微信 True == 历史 channel=="openclaw-weixin"）。
+    onboarding_channel_enabled = cap.onboarding_enabled
     onboarding_active = onboarding_channel_enabled and is_onboarding_active(onboarding_state)
 
     # When the user's first inbound message arrives and onboarding hasn't started yet,
@@ -1067,6 +1096,7 @@ def _prepare_turn(
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
         llm_provider=resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)),
+        cap=cap,
     )
 
 
@@ -1336,7 +1366,7 @@ def _resolve_turn_reply(
         # 同步调用，严格 200 ms 超时，失败时 tdai_extra_blocks 为空继续正常回复。
         # onboarding 期间跳过（onboarding 目的是采集基础设定，不引入历史记忆）。
         _tdai_extra_blocks: List[ContextBlock] = []
-        if not onboarding_active:
+        if not onboarding_active and setup.cap.tdai_enabled:
             from app.tdai_client import recall as _tdai_recall
             _tdai_t0 = time.monotonic()
             _tdai_result = _tdai_recall(account_id=account_id, query=text)
@@ -1418,6 +1448,7 @@ def _resolve_turn_reply(
                 llm_provider=llm_provider,
                 message_type=payload.message_type,
                 extra_blocks=_tdai_extra_blocks or None,
+                cap=setup.cap,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
@@ -1869,6 +1900,7 @@ def _finalize_turn(
             if (
                 getattr(settings, "tdai_enabled", False)
                 and getattr(settings, "tdai_capture_enabled", True)
+                and setup.cap.tdai_enabled
                 and not moderation_reply_metadata.get("moderation_blocked")
                 and not onboarding_active
                 and not inbound.image_understanding_failed
@@ -1910,42 +1942,46 @@ def _finalize_turn(
             ),
         },
     }
+    # 带外投递（工具轮最终回复绕过 OpenClaw 同步超时）仅对声明 supports_out_of_band_tool_final
+    # 的渠道启用（微信 True → 走历史带外路径）。不支持的渠道（如 Web V1 纯同步）**绝不** node_send_text，
+    # 直接落到下方同步返回，由调用方拿 reply。
     if tool_names:
         response_metadata["tool_names_used"] = tool_names
-        try:
-            send_result = _send_tool_final_reply(
-                identity=identity,
-                account_id=account_id,
-                openclaw_session_key=openclaw_session_key,
-                reply=reply,
-                reply_message_id=reply_message_id,
-            )
-            response_metadata["delivery_mode"] = "out_of_band_tool_final"
-            response_metadata["gateway_message_id"] = (
-                send_result.get("messageId") or send_result.get("message_id")
-            )
-            logger.info(
-                "tool_final_reply_sent account=%s tools=%s reply_message_id=%s gateway_message_id=%s",
-                account_id,
-                tool_names,
-                reply_message_id,
-                response_metadata["gateway_message_id"],
-            )
-            return OpenClawTurnResponse(
-                status="ok",
-                no_reply=True,
-                metadata=response_metadata,
-            )
-        except Exception as err:
-            response_metadata["delivery_mode"] = "sync_response_fallback"
-            response_metadata["tool_final_send_error"] = str(err)
-            logger.warning(
-                "tool_final_reply send failed account=%s tools=%s reply_message_id=%s error=%s",
-                account_id,
-                tool_names,
-                reply_message_id,
-                err,
-            )
+        if setup.cap.supports_out_of_band_tool_final:
+            try:
+                send_result = _send_tool_final_reply(
+                    identity=identity,
+                    account_id=account_id,
+                    openclaw_session_key=openclaw_session_key,
+                    reply=reply,
+                    reply_message_id=reply_message_id,
+                )
+                response_metadata["delivery_mode"] = "out_of_band_tool_final"
+                response_metadata["gateway_message_id"] = (
+                    send_result.get("messageId") or send_result.get("message_id")
+                )
+                logger.info(
+                    "tool_final_reply_sent account=%s tools=%s reply_message_id=%s gateway_message_id=%s",
+                    account_id,
+                    tool_names,
+                    reply_message_id,
+                    response_metadata["gateway_message_id"],
+                )
+                return OpenClawTurnResponse(
+                    status="ok",
+                    no_reply=True,
+                    metadata=response_metadata,
+                )
+            except Exception as err:
+                response_metadata["delivery_mode"] = "sync_response_fallback"
+                response_metadata["tool_final_send_error"] = str(err)
+                logger.warning(
+                    "tool_final_reply send failed account=%s tools=%s reply_message_id=%s error=%s",
+                    account_id,
+                    tool_names,
+                    reply_message_id,
+                    err,
+                )
 
     return OpenClawTurnResponse(
         status="ok",
@@ -1954,15 +1990,28 @@ def _finalize_turn(
     )
 
 
-def handle_openclaw_turn(
-    payload: OpenClawTurnRequest,
-    *,
-    background_loop: Optional[asyncio.AbstractEventLoop] = None,
-    force_web_search_enabled: Optional[bool] = None,
-) -> OpenClawTurnResponse:
-    """每条入站微信消息的主入口。编排脊柱：解析+守卫 → 入站持久化+筛查 →
+@dataclass
+class ChannelTurnInput:
+    """渠道无关的一次 turn 输入——供 ``run_turn_for_account`` 复用为跨渠道入口。
+
+    Phase 0 仅微信构造：包住已归一的入站 ``payload`` 与本轮运行开关；``handle_openclaw_turn``
+    构造本对象后调 ``run_turn_for_account``，与历史逐字节一致（纯搬家）。Phase 1 的 ``/web/turn``
+    可构造 ``channel="web"`` 的 ``OpenClawTurnRequest`` 走同一入口，由渠道 ``cap`` 分支自动获得
+    保守行为（工具/onboarding/投递/TDAI）。**账号解析仍在 ``_prepare_turn`` 内按 binding 进行**，
+    使非微信渠道走可插拔账号解析是 Phase 1 的后续扩展点（本期无 Web 调用方）。
+    """
+    payload: OpenClawTurnRequest
+    background_loop: Optional[asyncio.AbstractEventLoop] = None
+    force_web_search_enabled: Optional[bool] = None
+
+
+def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
+    """渠道无关的一次 turn 编排入口。编排脊柱：解析+守卫 → 入站持久化+筛查 →
     解析回复 → 终结。各阶段细节见对应 _prepare_turn/_persist_and_screen_inbound/
-    _resolve_turn_reply/_finalize_turn。"""
+    _resolve_turn_reply/_finalize_turn。微信经 ``handle_openclaw_turn`` 构造 ``ctx`` 进入。"""
+    payload = ctx.payload
+    background_loop = ctx.background_loop
+    force_web_search_enabled = ctx.force_web_search_enabled
     started_at = time.monotonic()
     timings: Dict[str, int] = {}
     id_diagnostics = _openclaw_id_diagnostics(payload)
@@ -2066,3 +2115,20 @@ def handle_openclaw_turn(
         error=result.generation_error,
     )
     return response
+
+
+def handle_openclaw_turn(
+    payload: OpenClawTurnRequest,
+    *,
+    background_loop: Optional[asyncio.AbstractEventLoop] = None,
+    force_web_search_enabled: Optional[bool] = None,
+) -> OpenClawTurnResponse:
+    """每条入站微信消息的主入口（薄封装）：构造渠道无关 ``ChannelTurnInput`` 后委派给
+    ``run_turn_for_account``。保留此函数名与签名不变，既有 router/脚本/测试调用方零改动。"""
+    return run_turn_for_account(
+        ChannelTurnInput(
+            payload=payload,
+            background_loop=background_loop,
+            force_web_search_enabled=force_web_search_enabled,
+        )
+    )

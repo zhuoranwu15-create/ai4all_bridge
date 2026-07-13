@@ -95,7 +95,12 @@ def _rotate_session_with_dreaming(
         close_reason=close_reason,
         source_business_day=source_business_day,
     )
-    archived_session_key = f"{ACCOUNT_ACTIVE_SESSION_KEY}:{session_id}"
+    # 按 session **自身** 的 active key 归档（§7.1）：被轮转的 session 一定是某个 scope
+    # 的 active session，其 session_key 即该 scope 的 active key（微信 __account_active__
+    # / Web __web_active__）。据此归档使两 scope 的 closed 段各带自身前缀、互不串。回落到
+    # 微信常量仅为兼容极端缺字段的情况（正常路径 session_key 必有值）。
+    active_key = str(session.get("session_key") or ACCOUNT_ACTIVE_SESSION_KEY)
+    archived_session_key = f"{active_key}:{session_id}"
     close_session(
         session_id=session_id,
         close_reason=close_reason,
@@ -116,16 +121,26 @@ def get_or_create_account_active_session_with_dreaming(
     sender_name: Optional[str],
     chat_id: Optional[str],
     business_day: Optional[str] = None,
+    active_session_key: str = ACCOUNT_ACTIVE_SESSION_KEY,
+    update_account_channel: bool = True,
 ) -> Dict[str, Any]:
-    """Return active session, rotating with LLM Dreaming before creating a new one."""
+    """Return active session, rotating with LLM Dreaming before creating a new one.
+
+    ``active_session_key`` 选定 conversation_scope（§7.1）：微信默认
+    ``__account_active__``（行为不变），Web 传 ``__web_active__``，两渠道各自独立对话线。
+
+    ``update_account_channel=False``（§3）：本次不改写已存在账号的 ``accounts.channel``
+    （供 Web 首触已绑微信账号时保留原渠道）。默认 True，微信路径行为不变。
+    """
     initial = get_or_create_session(
         account_id=account_id,
         channel=channel,
         sender_id=sender_id,
         sender_name=sender_name,
         chat_id=chat_id,
-        session_key=ACCOUNT_ACTIVE_SESSION_KEY,
+        session_key=active_session_key,
         business_day=business_day,
+        update_account_channel=update_account_channel,
     )
     session = initial["session"]
     close_reason = _close_reason_for(
@@ -148,10 +163,11 @@ def get_or_create_account_active_session_with_dreaming(
         sender_id=sender_id,
         sender_name=sender_name,
         chat_id=chat_id,
-        session_key=ACCOUNT_ACTIVE_SESSION_KEY,
+        session_key=active_session_key,
         business_day=business_day,
         carryover_summary=summary.get("carryover_summary"),
         metadata={"created_reason": close_reason},
+        update_account_channel=update_account_channel,
     )
     _maybe_seed_new_session_from_last_closed(next_state["session"])
     if summary.get("dreaming_result") is not None:
@@ -172,7 +188,17 @@ def _maybe_seed_new_session_from_last_closed(session: Dict[str, Any]) -> None:
         return
     if int(session.get("turn_count") or 0) > 0:
         return
-    seed = (get_latest_closed_carryover_for_account(account_id=str(session["account_id"])) or "").strip()
+    # 只承接**同 scope** 的上一段 carryover（§7.2 Model B）：新 active session 的
+    # session_key 即其 scope 的 active key（微信 __account_active__ / Web __web_active__），
+    # 据此过滤归档段前缀，避免跨渠道 carryover 泄漏。微信单渠道下与不过滤等价现状。
+    active_key = str(session.get("session_key") or ACCOUNT_ACTIVE_SESSION_KEY)
+    seed = (
+        get_latest_closed_carryover_for_account(
+            account_id=str(session["account_id"]),
+            active_session_key=active_key,
+        )
+        or ""
+    ).strip()
     if not seed:
         return
     update_session_rolling_summary(

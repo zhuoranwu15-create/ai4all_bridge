@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import pytest
+
 
 BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 
@@ -52,6 +54,7 @@ def _turn_payload(
     }
 
 
+@pytest.mark.slow
 def test_account_active_session_ignores_openclaw_session_key_changes(client):
     from app.db import (
         ACCOUNT_ACTIVE_SESSION_KEY,
@@ -113,6 +116,7 @@ def test_account_active_session_ignores_openclaw_session_key_changes(client):
     assert assistant_raw["account_active_session_key"] == ACCOUNT_ACTIVE_SESSION_KEY
 
 
+@pytest.mark.slow
 def test_normal_chat_does_not_load_daily_notes_into_prompt(client):
     with patch(
         "app.user_profiles.read_daily_notes",

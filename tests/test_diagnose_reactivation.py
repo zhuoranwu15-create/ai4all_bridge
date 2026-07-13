@@ -17,18 +17,7 @@ def _create_account(account_id: str, *, business_day: str = "2026-06-05") -> int
     return int(session["session"]["id"])
 
 
-def _create_route(account_id: str) -> None:
-    from app.db import upsert_channel_binding
-
-    upsert_channel_binding(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        session_key=f"session-{account_id}",
-        channel_account_id="bot-1",
-        sender_id="sender",
-        chat_id="user@im.wechat",
-        raw_identity={"source": "test"},
-    )
+from tests.factories import create_route as _create_route
 
 
 def _insert_message(

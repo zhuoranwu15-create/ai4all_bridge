@@ -571,6 +571,7 @@ def _turn_payload(account_id: str, session_key: str, text: str, message_id: str 
     }
 
 
+@pytest.mark.slow
 def test_first_turn_enters_onboarding_mode(client, fresh_db):
     """When onboarding_state=pending, the first user turn should trigger step1 and advance state.
 
@@ -713,6 +714,7 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
     assert get_account_onboarding_state(account_id=session_key) == "complete"
 
 
+@pytest.mark.slow
 def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
     """When onboarding_state=complete, the turn should NOT inject onboarding context."""
     from app.db import set_account_onboarding_state

@@ -695,6 +695,7 @@ def test_admin_account_wallet_is_read_only_and_does_not_duplicate_grant(client):
     assert len(after) == 1
 
 
+@pytest.mark.slow
 def test_chat_turn_debits_wallet_balance_and_is_idempotent(client):
     from app.db import get_binding_intent
     from app.routers.web import _complete_binding_intent_from_wait_result
@@ -1376,6 +1377,7 @@ def test_binding_wait_already_connected_restores_local_binding(client):
     assert bindings[0]["raw_identity"]["already_connected"] is True
 
 
+@pytest.mark.slow
 def test_bound_channel_account_routes_turn_to_precreated_account(client):
     from app.db import get_binding_intent
     from app.routers.web import _complete_binding_intent_from_wait_result
@@ -1429,6 +1431,7 @@ def test_bound_channel_account_routes_turn_to_precreated_account(client):
     assert account["id"] in data["reply"]
 
 
+@pytest.mark.slow
 def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(client):
     from app.db import get_binding_intent
     from app.routers.web import _complete_binding_intent_from_wait_result
@@ -1481,6 +1484,7 @@ def test_bound_weixin_normalized_channel_account_routes_to_precreated_account(cl
     assert account["id"] in data["reply"]
 
 
+@pytest.mark.slow
 def test_bound_login_session_key_routes_turn_to_precreated_account(client):
     from app.db import get_binding_intent
     from app.routers.web import _complete_binding_intent_from_wait_result

@@ -8,20 +8,7 @@ ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 STAFF_HEADERS = {"Authorization": "Bearer test-staff"}
 
 
-def _create_account(account_id: str, *, is_debug: bool = False) -> int:
-    from app.db import get_or_create_session, set_account_debug_flag
-
-    state = get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
-    if is_debug:
-        set_account_debug_flag(account_id=account_id, is_debug=True)
-    return int(state["session"]["id"])
+from tests.factories import create_account as _create_account
 
 
 def _insert_message_at(

@@ -23,18 +23,7 @@ from app.relationship_state import (
 _phone_seq = itertools.count(1)
 
 
-def _create_account(account_id: str) -> int:
-    from app.db import get_or_create_session
-
-    state = get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
-    return int(state["session"]["id"])
+from tests.factories import create_account as _create_account
 
 
 def _add_inbound(*, account_id: str, session_id: int, created_at: str, idx: int) -> None:

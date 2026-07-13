@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
 from app.db._core import (
-    ACCOUNT_ACTIVE_SESSION_KEY,
+    DEFAULT_ACTIVE_SESSION_KEYS,
     _clean_text,
     _decode_json_field,
     connect,
@@ -842,18 +842,27 @@ def list_active_sessions_for_business_day_before(
     business_day: str,
     limit: int = 100,
     node_id: Optional[str] = None,
+    active_keys: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """node_id 非空时只返回归属该节点的账号的会话（厚节点改造 P4 调度分片）。"""
+    """node_id 非空时只返回归属该节点的账号的会话（厚节点改造 P4 调度分片）。
+
+    ``active_keys`` 指定要扫描的合法 active scope（§7.1 / Codex ②）。默认扫描
+    ``DEFAULT_ACTIVE_SESSION_KEYS``（微信 ``__account_active__`` + Web
+    ``__web_active__``），使两 scope 的到期 active session 都能被每日轮转/dreaming 关闭；
+    否则 Web scope 永不轮转。默认含微信 key，故对纯微信数据行为等价现状。
+    """
+    keys = list(active_keys) if active_keys else list(DEFAULT_ACTIVE_SESSION_KEYS)
+    placeholders = ", ".join("?" for _ in keys)
     node_filter = _clean_text(node_id) if node_id else None
     safe_limit = max(1, min(int(limit), 500))
     with connect() as conn:
         if node_filter:
             rows = conn.execute(
-                """
+                f"""
                 SELECT s.*
                 FROM sessions s
                 JOIN accounts a ON a.id = s.account_id
-                WHERE s.session_key = ?
+                WHERE s.session_key IN ({placeholders})
                   AND s.status = 'active'
                   AND s.business_day IS NOT NULL
                   AND s.business_day != ''
@@ -862,13 +871,13 @@ def list_active_sessions_for_business_day_before(
                 ORDER BY s.updated_at ASC, s.id ASC
                 LIMIT ?
                 """,
-                (ACCOUNT_ACTIVE_SESSION_KEY, business_day, node_filter, safe_limit),
+                (*keys, business_day, node_filter, safe_limit),
             ).fetchall()
         else:
             rows = conn.execute(
-                """
+                f"""
                 SELECT * FROM sessions
-                WHERE session_key = ?
+                WHERE session_key IN ({placeholders})
                   AND status = 'active'
                   AND business_day IS NOT NULL
                   AND business_day != ''
@@ -876,7 +885,7 @@ def list_active_sessions_for_business_day_before(
                 ORDER BY updated_at ASC, id ASC
                 LIMIT ?
                 """,
-                (ACCOUNT_ACTIVE_SESSION_KEY, business_day, safe_limit),
+                (*keys, business_day, safe_limit),
             ).fetchall()
     return [dict(row) for row in rows]
 

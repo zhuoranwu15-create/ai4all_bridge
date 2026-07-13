@@ -64,9 +64,19 @@
 
 测试不需要启动服务。测试使用内存 SQLite。
 
+### Marker 与快档
+
+marker 由 `tests/conftest.py` 的 `pytest_collection_modifyitems` **按每个用例请求的 fixture 自动派生**（互斥三档，新增测试免手写 marker）：`integration`（用 `client`，FastAPI 全栈）、`db`（用 `fresh_db` 等 DB fixture）、`unit`（都不用，纯函数级）。另有 `slow` 按 `--durations` 实测显式标注（少数重用例）。全部注册在根目录 `pytest.ini`（`--strict-markers`，拼错即报错）。
+
+```bash
+make test-unit   # -m unit：纯 unit 快档（不碰 DB/FastAPI，秒级）
+make test-fast   # -m "not integration"：跳过全栈用例（约 2x）
+make test        # SQLite 全量；make test-pg 为 PG 全量
+```
+
 测试选择策略：
 
-- 窄范围代码改动，优先运行直接覆盖被改模块或行为的聚焦测试。
+- 窄范围代码改动，优先运行直接覆盖被改模块或行为的聚焦测试；纯逻辑改动可先跑 `make test-unit` 拿秒级反馈。
 - 只有当改动触及共享基础设施、请求路由、持久化/schema、计费、prompt/tool 执行、跨模块契约，或准备提交较大改动时，才运行全量测试。
 - 如果用户明确要求完整回归，运行全量测试。
 

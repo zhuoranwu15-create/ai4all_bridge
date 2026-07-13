@@ -38,32 +38,10 @@ def _make_ctx(account_id="acc-com-tool", session_id=1, message_id="msg-1"):
     )
 
 
-def _create_account(account_id: str) -> int:
-    from app.db import get_or_create_session
-
-    state = get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
-    return int(state["session"]["id"])
+from tests.factories import create_account as _create_account
 
 
-def _create_route(account_id: str) -> None:
-    from app.db import upsert_channel_binding
-
-    upsert_channel_binding(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        session_key=f"session-{account_id}",
-        channel_account_id="bot-1",
-        sender_id="sender",
-        chat_id="user@im.wechat",
-        raw_identity={"source": "test"},
-    )
+from tests.factories import create_route as _create_route
 
 
 def _create_state(account_id: str, *, enabled: bool = True) -> None:

@@ -11,6 +11,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
+from app.channels import CHANNEL_WEIXIN
 from app.db import get_account_last_inbound_at
 from app.proactive.store.candidates import _parse_reactivation_time
 from app.time_utils import beijing_naive_now
@@ -37,7 +38,10 @@ def get_account_touch_state(
         # 部分调用方（如 admin run-once）传入 beijing_now() 的 tz-aware 值；本系统
         # DB 时间戳一律是北京 naive 裸串，这里统一去掉 tzinfo 才能和 last_inbound 相减。
         current = current.replace(tzinfo=None)
-    last_inbound = _parse_reactivation_time(get_account_last_inbound_at(account_id=account_id))
+    # WeChat 送达窗口判断只看微信入站时间，不被 Web 等其它渠道活跃污染（§7.5）。
+    last_inbound = _parse_reactivation_time(
+        get_account_last_inbound_at(account_id=account_id, channel=CHANNEL_WEIXIN)
+    )
     if last_inbound is None:
         return STALE
     elapsed_hours = (current - last_inbound).total_seconds() / 3600.0

@@ -13,17 +13,7 @@ from app.db.campaign import (
 )
 
 
-def _create_account(account_id: str) -> None:
-    from app.db import get_or_create_session
-
-    get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
+from tests.factories import create_account as _create_account
 
 
 # ---------------------------------------------------------------------------
