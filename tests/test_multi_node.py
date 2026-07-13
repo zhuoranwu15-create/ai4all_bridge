@@ -9,19 +9,7 @@ from unittest.mock import patch
 import pytest
 
 
-def _create_account(account_id, node_id=None):
-    from app.db import get_or_create_session, set_account_assigned_node
-
-    get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
-    if node_id is not None:
-        set_account_assigned_node(account_id=account_id, node_id=node_id)
+from tests.factories import create_account as _create_account
 
 
 def _enqueue_row(account_id, node_id, idem, *, status="pending", scheduled_at=None):

@@ -4,6 +4,8 @@ using LLM tool use. The LLM is mocked to return a tool_calls response.
 """
 from unittest.mock import patch
 
+import pytest
+
 
 def test_turn_creates_reminder_via_tool_call(client, fresh_db):
     """When LLM returns create_reminder tool call, reply is returned correctly."""
@@ -287,6 +289,7 @@ def test_turn_forwards_proactive_update_tool_choice(client, fresh_db):
     assert mock_llm.call_args.kwargs["first_round_tool_choice"] == "auto"
 
 
+@pytest.mark.slow
 def test_turn_command_bypasses_llm(client, fresh_db):
     """#重置会话 special command does not call generate_reply_with_tools."""
     with patch("app.turn_service.generate_reply_with_tools") as mock_llm:

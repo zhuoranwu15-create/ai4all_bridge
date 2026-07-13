@@ -6,17 +6,7 @@
 from app.mission_state import build_admin_mission_view, has_resolved_mission, resolve_account_mission
 
 
-def _create_account(account_id: str) -> None:
-    from app.db import get_or_create_session
-
-    get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
+from tests.factories import create_account as _create_account
 
 
 def test_resolve_returns_none_when_unassigned(fresh_db):

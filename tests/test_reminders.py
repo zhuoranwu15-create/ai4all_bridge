@@ -4,35 +4,10 @@ from unittest.mock import patch
 from app.time_utils import beijing_naive_now
 
 
-def _create_account(account_id: str) -> None:
-    from app.db import get_or_create_session
-
-    get_or_create_session(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        sender_id="sender",
-        sender_name=None,
-        chat_id="chat",
-        session_key=f"session-{account_id}",
-    )
+from tests.factories import create_account as _create_account
 
 
-def _create_route(account_id: str) -> None:
-    """登记一条最近入站的 channel_binding，使 get_account_touch_state() 判定为 reachable。
-
-    不传则账号无任何 channel_binding，会被判 stale，触发 dispatch_reminder 的送达窗口跳过分支。
-    """
-    from app.db import upsert_channel_binding
-
-    upsert_channel_binding(
-        account_id=account_id,
-        channel="openclaw-weixin",
-        session_key=f"session-{account_id}",
-        channel_account_id="bot-1",
-        sender_id="sender",
-        chat_id="user@im.wechat",
-        raw_identity={"source": "test"},
-    )
+from tests.factories import create_route as _create_route
 
 
 def test_reminder_create_due_claim_and_mark_sent(fresh_db):
