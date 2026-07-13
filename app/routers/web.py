@@ -17,7 +17,7 @@ from app.app_runtime import get_background_loop
 from app.routers.deps import _require_session
 from app import node_gateway
 from app.captcha import verify_captcha
-from app.db import count_verifications_last_hour, create_ai4all_account_for_user, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
+from app.db import count_verifications_last_hour, create_ai4all_account_for_user, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.rate_limiter import RateLimiter
@@ -32,6 +32,11 @@ _referral_preview_rate_limiter = RateLimiter()
 
 
 _REFERRAL_PREVIEW_RPM = 60
+
+
+# 落地页曝光 beacon 限流器：单 IP 每分钟上限，超限静默丢弃（不返回 429，不给刷量者信号）。
+_campaign_visit_rate_limiter = RateLimiter()
+_CAMPAIGN_VISIT_RPM = 120
 
 
 class WebRegisterRequest(BaseModel):
@@ -898,6 +903,46 @@ def web_register_and_binding_intent(
         "binding_mode": "openclaw_gateway_qr",
         "next_step": "scan_qr_and_wait_for_completion",
     }
+
+
+class WebCampaignVisitRequest(BaseModel):
+    campaign_code: str
+    visitor_token: Optional[str] = None
+    page: Optional[str] = None
+
+
+@router.post("/web/campaign-visit")
+def web_campaign_visit(payload: WebCampaignVisitRequest, request: Request) -> dict:
+    """落地页曝光 beacon（漏斗 S0）。无鉴权、fail-open：任何异常都返回 ok，绝不阻塞落地页。
+
+    只接受 campaign_code + 匿名 visitor_token，不接受任何账号/用户标识；只写匿名元数据。
+    仅记录命中现存活码的曝光，挡掉任意垃圾 code 放大。见
+    campaign_funnel_analytics_technical_design.md §7.3。
+    """
+    try:
+        code = (payload.campaign_code or "").strip()
+        if not code:
+            return {"status": "ignored"}
+        # 轻量防刷：单 IP 限频，超限静默丢弃。
+        client_host = request.client.host if request.client else "unknown"
+        if not _campaign_visit_rate_limiter.check_rpm(
+            f"campaign-visit:{client_host}", _CAMPAIGN_VISIT_RPM, window_seconds=60.0
+        ):
+            return {"status": "ok"}
+        if get_campaign_code(code=code) is None:
+            return {"status": "ignored"}
+        referrer = request.headers.get("referer")
+        user_agent = request.headers.get("user-agent")
+        record_campaign_visit(
+            campaign_code=code,
+            visitor_token=(payload.visitor_token or "")[:64] or None,
+            page=(payload.page or "")[:32] or None,
+            referrer=referrer[:500] if referrer else None,
+            user_agent=user_agent[:500] if user_agent else None,
+        )
+    except Exception as err:  # fail-open：beacon 不因后端错误影响落地页
+        logger.warning("campaign visit beacon failed: %s", err)
+    return {"status": "ok"}
 
 
 @router.post("/web/agents")

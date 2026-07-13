@@ -1,6 +1,6 @@
 # 项目现状与近期方向
 
-更新时间：2026-07-08
+更新时间：2026-07-12
 
 > 本文是**持续更新**的项目状态入口，回答"我们现在在哪、当前重点是什么、还剩哪些大块"。它取代了原 `phase1/next_dev_steps.md`，并承载原 Phase 1 收尾总结里"还剩什么"的活的部分。
 >
@@ -24,9 +24,9 @@
 
 1. **拉新送贝壳闭环（已落地，继续观察）** — 已实现个人邀请码、邀请码预览/注册带入、邀请关系记录、绑定后 3 条有意义消息启发式判定、邀请人 1000 贝壳奖励、奖励幂等和后台查看；同一邀请人 7 天内超过 5 个成功注册后，第 6 个起达标奖励进入软风控延迟发放，默认 3 天后释放。剩余：运营人工复核 UI、风控原因分层和真实数据阈值调参。
 2. **权益扣减收口** — 商业搜索成功固定扣 5 贝壳**未接线**（`web_search` 当前不扣费且默认关闭）；模型价格倍率恒传 1.0x、`model_price_rules` 未落地；基准模型仍硬编码、未对齐 PRD 口径；运营补发/冲正入口与客服记录未做。
-3. **图片理解转正** — 能力已提前交付并上线，但生产依赖手术式改运行中 OpenClaw dist，**升级会静默退回空文本**且部署脚本写死哈希文件名；需稳定化部署（去硬编码、补升级回归清单）+ 真图质量回归，两份文档去掉"草稿"标注。见 [图片理解设计](tech_design/image_understanding_design.md)、[OpenClaw 补丁与部署机制](tech_design/openclaw_patches_maintenance.md)。
-4. **主动消息观察期收口** — 周期提醒基础版已实现（`recur_rule` daily/weekly/monthly，含每周期独立幂等键修复）；仍剩自然语言取消/更新确认、用户级 timezone、多实例 scheduler lease、真实端到端调参。**关键约束（2026-07-08）**：微信对沉默联系人有一个我方无法绕过的送达窗口（官方口径 24 小时，超窗静默拒收），详见 [`proactive_prd.md` §9](product/proactive_prd.md) 与 [`weixin_context_token_send_semantics.md`](troubleshooting/weixin_context_token_send_semantics.md)。已落地 `get_account_touch_state()` 并接入全部主动消息触发点：陪伴跟进/内容邀请/拉活在候选生成前阻断，**用户提醒/承诺在触发前阻断（2026-07-08 追加，反转此前"提醒必达、仍照常尝试发送"的决策）**——一次性提醒/承诺过期直接终态 `cancelled`，周期提醒跳过本次正常推进到下一周期；剩余缺口是事后告知（用户下次开口时知会"之前有条提醒因为太久没聊天没发出去"），跟踪在临时文档 P3。对应的可观测性修复（假成功→显式失败）已手术式打在 aliyun1 但未固化为正式补丁、aliyun2 未确认，见 [`openclaw_patches_maintenance.md` §2.7](tech_design/openclaw_patches_maintenance.md)。已确认的应对方案与开发跟进见 [`主动消息送达窗口对齐.md`](plans/主动消息送达窗口对齐.md)。
-5. **内测部署硬化** — PostgreSQL/Redis 迁移、独立 scheduler worker 生产化、结构化日志/trace id/告警体系。
+3. **图片理解转正** — 能力已提前交付并上线。部署脚本已去硬编码（`deploy_image_understanding.sh` 按内容自发现 bundle/dist/node，2026-06-13 修复），两份文档也已去掉"草稿"标注。**仍在的缺口**：生产依赖手术式改运行中 OpenClaw dist（升级仍有静默退回空文本风险，回归清单待补）+ 真图质量回归。见 [图片理解设计](tech_design/image_understanding_design.md)、[OpenClaw 补丁与部署机制](tech_design/openclaw_patches_maintenance.md)。
+4. **主动消息观察期收口** — 周期提醒基础版已实现（`recur_rule` daily/weekly/monthly，含每周期独立幂等键修复）；自然语言取消/更新已有工具（`cancel_reminder`/`update_reminder` 已注册，直接执行，仍缺二次确认交互）；仍剩用户级 timezone 真正接线（列已建但调度未消费）、多实例 scheduler lease、真实端到端调参。**关键约束（2026-07-08）**：微信对沉默联系人有一个我方无法绕过的送达窗口（官方口径 24 小时，超窗静默拒收），详见 [`proactive_prd.md` §9](product/proactive_prd.md) 与 [`weixin_context_token_send_semantics.md`](troubleshooting/weixin_context_token_send_semantics.md)。已落地 `get_account_touch_state()` 并接入全部主动消息触发点：陪伴跟进/内容邀请/拉活在候选生成前阻断，**用户提醒/承诺在触发前阻断（2026-07-08 追加，反转此前"提醒必达、仍照常尝试发送"的决策）**——一次性提醒/承诺过期直接终态 `cancelled`，周期提醒跳过本次正常推进到下一周期；剩余缺口是事后告知（用户下次开口时知会"之前有条提醒因为太久没聊天没发出去"），跟踪在临时文档 P3。对应的可观测性修复（假成功→显式失败）已手术式打在 aliyun1 但未固化为正式补丁、aliyun2 未确认，见 [`openclaw_patches_maintenance.md` §2.7](tech_design/openclaw_patches_maintenance.md)。已确认的应对方案与开发跟进见 [`主动消息送达窗口对齐.md`](plans/主动消息送达窗口对齐.md)。
+5. **内测部署硬化** — **已落地**：PostgreSQL 迁移（aliyun1+aliyun2 自 2026-06-21 全量切 PG，`app/db/_backend.py` 双后端垫片）、独立 scheduler worker（`scripts/run_proactive_scheduler.py`，含 dreaming 编排与时区校验）、飞书告警体系（`app/alerting.py`，ERROR 日志脱敏+冷却，main 与 scheduler 双处挂载）、per-turn trace_id 与计时结构化行。**仍在的缺口**：Redis 迁移（当前无 redis 依赖）、全局结构化日志框架、用户级 timezone 真正接线、多实例 scheduler lease（现仅行级 `claim_due_*` 幂等、无调度器租约）。
 
 ## 4. 待跟进的架构设计
 

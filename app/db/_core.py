@@ -1888,6 +1888,34 @@ def _migration_0019_campaign_ai_name_preset(conn: Connection) -> None:
     _ensure_column(conn, "account_campaign_attribution", "ai_name_preset", "TEXT")
 
 
+def _migration_0020_campaign_visits(conn: Connection) -> None:
+    """营销活码落地页曝光埋点：campaign_visits（匿名 PV/UV，账号创建之前）。
+
+    见 docs/tech_design/campaign_funnel_analytics_technical_design.md §3.1。这是漏斗 S0
+    曝光层：用户点营销链接进落地页时，前端上报 campaign_code + 匿名 visitor_token。
+    刻意 campaign-scoped、无 account_id——曝光发生在注册建号之前，此时没有账号；表内不含
+    任何用户正文/PII，故不违反账号隔离不变量（该不变量约束的是账号级用户数据）。
+    S1–S5 漏斗仍以 account_campaign_attribution 按 account_id 归组，与本表不 join。
+    双后端通用 DDL（AUTOINCREMENT/TEXT/默认值 SQLite+PG 均支持）。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS campaign_visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            campaign_code TEXT NOT NULL,
+            visitor_token TEXT,
+            page TEXT,
+            referrer TEXT,
+            user_agent TEXT,
+            visit_date TEXT NOT NULL,
+            event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE INDEX IF NOT EXISTS ix_campaign_visits_code_date ON campaign_visits(campaign_code, visit_date);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1903,6 +1931,7 @@ _MIGRATIONS = [
     (12, _migration_0012_agent_mission),
     (13, _migration_0013_campaign_codes),
     (19, _migration_0019_campaign_ai_name_preset),
+    (20, _migration_0020_campaign_visits),
 ]
 
 

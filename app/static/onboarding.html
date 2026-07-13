@@ -176,6 +176,26 @@
     // 营销活码：从落地页链接静默采集，不展示 UI（不是用户手填的邀请码，无需可见/可编辑）。
     function initCampaignCodeFromUrl() {
       state.campaignCode = (new URLSearchParams(location.search).get('campaign_code') || '').trim();
+      reportCampaignVisit(state.campaignCode, 'onboarding', '/web/campaign-visit');
+    }
+
+    // 落地页曝光 beacon（漏斗 S0）：匿名 visitor_token + campaign_code 上报，静默失败，绝不阻塞页面。
+    function reportCampaignVisit(code, page, endpoint) {
+      if (!code) return;
+      try {
+        var vt = localStorage.getItem('ai4all_vt');
+        if (!vt) {
+          vt = (window.crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : String(Date.now()) + '-' + Math.random().toString(16).slice(2);
+          localStorage.setItem('ai4all_vt', vt);
+        }
+        fetch(endpoint, {
+          method: 'POST', keepalive: true,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaign_code: code, visitor_token: vt, page: page }),
+        }).catch(function () {});
+      } catch (e) { /* localStorage 不可用等，静默 */ }
     }
 
     async function webFetch(path, options) {

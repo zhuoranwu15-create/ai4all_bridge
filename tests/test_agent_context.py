@@ -213,12 +213,33 @@ def test_agent_context_default_assistant_name_not_written_to_soul(fresh_db, tmp_
         assert "你是我" in context.blocks["SOUL"]
 
 
+def test_all_soul_templates_render_without_duplicate_possessive():
+    """所有人设模板渲染后不得出现「的的」「的在」等占位符尾「的」叠加的坏串。
+
+    _render_soul_template 的 user_clause 自带尾「的」（<名>的 / 这个用户的），
+    模板里若再手写「的」或「在」会拼出病句。强制人设 SOUL 建号时一次性落库、
+    不重渲，坏串会长期驻留，故用例覆盖有名/无名两种渲染。
+    """
+    from app import user_profiles
+
+    for name, template in user_profiles._SOUL_TEMPLATES.items():
+        for user_name in (None, "小明"):
+            rendered = user_profiles._render_soul_template(
+                template, ai_name="阿聿", user_name=user_name
+            )
+            assert "{user_clause}" not in rendered
+            assert "的的" not in rendered, f"{name} 渲染出重复「的的」"
+            assert "的在" not in rendered, f"{name} 渲染出病句「的在」"
+
+
 def test_missing_blank_soul_template_logs_error_and_falls_back(tmp_path, caplog):
     from app import user_profiles
 
     template_dir = tmp_path / "templates"
     template_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("xiaotaiyang", "xiaoyueya", "ju"):
+    # 除 blank 外的全部 preset 都要在临时目录就位——本例只验证「blank 缺失→兜底」，
+    # 其余 preset 缺文件会触发 re-raise，与被测行为无关。新增 preset 时同步补齐此列表。
+    for name in ("xiaotaiyang", "xiaoyueya", "ju", "peiyan", "shenyan", "qiyue", "lushian", "jiangye"):
         (template_dir / f"{name}.md").write_text("# SOUL\n\n{name_clause}\n", encoding="utf-8")
 
     caplog.set_level(logging.ERROR, logger="ai4all.user_profiles")

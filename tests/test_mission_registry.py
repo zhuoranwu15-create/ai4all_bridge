@@ -4,9 +4,11 @@ import pytest
 from app.mission_registry import get_mission_template, list_mission_templates
 
 
-def test_list_returns_both_templates_in_order():
+def test_list_returns_templates_in_order():
     templates = list_mission_templates()
-    assert [t.id for t in templates] == ["mission_001", "mission_002"]
+    assert [t.id for t in templates] == [
+        "mission_001", "mission_002", "mission_003", "mission_004",
+    ]
 
 
 def test_mission_001_hundred_moments_fields():
@@ -30,6 +32,24 @@ def test_mission_002_ten_solitudes_fields():
 def test_unknown_mission_id_raises_keyerror():
     with pytest.raises(KeyError):
         get_mission_template("mission_999")
+
+
+def test_mission_003_heartbeat_fields():
+    template = get_mission_template("mission_003")
+    assert template.slug == "heartbeat_moments"
+    assert template.display_name == "心动"
+    assert template.target_count == 100
+    assert template.short_label == "心动瞬间"
+    assert "心动" in template.inquiry
+
+
+def test_mission_004_seen_fields():
+    template = get_mission_template("mission_004")
+    assert template.slug == "seen_moments"
+    assert template.display_name == "看见"
+    assert template.target_count == 30
+    assert template.short_label == "被看见的小事"
+    assert "看见" in template.inquiry
 
 
 def test_prose_files_exist_and_are_non_empty():

@@ -75,7 +75,7 @@ curl -s http://127.0.0.1:8180/health/ready
 
 处理：
 
-- 检查 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_MODEL` 是否正确。
+- 检查 `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_ACTIVE_FAMILY`（以及后台 runtime 切换的 active family / tier override）是否正确。
 - 检查供应商状态、额度和网络连通性。
 - 如果失败由最近发布引入，先回滚代码，再重启 backend。
 

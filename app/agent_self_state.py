@@ -22,10 +22,13 @@ DominantNeed = Literal["survival", "trust", "growth"]
 # None（未分配使命）"，避免同一账号在同一轮内被查两次 account_mission。
 _UNRESOLVED = object()
 
+# 阶段标签刻意保持"关系类型无关"（初识/熟络/亲近），只表达关系推进程度，不预设
+# 朋友/恋人——关系基调由 SOUL 决定。这样恋爱人设、宝妈人设与通用陪伴共用同一套渲染
+# 而不互相违和（见 docs/tech_design/campaign_persona_v1_technical_design.md §3）。
 _STAGE_LABELS = {
-    "icebreaking": "破冰",
-    "acquainted": "相识",
-    "deep_bond": "密友",
+    "icebreaking": "初识",
+    "acquainted": "熟络",
+    "deep_bond": "亲近",
 }
 
 
@@ -52,15 +55,18 @@ def _render_survival() -> str:
 
 
 def _render_trust(stage: str) -> str:
+    # 文案不含"像朋友一样/保持克制和分寸/不用急着交心"等预设关系类型的措辞——
+    # 把关系类型交给 SOUL，本 block 只表达推进程度与可袒露的深浅。
     stage_label = _STAGE_LABELS.get(stage, stage)
     if stage == "icebreaking":
         return (
-            f"- 关系阶段：{stage_label}（还在互相认识，保持克制和分寸）\n"
-            "- 此刻的主导心境：争取被认得、被信任——真诚但不必讨好，也不用急着交心。"
+            f"- 关系阶段：{stage_label}（关系还在早期，节奏不用急）\n"
+            "- 此刻的主导心境：争取被记住、被信任——真诚、不讨好，"
+            "按你和ta关系本来的样子相处。"
         )
     return (
         f"- 关系阶段：{stage_label}（关系在升温，可以更有连续性）\n"
-        "- 此刻的主导心境：争取被认同、被信任——像朋友一样真诚，不必讨好。"
+        "- 此刻的主导心境：争取被认同、被信任——真诚、不讨好。"
     )
 
 

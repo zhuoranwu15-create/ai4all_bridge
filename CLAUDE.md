@@ -91,18 +91,23 @@
 | 模块 | 职责 |
 |---|---|
 | `main.py` | FastAPI app 装配：中间件、静态挂载、startup/shutdown、scheduler 接线、`include_router`。路由本身已拆到 `app/routers/*`，此文件不再含 handler |
-| `app/routers/*` | 按域拆分的 `APIRouter`：`bridge`(openclaw/node)、`health`、`web`(/web/*)、`debug`(/debug/*)、`admin_{moderation,accounts,proactive,dreaming,ops,security}`(/admin/*)。共享层：`deps`(鉴权依赖)、`serializers`(脱敏/视图 helper)、`models`(共享请求模型)。对外 URL 与拆分前一致。`app/app_runtime.py` 持有后台事件循环（startup 写入，router 请求时 `get_background_loop()` 读取） |
+| `app/routers/*` | 按域拆分的 `APIRouter`：`bridge`(openclaw inbound)、`health`、`web`(/web/*)、`debug`(/debug/*)、`admin_{moderation,accounts,proactive,dreaming,ops,security,campaigns,llm}`(/admin/*)。多节点接入的 `/node/*` 端点在 `app/node_gateway.py`/`app/node_agent.py`（见下）。共享层：`deps`(鉴权依赖)、`serializers`(脱敏/视图 helper)、`models`(共享请求模型)。对外 URL 与拆分前一致。`app/app_runtime.py` 持有后台事件循环（startup 写入，router 请求时 `get_background_loop()` 读取） |
 | `turn_service.py` | 每条入站消息的入口 |
 | `prompt_builder.py` | 从所有来源组装 LLM 上下文 |
-| `user_profiles.py` | 账号级上下文文件：SOUL、IDENTITY、USER |
+| `user_profiles.py` | 账号级上下文文件：SOUL、IDENTITY、USER、MEMORY。厚节点下这些文件已下沉到 DB（`profile_storage.py` + `account_profile_files` 表），`user_profiles.py` 为业务读写门面 |
 | `session_lifecycle.py` | 对话 session 轮转 |
 | `onboarding.py` | 新用户 onboarding 流程 |
 | `dreaming.py` 和 `dreaming_scheduler.py` | Dreaming 记忆压缩与调度 |
 | `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、reactivation 拉活、账号主动检查 |
 | `memory_writer.py` | turn 后记忆更新 |
 | `rate_limiter.py` | 每日和 RPM 配额控制 |
-| `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力 |
-| `app/db/*` | SQLite 数据访问层（按域拆分的包：`_core`/`accounts`/`sessions`相关/`billing`/`moderation`/`proactive`/`admin`/`analytics`/`ops`/`lifecycle`）。`from app.db import X` 接口不变，由 `__init__.py` 重导出；`connect()`/`init_db()`/迁移框架在 `_core.py` |
+| `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力（`openclaw_gateway_ws.py` 为持久 WS 网关变体） |
+| `llm.py` / `llm_providers.py` / `llm_adapters.py` | LLM 统一入口。选型为 **family×tier 两层**：`tier_for_task(task)` 把调用点映射到 pro/flash 档，`resolve_provider_for_tier` 按 active family × tier 解析 provider；`llm_adapters` 把各协议响应归一。运行时切换存 `app/db/llm_config.py`，后台 `admin_llm` 管理。详见 [LLM family×tier 设计](docs/tech_design/llm_family_tier_design.md) |
+| `agent_self_state.py` / `relationship_state.py` / `mission_*.py` + `mission_templates/` | Agent 自我状态层与使命子系统：关系阶段 + 马斯洛需求 + 使命，确定性更新后注入 prompt block。设计见 [agent_self_prd](docs/product/agent_self_prd.md)、[使命与编排设计](docs/tech_design/agent_mission_and_orchestration_design.md) |
+| `user_meta_scheduler.py` | 账号级派生画像（user_meta）的天级刷新调度器——**与 proactive、dreaming 并列的第三个调度器**。数据在 `app/db/user_meta.py` |
+| `node_gateway.py` / `node_agent.py` | 多节点接入：中心侧按 `node_id` 派发 openclaw 登录/登出与 outbound（local 直调 / remote HTTP push），`node_agent` 为瘦接入节点（node-only 机，如 aliyun2，全程不碰本地 DB）。设计见 [multi_node_access_refactor](docs/tech_design/multi_node_access_refactor.md) |
+| `tool_evidence_replay.py` / `context_window.py` / `context_summarizer.py` | 短期上下文运行时：工具证据跨 turn 回灌、历史 token 预算裁剪、session 内滚动摘要 |
+| `app/db/*` | 数据访问层（SQLite/PostgreSQL 双后端，按 `DATABASE_URL` 二选一，见上文「数据库后端」）。按域拆分的包：`_core`(连接/`init_db`/`_MIGRATIONS` 迁移框架)、`_backend`(SQLite/PG 后端中立垫片)、`accounts`、`lifecycle`(session 轮转，无独立 sessions 模块)、`billing`、`moderation`、`proactive`、`admin`、`analytics`、`ops`、`campaign`(营销活码)、`llm_config`(运行时 family/tier 绑定)、`user_meta`(账号级派生画像)、`mission`(使命分配)。`from app.db import X` 接口不变，由 `__init__.py` 重导出 |
 
 ## 开发约定
 
@@ -114,7 +119,7 @@
 
 新增路由请加到 `app/routers/` 对应域的模块（而非 `main.py`）；`main.py` 只负责 app 装配与 `include_router`。新增 router 模块若 `from app.config import settings`，需在 `tests/conftest.py` 的 `fresh_db`/`client` 两个 fixture 各补一行 `patch("app.routers.<模块>.settings", ...)`，否则测试会落到生产配置（per-module patch 约定）。测试 patch router 内部对象时遵循 "patch where it's used"（patch `app.routers.<模块>.X`，不是 `app.main.X`）。
 
-主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关（`DREAMING_SCHEDULER_ENABLED`）或 admin run-once 调试，避免多实例重复扫描。
+主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关（`DREAMING_SCHEDULER_ENABLED`）或 admin run-once 调试，避免多实例重复扫描。User meta scheduler（账号级派生画像天级刷新）同为 FastAPI in-process 开关（`USER_META_SCHEDULER_ENABLED`，默认关），是与前两者并列的第三个调度器。
 
 标准数据库是 `data/ai4all.sqlite3`。忽略仓库根目录和 `data/` 下空的 `ai4all.db` 文件。
 

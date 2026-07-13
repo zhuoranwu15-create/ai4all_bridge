@@ -185,3 +185,80 @@ def test_update_edits_multiple_fields(client):
     assert campaign["soul_preset_key"] == "ju"
     assert campaign["onboarding_script_variant"] == "hi there"
     assert campaign["expires_at"] == "2099-01-01 00:00:00"
+
+
+# ---------------------------------------------------------------------------
+# 漏斗统计端点 GET /admin/campaign-codes/{code}/stats
+# ---------------------------------------------------------------------------
+
+def _seed_stats_data(client, code="STATS1"):
+    from app.db import (
+        get_or_create_session,
+        record_campaign_visit,
+        write_campaign_attribution,
+    )
+
+    client.post(
+        "/admin/campaign-codes",
+        json={"code": code, "campaign_key": "k"},
+        headers=ADMIN_HEADERS,
+    )
+    # S0 曝光：2 PV / 1 UV（今天，落入默认 14 天窗口）
+    record_campaign_visit(campaign_code=code, visitor_token="v1")
+    record_campaign_visit(campaign_code=code, visitor_token="v1")
+    # S1 注册：1 账号归因（attributed_at=今天）
+    get_or_create_session(
+        account_id="aid_stat_1", channel="openclaw-weixin",
+        sender_id="s", sender_name=None, chat_id="c", session_key="sk-stat-1",
+    )
+    write_campaign_attribution(
+        account_id="aid_stat_1", campaign_code=code,
+        mission_id=None, onboarding_script_variant=None, soul_preset_key=None,
+    )
+
+
+def test_admin_campaign_stats_default_range(client):
+    _seed_stats_data(client)
+    res = client.get("/admin/campaign-codes/STATS1/stats", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "ok"
+    assert body["totals"]["pv"] == 2
+    assert body["totals"]["uv"] == 1
+    assert body["totals"]["registered"] == 1
+    assert body["rates"]["visit_to_register"] == 1.0  # 1 registered / 1 uv
+
+
+def test_admin_campaign_stats_staff_allowed(client):
+    _seed_stats_data(client, code="STATS2")
+    res = client.get("/admin/campaign-codes/STATS2/stats", headers=STAFF_HEADERS)
+    assert res.status_code == 200
+
+
+def test_admin_campaign_stats_requires_auth(client):
+    res = client.get("/admin/campaign-codes/STATS1/stats")
+    assert res.status_code == 401
+
+
+def test_admin_campaign_stats_rejects_bad_date(client):
+    res = client.get(
+        "/admin/campaign-codes/STATS1/stats?from=2026-13-99",
+        headers=ADMIN_HEADERS,
+    )
+    assert res.status_code == 400
+
+
+def test_admin_campaign_stats_rejects_oversized_range(client):
+    res = client.get(
+        "/admin/campaign-codes/STATS1/stats?from=2020-01-01&to=2026-01-01",
+        headers=ADMIN_HEADERS,
+    )
+    assert res.status_code == 400
+
+
+def test_admin_campaign_stats_unknown_code_returns_zeroed(client):
+    res = client.get("/admin/campaign-codes/GHOST/stats", headers=ADMIN_HEADERS)
+    assert res.status_code == 200
+    body = res.json()
+    assert body["totals"]["registered"] == 0
+    assert body["rates"]["visit_to_register"] is None

@@ -1,8 +1,8 @@
-# 关系状态结构化实施方案（临时）
+# 关系状态结构化实施方案
 
-更新时间：2026-06-22
+更新时间：2026-07-12（Phase A/B/C/D 已核实落地，去 tmp 转正）
 
-本文是关系阶段与 Agent 需求满足状态的临时实施方案，用于后续拆分开发任务。本文只覆盖状态存储、更新口径、同步视图和验证方案；不包含这些状态对动态编排的具体影响策略。
+本文描述关系阶段与 Agent 需求满足状态的结构化实施方案。Phase A/B/C/D 均已落地（见 §1 与 [`agent_mission_and_orchestration_design.md`](agent_mission_and_orchestration_design.md)）。本文覆盖状态存储、更新口径、同步视图和验证方案；状态对动态编排 / prompt 注入的具体影响策略见 [`agent_self_prd.md`](../product/agent_self_prd.md) §7 与使命设计 §4，本文不重复。
 
 ## 1. 目标
 
@@ -377,7 +377,7 @@ Prompt 装载策略：
 
 - `RELATIONSHIP.md` 不默认进入 `Project Context`。
 - 后续编排层需要时，只注入本轮具体策略 block。
-- 本临时方案不定义具体编排策略。
+- 本方案不定义具体编排策略（编排影响见 `agent_self_prd.md` §7 与使命设计 §4）。
 
 ## 11. 测试方案
 

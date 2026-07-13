@@ -18,7 +18,12 @@ _SOUL_TEMPLATES_DIR = Path(__file__).parent / "soul_templates"
 
 
 def _load_soul_templates() -> dict:
-    presets = ("blank", "xiaotaiyang", "xiaoyueya", "ju")
+    presets = (
+        "blank", "xiaotaiyang", "xiaoyueya", "ju",
+        # 营销活码人设（campaign_persona_v1_technical_design.md §2）：恋爱向 peiyan/shenyan/qiyue，
+        # 宝妈向 lushian/jiangye。带性别（"他"），仅经活码 soul_preset_key 强制，不进 onboarding 自选菜单。
+        "peiyan", "shenyan", "qiyue", "lushian", "jiangye",
+    )
     templates = {}
     for name in presets:
         path = _SOUL_TEMPLATES_DIR / f"{name}.md"

@@ -226,7 +226,7 @@ WHERE account_id  = :account_id
 
 #### LLM 调用规格
 
-- 模型：复用运行时默认 LLM provider（由 `LLM_DEFAULT_PROVIDER_ID` 和后台 runtime override 决定，当前生产为 `deepseek-v4-pro`）
+- 模型：按 family×tier 路由，`tier_for_task("user_meta")`=flash 档（active family 的 flash provider，可被 `LLM_TASK_TIERS` 或后台 tier override 调整），当前生产为 `deepseek-v4-flash`。见 [LLM family×tier 设计](llm_family_tier_design.md)
 - Temperature / max_tokens：沿用默认 provider 配置
 - 调用方式：通过 `generate_completion(messages)` 调用项目统一 LLM 入口，不构造 batch 专用 provider，不绕过 runtime config
 - 失败处理：LLM 调用失败或输出解析失败时，保留现有 `companion_*` 字段不变，记录错误到调度器摘要

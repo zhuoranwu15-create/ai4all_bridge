@@ -3,7 +3,7 @@
 更新时间：2026-07-04
 
 对应产品 PRD：[`docs/product/agent_self_prd.md`](../product/agent_self_prd.md)（本文只覆盖其 §10「第一大块」：使命 + 编排注入）
-状态层依赖：[`relationship_state_implementation_plan_tmp.md`](relationship_state_implementation_plan_tmp.md)（Phase A/B/C/D 均已核实落地，见 §1）
+状态层依赖：[`relationship_state_implementation_plan.md`](relationship_state_implementation_plan.md)（Phase A/B/C/D 均已核实落地，见 §1）
 
 本文档命名、编号、字段等具体候选由本文作者提出，非最终定论；如后续认为不合适可随时调整，不构成对 PRD 的既成事实。
 
