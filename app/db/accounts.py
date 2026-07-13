@@ -161,24 +161,6 @@ def upsert_channel_binding(
     return item
 
 
-def get_account_last_inbound_at(*, account_id: str) -> Optional[str]:
-    """Return the most recent `channel_bindings.last_seen_at` across all of this
-    account's bindings, or None if it has none.
-
-    Only real inbound turns refresh `last_seen_at` (see `upsert_channel_binding`
-    callers) — unlike the `messages`-table `MAX(created_at)` aggregates used
-    elsewhere for display, this is not contaminated by the bot's own outbound
-    messages, so it is the clean signal for "is this account currently reachable
-    for a proactive WeChat send" (see docs/plans/主动消息送达窗口对齐.md).
-    """
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT MAX(last_seen_at) AS last_seen_at FROM channel_bindings WHERE account_id = ?",
-            (account_id,),
-        ).fetchone()
-    return row["last_seen_at"] if row and row["last_seen_at"] else None
-
-
 def list_channel_bindings_for_account(*, account_id: str) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -759,25 +741,48 @@ def list_recent_context_messages_for_session(
     ]
 
 
-def get_latest_closed_carryover_for_account(*, account_id: str) -> Optional[str]:
+def get_latest_closed_carryover_for_account(
+    *, account_id: str, active_session_key: Optional[str] = None
+) -> Optional[str]:
     """Return the carryover_summary of the account's **immediately-preceding** closed session.
 
     取最近一个已关闭 session（不再往前挖）：其 carryover 即新 active session 应承接的上一段延续。
     统一了「懒轮转」与「4 点 scheduler 关闭后懒建」两条路径的 seed 来源（carryover 在两种关闭里
     都已落到被关闭的 session 行上）。若上一段是 `#重置` 之类的 replaced 关闭（无 carryover），返回
     空/None → 不承接（不复活已被显式重置的上下文）。account 隔离。
+
+    ``active_session_key`` 指定 conversation_scope（§7.2，Model B）：传入时只承接**同 scope**
+    上一段 carryover（归档 key 形如 ``{active_session_key}:{id}``），避免跨渠道泄漏（微信昨天
+    关的 session 被 Web 今天首开继承，反之亦然）。用**前缀精确匹配** ``substr(session_key,1,?)=?``
+    而非 ``LIKE``（``LIKE`` 里 ``_`` 是单字符通配符，``__account_active__`` 会误命中）。
+    不传（None）= 现状：承接账号最近任意 closed session（微信单渠道下与按 scope 过滤等价，
+    因所有归档段都带 ``__account_active__:`` 前缀）。
     """
     with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT carryover_summary FROM sessions
-            WHERE account_id = ?
-              AND status = 'closed'
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (account_id,),
-        ).fetchone()
+        if active_session_key:
+            prefix = f"{active_session_key}:"
+            row = conn.execute(
+                """
+                SELECT carryover_summary FROM sessions
+                WHERE account_id = ?
+                  AND status = 'closed'
+                  AND substr(session_key, 1, ?) = ?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (account_id, len(prefix), prefix),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT carryover_summary FROM sessions
+                WHERE account_id = ?
+                  AND status = 'closed'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
     return row["carryover_summary"] if row else None
 
 
@@ -1157,20 +1162,29 @@ def get_account_onboarding_state(*, account_id: str) -> str:
     return row["onboarding_state"] or "pending"
 
 
-def get_account_last_inbound_at(*, account_id: str) -> Optional[str]:
-    """Return the most recent `channel_bindings.last_seen_at` across all of this
-    account's bindings, or None if it has none.
+def get_account_last_inbound_at(*, account_id: str, channel: str) -> Optional[str]:
+    """Return the most recent `channel_bindings.last_seen_at` for this account **on
+    the given channel**, or None if it has no binding on that channel.
 
     Only real inbound turns refresh `last_seen_at` (see `upsert_channel_binding`
     callers) — unlike the `messages`-table `MAX(created_at)` aggregates used
     elsewhere for display, this is not contaminated by the bot's own outbound
-    messages, so it is a clean signal for "has this account sent an inbound
-    message, and when" (used by new-user-reactivation idle-hours eligibility).
+    messages, so it is a clean signal for "when did this account last send an
+    inbound message on this channel" (used by new-user-reactivation idle-hours
+    eligibility and the WeChat proactive touch window).
+
+    ``channel`` is **mandatory** (Model B, §7.5): a WeChat proactive-reachability
+    check must not be contaminated by activity on other channels (e.g. Web). The
+    two current callers both pass ``channel="openclaw-weixin"``. (Previously there
+    were two identical channel-agnostic definitions of this function, the second
+    shadowing the first; they have been converged into this single channel-scoped
+    definition.)
     """
     with connect() as conn:
         row = conn.execute(
-            "SELECT MAX(last_seen_at) AS last_seen_at FROM channel_bindings WHERE account_id = ?",
-            (account_id,),
+            "SELECT MAX(last_seen_at) AS last_seen_at FROM channel_bindings "
+            "WHERE account_id = ? AND channel = ?",
+            (account_id, channel),
         ).fetchone()
     return row["last_seen_at"] if row and row["last_seen_at"] else None
 

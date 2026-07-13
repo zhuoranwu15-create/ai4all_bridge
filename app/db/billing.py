@@ -2612,16 +2612,21 @@ def get_or_create_session(
     business_day: Optional[str] = None,
     carryover_summary: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    update_account_channel: bool = True,
 ) -> Dict[str, Any]:
+    """``update_account_channel=False``（§3）：已存在账号的 ``accounts.channel`` 不被本次
+    改写——供 Web 首触已绑微信的账号时保留原渠道字段。默认 True，微信/存量调用方行为不变
+    （新建账号仍按 INSERT 写入 ``channel``；仅 ON CONFLICT 更新分支受此开关影响）。"""
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
+    # 内部固定常量拼接（非用户输入），无注入风险：控制 ON CONFLICT 是否覆写 channel。
+    _channel_update_clause = "channel = excluded.channel,\n                " if update_account_channel else ""
     with connect() as conn:
         conn.execute(
-            """
+            f"""
             INSERT INTO accounts(id, channel, updated_at)
             VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
-                channel = excluded.channel,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                {_channel_update_clause}updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, channel),
         )
@@ -2689,22 +2694,33 @@ def get_or_create_account_active_session(
     sender_name: Optional[str],
     chat_id: Optional[str],
     business_day: Optional[str] = None,
+    active_session_key: str = ACCOUNT_ACTIVE_SESSION_KEY,
+    update_account_channel: bool = True,
 ) -> Dict[str, Any]:
     """Return the account-level active session used for main conversation context.
 
     OpenClaw's session_key is a channel routing/debug field. P0 keeps the
     existing sessions schema and rotates the stable compatibility key when
     the account's active session crosses a lifecycle boundary.
+
+    ``active_session_key`` selects the conversation_scope (§7.1): WeChat uses
+    ``__account_active__`` (default, behavior unchanged), Web uses
+    ``__web_active__``. The archived key is derived from it, so each scope's
+    closed sessions carry their own prefix and stay isolated.
+
+    ``update_account_channel=False``（§3）：已存在账号的 ``accounts.channel`` 不被本次
+    改写（供 Web 首触已绑微信账号时保留原渠道）。默认 True，微信路径行为不变。
     """
 
+    # 内部固定常量拼接（非用户输入），无注入风险：控制 ON CONFLICT 是否覆写 channel。
+    _channel_update_clause = "channel = excluded.channel,\n                " if update_account_channel else ""
     with connect() as conn:
         conn.execute(
-            """
+            f"""
             INSERT INTO accounts(id, channel, updated_at)
             VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
-                channel = excluded.channel,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                {_channel_update_clause}updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
             (account_id, channel),
         )
@@ -2727,7 +2743,7 @@ def get_or_create_account_active_session(
             SELECT * FROM sessions
             WHERE account_id = ? AND session_key = ?
             """,
-            (account_id, ACCOUNT_ACTIVE_SESSION_KEY),
+            (account_id, active_session_key),
         ).fetchone()
 
         carryover_summary = None
@@ -2742,7 +2758,7 @@ def get_or_create_account_active_session(
                     conn,
                     session_id=int(session["id"]),
                 )
-                archived_session_key = f"{ACCOUNT_ACTIVE_SESSION_KEY}:{session['id']}"
+                archived_session_key = f"{active_session_key}:{session['id']}"
                 conn.execute(
                     """
                     UPDATE sessions
@@ -2794,7 +2810,7 @@ def get_or_create_account_active_session(
                 """,
                 (
                     account_id,
-                    ACCOUNT_ACTIVE_SESSION_KEY,
+                    active_session_key,
                     sender_id,
                     chat_id,
                     sender_name,
@@ -2812,7 +2828,7 @@ def get_or_create_account_active_session(
             SELECT * FROM sessions
             WHERE account_id = ? AND session_key = ?
             """,
-            (account_id, ACCOUNT_ACTIVE_SESSION_KEY),
+            (account_id, active_session_key),
         ).fetchone()
         profile = conn.execute(
             "SELECT * FROM profiles WHERE account_id = ?",

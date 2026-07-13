@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.channels import get_channel_capability
 from app.config import settings
 from app.time_utils import beijing_naive_now, beijing_now
 from app.session_lifecycle import business_day_for
@@ -353,6 +354,24 @@ def dispatch_proactive_text(
 
     两分支返回同形 outbound dict(状态可能为 pending/cancelled/sent 等)。
     """
+    # 投递 fail-fast（§8.3，原则一硬需求）:``supports_proactive=False`` 的渠道(如 web)
+    # 绝不进出站发送——底层 send_weixin_text 无条件走微信网关,不看 channel 参数,若放行
+    # 会把 channel="web" 的主动消息误投微信网关。V1 只有 openclaw-weixin 可投,故对微信
+    # 行为等价现状。这里只拦截,不建 outbound 行(调用方经 _select_route 能力过滤后本就不
+    # 应到达此分支;此为第二道防线)。
+    if not get_channel_capability(channel).supports_proactive:
+        logger.warning(
+            "dispatch_proactive_text blocked non-proactive channel account=%s channel=%s source=%s",
+            account_id,
+            channel,
+            source,
+        )
+        return {
+            "status": "cancelled",
+            "error": "channel_not_proactive",
+            "account_id": account_id,
+            "channel": channel,
+        }
     if should_inline_dispatch_for_account(account_id, settings):
         return send_proactive_text(
             account_id=account_id,
