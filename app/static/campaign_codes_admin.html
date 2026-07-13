@@ -5,6 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>营销活码后台 – AI4ALL</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    /* 漏斗汇总条：阶段计数 + 阶段间转化率，横向排列、窄屏可换行。 */
+    .funnel-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; }
+    .funnel-cell { text-align: center; min-width: 56px; padding: 6px 8px; background: rgba(127,127,127,.08); border-radius: 6px; }
+    .funnel-num { font-size: 20px; font-weight: 700; line-height: 1.1; }
+    .funnel-label { font-size: 12px; opacity: .7; margin-top: 2px; }
+    .funnel-arrow { text-align: center; font-size: 13px; opacity: .55; align-self: center; }
+    .funnel-rate { font-size: 12px; font-weight: 600; opacity: .85; }
+  </style>
 </head>
 <body>
   <a class="back-link" href="index.html">← 返回后台入口</a>
@@ -100,6 +109,40 @@
     </div>
   </div>
 
+  <div class="card" id="stats-card" style="display:none">
+    <div class="card-title-row">
+      <h2>漏斗统计 <span id="stats-code-label" class="mono"></span></h2>
+      <button onclick="closeStats()">关闭</button>
+    </div>
+    <div class="filter-grid">
+      <div>
+        <label for="s-from">起始日（北京日，YYYY-MM-DD）</label>
+        <input id="s-from" type="text" class="mono-input" placeholder="2026-07-01">
+      </div>
+      <div>
+        <label for="s-to">结束日（含当天）</label>
+        <input id="s-to" type="text" class="mono-input" placeholder="2026-07-13">
+      </div>
+      <div style="align-self:end">
+        <button class="primary" onclick="loadStats()">查询</button>
+        <span id="stats-status" class="status-msg"></span>
+      </div>
+    </div>
+    <!-- 漏斗汇总：S0 曝光 → S1 注册 → S2 扫码 → S3 激活 → S4/S5 onboarding。-->
+    <div id="stats-totals" class="funnel-row" style="margin-top:12px"></div>
+    <table style="margin-top:12px">
+      <thead>
+        <tr>
+          <th>日期</th><th>曝光PV</th><th>曝光UV</th><th>注册</th><th>扫码</th>
+          <th>激活</th><th>引导1</th><th>引导2</th><th>完成</th>
+        </tr>
+      </thead>
+      <tbody id="stats-tbody">
+        <tr><td colspan="9">选择日期后点「查询」</td></tr>
+      </tbody>
+    </table>
+  </div>
+
   <div class="card" id="list-card">
     <div class="card-title-row">
       <h2>活码列表</h2>
@@ -152,6 +195,8 @@
       var code = btn.getAttribute('data-code');
       if (btn.dataset.action === 'edit') {
         openEdit(code);
+      } else if (btn.dataset.action === 'stats') {
+        openStats(code);
       } else if (btn.dataset.action === 'toggle') {
         toggleStatus(code, btn.getAttribute('data-next-status'));
       }
@@ -208,6 +253,7 @@
             + '<td>' + esc(c.expires_at || '—') + '</td>'
             + '<td>'
             + '<button data-code="' + esc(c.code) + '" data-action="edit">编辑</button> '
+            + '<button data-code="' + esc(c.code) + '" data-action="stats">统计</button> '
             + '<button class="' + toggleClass + '" data-code="' + esc(c.code) + '" data-action="toggle" data-next-status="' + esc(nextStatus) + '">' + toggleLabel + '</button>'
             + '</td>'
             + '</tr>';
@@ -271,6 +317,100 @@
         showStatus(statusEl, '保存成功', false);
         closeEdit();
         loadCampaignCodes();
+      } catch (e) {
+        showStatus(statusEl, e.message, true);
+      }
+    }
+
+    // ===== 漏斗统计 =====
+    var statsCode = null;
+
+    // 本地日期 → YYYY-MM-DD（用于默认区间；后端仍按北京日重算，前端仅作缺省填充）。
+    function ymd(d) {
+      var m = String(d.getMonth() + 1).padStart(2, '0');
+      var day = String(d.getDate()).padStart(2, '0');
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+
+    function openStats(code) {
+      statsCode = code;
+      document.getElementById('stats-code-label').textContent = code;
+      // 默认最近 14 天
+      var to = new Date();
+      var from = new Date();
+      from.setDate(from.getDate() - 13);
+      document.getElementById('s-from').value = ymd(from);
+      document.getElementById('s-to').value = ymd(to);
+      document.getElementById('stats-status').textContent = '';
+      document.getElementById('stats-totals').innerHTML = '';
+      document.getElementById('stats-tbody').innerHTML = '<tr><td colspan="9">点「查询」加载</td></tr>';
+      show('stats-card');
+      document.getElementById('stats-card').scrollIntoView({ behavior: 'smooth' });
+      loadStats();
+    }
+
+    function closeStats() { hide('stats-card'); }
+
+    // 漏斗阶段渲染：label + 计数，转化率标在阶段之间。
+    function renderFunnel(totals, rates) {
+      function pct(v) { return v == null ? '—' : (Math.round(v * 1000) / 10) + '%'; }
+      function cell(label, val) {
+        return '<div class="funnel-cell"><div class="funnel-num">' + esc(String(val)) + '</div>'
+          + '<div class="funnel-label">' + esc(label) + '</div></div>';
+      }
+      function arrow(rate) {
+        return '<div class="funnel-arrow">→<br><span class="funnel-rate">' + pct(rate) + '</span></div>';
+      }
+      return cell('曝光 PV', totals.pv)
+        + '<div class="funnel-arrow">·</div>'
+        + cell('曝光 UV', totals.uv)
+        + arrow(rates.visit_to_register)
+        + cell('注册', totals.registered)
+        + arrow(rates.register_to_scan)
+        + cell('扫码', totals.scanned)
+        + '<div class="funnel-arrow">·</div>'
+        + cell('激活', totals.activated)
+        + '<div class="funnel-arrow">·</div>'
+        + cell('引导1', totals.onboarding_step1)
+        + '<div class="funnel-arrow">·</div>'
+        + cell('引导2', totals.onboarding_step2)
+        + arrow(rates.register_to_complete)
+        + cell('完成', totals.completed);
+    }
+
+    async function loadStats() {
+      if (!statsCode) return;
+      var statusEl = document.getElementById('stats-status');
+      var from = document.getElementById('s-from').value.trim();
+      var to = document.getElementById('s-to').value.trim();
+      var qs = [];
+      if (from) qs.push('from=' + encodeURIComponent(from));
+      if (to) qs.push('to=' + encodeURIComponent(to));
+      var suffix = qs.length ? ('?' + qs.join('&')) : '';
+      try {
+        showStatus(statusEl, '查询中…', false);
+        var data = await apiFetch('/admin/campaign-codes/' + encodeURIComponent(statsCode) + '/stats' + suffix);
+        document.getElementById('stats-totals').innerHTML = renderFunnel(data.totals, data.rates);
+        var rows = data.by_day || [];
+        var tbody = document.getElementById('stats-tbody');
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="9">该区间暂无数据</td></tr>';
+        } else {
+          tbody.innerHTML = rows.map(function(r) {
+            return '<tr>'
+              + '<td class="mono">' + esc(r.date) + '</td>'
+              + '<td>' + esc(String(r.pv)) + '</td>'
+              + '<td>' + esc(String(r.uv)) + '</td>'
+              + '<td>' + esc(String(r.registered)) + '</td>'
+              + '<td>' + esc(String(r.scanned)) + '</td>'
+              + '<td>' + esc(String(r.activated)) + '</td>'
+              + '<td>' + esc(String(r.onboarding_step1)) + '</td>'
+              + '<td>' + esc(String(r.onboarding_step2)) + '</td>'
+              + '<td>' + esc(String(r.completed)) + '</td>'
+              + '</tr>';
+          }).join('');
+        }
+        showStatus(statusEl, '', false);
       } catch (e) {
         showStatus(statusEl, e.message, true);
       }
