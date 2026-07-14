@@ -34,6 +34,7 @@ __all__ = [
     'list_context_messages_for_session',
     'update_session_rolling_summary',
     'count_reactivation_outbound_for_quota_date',
+    'count_inbound_messages_for_account',
     'count_recent_inbound_messages_for_account',
     'count_verifications_last_hour',
     'create_phone_verification',
@@ -53,6 +54,7 @@ __all__ = [
     'get_profile_for_account',
     'get_profile_for_session',
     'get_session',
+    'get_session_for_account_and_key',
     'get_usage_last_7_days',
     'get_valid_verification_by_token',
     'get_verification_by_token',
@@ -73,12 +75,14 @@ __all__ = [
     'list_recent_messages_for_account_since',
     'list_recent_reactivation_outbound_messages',
     'list_session_messages',
+    'list_session_messages_before',
     'list_sessions',
     'list_sessions_for_account',
     'list_user_active_dates',
     'mark_message_moderation_blocked',
     'normalize_phone',
     'record_analytics_event',
+    'revoke_platform_user_session',
     'set_account_debug_flag',
     'set_account_onboarding_state',
     'set_account_status',
@@ -494,6 +498,26 @@ def get_latest_message_id_for_account(*, account_id: str) -> Optional[int]:
     return int(row["id"])
 
 
+def count_inbound_messages_for_account(*, account_id: str) -> int:
+    """账号累计入站(用户)消息总数。
+
+    用于 TDAI 记忆功能（recall + 主动 search 工具）的消息数自然灰度阈值判定：
+    只统计 direction='inbound'（用户实际发过的条数），不含 bot 出站。account_id
+    有索引，走索引计数，热路径开销可忽略。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages
+            WHERE account_id = ?
+              AND direction = 'inbound'
+            """,
+            (account_id,),
+        ).fetchone()
+    return int(row["count"] if row else 0)
+
+
 def count_recent_inbound_messages_for_account(*, account_id: str, since: str) -> int:
     with connect() as conn:
         row = conn.execute(
@@ -858,6 +882,43 @@ def list_session_messages(*, session_id: int, limit: int = 100) -> List[Dict[str
     return [dict(row) for row in reversed(rows)]
 
 
+def list_session_messages_before(
+    *,
+    account_id: str,
+    session_id: int,
+    before_id: Optional[int] = None,
+    limit: int = 50,
+) -> List[Dict[str, Any]]:
+    """Return one account/session's user-visible text tail, oldest to newest.
+
+    ``account_id`` is deliberately part of the predicate: a caller cannot use a guessed
+    numeric session id to read another account's conversation.
+    """
+    clean_limit = max(1, min(int(limit), 100))
+    before_clause = "AND id < ?" if before_id is not None else ""
+    params: List[Any] = [session_id, account_id]
+    if before_id is not None:
+        params.append(int(before_id))
+    params.append(clean_limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT id, message_id, reply_to_message_id, role, message_type, content, created_at
+            FROM messages
+            WHERE session_id = ?
+              AND account_id = ?
+              AND role IN ('user', 'assistant')
+              AND content IS NOT NULL
+              AND content != ''
+              {before_clause}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
 def list_recent_message_raw(*, limit: int = 20) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -971,6 +1032,20 @@ def get_session(*, session_id: int) -> Optional[Dict[str, Any]]:
         row = conn.execute(
             "SELECT * FROM sessions WHERE id = ?",
             (session_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_session_for_account_and_key(
+    *, account_id: str, session_key: str
+) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM sessions
+            WHERE account_id = ? AND session_key = ? AND status = 'active'
+            """,
+            (account_id, session_key),
         ).fetchone()
     return dict(row) if row else None
 
@@ -1613,6 +1688,16 @@ def get_platform_user_by_session_token(*, token: str) -> Optional[Dict[str, Any]
             (token,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def revoke_platform_user_session(*, token: str) -> bool:
+    """Revoke exactly the presented opaque mobile/web session token."""
+    with connect() as conn:
+        cursor = conn.execute(
+            "DELETE FROM platform_user_sessions WHERE token = ?",
+            (token,),
+        )
+    return bool(cursor.rowcount)
 
 
 def consume_valid_verification_token(

@@ -6,6 +6,7 @@
 
 from app.channels import (
     _DEFAULT_CAPABILITY,
+    CHANNEL_APP,
     CHANNEL_WEB,
     CHANNEL_WEIXIN,
     CHANNELS,
@@ -33,6 +34,16 @@ def test_web_capability_conservative_defaults():
     assert cap.onboarding_enabled is False
     assert cap.default_reply_delivery == "sync_http"
     # Web 绝不走网关 out-of-band、不可被主动消息投递、不接 TDAI。
+    assert cap.supports_out_of_band_tool_final is False
+    assert cap.supports_proactive is False
+    assert cap.tdai_enabled is False
+
+
+def test_app_capability_is_independent_and_sync_only():
+    cap = CHANNELS[CHANNEL_APP]
+    assert cap.active_session_key == "__app_active__"
+    assert cap.onboarding_enabled is False
+    assert cap.default_reply_delivery == "sync_http"
     assert cap.supports_out_of_band_tool_final is False
     assert cap.supports_proactive is False
     assert cap.tdai_enabled is False

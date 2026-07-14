@@ -20,13 +20,14 @@ from dataclasses import dataclass
 # 渠道常量。取值与 ``openclaw_gateway.DEFAULT_WEIXIN_CHANNEL`` 保持一致（微信入站/出站现状）。
 CHANNEL_WEIXIN = "openclaw-weixin"
 CHANNEL_WEB = "web"          # 本期新增（Phase 1 才有运行路径；Phase 0 仅声明）
-# CHANNEL_APP = "app"        # 预留，本期不实现
+CHANNEL_APP = "app"
 
 
 # 微信短期会话隔离键，取值与 ``app.db._core.ACCOUNT_ACTIVE_SESSION_KEY`` 一致（不变）。
 # 这里独立写一份字面量以避免 channels.py 反向依赖 db 层；两处取值必须相同。
 _WEIXIN_ACTIVE_SESSION_KEY = "__account_active__"
 _WEB_ACTIVE_SESSION_KEY = "__web_active__"
+_APP_ACTIVE_SESSION_KEY = "__app_active__"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,17 @@ CHANNELS = {
         active_session_key=_WEB_ACTIVE_SESSION_KEY,
         onboarding_enabled=False,
         onboarding_copy_key="web_welcome",
+        default_reply_delivery="sync_http",
+        supports_out_of_band_tool_final=False,
+        supports_proactive=False,
+        tdai_enabled=False,
+    ),
+    # App V1：独立短期会话；普通回复和工具最终回复均由当前 HTTP 请求同步返回。
+    # 不启用微信专用 onboarding，也不生成当前无法投递的主动任务。
+    CHANNEL_APP: ChannelCapability(
+        active_session_key=_APP_ACTIVE_SESSION_KEY,
+        onboarding_enabled=False,
+        onboarding_copy_key="app_welcome",
         default_reply_delivery="sync_http",
         supports_out_of_band_tool_final=False,
         supports_proactive=False,

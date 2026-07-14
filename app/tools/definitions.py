@@ -268,6 +268,76 @@ def get_web_search_tools() -> list:
     ]
 
 
+def get_tdai_search_tools() -> list:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "tdai_memory_search",
+                "description": (
+                    "检索关于用户的长期记忆结论（已消化的偏好、事件、指令、关系状态）。"
+                    "当你在组织回复时发现需要某条用户长期信息、但当前上下文里没有给出时使用；"
+                    "用你自己的措辞描述你要找的信息，不受用户原话限制。"
+                    "与 tdai_conversation_search 合计每轮最多调用 3 次。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "语义化检索词，描述你要找的用户长期信息",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "返回条数，1-20，默认 5",
+                            "minimum": 1,
+                            "maximum": 20,
+                        },
+                        "type": {
+                            "type": "string",
+                            "description": "可选，限定记忆类型",
+                            "enum": ["persona", "episodic", "instruction"],
+                        },
+                        "scene": {
+                            "type": "string",
+                            "description": "可选，限定场景",
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tdai_conversation_search",
+                "description": (
+                    "检索与用户的原始逐轮对话历史（未提纯的原文）。"
+                    "用于核对用户当时的具体措辞、确认时间线、或查找刚说过还没被提纯进长期记忆的内容——"
+                    "当 tdai_memory_search 拿不到你要的信息时使用。"
+                    "与 tdai_memory_search 合计每轮最多调用 3 次。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "检索词，描述你要找的历史对话内容",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "返回条数，1-20，默认 5",
+                            "minimum": 1,
+                            "maximum": 20,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+    ]
+
+
 def get_content_invitation_generation_tools() -> list:
     return [
         {

@@ -2064,6 +2064,8 @@ def create_ai4all_account_for_user(
     plan: str = "free",
     require_display_name: bool = True,
     campaign_code: Optional[str] = None,
+    initial_channel: str = "openclaw-weixin",
+    binding_method: str = "web_onboarding",
 ) -> Dict[str, Any]:
     from app.db.accounts import get_account, get_profile_for_account
     cleaned_display_name = _clean_text(display_name)
@@ -2096,9 +2098,9 @@ def create_ai4all_account_for_user(
                     conn.execute(
                         """
                         INSERT INTO accounts(id, channel, display_name, updated_at)
-                        VALUES (?, 'openclaw-weixin', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                         """,
-                        (account_id, cleaned_display_name),
+                        (account_id, _clean_text(initial_channel) or "openclaw-weixin", cleaned_display_name),
                     )
                 break
             except IntegrityError as err:
@@ -2119,9 +2121,9 @@ def create_ai4all_account_for_user(
             INSERT INTO account_owner_bindings(
                 platform_user_id, account_id, binding_method, status, updated_at
             )
-            VALUES (?, ?, 'web_onboarding', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
-            (platform_user_id, account_id),
+            (platform_user_id, account_id, _clean_text(binding_method) or "web_onboarding"),
         )
         owner_binding_id = int(cursor.lastrowid)
 
@@ -2197,6 +2199,8 @@ def get_or_create_default_ai4all_account_for_user(
     display_name: Optional[str] = None,
     plan: str = "free",
     campaign_code: Optional[str] = None,
+    initial_channel: str = "openclaw-weixin",
+    binding_method: str = "web_onboarding",
 ) -> Dict[str, Any]:
     existing = get_first_active_account_for_user(platform_user_id=platform_user_id)
     if existing is not None:
@@ -2208,6 +2212,8 @@ def get_or_create_default_ai4all_account_for_user(
         plan=plan,
         campaign_code=campaign_code,
         require_display_name=False,
+        initial_channel=initial_channel,
+        binding_method=binding_method,
     )
 
 
@@ -2920,5 +2926,4 @@ def increment_session_turn_count(
             (session_id,),
         ).fetchone()
     return dict(row) if row else None
-
 

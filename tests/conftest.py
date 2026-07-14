@@ -284,6 +284,13 @@ def test_settings(tmp_path, db_dsn):
     s.aliyun_captcha_prefix = ""
     s.otp_expires_minutes = 10
     s.otp_token_expires_minutes = 10
+    s.asr_base_url = "http://fake-asr/v1"
+    s.asr_api_key = ""
+    s.asr_model = "whisper-1"
+    s.asr_timeout_seconds = 5.0
+    s.asr_max_audio_bytes = 10 * 1024 * 1024
+    s.asr_max_duration_ms = 60_000
+    s.asr_mock_transcript = ""
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""
@@ -351,6 +358,8 @@ def fresh_db(test_settings):
         patch("app.routers.health.settings", test_settings),
         patch("app.routers.bridge.settings", test_settings),
         patch("app.routers.web.settings", test_settings),
+        patch("app.routers.app_api.settings", test_settings),
+        patch("app.asr.settings", test_settings),
         patch("app.routers.debug.settings", test_settings),
         patch("app.routers.admin_moderation.settings", test_settings),
         patch("app.routers.admin_proactive.settings", test_settings),
@@ -423,6 +432,8 @@ def client(fresh_db):
         patch("app.routers.health.settings", fresh_db),
         patch("app.routers.bridge.settings", fresh_db),
         patch("app.routers.web.settings", fresh_db),
+        patch("app.routers.app_api.settings", fresh_db),
+        patch("app.asr.settings", fresh_db),
         patch("app.routers.debug.settings", fresh_db),
         patch("app.routers.admin_moderation.settings", fresh_db),
         patch("app.routers.admin_proactive.settings", fresh_db),

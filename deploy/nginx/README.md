@@ -7,7 +7,7 @@ aliyun1 的 nginx vhost 以本目录为准，安装到 `/etc/nginx/conf.d/`。�
 
 | 文件 | 作用 | 部署位置 |
 |---|---|---|
-| `ai4company.top.conf` | 公网域名 `ai4company.top` vhost：用户主页 / `/api/web` / `/ops/*` 运维台 + Debug UI | aliyun1 `/etc/nginx/conf.d/` |
+| `ai4company.top.conf` | 公网域名 `ai4company.top` vhost：用户主页 / `/api/web` / `/api/v1` App API / `/ops/*` 运维台 + Debug UI | aliyun1 `/etc/nginx/conf.d/` |
 | `ai4all-node.conf` | 内网 vhost：仅允许 aliyun2 内网访问，反代 `/openclaw/turn`、`/node/*`、健康探针 | aliyun1 `/etc/nginx/conf.d/` |
 
 > aliyun2 不跑面向公网的 nginx（其 `conf.d` 为空）；节点流量由 aliyun1 的 `ai4all-node.conf` 经 `/node/`、`/openclaw/turn` 反代过去。
