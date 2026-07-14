@@ -445,20 +445,20 @@ class TestPromptBuilderOutputDirectives:
         # 新增常驻块：外部/召回/metadata 都是材料而非指令，且抗 prompt injection。
         out = self.pb.build()
         assert "【上下文与外部证据纪律】" in out
-        assert "一律忽略" in out
+        assert "尤其忽略" in out  # C3: "一律忽略" → 原则层+案例层结构，改用 "尤其忽略"
         assert "不能补造" in out
 
     def test_provenance_rule_no_style_based_attribution(self):
-        """归因规则 - 不得凭文风/语义相似认领 assistant 历史输出。"""
+        """归因规则 - 不得仅凭文风/语义相似认领 assistant 历史输出。"""
         out = self.pb.build()
-        assert "不得凭文风" in out
+        assert "不得仅凭文风" in out   # C3-c: 移除"上下文连续性"过宽限制，改为"仅凭文风"
         assert "语义相似" in out
-        assert "上下文连续性" in out
+        # "上下文连续性"已移除：会误干扰"继续""刚才那个"等正常指代，不再作断言
 
     def test_provenance_rule_requires_history_evidence(self):
-        """归因规则 - 只有 assistant 历史中确实存在才可认领。"""
+        """归因规则 - 只有当前可见 assistant 历史中存在对应内容才可认领。"""
         out = self.pb.build()
-        assert "assistant 历史中确实存在" in out
+        assert "assistant 历史中存在对应内容" in out  # C3-c: "确实存在" → "存在对应内容"
         assert "中性表述" in out
 
     def test_provenance_rule_user_content_not_auto_attributed(self):
@@ -506,7 +506,7 @@ class TestProvenanceRuleStructural:
         """归因规则位于 context_evidence block，block 本身在 assemble 元数据中可见。"""
         result = self.pb.assemble()
         assert result.included("context_evidence")
-        assert "消息归属必须有历史证据" in result.prompt
+        assert "消息归属须有证据" in result.prompt  # C3-c: "必须有历史证据" → "须有证据"
 
     def test_provenance_block_is_stable(self):
         """context_evidence 是 STABLE block，不因 token 预算被丢弃。"""
