@@ -1,14 +1,18 @@
-"""Seam A：ChannelTurnInput + 渠道无关入口 run_turn_for_account 守卫。
+"""Seam A：微信 adapter（build_channel_input_from_openclaw）+ 渠道无关入口 run_turn_for_account。
 
-核心不变量（原则一）：handle_openclaw_turn 现为薄封装，仅构造 ChannelTurnInput 后委派
-run_turn_for_account——委派透明、行为等价历史；run_turn_for_account 为 Phase 1 /web/turn
-预留的复用入口。
+核心不变量（原则一）：handle_openclaw_turn 现为薄封装——经微信 adapter 把 OpenClaw DTO 归一为
+规范化 ChannelTurnInput 后委派 run_turn_for_account；入口守卫（非私聊/unbound）在 adapter 收口，
+不进核心。核心链路（run_turn_for_account 及四阶段）从此不再触碰任何渠道 DTO。
 """
 from unittest.mock import patch
 
 import app.turn_service as turn_service
 from app.schemas import OpenClawTurnRequest
-from app.turn_service import ChannelTurnInput, run_turn_for_account
+from app.turn_service import (
+    ChannelTurnInput,
+    build_channel_input_from_openclaw,
+    run_turn_for_account,
+)
 
 
 def _payload(chat_type: str = "private") -> OpenClawTurnRequest:
@@ -26,8 +30,33 @@ def _payload(chat_type: str = "private") -> OpenClawTurnRequest:
     )
 
 
+def test_adapter_normalizes_openclaw_payload():
+    """绑定命中时，微信 adapter 把 OpenClaw payload 归一为规范化 ChannelTurnInput。
+
+    身份/账号/cap 均已由 adapter 解析并落到 ctx；消息内容字段来自 payload、运行开关透传。
+    """
+    payload = _payload()
+    with patch.object(
+        turn_service,
+        "resolve_account_id_for_inbound_channel_identity",
+        return_value="acct-seamA",
+    ):
+        ctx = build_channel_input_from_openclaw(
+            payload, background_loop=None, force_web_search_enabled=True
+        )
+
+    assert isinstance(ctx, ChannelTurnInput)
+    assert ctx.account_id == "acct-seamA"
+    assert ctx.cap is turn_service.get_channel_capability("openclaw-weixin")
+    assert ctx.identity.channel == "openclaw-weixin"
+    assert ctx.message_id == "seamA-1"
+    assert ctx.message_type == "text"
+    assert ctx.text == "你好"
+    assert ctx.force_web_search_enabled is True
+
+
 def test_handle_openclaw_turn_delegates_to_run_turn_for_account():
-    """薄封装：handle_openclaw_turn 把 payload + 运行开关原样包进 ChannelTurnInput 后委派。"""
+    """薄封装：adapter 归一后委派 run_turn_for_account，账号/运行开关透传。"""
     payload = _payload()
     sentinel_loop = object()
     captured = {}
@@ -36,7 +65,11 @@ def test_handle_openclaw_turn_delegates_to_run_turn_for_account():
         captured["ctx"] = ctx
         return turn_service.OpenClawTurnResponse(status="ok", reply="ok")
 
-    with patch.object(turn_service, "run_turn_for_account", _fake_run):
+    with patch.object(
+        turn_service,
+        "resolve_account_id_for_inbound_channel_identity",
+        return_value="acct-seamA",
+    ), patch.object(turn_service, "run_turn_for_account", _fake_run):
         turn_service.handle_openclaw_turn(
             payload,
             background_loop=sentinel_loop,
@@ -45,13 +78,35 @@ def test_handle_openclaw_turn_delegates_to_run_turn_for_account():
 
     ctx = captured["ctx"]
     assert isinstance(ctx, ChannelTurnInput)
-    assert ctx.payload is payload
+    assert ctx.account_id == "acct-seamA"
     assert ctx.background_loop is sentinel_loop
     assert ctx.force_web_search_enabled is True
 
 
-def test_run_turn_for_account_non_private_ignored():
-    """非私聊在入口即被忽略（不落 DB、不调 LLM）——与历史 handle_openclaw_turn 同一守卫。"""
-    res = run_turn_for_account(ChannelTurnInput(payload=_payload(chat_type="group")))
+def test_handle_openclaw_turn_unbound_ignored_without_entering_core():
+    """未命中 binding 且要求绑定：adapter 入口收口为 ignored，run_turn_for_account 零调用。"""
+    called = {"run": False}
+
+    def _fake_run(ctx):
+        called["run"] = True
+        return turn_service.OpenClawTurnResponse(status="ok")
+
+    with patch.object(
+        turn_service,
+        "resolve_account_id_for_inbound_channel_identity",
+        return_value=None,
+    ), patch.object(
+        turn_service.settings, "openclaw_inbound_require_binding", True
+    ), patch.object(turn_service, "run_turn_for_account", _fake_run):
+        res = turn_service.handle_openclaw_turn(_payload())
+
+    assert res.status == "ignored"
+    assert res.no_reply is True
+    assert called["run"] is False
+
+
+def test_non_private_ignored_at_adapter():
+    """非私聊在 adapter 入口即被忽略（不解析账号、不落 DB、不调 LLM）——守卫等价历史。"""
+    res = turn_service.handle_openclaw_turn(_payload(chat_type="group"))
     assert res.status == "ignored"
     assert res.no_reply is True
