@@ -317,35 +317,29 @@ class PromptBuilder:
         # STABLE BLOCKS (1-6) — cache-friendly; rarely change
         # ------------------------------------------------------------------
 
-        # Block 1: Tooling
-        if tools:
-            tool_lines = "\n".join(f"- {t}" for t in tools)
-            _add(
-                "tooling",
-                (
-                    "【本轮可用工具】\n"
-                    "以下工具由运行时按账号、场景和开关过滤后提供。"
-                    "只有本节列出的工具可以调用；TOOLS.md 是用法说明，不代表本轮可用性。\n"
-                    f"{tool_lines}"
-                ),
-                section=_SECTION_STABLE,
-            )
-
-        # Block 2: Safety
+        # Block 1: Safety
         if _SAFETY_TEXT:
             safety = _truncate(_SAFETY_TEXT, _MAX_SAFETY_CHARS, "safety")
             _add("safety", safety, section=_SECTION_STABLE, char_limit=_MAX_SAFETY_CHARS)
 
-        # Block 3: Fixed output directives
+        # Block 2: Fixed output directives
         _add("output_directives", _OUTPUT_DIRECTIVES_FIXED, section=_SECTION_STABLE)
 
-        # Block 3b: Factual-accuracy discipline (time → runtime block; relationship → tool)
+        # Block 2b: Factual-accuracy discipline (time → runtime block; relationship → tool)
         _add("factual_discipline", _FACTUAL_DISCIPLINE, section=_SECTION_STABLE)
 
-        # Block 3c: Context & external-evidence discipline (treat tool/web/recall/metadata as material)
+        # Block 2c: Context & external-evidence discipline (treat tool/web/recall/metadata as material)
         _add("context_evidence", _CONTEXT_EVIDENCE_DISCIPLINE, section=_SECTION_STABLE)
 
-        # Block 4: Skills
+        # Block 3: Project Context (Global) — AGENTS.md/TOOLS.md，全局共享、几乎不变，
+        # 独立于账号级 project_context，避免 MEMORY.md 等每轮变化的内容拖累前缀缓存命中。
+        # 放在 skills 之前：AGENTS.md/TOOLS.md 比 Skill version 更稳定，
+        # Skill 更新时不应连带破坏前面的全局稳定前缀。
+        project_context_global = self._build_project_context_global(agent_context)
+        if project_context_global:
+            _add("project_context_global", project_context_global, section=_SECTION_STABLE)
+
+        # Block 4: Skills（紧跟 project_context_global 之后）
         if skills:
             skill_entries = []
             for s in skills:
@@ -375,12 +369,6 @@ class PromptBuilder:
                 section=_SECTION_STABLE,
             )
 
-        # Block 4b: Project Context (Global) — AGENTS.md/TOOLS.md，全局共享、几乎不变，
-        # 独立于账号级 project_context，避免 MEMORY.md 等每轮变化的内容拖累前缀缓存命中。
-        project_context_global = self._build_project_context_global(agent_context)
-        if project_context_global:
-            _add("project_context_global", project_context_global, section=_SECTION_STABLE)
-
         project_context = self._build_project_context(agent_context)
         if not project_context:
             # Legacy profile fallback. New accounts should use AGENTS/SOUL/etc.
@@ -398,6 +386,21 @@ class PromptBuilder:
         # Block 7: Project Context
         if project_context:
             _add("project_context", project_context, trim_priority=80)
+
+        # Block 7a: Tooling — 本轮条件内容，放在账号级内容之后，让不同用户共享更长的公共前缀。
+        # section 保持 _SECTION_STABLE：tooling 虽每轮可能变化，但属于执行关键内容，不可被 token 预算裁剪。
+        if tools:
+            tool_lines = "\n".join(f"- {t}" for t in tools)
+            _add(
+                "tooling",
+                (
+                    "【本轮可用工具】\n"
+                    "以下工具由运行时按账号、场景和开关过滤后提供。"
+                    "只有本节列出的工具可以调用；TOOLS.md 是用法说明，不代表本轮可用性。\n"
+                    f"{tool_lines}"
+                ),
+                section=_SECTION_STABLE,
+            )
 
         # Block 7b: Agent self state — 关系阶段 + 主导需求驱动的行为指引（agent_self_prd.md）。
         # 紧跟 project_context（先交代"这是谁"，再交代"此刻怎样"）；trim_priority 低于身份、
