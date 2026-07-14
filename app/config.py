@@ -358,6 +358,19 @@ class Settings(BaseSettings):
     tdai_recall_max_chars: int = 2500
     # 逗号分隔的 account_id，空 = recall 对所有账号关闭。capture 不受此控制（全量）。
     tdai_recall_account_allowlist: str = ""
+    # ----- TDAI 主动检索工具（tdai_memory_search / tdai_conversation_search）-----
+    # 两个 search 工具总开关，默认关；独立于 recall，可单独灰度。
+    tdai_search_enabled: bool = False
+    # 模型 tool loop 内调用，非开口热路径，可比 recall(0.5) 宽松。
+    tdai_search_timeout_seconds: float = 2.0
+    # 每轮两个 search 工具合计调用上限（TDAI 后端未实现，由本侧 TurnContext 计数强制）。
+    tdai_search_max_calls_per_turn: int = 3
+    # 逗号分隔的 account_id，空 = search 对所有账号关闭（独立于 recall allowlist）。
+    tdai_search_account_allowlist: str = ""
+    # recall + search 共用的自然灰度阈值：账号累计 inbound(用户)消息数 ≥ 此值即视为
+    # "已积累足够记忆"，对 recall 与两个 search 工具开放（与各自 allowlist 取并集）。
+    # 0 = 关闭阈值通道，只认 allowlist。生产建议先设较高值观察，再按需下调。
+    tdai_memory_min_messages: int = 50
 
     class Config:
         env_file = ".env"

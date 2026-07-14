@@ -448,6 +448,29 @@ async def capture_event_loop() -> None:
 
 
 @app.on_event("startup")
+async def verify_tdai_multitenant() -> None:
+    """多租户安全闸门：启用主动检索时确认网关处于强隔离模式。
+
+    L1 检索的账号隔离完全依赖网关 multiTenant=true 的物理分库；网关若退回共享库模式，
+    tdai_memory_search 会跨账号串号。探针 best-effort（网络错误不阻塞启动），确认共享库
+    模式则强制关闭主动检索（recall/capture 不受影响）。
+    """
+    if not (getattr(settings, "tdai_enabled", False) and getattr(settings, "tdai_search_enabled", False)):
+        return
+    from app.tdai_client import mark_multitenant_unsafe, verify_multitenant
+
+    ok = await asyncio.to_thread(verify_multitenant)
+    if ok is False:
+        logger.critical(
+            "TDAI gateway 未处于 multiTenant 强隔离模式（缺 session_key 未返回 400），"
+            "主动检索会跨账号串号，已强制关闭 tdai search 工具。"
+        )
+        mark_multitenant_unsafe()
+    elif ok is None:
+        logger.warning("TDAI multiTenant 探针未能确认（网络/超时），主动检索仍受显式开关+allowlist 双重 gating。")
+
+
+@app.on_event("startup")
 async def startup_persistent_gateway_client() -> None:
     if not getattr(settings, "openclaw_gateway_ws_warmup_on_startup", False):
         return

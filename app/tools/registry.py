@@ -23,6 +23,7 @@ from app.tools.definitions import (
     get_read_tools,
     get_reminder_tools,
     get_session_status_tools,
+    get_tdai_search_tools,
     get_web_fetch_tools,
     get_web_search_tools,
 )
@@ -89,6 +90,14 @@ _META: Dict[str, tuple] = {
         "app.tools.web_search_handlers", "handle_web_search",
         CALL_WEB_SEARCH, "web_search_enabled", "web_search_enabled",
     ),
+    "tdai_memory_search": (
+        "app.tools.tdai_search_handlers", "handle_tdai_memory_search",
+        CALL_PLAIN, "tdai_search_enabled", "tdai_search_enabled",
+    ),
+    "tdai_conversation_search": (
+        "app.tools.tdai_search_handlers", "handle_tdai_conversation_search",
+        CALL_PLAIN, "tdai_search_enabled", "tdai_search_enabled",
+    ),
     "send_content_invitation_titles": (
         "app.tools.content_invitation_handlers", "handle_send_content_invitation_titles",
         CALL_INVOCATION, None, "content_invitation_response_enabled",
@@ -120,6 +129,7 @@ _GROUP_PROVIDERS: List[tuple] = [
     ("mission", get_mission_tools),
     ("proactive_message_settings", get_proactive_message_settings_tools),
     ("web_search", get_web_search_tools),
+    ("tdai_search", get_tdai_search_tools),
     ("content_invitation_response", get_content_invitation_response_tools),
     ("content_invitation_generation", get_content_invitation_generation_tools),
 ]
@@ -175,12 +185,14 @@ def get_default_tools(
     web_search_enabled: bool = False,
     content_invitation_response_enabled: bool = False,
     has_mission: bool = False,
+    tdai_search_enabled: bool = False,
 ) -> list:
     """主对话默认工具集：按 default_when_flag gating 后返回 schema 列表（顺序稳定）。"""
     flags = {
         "web_search_enabled": web_search_enabled,
         "content_invitation_response_enabled": content_invitation_response_enabled,
         "has_mission": has_mission,
+        "tdai_search_enabled": tdai_search_enabled,
     }
     out = []
     for spec in _SPECS:

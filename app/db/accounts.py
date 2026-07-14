@@ -34,6 +34,7 @@ __all__ = [
     'list_context_messages_for_session',
     'update_session_rolling_summary',
     'count_reactivation_outbound_for_quota_date',
+    'count_inbound_messages_for_account',
     'count_recent_inbound_messages_for_account',
     'count_verifications_last_hour',
     'create_phone_verification',
@@ -495,6 +496,26 @@ def get_latest_message_id_for_account(*, account_id: str) -> Optional[int]:
     if row is None or row["id"] is None:
         return None
     return int(row["id"])
+
+
+def count_inbound_messages_for_account(*, account_id: str) -> int:
+    """账号累计入站(用户)消息总数。
+
+    用于 TDAI 记忆功能（recall + 主动 search 工具）的消息数自然灰度阈值判定：
+    只统计 direction='inbound'（用户实际发过的条数），不含 bot 出站。account_id
+    有索引，走索引计数，热路径开销可忽略。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM messages
+            WHERE account_id = ?
+              AND direction = 'inbound'
+            """,
+            (account_id,),
+        ).fetchone()
+    return int(row["count"] if row else 0)
 
 
 def count_recent_inbound_messages_for_account(*, account_id: str, since: str) -> int:

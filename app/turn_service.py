@@ -21,6 +21,7 @@ from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
     connect as db_connect,
+    count_inbound_messages_for_account,
     get_account_id_for_session_key,
     get_account_onboarding_state,
     get_active_content_invitation,
@@ -97,6 +98,29 @@ _ABOVE_WATERMARK_FETCH_LIMIT = 2000
 # 防 prompt 无界膨胀。正常态压缩把尾窗维持在预算内，永不触发。
 _HARD_CEILING_BUDGET_MULTIPLIER = 2
 _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再发我一次。"
+
+# TDAI 记忆功能（recall + 主动 search 工具）的消息数自然灰度：一旦某账号累计 inbound
+# 消息数越过 tdai_memory_min_messages 阈值，即固化进该集合，后续 turn 直接短路、不再
+# COUNT。阈值是启动期 Settings（改需重启），eligibility 在固定阈值下单调递增，故进程内
+# sticky 缓存始终一致。
+_tdai_memory_eligible_accounts: set = set()
+
+
+def _tdai_memory_volume_eligible(account_id: str) -> bool:
+    """账号累计 inbound 消息数是否达到 TDAI 记忆灰度阈值（含进程内 sticky 缓存）。
+
+    阈值 <= 0 表示关闭该通道（只认 allowlist），恒返回 False。
+    """
+    threshold = int(getattr(settings, "tdai_memory_min_messages", 0) or 0)
+    if threshold <= 0:
+        return False
+    if account_id in _tdai_memory_eligible_accounts:
+        return True
+    count = count_inbound_messages_for_account(account_id=account_id)
+    if count >= threshold:
+        _tdai_memory_eligible_accounts.add(account_id)
+        return True
+    return False
 
 
 def _elapsed_ms(started_at: float) -> int:
@@ -282,6 +306,7 @@ _TOOL_GATE_REASONS: Dict[str, tuple] = {
     "web_search_enabled": ("web_search_enabled", "web_search_disabled"),
     "content_invitation_response_enabled": ("active_content_invitation", "no_active_content_invitation"),
     "has_mission": ("has_mission", "no_mission_assigned"),
+    "tdai_search_enabled": ("tdai_search_enabled", "tdai_search_disabled"),
 }
 
 # 「产生未来投递」的工具：为提醒/承诺埋下将来主动外呼的动作。渠道不支持主动消息
@@ -298,6 +323,7 @@ def _build_tooling_envelope(
     web_search_enabled: bool,
     active_content_invitation: Optional[dict],
     has_mission: bool,
+    tdai_search_enabled: bool = False,
     text: str,
     include_tool_instructions: bool,
     cap: ChannelCapability,
@@ -318,6 +344,7 @@ def _build_tooling_envelope(
             web_search_enabled=web_search_enabled,
             content_invitation_response_enabled=content_invitation_enabled,
             has_mission=has_mission,
+            tdai_search_enabled=tdai_search_enabled,
         )
         if not cap.supports_proactive:
             tools = [s for s in tools if _tool_name(s) not in _PROACTIVE_DELIVERY_TOOLS]
@@ -401,6 +428,7 @@ def build_turn_llm_input(
     onboarding_state: str = "",
     onboarding_active: bool,
     web_search_enabled: bool,
+    tdai_search_enabled: bool = False,
     force_web_search_enabled: Optional[bool] = None,
     onboarding_pre_written: Optional[Dict[str, Any]] = None,
     onboarding_pre_extracted: Optional[Dict[str, Any]] = None,
@@ -581,6 +609,7 @@ def build_turn_llm_input(
         web_search_enabled=web_search_enabled,
         active_content_invitation=active_content_invitation,
         has_mission=has_mission,
+        tdai_search_enabled=tdai_search_enabled,
         text=text,
         include_tool_instructions=include_tool_instructions,
         cap=cap,
@@ -1347,11 +1376,26 @@ def _resolve_turn_reply(
         # TDAI recall：注入 query-time L1 记忆（prepend_context）和 L3 persona（context）。
         # 同步调用，严格 200 ms 超时，失败时 tdai_extra_blocks 为空继续正常回复。
         # onboarding 期间跳过（onboarding 目的是采集基础设定，不引入历史记忆）。
+        # 主动检索工具（tdai_memory_search / tdai_conversation_search）gating：
+        # 渠道支持 TDAI + search_allowed（总开关/search 开关/allowlist/多租户安全闸门）。
+        # onboarding 期由 tooling envelope 整体禁工具，这里无需额外判断。
+        # 记忆准入（recall + search 共用）：allowlist 命中 OR 累计 inbound 消息数越过阈值。
+        # 每轮只算一次，同时喂给 search gating 与被动 recall。
+        _tdai_volume_eligible = (
+            _tdai_memory_volume_eligible(account_id) if setup.cap.tdai_enabled else False
+        )
+        from app.tdai_client import search_allowed as _tdai_search_allowed
+        tdai_search_enabled_for_turn = bool(setup.cap.tdai_enabled) and _tdai_search_allowed(
+            account_id, volume_eligible=_tdai_volume_eligible
+        )
+
         _tdai_extra_blocks: List[ContextBlock] = []
         if not onboarding_active and setup.cap.tdai_enabled:
             from app.tdai_client import recall as _tdai_recall
             _tdai_t0 = time.monotonic()
-            _tdai_result = _tdai_recall(account_id=account_id, query=text)
+            _tdai_result = _tdai_recall(
+                account_id=account_id, query=text, volume_eligible=_tdai_volume_eligible
+            )
             debug_metadata["tdai_recall_latency_ms"] = _elapsed_ms(_tdai_t0)
             if _tdai_result:
                 _max_chars = int(getattr(settings, "tdai_recall_max_chars", 2500))
@@ -1425,6 +1469,7 @@ def _resolve_turn_reply(
                 onboarding_pre_written=onboarding_pre_written,
                 onboarding_pre_extracted=onboarding_pre_extracted,
                 web_search_enabled=web_search_enabled_for_turn,
+                tdai_search_enabled=tdai_search_enabled_for_turn,
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
                 llm_provider=llm_provider,
@@ -1455,6 +1500,7 @@ def _resolve_turn_reply(
                 recent_messages=history,
                 background_loop=background_loop,
                 web_search_enabled=web_search_enabled_for_turn,
+                tdai_search_enabled=tdai_search_enabled_for_turn,
             )
             _record_timing(timings, "prompt_build_ms", prompt_started)
 
