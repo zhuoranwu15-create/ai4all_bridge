@@ -3,7 +3,7 @@ import logging
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from app.time_utils import (
@@ -41,7 +41,7 @@ from app.db import (
     set_account_onboarding_state,
     upsert_channel_binding,
 )
-from app.identity import identity_response_metadata, resolve_openclaw_identity
+from app.identity import ResolvedIdentity, identity_response_metadata, resolve_openclaw_identity
 from app.image_understanding import describe_image
 from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.llm_providers import TASK_MAIN_REPLY, tier_for_task
@@ -61,7 +61,7 @@ from app.context_window import compute_floor_count, trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
 from app.proactive.store.account_state import ensure_account_state
 from app.rate_limiter import rate_limiter
-from app.schemas import OpenClawTurnRequest, OpenClawTurnResponse
+from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools, iter_specs
 from app.turn_context import TurnContext
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
@@ -109,9 +109,33 @@ def _record_timing(timings: Dict[str, int], key: str, started_at: float) -> int:
     return value
 
 
+def _schedule_on_loop(loop: asyncio.AbstractEventLoop, coro) -> bool:
+    """把一个协程线程安全地调度到后台事件循环执行；返回是否成功挂上。
+
+    shutdown 竞态：``loop`` 在 startup 写入后可能先于本调用被关闭，``call_soon_threadsafe``
+    对已关闭 loop 会抛 ``RuntimeError``。这里先查 ``is_closed()`` 兜住常态，再对「检查后到
+    调用间被关闭」的窗口 catch ``RuntimeError``；两种情况都主动 ``close()`` 掉未被调度的协程，
+    既避免 "coroutine was never awaited" 告警，也记一条 warning 让 after-turn 工作被跳过可观测。
+    """
+    if loop.is_closed():
+        coro.close()
+        logger.warning("after-turn task skipped: background loop closed (shutdown)")
+        return False
+    try:
+        loop.call_soon_threadsafe(loop.create_task, coro)
+        return True
+    except RuntimeError as err:
+        # loop 在 is_closed() 检查之后、调度之前被关闭（关停竞态窗口）。
+        coro.close()
+        logger.warning(
+            "after-turn task skipped: background loop closed mid-schedule (%s)", err
+        )
+        return False
+
+
 def _log_turn_timing(
     *,
-    payload: OpenClawTurnRequest,
+    ctx: "ChannelTurnInput",
     timings: Dict[str, int],
     started_at: float,
     status: str,
@@ -125,8 +149,8 @@ def _log_turn_timing(
         "openclaw_turn timing account=%s session=%s message_id=%s status=%s "
         "total_ms=%s reply_ready_ms=%s timings=%s error=%s",
         account_id,
-        session or payload.session_key,
-        message_id or payload.message_id or payload.event_id,
+        session or ctx.identity.session_key,
+        message_id or ctx.message_id or ctx.event_id,
         status,
         _elapsed_ms(started_at),
         timings.get("reply_ready_ms"),
@@ -809,63 +833,20 @@ class _ReplyResult:
 
 
 def _prepare_turn(
-    payload: OpenClawTurnRequest,
+    ctx: "ChannelTurnInput",
     *,
-    id_diagnostics: Dict[str, Any],
     started_at: float,
 ) -> Union[_TurnSetup, OpenClawTurnResponse]:
-    """阶段A：身份/账号解析、unbound 收口、session/binding 初始化、onboarding welcome、
-    disabled、限流、首次去重。命中守卫直接返回 OpenClawTurnResponse；否则返回 _TurnSetup。"""
-    identity = resolve_openclaw_identity(
-        channel=payload.channel,
-        session_key=payload.session_key,
-        channel_account_id=payload.channel_account_id or payload.account_id,
-        sender_id=payload.sender_id,
-        chat_id=payload.chat_id,
-    )
+    """阶段A（账号级守卫+初始化）：session/binding 初始化、onboarding welcome、disabled、
+    限流、首次去重。身份/账号解析与 unbound 收口已由渠道 adapter 完成（见
+    build_channel_input_from_openclaw）。命中守卫直接返回 OpenClawTurnResponse；否则返回 _TurnSetup。"""
+    identity = ctx.identity
+    account_id = ctx.account_id
+    cap = ctx.cap
     openclaw_session_key = identity.session_key
-    # 渠道能力：单一开关来源，下游 onboarding/active-scope/工具/TDAI/投递 均由此分支。
-    # 微信 cap 全 True，取值与历史等价；未知渠道回落微信 cap（get_channel_capability）。
-    cap = get_channel_capability(identity.channel)
-    resolved_account_id = resolve_account_id_for_inbound_channel_identity(
-        channel=identity.channel,
-        session_key=identity.session_key,
-        channel_account_id=identity.channel_account_id,
-    )
-    if resolved_account_id is None:
-        # 找不到 completed binding。收口：不再用 session_key 兜底创建账号，
-        # 避免已解绑/未绑定的远端微信账号被当作新账号自动激活并继续回复。
-        # 仅记 channel/account/session metadata，不记正文（解绑后隐私预期）。
-        if getattr(settings, "openclaw_inbound_require_binding", True):
-            logger.info(
-                "openclaw_turn ignored unbound inbound channel=%s channel_account=%s "
-                "session=%s message_id=%s",
-                identity.channel,
-                identity.channel_account_id,
-                openclaw_session_key,
-                payload.message_id or payload.event_id,
-            )
-            return OpenClawTurnResponse(
-                status="ignored",
-                no_reply=True,
-                metadata={
-                    "reason": "no_binding",
-                    "channel": identity.channel,
-                    "channel_account_id": identity.channel_account_id,
-                    "session_key": openclaw_session_key,
-                },
-            )
-        # 开关关闭（本地调试/测试）：保留 session_key 兜底，但优先复用该
-        # session_key 已落过的账号（如 debug 建号直接写 sessions，没有走
-        # binding），避免每次兜底都新建一个不同的影子账号（session_key
-        # 本身也会变化，见 get_account_id_for_session_key 注释）。
-        resolved_account_id = (
-            get_account_id_for_session_key(session_key=openclaw_session_key)
-            or openclaw_session_key
-        )
-    account_id = resolved_account_id
+    id_diagnostics = ctx.inbound_diagnostics
     sender_id = identity.sender_id
-    message_id = payload.message_id or payload.event_id
+    message_id = ctx.message_id
     if not message_id:
         logger.warning(
             "openclaw_turn missing_message_id account=%s channel=%s channel_account=%s "
@@ -890,7 +871,7 @@ def _prepare_turn(
         account_id=account_id,
         channel=identity.channel,
         sender_id=sender_id,
-        sender_name=payload.sender_name,
+        sender_name=ctx.sender_name,
         chat_id=identity.chat_id,
         business_day=business_day,
         active_session_key=cap.active_session_key,
@@ -950,14 +931,14 @@ def _prepare_turn(
                     reply_to_message_id=None,
                     direction="inbound",
                     role="user",
-                    message_type=payload.message_type,
-                    content=payload.text or "",
+                    message_type=ctx.message_type,
+                    content=ctx.text or "",
                     raw=_turn_message_raw(
                         source="openclaw_turn",
                         identity=identity,
                         account_id=account_id,
                         binding=binding,
-                        raw_payload=payload.raw,
+                        raw_payload=ctx.raw,
                         extra={"message_id": message_id, "onboarding_action": "absorbed_first_message"},
                     ),
                 )
@@ -1019,7 +1000,7 @@ def _prepare_turn(
         account_id,
         openclaw_session_key,
         message_id,
-        payload.text,
+        ctx.text,
     )
 
     effective_rpm = settings.rate_limit_rpm if account.get("rpm_limit") is None else account["rpm_limit"]
@@ -1101,7 +1082,7 @@ def _prepare_turn(
 
 
 def _persist_and_screen_inbound(
-    payload: OpenClawTurnRequest,
+    ctx: "ChannelTurnInput",
     setup: _TurnSetup,
     *,
     started_at: float,
@@ -1116,17 +1097,17 @@ def _persist_and_screen_inbound(
     message_id = setup.message_id
     today = setup.today
 
-    text = (payload.text or "").strip()
+    text = (ctx.text or "").strip()
     # 图片轮：调 VL 产出多维描述，合成进 user 历史（支撑图后追问 C 场景），
     # 再走主链路按人设接话；VL 失败/总开关关闭则走兜底，跳过主模型（红线：不瞎猜）。
     image_described = False
     image_understanding_failed = False
-    if payload.message_type == "image":
+    if ctx.message_type == "image":
         image_started = time.monotonic()
         caption = text
         description = None
         if settings.image_understanding_enabled:
-            media = payload.media
+            media = ctx.media
             if media is not None and (media.data_base64 or media.path or media.url):
                 # 来源优先级（多机字节 > 单机本地路径 > 远程 URL）在 describe_image 内部统一。
                 description = describe_image(
@@ -1143,7 +1124,7 @@ def _persist_and_screen_inbound(
             image_understanding_failed = True
             text = caption or "[图片]"
         _record_timing(timings, "image_understanding_ms", image_started)
-    elif not text and payload.message_type == "voice":
+    elif not text and ctx.message_type == "voice":
         text = "[voice message]"
 
     inbound_db_started = time.monotonic()
@@ -1155,17 +1136,17 @@ def _persist_and_screen_inbound(
             reply_to_message_id=None,
             direction="inbound",
             role="user",
-            message_type=payload.message_type,
+            message_type=ctx.message_type,
             content=text,
             raw=_turn_message_raw(
                 source="openclaw_turn",
                 identity=identity,
                 account_id=account_id,
                 binding=binding,
-                raw_payload=payload.raw,
+                raw_payload=ctx.raw,
                 extra={
                     "message_id": message_id,
-                    "message_type": payload.message_type,
+                    "message_type": ctx.message_type,
                 },
             ),
             conn=conn,
@@ -1190,17 +1171,17 @@ def _persist_and_screen_inbound(
     inbound_screen = None
     inbound_moderation_started = time.monotonic()
     try:
-        inbound_content_kind = "voice_transcript" if payload.message_type == "voice" else payload.message_type
+        inbound_content_kind = "voice_transcript" if ctx.message_type == "voice" else ctx.message_type
         inbound_screen = screen_inbound_message_sync(
             message_db_id=int(inserted_id),
             account_id=account_id,
             session_id=int(session["id"]),
             content_kind=inbound_content_kind,
             text=text,
-            media=payload.media,
+            media=ctx.media,
             source_message_id=message_id,
             metadata={
-                "message_type": payload.message_type,
+                "message_type": ctx.message_type,
                 "image_described": image_described,
                 "image_understanding_failed": image_understanding_failed,
             },
@@ -1282,7 +1263,7 @@ def _persist_and_screen_inbound(
 
 
 def _resolve_turn_reply(
-    payload: OpenClawTurnRequest,
+    ctx: "ChannelTurnInput",
     setup: _TurnSetup,
     inbound: _InboundResult,
     *,
@@ -1336,7 +1317,7 @@ def _resolve_turn_reply(
         "openclaw_session_key": openclaw_session_key,
         "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
         "sender_id": sender_id,
-        "message_type": payload.message_type,
+        "message_type": ctx.message_type,
         "today": today,
         "business_day": business_day,
         "session_business_day": session.get("business_day"),
@@ -1446,7 +1427,7 @@ def _resolve_turn_reply(
                 force_web_search_enabled=force_web_search_enabled,
                 now=now,
                 llm_provider=llm_provider,
-                message_type=payload.message_type,
+                message_type=ctx.message_type,
                 extra_blocks=_tdai_extra_blocks or None,
                 cap=setup.cap,
             )
@@ -1553,8 +1534,143 @@ def _resolve_turn_reply(
     )
 
 
+@dataclass
+class _AfterTurnContext:
+    """after-turn 后台工作所需的最小上下文快照（由 _finalize_turn 组装）。
+
+    hook 只读本对象、不回写主链路状态；新增 after-turn 工作只需在 _AFTER_TURN_HOOKS 注册一个
+    hook，无需改动 _finalize_turn 主体。
+    """
+    account_id: str
+    text: str
+    reply: str
+    business_day: str
+    session: Dict[str, Any]
+    message_id: Optional[str]
+    reply_message_id: str
+    message_type: str
+    identity: ResolvedIdentity
+    binding: Dict[str, Any]
+    openclaw_session_key: str
+    normal_reply_generated: bool
+    cap: ChannelCapability
+    moderation_blocked: bool
+    onboarding_active: bool
+    image_understanding_failed: bool
+
+
+def _after_turn_write_memory(atx: "_AfterTurnContext"):
+    """turn 后记忆写入（当日记忆压缩上游）。should_run_after_turn 已在上游门控，无额外条件。"""
+    return write_memory(
+        account_id=atx.account_id,
+        turns=[
+            {"role": "user", "content": atx.text},
+            {"role": "assistant", "content": atx.reply},
+        ],
+        today=atx.business_day,
+        session_id=int(atx.session["id"]),
+        user_message_id=atx.message_id,
+        assistant_message_id=atx.reply_message_id,
+        modality=atx.message_type,
+        extra_metadata={
+            "channel": atx.identity.channel,
+            "channel_binding_id": atx.binding["id"],
+            "openclaw_session_key": atx.openclaw_session_key,
+            "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
+        },
+    )
+
+
+def _after_turn_relationship_state(atx: "_AfterTurnContext"):
+    """turn 后确定性关系状态更新（30 条阈值 + 资源风险）；失败在函数内部记日志。"""
+    return asyncio.to_thread(
+        maybe_update_relationship_state_after_turn,
+        account_id=atx.account_id,
+    )
+
+
+def _after_turn_rolling_summary(atx: "_AfterTurnContext"):
+    """P3 Token 压力滚动摘要（默认关）：仅在开关开时挂任务，避免无谓调度。"""
+    if not getattr(settings, "llm_rolling_summary_enabled", False):
+        return None
+    from app.context_summarizer import maybe_update_rolling_summary
+    return asyncio.to_thread(
+        maybe_update_rolling_summary,
+        account_id=atx.account_id,
+        session_id=int(atx.session["id"]),
+    )
+
+
+def _after_turn_tdai_capture(atx: "_AfterTurnContext"):
+    """TDAI capture：把本轮 user/assistant 可见文本喂给 TDAI L0→L1→L2→L3 pipeline。跳过条件：
+    非正常回复、TDAI 关闭、渠道 cap 关闭、出站红线拦截、onboarding 期间、图片理解失败兜底。
+    先判开关再构造协程，避免关闭时创建未被 await 的 coroutine。"""
+    if not atx.normal_reply_generated:
+        return None
+    if not (
+        getattr(settings, "tdai_enabled", False)
+        and getattr(settings, "tdai_capture_enabled", True)
+        and atx.cap.tdai_enabled
+        and not atx.moderation_blocked
+        and not atx.onboarding_active
+        and not atx.image_understanding_failed
+    ):
+        return None
+    from app.tdai_client import capture_turn as _tdai_capture
+    return _tdai_capture(
+        account_id=atx.account_id,
+        session_id=int(atx.session["id"]),
+        user_content=atx.text,
+        # reply 在未触发出站红线时 == result.reply（原始 LLM 回复）
+        assistant_content=atx.reply,
+    )
+
+
+# after-turn 后台工作注册表：每个 hook 读 _AfterTurnContext、返回待调度协程或 None（跳过）。
+# 列表顺序即调度顺序，与历史逐条 call_soon_threadsafe 顺序一致；新增 after-turn 工作在此注册即可。
+_AFTER_TURN_HOOKS = [
+    ("write_memory", _after_turn_write_memory),
+    ("relationship_state", _after_turn_relationship_state),
+    ("rolling_summary", _after_turn_rolling_summary),
+    ("tdai_capture", _after_turn_tdai_capture),
+]
+
+
+def _dispatch_after_turn(
+    atx: "_AfterTurnContext",
+    *,
+    background_loop: Optional[asyncio.AbstractEventLoop],
+    timings: Dict[str, int],
+    started_at: float,
+) -> None:
+    """统一 after-turn 后台派发：按 _AFTER_TURN_HOOKS 逐个构造协程并经 _schedule_on_loop 挂到
+    后台事件循环。``background_loop`` 为 None（独立进程/脚本/显式 None）时整体跳过并记 warning。
+    单个 hook 构造异常被隔离（记日志后继续），不影响其余 after-turn 工作。"""
+    if background_loop is None:
+        # 无后台事件循环：after-turn 记忆写入等会被跳过，记 warning 让数据丢失可观测。
+        logger.warning(
+            "after-turn work skipped: no background loop (daily memory not run) account=%s",
+            atx.account_id,
+        )
+    else:
+        for name, hook in _AFTER_TURN_HOOKS:
+            try:
+                coro = hook(atx)
+            except Exception as err:
+                logger.exception(
+                    "after-turn hook %s build failed account=%s error=%s",
+                    name,
+                    atx.account_id,
+                    err,
+                )
+                continue
+            if coro is not None:
+                _schedule_on_loop(background_loop, coro)
+    _record_timing(timings, "after_turn_enqueue_ms", started_at)
+
+
 def _finalize_turn(
-    payload: OpenClawTurnRequest,
+    ctx: "ChannelTurnInput",
     setup: _TurnSetup,
     inbound: _InboundResult,
     result: _ReplyResult,
@@ -1837,93 +1953,41 @@ def _finalize_turn(
         and text
         and text not in _SPECIAL_COMMANDS
     )
-    after_turn_enqueue_started = time.monotonic()
-    if should_run_after_turn and background_loop is None:
-        # 不再静默吞掉：无后台事件循环时（独立进程/脚本/测试显式 None）after-turn
-        # 记忆写入会被跳过，至少记一条 warning 让数据丢失可观测。
-        logger.warning(
-            "after-turn work skipped: no background loop "
-            "(daily memory not run) account=%s",
-            account_id,
-        )
-    if should_run_after_turn and background_loop is not None:
-        turns_for_memory = [
-            {"role": "user", "content": text},
-            {"role": "assistant", "content": reply},
-        ]
-        background_loop.call_soon_threadsafe(
-            background_loop.create_task,
-            write_memory(
-                account_id=account_id,
-                turns=turns_for_memory,
-                today=business_day,
-                session_id=int(session["id"]),
-                user_message_id=message_id,
-                assistant_message_id=reply_message_id,
-                modality=payload.message_type,
-                extra_metadata={
-                    "channel": identity.channel,
-                    "channel_binding_id": binding["id"],
-                    "openclaw_session_key": openclaw_session_key,
-                    "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
-                },
-            ),
-        )
-        # turn 后确定性关系状态更新（30 条阈值 + 资源风险）。不阻塞主回复，
-        # 失败在函数内部记日志；inbound 已在此前持久化，计数含当前消息。
-        background_loop.call_soon_threadsafe(
-            background_loop.create_task,
-            asyncio.to_thread(
-                maybe_update_relationship_state_after_turn,
-                account_id=account_id,
-            ),
-        )
-        # P3 Token 压力滚动摘要（默认关）：复用本 after-turn 后台链路触发，同步回复零新增 LLM 调用。
-        # 函数内部对开关/异常全兜底，这里仅在开关开时挂任务，避免无谓调度。
-        if getattr(settings, "llm_rolling_summary_enabled", False):
-            from app.context_summarizer import maybe_update_rolling_summary
-            background_loop.call_soon_threadsafe(
-                background_loop.create_task,
-                asyncio.to_thread(
-                    maybe_update_rolling_summary,
-                    account_id=account_id,
-                    session_id=int(session["id"]),
-                ),
-            )
-        if normal_reply_generated:
-            # commitment 抽取已改为工具调用（create_commitment，见 app/tools/
-            # commitment_handlers.py），不再无条件跑隐藏分类器；extract_commitment_from_turn
-            # 保留供参考/单测，不在此处调度。
-            # TDAI capture：把本轮 user/assistant 可见文本喂给 TDAI L0→L1→L2→L3 pipeline。
-            # 跳过条件：TDAI 关闭、出站同步红线触发（reply 已换成安全话术）、onboarding 期间、图片理解失败兜底。
-            # 注意：必须先检查 tdai_enabled，避免在 TDAI 关闭时创建未被 await 的 coroutine。
-            if (
-                getattr(settings, "tdai_enabled", False)
-                and getattr(settings, "tdai_capture_enabled", True)
-                and setup.cap.tdai_enabled
-                and not moderation_reply_metadata.get("moderation_blocked")
-                and not onboarding_active
-                and not inbound.image_understanding_failed
-            ):
-                from app.tdai_client import capture_turn as _tdai_capture
-                background_loop.call_soon_threadsafe(
-                    background_loop.create_task,
-                    _tdai_capture(
-                        account_id=account_id,
-                        session_id=int(session["id"]),
-                        user_content=text,
-                        # reply 在未触发出站红线时 == result.reply（原始 LLM 回复）
-                        assistant_content=reply,
-                    ),
-                )
+    # commitment 抽取已改为工具调用（create_commitment，见 app/tools/commitment_handlers.py），
+    # 不再无条件跑隐藏分类器；extract_commitment_from_turn 保留供参考/单测，不在此处调度。
+    # after-turn 后台工作统一由 _dispatch_after_turn（+_AFTER_TURN_HOOKS 注册表）派发，
+    # _schedule_on_loop 是唯一挂载口（含 shutdown 竞态防护）。
     if should_run_after_turn:
-        _record_timing(timings, "after_turn_enqueue_ms", after_turn_enqueue_started)
+        after_turn_enqueue_started = time.monotonic()
+        _dispatch_after_turn(
+            _AfterTurnContext(
+                account_id=account_id,
+                text=text,
+                reply=reply,
+                business_day=business_day,
+                session=session,
+                message_id=message_id,
+                reply_message_id=reply_message_id,
+                message_type=ctx.message_type,
+                identity=identity,
+                binding=binding,
+                openclaw_session_key=openclaw_session_key,
+                normal_reply_generated=normal_reply_generated,
+                cap=setup.cap,
+                moderation_blocked=bool(moderation_reply_metadata.get("moderation_blocked")),
+                onboarding_active=onboarding_active,
+                image_understanding_failed=inbound.image_understanding_failed,
+            ),
+            background_loop=background_loop,
+            timings=timings,
+            started_at=after_turn_enqueue_started,
+        )
 
     response_metadata = {
         **identity_response_metadata(identity, account_id),
         "channel_binding_id": binding["id"],
         "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
-        "message_type": payload.message_type,
+        "message_type": ctx.message_type,
         "latency_ms": latency_ms,
         "user_profile_path": str(profile_path),
         "debug_trace_id": trace_id,
@@ -1992,75 +2056,77 @@ def _finalize_turn(
 
 @dataclass
 class ChannelTurnInput:
-    """渠道无关的一次 turn 输入——供 ``run_turn_for_account`` 复用为跨渠道入口。
+    """渠道无关的一次 turn 规范化输入——``run_turn_for_account`` 的唯一入参。
 
-    Phase 0 仅微信构造：包住已归一的入站 ``payload`` 与本轮运行开关；``handle_openclaw_turn``
-    构造本对象后调 ``run_turn_for_account``，与历史逐字节一致（纯搬家）。Phase 1 的 ``/web/turn``
-    可构造 ``channel="web"`` 的 ``OpenClawTurnRequest`` 走同一入口，由渠道 ``cap`` 分支自动获得
-    保守行为（工具/onboarding/投递/TDAI）。**账号解析仍在 ``_prepare_turn`` 内按 binding 进行**，
-    使非微信渠道走可插拔账号解析是 Phase 1 的后续扩展点（本期无 Web 调用方）。
+    身份/账号解析已由渠道 adapter 完成（微信见 ``build_channel_input_from_openclaw``）：
+    ``account_id``/``cap``/``identity`` 是 adapter 产出，核心不再重复解析、也不再触碰任何
+    渠道 DTO（OpenClaw 等）。Phase 1 的 ``/web/turn`` 只需构造本对象即可复用同一核心，
+    无需伪造 ``OpenClawTurnRequest``。``identity`` 沿用 ``ResolvedIdentity``（其字段
+    channel/session_key/sender_id/chat_id 本就渠道通用），阶段 B/C/D 的 ``setup.identity.*``
+    读法因此保持不变。
     """
-    payload: OpenClawTurnRequest
+    account_id: str
+    cap: ChannelCapability
+    identity: ResolvedIdentity
+    message_id: Optional[str]
+    event_id: Optional[str]
+    message_type: str
+    text: Optional[str]
+    media: Optional[MediaPayload]
+    raw: Dict[str, Any]
+    sender_name: Optional[str]
     background_loop: Optional[asyncio.AbstractEventLoop] = None
     force_web_search_enabled: Optional[bool] = None
+    # 原 _openclaw_id_diagnostics 结果（渠道相关，对核心不透明），仅供日志。
+    inbound_diagnostics: Dict[str, Any] = field(default_factory=dict)
 
 
 def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
-    """渠道无关的一次 turn 编排入口。编排脊柱：解析+守卫 → 入站持久化+筛查 →
-    解析回复 → 终结。各阶段细节见对应 _prepare_turn/_persist_and_screen_inbound/
-    _resolve_turn_reply/_finalize_turn。微信经 ``handle_openclaw_turn`` 构造 ``ctx`` 进入。"""
-    payload = ctx.payload
+    """渠道无关的一次 turn 编排入口。入参 ``ctx`` 已由渠道 adapter 完成身份/账号解析与
+    入口守卫（非私聊/unbound，见 ``build_channel_input_from_openclaw``）。编排脊柱：账号级
+    守卫+初始化 → 入站持久化+筛查 → 解析回复 → 终结。各阶段细节见对应 _prepare_turn/
+    _persist_and_screen_inbound/_resolve_turn_reply/_finalize_turn。"""
     background_loop = ctx.background_loop
     force_web_search_enabled = ctx.force_web_search_enabled
     started_at = time.monotonic()
     timings: Dict[str, int] = {}
-    id_diagnostics = _openclaw_id_diagnostics(payload)
-    # 入口只记 metadata，不记正文：未绑定/已解绑入站会在下方收口返回，
-    # 正文日志移到绑定校验通过后（见 disabled 检查之后）。
+    id_diagnostics = ctx.inbound_diagnostics
+    # 入口只记 metadata，不记正文。身份/账号已由 adapter 解析，非私聊/unbound 已在入口收口。
+    # 正文日志移到 disabled 检查之后（见 _prepare_turn）。
     logger.info(
         "openclaw_turn received channel=%s session=%s sender=%s type=%s "
         "message_id=%s event_id=%s ctx_run_id=%s ctx_session_id=%s raw_keys=%s",
-        payload.channel,
-        payload.session_key,
-        payload.sender_id,
-        payload.message_type,
-        payload.message_id,
-        payload.event_id,
+        ctx.identity.channel,
+        ctx.identity.session_key,
+        ctx.identity.sender_id,
+        ctx.message_type,
+        ctx.message_id,
+        ctx.event_id,
         id_diagnostics.get("ctx_run_id"),
         id_diagnostics.get("ctx_session_id"),
         id_diagnostics.get("raw_keys"),
     )
 
-    if payload.chat_type != "private":
-        timings["reply_ready_ms"] = _elapsed_ms(started_at)
-        _log_turn_timing(
-            payload=payload,
-            timings=timings,
-            started_at=started_at,
-            status="ignored_non_private",
-        )
-        return OpenClawTurnResponse(status="ignored", no_reply=True)
-
     prepare_started = time.monotonic()
-    setup = _prepare_turn(payload, id_diagnostics=id_diagnostics, started_at=started_at)
+    setup = _prepare_turn(ctx, started_at=started_at)
     _record_timing(timings, "prepare_ms", prepare_started)
     if isinstance(setup, OpenClawTurnResponse):
         timings["reply_ready_ms"] = _elapsed_ms(started_at)
         setup_metadata = setup.metadata or {}
         _log_turn_timing(
-            payload=payload,
+            ctx=ctx,
             timings=timings,
             started_at=started_at,
             status=setup.status,
             account_id=setup_metadata.get("account_id") or setup_metadata.get("ai4all_account_id"),
-            session=setup_metadata.get("session_key") or payload.session_key,
-            message_id=payload.message_id or payload.event_id,
+            session=setup_metadata.get("session_key") or ctx.identity.session_key,
+            message_id=ctx.message_id or ctx.event_id,
         )
         return setup
 
     inbound_started = time.monotonic()
     inbound = _persist_and_screen_inbound(
-        payload,
+        ctx,
         setup,
         started_at=started_at,
         timings=timings,
@@ -2069,7 +2135,7 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
     if isinstance(inbound, OpenClawTurnResponse):
         timings["reply_ready_ms"] = _elapsed_ms(started_at)
         _log_turn_timing(
-            payload=payload,
+            ctx=ctx,
             timings=timings,
             started_at=started_at,
             status=inbound.status,
@@ -2081,7 +2147,7 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
 
     reply_started = time.monotonic()
     result = _resolve_turn_reply(
-        payload,
+        ctx,
         setup,
         inbound,
         background_loop=background_loop,
@@ -2095,7 +2161,7 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
 
     finalize_started = time.monotonic()
     response = _finalize_turn(
-        payload,
+        ctx,
         setup,
         inbound,
         result,
@@ -2105,7 +2171,7 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
     )
     _record_timing(timings, "finalize_total_ms", finalize_started)
     _log_turn_timing(
-        payload=payload,
+        ctx=ctx,
         timings=timings,
         started_at=started_at,
         status=response.status,
@@ -2117,18 +2183,109 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
     return response
 
 
+def build_channel_input_from_openclaw(
+    payload: OpenClawTurnRequest,
+    *,
+    background_loop: Optional[asyncio.AbstractEventLoop] = None,
+    force_web_search_enabled: Optional[bool] = None,
+) -> Union[ChannelTurnInput, OpenClawTurnResponse]:
+    """微信渠道 adapter：把 OpenClaw 入站 DTO 归一为渠道无关 ``ChannelTurnInput``。
+
+    完成入口守卫（非私聊）、身份归一、按 binding 的账号解析与 unbound 收口、渠道能力选定。
+    命中入口守卫返回 ``OpenClawTurnResponse``（入口即收口，不进核心）；否则返回规范化
+    ``ChannelTurnInput``。**OpenClaw DTO 仅在本函数内出现**——核心链路从此不再触碰任何渠道 DTO。
+    """
+    id_diagnostics = _openclaw_id_diagnostics(payload)
+
+    if payload.chat_type != "private":
+        logger.info(
+            "openclaw_turn ignored non_private channel=%s session=%s message_id=%s chat_type=%s",
+            payload.channel,
+            payload.session_key,
+            payload.message_id or payload.event_id,
+            payload.chat_type,
+        )
+        return OpenClawTurnResponse(status="ignored", no_reply=True)
+
+    identity = resolve_openclaw_identity(
+        channel=payload.channel,
+        session_key=payload.session_key,
+        channel_account_id=payload.channel_account_id or payload.account_id,
+        sender_id=payload.sender_id,
+        chat_id=payload.chat_id,
+    )
+    openclaw_session_key = identity.session_key
+    # 渠道能力：单一开关来源，下游 onboarding/active-scope/工具/TDAI/投递 均由此分支。
+    # 微信 cap 全 True，取值与历史等价；未知渠道回落微信 cap（get_channel_capability）。
+    cap = get_channel_capability(identity.channel)
+    resolved_account_id = resolve_account_id_for_inbound_channel_identity(
+        channel=identity.channel,
+        session_key=identity.session_key,
+        channel_account_id=identity.channel_account_id,
+    )
+    if resolved_account_id is None:
+        # 找不到 completed binding。收口：不再用 session_key 兜底创建账号，
+        # 避免已解绑/未绑定的远端微信账号被当作新账号自动激活并继续回复。
+        # 仅记 channel/account/session metadata，不记正文（解绑后隐私预期）。
+        if getattr(settings, "openclaw_inbound_require_binding", True):
+            logger.info(
+                "openclaw_turn ignored unbound inbound channel=%s channel_account=%s "
+                "session=%s message_id=%s",
+                identity.channel,
+                identity.channel_account_id,
+                openclaw_session_key,
+                payload.message_id or payload.event_id,
+            )
+            return OpenClawTurnResponse(
+                status="ignored",
+                no_reply=True,
+                metadata={
+                    "reason": "no_binding",
+                    "channel": identity.channel,
+                    "channel_account_id": identity.channel_account_id,
+                    "session_key": openclaw_session_key,
+                },
+            )
+        # 开关关闭（本地调试/测试）：保留 session_key 兜底，但优先复用该
+        # session_key 已落过的账号（如 debug 建号直接写 sessions，没有走
+        # binding），避免每次兜底都新建一个不同的影子账号（session_key
+        # 本身也会变化，见 get_account_id_for_session_key 注释）。
+        resolved_account_id = (
+            get_account_id_for_session_key(session_key=openclaw_session_key)
+            or openclaw_session_key
+        )
+
+    return ChannelTurnInput(
+        account_id=resolved_account_id,
+        cap=cap,
+        identity=identity,
+        message_id=payload.message_id or payload.event_id,
+        event_id=payload.event_id,
+        message_type=payload.message_type,
+        text=payload.text,
+        media=payload.media,
+        raw=payload.raw,
+        sender_name=payload.sender_name,
+        background_loop=background_loop,
+        force_web_search_enabled=force_web_search_enabled,
+        inbound_diagnostics=id_diagnostics,
+    )
+
+
 def handle_openclaw_turn(
     payload: OpenClawTurnRequest,
     *,
     background_loop: Optional[asyncio.AbstractEventLoop] = None,
     force_web_search_enabled: Optional[bool] = None,
 ) -> OpenClawTurnResponse:
-    """每条入站微信消息的主入口（薄封装）：构造渠道无关 ``ChannelTurnInput`` 后委派给
-    ``run_turn_for_account``。保留此函数名与签名不变，既有 router/脚本/测试调用方零改动。"""
-    return run_turn_for_account(
-        ChannelTurnInput(
-            payload=payload,
-            background_loop=background_loop,
-            force_web_search_enabled=force_web_search_enabled,
-        )
+    """每条入站微信消息的主入口（薄封装）：经微信 adapter 归一为 ``ChannelTurnInput`` 后委派
+    ``run_turn_for_account``。保留函数名与签名不变，既有 router/脚本/测试调用方零改动。adapter
+    命中入口守卫（非私聊/unbound）时直接返回其 ``OpenClawTurnResponse``。"""
+    result = build_channel_input_from_openclaw(
+        payload,
+        background_loop=background_loop,
+        force_web_search_enabled=force_web_search_enabled,
     )
+    if isinstance(result, OpenClawTurnResponse):
+        return result
+    return run_turn_for_account(result)
