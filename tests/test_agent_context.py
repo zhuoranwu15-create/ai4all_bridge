@@ -116,7 +116,7 @@ def test_default_chat_tools_have_trigger_guidance_somewhere():
 
     # 能力边界（schema 覆盖不到，TOOLS.md 独有）仍必须保留。
     assert "图片理解能力" in tools_text
-    assert "可以接收并理解用户在当前微信对话里发来的图片" in tools_text
+    assert "可以理解当前对话中实际收到且成功识别的图片" in tools_text  # C2-b: 删除内部视觉流水线描述
     assert "不能发送或生成图片" in tools_text
 
 
