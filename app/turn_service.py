@@ -15,7 +15,7 @@ from app.time_utils import (
 from typing import Any, Dict, List, Optional, Union
 
 from app.agent_self_state import build_agent_self_state_block
-from app.channels import CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
+from app.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
@@ -875,6 +875,7 @@ def _prepare_turn(
         chat_id=identity.chat_id,
         business_day=business_day,
         active_session_key=cap.active_session_key,
+        update_account_channel=identity.channel not in {CHANNEL_APP, CHANNEL_WEB},
     )
     binding = upsert_channel_binding(
         account_id=account_id,

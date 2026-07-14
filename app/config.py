@@ -316,6 +316,16 @@ class Settings(BaseSettings):
     otp_expires_minutes: int = 10
     otp_token_expires_minutes: int = 10
 
+    # App V1 batch ASR. The provider must expose an OpenAI-compatible
+    # POST {base_url}/audio/transcriptions endpoint.
+    asr_base_url: str = "https://api.openai.com/v1"
+    asr_api_key: str = ""
+    asr_model: str = "whisper-1"
+    asr_timeout_seconds: float = 30.0
+    asr_max_audio_bytes: int = 10 * 1024 * 1024
+    asr_max_duration_ms: int = 60_000
+    asr_mock_transcript: str = ""
+
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
     # standalone 下所有新路径不触发,行为逐字节不变。

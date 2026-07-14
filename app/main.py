@@ -318,6 +318,8 @@ if settings.has_central_role:
     app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
     from app.routers import web as _web_router  # noqa: E402
     app.include_router(_web_router.router)
+    from app.routers import app_api as _app_api_router  # noqa: E402
+    app.include_router(_app_api_router.router)
     from app.routers import debug as _debug_router  # noqa: E402
     app.include_router(_debug_router.router)
     from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
