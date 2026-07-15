@@ -58,6 +58,49 @@ def test_handle_create_reminder_one_shot(fresh_db):
     assert result["recur_rule"] is None
 
 
+def test_handle_create_reminder_dynamic_blocked_when_not_allowlisted(fresh_db):
+    from app.tools.reminder_handlers import handle_create_reminder
+
+    with patch("app.db.settings", fresh_db):
+        _setup_account("acc-dyn0")
+    fresh_db.dynamic_reminder_enabled = True
+    fresh_db.dynamic_reminder_account_allowlist = ""  # 空 = 对所有账号关闭
+    ctx = _make_ctx("acc-dyn0")
+    with patch("app.db.settings", fresh_db), \
+         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
+        result = handle_create_reminder(
+            {"text": "AI 热点", "due_at": "2026-07-15 08:00:00",
+             "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic"},
+            ctx,
+        )
+    assert "error" in result
+
+
+def test_handle_create_reminder_dynamic_backend_recomputes_due_at(fresh_db):
+    from app.tools.reminder_handlers import handle_create_reminder
+
+    with patch("app.db.settings", fresh_db):
+        _setup_account("acc-1")
+    fresh_db.dynamic_reminder_enabled = True
+    fresh_db.dynamic_reminder_account_allowlist = "acc-1"
+    ctx = _make_ctx("acc-1")
+    # 模型给了个"错误"的过去日期，但只有时刻(08:00)应被采用，日期由后端按 recur 重算。
+    fake_now = datetime(2026, 7, 15, 9, 30, 0)  # 周三，已过 08:00
+    with patch("app.db.settings", fresh_db), \
+         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
+         patch("app.tools.reminder_handlers.settings", fresh_db), \
+         patch("app.tools.reminder_handlers.beijing_naive_now", return_value=fake_now):
+        result = handle_create_reminder(
+            {"text": "AI 热点", "due_at": "2020-01-01 08:00:00",
+             "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic", "max_items": 5},
+            ctx,
+        )
+    assert result["status"] == "created"
+    assert result["fulfillment"] == "dynamic"
+    # 一三五、今天周三已过点 → 下一次周五 08:00。
+    assert result["due_at"] == "2026-07-17 08:00:00"
+
+
 def test_execute_tool_call_blocks_web_search_when_disabled():
     from app.tools.executor import execute_tool_call
 

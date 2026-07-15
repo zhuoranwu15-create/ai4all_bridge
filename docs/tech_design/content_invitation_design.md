@@ -4,6 +4,8 @@
 
 本文承接 [主动消息与提醒技术设计](proactive_messaging_design.md) 和 [主动消息与提醒 PRD](../product/proactive_prd.md)，定义内容邀请的详细技术方案。内容邀请不是订阅型内容推送，也不是到点自动发日报；主动阶段只能发送朋友式询问，用户正向确认后才在当前入站回合返回标题列表。
 
+> 用户**明确要求**的到点自动内容推送是另一条独立能力——例行简报（`create_reminder(fulfillment=dynamic)`），不走内容邀请，见 [动态提醒 / 例行简报设计](dynamic_reminder_scheduled_content_design.md)。
+
 ## 1. 设计原则
 
 - 内容邀请必须采用 LLM tool use，不使用关键词、正则或 emoji 白名单作为确认、拒绝或触发主路径。

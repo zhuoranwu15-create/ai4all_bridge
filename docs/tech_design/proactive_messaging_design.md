@@ -541,6 +541,8 @@ proactive_scheduler_interval_seconds = 30
 
 内容邀请 Phase 1 目标是低频、朋友式、两阶段触达。系统不能到点直接发送日报或新闻列表；主动阶段只能发送邀请问题，用户在后续入站回合正向确认后，才发送标题列表。详细状态机、工具 schema、数据模型和确认链路见 [内容邀请技术设计](content_invitation_design.md)。
 
+> 上述「不能到点直接发日报」约束的是**系统主动发起**的内容邀请。**用户明确要求**的到点内容推送（例行简报）是一条独立能力，通过 `create_reminder(fulfillment=dynamic)` 创建、语义类似用户提醒（豁免普通主动配额但仍过账号状态/moderation/送达窗口），见 [动态提醒 / 例行简报设计](dynamic_reminder_scheduled_content_design.md)。它不改变内容邀请与其它系统主动消息的上述边界。
+
 主链路摘要：
 
 ```text
