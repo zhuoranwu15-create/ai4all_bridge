@@ -70,6 +70,68 @@ def get_read_tools() -> list:
     ]
 
 
+def get_bazi_profile_tools() -> list:
+    """Return tool schemas for the account-scoped bazi profile in MEMORY.md."""
+    profile_properties = {
+        "birth_date": {
+            "type": "string",
+            "description": "已确认的阳历日期（农历须先 web_search 转换后再保存）。可传 YYYY-MM-DD、YYYY.M.D 或 YYYY年M月D日；服务会规范为 YYYY-MM-DD。",
+        },
+        "birth_time_text": {
+            "type": "string",
+            "description": "用户的原始出生时间表达，如 下午、申时、14:30；不得自行补成具体时间。",
+        },
+        "birth_time_precision": {
+            "type": "string",
+            "enum": ["exact_time", "shichen", "part_of_day", "unknown"],
+            "description": "时间精度：精确时刻、时辰、早中晚等时段、未知。",
+        },
+        "birth_place": {"type": "string", "description": "出生地省市，可选。"},
+        "gender": {"type": "string", "enum": ["男", "女", "未知"], "description": "性别。"},
+        "calendar_type": {"type": "string", "enum": ["solar", "lunar"], "description": "日期历法：solar 公历，lunar 农历。"},
+        "subject_type": {"type": "string", "enum": ["self", "other"], "description": "self 为用户本人，other 为他人。"},
+        "living_status": {"type": "string", "enum": ["alive", "deceased", "unknown"], "description": "对象在世状态。"},
+    }
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_bazi_profile",
+                "description": "读取当前账号已保存的八字资料。进入八字流程时先调用。",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_bazi_profile",
+                "description": "部分更新当前账号八字资料；只传本次已确认的字段，其余字段保持不变。",
+                "parameters": {"type": "object", "properties": profile_properties, "required": []},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "clear_bazi_profile_field",
+                "description": "清除一项八字资料；用户明确要求删除或改填前的旧值时调用。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"field": {"type": "string", "enum": sorted(profile_properties)}},
+                    "required": ["field"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_bazi_profile",
+                "description": "删除当前账号全部已保存的八字资料；仅在用户明确要求时调用。",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
+    ]
+
+
 def get_reminder_tools() -> list:
     return [
         {

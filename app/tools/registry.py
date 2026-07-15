@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from app.tools.definitions import (
+    get_bazi_profile_tools,
     get_commitment_tools,
     get_content_invitation_generation_tools,
     get_content_invitation_response_tools,
@@ -56,6 +57,10 @@ class ToolSpec:
 # 每个工具的分发元数据：name -> (handler_module, handler_attr, call_style,
 # runtime_requires_flag, default_when_flag)。这是分发与默认集的单一声明处。
 _META: Dict[str, tuple] = {
+    "get_bazi_profile": ("app.tools.bazi_profile_handlers", "handle_get_bazi_profile", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "update_bazi_profile": ("app.tools.bazi_profile_handlers", "handle_update_bazi_profile", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "clear_bazi_profile_field": ("app.tools.bazi_profile_handlers", "handle_clear_bazi_profile_field", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "delete_bazi_profile": ("app.tools.bazi_profile_handlers", "handle_delete_bazi_profile", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "web_fetch": (
         "app.tools.web_fetch_handlers", "handle_web_fetch",
         CALL_PLAIN, None, _DEFAULT_ALWAYS,
@@ -123,6 +128,7 @@ _META: Dict[str, tuple] = {
 _GROUP_PROVIDERS: List[tuple] = [
     ("web_fetch", get_web_fetch_tools),
     ("read", get_read_tools),
+    ("bazi_profile", get_bazi_profile_tools),
     ("reminder", get_reminder_tools),
     ("commitment", get_commitment_tools),
     ("session_status", get_session_status_tools),

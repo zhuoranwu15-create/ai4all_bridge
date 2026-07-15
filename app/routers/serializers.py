@@ -497,20 +497,29 @@ def _prompt_lab_session_for_account(
 
 
 def _validate_prompt_lab_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    """Validate replay messages for side-effect-free completion calls."""
+    """Validate replay messages for side-effect-free completion calls.
+
+    tool role 消息和 assistant 的 tool_calls 字段在 replay 时跳过，
+    避免工具调用历史导致 LLM API 400。
+    """
     if not messages:
         raise HTTPException(status_code=400, detail="messages is required")
     cleaned: list[dict[str, str]] = []
     for index, message in enumerate(messages):
         role = str((message or {}).get("role") or "").strip()
+        if role == "tool":
+            continue  # 工具调用结果跳过，replay 不需要
         content = str((message or {}).get("content") or "")
         if role not in {"system", "user", "assistant"}:
             raise HTTPException(
                 status_code=400,
                 detail=f"messages[{index}].role must be system, user, or assistant",
             )
+        # assistant 有 tool_calls 但无 content 时跳过（纯工具调用轮）
+        if role == "assistant" and not content and (message or {}).get("tool_calls"):
+            continue
         cleaned.append({"role": role, "content": content})
-    if cleaned[0]["role"] != "system":
+    if not cleaned or cleaned[0]["role"] != "system":
         raise HTTPException(status_code=400, detail="messages[0].role must be system")
     return cleaned
 
