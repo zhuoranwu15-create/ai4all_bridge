@@ -44,16 +44,11 @@ def _csv(value: Any) -> List[str]:
 def is_dynamic_reminder_allowed(account_id: str) -> bool:
     """账号是否可创建/履约动态提醒。
 
-    单一总开关 dynamic_reminder_enabled 控制功能启停；启用后**默认对全部账号放开（全量）**。
-    dynamic_reminder_account_allowlist 仅作可选收窄：留空=全量放开；非空=仅列出的账号
-    （出问题时的临时止血闸，平时不配）。
+    只看单一总开关 dynamic_reminder_enabled：开=对全部账号放开（全量），关=整体禁用。
+    不再按账号灰度（account_id 保留在签名里，供将来需要时重新引入收窄逻辑）。
     """
-    if not bool(getattr(settings, "dynamic_reminder_enabled", False)):
-        return False
-    allowlist = set(_csv(getattr(settings, "dynamic_reminder_account_allowlist", "")))
-    if not allowlist:
-        return True  # 默认全量：未配 allowlist 即对所有账号放开
-    return account_id in allowlist
+    _ = account_id  # 当前不按账号收窄；保留参数以兼容调用方与未来扩展
+    return bool(getattr(settings, "dynamic_reminder_enabled", False))
 
 
 def _fulfillment_tools() -> List[Dict[str, Any]]:

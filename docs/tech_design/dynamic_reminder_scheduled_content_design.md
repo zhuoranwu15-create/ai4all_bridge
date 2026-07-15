@@ -183,16 +183,15 @@ CREATE INDEX IF NOT EXISTS ix_rcr_account ON reminder_content_runs(account_id, c
 ## 8. 灰度配置（`app/config.py` + `.env.example`）
 
 ```
-DYNAMIC_REMINDER_ENABLED=true                 # 单一总开关（功能启停）；启用后默认全量放开
-DYNAMIC_REMINDER_ACCOUNT_ALLOWLIST=           # 可选收窄：空=全量(所有账号)，非空=仅列出账号(临时止血)
+DYNAMIC_REMINDER_ENABLED=true                 # 单一总开关：开=对所有账号放开（全量），关=整体禁用
 DYNAMIC_REMINDER_MAX_ACTIVE_PER_ACCOUNT=5     # 每账号活跃 dynamic 提醒上限
 DYNAMIC_REMINDER_MAX_RETRIES=2                # 30 分钟内重试次数
 DYNAMIC_REMINDER_FULFILLMENT_TOOLS=web_search # 履约工具集（逗号分隔，后续放开）
 DYNAMIC_REMINDER_FORCE_FIRST_TOOL=web_search  # 首轮强制工具
 ```
-- **默认全量**：`dynamic_reminder_enabled=true` 后对**所有账号**放开创建/履约；`allowlist` 留空即全量，仅在需要临时收窄时才填（"有问题咱们再处理"）。功能启停只靠这一个总开关，不再按账号灰度。
+- **默认全量、无账号灰度**：`dynamic_reminder_enabled=true` 后对**所有账号**放开创建/履约；功能启停只靠这一个总开关（不再有 account allowlist 门控）。
 - **两机都配**：aliyun2 处理入站→创建 dynamic 提醒需 enabled；调度机执行到期履约+出站分发。
-- `create_reminder` 的 `fulfillment=dynamic` 受 `dynamic_reminder_enabled` 门控（关闭时忽略该字段，提示不支持）；allowlist 非空时再按账号收窄。
+- `create_reminder` 的 `fulfillment=dynamic` 受 `dynamic_reminder_enabled` 门控（关闭时忽略该字段，提示不支持）。
 - **无需**改 `TDAI_RECALL_ACCOUNT_ALLOWLIST`（web_search 已可用）。
 
 ---
