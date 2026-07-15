@@ -372,6 +372,23 @@ class Settings(BaseSettings):
     # 0 = 关闭阈值通道，只认 allowlist。生产建议先设较高值观察，再按需下调。
     tdai_memory_min_messages: int = 50
 
+    # ----- 动态提醒 / 例行简报（dynamic reminder）-----
+    # 见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。
+    # 总开关：为假时到期履约不走 dynamic 分支、创建工具不接受 fulfillment=dynamic。
+    dynamic_reminder_enabled: bool = False
+    # 逗号分隔 account_id，空 = 对所有账号关闭 dynamic 提醒创建（灰度准入）。
+    dynamic_reminder_account_allowlist: str = ""
+    # 每账号活跃（pending）dynamic 提醒数量上限，创建时校验。
+    dynamic_reminder_max_active_per_account: int = 5
+    # 单次调度扫描处理的 dynamic 到期提醒批量上限。
+    dynamic_reminder_batch_size: int = 5
+    # 履约失败（搜索/生成失败）的重试次数（配合 30 分钟窗口，由 obligation 控制）。
+    dynamic_reminder_max_retries: int = 2
+    # 履约合成轮次可用的工具集（逗号分隔工具名）。v1 只带 web_search；后续放开只改此项。
+    dynamic_reminder_fulfillment_tools: str = "web_search"
+    # 首轮强制调用的工具（逗号分隔）；空 = 不强制。v1 强制 web_search，杜绝纯模型知识生成。
+    dynamic_reminder_force_first_tool: str = "web_search"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

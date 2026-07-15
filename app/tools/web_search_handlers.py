@@ -123,6 +123,11 @@ def handle_web_search(
             latency_ms=response.get("latency_ms"),
             attempt=attempt_index,
         )
+        # 记录一次成功搜索，供动态提醒履约校验「至少一次搜索成功」（默认 0，仅成功时自增）。
+        try:
+            ctx.web_search_success_count += 1
+        except AttributeError:
+            pass
         return {"status": "succeeded", "attempts": attempts, **response}
 
     error = attempts[-1]["error"] if attempts else "no web_search provider configured"

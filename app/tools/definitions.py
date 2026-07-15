@@ -139,10 +139,17 @@ def get_reminder_tools() -> list:
             "function": {
                 "name": "create_reminder",
                 "description": (
-                    "创建一个提醒。用于用户明确要求在未来某个时间收到提醒的场景。"
+                    "创建一个提醒。用于用户明确要求在未来某个时间收到内容的场景。"
                     "due_at 格式为 YYYY-MM-DD HH:MM:SS。"
-                    "recur_rule 可选：daily（每天）、weekly:N（每周，N=0 周一…6 周日）、"
-                    "monthly:D（每月第 D 日）。不填为一次性提醒。"
+                    "recur_rule 可选：daily（每天）、weekly:N（每周，N=0 周一…6 周日；"
+                    "多个星期几用逗号，如 weekly:0,2,4 表示每周一三五）、monthly:D（每月第 D 日）。"
+                    "不填为一次性提醒。\n"
+                    "两种履约方式，用 fulfillment 指定：\n"
+                    "- fixed（默认）：到点发送创建时保存的固定文本 text，不做检索或生成。\n"
+                    "- dynamic：到点自动联网检索并生成新内容再发（如『每周一三五早上8点推送AI热点/"
+                    "技术进展』这类定期内容订阅）。此时 text 填主题/用户原话，另可填 topic、max_items。\n"
+                    "凡是用户要按固定时间『定期推送某类最新内容/新闻/热点/进展』，一律用 "
+                    "fulfillment=dynamic，不要用 fixed 冒充。\n"
                     "时间不明确时不要猜测，告知用户需要补充具体日期和时间。"
                     "due_at 距现在超过约 1 天时，确认回复里自然带一句提醒用户这段时间保持联系。"
                 ),
@@ -151,15 +158,30 @@ def get_reminder_tools() -> list:
                     "properties": {
                         "text": {
                             "type": "string",
-                            "description": "提醒内容，简短描述要提醒的事情",
+                            "description": "fixed：要提醒的固定内容；dynamic：简报主题或用户原话",
                         },
                         "due_at": {
                             "type": "string",
-                            "description": "触发时间，格式 YYYY-MM-DD HH:MM:SS",
+                            "description": "触发时间，格式 YYYY-MM-DD HH:MM:SS（dynamic 的具体日期由后端按 recur_rule 重算，只取其中的时刻）",
                         },
                         "recur_rule": {
                             "type": "string",
-                            "description": "周期规则，可选。daily / weekly:N / monthly:D",
+                            "description": "周期规则，可选。daily / weekly:N（可多个如 weekly:0,2,4）/ monthly:D",
+                        },
+                        "fulfillment": {
+                            "type": "string",
+                            "enum": ["fixed", "dynamic"],
+                            "description": "履约方式，默认 fixed；定期推送最新内容用 dynamic",
+                        },
+                        "topic": {
+                            "type": "string",
+                            "description": "仅 dynamic：简报主题（不填则用 text）",
+                        },
+                        "max_items": {
+                            "type": "integer",
+                            "minimum": 3,
+                            "maximum": 5,
+                            "description": "仅 dynamic：每期要点条数，3-5，默认 5",
                         },
                     },
                     "required": ["text", "due_at"],
@@ -523,6 +545,8 @@ def get_proactive_message_settings_tools() -> list:
                     "查询当前用户的主动消息设定（你会不会、什么时候主动找 TA）。"
                     "当用户问『你现在会什么时候主动找我』『我是不是关了主动消息』这类问题时调用。"
                     "返回：总开关、各分类开关、静默时段、临时静默截止时间。"
+                    "返回的 allowed_windows 只表示普通主动消息可发送的时段，不表示已创建定时任务；"
+                    "不得据此声称某次定时推送已经安排或设置正常。"
                     "边界：这只影响系统主动触达（陪伴跟进、内容邀请），不影响用户提醒。"
                 ),
                 "parameters": {
@@ -547,6 +571,10 @@ def get_proactive_message_settings_tools() -> list:
                     "- 『晚上X点后别发』→ quiet_hours\n"
                     "- 『这周先别主动发』→ muted_until\n"
                     "- 『别再发陪伴跟进/内容』→ category_updates\n"
+                    "不要用于『每周一三五早上8点推送AI新闻/热点/技术进展』这类"
+                    "定时内容订阅请求：本工具只更新主动消息偏好，不会创建例行内容任务。"
+                    "遇到这类请求，应改用 create_reminder 并设 fulfillment=dynamic 来创建例行简报，"
+                    "不要调用本工具后声称已安排。"
                     "边界：只管主动触达，不影响用户提醒。"
                     "调用后回复必须说明变更结果并点明『提醒不受影响』。"
                 ),
@@ -600,6 +628,8 @@ def get_proactive_message_settings_tools() -> list:
                             "type": "array",
                             "description": (
                                 "允许推送时段窗口（只在这些时段发主动消息）。"
+                                "这是发送策略过滤器，不会在窗口开始时创建或生成消息，"
+                                "不能用于实现定时推送或内容订阅。"
                                 "每项 {\"days\": [\"SAT\",\"SUN\"], \"start\": \"09:00\", \"end\": \"12:00\"}；"
                                 "days 取值 MON/TUE/WED/THU/FRI/SAT/SUN，时间 HH:MM，start 必须早于 end（不支持跨午夜）。"
                                 "传空数组表示取消时段限制。例如『只在周末上午找我』。"

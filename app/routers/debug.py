@@ -875,6 +875,33 @@ def debug_delete_reminder(reminder_id: str, _: None = Depends(verify_admin_auth)
     return {"status": "ok", "reminder": cancelled}
 
 
+@router.get("/debug/reminders/{account_id}/content-runs")
+def debug_get_reminder_content_runs(
+    account_id: str, _: None = Depends(verify_admin_auth)
+) -> dict:
+    """动态提醒（例行简报）的履约 run 历史，供排查『某期发了什么/为何没发』。"""
+    from app.db import list_reminder_content_runs_for_account
+
+    runs = [
+        _normalize_ts(r, "scheduled_for")
+        for r in list_reminder_content_runs_for_account(account_id=account_id, limit=100)
+    ]
+    return {"account_id": account_id, "content_runs": runs}
+
+
+@router.post("/debug/reminders/dynamic/run-once")
+def debug_run_dynamic_reminders_once(_: None = Depends(verify_admin_auth)) -> dict:
+    """手动跑一轮动态提醒到期履约 + 对账（调试用；受总开关 dynamic_reminder_enabled 约束）。"""
+    from app.proactive.obligations.reminders import (
+        dispatch_due_dynamic_reminders,
+        reconcile_enqueued_reminder_content_runs,
+    )
+
+    dispatched = dispatch_due_dynamic_reminders(limit=20)
+    reconciled = reconcile_enqueued_reminder_content_runs(limit=100)
+    return {"status": "ok", "dispatched": dispatched, "reconciled": reconciled}
+
+
 class WebSearchDebugSimulationRequest(BaseModel):
     query: str
     provider: Optional[str] = None

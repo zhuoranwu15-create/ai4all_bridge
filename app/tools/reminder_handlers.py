@@ -1,14 +1,18 @@
 import logging
 from typing import TYPE_CHECKING
 
+from app.config import settings
 from app.db import (
     cancel_reminder,
+    count_active_dynamic_reminders_for_account,
     create_reminder,
     get_reminder,
     list_reminders_for_account,
     update_reminder,
 )
-from app.reminder_utils import validate_due_at, validate_recur_rule
+from app.proactive.fulfillment import is_dynamic_reminder_allowed
+from app.reminder_utils import compute_first_due_at, validate_due_at, validate_recur_rule
+from app.time_utils import beijing_naive_now
 
 if TYPE_CHECKING:
     from app.turn_context import TurnContext
@@ -21,6 +25,9 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
     text = str(args.get("text") or args.get("title") or args.get("content") or "").strip()
     due_at_raw = str(args.get("due_at") or args.get("time") or args.get("datetime") or "").strip()
     recur_rule_raw = args.get("recur_rule") or args.get("repeat") or args.get("recurrence")
+    fulfillment = str(args.get("fulfillment") or "fixed").strip().lower() or "fixed"
+    if fulfillment not in ("fixed", "dynamic"):
+        return {"error": "fulfillment 只能是 fixed 或 dynamic"}
 
     if not text:
         return {"error": "提醒内容不能为空"}
@@ -46,6 +53,32 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
     if not to_user_id:
         return {"error": "缺少发送目标，无法创建提醒"}
 
+    content_meta = None
+    due_at_str = due_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if fulfillment == "dynamic":
+        # 灰度准入 + 每账号活跃上限。
+        if not is_dynamic_reminder_allowed(ctx.account_id):
+            return {"error": "例行简报（定时内容推送）功能当前未对你开放"}
+        max_active = int(getattr(settings, "dynamic_reminder_max_active_per_account", 5) or 5)
+        if count_active_dynamic_reminders_for_account(account_id=ctx.account_id) >= max_active:
+            return {"error": f"例行简报数量已达上限（{max_active} 个），请先取消一个再新建"}
+        # 首次触发时间由后端按 recur_rule + 时刻重算，绝不采用模型提供的日期。
+        if recur_rule and (recur_rule == "daily" or recur_rule.startswith("weekly:")):
+            due_at_str = compute_first_due_at(
+                recur_rule, due_dt.time(), beijing_naive_now()
+            ).strftime("%Y-%m-%d %H:%M:%S")
+        max_items_raw = args.get("max_items")
+        try:
+            max_items = max(3, min(int(max_items_raw), 5)) if max_items_raw is not None else 5
+        except (TypeError, ValueError):
+            max_items = 5
+        content_meta = {
+            "topic": str(args.get("topic") or text).strip(),
+            "max_items": max_items,
+        }
+        if args.get("instructions"):
+            content_meta["instructions"] = str(args["instructions"]).strip()
+
     reminder = create_reminder(
         account_id=ctx.account_id,
         channel=ctx.identity.channel,
@@ -53,15 +86,18 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
         to_user_id=to_user_id,
         session_key=ctx.identity.session_key,
         text=text,
-        due_at=due_dt.strftime("%Y-%m-%d %H:%M:%S"),
+        due_at=due_at_str,
         recur_rule=recur_rule,
         metadata={"source": "tool_use", "source_message_id": ctx.message_id},
+        fulfillment=fulfillment,
+        content_meta=content_meta,
     )
     return {
         "status": "created",
         "reminder_id": reminder["id"],
         "due_at": reminder["due_at"],
         "recur_rule": recur_rule,
+        "fulfillment": fulfillment,
     }
 
 
@@ -78,6 +114,7 @@ def handle_list_reminders(args: dict, ctx: "TurnContext") -> dict:
                 "text": r["text"],
                 "due_at": r["due_at"],
                 "recur_rule": r.get("recur_rule"),
+                "fulfillment": r.get("fulfillment", "fixed"),
             }
             for r in reminders
         ]

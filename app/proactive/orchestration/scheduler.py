@@ -6,7 +6,11 @@ from typing import Any, Callable, Dict, List, Optional
 from app.proactive.obligations.commitments import dispatch_due_commitments
 from app.proactive.obligations.content_invitations import expire_stale_content_invitations
 from app.proactive.delivery.dispatch import dispatch_due_reactivation_candidates
-from app.proactive.obligations.reminders import dispatch_due_reminders
+from app.proactive.obligations.reminders import (
+    dispatch_due_dynamic_reminders,
+    dispatch_due_reminders,
+    reconcile_enqueued_reminder_content_runs,
+)
 from app.proactive.orchestration.planning import scan_due_proactive_account_checks
 from app.proactive.recall.hot_topic import refresh_hot_topic_pool
 from app.proactive.store.account_state import DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS
@@ -15,6 +19,8 @@ from app.time_utils import beijing_naive_now
 
 
 DispatchDueReminders = Callable[..., List[Dict[str, Any]]]
+DispatchDueDynamicReminders = Callable[..., List[Dict[str, Any]]]
+ReconcileDynamicRuns = Callable[..., List[Dict[str, Any]]]
 DispatchDueCommitments = Callable[..., List[Dict[str, Any]]]
 DispatchDueReactivation = Callable[..., List[Dict[str, Any]]]
 ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
@@ -36,6 +42,8 @@ class ProactiveScheduler:
         planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
         node_id: Optional[str] = None,
         dispatch_reminders: DispatchDueReminders = dispatch_due_reminders,
+        dispatch_dynamic_reminders: DispatchDueDynamicReminders = dispatch_due_dynamic_reminders,
+        reconcile_dynamic_runs: ReconcileDynamicRuns = reconcile_enqueued_reminder_content_runs,
         dispatch_commitments: DispatchDueCommitments = dispatch_due_commitments,
         dispatch_reactivation: DispatchDueReactivation = dispatch_due_reactivation_candidates,
         expire_content_invitations: ExpireContentInvitations = expire_stale_content_invitations,
@@ -49,6 +57,8 @@ class ProactiveScheduler:
         # 厚节点改造 P4：节点角色时只扫本节点账号（assigned_node_id = node_id）
         self.node_id: Optional[str] = node_id or None
         self._dispatch_reminders = dispatch_reminders
+        self._dispatch_dynamic_reminders = dispatch_dynamic_reminders
+        self._reconcile_dynamic_runs = reconcile_dynamic_runs
         self._dispatch_commitments = dispatch_commitments
         self._dispatch_reactivation = dispatch_reactivation
         self._expire_content_invitations = expire_content_invitations
@@ -97,6 +107,23 @@ class ProactiveScheduler:
             bypass_quiet_hours=self.bypass_quiet_hours,
             node_id=self.node_id,
         )
+        # 动态提醒（例行简报）：统一 aliyun1 调度，扫描内部忽略 node 分片以覆盖远程账号。
+        # 总开关关闭时函数内部立即返回空，无额外开销。
+        dynamic_reminder_results = await _step(
+            "dynamic_reminders",
+            self._dispatch_dynamic_reminders,
+            now=current,
+            limit=self.batch_size,
+            bypass_quiet_hours=self.bypass_quiet_hours,
+            node_id=self.node_id,
+        )
+        # 远程出站对账：把 enqueued 的履约 run 按 outbound 最终态翻成 sent/failed。
+        dynamic_reconcile_results = await _step(
+            "dynamic_reminder_reconcile",
+            self._reconcile_dynamic_runs,
+            now=current,
+            limit=self.batch_size,
+        )
         commitment_results = await _step(
             "commitments",
             self._dispatch_commitments,
@@ -142,6 +169,10 @@ class ProactiveScheduler:
             "finished_at": finished_at.isoformat(timespec="seconds"),
             "reminder_count": len(reminder_results),
             "reminders": reminder_results,
+            "dynamic_reminder_count": len(dynamic_reminder_results),
+            "dynamic_reminders": dynamic_reminder_results,
+            "dynamic_reminder_reconcile_count": len(dynamic_reconcile_results),
+            "dynamic_reminder_reconciles": dynamic_reconcile_results,
             "commitment_count": len(commitment_results),
             "commitments": commitment_results,
             "account_check_count": len(account_results),

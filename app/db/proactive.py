@@ -30,14 +30,17 @@ __all__ = [
     'claim_due_proactive_account_state',
     'claim_due_proactive_commitment',
     'claim_due_reminder',
+    'claim_reminder_content_run',
     'claim_pending_outbound_by_node',
     'claim_pending_outbound_message',
+    'count_active_dynamic_reminders_for_account',
     'count_outbound_in_window',
     'count_total_proactive_outbound_for_quota_date',
     'create_content_invitation',
     'create_outbound_message',
     'create_proactive_commitment',
     'create_reminder',
+    'create_reminder_content_run',
     'expire_content_invitations',
     'get_access_node',
     'get_active_content_invitation',
@@ -51,6 +54,7 @@ __all__ = [
     'get_proactive_commitment',
     'get_proactive_message_settings_row',
     'get_reminder',
+    'get_reminder_content_run',
     'insert_global_candidate',
     'insert_proactive_message_setting_event',
     'list_active_global_candidates',
@@ -60,9 +64,11 @@ __all__ = [
     'list_due_proactive_commitments',
     'list_due_reactivation_candidate_accounts',
     'list_due_reminders',
+    'list_enqueued_reminder_content_runs',
     'list_outbound_messages',
     'list_proactive_commitments_for_account',
     'list_proactive_message_setting_events',
+    'list_reminder_content_runs_for_account',
     'list_reminders_for_account',
     'mark_content_invitation_feedback',
     'mark_content_invitation_invited',
@@ -72,6 +78,10 @@ __all__ = [
     'mark_outbound_message_sent',
     'mark_proactive_commitment_failed',
     'mark_proactive_commitment_sent',
+    'mark_reminder_content_run_enqueued',
+    'mark_reminder_content_run_failed',
+    'mark_reminder_content_run_sent',
+    'mark_reminder_content_run_skipped',
     'mark_reminder_failed',
     'mark_reminder_sent',
     'pick_node',
@@ -82,6 +92,7 @@ __all__ = [
     'should_inline_dispatch_for_account',
     'update_outbound_message_metadata',
     'update_reminder',
+    'update_reminder_content_meta',
     'upsert_access_node',
     'upsert_content_invitation_preference',
     'upsert_proactive_account_state',
@@ -742,6 +753,15 @@ def _decode_reminder(row: Row) -> Dict[str, Any]:
     except json.JSONDecodeError:
         item["metadata"] = {}
         item["metadata_decode_error"] = True
+    # dynamic 提醒的履约参数（旧行无此列/为空 → 视作 fixed）。
+    content_meta_json = item.pop("content_meta_json", None)
+    try:
+        item["content_meta"] = json.loads(content_meta_json or "{}")
+    except (json.JSONDecodeError, TypeError):
+        item["content_meta"] = {}
+        item["content_meta_decode_error"] = True
+    if not item.get("fulfillment"):
+        item["fulfillment"] = "fixed"
     return item
 
 
@@ -757,6 +777,8 @@ def create_reminder(
     reminder_id: Optional[str] = None,
     recur_rule: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    fulfillment: str = "fixed",
+    content_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     cleaned_account_id = _clean_text(account_id)
     cleaned_channel = _clean_text(channel)
@@ -775,14 +797,18 @@ def create_reminder(
     if not cleaned_due_at:
         raise ValueError("due_at is required")
 
+    cleaned_fulfillment = _clean_text(fulfillment) or "fixed"
+    if cleaned_fulfillment not in ("fixed", "dynamic"):
+        raise ValueError(f"invalid fulfillment: {fulfillment!r}")
     with connect() as conn:
         conn.execute(
             """
             INSERT INTO reminders(
                 id, account_id, channel, channel_account_id, to_user_id,
-                session_key, text, due_at, recur_rule, metadata_json, updated_at
+                session_key, text, due_at, recur_rule, metadata_json,
+                fulfillment, content_meta_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 cleaned_reminder_id,
@@ -795,6 +821,8 @@ def create_reminder(
                 cleaned_due_at,
                 _clean_text(recur_rule) if recur_rule else None,
                 json.dumps(metadata or {}, ensure_ascii=False),
+                cleaned_fulfillment,
+                json.dumps(content_meta, ensure_ascii=False) if content_meta else None,
             ),
         )
         row = conn.execute(
@@ -816,37 +844,43 @@ def get_reminder(*, reminder_id: str) -> Optional[Dict[str, Any]]:
 
 
 def list_due_reminders(
-    *, now: str, limit: int = 20, node_id: Optional[str] = None
+    *,
+    now: str,
+    limit: int = 20,
+    node_id: Optional[str] = None,
+    fulfillment: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """node_id 非空时只返回归属该节点的账号的提醒（厚节点改造 P4 调度分片）。"""
+    """到期提醒扫描。
+
+    - node_id 非空时只返回归属该节点的账号的提醒（厚节点改造 P4 调度分片）。
+    - fulfillment 非空时按履约方式过滤：'fixed' 供现有固定提醒调度（节点分片）；
+      'dynamic' 供动态提醒调度（统一 aliyun1 调度，node_id 传 None 跨节点覆盖远程账号）。
+      不传则不过滤（保持历史行为）。
+    """
     node_filter = _clean_text(node_id) if node_id else None
+    fulfillment_filter = _clean_text(fulfillment) if fulfillment else None
+    conditions = ["r.status = 'pending'", "r.due_at <= ?"]
+    params: List[Any] = [now]
+    join_clause = ""
+    if node_filter:
+        join_clause = "JOIN accounts a ON a.id = r.account_id"
+        conditions.append("a.assigned_node_id = ?")
+        params.append(node_filter)
+    if fulfillment_filter:
+        # 旧行 fulfillment 为空视作 fixed，用 COALESCE 覆盖历史数据。
+        conditions.append("COALESCE(r.fulfillment, 'fixed') = ?")
+        params.append(fulfillment_filter)
+    params.append(limit)
+    sql = f"""
+        SELECT r.*
+        FROM reminders r
+        {join_clause}
+        WHERE {' AND '.join(conditions)}
+        ORDER BY r.due_at ASC, r.created_at ASC
+        LIMIT ?
+    """
     with connect() as conn:
-        if node_filter:
-            rows = conn.execute(
-                """
-                SELECT r.*
-                FROM reminders r
-                JOIN accounts a ON a.id = r.account_id
-                WHERE r.status = 'pending'
-                  AND r.due_at <= ?
-                  AND a.assigned_node_id = ?
-                ORDER BY r.due_at ASC, r.created_at ASC
-                LIMIT ?
-                """,
-                (now, node_filter, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM reminders
-                WHERE status = 'pending'
-                  AND due_at <= ?
-                ORDER BY due_at ASC, created_at ASC
-                LIMIT ?
-                """,
-                (now, limit),
-            ).fetchall()
+        rows = conn.execute(sql, tuple(params)).fetchall()
     return [_decode_reminder(row) for row in rows]
 
 
@@ -1066,6 +1100,332 @@ def update_reminder(
             "SELECT * FROM reminders WHERE id = ?", (reminder_id,)
         ).fetchone()
     return _decode_reminder(row) if row else None
+
+
+def count_active_dynamic_reminders_for_account(*, account_id: str) -> int:
+    """账号当前活跃（status='pending'）的动态提醒数，供创建时的每账号上限校验。"""
+    cleaned = _clean_text(account_id)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM reminders
+            WHERE account_id = ?
+              AND status = 'pending'
+              AND COALESCE(fulfillment, 'fixed') = 'dynamic'
+            """,
+            (cleaned,),
+        ).fetchone()
+    return int((dict(row) if row else {}).get("n", 0) or 0)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic reminder content runs（每次动态履约一行；见动态提醒设计文档）
+# ---------------------------------------------------------------------------
+
+def _decode_reminder_content_run(row: Row) -> Dict[str, Any]:
+    item = dict(row)
+    for src, dst, default in (
+        ("search_trace_json", "search_trace", None),
+        ("metadata_json", "metadata", {}),
+    ):
+        raw = item.pop(src, None)
+        try:
+            item[dst] = json.loads(raw) if raw else default
+        except (json.JSONDecodeError, TypeError):
+            item[dst] = default
+            item[f"{dst}_decode_error"] = True
+    return item
+
+
+def create_reminder_content_run(
+    *,
+    reminder_id: str,
+    account_id: str,
+    scheduled_for: str,
+    run_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """为一次到期履约建 run 行。
+
+    UNIQUE(reminder_id, scheduled_for) 保证同一周期只建一次：若该周期已存在（重复扫描/
+    重复认领）返回 None，调用方据此跳过，杜绝重复搜索/重复发送。
+    """
+    cleaned_reminder_id = _clean_text(reminder_id)
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_scheduled_for = _clean_text(scheduled_for)
+    cleaned_run_id = _clean_text(run_id) or _new_id("rcr")
+    if not cleaned_reminder_id or not cleaned_account_id or not cleaned_scheduled_for:
+        raise ValueError("reminder_id/account_id/scheduled_for are required")
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO reminder_content_runs(
+                id, reminder_id, account_id, scheduled_for, status,
+                attempts, started_at, created_at
+            )
+            VALUES (?, ?, ?, ?, 'running', 1,
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (cleaned_run_id, cleaned_reminder_id, cleaned_account_id, cleaned_scheduled_for),
+        )
+        if cursor.rowcount != 1:
+            # 该 (reminder_id, scheduled_for) 已存在 → 本周期已被处理，跳过。
+            return None
+        row = conn.execute(
+            "SELECT * FROM reminder_content_runs WHERE id = ?",
+            (cleaned_run_id,),
+        ).fetchone()
+    return _decode_reminder_content_run(row) if row else None
+
+
+def claim_reminder_content_run(
+    *,
+    reminder_id: str,
+    account_id: str,
+    scheduled_for: str,
+    max_attempts: int = 1,
+    run_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """认领某周期的履约 run（支持同周期有限次重试）。
+
+    - 该 (reminder_id, scheduled_for) 尚无 run → 新建 running(attempts=1) 并返回。
+    - 已存在但为可重试态（failed/running）且 attempts < max_attempts → 复用：置 running、
+      attempts+1 并返回（同周期重试，不产生新行，天然不重复占用）。
+    - 已存在且为终态（sent/enqueued/skipped）或重试已耗尽 → 返回 None（调用方据此跳过并推进周期）。
+
+    UNIQUE(reminder_id, scheduled_for) 保证「同周期只有一行」，据此杜绝重复搜索/发送。
+    """
+    cleaned_reminder_id = _clean_text(reminder_id)
+    cleaned_account_id = _clean_text(account_id)
+    cleaned_scheduled_for = _clean_text(scheduled_for)
+    cleaned_run_id = _clean_text(run_id) or _new_id("rcr")
+    if not cleaned_reminder_id or not cleaned_account_id or not cleaned_scheduled_for:
+        raise ValueError("reminder_id/account_id/scheduled_for are required")
+    max_attempts = max(1, int(max_attempts))
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO reminder_content_runs(
+                id, reminder_id, account_id, scheduled_for, status,
+                attempts, started_at, created_at
+            )
+            VALUES (?, ?, ?, ?, 'running', 1,
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (cleaned_run_id, cleaned_reminder_id, cleaned_account_id, cleaned_scheduled_for),
+        )
+        if cursor.rowcount == 1:
+            row = conn.execute(
+                "SELECT * FROM reminder_content_runs WHERE id = ?", (cleaned_run_id,)
+            ).fetchone()
+            return _decode_reminder_content_run(row) if row else None
+        # 已存在：只有可重试态且未耗尽才复用。
+        existing = conn.execute(
+            """
+            SELECT * FROM reminder_content_runs
+            WHERE reminder_id = ? AND scheduled_for = ?
+            """,
+            (cleaned_reminder_id, cleaned_scheduled_for),
+        ).fetchone()
+        if existing is None:
+            return None
+        run = _decode_reminder_content_run(existing)
+        if run.get("status") not in ("failed", "running"):
+            return None
+        if int(run.get("attempts") or 0) >= max_attempts:
+            return None
+        conn.execute(
+            """
+            UPDATE reminder_content_runs
+            SET status = 'running',
+                attempts = attempts + 1,
+                error = NULL,
+                started_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (run["id"],),
+        )
+        row = conn.execute(
+            "SELECT * FROM reminder_content_runs WHERE id = ?", (run["id"],)
+        ).fetchone()
+    return _decode_reminder_content_run(row) if row else None
+
+
+def update_reminder_content_meta(
+    *, reminder_id: str, patch: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """合并式更新提醒的 content_meta_json（读改写，供记录 last_success_run_at 等）。"""
+    cleaned = _clean_text(reminder_id)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT content_meta_json FROM reminders WHERE id = ?", (cleaned,)
+        ).fetchone()
+        if row is None:
+            return None
+        current_raw = (dict(row) if row else {}).get("content_meta_json")
+        try:
+            current = json.loads(current_raw) if current_raw else {}
+        except (json.JSONDecodeError, TypeError):
+            current = {}
+        current.update(patch or {})
+        conn.execute(
+            """
+            UPDATE reminders
+            SET content_meta_json = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (json.dumps(current, ensure_ascii=False), cleaned),
+        )
+        updated = conn.execute(
+            "SELECT * FROM reminders WHERE id = ?", (cleaned,)
+        ).fetchone()
+    return _decode_reminder(updated) if updated else None
+
+
+def _finish_reminder_content_run(
+    *,
+    run_id: str,
+    status: str,
+    outbound_message_id: Optional[int] = None,
+    generated_text: Optional[str] = None,
+    search_ok: Optional[bool] = None,
+    search_trace: Optional[Any] = None,
+    error: Optional[str] = None,
+    finished: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """统一的 run 终态/中间态写入。finished=False 用于 enqueued（尚未终结，待对账）。"""
+    fields = ["status = ?"]
+    values: List[Any] = [status]
+    if outbound_message_id is not None:
+        fields.append("outbound_message_id = ?")
+        values.append(outbound_message_id)
+    if generated_text is not None:
+        fields.append("generated_text = ?")
+        values.append(generated_text)
+    if search_ok is not None:
+        fields.append("search_ok = ?")
+        values.append(1 if search_ok else 0)
+    if search_trace is not None:
+        fields.append("search_trace_json = ?")
+        values.append(json.dumps(search_trace, ensure_ascii=False))
+    if error is not None:
+        fields.append("error = ?")
+        values.append(error)
+    if finished:
+        fields.append(
+            "finished_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+        )
+    values.append(run_id)
+    with connect() as conn:
+        conn.execute(
+            f"UPDATE reminder_content_runs SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        row = conn.execute(
+            "SELECT * FROM reminder_content_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    return _decode_reminder_content_run(row) if row else None
+
+
+def mark_reminder_content_run_sent(
+    *,
+    run_id: str,
+    outbound_message_id: Optional[int] = None,
+    generated_text: Optional[str] = None,
+    search_ok: Optional[bool] = None,
+    search_trace: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    return _finish_reminder_content_run(
+        run_id=run_id,
+        status="sent",
+        outbound_message_id=outbound_message_id,
+        generated_text=generated_text,
+        search_ok=search_ok,
+        search_trace=search_trace,
+    )
+
+
+def mark_reminder_content_run_enqueued(
+    *,
+    run_id: str,
+    outbound_message_id: Optional[int] = None,
+    generated_text: Optional[str] = None,
+    search_ok: Optional[bool] = None,
+    search_trace: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    """远程账号出站入队（尚未确认发送）：不写 finished_at，等对账翻 sent/failed。"""
+    return _finish_reminder_content_run(
+        run_id=run_id,
+        status="enqueued",
+        outbound_message_id=outbound_message_id,
+        generated_text=generated_text,
+        search_ok=search_ok,
+        search_trace=search_trace,
+        finished=False,
+    )
+
+
+def mark_reminder_content_run_skipped(
+    *, run_id: str, reason: str
+) -> Optional[Dict[str, Any]]:
+    return _finish_reminder_content_run(run_id=run_id, status="skipped", error=reason)
+
+
+def mark_reminder_content_run_failed(
+    *, run_id: str, error: str, outbound_message_id: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    return _finish_reminder_content_run(
+        run_id=run_id,
+        status="failed",
+        error=error,
+        outbound_message_id=outbound_message_id,
+    )
+
+
+def get_reminder_content_run(*, run_id: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM reminder_content_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+    return _decode_reminder_content_run(row) if row else None
+
+
+def list_enqueued_reminder_content_runs(*, limit: int = 100) -> List[Dict[str, Any]]:
+    """待对账的 run（远程出站已入队、尚未确认终态），按创建时间升序。"""
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM reminder_content_runs
+            WHERE status = 'enqueued'
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [_decode_reminder_content_run(row) for row in rows]
+
+
+def list_reminder_content_runs_for_account(
+    *, account_id: str, limit: int = 50
+) -> List[Dict[str, Any]]:
+    """账号级 run 历史（供 admin/debug 查询），强制按 account_id 隔离。"""
+    cleaned = _clean_text(account_id)
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM reminder_content_runs
+            WHERE account_id = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (cleaned, limit),
+        ).fetchall()
+    return [_decode_reminder_content_run(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------

@@ -1922,6 +1922,52 @@ def _migration_0020_campaign_visits(conn: Connection) -> None:
     )
 
 
+def _migration_0021_dynamic_reminders(conn: Connection) -> None:
+    """动态提醒（例行简报）：提醒新增履约方式 + 履约留痕表。
+
+    见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。提醒分两种履约：
+    - fulfillment='fixed'（默认，现状零回归）：到点发 reminders.text 固定文案；
+    - fulfillment='dynamic'：到点跑一次「无用户输入的合成轮次」（专用 prompt + 可配工具集），
+      检索并生成一条带来源的内容再发。dynamic 专属参数（topic/max_items/tool_policy/上次成功
+      时间等）存 content_meta_json，避免污染 text 的「固定文案」语义。
+
+    reminder_content_runs 记录每次 dynamic 履约：UNIQUE(reminder_id, scheduled_for) 是防
+    「同一周期重复搜索/重复发送」的第一道闸；status 覆盖 pending/running/enqueued/sent/
+    skipped/failed，其中 enqueued 专为远程账号（出站 pull 由归属节点完成）设，配合对账翻终态。
+    account_id 冗余存储以满足账号隔离查询。
+    """
+    _ensure_column(conn, "reminders", "fulfillment", "TEXT NOT NULL DEFAULT 'fixed'")
+    _ensure_column(conn, "reminders", "content_meta_json", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reminder_content_runs (
+            id TEXT PRIMARY KEY,
+            reminder_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            scheduled_for TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            generated_text TEXT,
+            outbound_message_id INTEGER,
+            search_ok INTEGER NOT NULL DEFAULT 0,
+            search_trace_json TEXT,
+            error TEXT,
+            metadata_json TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_content_runs_reminder_sched
+            ON reminder_content_runs(reminder_id, scheduled_for);
+        CREATE INDEX IF NOT EXISTS ix_reminder_content_runs_status
+            ON reminder_content_runs(status);
+        CREATE INDEX IF NOT EXISTS ix_reminder_content_runs_account
+            ON reminder_content_runs(account_id, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1938,6 +1984,7 @@ _MIGRATIONS = [
     (13, _migration_0013_campaign_codes),
     (19, _migration_0019_campaign_ai_name_preset),
     (20, _migration_0020_campaign_visits),
+    (21, _migration_0021_dynamic_reminders),
 ]
 
 
