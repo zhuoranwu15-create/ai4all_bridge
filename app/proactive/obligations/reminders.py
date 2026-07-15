@@ -392,6 +392,9 @@ def reconcile_enqueued_reminder_content_runs(
     这里据此落 run 终态，供 run 历史/观测准确。提醒周期在入队时已推进，故此处只更新 run。
     """
     _ = now  # 预留：将来可据 created_at 做 enqueued 超时兜底
+    # 总开关关闭时不可能有动态履约 run，直接短路（避免无谓的 DB 访问）。
+    if not bool(getattr(settings, "dynamic_reminder_enabled", False)):
+        return []
     results: List[Dict[str, Any]] = []
     for run in list_enqueued_reminder_content_runs(limit=limit):
         outbound_id = run.get("outbound_message_id")
