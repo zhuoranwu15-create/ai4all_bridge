@@ -133,7 +133,6 @@ def test_content_runs_account_isolation(fresh_db):
 @pytest.fixture
 def _dyn_settings(fresh_db):
     fresh_db.dynamic_reminder_enabled = True
-    fresh_db.dynamic_reminder_account_allowlist = "acc-1"
     fresh_db.dynamic_reminder_max_retries = 1
     with patch(f"{_OBLIG}.settings", fresh_db):
         yield fresh_db

@@ -76,14 +76,13 @@ def test_handle_create_reminder_dynamic_blocked_when_disabled(fresh_db):
     assert "error" in result
 
 
-def test_handle_create_reminder_dynamic_allowed_when_allowlist_empty(fresh_db):
-    """默认全量：总开关开 + allowlist 留空 → 对任意账号放开（不再按账号灰度）。"""
+def test_handle_create_reminder_dynamic_allowed_when_enabled(fresh_db):
+    """默认全量：总开关开 → 对任意账号放开（不再有账号 allowlist 门控）。"""
     from app.tools.reminder_handlers import handle_create_reminder
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-dyn1")
     fresh_db.dynamic_reminder_enabled = True
-    fresh_db.dynamic_reminder_account_allowlist = ""  # 空 = 全量
     ctx = _make_ctx("acc-dyn1")
     with patch("app.db.settings", fresh_db), \
          patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
@@ -103,7 +102,6 @@ def test_handle_create_reminder_dynamic_backend_recomputes_due_at(fresh_db):
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-1")
     fresh_db.dynamic_reminder_enabled = True
-    fresh_db.dynamic_reminder_account_allowlist = "acc-1"
     ctx = _make_ctx("acc-1")
     # 模型给了个"错误"的过去日期，但只有时刻(08:00)应被采用，日期由后端按 recur 重算。
     fake_now = datetime(2026, 7, 15, 9, 30, 0)  # 周三，已过 08:00
