@@ -58,13 +58,13 @@ def test_handle_create_reminder_one_shot(fresh_db):
     assert result["recur_rule"] is None
 
 
-def test_handle_create_reminder_dynamic_blocked_when_not_allowlisted(fresh_db):
+def test_handle_create_reminder_dynamic_blocked_when_disabled(fresh_db):
+    """总开关关闭 → 拒绝创建 dynamic 提醒（唯一的启停闸）。"""
     from app.tools.reminder_handlers import handle_create_reminder
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-dyn0")
-    fresh_db.dynamic_reminder_enabled = True
-    fresh_db.dynamic_reminder_account_allowlist = ""  # 空 = 对所有账号关闭
+    fresh_db.dynamic_reminder_enabled = False
     ctx = _make_ctx("acc-dyn0")
     with patch("app.db.settings", fresh_db), \
          patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
@@ -74,6 +74,27 @@ def test_handle_create_reminder_dynamic_blocked_when_not_allowlisted(fresh_db):
             ctx,
         )
     assert "error" in result
+
+
+def test_handle_create_reminder_dynamic_allowed_when_allowlist_empty(fresh_db):
+    """默认全量：总开关开 + allowlist 留空 → 对任意账号放开（不再按账号灰度）。"""
+    from app.tools.reminder_handlers import handle_create_reminder
+
+    with patch("app.db.settings", fresh_db):
+        _setup_account("acc-dyn1")
+    fresh_db.dynamic_reminder_enabled = True
+    fresh_db.dynamic_reminder_account_allowlist = ""  # 空 = 全量
+    ctx = _make_ctx("acc-dyn1")
+    with patch("app.db.settings", fresh_db), \
+         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
+         patch("app.tools.reminder_handlers.settings", fresh_db):
+        result = handle_create_reminder(
+            {"text": "AI 热点", "due_at": "2026-07-15 08:00:00",
+             "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic"},
+            ctx,
+        )
+    assert result["status"] == "created"
+    assert result["fulfillment"] == "dynamic"
 
 
 def test_handle_create_reminder_dynamic_backend_recomputes_due_at(fresh_db):

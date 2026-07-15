@@ -376,7 +376,8 @@ class Settings(BaseSettings):
     # 见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。
     # 总开关：为假时到期履约不走 dynamic 分支、创建工具不接受 fulfillment=dynamic。
     dynamic_reminder_enabled: bool = False
-    # 逗号分隔 account_id，空 = 对所有账号关闭 dynamic 提醒创建（灰度准入）。
+    # 可选收窄：逗号分隔 account_id。空 = 默认全量（对所有账号放开）；非空 = 仅列出的账号
+    # （出问题时的临时止血闸，平时不配）。功能启停只看上面的总开关。
     dynamic_reminder_account_allowlist: str = ""
     # 每账号活跃（pending）dynamic 提醒数量上限，创建时校验。
     dynamic_reminder_max_active_per_account: int = 5
