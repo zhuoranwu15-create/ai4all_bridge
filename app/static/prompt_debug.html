@@ -54,7 +54,7 @@
       font-size: 12px;
       color: #516070;
     }
-    .context-body, .message-body, .reply-box {
+    .context-body, .reply-box {
       white-space: pre-wrap;
       word-break: break-word;
       font-size: 13px;
@@ -65,6 +65,28 @@
       border-radius: 6px;
       padding: 8px;
     }
+    .message-item { border: none; padding: 0; background: transparent; }
+    .message-item .message-head { margin-bottom: 3px; }
+    .message-body {
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 13px;
+      line-height: 1.6;
+      border-radius: 12px;
+      padding: 10px 14px;
+    }
+    .message-item.user { margin-left: 15%; }
+    .message-item.user .message-head { justify-content: flex-end; }
+    .message-item.user .message-body { background: #dbeafe; }
+    .message-item.assistant .message-body { background: #f7f9fc; }
+    .message-item.loading .message-body { color: #9ca3af; font-style: italic; }
+    .chat-input-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .chat-input-row input { flex: 1; }
+    .message-list { max-height: 420px; overflow-y: auto; display: grid; gap: 10px; }
     .conversation-toggle {
       display: flex;
       justify-content: space-between;
@@ -194,9 +216,10 @@
           <h2>对话</h2>
           <span id="sessionLabel" class="card-note">—</span>
         </div>
-        <div class="toolbar-row">
-          <input id="userText" placeholder="输入一条用户消息用于 dry-run build">
-          <button class="primary" onclick="buildPrompt()">Build Prompt</button>
+        <div class="chat-input-row">
+          <input id="userText" placeholder="输入消息，Enter 发送">
+          <button class="primary" onclick="sendMessage()">发送</button>
+          <button onclick="buildPrompt()" title="dry-run build，不真实发送">Build</button>
         </div>
         <div id="conversation" class="message-list">请选择账号</div>
       </section>
@@ -283,6 +306,9 @@
       bindLlmProviderControls();
       await Promise.all([loadAccounts(), loadLlmProviders()]);
       bindLengthMeters();
+      document.getElementById('userText').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+      });
     })();
 
     function bindLlmProviderControls() {
@@ -485,8 +511,10 @@
 
     function renderMessage(m) {
       var content = m.content_redacted ? ('已脱敏 · ' + m.content_chars + ' chars') : m.content;
-      return '<div class="message-item">'
-        + '<div class="message-head"><strong>' + esc(m.role || m.direction) + '</strong><span>' + esc(formatDateTime(m.created_at)) + '</span></div>'
+      var role = m.role || m.direction || '';
+      var cls = 'message-item ' + (role === 'user' ? 'user' : 'assistant') + (m._loading ? ' loading' : '');
+      return '<div class="' + cls + '">'
+        + '<div class="message-head"><strong>' + esc(role) + '</strong><span>' + esc(formatDateTime(m.created_at)) + '</span></div>'
         + '<div class="message-body">' + esc(content || '') + '</div>'
         + '</div>';
     }
@@ -547,6 +575,56 @@
       } catch (e) {
         panel.innerHTML = '<div class="status-msg error">' + esc(e.message) + '</div>';
       }
+    }
+
+    async function sendMessage() {
+      var text = (document.getElementById('userText').value || '').trim();
+      if (!text || !currentAccountId) return;
+      // 从 account_id 解析 sender_id：openclaw-weixin:local:aid_xxx → aid_xxx
+      var parts = currentAccountId.split(':');
+      var senderId = parts[parts.length - 1];
+      var now = Math.floor(Date.now() / 1000);
+      var msgId = 'msg_' + now;
+      document.getElementById('userText').value = '';
+      // 乐观渲染
+      currentConversationMessages.push({ role: 'user', content: text, created_at: new Date().toISOString() });
+      currentConversationMessages.push({ role: 'assistant', content: '输入中…', created_at: new Date().toISOString(), _loading: true });
+      renderConversation();
+      scrollConversationToBottom();
+      var prevCount = currentConversationMessages.filter(function(m) { return !m._loading; }).length;
+      // 后台发送，不阻塞 UI；轮询直到出现新 assistant 消息
+      fetch(resolveOpsApiPath('/openclaw/turn'), {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer dev-secret', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event_id: 'evt_' + msgId,
+          message_id: msgId,
+          channel: 'openclaw-weixin',
+          account_id: 'local',
+          sender_id: senderId,
+          chat_id: senderId,
+          chat_type: 'private',
+          session_key: 'openclaw-weixin:local:' + senderId,
+          message_type: 'text',
+          text: text,
+          timestamp: now,
+          raw: {},
+        }),
+      }).catch(function() {});
+      // 每 2 秒轮询一次，最多等 30 秒
+      var polls = 0;
+      var poll = setInterval(async function() {
+        polls++;
+        await loadConversation();
+        var newCount = currentConversationMessages.length;
+        scrollConversationToBottom();
+        if (newCount > prevCount || polls >= 15) clearInterval(poll);
+      }, 2000);
+    }
+
+    function scrollConversationToBottom() {
+      var el = document.getElementById('conversation');
+      el.scrollTop = el.scrollHeight;
     }
 
     async function buildPrompt() {
