@@ -315,6 +315,47 @@ def test_recurring_reminder_resets_after_dispatch(fresh_db):
     assert updated["due_at"] == "2026-06-06 09:00:00"
 
 
+def test_recurring_reminder_remote_pending_advances_not_failed(fresh_db):
+    """回归：远程账号（如 aliyun2）循环提醒——dispatch 出站 enqueue 返回 status='pending'，
+    过去会被 fixed 分支误判 failed 且不推进周期，导致该每日提醒永久卡死（list_due_reminders 只扫
+    pending）。现应视为已交付/在途：推进到下一周期并计入 sent_count。"""
+    from unittest.mock import MagicMock
+    from app.db import create_reminder, get_reminder
+
+    with patch("app.db.settings", fresh_db):
+        _create_account("acc-recur-remote")
+        _create_route("acc-recur-remote")
+        create_reminder(
+            reminder_id="rem-recur-remote",
+            account_id="acc-recur-remote",
+            channel="openclaw-weixin",
+            channel_account_id="bot-1",
+            to_user_id="user@wechat",
+            session_key="sk-remote",
+            text="每天提醒",
+            due_at="2026-05-30 09:00:00",
+            recur_rule="daily",
+        )
+
+    # 远程入队：出站返回 pending（未终结），归属节点稍后 pull 发送。
+    mock_send = MagicMock(return_value={"id": None, "status": "pending"})
+    with patch("app.db.settings", fresh_db), \
+         patch("app.proactive.obligations.reminders.dispatch_proactive_text", mock_send):
+        from app.proactive.obligations.reminders import dispatch_reminder
+        result = dispatch_reminder(
+            reminder_id="rem-recur-remote",
+            now=datetime(2026, 5, 30, 9, 0, 0),
+        )
+
+    assert result["status"] == "pending"
+    with patch("app.db.settings", fresh_db):
+        updated = get_reminder(reminder_id="rem-recur-remote")
+    # 已推进到下一天并计发送，不再是 failed/卡死。
+    assert updated["status"] == "pending"
+    assert updated["sent_count"] == 1
+    assert updated["due_at"] == "2026-05-31 09:00:00"
+
+
 def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
     """回归:周期提醒的第二次触发必须真正发送,而不是被幂等键去重短路。
 
