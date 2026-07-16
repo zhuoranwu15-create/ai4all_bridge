@@ -389,32 +389,16 @@ def test_web_login_with_invite_code_creates_referral_relationship(client):
     assert relationships[0]["status"] == "registered"
 
 
-def test_web_create_agent_creates_account_profile_owner_and_subscription(client):
+def test_web_agents_endpoint_removed(client):
+    """A 收敛:多账号创建入口 POST /web/agents 已删除(§9.3 A6)——返回 404/405,不再建号。"""
     session_headers, login_data = _get_login_data("13800000001", client)
     user = login_data["platform_user"]
-
     res = client.post(
         "/web/agents",
-        json={
-            "platform_user_id": user["id"],
-            "agent_name": "Bob Bot",
-            "role_prompt": "你是 Bob 的个人助理。",
-            "plan": "trial",
-        },
+        json={"platform_user_id": user["id"], "agent_name": "Bob Bot"},
         headers=session_headers,
     )
-
-    assert res.status_code == 200
-    data = res.json()
-    assert ACCOUNT_ID_RE.match(data["account"]["id"])
-    assert data["account"]["display_name"] == "Bob Bot"
-    assert data["account"]["channel"] == "openclaw-weixin"
-    assert data["profile"]["account_id"] == data["account"]["id"]
-    assert data["profile"]["system_prompt"] == "你是 Bob 的个人助理。"
-    assert data["owner_binding"]["platform_user_id"] == user["id"]
-    assert data["owner_binding"]["account_id"] == data["account"]["id"]
-    assert data["owner_binding"]["binding_method"] == "web_onboarding"
-    assert data["subscription"]["plan"] == "trial"
+    assert res.status_code in (404, 405)
 
 
 def test_web_create_binding_intent_starts_openclaw_qr_login(client):
@@ -463,25 +447,6 @@ def test_web_create_binding_intent_starts_openclaw_qr_login(client):
     other_headers, _ = _get_login_data("13800000099", client)
     cross = client.get(f"/web/binding-intents/{intent['id']}", headers=other_headers)
     assert cross.status_code == 404
-
-
-def test_web_create_agent_rejects_foreign_platform_user(client):
-    """只能为自己创建账号：指定他人 platform_user_id 返回 403；无鉴权返回 401。"""
-    session_headers, login_data = _get_login_data("13800000051", client)
-    other_headers, other_login = _get_login_data("13800000052", client)
-
-    res = client.post(
-        "/web/agents",
-        json={"platform_user_id": other_login["platform_user"]["id"], "agent_name": "X"},
-        headers=session_headers,
-    )
-    assert res.status_code == 403
-
-    no_auth = client.post(
-        "/web/agents",
-        json={"platform_user_id": login_data["platform_user"]["id"], "agent_name": "X"},
-    )
-    assert no_auth.status_code == 401
 
 
 def test_register_and_binding_intent_creates_default_account_and_qr(client):
@@ -1538,31 +1503,71 @@ def test_binding_intent_requires_session_auth(client):
     assert res.status_code == 401
 
 
-def test_web_create_agent_enforces_per_user_limit(client):
+def test_create_account_enforces_one_active_per_user_app(client):
+    """A 收敛(§9.3 A4):同一 (user, app) 最多一个 active 账号,二次建号被拒。"""
     from app.db import create_platform_user_session
+    from app.db.billing import (
+        create_ai4all_account_for_user,
+        get_first_active_account_for_user,
+    )
 
     user = client.post(
         "/web/register",
         json={"phone": "13800009999",
               "otp_token": _get_verified_token("13800009999")},
     ).json()["platform_user"]
-    # 直接签发 session（不走 /web/login，避免额外创建默认账号扰动限额计数）。
-    session = create_platform_user_session(platform_user_id=user["id"], days=7)
-    headers = {"Authorization": f"Bearer {session['token']}"}
-    for i in range(10):
-        res = client.post(
-            "/web/agents",
-            json={"platform_user_id": user["id"], "agent_name": f"Bot {i}"},
-            headers=headers,
-        )
-        assert res.status_code == 200, f"agent {i} creation failed: {res.json()}"
-    res = client.post(
-        "/web/agents",
-        json={"platform_user_id": user["id"], "agent_name": "Bot 11"},
-        headers=headers,
+    create_platform_user_session(platform_user_id=user["id"], days=7)
+
+    first = create_ai4all_account_for_user(
+        platform_user_id=user["id"], display_name="第一个", require_display_name=False,
     )
-    assert res.status_code == 400
-    assert "maximum" in res.json()["detail"]
+    assert ACCOUNT_ID_RE.match(first["account"]["id"])
+
+    with pytest.raises(ValueError, match="already has an active account"):
+        create_ai4all_account_for_user(
+            platform_user_id=user["id"], display_name="第二个", require_display_name=False,
+        )
+
+    # 解析器仍稳定返回那唯一账号。
+    resolved = get_first_active_account_for_user(platform_user_id=user["id"])
+    assert resolved["account"]["id"] == first["account"]["id"]
+
+
+def test_owner_binding_partial_unique_index_enforces_and_allows_archived(fresh_db):
+    """§9.3 A2:部分唯一索引在 DB 层挡住第二个 active (user,app);archived 不占名额。
+
+    同时验证 SQLite 冲突消息含冲突列名——create_ai4all_account_for_user 的竞态兜底据此翻译。
+    """
+    from app.db._core import connect
+    from app.db._backend import IntegrityError
+
+    with connect() as conn:
+        conn.execute("INSERT INTO platform_users(id, phone) VALUES ('u9','p9')")
+        conn.execute("INSERT INTO accounts(id, app_id) VALUES ('acc-x','zhaoxi')")
+        conn.execute("INSERT INTO accounts(id, app_id) VALUES ('acc-y','zhaoxi')")
+        conn.execute(
+            "INSERT INTO account_owner_bindings(platform_user_id, account_id, binding_method, status, app_id) "
+            "VALUES ('u9','acc-x','m','active','zhaoxi')"
+        )
+
+    with pytest.raises(IntegrityError) as ei:
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO account_owner_bindings(platform_user_id, account_id, binding_method, status, app_id) "
+                "VALUES ('u9','acc-y','m','active','zhaoxi')"
+            )
+    msg = str(ei.value)
+    # 兜底翻译条件(billing.create_ai4all_account_for_user):索引名(PG) 或 列名(SQLite) 命中。
+    assert "ux_owner_binding_active_user_app" in msg or (
+        "platform_user_id" in msg and "app_id" in msg
+    )
+
+    # archived 第二绑定允许(部分索引仅约束 active),收敛规范化(archive 非规范)不被索引阻断。
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO account_owner_bindings(platform_user_id, account_id, binding_method, status, app_id) "
+            "VALUES ('u9','acc-y','m','archived','zhaoxi')"
+        )
 
 
 def test_get_binding_intent_auto_expires_stale_qr(client):
