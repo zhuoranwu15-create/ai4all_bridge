@@ -2013,6 +2013,17 @@ def _migration_0023_owner_binding_active_unique(conn: Connection) -> None:
     )
 
 
+def _migration_0024_rename_channel_app_to_native(conn: Connection) -> None:
+    """channel 命名 'app' → 'native':区分 App(产品层) 与 channel(传输层)。
+
+    见 §9.2 Q5 / §9.3 B。CHANNEL_APP 常量值由 'app' 改为 'native'(app/channels.py)后,存量
+    channel_bindings 中的 'app' 值需一并迁移,否则旧绑定解析不到。生产审计:全库仅 channel_bindings
+    有 1 行 'app',其余含 channel 列的表(accounts/binding_intents/outbound_messages/reminders)均无。
+    幂等:无 'app' 行时 UPDATE 影响 0 行。
+    """
+    conn.execute("UPDATE channel_bindings SET channel='native' WHERE channel='app'")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2032,6 +2043,7 @@ _MIGRATIONS = [
     (21, _migration_0021_dynamic_reminders),
     (22, _migration_0022_account_app_id),
     (23, _migration_0023_owner_binding_active_unique),
+    (24, _migration_0024_rename_channel_app_to_native),
 ]
 
 

@@ -49,6 +49,14 @@ def test_app_capability_is_independent_and_sync_only():
     assert cap.tdai_enabled is False
 
 
+def test_channel_app_renamed_to_native():
+    """§9.2 Q5:App 原生渠道值改名 native（区分 App=产品层 / channel=传输层）；
+    会话隔离键仍为 __app_active__（正交，不随渠道名改）。"""
+    assert CHANNEL_APP == "native"
+    assert CHANNELS[CHANNEL_APP].active_session_key == "__app_active__"
+    assert get_channel_capability("native") is CHANNELS[CHANNEL_APP]
+
+
 def test_capability_is_frozen():
     cap = CHANNELS[CHANNEL_WEIXIN]
     assert isinstance(cap, ChannelCapability)

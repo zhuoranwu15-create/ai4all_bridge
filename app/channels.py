@@ -20,7 +20,11 @@ from dataclasses import dataclass
 # 渠道常量。取值与 ``openclaw_gateway.DEFAULT_WEIXIN_CHANNEL`` 保持一致（微信入站/出站现状）。
 CHANNEL_WEIXIN = "openclaw-weixin"
 CHANNEL_WEB = "web"          # 本期新增（Phase 1 才有运行路径；Phase 0 仅声明）
-CHANNEL_APP = "app"
+# native = App 原生传输渠道。取值 "native" 以区分「App=产品层」与「channel=传输层」
+# （见 app_account_convergence_and_channel_persona.md §9.2 Q5）。变量名保留 CHANNEL_APP，
+# 存量 channel_bindings 的旧值 "app" 由迁移 m0024 一并改为 "native"；短期会话键
+# _APP_ACTIVE_SESSION_KEY="__app_active__" 属会话隔离概念、与渠道名正交，不随之改。
+CHANNEL_APP = "native"
 
 
 # 微信短期会话隔离键，取值与 ``app.db._core.ACCOUNT_ACTIVE_SESSION_KEY`` 一致（不变）。
