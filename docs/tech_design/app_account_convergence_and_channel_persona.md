@@ -1,7 +1,8 @@
 # App 接入:账号收敛(App 层身份) + 渠道化人设 — 调研与方案交接
 
-> 状态:**设计/调研完成,待决策后实施**。本文自包含,可直接在线上机接续。
+> 状态:**方案定稿,待实施**(生产已验证 + 决策已定,见 §9)。本文自包含,可直接在线上机接续。
 > 语言:中文(项目规范)。所有代码位置给到 `file:line`,均基于本次调研时的 `main`。
+> 定稿更新(2026-07-16,aliyun1 生产 PG 验证):S1 审计 = 0 多账号 user ⇒ **S2 存量规范化不需要**;Q1–Q5 已决策。**最终方案见 §9**,§1–§8 为调研原文保留。
 
 ---
 
@@ -164,26 +165,34 @@ ON account_owner_bindings(platform_user_id) WHERE status='active';
 
 ## 7. TODO(按建议顺序;`[ ]` 待办)
 
+> 决策已定 + 生产已验证 + **代码已实现并通过测试**(2026-07-16,分支 `feat/app-account-convergence-and-channel-persona`);下表标记进度。**待生产部署**(迁移 m0022–m0024 于发布时由 `init_db` 应用)。
+
 收敛(A):
-- [ ] **S1** 线上 PG 跑审计 SQL(§4),记录是否存在多账号 user
-- [ ] **S2** 如有:写 `scripts/` 规范化脚本(规则见 §4),人工审阅后执行
-- [ ] **S3** `_MIGRATIONS` 加迁移:owner_bindings 部分唯一索引
-- [ ] **S4** 处理 `web_create_agent`(依 Q1)
-- [ ] **S5** 收敛 `billing.py:2090` 的 ≤10 → ≤1
-- [ ] **S6** `get_first_active_account_for_user` 加 >1 告警
-- [ ] 测试:同 user 二次建号被拒;审计脚本干跑;解析器告警
+- [x] **S1** 线上 PG 审计 = **0 多账号 user**(2026-07-16,§9.1)
+- [x] **S2** 免做(S1 为空,无存量清理)
+- [x] **A1/A2**(原 S3)`_MIGRATIONS` m0022 `accounts.app_id`+owner_bindings 冗余列(Q2)→ m0023 部分唯一索引 `(platform_user_id, app_id)`
+- [x] **A3** 建账号/绑定写 `app_id='zhaoxi'`(`billing.DEFAULT_APP_ID`)
+- [x] **A6**(原 S4)**直接删** `web_create_agent` + `WebCreateAgentRequest`(Q1)
+- [x] **A4**(原 S5)收敛 `billing.py` ≤10 → ≤1,IntegrityError 跨后端翻译兜底
+- [x] **A5**(原 S6)`get_first_active_account_for_user` 加 >1 告警
+- [x] **A7** debug 建号:`debug_create_account` 不建 owner_binding,天然不碰唯一索引,无需改(Q3)
+- [x] **B**(Q5)channel `app`→`native`:m0024 单行 `UPDATE` + `channels.py` 常量值(变量名保留)
+- [x] 测试:同 `(user,app)` 二次建号被拒;索引 DB 层兜底 + archived 不占名额;解析器告警;m0022–m0024 SQLite 幂等
+- [ ] **部署**:发布分支 → `init_db` 在生产 PG 应用 m0022–m0024(PG 端 DDL 于部署时最终验证)
 
-渠道化人设(问题 A,可并行):
-- [ ] L3 `reply_presentation`(channels + prompt_builder + turn_service),微信默认快照不变
-- [ ] L1 传输三行剥离为 channel 传输块,微信渲染快照等价
-- [ ] L2 IDENTITY 播种加 channel 参数,微信默认不变
-- [ ] L4 名字兜底(app_create_session 传账号真实名,"朝夕"仅新建无名时)
-- [ ] 测试:App 组装 prompt 的 L1/L2/L3 不含"微信"、自称"朝夕";微信 prompt 与改前逐字节一致快照
+渠道化人设(问题 A,已随本次并行实现):
+- [x] L3 `reply_presentation`(channels + prompt_builder + turn_service),默认 weixin 档字节不变
+- [x] L1 传输措辞剥离为 channel 变体文件(`AGENTS.native.md`/`TOOLS.native.md`);weixin 读原文件字节不变,native 读变体、缺失回落原文件
+- [x] L2 IDENTITY 播种加 channel 参数(`read_agent_context`/`ensure_agent_context_files`/`_default_user_context_templates`),微信默认不变
+- [x] L4 名字兜底(`app_create_session` 传 zhaoxi 默认名「朝夕」,仅 get_or_create 新建无名时写入)
+- [x] 测试:App(native)组装 prompt 的 L1/L2/L3 不含"微信"、播种「朝夕」;weixin 默认档逐字节不变(单测覆盖)
 
-Phase 2(按需,Q2 决定是否提前):
-- [ ] `accounts.app_id` 列 + backfill zhaoxi
-- [ ] App 化解析器 + `app/apps.py` 注册表
-- [ ] `AGENTS.<app_id>.md` 变体机制
+> L1 实现说明:调研设 §5 设想"传输块按 channel 注入 + weixin 逐字节还原",但 AGENTS.md 的"微信"字样是句中词而非独立行,strip+append 无法字节还原。为守住原则一,改为**渠道变体文件**:weixin 恒读原文件(字节级不变、非"重组还原"),native 读去微信味的 `AGENTS.native.md`/`TOOLS.native.md`。此机制正是 Phase 2 `AGENTS.<app_id>.md` 变体的前身,方向一致。变体文件为新拟文案,建议运营/产品复核。
+
+Phase 2(按需,Q2 已决定本次提前落 app_id 列):
+- [x] `accounts.app_id` 列 + backfill zhaoxi(m0022;owner_bindings 亦加冗余列)
+- [ ] App 化解析器 `get_or_create_account_for_user_in_app` + `app/apps.py` 注册表(仍 Phase 2)
+- [ ] `AGENTS.<app_id>.md` 变体机制(本次先落 channel 变体 `AGENTS.native.md`,app_id 变体待第二款 App)
 
 ---
 
@@ -192,3 +201,71 @@ Phase 2(按需,Q2 决定是否提前):
 - **收敛不删记忆**:规范化只 archive 非规范 owner_binding,绝不删账号/记忆。
 - **原则一(微信零影响)**:所有渠道差异化默认值回落微信原文;微信主链路渲染结果字节级不变(以快照测把关)。
 - schema 改动走 `_core.py` 的 `_MIGRATIONS`,不用启动期 `_ensure_column`。
+
+---
+
+## 9. 最终方案(生产验证后定稿,2026-07-16)
+
+### 9.1 生产验证结果(aliyun1 本地 PG,只读审计)
+
+| 审计项 | SQL/口径 | 结果 | 结论 |
+|---|---|---|---|
+| **S1 多 active 账号 user** | `owner_bindings status='active' GROUP BY user HAVING COUNT>1` | **0 行** | **S2 存量规范化脚本不需要** |
+| 规模 | platform_users / accounts / owner_bindings | 72 / 85 / 72 | active 集合 **72↔72 一对一** |
+| 每 user active 账号数 | 分布 | 全部 = 1 | "最早=唯一"已然成立 |
+| 历史任意 status 多账号 user | `GROUP BY user HAVING COUNT(DISTINCT account)>1` | 0 | 无历史多账号残留 |
+| 13 个无 owner_binding 孤儿账号 | 明细 | 1 本地 mock + 11 已 `deactivated` 真实号 + 1 `smoke`(is_debug=1) | 均非"活跃用户第二账号",不威胁不变量 |
+| S3 索引可建性 | — | 无重复冲突 | 可直接建,**无需先跑 S2** |
+| channel `'app'` 存量 | 5 张含 channel 列的表 | **仅 `channel_bindings` 1 行 `'app'`**;`accounts.channel` 全 `openclaw-weixin` | 改名迁移只需单行 `UPDATE` |
+| 迁移基线 | `schema_migrations` | 线上已应用至 **v21**(1–13,19–21) | 新迁移从 **v22** 起 |
+
+⇒ **A 收敛在生产是"零存量清理"场景**,风险远低于原调研预估。
+
+### 9.2 决策定稿(§6 Q1–Q5)
+
+| Q | 决策 | 说明 |
+|---|---|---|
+| **Q1** web_create_agent | **直接删** | 无读侧半成品死代码,线上无活跃多账号,无灰度必要(符合门控偏好:死代码直接清) |
+| **Q2** app_id 列 | **本次顺带加** | 加 `accounts.app_id`(+ owner_bindings 冗余列)backfill `zhaoxi`,唯一索引直接落 `(platform_user_id, app_id)` 终态,多背一次迁移换未来省事 |
+| **Q3** debug 建号 | **保留 admin 建号能力,不留唯一索引 bypass** | 对已有 active `(user, app)` 再建 → 命中唯一索引 → 翻译成清晰 409/报错 |
+| **Q4** 短期会话 | **确认现状**:App 与微信各自独立实时会话(`__app_active__` vs 账号 active)+ 共享长期记忆 | 本次不合并 session 隔离键 |
+| **Q5** channel 命名 | **改名 `native`** | 彻底区分 "App=产品层 / channel=传输层";数据仅 1 行,迁移便宜 |
+
+> `app_id` 说明:`app_id` 是账号不可变属性(账号一旦属于某 App 永不改),故冗余到 `owner_bindings` 安全(创建时写入、永不同步漂移),使"每 `(user, app)` 一个 active 账号"能用单条部分唯一索引表达。当前单 App 下 `app_id` 恒为 `'zhaoxi'`,`(user, app_id)` 索引行为等价于 `(user)`,但形态已是终态、Phase 2 无需重建索引。**解析器 App 化(`get_or_create_account_for_user_in_app`)与 `app/apps.py` 注册表仍属 Phase 2,本次不做**;本次仅保证新账号/新绑定写入 `app_id='zhaoxi'`。
+
+### 9.3 最终执行步骤(依赖有序)
+
+**Group A — 收敛 + app_id 打底(DB 先行)**
+
+- **A1 迁移 m0022 `_migration_0022_account_app_id`**:`accounts` 与 `account_owner_bindings` 各 `ADD COLUMN app_id TEXT NOT NULL DEFAULT 'zhaoxi'`(自动 backfill 存量为 `zhaoxi`);owner_bindings 的 `app_id` 亦可从 `accounts` JOIN 回填校验。跨后端 DDL 参照 m0004/m0021 范式。
+- **A2 迁移 m0023 `_migration_0023_owner_binding_active_unique`**:`CREATE UNIQUE INDEX ux_owner_binding_active_user_app ON account_owner_bindings(platform_user_id, app_id) WHERE status='active';`(SQLite/PG 均支持部分索引;S1 已验证无冲突)。
+- **A3 写入 app_id**:`create_ai4all_account_for_user`(`billing.py`)建账号/建 owner_binding 时写 `app_id='zhaoxi'`。
+- **A4 收敛 ≤10(S5,`billing.py:2090`)**:移除 `if existing_count >= 10` 软检查,create 前若该 `(user, 'zhaoxi')` 已有 active 账号则直接拒绝;唯一索引兜底,`IntegrityError` 翻译成清晰报错。`get_or_create_default` 无害(仅无账号时进 create)。
+- **A5 解析器告警(S6,`billing.py:2158` `get_first_active_account_for_user`)**:返回前 `COUNT`,`>1` 打 `warning`(收敛后恒为 1,用于探测异常)。
+- **A6 删 web_create_agent(S4,`web.py:949`)**:删 handler + `WebCreateAgentRequest` 模型 + 路由注册;保留 `create_ai4all_account_for_user` 本体。
+- **A7 debug 建号(Q3,`debug.py:695`)**:保留能力;命中唯一索引时返回清晰 409(而非 500)。
+
+**Group B — channel 改名 native(正交,可与 A 并行)**
+
+- **B1 迁移 m0024 `_migration_0024_rename_channel_app_to_native`**:`UPDATE channel_bindings SET channel='native' WHERE channel='app';`(生产 1 行)。审查其余 4 表确认无 `'app'`(已验证)。
+- **B2 代码**:`channels.py:23` `CHANNEL_APP` 常量值 `"app"` → `"native"`(变量名可保留 `CHANNEL_APP`,零波及引用点:`turn_service.py:18/907`、`app_api.py:28/187/245/318/326` 均引用常量而非字面量)。`CHANNELS` 表 key 同步。
+
+**Group C — 渠道化人设 Phase1(正交;原则一:微信字节不变)**
+
+- **C1 L3 reply_presentation**:`ChannelCapability` 加 `reply_presentation`(weixin/native/web);`prompt_builder._OUTPUT_DIRECTIVES_FIXED` 改为按 key 取的字典;`assemble(reply_presentation=...)` 默认 `weixin`(默认字节不变);`turn_service:649` 传 `cap.reply_presentation`。
+- **C2 L1 传输三行剥离**:`data/system/AGENTS.md`/`TOOLS.md` 的传输三行(微信好友/24h/只能发回微信)从共享人设移出 → 组装期按 channel 注入的"传输事实块";weixin 块还原原文,**微信渲染快照等价**(快照测验收)。
+- **C3 L2 IDENTITY 播种中性化**:`user_profiles._default_user_context_templates` 去"在微信里/微信好友";`read_agent_context`/`ensure_agent_context_files` 加 channel 参数;微信默认保持现文。
+- **C4 L4 名字兜底**:`app_create_session`(`app_api.py:184`)传账号真实名;`zhaoxi` 默认名 `"朝夕"` **仅新建且无名时**写入,不覆盖用户已起的名。全 App 一致显示同名。
+
+### 9.4 测试方案(交付前)
+
+- **收敛**:同 `(user, 'zhaoxi')` 二次建号被唯一索引拒 + 清晰错;`get_first_active` `>1` 告警路径;m0022/m0023 幂等(SQLite + PG 双跑);`web_create_agent` 已删(404)。
+- **channel 改名**:m0024 后全表无 `'app'` 残留;`app_api` 端到端一轮(建 session→发消息→回包)。
+- **人设**:App 组装 prompt 的 L1/L2/L3 **不含"微信"**、自称 **"朝夕"**;**微信 prompt 逐字节快照与改前一致**(原则一硬验收线)。
+- **回归**:`make test-fast` 全量 + 聚焦 `test_turn_service` / `prompt_builder`;触及 schema/billing 故建议提交前 `make test` + `make test-pg`。
+
+### 9.5 上线顺序与回滚
+
+- 顺序:先 DB 迁移(m0022→m0023→m0024,`init_db` 顺序应用)→ 部署代码。迁移与代码同一次发布内完成;唯一索引在 A1 之后、A4 代码之前生效不影响正常登录链路(`get_or_create` 不新建)。
+- 回滚:代码回滚即可(唯一索引/新列对旧代码兼容——旧代码不读 `app_id`、不受 `native` 影响,因线上 `'app'` 仅 1 行已迁走)。迁移不做 down(项目惯例:仅前向)。
+- 双机:aliyun1 + aliyun2,按 [[deploy-restart-model]] 免 sudo 重启;aliyun2 为瘦接入 node-only,不碰本地 DB,迁移只在中心 PG 生效一次。

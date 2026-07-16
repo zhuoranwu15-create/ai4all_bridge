@@ -141,13 +141,30 @@ def _apply_token_budget(blocks: List[ContextBlock], token_budget: Optional[int])
 # ---------------------------------------------------------------------------
 
 # 仅保留机械格式规则；语气底线在 AGENTS.md、人格细节在 SOUL.md，避免跨层重复。
-_OUTPUT_DIRECTIVES_FIXED = (
+# 按渠道呈现风格分档（reply_presentation）：weixin 为现状原文（原则一：字节级不变）；
+# native/web 去「微信」字样，改中性「纯文本」。默认取 weixin。
+_OUTPUT_DIRECTIVES_WEIXIN = (
     "【微信回复呈现】\n"
     "- 默认微信纯文本，不用 Markdown 标题、表格、粗体或代码块；用户明确要代码、清单、步骤时除外。\n"
     "- 默认 1-3 句，先回答用户当下最关心的点；用户要求详细、复盘、比较或专业解释时再展开。\n"
     "- 需要追问时只问一个最关键的问题；能先给部分帮助就不要只反问。\n"
     "- 不在结尾机械重复“还有什么可以帮你的吗”。"
 )
+# 中性呈现（native/web）：与微信档规则一致，仅去掉「微信」字样，避免 App/Web 面穿帮。
+_OUTPUT_DIRECTIVES_NEUTRAL = (
+    "【回复呈现】\n"
+    "- 默认纯文本，不用 Markdown 标题、表格、粗体或代码块；用户明确要代码、清单、步骤时除外。\n"
+    "- 默认 1-3 句，先回答用户当下最关心的点；用户要求详细、复盘、比较或专业解释时再展开。\n"
+    "- 需要追问时只问一个最关键的问题；能先给部分帮助就不要只反问。\n"
+    "- 不在结尾机械重复“还有什么可以帮你的吗”。"
+)
+_OUTPUT_DIRECTIVES_BY_PRESENTATION = {
+    "weixin": _OUTPUT_DIRECTIVES_WEIXIN,
+    "native": _OUTPUT_DIRECTIVES_NEUTRAL,
+    "web": _OUTPUT_DIRECTIVES_NEUTRAL,
+}
+# 兼容旧引用：默认档即微信原文。
+_OUTPUT_DIRECTIVES_FIXED = _OUTPUT_DIRECTIVES_WEIXIN
 
 # 事实准确与核实纪律：时间→运行时，关系事实→工具，近期/外部事实→检索工具；无真值时不编造。
 _FACTUAL_DISCIPLINE = (
@@ -236,6 +253,7 @@ class PromptBuilder:
         tool_instructions: Optional[str] = None,
         extra_blocks: Optional[List[ContextBlock]] = None,
         token_budget: Optional[int] = None,
+        reply_presentation: str = "weixin",
     ) -> str:
         """Build and return the assembled system prompt string (向后兼容入口)。"""
         return self.assemble(
@@ -260,6 +278,7 @@ class PromptBuilder:
             tool_instructions=tool_instructions,
             extra_blocks=extra_blocks,
             token_budget=token_budget,
+            reply_presentation=reply_presentation,
         ).prompt
 
     def assemble(
@@ -286,6 +305,7 @@ class PromptBuilder:
         tool_instructions: Optional[str] = None,
         extra_blocks: Optional[List[ContextBlock]] = None,
         token_budget: Optional[int] = None,
+        reply_presentation: str = "weixin",
     ) -> BuildResult:
         """组装为声明式 block 列表，应用 token 预算后 join；返回 prompt + block 元数据。
 
@@ -327,8 +347,11 @@ class PromptBuilder:
             safety = _truncate(_SAFETY_TEXT, _MAX_SAFETY_CHARS, "safety")
             _add("safety", safety, section=_SECTION_STABLE, char_limit=_MAX_SAFETY_CHARS)
 
-        # Block 2: Fixed output directives
-        _add("output_directives", _OUTPUT_DIRECTIVES_FIXED, section=_SECTION_STABLE)
+        # Block 2: Fixed output directives（按渠道呈现风格取档，默认 weixin=现状原文）
+        output_directives = _OUTPUT_DIRECTIVES_BY_PRESENTATION.get(
+            reply_presentation, _OUTPUT_DIRECTIVES_WEIXIN
+        )
+        _add("output_directives", output_directives, section=_SECTION_STABLE)
 
         # Block 2b: Factual-accuracy discipline (time → runtime block; relationship → tool)
         _add("factual_discipline", _FACTUAL_DISCIPLINE, section=_SECTION_STABLE)

@@ -556,3 +556,32 @@ class TestProvenanceRuleStructural:
             {"role": "user", "content": user_text},
         ]
         assert messages[1]["content"] == user_text
+
+
+# ---------------------------------------------------------------------------
+# L3 渠道化回复呈现（reply_presentation）—— App 账号收敛/渠道化人设 §9.3 C
+# ---------------------------------------------------------------------------
+
+class TestReplyPresentation:
+    """默认(weixin)呈现档字节级等价现状；native/web 去「微信」字样（原则一）。"""
+
+    def _common(self):
+        return dict(agent_context={"AGENTS": "占位", "TOOLS": "占位"}, model_name="m")
+
+    def test_default_equals_weixin_bytewise(self):
+        pb = PromptBuilder()
+        assert pb.build(**self._common()) == pb.build(reply_presentation="weixin", **self._common())
+
+    def test_weixin_presentation_keeps_weixin_wording(self):
+        out = PromptBuilder().build(reply_presentation="weixin", **self._common())
+        assert "【微信回复呈现】" in out
+
+    def test_native_presentation_drops_weixin_from_directives(self):
+        out = PromptBuilder().build(reply_presentation="native", **self._common())
+        assert "【回复呈现】" in out
+        assert "【微信回复呈现】" not in out
+
+    def test_unknown_presentation_falls_back_to_weixin(self):
+        pb = PromptBuilder()
+        assert pb.build(reply_presentation="totally-unknown", **self._common()) == \
+            pb.build(reply_presentation="weixin", **self._common())

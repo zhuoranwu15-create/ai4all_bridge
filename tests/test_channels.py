@@ -57,6 +57,14 @@ def test_channel_app_renamed_to_native():
     assert get_channel_capability("native") is CHANNELS[CHANNEL_APP]
 
 
+def test_reply_presentation_per_channel():
+    """L3:weixin 呈现档=weixin（原则一），native/web 为各自档，未知渠道回落 weixin。"""
+    assert CHANNELS[CHANNEL_WEIXIN].reply_presentation == "weixin"
+    assert CHANNELS[CHANNEL_WEB].reply_presentation == "web"
+    assert CHANNELS[CHANNEL_APP].reply_presentation == "native"
+    assert _DEFAULT_CAPABILITY.reply_presentation == "weixin"
+
+
 def test_capability_is_frozen():
     cap = CHANNELS[CHANNEL_WEIXIN]
     assert isinstance(cap, ChannelCapability)
