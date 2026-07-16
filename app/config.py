@@ -384,8 +384,12 @@ class Settings(BaseSettings):
     dynamic_reminder_max_retries: int = 2
     # 履约合成轮次可用的工具集（逗号分隔工具名）。v1 只带 web_search；后续放开只改此项。
     dynamic_reminder_fulfillment_tools: str = "web_search"
-    # 首轮强制调用的工具（逗号分隔）；空 = 不强制。v1 强制 web_search，杜绝纯模型知识生成。
-    dynamic_reminder_force_first_tool: str = "web_search"
+    # 首轮工具选择约束（逗号分隔）；空 = 不强制（tool_choice=auto）。
+    # 默认置空：当前 PRO 档为 thinking 模型（deepseek-v4-pro），其 API 只接受 tool_choice="auto"，
+    # 指定函数或 "required" 都会 400（Thinking mode does not support this tool_choice）。
+    # 「必须先搜索」改由履约提示词硬性要求 + search_ok 后置校验保证（搜不到不发编造内容）。
+    # 若将来换用非 thinking 的 provider 需要 API 层硬强制，再把此项设为 web_search。
+    dynamic_reminder_force_first_tool: str = ""
 
     class Config:
         env_file = ".env"

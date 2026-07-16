@@ -38,6 +38,22 @@ def _mk_dynamic_reminder(reminder_id, account_id, *, due_at, recur_rule="weekly:
 # db 层
 # --------------------------------------------------------------------------- #
 
+def test_forced_first_tool_choice_defaults_to_auto(fresh_db):
+    """thinking 模型（deepseek-v4-pro）只接受 tool_choice='auto'，指定函数/required 会 400。
+    默认 force_first 为空 → 履约首轮必须下发 'auto'，强制搜索改由提示词 + search_ok 校验保证。"""
+    from app.proactive.fulfillment.dynamic_reminder import _forced_first_tool_choice
+
+    tools = [{"function": {"name": "web_search"}}]
+    fresh_db.dynamic_reminder_force_first_tool = ""
+    with patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
+        assert _forced_first_tool_choice(tools) == "auto"
+        # 显式配置某工具时才下发指定函数（供未来非 thinking provider）。
+        fresh_db.dynamic_reminder_force_first_tool = "web_search"
+        assert _forced_first_tool_choice(tools) == {
+            "type": "function", "function": {"name": "web_search"}
+        }
+
+
 def test_list_due_fulfillment_filter_and_count(fresh_db):
     from app.db import (
         create_reminder,

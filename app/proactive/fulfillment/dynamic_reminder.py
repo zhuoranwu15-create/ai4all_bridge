@@ -66,7 +66,13 @@ def _fulfillment_tools() -> List[Dict[str, Any]]:
 
 
 def _forced_first_tool_choice(tools: List[Dict[str, Any]]) -> Any:
-    """首轮强制工具：只在该工具确实在本次工具集中时生效，否则降级 auto。"""
+    """首轮工具选择：默认 "auto"。
+
+    注意：当前 PRO 档是 thinking 模型（deepseek-v4-pro），其 API 只接受 tool_choice="auto"，
+    传指定函数或 "required" 都会 400。因此默认不在 API 层强制；"必须先搜索" 由履约提示词 +
+    search_ok 后置校验保证（搜不到不发编造）。仅当 dynamic_reminder_force_first_tool 被显式
+    配成某工具、且该工具在本次工具集内时，才下发指定函数 tool_choice（供未来非 thinking provider）。
+    """
     forced = _csv(getattr(settings, "dynamic_reminder_force_first_tool", ""))
     if not forced:
         return "auto"

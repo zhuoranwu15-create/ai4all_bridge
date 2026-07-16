@@ -124,15 +124,14 @@ CREATE INDEX IF NOT EXISTS ix_rcr_account ON reminder_content_runs(account_id, c
 - **工具集 = registry × ctx 运行时开关，再叠履约级 `tool_policy` 过滤**：
   - **v1**：`allowlist=["web_search"]` + `force_first=["web_search"]`（配置项，非硬编码 if-else）。
   - **后续**：放开 allowlist（或置空=继承普通轮次全集），**不改履约主干，只改配置/行级 tool_policy**。
-- **「强制搜索」用 policy 表达，不靠砍工具集**：即便 v1 只带 web_search，也建模成「首轮必须命中 web_search」的约束；将来放开工具集时该约束仍独立存在。
+- **「强制搜索」的实现取舍（thinking 模型约束）**：原设计想用 `tool_choice` 在 API 层强制首轮命中 web_search。但当前 PRO 档 `deepseek-v4-pro` 是 thinking 模型，其 API **只接受 `tool_choice="auto"`**，下发指定函数或 `"required"` 一律 400（`Thinking mode does not support this tool_choice`）。因此改为：**首轮 `tool_choice=auto` + 履约提示词硬性要求先搜索 + `search_ok` 后置校验**（搜不到就判失败、不发编造内容）。硬保证由「校验」而非「API 强制」提供；`DYNAMIC_REMINDER_FORCE_FIRST_TOOL` 默认置空，仅当将来换用非 thinking provider 需要 API 层强制时才设值。
 - **护栏复用现成的**：每轮工具调用硬上限（参照 TDAI 主动检索的 `TurnContext` 计数器）、account 强隔离、超时降级 never-raise。通用化到全工具时这些闸门正好复用。
 
 专用 prompt 要求：强制搜索、`date_after` 优先取 `last_success_run_at`（首次取最近一周）、只引用搜索结果的 URL/标题/时间、输出限一条微信消息、**搜索失败不发编造内容**、生成 3–5 条。
 
 配置项：
 - `DYNAMIC_REMINDER_FULFILLMENT_TOOLS`（默认 `web_search`）
-- `DYNAMIC_REMINDER_FORCE_FIRST_TOOL`（默认 `web_search`）
-- 行级 `content_meta_json.tool_policy` 可覆盖全局默认。
+- `DYNAMIC_REMINDER_FORCE_FIRST_TOOL`（**默认空=auto**；thinking 模型只接受 auto，见上）
 
 ---
 

@@ -127,20 +127,27 @@ def dispatch_reminder(
 
     outbound_id = int(outbound["id"]) if outbound.get("id") is not None else None
     outbound_status = outbound.get("status")
-    if outbound_status == "sent":
+    # sent=本机直发成功；pending=远程账号（如 aliyun2）已入队，待归属节点 pull 发送。
+    # 两者都视为本期已交付/在途：推进 recur 周期，避免远程账号的循环提醒被误判 failed 而卡死
+    # （list_due_reminders 只扫 pending，failed 后本条永不再触发）。远程若最终发送失败，仅损失
+    # 这一期不重发，与动态提醒分支的取舍一致（见设计文档 §6.2-6）。
+    if outbound_status in ("sent", "pending"):
         recur_rule = claimed.get("recur_rule")
         next_due_at = None
         if recur_rule:
-            last_due = datetime.strptime(claimed["due_at"], "%Y-%m-%d %H:%M:%S")
-            next_dt = compute_next_due_at(recur_rule, last_due)
-            next_due_at = next_dt.strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                last_due = datetime.strptime(claimed["due_at"], "%Y-%m-%d %H:%M:%S")
+                next_due_at = compute_next_due_at(recur_rule, last_due).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, IndexError):
+                # recur_rule 脏数据（如 /debug 补丁写入）不阻断调度，降级为一次性终止。
+                next_due_at = None
         reminder = mark_reminder_sent(
             reminder_id=claimed["id"],
             outbound_message_id=outbound_id,
             next_due_at=next_due_at,
         )
         return {
-            "status": "sent",
+            "status": outbound_status,
             "reminder": reminder,
             "outbound_message": outbound,
         }
