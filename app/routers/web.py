@@ -17,7 +17,7 @@ from app.app_runtime import get_background_loop
 from app.routers.deps import _require_session
 from app import node_gateway
 from app.captcha import verify_captcha
-from app.db import count_verifications_last_hour, create_ai4all_account_for_user, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
+from app.db import count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.rate_limiter import RateLimiter
@@ -63,13 +63,6 @@ class SendOtpRequest(BaseModel):
 class VerifyOtpRequest(BaseModel):
     phone: str
     code: str
-
-
-class WebCreateAgentRequest(BaseModel):
-    platform_user_id: str
-    agent_name: str
-    role_prompt: Optional[str] = None
-    plan: Optional[str] = "free"
 
 
 class WebCreateBindingIntentRequest(BaseModel):
@@ -943,28 +936,6 @@ def web_campaign_visit(payload: WebCampaignVisitRequest, request: Request) -> di
     except Exception as err:  # fail-open：beacon 不因后端错误影响落地页
         logger.warning("campaign visit beacon failed: %s", err)
     return {"status": "ok"}
-
-
-@router.post("/web/agents")
-def web_create_agent(
-    payload: WebCreateAgentRequest,
-    platform_user=Depends(_require_session),
-) -> dict:
-    # 鉴权 + 属主校验：只能为「当前登录用户自己」创建账号，禁止指定他人 platform_user_id。
-    if payload.platform_user_id != platform_user["id"]:
-        raise HTTPException(status_code=403, detail="无权为其他用户创建账号")
-    if get_platform_user(platform_user_id=payload.platform_user_id) is None:
-        raise HTTPException(status_code=404, detail="platform_user not found")
-    try:
-        result = create_ai4all_account_for_user(
-            platform_user_id=payload.platform_user_id,
-            display_name=payload.agent_name,
-            system_prompt=payload.role_prompt,
-            plan=payload.plan or "free",
-        )
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-    return {"status": "ok", **result}
 
 
 @router.post("/web/binding-intents")

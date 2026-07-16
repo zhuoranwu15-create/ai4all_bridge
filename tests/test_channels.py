@@ -49,6 +49,22 @@ def test_app_capability_is_independent_and_sync_only():
     assert cap.tdai_enabled is False
 
 
+def test_channel_app_renamed_to_native():
+    """§9.2 Q5:App 原生渠道值改名 native（区分 App=产品层 / channel=传输层）；
+    会话隔离键仍为 __app_active__（正交，不随渠道名改）。"""
+    assert CHANNEL_APP == "native"
+    assert CHANNELS[CHANNEL_APP].active_session_key == "__app_active__"
+    assert get_channel_capability("native") is CHANNELS[CHANNEL_APP]
+
+
+def test_reply_presentation_per_channel():
+    """L3:weixin 呈现档=weixin（原则一），native/web 为各自档，未知渠道回落 weixin。"""
+    assert CHANNELS[CHANNEL_WEIXIN].reply_presentation == "weixin"
+    assert CHANNELS[CHANNEL_WEB].reply_presentation == "web"
+    assert CHANNELS[CHANNEL_APP].reply_presentation == "native"
+    assert _DEFAULT_CAPABILITY.reply_presentation == "weixin"
+
+
 def test_capability_is_frozen():
     cap = CHANNELS[CHANNEL_WEIXIN]
     assert isinstance(cap, ChannelCapability)

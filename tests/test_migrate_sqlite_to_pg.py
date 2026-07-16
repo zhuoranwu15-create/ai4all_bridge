@@ -74,12 +74,14 @@ def _build_source_sqlite(path: str) -> None:
             "VALUES (?, ?, ?, ?, 'grant', 'referral', ?, ?, ?)",
             ("l2", "w1", "acc1", "pu1", 2_000_000_000, _BIG_BALANCE, "idem-2"),
         )
-        # IDENTITY 表：不传 id，自增出 1、2（(platform_user_id, account_id) 唯一，用不同 account_id）
-        for acc in ("acc1", "acc2"):
+        # owner_bindings：不传 id，自增出 1、2（(platform_user_id, account_id) 唯一，用不同 account_id）。
+        # A 收敛后每 (user, app) 最多一个 active（ux_owner_binding_active_user_app），故第二条置
+        # archived，避免迁到含该唯一索引的 PG 时 (pu1, zhaoxi) 撞 active；行数/自增 id 验证不受影响。
+        for acc, status in (("acc1", "active"), ("acc2", "archived")):
             conn.execute(
-                "INSERT INTO account_owner_bindings (platform_user_id, account_id, binding_method) "
-                "VALUES (?, ?, 'manual')",
-                ("pu1", acc),
+                "INSERT INTO account_owner_bindings (platform_user_id, account_id, binding_method, status) "
+                "VALUES (?, ?, 'manual', ?)",
+                ("pu1", acc, status),
             )
         conn.commit()
     finally:
@@ -136,10 +138,11 @@ def test_migrate_preserves_bigint_and_resets_identity(tmp_path, pg_dsn):
             cur.execute("SELECT id FROM account_owner_bindings ORDER BY id")
             assert [r[0] for r in cur.fetchall()] == [1, 2]
 
-            # 序列已对齐到 MAX(id)：新插入（不传 id）应得 3，不撞号
+            # 序列已对齐到 MAX(id)：新插入（不传 id）应得 3，不撞号。
+            # 置 archived：pu1/zhaoxi 的 active 名额已被 acc1 占用，A 收敛唯一索引只约束 active。
             cur.execute(
-                "INSERT INTO account_owner_bindings (platform_user_id, account_id, binding_method) "
-                "VALUES ('pu1', 'acc3', 'manual') RETURNING id"
+                "INSERT INTO account_owner_bindings (platform_user_id, account_id, binding_method, status) "
+                "VALUES ('pu1', 'acc3', 'manual', 'archived') RETURNING id"
             )
             assert cur.fetchone()[0] == 3
         pconn.commit()

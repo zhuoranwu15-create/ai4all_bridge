@@ -432,3 +432,44 @@ def test_custom_system_tools_file_is_not_overwritten(tmp_path):
 
         assert created["TOOLS.md"] is False
         assert tools_path.read_text(encoding="utf-8").strip() == custom
+
+
+# ---------------------------------------------------------------------------
+# 渠道化人设 Phase1 L1/L2（App 账号收敛/渠道化人设 §9.3 C）
+# ---------------------------------------------------------------------------
+
+def test_identity_seed_is_channel_aware_weixin_unchanged_native_neutral():
+    """L2:weixin 播种保持现状原文（原则一）；native 去「微信」字样。"""
+    from app.user_profiles import _default_user_context_templates
+
+    weixin = _default_user_context_templates(display_name=None)  # 默认 channel=weixin
+    native = _default_user_context_templates(display_name=None, channel="native")
+
+    assert "你是用户在微信里的个人 AI 陪伴与生活助理。" in weixin["IDENTITY.md"]
+    assert "你的微信好友" in weixin["IDENTITY.md"]
+    assert "微信" not in native["IDENTITY.md"]
+    assert "你是用户的个人 AI 陪伴与生活助理。" in native["IDENTITY.md"]
+
+
+def test_resolve_system_context_path_channel_variant(tmp_path):
+    """L1:weixin 读原文件（字节不变）；native 优先读变体，缺失回落原文件（无回归）。"""
+    from app.user_profiles import _resolve_system_context_path
+
+    sd = tmp_path
+    (sd / "AGENTS.md").write_text("base", encoding="utf-8")
+    # 无变体时 native 回落原文件
+    assert _resolve_system_context_path(sd, "AGENTS.md", "native") == sd / "AGENTS.md"
+    # 有变体时 native 读变体；weixin 始终读原文件
+    (sd / "AGENTS.native.md").write_text("native", encoding="utf-8")
+    assert _resolve_system_context_path(sd, "AGENTS.md", "native") == sd / "AGENTS.native.md"
+    assert _resolve_system_context_path(sd, "AGENTS.md", "openclaw-weixin") == sd / "AGENTS.md"
+
+
+def test_read_agent_context_native_seeds_neutral_identity(fresh_db, tmp_path):
+    """L2 端到端:native 渠道首建账号,IDENTITY 不含「微信」。"""
+    s = fresh_db
+    with patch("app.user_profiles.settings", s):
+        from app.user_profiles import read_agent_context
+
+        context = read_agent_context("acc-native", display_name=None, channel="native")
+        assert "微信" not in context.blocks["IDENTITY"]
