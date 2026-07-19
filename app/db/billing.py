@@ -641,13 +641,17 @@ def _ensure_wallet_in_conn(
     ).fetchone()
     if user is None:
         raise ValueError("platform_user not found")
+    # D-14：一真人一 active 钱包。按 platform_user get-or-create——同一真人第二个 account
+    # 命中局部唯一索引 ux_entitlement_wallets_user_active（partial ON platform_user_id
+    # WHERE status='active'）→ DO NOTHING，复用既有共享钱包，不插新行。account_id 列保留
+    # （创建来源），因永不为同一真人插第二行而事实上仍唯一。
     conn.execute(
         """
         INSERT INTO entitlement_wallets(
             id, account_id, platform_user_id, balance_shell_micros, status, updated_at
         )
         VALUES (?, ?, ?, 0, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-        ON CONFLICT(account_id) DO NOTHING
+        ON CONFLICT(platform_user_id) WHERE status = 'active' DO NOTHING
         """,
         (_new_id("wallet"), account_id, platform_user_id),
     )
@@ -656,19 +660,12 @@ def _ensure_wallet_in_conn(
         SELECT id, account_id, platform_user_id, balance_shell_micros, status,
                created_at, updated_at
         FROM entitlement_wallets
-        WHERE account_id = ?
+        WHERE platform_user_id = ? AND status = 'active'
         """,
-        (account_id,),
+        (platform_user_id,),
     ).fetchone()
     if row is None:
         raise RuntimeError("entitlement_wallet was not created")
-    if row["platform_user_id"] != platform_user_id:
-        logger.warning(
-            "wallet platform_user_id mismatch account=%s wallet_owner=%s caller=%s — using existing wallet",
-            account_id,
-            row["platform_user_id"],
-            platform_user_id,
-        )
     return row
 
 
@@ -812,7 +809,9 @@ def grant_new_user_shells(
         amount_shell_micros=NEW_USER_GRANT_SHELL_MICROS,
         source_type="new_user_grant",
         source_id=account_id,
-        idempotency_key=f"new-user-grant-{account_id}",
+        # M1-7（D-14）：幂等键按真人，钱包并份后同一真人第二个 account 的赠权命中既有键、
+        # 不二次入账（source_id 仍记触发赠权的 account 供审计）。
+        idempotency_key=f"new-user-grant-{platform_user_id}",
         metadata={"grant_shells": NEW_USER_GRANT_SHELLS},
     )
 
@@ -1730,9 +1729,9 @@ def record_chat_usage_charge(
                 SELECT id, account_id, platform_user_id, balance_shell_micros, status,
                        created_at, updated_at
                 FROM entitlement_wallets
-                WHERE account_id = ?
+                WHERE platform_user_id = ? AND status = 'active'
                 """,
-                (account_id,),
+                (platform_user_id,),
             ).fetchone()
             return {
                 "cost_event": event,
@@ -1875,9 +1874,9 @@ def record_image_understanding_charge(
                 SELECT id, account_id, platform_user_id, balance_shell_micros, status,
                        created_at, updated_at
                 FROM entitlement_wallets
-                WHERE account_id = ?
+                WHERE platform_user_id = ? AND status = 'active'
                 """,
-                (account_id,),
+                (platform_user_id,),
             ).fetchone()
             return {
                 "cost_event": event,
@@ -1993,9 +1992,9 @@ def get_wallet_summary(
             SELECT id, account_id, platform_user_id, balance_shell_micros, status,
                    created_at, updated_at
             FROM entitlement_wallets
-            WHERE account_id = ?
+            WHERE platform_user_id = ? AND status = 'active'
             """,
-            (account_id,),
+            (platform_user_id,),
         ).fetchone()
         if wallet_row is None:
             return None
@@ -2042,16 +2041,21 @@ def list_wallet_ledger(
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     clean_limit = max(1, min(int(limit), 200))
+    # D-14：钱包已按真人共享，流水视图随之按 platform_user 聚合（跨该真人全部 account），
+    # 与 get_wallet_summary 的共享余额一致。无 active 绑定则空。
+    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
+    if platform_user_id is None:
+        return []
     with connect() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM entitlement_ledger
-            WHERE account_id = ?
+            WHERE platform_user_id = ?
             ORDER BY created_at DESC, id DESC
             LIMIT ?
             """,
-            (account_id, clean_limit),
+            (platform_user_id, clean_limit),
         ).fetchall()
     return [_decode_ledger_row(row) for row in rows]
 

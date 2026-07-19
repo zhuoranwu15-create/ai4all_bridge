@@ -1968,6 +1968,108 @@ def _migration_0021_dynamic_reminders(conn: Connection) -> None:
     )
 
 
+def _migration_0022_wallet_unique_platform_user(conn: Connection) -> None:
+    """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
+    上线前，把 entitlement_wallets 的「一 account 一钱包」上迁为「一真人一钱包、全部居民共用
+    一份余额」。本迁移刻意**保留** UNIQUE(account_id)：billing 改按 platform_user
+    get-or-create 后永不会为同一真人插入第二个钱包行，account_id 事实上仍唯一、保留无害，据此
+    完全避开 SQLite 表重建 / PG DROP CONSTRAINT 的高风险后端分叉（决策见 §D-14 item3）。只做：
+
+      1) 合并存量多钱包老用户（建号允许每真人 ≤10 account，历史上可能已有多钱包）：
+         选主钱包 = 该真人「最早 active binding 对应 account」的 active 钱包；余额求和入主钱包、
+         ledger/cost_events.wallet_id 归并到主、其余钱包置 status='merged'（保留审计，不删行避免 FK 冲突）。
+      2) 加局部唯一索引 ux_entitlement_wallets_user_active（合并后可满足；SQLite/PG 同一 DDL，无需分支）。
+
+    可重复执行（幂等）：再跑时每真人仅 1 active 钱包，不再进入合并分支。生产执行前须先跑
+    scripts/precheck_wallet_migration.py（四条阻断全过）；本迁移假定 primary 有定义、无歧义/
+    孤儿/漂移，万一取不到主钱包则告警跳过、不静默改数。
+    """
+    multi_wallet_users = conn.execute(
+        """
+        SELECT platform_user_id
+        FROM entitlement_wallets
+        WHERE status = 'active'
+        GROUP BY platform_user_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for row in multi_wallet_users:
+        user_id = row["platform_user_id"]
+        # 选主：该真人「最早 active binding 对应 account」的 active 钱包（冻结规则，与预检一致）。
+        primary = conn.execute(
+            """
+            SELECT w.id AS id
+            FROM entitlement_wallets w
+            JOIN account_owner_bindings b
+              ON b.account_id = w.account_id
+             AND b.status = 'active'
+             AND b.platform_user_id = w.platform_user_id
+            WHERE w.status = 'active' AND w.platform_user_id = ?
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        if primary is None:
+            logger.warning(
+                "m0022 skip merge: primary wallet undefined for platform_user=%s "
+                "(precheck should have blocked this)",
+                user_id,
+            )
+            continue
+        primary_id = primary["id"]
+        # 求和须在置 merged 之前（此刻全部候选钱包仍 active）。
+        total = conn.execute(
+            """
+            SELECT COALESCE(SUM(balance_shell_micros), 0) AS total
+            FROM entitlement_wallets
+            WHERE status = 'active' AND platform_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()["total"]
+        conn.execute(
+            """
+            UPDATE entitlement_ledger SET wallet_id = ?
+            WHERE wallet_id IN (
+                SELECT id FROM entitlement_wallets
+                WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            )
+            """,
+            (primary_id, user_id, primary_id),
+        )
+        conn.execute(
+            """
+            UPDATE cost_events SET wallet_id = ?
+            WHERE wallet_id IN (
+                SELECT id FROM entitlement_wallets
+                WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            )
+            """,
+            (primary_id, user_id, primary_id),
+        )
+        conn.execute(
+            """
+            UPDATE entitlement_wallets SET status = 'merged'
+            WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            """,
+            (user_id, primary_id),
+        )
+        conn.execute(
+            "UPDATE entitlement_wallets SET balance_shell_micros = ? WHERE id = ?",
+            (int(total), primary_id),
+        )
+    # 合并后每真人至多 1 active 钱包，局部唯一索引可满足。
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_wallets_user_active
+        ON entitlement_wallets(platform_user_id)
+        WHERE status = 'active';
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -1985,6 +2087,7 @@ _MIGRATIONS = [
     (19, _migration_0019_campaign_ai_name_preset),
     (20, _migration_0020_campaign_visits),
     (21, _migration_0021_dynamic_reminders),
+    (22, _migration_0022_wallet_unique_platform_user),
 ]
 
 
