@@ -8,12 +8,12 @@ M1（D-14 钱包上迁 / D-09 配额上迁）会改动的接缝：
      且按 account 隔离（不同 account 同名 message_id 不算重复）。
   2) 一人多号钱包/赠权：同一 platform_user 的两个 account 共用一个 active 钱包、只赠一次
      new_user_grant（幂等键按 platform_user）——**M1-1+M1-7（D-14）已落地，此为翻转后终态**。
-  3) 一人多号 daily 配额现状：daily 按 account_id 独立计数——D-09/M1-3/M1-4 会迁到
-     platform_user 共享（**尚未落地，仍钉 pre-D-09 现状**）。
+  3) 一人多号 daily 配额：daily 按 platform_user 聚合、全部居民共享一套额度——**M1-3+M1-4
+     （D-09）已落地，此为翻转后终态**。
 
-重要：2) 原钉 pre-D-14 现状、已随 M1-1+M1-7 翻转为新预期；3) 仍冻结「即将被改掉」的
-pre-D-09 行为，D-09（M1-3/M1-4）落地后会变红、届时同步更新。RPM 的 account 隔离已由
-test_rate_limiter::test_accounts_are_isolated 覆盖，此处不重复。全部走内存 SQLite（fresh_db）。
+重要：2) 原钉 pre-D-14 现状、已随 M1-1+M1-7 翻转为新预期；3) 原钉 pre-D-09 现状、已随
+M1-3+M1-4 翻转为新预期。RPM 的 account 隔离已由 test_rate_limiter::test_accounts_are_isolated
+覆盖，此处不重复。全部走内存 SQLite（fresh_db）。
 """
 import app.db as db
 from tests import factories
@@ -136,16 +136,22 @@ def test_multi_account_shared_wallet_and_single_grant_per_person(fresh_db):
 
 
 # ---------------------------------------------------------------------------
-# 接缝 6：一人多号 daily 配额现状（D-09 / M1-3 / M1-4 会迁 platform_user 共享）
+# 接缝 6：一人多号 daily 配额终态（D-09 / M1-3 + M1-4 已落地，按 platform_user 共享）
 # ---------------------------------------------------------------------------
-def test_multi_account_daily_usage_is_counted_per_account(fresh_db):
-    """现状（pre-D-09）：同一真人的两个号 daily 计数相互独立、不共享。"""
+def test_multi_account_daily_usage_is_shared_per_person(fresh_db):
+    """D-09 后终态：同一真人的两个号 daily 计数共享一套额度（按 platform_user 聚合）。
+
+    M0-1 曾钉 pre-D-09 现状（两号各自独立计数）；M1-3+M1-4 落地后翻转为「一真人一套配额、
+    全部居民共享」，此断言即新预期。
+    """
     _user_id, a1, a2 = _two_accounts_of_one_user()
     date = "2026-07-19"
 
     db.increment_daily_usage(account_id=a1, date=date)
     db.increment_daily_usage(account_id=a1, date=date)
+    # 另一个号继续消耗同一套额度（不再各自独立）。
+    db.increment_daily_usage(account_id=a2, date=date)
 
-    assert db.get_daily_usage(account_id=a1, date=date) == 2
-    # 另一个号的计数不受影响——M1-3/M1-4 迁 platform_user 共享后此处将随 a1 一同消耗。
-    assert db.get_daily_usage(account_id=a2, date=date) == 0
+    # 两个号读到同一份共享计数（3），而非各自独立。
+    assert db.get_daily_usage(account_id=a1, date=date) == 3
+    assert db.get_daily_usage(account_id=a2, date=date) == 3

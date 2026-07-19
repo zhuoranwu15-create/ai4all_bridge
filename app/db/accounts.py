@@ -1319,11 +1319,34 @@ def set_account_onboarding_state(*, account_id: str, state: str) -> None:
             logger.warning("analytics onboarding event emit failed account=%s error=%s", account_id, err)
 
 
+def _resolve_quota_subject(cursor, account_id: str) -> str:
+    """在给定连接/事务上把 account_id 解析成配额聚合键 platform_user_id（D-09 M1-3）。
+
+    冻结解析规则（与 get_platform_user_id_for_account、D-14 预检、迁移 m0022/m0023 一致）：
+    最早 active binding 的 platform_user_id 胜出。无 active binding 的孤儿号回退为 account_id
+    本身，保证配额仍按号强制（daily_usage.platform_user_id 无 FK，容此回退值）。刻意在**同一**
+    连接/事务上查，避免与调用方的写事务嵌套开新连接。
+    """
+    row = cursor.execute(
+        """
+        SELECT platform_user_id
+        FROM account_owner_bindings
+        WHERE account_id = ? AND status = 'active'
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+        """,
+        (account_id,),
+    ).fetchone()
+    return str(row["platform_user_id"]) if row else account_id
+
+
 def get_daily_usage(*, account_id: str, date: str) -> int:
+    # D-09：daily 按真人聚合。对外仍收 account_id，内部解析成 platform_user 后按真人查。
     with connect() as conn:
+        subject = _resolve_quota_subject(conn, account_id)
         row = conn.execute(
-            "SELECT message_count FROM daily_usage WHERE account_id = ? AND date = ?",
-            (account_id, date),
+            "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (subject, date),
         ).fetchone()
     return int(row["message_count"]) if row else 0
 
@@ -1335,34 +1358,39 @@ def increment_daily_usage(
     conn: Optional[Connection] = None,
 ) -> int:
     with _tx(conn) as tx:
+        # D-09：解析真人聚合键（同事务查，避免嵌套连接）；account_id 列继续写入作创建来源
+        # + 满足保留的 UNIQUE(account_id,date)/FK。ON CONFLICT arbiter 迁到 (platform_user_id,date)。
+        subject = _resolve_quota_subject(tx, account_id)
         tx.execute(
             """
-            INSERT INTO daily_usage(account_id, date, message_count, updated_at)
-            VALUES (?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            ON CONFLICT(account_id, date) DO UPDATE SET
+            INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at)
+            VALUES (?, ?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(platform_user_id, date) DO UPDATE SET
                 -- 限定表名：PG 的 DO UPDATE 里 excluded 也在作用域，裸 message_count 会歧义
                 message_count = daily_usage.message_count + 1,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             """,
-            (account_id, date),
+            (account_id, subject, date),
         )
         row = tx.execute(
-            "SELECT message_count FROM daily_usage WHERE account_id = ? AND date = ?",
-            (account_id, date),
+            "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (subject, date),
         ).fetchone()
     return int(row["message_count"]) if row else 1
 
 
 def get_usage_last_7_days(*, account_id: str) -> List[Dict[str, Any]]:
+    # D-09：展示与强制一致，按真人聚合的近 7 日用量。
     with connect() as conn:
+        subject = _resolve_quota_subject(conn, account_id)
         rows = conn.execute(
             """
             SELECT date, message_count FROM daily_usage
-            WHERE account_id = ?
+            WHERE platform_user_id = ?
             ORDER BY date DESC
             LIMIT 7
             """,
-            (account_id,),
+            (subject,),
         ).fetchall()
     return [dict(row) for row in rows]
 

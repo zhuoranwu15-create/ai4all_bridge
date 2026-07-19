@@ -2070,6 +2070,81 @@ def _migration_0022_wallet_unique_platform_user(conn: Connection) -> None:
     )
 
 
+def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
+    """D-09 M1-3/M1-4：daily 配额计数键从 account_id 上迁到 platform_user（一真人一套配额）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
+    上线前，把 daily_usage 的「一 account 一套额度」上迁为「一真人一套、全部居民共享」。同 D-14
+    钱包上迁刻意**保留** UNIQUE(account_id,date)：daily 三函数改按 platform_user get-or-create
+    后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开 SQLite 表重建 /
+    PG DROP CONSTRAINT 的后端分叉（决策见 §D-09 落地说明）。只做：
+
+      1) 新增 platform_user_id 列（无 FK，容 fallback 值）+ 从最早 active binding 回填。
+      2) 合并同 (真人,date) 多行（历史多号可能各有当日行）：message_count 求和入主行（MIN(id)）、
+         删其余行（daily_usage 无被引用，直接删，无需 status 保留）。须在建唯一索引前。
+      3) 加唯一索引 ux_daily_usage_user_date(platform_user_id, date)（合并后可满足；SQLite/PG
+         同一 DDL，NULL 行互不相等不冲突，无需分支）。
+
+    可重复执行（幂等）：再跑时每 (真人,date) 仅 1 行、回填只补 NULL、索引 IF NOT EXISTS。daily/rpm
+    是瞬态计数（无历史余额可损坏），故无需 precheck（owner 解析不变式已由 D-14 precheck 作同一 M1
+    发布闸覆盖）；无 active binding 的孤儿行保持 platform_user_id=NULL、不进合并、不占索引。
+    """
+    # 1) 加列（幂等）+ 从最早 active binding 回填（冻结解析规则，与 get_platform_user_id_for_account
+    #    及 D-14 预检一致：ORDER BY b.created_at ASC, b.id ASC LIMIT 1）。
+    _ensure_column(conn, "daily_usage", "platform_user_id", "TEXT")
+    conn.execute(
+        """
+        UPDATE daily_usage
+        SET platform_user_id = (
+            SELECT b.platform_user_id
+            FROM account_owner_bindings b
+            WHERE b.account_id = daily_usage.account_id
+              AND b.status = 'active'
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+        )
+        WHERE platform_user_id IS NULL
+        """
+    )
+    # 2) 合并同 (真人,date) 多行（多号≈0，near-no-op；索引安全必需，须在建索引前）。
+    dup_groups = conn.execute(
+        """
+        SELECT platform_user_id, date
+        FROM daily_usage
+        WHERE platform_user_id IS NOT NULL
+        GROUP BY platform_user_id, date
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for grp in dup_groups:
+        pu = grp["platform_user_id"]
+        date = grp["date"]
+        primary_id = conn.execute(
+            "SELECT MIN(id) AS id FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (pu, date),
+        ).fetchone()["id"]
+        total = conn.execute(
+            "SELECT COALESCE(SUM(message_count), 0) AS total "
+            "FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (pu, date),
+        ).fetchone()["total"]
+        conn.execute(
+            "DELETE FROM daily_usage WHERE platform_user_id = ? AND date = ? AND id <> ?",
+            (pu, date, primary_id),
+        )
+        conn.execute(
+            "UPDATE daily_usage SET message_count = ? WHERE id = ?",
+            (int(total), primary_id),
+        )
+    # 3) 合并后每 (真人,date) 至多 1 行，唯一索引可满足。
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_usage_user_date
+        ON daily_usage(platform_user_id, date);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2088,6 +2163,7 @@ _MIGRATIONS = [
     (20, _migration_0020_campaign_visits),
     (21, _migration_0021_dynamic_reminders),
     (22, _migration_0022_wallet_unique_platform_user),
+    (23, _migration_0023_daily_usage_platform_user),
 ]
 
 

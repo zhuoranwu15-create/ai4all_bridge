@@ -27,6 +27,7 @@ from app.db import (
     get_active_content_invitation,
     get_daily_usage,
     get_duplicate_reply,
+    get_platform_user_id_for_account,
     increment_session_turn_count,
     increment_daily_usage,
     insert_debug_trace,
@@ -1041,8 +1042,11 @@ def _prepare_turn(
         0.001,
     )
 
+    # D-09：RPM 按真人聚合，多居民共享一套滑窗。check_rpm 是与 web IP-keyed 调用共享的通用限流器，
+    # 不能内部解析，故在此把 account_id 解析成 platform_user subject（孤儿号回退 account_id）后传入。
+    quota_subject = get_platform_user_id_for_account(account_id=account_id) or account_id
     if effective_rpm > 0 and not rate_limiter.check_rpm(
-        account_id,
+        quota_subject,
         effective_rpm,
         window_seconds=effective_rpm_window_seconds,
     ):

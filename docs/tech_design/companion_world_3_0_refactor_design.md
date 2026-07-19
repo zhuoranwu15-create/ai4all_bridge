@@ -109,6 +109,13 @@
 - **依据**：daily 路径 `turn_service.py:1065` 读、`:1185` 处理后才 +1，**无 advisory 锁**（RPM 路径 `rate_limiter.py:52` 有 `pg_advisory_xact_lock`）；TOCTOU 今天被 per-account 单飞掩盖，聚合到用户后跨居民无单飞将暴露。
 - **同源提示**：D-07/D-09/重复赠权同源于“建号函数把 owner binding 当计费锚点+容量上限+配额键三重身份”，P1 须一并解耦。
 
+> **落地说明（M1-3 + M1-4 键上迁已交付 2026-07-19；原子预占/退款/TTL 拆下一刀）**：与用户拍板「键上迁优先」——本刀只把配额**计数键**上迁到 `platform_user`（达成「一真人一套配额、多居民共享」核心目标 + 翻转 characterization 接缝 6），**不含** §D-09 的原子预占 + 回滚 / 退款矩阵 / TTL 回收；那部分动机（跨居民并发 TOCTOU）M2 多居民才出现，拆下一刀、M2 前置补齐。已交付：
+> 1. **迁移** `_migration_0023_daily_usage_platform_user`（版本 23，`_core.py`）：`daily_usage` 加 `platform_user_id` 列（无 FK）+ 从最早 active binding 回填 + 合并同 (真人,date) 多行（求和入 MIN(id)、删其余）+ 加唯一索引 `ux_daily_usage_user_date(platform_user_id,date)`，幂等。瞬态计数无历史余额可损坏，故**无需 precheck**（owner 解析不变式已由 D-14 precheck 作同一 M1 发布闸覆盖）。
+> 2. **daily**（`accounts.py` 三函数）：对外仍收 `account_id`，内部 `_resolve_quota_subject`（同连接/事务解析，孤儿号回退 account_id）按真人聚合；`increment_daily_usage` 的 `ON CONFLICT` arbiter 迁到 `(platform_user_id,date)`，`account_id` 列继续写作创建来源。调用方（turn_service daily 路径、admin、`test_db_rate_limit.py`）零改动。
+> 3. **RPM**（`turn_service.py`）：RPM 检查前解析 `quota_subject = get_platform_user_id_for_account(...) or account_id` 传入通用 `check_rpm`；`rpm_hits` 表 schema 不动（列语义变为不透明 subject，与 web IP-keyed 调用共命名空间不撞），存量行 30–60s 自然过期、无需迁移。
+> 4. **两处刻意偏差（同 D-14 Option A 取向）**：①**保留 `UNIQUE(account_id,date)` 只加 `(platform_user_id,date)` 唯一索引**，不删旧约束/不表重建，避开 SQLite 12 步重建 / PG DROP CONSTRAINT；改按真人聚合后每 (真人,date) 至多一行、旧唯一仍满足。②**override 来源未迁**：limit 值仍读 turn 所属 account 的 `daily_limit/rpm_limit`，真人级 override（本节 item2）待 M2-0 subject 模型引入 override 源后补齐（当前多号≈0，near-moot）。
+> 测试：翻转 `test_characterization_baseline.py` 接缝 6 为共享终态、新增 `test_daily_quota_migration_m0023.py`（回填/合并/幂等）+ `test_db_rate_limit.py` 共享 RPM。门禁 SQLite + PG 双档全绿。
+
 ### D-10 世界内容 ≠ 主动消息（架构）
 - **决策**：世界动态、离别动态、信箱由独立 world-content/lifecycle job 生成、审核、持久化（`universe_posts` 等），客户端主动拉取 Feed；**不通过打开 `CHANNEL_APP.supports_proactive` 实现**。是否 Push 后续独立设计。
 - **依据**：`channels.py` `CHANNEL_APP` `supports_proactive=False`、`tdai_enabled=False`；开启会误启当前无 APNs/FCM 投递能力的提醒工具。
