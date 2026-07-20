@@ -2185,6 +2185,121 @@ def _migration_0024_daily_quota_reservations(conn: Connection) -> None:
     )
 
 
+def _migration_0025_companion_world_core(conn: Connection) -> None:
+    """M2-A：朝夕相伴 P1 多居民核心四表（universe/template/resident/conversation）。
+
+    见 companion_world_p1_backend_spec.md §2.1–2.4。一真人一 home world（universes
+    UNIQUE(owner_platform_user_id) 幂等 bootstrap 依赖）；模板≠runtime account（同模板进两
+    世界=两 resident 两 account）；容量真相 = universe_residents.status='active' 计数（D-07，
+    world row lock 下校验 active≤10），偏唯一索引保证一 runtime account 至多一 resident；
+    ai_conversations 提供跨 session 稳定会话 ID（≠数值 session.id），owner 校验锚防越权。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。本刀不接线，无 live 读写。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universes (
+            id TEXT PRIMARY KEY,                          -- 内部世界 ID，非可分享公开码
+            owner_platform_user_id TEXT NOT NULL UNIQUE,  -- 一真人一 home world（幂等 bootstrap 依赖）
+            legacy_primary_account_id TEXT,               -- 老用户迁移/计费锚点（D-08 legacy 映射）
+            status TEXT NOT NULL DEFAULT 'active',         -- active | disabled
+            onboarding_state TEXT NOT NULL DEFAULT 'preparing',  -- preparing | selecting | confirmed
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS character_templates (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,                    -- official | operations | user_created | generated
+            owner_platform_user_id TEXT,                  -- 自建时非空；官方/运营为空
+            name TEXT NOT NULL,
+            avatar_ref TEXT,
+            summary TEXT,
+            tags_json TEXT,
+            persona_seed_json TEXT,                        -- 实例化时写入 runtime account 的 SOUL/IDENTITY 种子；不经 App DTO 下发
+            persona_version TEXT NOT NULL DEFAULT 'v1',    -- 版本；运营更新不静默改写既有关系
+            status TEXT NOT NULL DEFAULT 'active',          -- active | retired
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_character_templates_source ON character_templates(source_type, status);
+        CREATE INDEX IF NOT EXISTS ix_character_templates_owner ON character_templates(owner_platform_user_id);
+
+        CREATE TABLE IF NOT EXISTS universe_residents (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            character_template_id TEXT NOT NULL,
+            template_version TEXT NOT NULL,               -- 确认时刻钉住的模板版本
+            runtime_account_id TEXT,                       -- 激活后指向 account；candidate 期为空
+            origin TEXT NOT NULL,                          -- preset | custom | mailbox | legacy
+            status TEXT NOT NULL DEFAULT 'candidate',       -- candidate | active | offline | dismissed
+            joined_at TEXT,
+            offline_at TEXT,
+            departure_event_id TEXT,                        -- M4 用，P1 留列
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_residents_universe_status ON universe_residents(universe_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_runtime
+            ON universe_residents(runtime_account_id) WHERE runtime_account_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS ai_conversations (
+            id TEXT PRIMARY KEY,                           -- 客户端长期稳定会话 ID（≠ 数值 session.id）
+            universe_id TEXT NOT NULL,
+            resident_id TEXT NOT NULL,
+            owner_platform_user_id TEXT NOT NULL,          -- owner 校验锚（防越权）
+            runtime_account_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'active',            -- active | read_only（resident offline 后原子切换）
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(resident_id) REFERENCES universe_residents(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_conversations_resident ON ai_conversations(resident_id);
+        CREATE INDEX IF NOT EXISTS ix_ai_conversations_owner_state ON ai_conversations(owner_platform_user_id, state);
+        """
+    )
+
+
+def _migration_0026_universe_memory_l3(conn: Connection) -> None:
+    """M2-A：L3 共享沉淀记忆承载表 universe_memory_facts（append-only typed fact）。
+
+    见 companion_world_p1_backend_spec.md §2.5 + ADR §6.4/D-05/D-06。L3 锚 universe_id（非
+    account）；各 resident 只 INSERT 带 provenance 的结构化事实行、永不就地改写，天然规避
+    last-writer-wins；compact 由单 writer 打 status='superseded'+superseded_by。payload_json
+    是结构化事实体、非逐字原文（D-05 不共享聊天原文）。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。本刀只落存储，读注入/sink 路由属 M2-B。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_memory_facts (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,                     -- L3 锚点（D-06），非 account
+            fact_type TEXT NOT NULL,                       -- §1 L3 类枚举
+            payload_json TEXT NOT NULL,                    -- 结构化事实体（非逐字原文，D-05）
+            source_account_id TEXT,                        -- 来源 resident 的 runtime account
+            source_resident_id TEXT,
+            source_message_id TEXT,
+            occurred_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',           -- active | superseded
+            superseded_by TEXT,                              -- compact 合并后新行的 id
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_read
+            ON universe_memory_facts(universe_id, fact_type, status);
+        CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_universe_time
+            ON universe_memory_facts(universe_id, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2205,6 +2320,8 @@ _MIGRATIONS = [
     (22, _migration_0022_wallet_unique_platform_user),
     (23, _migration_0023_daily_usage_platform_user),
     (24, _migration_0024_daily_quota_reservations),
+    (25, _migration_0025_companion_world_core),
+    (26, _migration_0026_universe_memory_l3),
 ]
 
 
