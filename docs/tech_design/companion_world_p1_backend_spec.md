@@ -34,7 +34,7 @@ ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**
 | `user_identity` | 真人称呼/身份/基本信息 | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 沉淀记忆全量共享 |
 | `user_preference` | 偏好/口味/禁忌 | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
 | `user_profile_derived` | 派生画像（性格/关系网等） | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
-| `bazi` | 八字/命理托管段（**L3 首刀**） | **L3** 共享 | `universe_id` | `universe_memory_facts` | ADR §6.5 |
+| ~~`bazi`~~ | ~~八字/命理托管段（L3 首刀）~~ **已废弃 2026-07-21：八字降级为无工具 skill，出生信息走通用 `user_fact`** | — | — | — | ADR §6.5 |
 | `user_event` | 关于用户的客观事件/里程碑（**非聊天原文**） | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
 | `relationship` | 关系阶段/漂移/共同历史 | **L2** 隔离 | `account_id` | `account_user_meta` + MEMORY 关系段（现状不变） | D-04/D-05 |
 | `commitment` | 本居民某轮许下的承诺 | **L2** 隔离 | `account_id` | `proactive_commitments`（现状不变） | ADR §11.2 |
@@ -175,7 +175,7 @@ CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_universe_time
 - **写路径 = SQL 侧原子追加**（仿 `profile_storage.append_file`，ADR §6.3）：各 resident 只 `INSERT` 带 provenance 的事实行，**永不就地改写整表/整段**，天然规避 last-writer-wins（ADR §6.4）。
 - **compact = 单 writer**（挂 DreamingScheduler 单例，ADR §6.6）：合并/去重时 `INSERT` 一条合并行 + 把被合并行 `status='superseded'`、`superseded_by=<新行>`；append-only，不物理删。
 - **读注入（ADR §6.1）**：`read_universe_context(universe_id)` 选 `status='active'` 行按 `fact_type` 渲染文本 → 域层包成 `ContextBlock(name='universe_l3', ...)` 经 `ctx.extra_blocks` 注入（接缝①）。
-- **L3 首刀**：`read_bazi_profile`/`write_bazi_profile` 后端从 MEMORY.md 内嵌段改指本表（`fact_type='bazi'`，ADR §6.5），对 prompt 侧近乎透明。
+- ~~**L3 首刀**：`read_bazi_profile`/`write_bazi_profile` 后端改指本表（`fact_type='bazi'`）~~ **（废弃 2026-07-21：八字降级为无工具 skill、bazi 托管段整体移除；L3 首刀改由通用 `user_fact`/`user_preference` 承载）**。
 - **隔离测试点**：写入必带 `universe_id`；`INSERT` 前校验 `source_resident_id` 属于该 `universe_id`（跨 universe 写拒绝）；读取只在同 `universe_id` 内；访客/他人世界零泄漏（复用 visit ACL，M5）。
 
 ### 2.6 事务与并发边界（P1 硬边界，细则待 M2-0 收尾）
