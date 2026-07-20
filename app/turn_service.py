@@ -1512,7 +1512,9 @@ def _resolve_turn_reply(
                 now=now,
                 llm_provider=llm_provider,
                 message_type=ctx.message_type,
-                extra_blocks=_tdai_extra_blocks or None,
+                # 接缝①：域层注入块（ctx.extra_blocks，L3 等）在前 + tdai 召回块在后。
+                # 两者皆空 → None → assemble 既有 no-op 分支（form-A 逐字不变）。
+                extra_blocks=([*ctx.extra_blocks, *_tdai_extra_blocks] or None),
                 cap=setup.cap,
             )
             history = llm_input["history"]
@@ -2186,6 +2188,9 @@ class ChannelTurnInput:
     force_web_search_enabled: Optional[bool] = None
     # 原 _openclaw_id_diagnostics 结果（渠道相关，对核心不透明），仅供日志。
     inbound_diagnostics: Dict[str, Any] = field(default_factory=dict)
+    # 域层注入的外部 context 块（L3 等，ADR §7.3 接缝①）。WeChat 入口不填 → 默认空 →
+    # 组装时退化 no-op；form-B（App）入口随 M2-C 由 read_universe_context 填入。
+    extra_blocks: List[ContextBlock] = field(default_factory=list)
 
 
 def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
