@@ -92,6 +92,8 @@
 - **依据**：`billing.py:2090` 建号前 `COUNT(*) account_owner_bindings WHERE status='active' >= 10` 抛错。
 - **影响**：成本事件仍记实际 resident runtime，余额扣减归同一真人 billing owner。
 
+> **落地说明（核对 2026-07-19，M1 pre-work 结论：计数解耦事实已满足，no-cap/no-grant 路径随 M2 接线）**：核对现状代码——建号容量校验 `billing.py:2087-2095` **本就只数 `status='active'` binding**（非「历史 binding 全计」），离场路径 `wipe_account_data`（`lifecycle.py:224`）直接 **DELETE binding**、`/web/me/unbind` 把 active 归零，赠权已按真人幂等（`new-user-grant-{platform_user_id}`，D-14/M1-7）。故 D-07 的「active 容量真相、历史 binding 不占位」在 M1 现状**事实已满足**，无独立编码。真正剩余的 M1 pre-work = §12 M2 本体点名的 **M1-5「no-cap/no-grant 内部建号路径」**（M2 在 world lock 下用 `universe_residents.status` 自校容量，故建号侧不要 10 闸再打架）——该内部路径随 **M2 建居民**一并接线（M1 不引入 universe 表，R1a「不依赖任何 universe 表」）。
+
 ### D-08 legacy resident 保留离开豁免（P1 阻断，**冻结 2026-07-19 = 保留豁免 + 修订 PRD**）
 - **决策【已冻结 = 保留豁免】**：微信 legacy 居民与 App legacy 居民共享同一 runtime account，“legacy 普通居民 + 微信零回归 + 不可逆 offline”三者互斥。**取「保留豁免」**——legacy 居民永不 offline，App 仅展示、不提供离开入口；工程上微信零回归天然满足（不动共享 runtime account）。**须同步修订客户端 PRD `ai_companion_universe_prd.md:634`「来源不构成豁免」记为已知偏离**（本轮不动客户端仓库，去客户端仓库时改；§10.4 已标注）。
 - **依据 / backfill**：`account_owner_bindings` 在 `platform_user_id` 无唯一约束、`get_first_active_account_for_user` 只取最早一个 → backfill 须显式处理已持 2+ account 的老用户（全部映射为 `origin=legacy` 居民，或仅第一个、其余处置随 §10.2）。
@@ -115,6 +117,14 @@
 > 3. **RPM**（`turn_service.py`）：RPM 检查前解析 `quota_subject = get_platform_user_id_for_account(...) or account_id` 传入通用 `check_rpm`；`rpm_hits` 表 schema 不动（列语义变为不透明 subject，与 web IP-keyed 调用共命名空间不撞），存量行 30–60s 自然过期、无需迁移。
 > 4. **两处刻意偏差（同 D-14 Option A 取向）**：①**保留 `UNIQUE(account_id,date)` 只加 `(platform_user_id,date)` 唯一索引**，不删旧约束/不表重建，避开 SQLite 12 步重建 / PG DROP CONSTRAINT；改按真人聚合后每 (真人,date) 至多一行、旧唯一仍满足。②**override 来源未迁**：limit 值仍读 turn 所属 account 的 `daily_limit/rpm_limit`，真人级 override（本节 item2）待 M2-0 subject 模型引入 override 源后补齐（当前多号≈0，near-moot）。
 > 测试：翻转 `test_characterization_baseline.py` 接缝 6 为共享终态、新增 `test_daily_quota_migration_m0023.py`（回填/合并/幂等）+ `test_db_rate_limit.py` 共享 RPM。门禁 SQLite + PG 双档全绿。
+
+> **落地说明（原子预占下半刀已交付 2026-07-19）**：补齐 item 3–6 的原子预占 + 回滚/退款矩阵 + TTL（键上迁下半刀）。已交付：
+> 1. **迁移** `_migration_0024_daily_quota_reservations`（版本 24，`_core.py`）：新增独立预占表 `daily_quota_reservations(id, platform_user_id, date, account_id, created_at, expires_at)` + 两索引。空表迁移、无回填、幂等。**不改 `daily_usage` schema**——`message_count` 语义保持「已确认成功计费的计数」，`get_daily_usage`/`get_usage_last_7_days`/admin 展示零改动。
+> 2. **4 个原语**（`accounts.py`）：`reserve_daily_quota`（PG 取单键 advisory 锁 `pg_advisory_xact_lock('quota:'||platform_user)`【P1 §2.7 L3】→ prune-on-touch 清过期 → 按 `message_count + 活跃 reservation 数 < limit` 原子校验 → 插预占行，`limit<=0` 不限；已满返回 `None`）、`confirm_daily_quota`（删预占行 + `increment_daily_usage`，`DELETE rowcount` 守幂等不双记）、`rollback_daily_quota`（删行、不计数）、`reclaim_expired_reservations`（批量兜底回收）。共享 `advisory_lock_key`（抽 `rate_limiter._advisory_key` 到 `_core`，避免 `app.db`→`rate_limiter` 循环导入）。
+> 3. **turn_service 接线**：`_persist_and_screen_inbound` 入站 tx 内、`insert_message`（去重）**之后**、同一 `conn` 调 `reserve_daily_quota` 取代旧「入站即 +1」（满足「去重先于预占同事务」，重试不吃配额）；预占失败（在途 race 到满）返回 `rate_limited`。`_finalize_turn` 计费谓词处**一处**收敛：`should_charge → confirm` 否则 `rollback`（**配额消耗 ⟺ 钱包计费**）。保留 `_prepare_turn` 的 daily 读检做 fast-path（常见「已满」无插入即拒）。退款矩阵落地为：moderation 拦截 / 模型失败 / 特殊命令 / 未计费 onboarding 一律 rollback、不扣 daily。
+> 4. **TTL**：reserve 时 prune-on-touch（清本真人已过期悬挂，活跃真人自愈，TTL 默认 15min ≫ turn 秒级，保证 cap 计数正确）；崩溃后再无来信的残留由 DB 原语 `reclaim_expired_reservations` 兜底。**本刀不进 in-scheduler step**——该步的 DB 查询会打断未迁到 v24 的既有 scheduler 单测（不走 `fresh_db`），且残留仅本人隔离、不影响他人，故 in-scheduler/admin 接线随 M2 补（原语已就绪）。
+> 5. **偏差承接**：override 来源仍未迁（同键上迁偏差②，M2-0 subject 模型再补）；「网络断」按「对 LLM 调用失败(generation_error)」口径归入回滚，出站发送失败在计费(1924)之后、配额随钱包一致（本刀不改钱包侧语义）。
+> 测试：新增 `test_daily_quota_reservation.py`（reserve/confirm/rollback/TTL/幂等/多号共享/回滚不误伤 + **PG 并发不超卖**，SQLite 下 skip 并发用例）、`test_turn_rate_limit.py::test_failed_turn_rolls_back_daily_reservation`（失败 turn 回滚不消耗、不泄漏）。门禁 SQLite 全量 + PG lane（§9 硬门禁：并发不超卖只在 PG 算数）。
 
 ### D-10 世界内容 ≠ 主动消息（架构）
 - **决策**：世界动态、离别动态、信箱由独立 world-content/lifecycle job 生成、审核、持久化（`universe_posts` 等），客户端主动拉取 Feed；**不通过打开 `CHANNEL_APP.supports_proactive` 实现**。是否 Push 后续独立设计。

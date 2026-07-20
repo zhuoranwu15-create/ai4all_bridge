@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -44,6 +45,17 @@ _REFERRAL_CODE_GENERATION_RETRIES = 20
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def advisory_lock_key(subject: str) -> int:
+    """把任意字符串主体映射成稳定的 64 位有符号整数，作 pg_advisory_xact_lock 的键。
+
+    用 blake2b 取 8 字节（跨进程稳定、碰撞极低）。与 rate_limiter._advisory_key 同一算法，
+    抽到 _core 供配额预占（accounts.reserve_daily_quota）与 RPM 共用，避免 app.db → rate_limiter
+    循环导入。偶发碰撞只让两个无关主体短暂互斥，仅轻微竞争、不影响正确性。
+    """
+    digest = hashlib.blake2b(subject.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 def _new_account_id() -> str:
@@ -2145,6 +2157,34 @@ def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
     )
 
 
+def _migration_0024_daily_quota_reservations(conn: Connection) -> None:
+    """D-09 下半刀：daily 配额原子预占的存储载体（每 reservation 一行 + TTL）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
+    P1 §2.7（锁序 L3 = pg_advisory_xact_lock('quota:'||platform_user_id)）。多居民聚合到真人后，
+    turn_service 的「读—处理—+1」有 TOCTOU；本表承载「预占（reserve）→确认(confirm)/回滚(rollback)」：
+    reserve 在 advisory 锁下按 message_count + 活跃 reservation 数校验 cap 后插一行；confirm/rollback/
+    TTL 一律 DELETE，故行只在「已预占未结算」态存在、不设 status 列。daily_usage.message_count 语义
+    不变（=已确认成功计费的计数），展示口径零改动。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。platform_user_id 无 FK（容孤儿号 fallback=account_id）。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS daily_quota_reservations (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_qres_pu_date ON daily_quota_reservations(platform_user_id, date);
+        CREATE INDEX IF NOT EXISTS ix_qres_expires ON daily_quota_reservations(expires_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2164,6 +2204,7 @@ _MIGRATIONS = [
     (21, _migration_0021_dynamic_reminders),
     (22, _migration_0022_wallet_unique_platform_user),
     (23, _migration_0023_daily_usage_platform_user),
+    (24, _migration_0024_daily_quota_reservations),
 ]
 
 

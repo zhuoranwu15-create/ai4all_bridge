@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from app.db._backend import Connection, IntegrityError, Row
+from app.db._backend import Connection, IntegrityError, Row, is_postgres
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -22,6 +22,7 @@ from app.db._core import (
     _normalize_phone,
     _savepoint,
     _tx,
+    advisory_lock_key,
     connect,
     logger,
 )
@@ -59,6 +60,10 @@ __all__ = [
     'get_valid_verification_by_token',
     'get_verification_by_token',
     'increment_daily_usage',
+    'reserve_daily_quota',
+    'confirm_daily_quota',
+    'rollback_daily_quota',
+    'reclaim_expired_reservations',
     'increment_verify_attempts',
     'insert_message',
     'insert_outbound_delivery_message',
@@ -1393,6 +1398,126 @@ def get_usage_last_7_days(*, account_id: str) -> List[Dict[str, Any]]:
             (subject,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Daily 配额原子预占 / 回滚 / TTL 回收（D-09 下半刀）
+#
+# 消除 turn_service 的「读—处理—+1」TOCTOU：reserve 在 advisory 锁下按
+# message_count + 活跃 reservation 数原子校验 cap 后预占一格，仅真正成功计费的 turn
+# 才 confirm（计入 message_count），moderation 拦截/模型失败/未计费一律 rollback（退款
+# 矩阵）。崩溃悬挂 reservation 由 TTL（prune-on-touch + 调度器批量）回收。
+# 见 ADR §D-09 item 3–6、P1 §2.7 锁序 L3。
+# ---------------------------------------------------------------------------
+
+def reserve_daily_quota(
+    *,
+    account_id: str,
+    date: str,
+    limit: int,
+    ttl_minutes: int = 15,
+    conn: Optional[Connection] = None,
+) -> Optional[str]:
+    """原子预占一格 daily 配额，返回 reservation token；已满返回 None（limit<=0 不限、必得 token）。
+
+    强制口径 = daily_usage.message_count（已确认）+ 当日活跃 reservation 数 < limit。PG 路径先取单键
+    事务级 advisory 锁（'quota:'||platform_user）串行化同真人的检查-预占，消除 TOCTOU/超卖；SQLite
+    单写者天然串行。预占行带 expires_at = now + ttl_minutes，崩溃悬挂由 TTL 回收。account_id 内部解析
+    成 platform_user 聚合键（孤儿号回退 account_id）。
+
+    调用契约：去重（insert_message 幂等）须由调用方**先于**本函数、**同一 conn** 内完成
+    （ADR「去重先于预占同事务」，重试不吃配额）。
+    """
+    with _tx(conn) as tx:
+        subject = _resolve_quota_subject(tx, account_id)
+        if is_postgres():
+            # 事务级 advisory 锁：同真人的检查-预占串行化，锁随事务提交/回滚自动释放。
+            tx.execute(
+                "SELECT pg_advisory_xact_lock(?)",
+                (advisory_lock_key("quota:" + subject),),
+            )
+        # prune-on-touch：先清本真人已过期的悬挂预占（同 rpm_hits），再计数。
+        tx.execute(
+            "DELETE FROM daily_quota_reservations WHERE platform_user_id = ? "
+            "AND expires_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))",
+            (subject,),
+        )
+        if limit > 0:
+            used_row = tx.execute(
+                "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+                (subject, date),
+            ).fetchone()
+            used = int(used_row["message_count"]) if used_row else 0
+            reserved_row = tx.execute(
+                "SELECT COUNT(*) AS cnt FROM daily_quota_reservations "
+                "WHERE platform_user_id = ? AND date = ?",
+                (subject, date),
+            ).fetchone()
+            reserved = int(reserved_row["cnt"]) if reserved_row else 0
+            if used + reserved >= limit:
+                return None
+        reservation_id = _new_id("qres")
+        tx.execute(
+            """
+            INSERT INTO daily_quota_reservations(id, platform_user_id, date, account_id, expires_at)
+            VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?)))
+            """,
+            (reservation_id, subject, date, account_id, f"+{int(ttl_minutes)} minutes"),
+        )
+    return reservation_id
+
+
+def confirm_daily_quota(*, reservation_id: Optional[str], conn: Optional[Connection] = None) -> None:
+    """确认预占：删预占行并把该次消耗计入 daily_usage.message_count。
+
+    幂等：reservation 行已删（二次确认 / 已回滚 / 已 TTL 回收）→ no-op、不双记（DELETE rowcount 守门）。
+    reservation_id 为 None（该 turn 未预占，如 onboarding welcome）→ no-op。
+    """
+    if not reservation_id:
+        return
+    with _tx(conn) as tx:
+        row = tx.execute(
+            "SELECT account_id, date FROM daily_quota_reservations WHERE id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if row is None:
+            return
+        cur = tx.execute("DELETE FROM daily_quota_reservations WHERE id = ?", (reservation_id,))
+        if getattr(cur, "rowcount", 0) != 1:
+            return  # 并发下已被他方删除 → 不重复计数
+        increment_daily_usage(account_id=str(row["account_id"]), date=str(row["date"]), conn=tx)
+
+
+def rollback_daily_quota(*, reservation_id: Optional[str], conn: Optional[Connection] = None) -> None:
+    """回滚预占：删预占行、不计入 message_count（退款矩阵：未成功计费的 turn）。
+
+    幂等（删缺失 = no-op）。reservation_id 为 None → no-op。
+    """
+    if not reservation_id:
+        return
+    with _tx(conn) as tx:
+        tx.execute("DELETE FROM daily_quota_reservations WHERE id = ?", (reservation_id,))
+
+
+def reclaim_expired_reservations(*, now: str, limit: int = 200) -> int:
+    """批量回收已过期的悬挂预占（崩溃后再无来信、prune-on-touch 覆盖不到的残留）。返回清理条数。
+
+    now：北京时间字符串（'YYYY-MM-DD HH:MM:SS'），与 expires_at 列同格式做字典序（=按时间）比较。
+    """
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM daily_quota_reservations WHERE expires_at <= ? "
+            "ORDER BY expires_at ASC LIMIT ?",
+            (now, limit),
+        ).fetchall()
+        ids = [row["id"] for row in rows]
+        if ids:
+            placeholders = ", ".join("?" for _ in ids)
+            conn.execute(
+                f"DELETE FROM daily_quota_reservations WHERE id IN ({placeholders})",
+                ids,
+            )
+    return len(ids)
 
 
 # ---------------------------------------------------------------------------
