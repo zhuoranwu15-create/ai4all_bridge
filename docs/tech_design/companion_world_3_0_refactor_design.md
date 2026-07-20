@@ -164,6 +164,8 @@
 > - **连带 M1-7**：赠权幂等键 `new-user-grant-{account_id}` → `new-user-grant-{platform_user_id}`（`billing.py`），钱包并份后同一真人第二个号不二次赠贝壳。
 > - billing 解析 6 处（`_ensure_wallet_in_conn` / 两个 charge 幂等分支 / `get_wallet_summary` / `list_wallet_ledger`）由 `WHERE account_id` 改按 `platform_user_id AND status='active'`（`list_wallet_ledger` 流水视图随之按真人聚合）。对外 API 的 `account_id` 入参与 ledger/cost_events 的 `account_id` 列均不动。
 > - 测试：`tests/test_wallet_migration_m0022.py`（合并正确性 + 幂等）、`tests/test_characterization_baseline.py`（接缝 5 翻转为终态）、`tests/test_precheck_wallet_migration.py`（构造迁移前多钱包态）。**M1 整体发布仍以 M1-6 PG 并发闸为准**（本刀已过既有 PG billing 套件）。
+>
+> **落地说明（M1-6 钱包侧 PG 并发硬闸已交付 2026-07-19，#11）**：§9 发布闸的钱包侧显式并发用例补齐 = `tests/test_billing_concurrency_pg.py`（全部 PG-only，SQLite 下 skip）。证三条不变量在真 PG 上成立：①**跨居民并发扣款不丢更新**——同真人两 account 交替对共享钱包并发 `record_chat_usage_charge`（各不同 `idempotency_key`），余额恰为初始 − 各笔求和、`cost_events`/`entitlement_ledger` 各 N 行（靠 `balance = balance + ?` 原子自增，非读—改—写）；②**同 `idempotency_key` 并发恰扣一次**——8 worker 抢同一 key，`cost_events` 与 `entitlement_ledger`（`usage-charge-{key}`）双 UNIQUE 挡下双记，落库各 1 行、余额只扣一次，败者抛 `IntegrityError` 由 `connect()` 回滚半途扣减（不双记、不污染；真实 turn 路径经 `insert_message` 去重不可达此竞争、`turn_service` 亦 try/except 吞掉）；③**跨真人并发互不误伤**——两真人各自钱包扣减独立、无串扰（账号隔离核心不变量）。配额侧的并发不超卖/回滚不误伤已由 D-09 下半刀 `test_daily_quota_reservation.py::test_concurrent_reserve_no_oversell_pg` 覆盖。**至此 §9 钱包 + 配额并发硬闸齐备，M1 仅余 M1-5「no-cap/no-grant 内部建号路径」随 M2 建居民接线。**
 
 ---
 
