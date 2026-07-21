@@ -144,6 +144,16 @@ class CompanionWorldService:
             )
         )
 
+    def list_candidates(
+        self, platform_user_id: str
+    ) -> Tuple[CandidateRecord, ...]:
+        """返回 owner 当前仍可选择的快照候选；preparing world 要求先 bootstrap。"""
+        world = self._repository.get_home_universe(platform_user_id)
+        if world is None or world.onboarding_state == "preparing":
+            raise CompanionWorldError("world_not_ready")
+        self._ensure_world_available(world)
+        return tuple(self._repository.list_candidates(world.id, ("candidate",)))
+
     def create_resident(
         self,
         platform_user_id: str,
@@ -180,8 +190,12 @@ class CompanionWorldService:
                 template = repo.create_custom_template(platform_user_id, custom_template)
                 origin = "custom"
             else:
-                template = repo.get_available_template(template_id or "", platform_user_id)
+                template = repo.get_template_for_owner(
+                    template_id or "", platform_user_id
+                )
                 if template is None:
+                    raise CompanionWorldError("template_not_found")
+                if template.status != "active":
                     raise CompanionWorldError("template_not_available")
                 origin = "preset"
 

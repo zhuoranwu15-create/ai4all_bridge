@@ -320,6 +320,9 @@ if settings.has_central_role:
     app.include_router(_web_router.router)
     from app.routers import app_api as _app_api_router  # noqa: E402
     app.include_router(_app_api_router.router)
+    from app.routers import companion_world as _companion_world_router  # noqa: E402
+    app.include_router(_companion_world_router.router)
+    _companion_world_router.install_exception_handlers(app)
     from app.routers import debug as _debug_router  # noqa: E402
     app.include_router(_debug_router.router)
     from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402

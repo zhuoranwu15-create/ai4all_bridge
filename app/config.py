@@ -326,6 +326,10 @@ class Settings(BaseSettings):
     asr_max_duration_ms: int = 60_000
     asr_mock_transcript: str = ""
 
+    # ===== 朝夕相伴 Companion World P1 =====
+    # 默认关闭；只有四模板预检、存量 backfill 与支持 account:null 的客户端均就绪后才可开启。
+    companion_world_p1_enabled: bool = False
+
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
     # standalone 下所有新路径不触发,行为逐字节不变。

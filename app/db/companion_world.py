@@ -28,6 +28,7 @@ __all__ = [
     "get_template",
     "list_initial_character_templates",
     "get_available_character_template",
+    "get_character_template_for_owner",
     "get_or_create_legacy_template",
     "create_resident",
     "get_or_create_candidate_resident",
@@ -155,6 +156,7 @@ def create_character_template(
     *,
     source_type: str,
     name: str,
+    template_id: Optional[str] = None,
     owner_platform_user_id: Optional[str] = None,
     avatar_ref: Optional[str] = None,
     summary: Optional[str] = None,
@@ -170,7 +172,7 @@ def create_character_template(
     persona_seed_json 是实例化时写入 runtime account 的 SOUL/IDENTITY 种子，**绝不进 App DTO**
     （§2.2 / 客户端 §4.2）——candidates 端点须显式剔除该列。
     """
-    template_id = _new_id("tmpl")
+    resolved_template_id = template_id or _new_id("tmpl")
     with _tx(conn) as tx:
         tx.execute(
             """
@@ -181,7 +183,7 @@ def create_character_template(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                template_id,
+                resolved_template_id,
                 source_type,
                 owner_platform_user_id,
                 name,
@@ -195,7 +197,7 @@ def create_character_template(
             ),
         )
         row = tx.execute(
-            "SELECT * FROM character_templates WHERE id = ?", (template_id,)
+            "SELECT * FROM character_templates WHERE id = ?", (resolved_template_id,)
         ).fetchone()
     return dict(row)
 
@@ -238,6 +240,25 @@ def get_available_character_template(
             """
             SELECT * FROM character_templates
             WHERE id = ? AND status = 'active'
+              AND (owner_platform_user_id IS NULL OR owner_platform_user_id = ?)
+            """,
+            (template_id, owner_platform_user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_character_template_for_owner(
+    *,
+    template_id: str,
+    owner_platform_user_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """按 owner 可见性读取任意状态模板；他人私有模板与不存在统一返回 None。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT * FROM character_templates
+            WHERE id = ?
               AND (owner_platform_user_id IS NULL OR owner_platform_user_id = ?)
             """,
             (template_id, owner_platform_user_id),

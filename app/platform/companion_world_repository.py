@@ -184,6 +184,16 @@ class SqlCompanionWorldRepository(WorldRepository):
         )
         return _template(row) if row else None
 
+    def get_template_for_owner(
+        self, template_id: str, owner_platform_user_id: str
+    ) -> Optional[TemplateRecord]:
+        row = world_db.get_character_template_for_owner(
+            template_id=template_id,
+            owner_platform_user_id=owner_platform_user_id,
+            conn=self._conn,
+        )
+        return _template(row) if row else None
+
     def create_custom_template(
         self, owner_platform_user_id: str, draft: TemplateDraft
     ) -> TemplateRecord:

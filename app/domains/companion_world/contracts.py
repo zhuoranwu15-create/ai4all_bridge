@@ -137,6 +137,10 @@ class WorldRepository(Protocol):
         self, template_id: str, owner_platform_user_id: str
     ) -> Optional[TemplateRecord]: ...
 
+    def get_template_for_owner(
+        self, template_id: str, owner_platform_user_id: str
+    ) -> Optional[TemplateRecord]: ...
+
     def create_custom_template(
         self, owner_platform_user_id: str, draft: TemplateDraft
     ) -> TemplateRecord: ...
