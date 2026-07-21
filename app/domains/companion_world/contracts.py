@@ -109,6 +109,32 @@ class ConversationTarget:
 
 
 @dataclass(frozen=True)
+class ConversationSummary:
+    """conversation 列表公开模型；P1 unread 恒为 0。"""
+
+    conversation_id: str
+    resident_id: str
+    resident_name: str
+    resident_avatar_ref: Optional[str]
+    resident_status: str
+    state: str
+    last_preview: Optional[str]
+    unread: int
+
+
+@dataclass(frozen=True)
+class ConversationMessage:
+    """App 私聊历史中的一条用户可见消息。"""
+
+    id: int
+    message_id: Optional[str]
+    role: str
+    message_type: str
+    content: str
+    created_at: str
+
+
+@dataclass(frozen=True)
 class BootstrapResult:
     """幂等 bootstrap 的领域返回。"""
 
@@ -173,6 +199,20 @@ class WorldRepository(Protocol):
     def resolve_conversation_for_owner(
         self, conversation_id: str, platform_user_id: str
     ) -> Optional[ConversationTarget]: ...
+
+    def list_conversations_for_owner(
+        self,
+        platform_user_id: str,
+        cursor_conversation_id: Optional[str],
+        limit: int,
+    ) -> Sequence[ConversationSummary]: ...
+
+    def list_conversation_messages(
+        self,
+        runtime_account_id: str,
+        before_id: Optional[int],
+        limit: int,
+    ) -> Sequence[ConversationMessage]: ...
 
     # C2 backfill 使用的原语；仍遵循同一 transaction()/L1 锁序。
     def list_active_legacy_account_ids(self, platform_user_id: str) -> Sequence[str]: ...

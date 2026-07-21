@@ -11,6 +11,8 @@ from app.db._core import connect
 from app.db.billing import insert_resident_runtime_account
 from app.domains.companion_world.contracts import (
     CandidateRecord,
+    ConversationMessage,
+    ConversationSummary,
     ConversationTarget,
     ResidentRecord,
     TemplateDraft,
@@ -328,6 +330,58 @@ class SqlCompanionWorldRepository(WorldRepository):
             owner_platform_user_id=str(row["owner_platform_user_id"]),
             runtime_account_id=str(row["runtime_account_id"]),
             state=str(row["state"]),
+        )
+
+    def list_conversations_for_owner(
+        self,
+        platform_user_id: str,
+        cursor_conversation_id: Optional[str],
+        limit: int,
+    ) -> Sequence[ConversationSummary]:
+        rows = world_db.list_conversations_for_owner(
+            owner_platform_user_id=platform_user_id,
+            cursor_conversation_id=cursor_conversation_id,
+            limit=limit,
+            conn=self._conn,
+        )
+        return tuple(
+            ConversationSummary(
+                conversation_id=str(row["conversation_id"]),
+                resident_id=str(row["resident_id"]),
+                resident_name=str(row["resident_name"]),
+                resident_avatar_ref=row.get("avatar_ref"),
+                resident_status=str(row["resident_status"]),
+                state=str(row["state"]),
+                last_preview=row.get("last_preview"),
+                unread=int(row.get("unread") or 0),
+            )
+            for row in rows
+        )
+
+    def list_conversation_messages(
+        self,
+        runtime_account_id: str,
+        before_id: Optional[int],
+        limit: int,
+    ) -> Sequence[ConversationMessage]:
+        from app.db.accounts import list_app_conversation_messages_before
+
+        rows = list_app_conversation_messages_before(
+            runtime_account_id=runtime_account_id,
+            before_id=before_id,
+            limit=limit,
+            conn=self._conn,
+        )
+        return tuple(
+            ConversationMessage(
+                id=int(row["id"]),
+                message_id=row.get("message_id"),
+                role=str(row["role"]),
+                message_type=str(row["message_type"]),
+                content=str(row["content"]),
+                created_at=str(row["created_at"]),
+            )
+            for row in rows
         )
 
     def list_active_legacy_account_ids(self, platform_user_id: str) -> Sequence[str]:

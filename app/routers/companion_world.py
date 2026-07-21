@@ -2,17 +2,24 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from typing import Callable, Optional
 
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import settings
-from app.db import get_platform_user_by_session_token
+from app.db import (
+    get_duplicate_reply,
+    get_platform_user_by_session_token,
+    try_conversation_turn_lock,
+)
+from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
+from app.domains.companion_world.l3_context import read_universe_context
 from app.domains.companion_world import (
     CandidateRecord,
     CompanionWorldError,
@@ -42,7 +49,13 @@ _ERROR_STATUS = {
     "resident_already_exists": 409,
     "custom_candidate_limit_exceeded": 409,
     "conversation_not_found": 404,
+    "conversation_read_only": 409,
+    "turn_in_progress": 409,
+    "rate_limited": 429,
+    "account_disabled": 403,
 }
+
+_CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 
 class CompanionWorldApiError(Exception):
@@ -80,6 +93,20 @@ class CreateResidentPayload(BaseModel):
             raise ValueError("provide exactly one of template_id or name")
         if self.template_id and self.persona_hint:
             raise ValueError("persona_hint requires name")
+        return self
+
+
+class ConversationTurnPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_message_id: str = Field(min_length=8, max_length=64)
+    text: str = Field(min_length=1, max_length=4000)
+
+    @model_validator(mode="after")
+    def _clean_turn(self) -> "ConversationTurnPayload":
+        self.text = self.text.strip()
+        if not self.text or not _CLIENT_MESSAGE_ID_RE.fullmatch(self.client_message_id):
+            raise ValueError("invalid turn payload")
         return self
 
 
@@ -160,6 +187,21 @@ def _resident_data(resident: ResidentRecord) -> dict:
         "origin": resident.origin,
         "conversation_id": resident.conversation_id,
         "conversation_state": resident.conversation_state,
+    }
+
+
+def _conversation_data(item) -> dict:
+    return {
+        "conversation_id": item.conversation_id,
+        "resident": {
+            "id": item.resident_id,
+            "name": item.resident_name,
+            "avatar_ref": item.resident_avatar_ref,
+            "status": item.resident_status,
+        },
+        "state": item.state,
+        "last_preview": item.last_preview,
+        "unread": item.unread,
     }
 
 
@@ -282,6 +324,158 @@ def create_resident(
     return _envelope(request, code="ok", data=data)
 
 
+@router.get("/conversations")
+def list_conversations(
+    request: Request,
+    response: Response,
+    cursor: Optional[str] = Query(default=None, max_length=128),
+    limit: int = Query(default=50, ge=1, le=100),
+    platform_user: dict = Depends(_require_world_session),
+) -> dict:
+    items = _run_domain(
+        lambda: _service().list_conversations(
+            platform_user["id"],
+            cursor_conversation_id=cursor,
+            limit=limit,
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "items": [_conversation_data(item) for item in items],
+            "next_cursor": items[-1].conversation_id if len(items) == limit else None,
+        },
+    )
+
+
+@router.get("/ai-conversations/{conversation_id}/messages")
+def list_conversation_messages(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+    cursor: Optional[int] = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    platform_user: dict = Depends(_require_world_session),
+) -> dict:
+    target, messages = _run_domain(
+        lambda: _service().list_conversation_messages(
+            platform_user["id"],
+            conversation_id,
+            before_id=cursor,
+            limit=limit,
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "state": target.state,
+            "messages": [
+                {
+                    "id": item.id,
+                    "message_id": item.message_id,
+                    "role": item.role,
+                    "message_type": item.message_type,
+                    "text": item.content,
+                    "created_at": item.created_at,
+                }
+                for item in messages
+            ],
+            "next_cursor": messages[0].id if len(messages) == limit else None,
+        },
+    )
+
+
+@router.post("/ai-conversations/{conversation_id}/turn")
+def conversation_turn(
+    conversation_id: str,
+    payload: ConversationTurnPayload,
+    request: Request,
+    response: Response,
+    platform_user: dict = Depends(_require_world_session),
+) -> dict:
+    service = _service()
+    target = _run_domain(
+        lambda: service.resolve_conversation(platform_user["id"], conversation_id)
+    )
+    # 用客户端已知的 conversation 锚定幂等键，避免内部 runtime account 出现在历史响应。
+    mapped_message_id = f"app:{target.conversation_id}:{payload.client_message_id}"
+    duplicate = get_duplicate_reply(
+        account_id=target.runtime_account_id,
+        reply_to_message_id=mapped_message_id,
+    )
+    if duplicate is not None:
+        _no_store(response)
+        return _envelope(
+            request,
+            code="ok",
+            data={
+                "reply": {"text": duplicate, "message_id": None},
+                "no_reply": False,
+                "deduplicated": True,
+            },
+        )
+
+    with try_conversation_turn_lock(conversation_id) as acquired:
+        if not acquired:
+            raise CompanionWorldApiError("turn_in_progress")
+        # L2 锁内重读 state，确保未来 offline(M4) 与 turn 以同一 conversation 锁串行。
+        target = _run_domain(
+            lambda: service.resolve_conversation(
+                platform_user["id"], conversation_id
+            )
+        )
+        if target.state != "active":
+            raise CompanionWorldApiError("conversation_read_only")
+        duplicate = get_duplicate_reply(
+            account_id=target.runtime_account_id,
+            reply_to_message_id=mapped_message_id,
+        )
+        if duplicate is not None:
+            result = None
+        else:
+            adapter = DefaultAgentRuntimeAdapter(
+                universe_context_loader=lambda universe_id: read_universe_context(
+                    universe_id=universe_id
+                )
+            )
+            result = adapter.send_companion_world_turn(
+                conversation_id=target.conversation_id,
+                universe_id=target.universe_id,
+                resident_id=target.resident_id,
+                runtime_account_id=target.runtime_account_id,
+                platform_user_id=platform_user["id"],
+                sender_name=platform_user.get("display_name"),
+                message_id=mapped_message_id,
+                text=payload.text,
+            )
+
+    if result is None:
+        reply, reply_message_id, deduplicated, no_reply = duplicate, None, True, False
+    else:
+        if result.status == "rate_limited":
+            raise CompanionWorldApiError("rate_limited")
+        if result.status == "disabled":
+            raise CompanionWorldApiError("account_disabled")
+        reply = result.reply
+        reply_message_id = result.metadata.get("reply_message_id")
+        deduplicated = result.status == "duplicate"
+        no_reply = result.no_reply
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "reply": {"text": reply, "message_id": reply_message_id},
+            "no_reply": no_reply,
+            "deduplicated": deduplicated,
+        },
+    )
+
+
 async def _api_error_handler(request: Request, exc: CompanionWorldApiError):
     response = JSONResponse(
         status_code=exc.status_code,
@@ -292,7 +486,10 @@ async def _api_error_handler(request: Request, exc: CompanionWorldApiError):
 
 
 async def _validation_error_handler(request: Request, exc: RequestValidationError):
-    if request.url.path.startswith("/v1/worlds/"):
+    companion_path = request.url.path.startswith(
+        ("/v1/worlds/", "/v1/conversations", "/v1/ai-conversations/")
+    )
+    if companion_path:
         forbidden_account_id = isinstance(exc.body, dict) and bool(
             {"account_id", "runtime_account_id"}.intersection(exc.body)
         )

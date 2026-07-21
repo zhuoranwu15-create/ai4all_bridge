@@ -8,6 +8,8 @@ from app.domains.companion_world.contracts import (
     BootstrapResult,
     CandidateRecord,
     CompanionWorldError,
+    ConversationMessage,
+    ConversationSummary,
     ConversationTarget,
     ResidentRecord,
     ResidentSelection,
@@ -226,3 +228,34 @@ class CompanionWorldService:
         if target is None:
             raise CompanionWorldError("conversation_not_found")
         return target
+
+    def list_conversations(
+        self,
+        platform_user_id: str,
+        *,
+        cursor_conversation_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Tuple[ConversationSummary, ...]:
+        """列出 owner 自己的 AI conversations；cursor 越权只得到空页。"""
+        return tuple(
+            self._repository.list_conversations_for_owner(
+                platform_user_id, cursor_conversation_id, limit
+            )
+        )
+
+    def list_conversation_messages(
+        self,
+        platform_user_id: str,
+        conversation_id: str,
+        *,
+        before_id: Optional[int] = None,
+        limit: int = 50,
+    ) -> Tuple[ConversationTarget, Tuple[ConversationMessage, ...]]:
+        """owner 校验后读取目标 runtime 的跨日 App scope 历史。"""
+        target = self.resolve_conversation(platform_user_id, conversation_id)
+        messages = tuple(
+            self._repository.list_conversation_messages(
+                target.runtime_account_id, before_id, limit
+            )
+        )
+        return target, messages

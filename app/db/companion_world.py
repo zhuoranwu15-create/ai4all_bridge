@@ -11,10 +11,12 @@ import 本模块，须经 app.agent_runtime 端口。二者同名不同包、互
 M2-A 只落存储 + 纯 DB 原语（无 live 调用方、零行为变更）；L3 读注入/sink 路由（M2-B）、
 居民 bootstrap/confirm/backfill（M2-C，待 ADR §10.1/.2/.6 产品冻结）为后续刀。
 """
-from typing import Any, Dict, List, Optional, Sequence
+import threading
+from contextlib import contextmanager
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from app.db._backend import Connection, is_postgres
-from app.db._core import _new_id, _tx, connect
+from app.db._core import _new_id, _tx, advisory_lock_key, connect
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
@@ -42,10 +44,15 @@ __all__ = [
     "create_ai_conversation",
     "get_conversation",
     "resolve_conversation_for_owner",
+    "list_conversations_for_owner",
+    "try_conversation_turn_lock",
     "list_active_account_ids_for_user",
     "append_universe_fact",
     "read_universe_facts",
 ]
+
+_SQLITE_CONVERSATION_LOCKS: Dict[str, threading.Lock] = {}
+_SQLITE_CONVERSATION_LOCKS_GUARD = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -649,6 +656,93 @@ def resolve_conversation_for_owner(
             (conversation_id, owner_platform_user_id),
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_conversations_for_owner(
+    *,
+    owner_platform_user_id: str,
+    cursor_conversation_id: Optional[str] = None,
+    limit: int = 50,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """owner-scoped 列出 AI conversations；cursor 必须同 owner，否则返回空页。"""
+    from app.db.accounts import list_app_conversation_messages_before
+
+    clean_limit = max(1, min(int(limit), 100))
+    cursor_clause = ""
+    params: List[Any] = [owner_platform_user_id]
+    with _tx(conn) as tx:
+        if cursor_conversation_id:
+            cursor_row = tx.execute(
+                """
+                SELECT updated_at, id FROM ai_conversations
+                WHERE id = ? AND owner_platform_user_id = ?
+                """,
+                (cursor_conversation_id, owner_platform_user_id),
+            ).fetchone()
+            if cursor_row is None:
+                return []
+            cursor_clause = (
+                "AND (c.updated_at < ? OR (c.updated_at = ? AND c.id < ?))"
+            )
+            params.extend(
+                [cursor_row["updated_at"], cursor_row["updated_at"], cursor_row["id"]]
+            )
+        params.append(clean_limit)
+        rows = tx.execute(
+            f"""
+            SELECT c.id AS conversation_id, c.universe_id, c.resident_id,
+                   c.runtime_account_id, c.state, c.updated_at,
+                   COALESCE(p.display_name, t.name) AS resident_name,
+                   t.avatar_ref, r.status AS resident_status, r.origin
+            FROM ai_conversations c
+            JOIN universe_residents r ON r.id = c.resident_id
+            JOIN character_templates t ON t.id = r.character_template_id
+            LEFT JOIN profiles p ON p.account_id = c.runtime_account_id
+            WHERE c.owner_platform_user_id = ?
+              {cursor_clause}
+            ORDER BY c.updated_at DESC, c.id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            latest = list_app_conversation_messages_before(
+                runtime_account_id=str(row["runtime_account_id"]),
+                limit=1,
+                conn=tx,
+            )
+            item["last_preview"] = latest[-1]["content"] if latest else None
+            item["unread"] = 0
+            result.append(item)
+    return result
+
+
+@contextmanager
+def try_conversation_turn_lock(conversation_id: str) -> Iterator[bool]:
+    """非阻塞获取 conversation single-flight 锁，并在上下文退出时释放。
+
+    PG 使用事务级 advisory lock，跨进程/跨节点可见；SQLite 仅以进程锁作功能回退。
+    """
+    key = str(conversation_id)
+    if is_postgres():
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT pg_try_advisory_xact_lock(?) AS acquired",
+                (advisory_lock_key("conv:" + key),),
+            ).fetchone()
+            yield bool(row and row["acquired"])
+        return
+    with _SQLITE_CONVERSATION_LOCKS_GUARD:
+        lock = _SQLITE_CONVERSATION_LOCKS.setdefault(key, threading.Lock())
+    acquired = lock.acquire(blocking=False)
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            lock.release()
 
 
 def list_active_account_ids_for_user(
