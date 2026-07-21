@@ -1980,6 +1980,62 @@ def _migration_0021_dynamic_reminders(conn: Connection) -> None:
     )
 
 
+def _migration_0022_account_app_id(conn: Connection) -> None:
+    """App(产品)层身份打底:accounts / account_owner_bindings 落 app_id 列。
+
+    见 docs/tech_design/app_account_convergence_and_channel_persona.md §9。App 是"分组单元"
+    (一手机号 × 一 App = 一 account);当前全部资产属唯一 App「朝夕相伴」,故存量 backfill 为
+    'zhaoxi'。app_id 是账号不可变属性(账号一旦属于某 App 永不改),因此把它冗余到
+    account_owner_bindings 是安全的(创建时写入、永不漂移),使"每 (platform_user, app) 一个
+    active 账号"的收敛不变量能用单条部分唯一索引(m0023)表达。
+
+    双后端通用:ADD COLUMN ... NOT NULL DEFAULT 会自动把存量行回填为 'zhaoxi'(SQLite/PG 均支持)。
+    owner_bindings.app_id 再用相关子查询从 accounts 精确对齐(当前均为 zhaoxi,为混合 App 未来预留正确性)。
+    """
+    _ensure_column(conn, "accounts", "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
+    _ensure_column(conn, "account_owner_bindings", "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
+    # 用账号真实 app_id 对齐 owner_binding 冗余列(相关子查询,SQLite/PG 通用)。
+    conn.execute(
+        """
+        UPDATE account_owner_bindings
+        SET app_id = (
+            SELECT a.app_id FROM accounts a WHERE a.id = account_owner_bindings.account_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM accounts a WHERE a.id = account_owner_bindings.account_id
+        )
+        """
+    )
+
+
+def _migration_0023_owner_binding_active_unique(conn: Connection) -> None:
+    """A 收敛的 DB 层唯一保证:每个 (platform_user, app) 最多一个 active owner_binding。
+
+    见 §9.3 A2。部分唯一索引仅约束 status='active' 行,归档/停用行不占名额。SQLite/PG 均支持
+    带 WHERE 的部分索引(范式同 ux_messages_account_message)。当前单 App 下 app_id 恒为 'zhaoxi',
+    (platform_user_id, app_id) 索引行为等价于 (platform_user_id),但形态已是多 App 终态。
+    生产 S1 审计已确认无重复(0 多账号 user),建索引不会因存量冲突失败。
+    """
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_binding_active_user_app
+        ON account_owner_bindings(platform_user_id, app_id)
+        WHERE status='active'
+        """
+    )
+
+
+def _migration_0024_rename_channel_app_to_native(conn: Connection) -> None:
+    """channel 命名 'app' → 'native':区分 App(产品层) 与 channel(传输层)。
+
+    见 §9.2 Q5 / §9.3 B。CHANNEL_APP 常量值由 'app' 改为 'native'(app/channels.py)后,存量
+    channel_bindings 中的 'app' 值需一并迁移,否则旧绑定解析不到。生产审计:全库仅 channel_bindings
+    有 1 行 'app',其余含 channel 列的表(accounts/binding_intents/outbound_messages/reminders)均无。
+    幂等:无 'app' 行时 UPDATE 影响 0 行。
+    """
+    conn.execute("UPDATE channel_bindings SET channel='native' WHERE channel='app'")
+
+
 def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
     """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
 
@@ -2326,6 +2382,9 @@ _MIGRATIONS = [
     (19, _migration_0019_campaign_ai_name_preset),
     (20, _migration_0020_campaign_visits),
     (21, _migration_0021_dynamic_reminders),
+    (22, _migration_0022_account_app_id),
+    (23, _migration_0023_owner_binding_active_unique),
+    (24, _migration_0024_rename_channel_app_to_native),
     (25, _migration_0025_wallet_unique_platform_user),
     (26, _migration_0026_daily_usage_platform_user),
     (27, _migration_0027_daily_quota_reservations),

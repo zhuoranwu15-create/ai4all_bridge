@@ -20,7 +20,11 @@ from dataclasses import dataclass
 # 渠道常量。取值与 ``openclaw_gateway.DEFAULT_WEIXIN_CHANNEL`` 保持一致（微信入站/出站现状）。
 CHANNEL_WEIXIN = "openclaw-weixin"
 CHANNEL_WEB = "web"          # 本期新增（Phase 1 才有运行路径；Phase 0 仅声明）
-CHANNEL_APP = "app"
+# native = App 原生传输渠道。取值 "native" 以区分「App=产品层」与「channel=传输层」
+# （见 app_account_convergence_and_channel_persona.md §9.2 Q5）。变量名保留 CHANNEL_APP，
+# 存量 channel_bindings 的旧值 "app" 由迁移 m0024 一并改为 "native"；短期会话键
+# _APP_ACTIVE_SESSION_KEY="__app_active__" 属会话隔离概念、与渠道名正交，不随之改。
+CHANNEL_APP = "native"
 
 
 # 微信短期会话隔离键，取值与 ``app.db._core.ACCOUNT_ACTIVE_SESSION_KEY`` 一致（不变）。
@@ -46,6 +50,8 @@ class ChannelCapability:
     supports_out_of_band_tool_final: bool # 工具最终回复是否可经网关 out-of-band 发送
     supports_proactive: bool              # 是否可被主动消息投递；同时门控「产生未来投递」的工具（§8.3）
     tdai_enabled: bool                    # 是否接 TDAI 热召回/capture（§7.4）
+    reply_presentation: str = "weixin"    # 回复呈现风格键（prompt_builder 选【回复呈现】文案）；
+    #                                      默认 "weixin"=现状原文（原则一：未知渠道回落微信呈现）
 
 
 # 未知渠道回落 cap：等价「现状微信传输，但不跑 onboarding」。这是**字节级等价现状**的关键——
@@ -86,6 +92,7 @@ CHANNELS = {
         supports_out_of_band_tool_final=False,
         supports_proactive=False,
         tdai_enabled=False,
+        reply_presentation="web",
     ),
     # App V1：独立短期会话；普通回复和工具最终回复均由当前 HTTP 请求同步返回。
     # 不启用微信专用 onboarding，也不生成当前无法投递的主动任务。
@@ -97,6 +104,7 @@ CHANNELS = {
         supports_out_of_band_tool_final=False,
         supports_proactive=False,
         tdai_enabled=False,
+        reply_presentation="native",
     ),
 }
 

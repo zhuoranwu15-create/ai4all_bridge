@@ -51,6 +51,11 @@ from app.turn_service import ChannelTurnInput, run_turn_for_account
 
 router = APIRouter(prefix="/v1", tags=["app-v1"])
 
+# App「朝夕相伴」(app_id=zhaoxi) 的默认 AI 名字。App 首建账号且用户未起名时用它兜底,
+# 使 IDENTITY 播种为「你的名字是 朝夕」、LLM 自称与 UI 展示一致(见 §9.3 C4/L4)。
+# get_or_create 不覆盖已有账号,故用户在其它渠道已起的名不受影响。
+_ZHAOXI_DEFAULT_AI_NAME = "朝夕"
+
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _ALLOWED_AUDIO_TYPES = {
     "audio/aac",
@@ -104,7 +109,7 @@ def _public_account(result: dict) -> dict:
         "id": account["id"],
         "status": account.get("status"),
         "ai_display_name": (
-            profile.get("display_name") or account.get("display_name") or "朝夕"
+            profile.get("display_name") or account.get("display_name") or _ZHAOXI_DEFAULT_AI_NAME
         ),
         "ai_subtitle": "陪你聊聊，也陪你慢慢认识自己",
     }
@@ -179,9 +184,11 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
         invite_code=payload.invite_code,
         invalid_otp_detail="验证凭证无效或已过期",
     )
+    # L4 名字兜底:App 首建账号且用户未起名时,以 zhaoxi 默认名「朝夕」播种,
+    # 使 IDENTITY/LLM 自称与 UI 展示一致。get_or_create 命中已有账号时不覆盖其名。
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
-        display_name=None,
+        display_name=_ZHAOXI_DEFAULT_AI_NAME,
         plan="free",
         campaign_code=payload.campaign_code,
         initial_channel=CHANNEL_APP,
@@ -199,7 +206,7 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
             "phone_masked": f"{platform_user['phone'][:3]}****{platform_user['phone'][-4:]}",
         },
         "account": _public_account(account_result),
-        "welcome_message": "你好，我是朝夕。想聊聊此刻的心情，还是随便说点什么？",
+        "welcome_message": f"你好，我是{_ZHAOXI_DEFAULT_AI_NAME}。想聊聊此刻的心情，还是随便说点什么？",
     }
 
 

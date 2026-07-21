@@ -84,6 +84,12 @@ __all__ = [
     'upsert_subscription_for_user',
     'validate_referral_code',
 ]
+
+# App(产品)层默认 id。当前全部资产属唯一 App「朝夕相伴」,故建号默认落此 app_id
+# (见 docs/tech_design/app_account_convergence_and_channel_persona.md §9)。多 App 解析器
+# (get_or_create_account_for_user_in_app)与 app/apps.py 注册表属 Phase 2,本阶段仅此常量。
+DEFAULT_APP_ID = "zhaoxi"
+
 # ---------------------------------------------------------------------------
 # Web onboarding
 # ---------------------------------------------------------------------------
@@ -2070,6 +2076,7 @@ def create_ai4all_account_for_user(
     campaign_code: Optional[str] = None,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
+    app_id: str = DEFAULT_APP_ID,
 ) -> Dict[str, Any]:
     from app.db.accounts import get_account, get_profile_for_account
     cleaned_display_name = _clean_text(display_name)
@@ -2077,6 +2084,7 @@ def create_ai4all_account_for_user(
         raise ValueError("display_name is required")
 
     cleaned_prompt = _clean_text(system_prompt)
+    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
     with connect() as conn:
         user = conn.execute(
             "SELECT id FROM platform_users WHERE id = ?",
@@ -2084,15 +2092,19 @@ def create_ai4all_account_for_user(
         ).fetchone()
         if user is None:
             raise ValueError("platform_user not found")
+        # A 收敛不变量:一手机号 × 一 App = 一 active 账号(见 §9)。此软检查拦常规重复建号;
+        # owner_bindings 部分唯一索引 ux_owner_binding_active_user_app 为并发竞态兜底。
         existing_count = conn.execute(
             """
             SELECT COUNT(*) FROM account_owner_bindings
-            WHERE platform_user_id = ? AND status = 'active'
+            WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id_clean),
         ).fetchone()[0]
-        if existing_count >= 10:
-            raise ValueError("platform_user has reached the maximum number of agents (10)")
+        if existing_count >= 1:
+            raise ValueError(
+                f"platform_user already has an active account for app '{app_id_clean}'"
+            )
         last_integrity_error = None
         for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
             account_id = _new_account_id()
@@ -2101,10 +2113,10 @@ def create_ai4all_account_for_user(
                 with _savepoint(conn, "account_ins"):
                     conn.execute(
                         """
-                        INSERT INTO accounts(id, channel, display_name, updated_at)
-                        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
+                        VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                         """,
-                        (account_id, _clean_text(initial_channel) or "openclaw-weixin", cleaned_display_name),
+                        (account_id, _clean_text(initial_channel) or "openclaw-weixin", cleaned_display_name, app_id_clean),
                     )
                 break
             except IntegrityError as err:
@@ -2120,15 +2132,28 @@ def create_ai4all_account_for_user(
             """,
             (account_id, cleaned_display_name, cleaned_prompt),
         )
-        cursor = conn.execute(
-            """
-            INSERT INTO account_owner_bindings(
-                platform_user_id, account_id, binding_method, status, updated_at
+        try:
+            cursor = conn.execute(
+                """
+                INSERT INTO account_owner_bindings(
+                    platform_user_id, account_id, binding_method, status, app_id, updated_at
+                )
+                VALUES (?, ?, ?, 'active', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                """,
+                (platform_user_id, account_id, _clean_text(binding_method) or "web_onboarding", app_id_clean),
             )
-            VALUES (?, ?, ?, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            """,
-            (platform_user_id, account_id, _clean_text(binding_method) or "web_onboarding"),
-        )
+        except IntegrityError as err:
+            # 竞态兜底:并发在软检查后同时插入,由部分唯一索引挡住;整笔事务由 connect() 回滚,
+            # 不留孤儿账号。翻译成与软检查一致的清晰错误。跨后端匹配:PG 报索引名,
+            # SQLite 报冲突列名(platform_user_id, app_id),两者任一命中即视为该唯一索引冲突。
+            err_text = str(err)
+            if "ux_owner_binding_active_user_app" in err_text or (
+                "platform_user_id" in err_text and "app_id" in err_text
+            ):
+                raise ValueError(
+                    f"platform_user already has an active account for app '{app_id_clean}'"
+                ) from err
+            raise
         owner_binding_id = int(cursor.lastrowid)
 
     subscription = upsert_subscription_for_user(
@@ -2177,6 +2202,21 @@ def get_first_active_account_for_user(
             """,
             (platform_user_id,),
         ).fetchone()
+        # A 收敛后每 user 恒有 <=1 个 active 账号;>1 说明存量未收敛或竞态漏网,
+        # 告警以便探测,不静默用"取最早"掩盖脏数据(见 §9.3 A5)。
+        active_count = conn.execute(
+            """
+            SELECT COUNT(*) FROM account_owner_bindings
+            WHERE platform_user_id = ? AND status = 'active'
+            """,
+            (platform_user_id,),
+        ).fetchone()[0]
+        if active_count > 1:
+            logger.warning(
+                "platform_user %s has %s active accounts (expected <=1 after A convergence); returning earliest",
+                platform_user_id,
+                active_count,
+            )
     if row is None:
         return None
     account = get_account(account_id=row["account_id"])

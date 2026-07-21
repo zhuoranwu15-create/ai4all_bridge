@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from app import profile_storage
+from app.channels import CHANNEL_WEIXIN
 from app.config import settings
 
 logger = logging.getLogger("ai4all.user_profiles")
@@ -54,6 +55,8 @@ CONTEXT_FILE_ORDER = SYSTEM_CONTEXT_FILES + USER_CONTEXT_FILE_ORDER
 
 CONTEXT_KEY_BY_FILE = {filename: filename[:-3] for filename in CONTEXT_FILE_ORDER}
 _NO_NAME_IDENTITY_LINE = "- 你还没有名字。以「我」或「你的微信好友」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
+# 中性无名自称行（native/web 播种用，去「微信好友」字样）；weixin 仍用上面的原文（原则一）。
+_NO_NAME_IDENTITY_LINE_NEUTRAL = "- 你还没有名字。以「我」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
 # 仅留触发条件；"基于工具结果不要凭印象""时间看运行时"已由系统【事实准确与核实纪律】统一约束。
 _RELATIONSHIP_STATUS_TOOLS_SECTION = """## 关系状态工具
@@ -111,6 +114,19 @@ def context_file_path(account_id: str, filename: str) -> Path:
 
 def _is_system_context_file(filename: str) -> bool:
     return filename in SYSTEM_CONTEXT_FILES
+
+
+def _resolve_system_context_path(system_dir: Path, filename: str, channel: str) -> Path:
+    """解析系统级文件（AGENTS/TOOLS）的渠道变体路径。
+
+    weixin（默认，也是未知渠道回落档）→ 原文件（字节级等价现状，原则一）。
+    native/web → 优先同名变体 ``<stem>.<channel>.md``（如 AGENTS.native.md），存在即用；
+    缺失则回落原文件——即「未提供变体 = 无回归」，渐进式去微信味不阻断上线。
+    """
+    if channel == CHANNEL_WEIXIN:
+        return system_dir / filename
+    variant = system_dir / f"{filename[:-3]}.{channel}.md"
+    return variant if variant.exists() else system_dir / filename
 
 
 def read_context_file(account_id: str, filename: str) -> Optional[str]:
@@ -587,7 +603,14 @@ def _render_soul_template(template: str, ai_name: Optional[str], user_name: Opti
 def _default_user_context_templates(
     *,
     display_name: Optional[str],
+    channel: str = CHANNEL_WEIXIN,
 ) -> Dict[str, str]:
+    """账号级 profile 文件的首建模板。
+
+    ``channel`` 决定 IDENTITY 播种文案的渠道口径：weixin（默认，也是未知渠道回落档）保持
+    现状原文（原则一：微信字节不变）；native/web 去「微信」字样，改中性表述，避免 App/Web
+    面把自己说成「微信好友」。仅影响**首次播种**（懒创建、已存在不覆盖）。
+    """
     assistant_name = (display_name or "").strip()
     if assistant_name in _LEGACY_DEFAULT_ASSISTANT_NAMES:
         assistant_name = ""
@@ -596,16 +619,22 @@ def _default_user_context_templates(
         ai_name=assistant_name or None,
         user_name=None,
     )
+    is_weixin = channel == CHANNEL_WEIXIN
     if assistant_name:
         identity_name_line = f"- 你的名字是 {assistant_name}，用它自称。"
     else:
-        identity_name_line = _NO_NAME_IDENTITY_LINE
+        identity_name_line = _NO_NAME_IDENTITY_LINE if is_weixin else _NO_NAME_IDENTITY_LINE_NEUTRAL
+    companion_line = (
+        "- 你是用户在微信里的个人 AI 陪伴与生活助理。"
+        if is_weixin
+        else "- 你是用户的个人 AI 陪伴与生活助理。"
+    )
     return {
         "SOUL.md": soul,
         "IDENTITY.md": f"""# IDENTITY
 
 {identity_name_line}
-- 你是用户在微信里的个人 AI 陪伴与生活助理。
+{companion_line}
 - 除非产品身份明确调整，不要把自己称为 OpenClaw，也不要声称自己运行在 OpenClaw 内部。
 """,
         "USER.md": f"""# USER
@@ -646,12 +675,19 @@ def ensure_system_context_files() -> Dict[str, bool]:
     return created
 
 
-def ensure_agent_context_files(account_id: str, display_name: Optional[str] = None) -> Dict[str, bool]:
+def ensure_agent_context_files(
+    account_id: str,
+    display_name: Optional[str] = None,
+    channel: str = CHANNEL_WEIXIN,
+) -> Dict[str, bool]:
     """Create missing user-level context files for an account.
 
     Only manages SOUL / IDENTITY / USER / MEMORY. AGENTS and TOOLS are
     system-level and live in data/system/ — see ensure_system_context_files().
     Existing non-empty files are never overwritten.
+
+    ``channel`` 仅在**首次播种**时决定 IDENTITY 渠道口径（见 _default_user_context_templates）；
+    默认 weixin 保持现状。已有文件永不被覆盖，故切换渠道不会改写既有身份。
     """
     created: Dict[str, bool] = {}
     files_to_create: list[str] = []
@@ -666,6 +702,7 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
 
     templates = _default_user_context_templates(
         display_name=display_name,
+        channel=channel,
     )
     for filename in files_to_create:
         profile_storage.write_file(account_id, filename, templates[filename].strip() + "\n")
@@ -673,9 +710,22 @@ def ensure_agent_context_files(account_id: str, display_name: Optional[str] = No
     return created
 
 
-def read_agent_context(account_id: str, display_name: Optional[str] = None) -> AgentContext:
+def read_agent_context(
+    account_id: str,
+    display_name: Optional[str] = None,
+    channel: str = CHANNEL_WEIXIN,
+) -> AgentContext:
+    """组装账号的 agent 上下文（AGENTS/TOOLS 系统文件 + 账号级 SOUL/IDENTITY/…）。
+
+    ``channel`` 决定两处渠道口径（默认 weixin，也是未知渠道回落档，均字节级等价现状）：
+    1) 账号级文件首次播种的 IDENTITY 文案（见 ensure_agent_context_files）；
+    2) 系统级 AGENTS/TOOLS 的渠道变体解析（见 _resolve_system_context_path）：weixin 读原文，
+       native/web 优先读同名 .<channel>.md 变体、缺失则回落原文（无变体即无回归）。
+    """
     ensure_system_context_files()
-    user_created = ensure_agent_context_files(account_id, display_name=display_name)
+    user_created = ensure_agent_context_files(
+        account_id, display_name=display_name, channel=channel
+    )
     base = account_profile_dir(account_id)
     system_dir = Path(settings.system_dir)
     blocks: Dict[str, str] = {}
@@ -684,7 +734,7 @@ def read_agent_context(account_id: str, display_name: Optional[str] = None) -> A
         key = CONTEXT_KEY_BY_FILE[filename]
         # system 级读磁盘真实文件；账号级读 storage（path 仅作展示用逻辑路径）。
         if filename in SYSTEM_CONTEXT_FILES:
-            disk_path = system_dir / filename
+            disk_path = _resolve_system_context_path(system_dir, filename, channel)
             raw = disk_path.read_text(encoding="utf-8") if disk_path.exists() else None
             logical_path = str(disk_path)
         else:

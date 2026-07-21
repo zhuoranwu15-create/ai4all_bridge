@@ -442,6 +442,7 @@ def build_turn_llm_input(
     message_type: str = "text",
     extra_blocks: Optional[List[ContextBlock]] = None,
     cap: Optional[ChannelCapability] = None,
+    channel: str = CHANNEL_WEIXIN,
 ) -> Dict[str, Any]:
     """Build the exact LLM input envelope for a chat turn.
 
@@ -449,7 +450,8 @@ def build_turn_llm_input(
     pre-writes or message insertion must do that before invoking it.
 
     ``cap`` 选定渠道能力（工具集裁剪等）；缺省回落微信 cap，故既有调用方（debug/脚本/
-    测试）行为逐字节不变。
+    测试）行为逐字节不变。``channel`` 为渠道真实值（如 openclaw-weixin/native），决定
+    AGENTS/TOOLS 渠道变体与 IDENTITY 播种口径；缺省 weixin 亦字节级等价现状。
     """
     _now = now or beijing_now()
     cap = cap or get_channel_capability(CHANNEL_WEIXIN)
@@ -547,6 +549,7 @@ def build_turn_llm_input(
     agent_context = read_agent_context(
         account_id,
         display_name=account.get("display_name"),
+        channel=channel,
     )
     # 统一编排：carryover 不再作为独立 block 注入，而是在 session 轮转时 seed 进新 session 的
     # rolling_summary（见 session_lifecycle），此后会话内溢出继续 merge 进同一条水位线。
@@ -674,6 +677,7 @@ def build_turn_llm_input(
             )
         ),
         extra_blocks=extra_blocks or None,
+        reply_presentation=cap.reply_presentation,
     )
     system_prompt = build_result.prompt
     # 由 builder 自产元数据，替代历史写死的僵尸字段（今后若 wire daily notes 自动正确）。
@@ -926,7 +930,9 @@ def _prepare_turn(
     account = session_state["account"]
     session = session_state["session"]
     profile_path = ensure_user_profile(account_id)
-    ensure_agent_context_files(account_id, display_name=account.get("display_name"))
+    ensure_agent_context_files(
+        account_id, display_name=account.get("display_name"), channel=identity.channel
+    )
     ensure_account_state(account_id=account_id)
     debug_trace_enabled = _is_debug_trace_account(account_id)
 
@@ -1516,6 +1522,7 @@ def _resolve_turn_reply(
                 # 两者皆空 → None → assemble 既有 no-op 分支（form-A 逐字不变）。
                 extra_blocks=([*ctx.extra_blocks, *_tdai_extra_blocks] or None),
                 cap=setup.cap,
+                channel=setup.identity.channel,
             )
             history = llm_input["history"]
             system_prompt = llm_input["system_prompt"]
