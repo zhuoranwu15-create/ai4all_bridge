@@ -71,6 +71,43 @@ def test_m0023_backfills_and_merges_multi_account_daily(fresh_db):
     assert db.get_daily_usage(account_id=a1, date=_DATE) == _C1 + _C2 + 1
 
 
+def test_m0023_orphan_no_binding_backfills_account_id(fresh_db):
+    """无 active binding 的孤儿号：迁移回退 platform_user_id=account_id（非 NULL），运行时 increment 不崩。
+
+    codex finding ②：旧迁移让孤儿行 pu 恒为 NULL，运行时以 subject=account_id 写入时
+    ON CONFLICT(pu,date) 命不中 NULL 行、转撞保留的 UNIQUE(account_id,date) 无 arbiter → IntegrityError。
+    """
+    user = db.create_or_get_platform_user_by_phone(phone="13800030003", display_name="孤儿迁移")
+    acc = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"], display_name="孤儿"
+    )["account"]["id"]
+    with db.connect() as conn:
+        # 制造孤儿态：删本号 owner binding；DROP 唯一索引后置一行 NULL-pu 当日行（模拟迁移前）。
+        conn.execute("DELETE FROM account_owner_bindings WHERE account_id = ?", (acc,))
+        conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_date")
+        conn.execute(
+            "INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at) "
+            "VALUES (?, NULL, ?, 4, '2026-07-19 00:00:00')",
+            (acc, _DATE),
+        )
+
+    with db.connect() as conn:
+        _migration_0023_daily_usage_platform_user(conn)
+
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT platform_user_id, message_count FROM daily_usage WHERE account_id = ? AND date = ?",
+            (acc, _DATE),
+        ).fetchone()
+    # 孤儿回退：pu = account_id（非 NULL），进入唯一索引。
+    assert row["platform_user_id"] == acc
+    assert int(row["message_count"]) == 4
+
+    # 运行时：subject=account_id（无绑定 fallback），ON CONFLICT(pu,date) 命中同一行 → 不崩、+1、不双写。
+    assert db.increment_daily_usage(account_id=acc, date=_DATE) == 5
+    assert db.get_daily_usage(account_id=acc, date=_DATE) == 5
+
+
 def test_m0023_is_idempotent(fresh_db):
     """迁移可重复执行：第二次跑合并态已收敛，计数/主行不变。"""
     user_id, a1, a2 = _two_accounts_one_user("13800030002")

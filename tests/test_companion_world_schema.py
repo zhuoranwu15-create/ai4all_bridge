@@ -184,6 +184,40 @@ def test_l3_append_only_and_anchor_isolation(fresh_db):
     assert any(r["source_account_id"] == "accX" for r in a_all)
 
 
+def test_l3_write_rejects_cross_universe_resident(fresh_db):
+    """§2.5 写入隔离（codex finding ③）：source_resident_id 必属 target universe，跨 universe/不存在 → 拒写回滚。"""
+    pu_a, pu_b = _pu("19911110010", "甲"), _pu("19911110011", "乙")
+    wa = db.get_or_create_home_universe(platform_user_id=pu_a)
+    wb = db.get_or_create_home_universe(platform_user_id=pu_b)
+    tmpl = db.create_character_template(source_type="official", name="小满")["id"]
+    res_b = db.create_resident(
+        universe_id=wb["id"], character_template_id=tmpl, template_version="v1",
+        origin="preset", status="active", runtime_account_id=_account(pu_b),
+    )
+
+    # 居民 B（属世界 B）往世界 A 写 → 拒（跨 universe 污染）。
+    with pytest.raises(ValueError):
+        db.append_universe_fact(
+            universe_id=wa["id"], fact_type="user_fact", payload_json='{"x":1}',
+            occurred_at="2026-07-21 10:00:00", source_resident_id=res_b["id"],
+        )
+    # 不存在的 resident → 拒。
+    with pytest.raises(ValueError):
+        db.append_universe_fact(
+            universe_id=wa["id"], fact_type="user_fact", payload_json='{"x":1}',
+            occurred_at="2026-07-21 10:00:00", source_resident_id="res_ghost",
+        )
+    # 拒写回滚：世界 A 无任何 fact 落库。
+    assert db.read_universe_facts(universe_id=wa["id"]) == []
+
+    # 正路：居民 B 往**自己**世界 B 写 → 成功。
+    fid = db.append_universe_fact(
+        universe_id=wb["id"], fact_type="user_fact", payload_json='{"x":1}',
+        occurred_at="2026-07-21 10:00:00", source_resident_id=res_b["id"],
+    )
+    assert fid and len(db.read_universe_facts(universe_id=wb["id"])) == 1
+
+
 def test_l3_status_filter_excludes_superseded(fresh_db):
     """compact 后被合并行 status='superseded' 不再进默认读（active）。"""
     pu = _pu("19911110008")

@@ -16,8 +16,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # 受管的领域层根（相对仓库根的包路径）
 DOMAIN_LAYER = REPO_ROOT / "app" / "domains" / "companion_world"
 
+# 受管的 Agent Runtime 层根（形态无关；不得反向依赖任何产品域层）
+RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
+
 # 禁止被领域层直接依赖的 Runtime 内部模块（绝对模块名前缀）
 FORBIDDEN_PREFIXES = ("app.db", "app.turn_service")
+
+# 禁止被 Agent Runtime 反向依赖的产品域层（D-06 形态无关：Runtime 不认识 Companion World）
+RUNTIME_FORBIDDEN_PREFIXES = ("app.domains",)
 
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
@@ -72,10 +78,10 @@ def _iter_imported_modules(tree: ast.AST, package: str):
                     yield f"{base}.{alias.name}"
 
 
-def _is_forbidden(module: str) -> bool:
+def _is_forbidden(module: str, prefixes: tuple[str, ...] = FORBIDDEN_PREFIXES) -> bool:
     return any(
         module == prefix or module.startswith(prefix + ".")
-        for prefix in FORBIDDEN_PREFIXES
+        for prefix in prefixes
     )
 
 
@@ -83,6 +89,12 @@ def _domain_py_files() -> list[Path]:
     if not DOMAIN_LAYER.exists():
         return []
     return sorted(DOMAIN_LAYER.rglob("*.py"))
+
+
+def _runtime_py_files() -> list[Path]:
+    if not RUNTIME_LAYER.exists():
+        return []
+    return sorted(RUNTIME_LAYER.rglob("*.py"))
 
 
 def test_scaffold_packages_exist():
@@ -104,5 +116,26 @@ def test_companion_world_does_not_import_runtime_internals():
                 violations.append(f"{rel} → import {module}")
     assert not violations, (
         "领域层越界依赖 Runtime 内部（应经 agent_runtime 端口，见 ADR §7.3）：\n"
+        + "\n".join(violations)
+    )
+
+
+def test_runtime_does_not_import_product_domains():
+    """D-06：Agent Runtime 形态无关，禁止反向依赖任何产品域层（app.domains.*）。
+
+    「读+渲染」的 L3 组合属产品域层（`app.domains.companion_world.l3_context`），Runtime 只留
+    形态无关的读 I/O。依赖方向须为 `域层 → agent_runtime`，反向即破 D-06——本门禁堵住
+    finding ④ 那类「Runtime import 域层渲染函数」的回归（旧一向门禁只扫域层→Runtime、漏此向）。
+    """
+    violations: list[str] = []
+    for py_file in _runtime_py_files():
+        package = _module_package(py_file)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for module in _iter_imported_modules(tree, package):
+            if _is_forbidden(module, RUNTIME_FORBIDDEN_PREFIXES):
+                rel = py_file.relative_to(REPO_ROOT)
+                violations.append(f"{rel} → import {module}")
+    assert not violations, (
+        "Agent Runtime 反向依赖产品域层（破 D-06 形态无关；组合应下沉域层）：\n"
         + "\n".join(violations)
     )

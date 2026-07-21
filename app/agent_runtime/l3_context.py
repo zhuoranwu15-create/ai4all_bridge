@@ -1,28 +1,23 @@
-"""L3 共享上下文读 facade（Runtime 层）——M2-B1「读注入」的读半刀。
+"""L3 共享上下文的 Runtime 侧读接缝——M2-B1「读注入」的读半刀（**仅 I/O**）。
 
-组合「读某世界 active L3 facts（app.db）+ 域层渲染成 ContextBlock」。Runtime 层允许直接
-依赖 app.db（是域层→Runtime 的受管接缝），故 I/O 落此处、渲染语义委托域层
-（`app.domains.companion_world.l3_context.render_universe_l3_block`，D-06）。
+只负责「读某世界 active L3 facts」这一形态无关的 I/O（Runtime 层允许直接依赖 app.db，是
+域层→Runtime 的受管接缝）。**渲染语义与「读+渲染」的组合属产品域层**（D-06：绝不编码进
+Agent Runtime），故本模块**不** import `app.domains.*`——组合在
+`app.domains.companion_world.l3_context.read_universe_context`（域层→agent_runtime 合法，
+依赖方向见 ADR §依赖方向 L181：`域层 → AgentRuntimePort → 现有实现`）。
 """
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from app.db._backend import Connection
 from app.db.companion_world import read_universe_facts
-from app.domains.companion_world.l3_context import render_universe_l3_block
-from app.prompt_builder import ContextBlock
 
 
-def read_universe_context(
+def read_active_universe_context_facts(
     *, universe_id: str, conn: Optional[Connection] = None
-) -> Optional[ContextBlock]:
-    """读某世界 active L3 facts 并渲染成注入用 `ContextBlock`；无 fact/空世界返回 None。
+) -> List[Dict[str, Any]]:
+    """读某世界 `status='active'` 的 L3 typed facts（严格按 universe_id 锚，跨 universe 不可见）。
 
-    ADR §12「L3 首刀」的 `read_universe_context()`。**只读 `status='active'`**（compact 后
-    superseded 行不注入）、严格按 `universe_id` 锚（跨 universe 不可见，read_universe_facts 保证）。
-
-    本刀（M2-B1）**无 live 调用方**——form-A（微信）不调、退化 1:1；form-B 的 App turn 适配器
-    随 M2-C 调用并把结果填入 `ChannelTurnInput.extra_blocks`（接缝①）。account→universe 解析
-    留调用方（M2-C 由 conversation_id 定位 universe），本 facade 只吃 universe_id。
+    形态无关的纯读：返回结构化 fact 行、不含任何渲染/共享语义（那是域层职责）。compact 后
+    superseded 行不返回。account→universe 的解析留调用方（M2-C 由 conversation_id 定位）。
     """
-    facts = read_universe_facts(universe_id=universe_id, status="active", conn=conn)
-    return render_universe_l3_block(facts)
+    return read_universe_facts(universe_id=universe_id, status="active", conn=conn)

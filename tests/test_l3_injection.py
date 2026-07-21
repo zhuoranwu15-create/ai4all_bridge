@@ -8,8 +8,10 @@ system prompt（build_turn_llm_input 直测 + run_turn_for_account 端到端）�
 from unittest.mock import patch
 
 import app.db as db
-from app.agent_runtime import read_universe_context
-from app.domains.companion_world.l3_context import render_universe_l3_block
+from app.domains.companion_world.l3_context import (
+    read_universe_context,
+    render_universe_l3_block,
+)
 from app.prompt_builder import ContextBlock
 
 _MARKER = "MARKER_L3_XYZ"

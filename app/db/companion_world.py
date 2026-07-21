@@ -309,9 +309,24 @@ def append_universe_fact(
     追加天然无写冲突、无 last-writer-wins（并发正确性以 PG 为证，D-12）。锚 universe_id（非
     account，D-06）。payload_json 是结构化事实体、**非逐字聊天原文**（D-05：不共享原文/检索）。
     compact（合并去重 + status='superseded'）由单 writer 另行执行（M2-B+），不在本写路径。
+
+    **写入隔离校验（§2.5）**：传 source_resident_id 时，INSERT 前（同事务）校验该 resident 确属
+    target universe_id——跨 universe（居民 B 往世界 A 写）或指向不存在的 resident 一律拒绝（抛
+    ValueError 回滚），杜绝一个世界的居民污染另一个世界的共享记忆。source_account_id 无对应关系表，
+    不在此校验（provenance-only）。
     """
     fact_id = _new_id("uf")
     with _tx(conn) as tx:
+        # §2.5 写入隔离校验（与 INSERT 同事务，拒写即回滚）：source_resident_id 必属 target universe。
+        if source_resident_id is not None:
+            owner = tx.execute(
+                "SELECT universe_id FROM universe_residents WHERE id = ?",
+                (source_resident_id,),
+            ).fetchone()
+            if owner is None or str(owner["universe_id"]) != str(universe_id):
+                raise ValueError(
+                    f"source_resident_id {source_resident_id} does not belong to universe {universe_id}"
+                )
         tx.execute(
             """
             INSERT INTO universe_memory_facts(

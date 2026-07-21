@@ -2189,7 +2189,8 @@ class ChannelTurnInput:
     # 原 _openclaw_id_diagnostics 结果（渠道相关，对核心不透明），仅供日志。
     inbound_diagnostics: Dict[str, Any] = field(default_factory=dict)
     # 域层注入的外部 context 块（L3 等，ADR §7.3 接缝①）。WeChat 入口不填 → 默认空 →
-    # 组装时退化 no-op；form-B（App）入口随 M2-C 由 read_universe_context 填入。
+    # 组装时退化 no-op；form-B（App）入口随 M2-C 由域层
+    # app.domains.companion_world.l3_context.read_universe_context 填入。
     extra_blocks: List[ContextBlock] = field(default_factory=list)
 
 

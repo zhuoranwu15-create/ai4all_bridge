@@ -2099,7 +2099,9 @@ def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
 
     可重复执行（幂等）：再跑时每 (真人,date) 仅 1 行、回填只补 NULL、索引 IF NOT EXISTS。daily/rpm
     是瞬态计数（无历史余额可损坏），故无需 precheck（owner 解析不变式已由 D-14 precheck 作同一 M1
-    发布闸覆盖）；无 active binding 的孤儿行保持 platform_user_id=NULL、不进合并、不占索引。
+    发布闸覆盖）。无 active binding 的孤儿行**回退 platform_user_id=account_id**（镜像运行时
+    _resolve_quota_subject 的孤儿回退），保证写路径 ON CONFLICT(platform_user_id,date) 命中同一行、
+    不与保留的 UNIQUE(account_id,date) 冲突（否则孤儿号次日 increment 触 IntegrityError / 读取静默清零）。
     """
     # 1) 加列（幂等）+ 从最早 active binding 回填（冻结解析规则，与 get_platform_user_id_for_account
     #    及 D-14 预检一致：ORDER BY b.created_at ASC, b.id ASC LIMIT 1）。
@@ -2117,6 +2119,13 @@ def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
         )
         WHERE platform_user_id IS NULL
         """
+    )
+    # 1b) 无 active binding 的孤儿行：回退 platform_user_id=account_id（同 _resolve_quota_subject 的
+    #     孤儿回退）。否则该行 platform_user_id 恒为 NULL，运行时 increment 以 subject=account_id 写入
+    #     时 ON CONFLICT(platform_user_id,date) 命不中 NULL 行、转而撞 UNIQUE(account_id,date) 无 arbiter
+    #     处理 → IntegrityError；读取按 platform_user_id 亦查不到 → 配额静默清零。幂等：仅补 NULL。
+    conn.execute(
+        "UPDATE daily_usage SET platform_user_id = account_id WHERE platform_user_id IS NULL"
     )
     # 2) 合并同 (真人,date) 多行（多号≈0，near-no-op；索引安全必需，须在建索引前）。
     dup_groups = conn.execute(

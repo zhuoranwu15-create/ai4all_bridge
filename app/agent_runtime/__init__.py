@@ -4,7 +4,9 @@
 本层允许直接依赖 app.db.* / app.turn_service（是域层→Runtime 的受管接缝），不受
 tests/test_layer_boundaries.py 门禁约束（门禁仅扫 app.domains.companion_world.*）。
 """
-from app.agent_runtime.l3_context import read_universe_context  # noqa: F401
+from app.agent_runtime.l3_context import (  # noqa: F401
+    read_active_universe_context_facts,
+)
 from app.agent_runtime.ports import (  # noqa: F401
     AgentRuntimePort,
     DeliveryResult,
@@ -27,5 +29,5 @@ __all__ = [
     "ProactiveIntent",
     "ResidentHandle",
     "UnitOfWork",
-    "read_universe_context",
+    "read_active_universe_context_facts",
 ]
