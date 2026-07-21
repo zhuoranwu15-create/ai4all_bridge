@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
-更新时间：2026-07-21
-状态：**核心架构决策已冻结；M2-C 产品门 §10.1/.2/.6 已冻结并 code-ready**。M3–M5 仍各自受 §10 对应产品门约束。含主动消息子系统改造（D-13 / §11）。本文为架构决策记录（ADR）性质，是 `docs/tmp/companion_app_backend_refactor_handoff.md` 讨论底稿的正式化产物，冻结口径以本文为准。
-核查基线：`main@3f42ee1`（PR #44 已合并）
+更新时间：2026-07-22
+状态：**核心架构决策已冻结；M2-C C0–C5 已实现、feature flag 默认关闭**。M3–M5 仍各自受 §10 对应产品门约束。含主动消息子系统改造（D-13 / §11）。本文为架构决策记录（ADR）性质，冻结口径以本文为准。
+核查基线：`feat/companion-world-m2c@a47d41e`（C5；C6 为文档/发布闸收口）
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -501,7 +501,7 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 | **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | §10.3/.4/.8 |
 | **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | §10.9 |
 
-M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1 已交付；M2-C 的 §10.1/.2/.6 已冻结、code-ready；M3–M5 对应 §10 冻结项未定前不进各自编码。**
+M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C 已交付代码；M2-C 保持默认关闭，生产启用仍受模板、backfill 和客户端版本发布闸约束；M3–M5 对应 §10 冻结项未定前不进各自编码。**
 
 ### M0 — 冻结·脚手架·现状 characterization（可立即开工）
 
@@ -529,7 +529,7 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 | **D-07** 容量脱建号计数 | `billing.py:2090` `COUNT(*) binding >= 10` 与容量解耦 | 满 10 后仍可 offline 补新（历史 binding 不占位） |
 | PG 并发测试 | 跨居民同时扣款不双扣、`idempotency_key` 唯一守住 | §9 硬门禁 |
 
-### M2 — Runtime facade + P1 多居民（§10.1/.2/.6 已冻结；**M2-C code-ready**）
+### M2 — Runtime facade + P1 多居民（§10.1/.2/.6 已冻结；**M2-C implemented / default-off**）
 
 **前置 M2-0（编码前必做）**：定稿 §7.3 四接缝签名（初稿已写入「方法签名初稿」2026-07-19，均核过现有入口类型）+ 产出**正式 P1 后端规范**。规范已定稿 [`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)（`fact_type` 枚举全集 + 路由矩阵、5 张 P1 表 DDL/索引/唯一约束、DTO + 安全契约、稳定错误码表、**锁顺序细则 §2.7 + 老用户 backfill 分步伪码 §2.8**）；**M2-0 前置门清零**（剩余 offline 原子事务/visit 双世界锁随 M4/M5）。客户端 gap 文档只作输入、不替代后端规范。
 
@@ -540,6 +540,16 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 **落地说明（M2-B1 L3 读注入接缝已交付 2026-07-21）**：M2-B 按风险再拆——本刀 B1 = **读注入接缝**，**零 live 行为变更、不碰 bazi**。交付：①域层 `app/domains/companion_world/l3_context.py::render_universe_l3_block(facts)`（纯渲染 active L3 facts→`ContextBlock`，只 import `app.prompt_builder`、过分层门禁）；②Runtime 层 `app/agent_runtime/l3_context.py::read_universe_context(universe_id)`（读 `status='active'` L3 facts + 域层渲染，`universe_id` 锚隔离）；③接缝①接线 `ChannelTurnInput.extra_blocks` 字段 + `build_turn_llm_input` 调用处 merge `[*ctx.extra_blocks, *_tdai_extra_blocks] or None`（加性、两空→None→assemble 既有 no-op）。**form-A no-op**：微信入口 `build_channel_input_from_openclaw` 不填 `extra_blocks`（默认空）；`read_universe_context` 本刀无 live 调用方（form-B App turn 适配器随 M2-C 调用并填 `ctx.extra_blocks`）。门禁：SQLite 全量 1370 passed、PG 全量 1371 passed（含「默认空 extra_blocks→prompt 无 L3 段」零回归用例）。**推迟**：通用 after-turn typed sink（seam②）因现 `write_memory` 无 fact_type 产出、按 ADR 随 form-B 居民产 fact 再落。~~**M2-B 剩余**：B2 八字段改指~~ → **已作废（2026-07-21），见下条落地说明**。
 
 **落地说明（八字降级为无工具 skill，替代原 B2 2026-07-21）**：应产品要求，八字不再拥有专属存储与工具，降级为与 tianqi/weather 同形态的**无工具 skill**（仅 `app/skills/bazi/SKILL.md` + 参考表，排盘靠 LLM 现算 + `web_search`）。已删除：4 个 bazi CRUD 工具（`get/update/clear/delete_bazi_profile`，涉及 `definitions.py`/`registry.py`/`tools.__init__`）、`app/tools/bazi_profile_handlers.py`、`user_profiles.py` 的 `read_bazi_profile`/`write_bazi_profile`/`_BAZI_PROFILE_*` 及 `write_context_file` 的 `preserve_bazi_profile` 通道、`tests/test_bazi_profile_tools.py`。出生信息改走**普通记忆**（Dreaming 蒸馏进 USER.md/MEMORY.md）；存量 MEMORY.md 受管段清爽移除、不迁移（作为普通文本留存，下次 Dreaming 全量重写时自然处理）。**故原 B2「八字段改指 universe 存储」彻底作废**，`fact_type='bazi'` 从路由矩阵移除；L3 首刀 proving vertical 改由通用 `user_fact`/`user_preference` 承载（现网 L3 代码对 fact_type 通用、无 bazi 硬编码，不受影响）。
+
+**落地说明（M2-C C0–C5 已交付 2026-07-22）**：实施提交依次为 `7471ca8`（m0030 + App Dreaming scope）、`2f419de`（领域/UoW）、`ec980ad`（API/import/backfill/auth）、`f5fd3c5`（conversation/history/text turn + PG single-flight）、`244d7a7`（typed sink + L3 compact）、`a47d41e`（防 N× proactive）。最终实现遵守以下边界：
+
+- resident runtime 不发 owner binding、不赠权；account/profile + resident + conversation 同一事务。
+- App owner API 只接受 session user + 路径 resource ID；history 只读目标 runtime 的 App scope；P1 turn 只开放文字，媒体后续另做安全评审。
+- conversation 单飞使用 PG `pg_try_advisory_xact_lock` 非阻塞锁，SQLite 仅进程锁功能回退；锁内重读 `state`。
+- Dreaming 仅把已应用的结构化用户事实送入 L3；relationship/commitment 与未知类型不共享；compact 只折叠 exact-normalized duplicate，central scheduler 单写并以同键 advisory lock 兜底重叠。
+- M2 安全阀仅允许 legacy primary 承担真人级 proactive；App-only fail-closed，reminder/commitment 不误杀。M3 才正式实现 App 收件箱、跨居民预算/活跃聚合与发声人选择。
+- 回滚为关闭 `COMPANION_WORLD_P1_ENABLED`，不删除加性数据。生产开启前仍必须完成四模板 manifest、固定 cutoff backfill、客户端最低版本与双后端门禁；详见 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)。
+- 最终代码门禁（2026-07-22）：unit 565 passed；SQLite 1424 passed / 8 skipped；PostgreSQL 1428 passed / 4 skipped；`git diff --check` 通过。
 
 ### M3–M5（各待对应 §10 冻结）
 

@@ -3,7 +3,7 @@
 > 面向：项目干系人 / 新加入者的快速通读。权威口径以 ADR
 > [`tech_design/companion_world_3_0_refactor_design.md`](tech_design/companion_world_3_0_refactor_design.md)
 > 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md) 为准；本文只做浓缩。
-> 更新日期：2026-07-21
+> 更新日期：2026-07-22
 
 ---
 
@@ -60,53 +60,44 @@
 
 ---
 
-## 四、进度与剩余工作（截至 2026-07-21，决策 B 后）
+## 四、进度与发布状态（截至 2026-07-22）
 
-> **PR #44 已于 2026-07-21 合并到 main（merge commit `3f42ee1`）；M2-C 当前工作分支为 `feat/companion-world-m2c`。本简报不再内嵌易失效的 feature HEAD，接手时以 `git rev-parse HEAD` / 当前 PR 最新提交为准。**
+> PR #44 已于 2026-07-21 合并到 main（merge commit `3f42ee1`）。M2-C 已在
+> `feat/companion-world-m2c` 完成 C0–C5，feature flag 仍默认关闭。
 
-**已交付（均已 commit）：**
-- **M0** 全部：四个骨架包 + AST 分层门禁（含 Runtime→域层反向门）+ characterization 安全网。
-- **M1** 全套：D-14 钱包上迁真人键 + 一真人一次赠权、D-09 daily/RPM 配额上迁 + 原子预占/回滚/TTL、D-07 容量脱建号计数、#11 PG 并发硬闸。
-- **M2-A**：数据基座（5 张 P1 表迁移，实际并主干后为 m0028/m0029）+ Agent Runtime 四接缝端口**形状**（未接线）。
-- **M2-B1**：L3「读注入」接缝（`read_universe_context` + `prompt_builder` 加性 `extra_blocks`），**form-A 微信零 live 行为变更**。
-- **八字无工具化**：八字降级为与 weather 同形态的无工具 skill，替代原「八字段改指 universe 存储」的 B2。
-- **codex 审查 5 findings 修复**（`1821ffd`）：M1 真人级上迁的冷路径漏扫——wipe 误删共享钱包、无 binding 孤儿行 daily 迁移、L3 跨 universe 写入隔离、Runtime→域层依赖反转、`grant_shells` 预览余额。
-- **并入 main #42**（`4a3cae1`）：main 已合并的「App/账号收敛 + 渠道化人设」（一手机号×一 App=一 active 账号、`ux_owner_binding_active_user_app`、`CHANNEL_APP 'app'→'native'`、迁移 22/23/24）。分支 M1 迁移先改号 22–26→25–29（`c2ba253`）让号，冲突仅 `_core.py`（registry 取并集 1–29）。
-- **✅ 账号模型对齐决策 B 实现**（`329ce59`）：见下节。
-- **✅ 决策 B 后 PG 并发硬闸补齐**：旧「一真人第二账号」测试夹具改走真实 form-B 居民路径；新增「微信 binding 账号 + 世界居民账号」同真人并发共享钱包用例，覆盖两条 owner 解析链汇聚且不丢更新。
+### 已交付
 
-**发布闸（2026-07-21）：unit 562 passed；SQLite 全量 1379 passed / 6 skipped；PG 聚焦并发 4 passed；PG 全量 1381 passed / 4 skipped。全 29 迁移与双后端发布闸均绿。**
+- **M0/M1/M2-A/B1**：分层门禁、真人级钱包/配额、P1 五表、Runtime 端口与 L3 加性读注入均已交付。
+- **C0 `7471ca8`**：m0030 初始候选 rank/模板关系唯一约束；`__app_active__` 纳入每日 Dreaming。
+- **C1 `2f419de`**：World 领域契约、SQL repository、runtime account + resident + conversation 同事务创建。
+- **C2 `ec980ad`**：flag-default-off 的 world API、四模板导入器、legacy 全 binding backfill、新用户 `account:null` auth 分支。
+- **C3 `f5fd3c5`**：conversation list/history/text turn、owner ACL、防枚举、PG 非阻塞 advisory single-flight、L3 同世界注入。
+- **C4 `244d7a7`**：Dreaming `fact_type`、fail-closed typed sink、resident→universe L3 append、exact-normalized compact 与 central-only single writer。
+- **C5 `a47d41e`**：真人级 proactive 防 N× 安全阀；仅 legacy primary 可触发，App-only fail-closed；reminder/commitment 仍 per-resident。
 
-### ✅ 账号模型对齐 —— 决策 B（已定 + 已实现，替代原「合并阻塞」）
+### 当前发布闸
 
-原「PR #44 合并阻塞」的根因是 **`account` 一词两义**（用户 App 账号 vs 居民 runtime 容器），**非产品矛盾**。已冻结为 **决策 B**（决策记录：[`tech_design/companion_world_account_model_reconciliation.md`](tech_design/companion_world_account_model_reconciliation.md)）：
+- `make test-unit`：**565 passed / 867 deselected**。
+- `make test`（SQLite）：**1424 passed / 8 skipped**。
+- `make test-pg`（PostgreSQL）：**1428 passed / 4 skipped**。
+- `git diff --check`：通过。PG 继续作为容量竞争、single-flight、配额和 L3 并发的权威。
+- 非阻断告警：既有 Pydantic/FastAPI deprecated warning；`test_image_turn` mock 有一次 `asyncio.to_thread` 未 await RuntimeWarning，无失败。
 
-- **口径**：`owner_binding` 是**微信接入（形态 A）独有**的产物、不是通用「用户账号」机制；朝夕相伴居民**不发 binding**，纯朝夕相伴用户**零 binding**。
-- **解析链**（`accounts.resolve_owner_platform_user_id`）：`account →（1）owner_binding →〔无则〕（2）universe_residents.runtime_account_id → universes.owner_platform_user_id →〔无则〕（3）account_id 兜底`。居民从不建 active binding → #42 的唯一索引永不触发，**B 不破 #42**。
-- **落地**：B-① 解析函数收口钱包/配额/wipe 四处冷热路径；B-② `billing.create_resident_runtime_account`（M1-5 内部建号原语：建 account + `universe_residents` 映射，不发 binding / 不赠权 / 不占容量）；B-③ 测试夹具 `make_resident_account` + 13 个红夹具改走内部路径；B-④ 命名消歧注释 + ADR D-02/D-07 落地说明 + `tests/test_resident_runtime_account.py`。
+### 生产状态与阻断项
 
-**剩余工作：**
+- 代码迁移已到 **m0030**，但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
+- `COMPANION_WORLD_P1_ENABLED=false` 仍是默认值；尚未授权开启。
+- 正式四位首发角色 manifest（名称、头像、简介、三个标签、persona、版本）尚未提供，代码没有编造默认人设。
+- 支持 `account:null` + world bootstrap 的客户端最低版本/上线窗口尚未提供。
+- 生产模板导入、带固定 cutoff 的 backfill dry-run/实跑、数据对账尚待按 [后台管理说明](guides/admin_guide.md#companion-world-p1-发布运行手册) 现场执行。
 
-*A. PR #44：*
-- **✅ 已合并 main**：PG 双档验证与混合 owner 解析并发用例均通过，merge commit `3f42ee1`。
-
-*B. M2-C（产品门已清零，待计划确认后编码）：*
-- **§10.1 已冻结**：新用户固定 4 位预设候选；版本不可原地改写，bootstrap 快照模板版本。
-- **§10.2 已冻结**：老用户全部 active binding 映射 legacy resident，不自动补居民；零 binding 走新用户流程；满 10 全保留并禁新增。
-- **§10.6 已冻结**：`__app_active__` 纳入定时 Dreaming；L1/L2 per-runtime、L3 per-universe 单 writer compact。
-- **当前 plan**：[`plans/companion_world_m2c_implementation_plan.md`](plans/companion_world_m2c_implementation_plan.md)。
-- **M1-5 内部建号接线** — 原语已就绪（B-②），随 M2 建居民真正调用。
-- **seam② after-turn typed sink** — 随 form-B 居民真正产出 typed fact 再落。
-- **M3 / M4 / M5** — 各待对应 §10 冻结项。
-
-> ⚠️ **本地 dev PG 污染提示**：本地 dev PG 曾被旧改号（22–26）污染，手动脚本直连 ambient `DATABASE_URL` 会报 `column "app_id" does not exist`——那是 **dev 机 artifact、非代码 bug**（fresh 测试库/生产只见 #42 的 22/23/24，按序应用 1–29 正确）。`make test-pg` 用隔离临时库，不受影响。
+因此当前结论是：**M2-C 代码闭环完成、默认关闭、尚未达到生产开 flag 条件**。回滚始终是先关 flag；不删除 world/resident/conversation/L3 数据。
 
 ---
 
-## 五、如何从本文档接手
+## 五、下一步
 
-1. **切到分支并取最新提交**：M0/M1/M2-A/B1 看 `main@3f42ee1`；M2-C 用 `feat/companion-world-m2c`。以 `git status` / `git rev-parse HEAD` 为准。
-2. **当前发布基线**：`make test-unit` = 562 passed；`make test` = 1379 passed / 6 skipped；`make test-pg` = 1381 passed / 4 skipped（全 29 迁移 + 并发不变量）。后续改动按风险复跑对应档。
-3. **PR #44 状态**：已合并；不要在旧分支继续堆 M2-C。
-4. **权威口径**：ADR `tech_design/companion_world_3_0_refactor_design.md`（§12 里程碑 / §7.3 端口 / D-01…D-14）、P1 规范 `..._p1_backend_spec.md`、账号模型 `..._account_model_reconciliation.md`。
-5. **下一步**：确认 M2-C 文件级 plan 后，按 C0→C6 串行编码；M3–M5 继续等待各自产品门。
+1. 取得运营签字的四模板 manifest 与客户端最低版本。
+2. 在 flag=false 下部署 m0030，依次完成模板导入、固定 cutoff backfill 和只读对账。
+3. 复跑最终双后端门禁，小流量开启 flag 并观察 bootstrap/confirm/turn/L3/Dreaming 指标。
+4. M3–M5 继续等待各自 §10 产品冻结项；M3 负责 App 通知收件箱与真人级 proactive 正式上提，M4/M5 不在本次范围。

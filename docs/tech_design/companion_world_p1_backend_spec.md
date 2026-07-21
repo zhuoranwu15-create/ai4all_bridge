@@ -1,10 +1,10 @@
 # 技术设计：Companion World P1 后端规范（fact_type / schema / DTO / 错误码）
 
-> 状态：**定稿 2026-07-21，M2-C code-ready**（M2-0 前置门 + 产品冻结 §2.9 完整交付）。
+> 状态：**定稿并实现 2026-07-22，default-off**（M2-C C0–C5 已交付；生产启用仍受 §2.9 发布闸约束）。
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
 > 上位 ADR：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
-> 核查基线：`main@3f42ee1`（PR #44 已合并；迁移 max 版本 = 29；App API 错误惯例 = `HTTPException(status, detail=<code>)`；待替换入口 `get_first_active_account_for_user`）
+> 核查基线：`feat/companion-world-m2c@a47d41e`（迁移 max 版本 = 30；新世界端点使用稳定 envelope）。
 
 ## 0. 范围与不做项
 
@@ -23,6 +23,15 @@
 - 全字段 OpenAPI：DTO 只列承载**不变量/安全语义**的字段，逐字段类型以 OpenAPI 评审为准。
 
 **贯穿约束（继承 CLAUDE.md + ADR）**：schema 改动一律**新增迁移函数追加 `_MIGRATIONS`**（勿用启动期 `_ensure_column` 补丁，L3/世界表为新建，用 `executescript`）；账号隔离不变量升级为**锚点隔离**——L1/L2 锚 `account_id`、L3 锚 `universe_id`，任何未按其锚约束的读写都是 bug；并发正确性以 PG 用例为证，SQLite 只验功能（D-12）。
+
+### 0.1 最终实现摘要与有意偏差
+
+- Backend 直接路由前缀为 `/v1`；部署网关可外部映射为 `/api/v1`。本文下表以代码实际 `/v1` 为准。
+- P1 turn **只开放非空 text（1–4000）**；media 未暴露，等待独立的上传、审核与配额安全设计。
+- 客户端不传 runtime account。入站幂等落在既有 `UNIQUE(account_id,message_id)`：服务端把公开锚映射成 `app:{conversation_id}:{client_message_id}`；同一 conversation 唯一对应一个 runtime account，因此等价承载 `(conversation, sender, client_message_id)` 的 P1 私聊不变量，且响应不泄露 runtime account ID。
+- PG conversation single-flight 使用非阻塞 `pg_try_advisory_xact_lock(advisory_lock_key('conv:'+id))`；失败立即返回 `turn_in_progress`。SQLite 只用进程锁作功能回退，不作为并发证明。
+- L3 compact 只合并 fact_type + 规范 JSON 完全一致的重复项；复杂语义冲突不在 P1。central scheduler 单写，PG 同 universe advisory xact lock 兜住 admin run-once 重叠。
+- 真人级 proactive 在 M2 仅落安全阀：form-A 不变，world resident 只有 `legacy_primary_account_id` 放行，App-only fail-closed。App 收件箱/发声人/正式人级聚合仍属 M3。
 
 ---
 
@@ -201,10 +210,10 @@ P1 全部涉锁操作共用**一条全局锁获取序**——按序获取、逆�
 
 | 序 | 锁 | 载体（PG） | 持有者 | 锚 |
 |---|---|---|---|---|
-| L0 | 入站去重 | `UNIQUE(conversation_id, sender_id, client_message_id)` | turn（P1） | 约束非持锁，逻辑最先（§3.4-3） |
+| L0 | 入站去重 | `UNIQUE(account_id,message_id)` + `message_id='app:'||conversation_id||':'||client_message_id` | turn（P1） | 约束非持锁，逻辑最先（§3.4-3） |
 | L1 | 世界行锁 | `SELECT … FROM universes WHERE id=? FOR UPDATE` | confirm / 建居民（P1）；offline、来信接受（M4） | `universe_id` |
-| L2 | 会话单飞 | `pg_advisory_xact_lock(hashtext('conv:'||conversation_id))` | turn（P1）；offline 切 `read_only`（M4） | `conversation_id` |
-| L3 | 用户配额 | `pg_advisory_xact_lock(hashtext('quota:'||platform_user_id))` | turn 预占（P1，D-09） | `platform_user_id` |
+| L2 | 会话单飞 | `pg_try_advisory_xact_lock(advisory_lock_key('conv:'||conversation_id))` | turn（P1）；offline 切 `read_only`（M4） | `conversation_id` |
+| L3 | 用户配额 | `pg_advisory_xact_lock(advisory_lock_key('quota:'||platform_user_id))` | turn 预占（P1，D-09） | `platform_user_id` |
 | L4 | 钱包行 | `entitlement_wallets` 行锁 | 计费（**独立事务**，ADR §7.3 ④） | `platform_user_id`（M1 后） |
 
 **结构性不变量**
@@ -219,7 +228,7 @@ P1 全部涉锁操作共用**一条全局锁获取序**——按序获取、逆�
 3. **同 universe 两 resident 并发写 L3**：**无锁**——L3 为 append-only typed fact（§2.5 / ADR §6.4），各 resident 只 `INSERT` 带 provenance 行，天然无写冲突、无 last-writer-wins；compact 由**单 writer**（DreamingScheduler 单例，ADR §6.6）串行执行 `INSERT 合并行 + status='superseded'`，不与在线写争锁。
 4. **跨居民同真人并发扣配额**：两 turn 同 `platform_user` 争 L3 → 串行预占、不超卖；失败**只回滚本 reservation**、不误伤他人配额（D-09 退款矩阵）。崩溃残留 reservation 由 TTL 回收（D-09-5）。
 
-进程内 `threading.Lock`（`app_api.py` `_turn_locks`，gap §3.6）在 P1 由 L2 advisory 锁替换（§3.4-4），多节点一致；SQLite 档以等价事务语义只验功能（D-12），锁语义不作数。
+旧 App 路径的进程内 `threading.Lock` 不再承担 P1 world turn；新端点使用上表 L2，多节点一致。SQLite 档的进程锁只验功能（D-12），锁语义不作数。
 
 ### 2.8 老用户 backfill 分步伪码（含多 account，D-08）
 
@@ -294,7 +303,7 @@ def backfill_user(platform_user_id):
 
 ### 3.1 响应信封（新世界端点统一，与客户端 OpenAPI 对齐）
 
-客户端 §3.7 要求新接口统一稳定 `code` + `request_id` + `server_time`；本规范据此定信封（legacy `/chat/*` 不变，仅新 `/api/v1` 世界端点适用）：
+客户端 §3.7 要求新接口统一稳定 `code` + `request_id` + `server_time`；本规范据此定信封（legacy `/chat/*` 不变，仅新 `/v1` 世界端点适用；公网网关可映射 `/api/v1`）：
 
 ```jsonc
 // 成功
@@ -308,14 +317,14 @@ def backfill_user(platform_user_id):
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 不变量 |
 |---|---|---|---|---|
-| POST | `/api/v1/worlds/home/bootstrap` | 空体；world 由 session `platform_user` 解析 | `data.world{id,onboarding_state,status}` + 固定 4 条 `data.candidates[]` | 幂等；目录 rank 1..4 齐全；candidate/版本快照（§2.9） |
-| GET | `/api/v1/worlds/home/resident-candidates` | — | `data.candidates[]{template_id,template_version,name,avatar_ref,summary,tags}` | 只返回本 world 已快照 candidate；**不含** `persona_seed_json`/内部策略 |
-| POST | `/api/v1/worlds/home/residents/confirm` | `{selections:[{template_id, display_name?}]}` | `data.residents[]{resident_id,name,conversation_id,status}` | selections 必须来自本 world candidate；事务；确认后 active ∈ [1,10]；world row lock |
-| GET | `/api/v1/worlds/home/residents` | — | `data.residents[]{resident_id,name,status,conversation_id}`（active+offline） | owner-scoped |
-| POST | `/api/v1/worlds/home/residents` | `{template_id?}` 或 `{name,persona_hint?}`（自建） | `data.resident{...}` | selecting 期至多创建 1 个自建 candidate；confirmed 期建前 world row lock 校验 active<10；no-grant 建号（M1-5） |
-| GET | `/api/v1/conversations` | `?cursor=` | `data.items[]{conversation_id,resident{id,name,avatar},state,last_preview,unread}`（P1 仅 AI） | owner-scoped；只读模型 |
-| GET | `/api/v1/ai-conversations/{id}/messages` | `?cursor=` | `data.messages[]` + `data.state` | owner 校验；offline→`read_only` |
-| POST | `/api/v1/ai-conversations/{id}/turn` | `{client_message_id, text? , media?}` | `data.reply{...}` | **不接受 `account_id`**；`state='read_only'` 拒写 |
+| POST | `/v1/worlds/home/bootstrap` | 空体；world 由 session `platform_user` 解析 | `data.world{id,onboarding_state,status}` + 固定 4 条 `data.candidates[]` | 幂等；目录 rank 1..4 齐全；candidate/版本快照（§2.9） |
+| GET | `/v1/worlds/home/resident-candidates` | — | `data.candidates[]{template_id,template_version,name,avatar_ref,summary,tags,origin,status}` | 只返回本 world 已快照 candidate；**不含** `persona_seed_json`/内部 resident/runtime ID |
+| POST | `/v1/worlds/home/residents/confirm` | `{selections:[{template_id, display_name?}]}` | `data.residents[]{resident_id,name,avatar_ref,status,origin,conversation_id,conversation_state}` | selections 必须来自本 world candidate；事务；确认后 active ∈ [1,10]；world row lock |
+| GET | `/v1/worlds/home/residents` | — | 同上 `data.residents[]`（active+offline） | owner-scoped；不含 runtime account ID |
+| POST | `/v1/worlds/home/residents` | `{template_id}` 或 `{name,persona_hint?}`（二选一） | selecting 时可返回 `data.candidate`；confirmed 时返回 `data.resident` | selecting 期至多 1 个自建 candidate；confirmed 期 active<10；no-grant 建号 |
+| GET | `/v1/conversations` | `?cursor=&limit=` | `data.items[]{conversation_id,resident{id,name,avatar_ref,status},state,last_preview,unread}` + `next_cursor` | owner-scoped；P1 `unread=0`；预览只取 App scope |
+| GET | `/v1/ai-conversations/{id}/messages` | `?cursor=&limit=` | `data{state,messages[]{id,message_id,role,message_type,text,created_at},next_cursor}` | owner 校验；只读该 runtime 的跨日 App scope |
+| POST | `/v1/ai-conversations/{id}/turn` | `{client_message_id,text}`；extra forbid | `data{reply{text,message_id},no_reply,deduplicated}` | **不接受 account ID/media**；`read_only` 拒写；single-flight |
 
 ### 3.3 confirm / turn 请求体（关键结构）
 
@@ -323,15 +332,15 @@ def backfill_user(platform_user_id):
 // POST /worlds/home/residents/confirm
 { "selections": [ { "template_id": "tmpl_xxx", "display_name": "小满" } ] }   // 1–10 项；display_name 可选
 
-// POST /ai-conversations/{id}/turn —— 显式渠道，无 account_id
-{ "client_message_id": "c_...", "text": "在吗", "media": null }               // 唯一去重键复用 (conversation, sender, client_message_id)
+// POST /ai-conversations/{id}/turn —— 显式渠道，无 account_id/media
+{ "client_message_id": "client_12345678", "text": "在吗" }
 ```
 
 ### 3.4 安全契约（新端点硬规则）
 
 1. **绝不接受客户端 `account_id`/`runtime_account_id`**：turn/history/资源全部由「session `platform_user` + 路径 `conversation_id`/`resident_id` → 服务端解析 runtime account + owner 校验」定位。请求体带 `account_id` → `400 account_id_not_accepted`。
 2. **越权定位返回 404 不返回 403**：`conversation_id`/`resident_id` 存在但不属于当前 `platform_user` → 一律 `404 conversation_not_found`/`resident_not_found`（**不用 403**），避免 ID 枚举确认他人资源存在。
-3. **去重键** `(conversation_id, sender_id, client_message_id)` 唯一（沿用现有 message 幂等思路）；重试不重复计费/不重复入库。
+3. **去重键**：服务端映射 `client_message_id → app:{conversation_id}:{client_message_id}`，再由既有 `UNIQUE(account_id,message_id)` 保证唯一；重试不重复计费/不重复入库。
 4. **turn single-flight 下沉**：P1 起用 DB 可见状态 / PG advisory lock 替换进程内 `threading.Lock`（`app_api.py` 现状 `_turn_lock`），多节点一致（客户端 §3.6）。
 5. 所有新端点：`Cache-Control: no-store` + 信封（§3.1）+ 会话鉴权（Bearer）。
 
@@ -344,8 +353,10 @@ def backfill_user(platform_user_id):
 | code | HTTP | 触发 | 备注 |
 |---|---|---|---|
 | `ok` | 200 | 成功 | 信封 `code` |
+| `not_found` | 404 | feature flag 关闭时隐藏整组 world 路由 | 默认关闭/回滚语义 |
 | `unauthorized` | 401 | 无/坏 Bearer | 替换现状中文 `"未登录"`（新端点统一英文码） |
 | `account_id_not_accepted` | 400 | 请求体携带 `account_id`/`runtime_account_id` | §3.4-1 契约违反 |
+| `invalid_request` | 422 | 字段长度、类型或 extra 字段不合法（account ID extra 除外） | 稳定 validation envelope |
 | `world_not_ready` | 409 | home world 未 bootstrap | 客户端应先 bootstrap |
 | `world_disabled` | 403 | `universes.status='disabled'` | |
 | `template_not_found` | 404 | 选用模板不存在 | |
@@ -354,6 +365,9 @@ def backfill_user(platform_user_id):
 | `resident_not_found` | 404 | resident 不存在**或非本人**（防枚举） | §3.4-2 |
 | `resident_capacity_exceeded` | 409 | 确认/建居民后 active > 10 | world row lock 下判定（D-07） |
 | `resident_capacity_empty` | 409 | confirm 集合为空（active 会 < 1） | 初始集合不为 0（ADR §9） |
+| `resident_selection_invalid` | 400 | confirm 重复选择或混入非本 world candidate | |
+| `resident_already_exists` | 409 | confirmed world 再选已存在模板 | |
+| `custom_candidate_limit_exceeded` | 409 | selecting 阶段第二个自建 candidate | P1 至多 1 个 |
 | `conversation_not_found` | 404 | 会话不存在**或非本人**（防枚举） | §3.4-2 |
 | `conversation_read_only` | 409 | 向 offline resident 的 read_only 会话发 turn | §2.4 |
 | `turn_in_progress` | 409 | 同会话并发 turn（single-flight） | 复用现有码 |
@@ -371,3 +385,11 @@ HTTP 语义约定：400 请求契约违反 / 401 未鉴权 / 403 资源被禁 / 
 - **信箱 / 生命周期 / 访客 / 真人聊天**：M4–M5（客户端 §4.4–4.6）。
 - **客户端口径对齐**：gap-analysis §4.2「默认隔离/白名单」需按 D-05「全量共享沉淀记忆」镜像更新（本轮不动客户端仓库）。
 - **App scope 漏扫已冻结修复**（ADR §6.6 / 本文 §2.9）：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并覆盖 App scope 每日轮转；L3 compact 仍是 per-universe 单 writer。
+
+## 6. 发布状态（2026-07-22）
+
+- C0–C5 代码已完成，迁移版本 30，`COMPANION_WORLD_P1_ENABLED` 默认 false。
+- 最终门禁：unit 565 passed；SQLite 1424 passed / 8 skipped；PostgreSQL 1428 passed / 4 skipped。
+- 已有运营工具：`scripts/import_companion_world_presets.py`（manifest 校验、dry-run、immutable/version 闸）与 `scripts/backfill_companion_world.py`（dry-run、cutoff、resume、逐用户事务）。
+- 代码完成不等于生产完成：正式四模板、客户端最低版本、生产模板导入/backfill/对账仍缺现场证据，故不得提前开 flag。
+- 发布和回滚步骤以 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册) 为准。
