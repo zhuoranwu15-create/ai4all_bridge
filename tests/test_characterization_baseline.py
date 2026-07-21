@@ -82,16 +82,18 @@ def test_insert_message_dedup_is_account_scoped(fresh_db):
 # 接缝 5：一人多号钱包 + 赠权终态（D-14 / M1-1 + M1-7 已落地）
 # ---------------------------------------------------------------------------
 def _two_accounts_of_one_user() -> tuple:
-    """同一 platform_user 建两个 active account，返回 (platform_user_id, a1, a2)。"""
+    """同一 platform_user 的两个 account，返回 (platform_user_id, a1, a2)。
+
+    决策 B：a1 = 用户账号（form-A，发 owner_binding）；a2 = 世界里的居民（form-B runtime account，
+    无 binding，经世界归属解析共享真人钱包/配额）。第二号走居民内部路径，不再用注册入口撞 #42 收敛。
+    """
     user = db.create_or_get_platform_user_by_phone(
         phone="13800009001", display_name="多号用户"
     )
     a1 = db.create_ai4all_account_for_user(
         platform_user_id=user["id"], display_name="居民甲"
     )["account"]["id"]
-    a2 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="居民乙"
-    )["account"]["id"]
+    a2 = factories.make_resident_account(user["id"], "居民乙")
     assert a1 != a2
     assert (
         db.get_platform_user_id_for_account(account_id=a1)

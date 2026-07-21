@@ -11,6 +11,7 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
+from tests.factories import make_resident_account
 
 _DATE = "2026-07-19"
 
@@ -24,13 +25,12 @@ def _user_with_account(phone: str):
 
 
 def _two_accounts_one_user(phone: str):
+    # 决策 B：a1 = 用户账号（form-A）；a2 = 居民（form-B，无 binding），经世界归属共享真人配额。
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="多号预占用户")
     a1 = db.create_ai4all_account_for_user(
         platform_user_id=user["id"], display_name="甲"
     )["account"]["id"]
-    a2 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="乙"
-    )["account"]["id"]
+    a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
 
 

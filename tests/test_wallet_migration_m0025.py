@@ -15,6 +15,7 @@ ledger/cost_events），再**直接调用**迁移函数，验证 money 路径的
 """
 import app.db as db
 from app.db._core import _migration_0025_wallet_unique_platform_user
+from tests.factories import make_resident_account
 
 _B1 = 1_000  # 主钱包（a1）余额
 _B2 = 2_500  # 被并钱包（a2）余额
@@ -69,13 +70,13 @@ def _seed_pre_migration_two_wallets(conn, *, user_id, a1, a2):
 
 
 def _two_accounts_one_user(phone: str):
+    # 决策 B：a1 = 用户账号（form-A，发 owner_binding + 建共享钱包）；a2 = 居民（form-B，无 binding、
+    # 无独立钱包）。第二号走居民内部路径，不再用 create_ai4all_account_for_user 撞 #42 收敛。
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="迁移用户")
     a1 = db.create_ai4all_account_for_user(
         platform_user_id=user["id"], display_name="甲"
     )["account"]["id"]
-    a2 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="乙"
-    )["account"]["id"]
+    a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
 
 

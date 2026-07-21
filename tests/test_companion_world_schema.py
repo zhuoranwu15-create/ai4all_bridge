@@ -30,6 +30,25 @@ def _account(pu: str, name: str = "居民") -> str:
     ]["id"]
 
 
+def _runtime_account(name: str = "居民") -> str:
+    """一个 form-B 居民 runtime 容器账号（bare account row，无 binding/wallet），供 create_resident 映射。
+
+    决策 B：居民 runtime account 不是用户账号（不发 owner_binding、不占「一 App 一号」容量）。
+    此 helper 直插一行 accounts 作运行容器——本文件的 resident 测试只需 FK 目标存在，无需 profile/钱包。
+    """
+    from app.db._core import _new_account_id
+
+    acc = _new_account_id()
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
+            "VALUES (?, 'native', ?, 'zhaoxi', "
+            "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+            (acc, name),
+        )
+    return acc
+
+
 # ---------------------------------------------------------------------------
 # 1. schema / 迁移
 # ---------------------------------------------------------------------------
@@ -133,7 +152,9 @@ def test_count_active_residents_only_active(fresh_db):
     pu = _pu("19911110005")
     w = db.get_or_create_home_universe(platform_user_id=pu)
     tmpl = db.create_character_template(source_type="official", name="小满")["id"]
-    acc1, acc2 = _account(pu, "甲"), _account(pu, "乙")
+    # 两个居民 runtime 容器账号（form-B bare account，非用户账号）。#42 收敛后同真人只有一个用户
+    # 账号，故不能用 create_ai4all 建第二个；居民容器直接建 account 行即可。
+    acc1, acc2 = _runtime_account("甲"), _runtime_account("乙")
     db.create_resident(
         universe_id=w["id"], character_template_id=tmpl, template_version="v1",
         origin="preset", status="active", runtime_account_id=acc1,

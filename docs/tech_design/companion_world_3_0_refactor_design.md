@@ -63,6 +63,11 @@
 - **理由**：全仓库机械 rename 高风险、零收益；facade 足以隔离命名。
 - **影响**：同一官方模板进入两个用户世界 → 生成两个 resident + 两个 runtime account，私聊/Memory 不共享。Port 方法从真实调用点长出，不提前落死（`set_read_only`/`configure_persona` 等暂无调用方的方法标注待定）。
 
+> **落地说明（账号模型对齐决策 B 已交付 2026-07-21，并入 main #42 前）**：canonical 决策/改动面记录 = [`companion_world_account_model_reconciliation.md`](companion_world_account_model_reconciliation.md)。要点：
+> - **「account」一词两义**（历史命名债）：对 main #42（App/账号收敛）= 用户 App 账号（一手机号 × 一 App ≤ 1 个 active）；对朝夕相伴 = 每个 AI 居民一行 runtime `account`（一真人 1–10 个）。两者共用 `accounts` + `account_owner_bindings` 表。
+> - **`account_owner_bindings` 是微信接入（形态 A）独有的产物**，记录「微信渠道把某 account 绑到某真人」，**不是通用「用户账号」机制**。纯朝夕相伴用户（无微信）零 owner_binding；居民都不发 binding（否则撞 #42 的 `ux_owner_binding_active_user_app`）。
+> - **决策 B**：「account → 真人」解析加**世界 fallback**——owner_binding →（无则）`universe_residents.runtime_account_id → universes.owner_platform_user_id` →（无则）回退 account_id。canonical `accounts.resolve_owner_platform_user_id`，收口 `_resolve_quota_subject` / `get_platform_user_id_for_account` / `get_wallet_summary` / `wipe_account_data` sibling 检查。居民经 **M1-5 内部建号原语** `create_resident_runtime_account`（建 account + 世界映射，不发 binding / 不赠权 / 不占容量）。B 不破 #42（居民从不建 active binding → 唯一索引永不触发）。
+
 ### D-03 三种接入形态 A/B/C（架构）
 - **决策**：显式建模接入形态。**A（微信）** 1 真人 ↔ 1 Agent，无世界、无共享问题；**B（朝夕相伴）** 1 真人 ↔ 1 世界 ↔ N Agent（1–10），共享 L3、独立 L1/L2；**C（未来）** 绑定关系与共享范围未知，**不提前设计**，仅要求架构不写死形态假设。
 - **理由**：把“共享/隔离范围”变成显式的形态维度，避免每次新产品都改内核。
@@ -92,7 +97,7 @@
 - **依据**：`billing.py:2090` 建号前 `COUNT(*) account_owner_bindings WHERE status='active' >= 10` 抛错。
 - **影响**：成本事件仍记实际 resident runtime，余额扣减归同一真人 billing owner。
 
-> **落地说明（核对 2026-07-19，M1 pre-work 结论：计数解耦事实已满足，no-cap/no-grant 路径随 M2 接线）**：核对现状代码——建号容量校验 `billing.py:2087-2095` **本就只数 `status='active'` binding**（非「历史 binding 全计」），离场路径 `wipe_account_data`（`lifecycle.py:224`）直接 **DELETE binding**、`/web/me/unbind` 把 active 归零，赠权已按真人幂等（`new-user-grant-{platform_user_id}`，D-14/M1-7）。故 D-07 的「active 容量真相、历史 binding 不占位」在 M1 现状**事实已满足**，无独立编码。真正剩余的 M1 pre-work = §12 M2 本体点名的 **M1-5「no-cap/no-grant 内部建号路径」**（M2 在 world lock 下用 `universe_residents.status` 自校容量，故建号侧不要 10 闸再打架）——该内部路径随 **M2 建居民**一并接线（M1 不引入 universe 表，R1a「不依赖任何 universe 表」）。
+> **落地说明（核对 2026-07-19，M1 pre-work 结论：计数解耦事实已满足，no-cap/no-grant 路径随 M2 接线）**：核对现状代码——建号容量校验 `billing.py:2087-2095` **本就只数 `status='active'` binding**（非「历史 binding 全计」），离场路径 `wipe_account_data`（`lifecycle.py:224`）直接 **DELETE binding**、`/web/me/unbind` 把 active 归零，赠权已按真人幂等（`new-user-grant-{platform_user_id}`，D-14/M1-7）。故 D-07 的「active 容量真相、历史 binding 不占位」在 M1 现状**事实已满足**，无独立编码。真正剩余的 M1 pre-work = §12 M2 本体点名的 **M1-5「no-cap/no-grant 内部建号路径」**（M2 在 world lock 下用 `universe_residents.status` 自校容量，故建号侧不要 10 闸再打架）——该内部路径随 **M2 建居民**一并接线（M1 不引入 universe 表，R1a「不依赖任何 universe 表」）。**（更新 2026-07-21：M1-5 已随账号模型对齐决策 B 交付 = `billing.create_resident_runtime_account`，建 account + `universe_residents` 映射、不发 binding/不赠权/不占容量；容量真相仍 = `count_active_residents`。见 D-02 落地说明。）**
 
 ### D-08 legacy resident 保留离开豁免（P1 阻断，**冻结 2026-07-19 = 保留豁免 + 修订 PRD**）
 - **决策【已冻结 = 保留豁免】**：微信 legacy 居民与 App legacy 居民共享同一 runtime account，“legacy 普通居民 + 微信零回归 + 不可逆 offline”三者互斥。**取「保留豁免」**——legacy 居民永不 offline，App 仅展示、不提供离开入口；工程上微信零回归天然满足（不动共享 runtime account）。**须同步修订客户端 PRD `ai_companion_universe_prd.md:634`「来源不构成豁免」记为已知偏离**（本轮不动客户端仓库，去客户端仓库时改；§10.4 已标注）。

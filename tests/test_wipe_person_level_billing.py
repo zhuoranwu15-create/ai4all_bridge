@@ -5,6 +5,7 @@
 验证：wipe 非末号 → 共享钱包/daily 原样保留且**不抛**；wipe 末号 → 真正拆除。走 fresh_db。
 """
 import app.db as db
+from tests.factories import make_resident_account
 
 _DATE = "2026-07-21"
 
@@ -22,8 +23,10 @@ def test_wipe_preserves_shared_wallet_when_person_has_other_accounts(fresh_db):
     pu = db.create_or_get_platform_user_by_phone(
         phone="13900040001", display_name="共享钱包"
     )["id"]
+    # 决策 B：a1 = 用户账号（form-A，发 owner_binding）；a2 = 居民（form-B，无 binding，经世界归属
+    # 共享真人钱包/daily）。wipe a1（非末号）的 sibling 检查须能经世界归属看见 a2。
     a1 = db.create_ai4all_account_for_user(platform_user_id=pu, display_name="甲")["account"]["id"]
-    a2 = db.create_ai4all_account_for_user(platform_user_id=pu, display_name="乙")["account"]["id"]
+    a2 = make_resident_account(pu, "乙")
 
     # a2 追加一笔手工赠权 → 生成 account_id=a2、引用共享钱包的 ledger 行（正是旧代码删钱包时
     # 触发 SQLite FK 崩 / PG 悬挂的那类跨号引用）。

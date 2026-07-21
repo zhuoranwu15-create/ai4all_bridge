@@ -114,13 +114,14 @@ def wipe_account_data(
         # 先解析本号 owner platform_user_id + 是否还有**其他 active 号**，据此决定共享的钱包/daily 是
         # 保留还是拆除（见下方 entitlement_wallets/daily_usage 分支）。必须在删 account_owner_bindings
         # （本函数末尾）之前解析——此刻绑定仍在。
-        _owner_row = conn.execute(
-            "SELECT platform_user_id FROM account_owner_bindings "
-            "WHERE account_id = ? AND status = 'active' "
-            "ORDER BY created_at ASC, id ASC LIMIT 1",
-            (account_id,),
-        ).fetchone()
-        _wipe_platform_user_id = _owner_row["platform_user_id"] if _owner_row else None
+        from app.db.accounts import resolve_owner_platform_user_id
+        # 本号归属真人：形态 A（微信）经 owner_binding、形态 B（朝夕相伴居民）经世界归属，
+        # canonical 收口（见 accounts.resolve_owner_platform_user_id）。
+        _wipe_platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        # 是否还有**其他 active 号**共享这份真人级钱包/daily——须**同时数两形态**：
+        #   形态 A：另一条 active owner_binding（微信接入）；
+        #   形态 B：真人世界里另一个居民 runtime account（非本号、未 dismissed）。
+        # 只数 owner_binding 则居民不可见 → 误判末号、误删居民仍在用的共享钱包/配额（codex-① 同类冷路径）。
         _person_has_other_active_accounts = False
         if _wipe_platform_user_id is not None:
             _sib = conn.execute(
@@ -128,6 +129,20 @@ def wipe_account_data(
                 "WHERE platform_user_id = ? AND account_id <> ? AND status = 'active' LIMIT 1",
                 (_wipe_platform_user_id, account_id),
             ).fetchone()
+            if _sib is None:
+                _sib = conn.execute(
+                    """
+                    SELECT 1
+                    FROM universe_residents r
+                    JOIN universes u ON u.id = r.universe_id
+                    WHERE u.owner_platform_user_id = ?
+                      AND r.runtime_account_id IS NOT NULL
+                      AND r.runtime_account_id <> ?
+                      AND r.status <> 'dismissed'
+                    LIMIT 1
+                    """,
+                    (_wipe_platform_user_id, account_id),
+                ).fetchone()
             _person_has_other_active_accounts = _sib is not None
         memory_events = conn.execute(
             "DELETE FROM memory_events WHERE account_id = ?",

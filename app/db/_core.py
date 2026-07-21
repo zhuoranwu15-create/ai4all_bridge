@@ -473,6 +473,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_cost_events_wallet_created
         ON cost_events(wallet_id, created_at);
 
+        -- owner_binding = 微信接入（形态 A）独有的产物：记录「微信渠道把某 account 绑到某真人」，
+        -- 非通用「用户账号」机制。朝夕相伴居民（form-B runtime account）不发 binding，经世界归属解析到
+        -- 真人（accounts.resolve_owner_platform_user_id）。详见 companion_world_account_model_reconciliation.md。
         CREATE TABLE IF NOT EXISTS account_owner_bindings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_user_id TEXT NOT NULL,

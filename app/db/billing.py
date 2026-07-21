@@ -44,6 +44,7 @@ from app.db._core import (
 )
 __all__ = [
     'create_ai4all_account_for_user',
+    'create_resident_runtime_account',
     'create_binding_intent',
     'create_or_get_platform_user_by_phone',
     'ensure_wallet',
@@ -1655,19 +1656,16 @@ def _shell_micros_for_tokens(
 
 
 def get_platform_user_id_for_account(*, account_id: str) -> Optional[str]:
+    """把 account_id 解析为归属真人 platform_user_id（钱包聚合键，D-14）。
+
+    统一收口到 accounts.resolve_owner_platform_user_id：形态 A（微信接入）经 owner_binding，
+    形态 B（朝夕相伴居民 runtime account）经世界归属（universe owner），都无则 None。
+    owner_binding 是微信接入独有的产物、非通用「用户账号」，居民不发 binding——详见
+    docs/tech_design/companion_world_account_model_reconciliation.md。
+    """
+    from app.db.accounts import resolve_owner_platform_user_id
     with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT platform_user_id
-            FROM account_owner_bindings
-            WHERE account_id = ?
-              AND status = 'active'
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1
-            """,
-            (account_id,),
-        ).fetchone()
-    return str(row["platform_user_id"]) if row else None
+        return resolve_owner_platform_user_id(conn, account_id)
 
 
 def record_chat_usage_charge(
@@ -1967,22 +1965,14 @@ def get_wallet_summary(
     ensure_grant: bool = False,
     create_if_missing: bool = True,
 ) -> Optional[Dict[str, Any]]:
+    from app.db.accounts import resolve_owner_platform_user_id
     with connect() as conn:
-        owner = conn.execute(
-            """
-            SELECT b.platform_user_id
-            FROM account_owner_bindings b
-            JOIN accounts a ON a.id = b.account_id
-            WHERE b.account_id = ?
-              AND b.status = 'active'
-            ORDER BY b.created_at ASC, b.id ASC
-            LIMIT 1
-            """,
-            (account_id,),
-        ).fetchone()
-        if owner is None:
+        # 统一收口到 canonical 解析：形态 A（微信）经 owner_binding、形态 B（朝夕相伴居民 runtime
+        # account）经世界归属；都无归属真人则无共享钱包可查。原内联读只认 owner_binding，居民会漏解析
+        # （codex-5 同类冷路径根因：M1 上迁时热路径已迁、此摘要路径漏扫）。
+        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        if platform_user_id is None:
             return None
-        platform_user_id = owner["platform_user_id"]
 
     if ensure_grant:
         grant_new_user_shells(
@@ -2181,6 +2171,94 @@ def create_ai4all_account_for_user(
         "profile": get_profile_for_account(account_id=account_id),
         "owner_binding": get_account_owner_binding(owner_binding_id=owner_binding_id),
         "subscription": subscription,
+    }
+
+
+def create_resident_runtime_account(
+    *,
+    universe_id: str,
+    character_template_id: str,
+    display_name: str,
+    template_version: str = "v1",
+    system_prompt: str = "",
+    origin: str = "preset",
+    initial_channel: str = "native",
+    joined_at: Optional[str] = None,
+    app_id: str = DEFAULT_APP_ID,
+) -> Dict[str, Any]:
+    """建一个居民 runtime account（形态 B / M1-5 内部建号路径），返回 {account, profile, resident}。
+
+    与 create_ai4all_account_for_user（用户注册入口，形态 A：微信 / Web onboarding）**彻底分开**——
+    前者建「AI 居民」（真人世界里的一位 agent），后者建「用户账号」（一 App 一个登录身份）：
+
+      - **不发 owner_binding**：owner_binding 是微信接入独有的产物（记录「微信渠道把某 account 绑到
+        某真人」），不是通用「用户账号」机制。居民经「世界归属」解析到真人——
+        universe_residents.runtime_account_id → universes.owner_platform_user_id
+        （见 accounts.resolve_owner_platform_user_id 的 fallback ②）去共享真人钱包/配额。
+      - **不赠新客贝壳、不建 subscription**：钱包/配额锚 platform_user、全世界居民共享一份（M1/D-14/D-09）。
+      - **不做「一 App 一 active 账号」软检查、不占用户账号容量**：居民容量真相 = count_active_residents
+        （D-07），由 confirm/建居民在 world row lock 下判（M2-C），本原语不校验上限。
+
+    账号行创建（id 生成重试 + accounts/profiles 插入）与 create_ai4all_account_for_user 同款；世界映射
+    委托 companion_world.create_resident（同连接/事务，原子）。详见
+    docs/tech_design/companion_world_account_model_reconciliation.md（冻结 = B）。
+    """
+    from app.db.accounts import get_account, get_profile_for_account
+    from app.db.companion_world import create_resident
+
+    cleaned_display_name = _clean_text(display_name)
+    if not cleaned_display_name:
+        raise ValueError("display_name is required")
+    cleaned_prompt = _clean_text(system_prompt)
+    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
+    with connect() as conn:
+        # 世界归属解析的锚：universe 必须存在（否则居民永远解析不到真人钱包）。
+        if conn.execute(
+            "SELECT 1 FROM universes WHERE id = ?", (universe_id,)
+        ).fetchone() is None:
+            raise ValueError("universe not found")
+        last_integrity_error = None
+        for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
+            account_id = _new_account_id()
+            try:
+                with _savepoint(conn, "resident_account_ins"):
+                    conn.execute(
+                        """
+                        INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
+                        VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        """,
+                        (account_id, _clean_text(initial_channel) or "native", cleaned_display_name, app_id_clean),
+                    )
+                break
+            except IntegrityError as err:
+                if "accounts.id" not in str(err):
+                    raise
+                last_integrity_error = err
+        else:
+            raise RuntimeError("failed to generate a unique account_id") from last_integrity_error
+        conn.execute(
+            """
+            INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
+            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            """,
+            (account_id, cleaned_display_name, cleaned_prompt),
+        )
+        # 世界映射：resident.runtime_account_id = 本 account、status='active'（占容量位，D-07）。
+        # 同一连接/事务插入，账号行与居民映射要么全成、要么整体回滚（不留孤儿号）。
+        resident = create_resident(
+            universe_id=universe_id,
+            character_template_id=character_template_id,
+            template_version=template_version,
+            origin=origin,
+            status="active",
+            runtime_account_id=account_id,
+            joined_at=joined_at,
+            conn=conn,
+        )
+    return {
+        "account": get_account(account_id=account_id),
+        "profile": get_profile_for_account(account_id=account_id),
+        "resident": resident,
     }
 
 

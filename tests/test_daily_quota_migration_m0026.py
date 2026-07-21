@@ -13,6 +13,7 @@ fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故�
 """
 import app.db as db
 from app.db._core import _migration_0026_daily_usage_platform_user
+from tests.factories import make_resident_account
 
 _DATE = "2026-07-19"
 _C1 = 3  # a1 当日计数
@@ -20,24 +21,29 @@ _C2 = 5  # a2 当日计数
 
 
 def _two_accounts_one_user(phone: str):
+    # 决策 B：a1 = 用户账号（form-A）；a2 = 居民（form-B，无 binding），走居民内部路径避开 #42 收敛。
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="配额迁移用户")
     a1 = db.create_ai4all_account_for_user(
         platform_user_id=user["id"], display_name="甲"
     )["account"]["id"]
-    a2 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="乙"
-    )["account"]["id"]
+    a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
 
 
-def _seed_pre_migration_daily(conn, *, a1, a2):
-    """构造迁移前态：DROP 唯一索引后 raw 插两行 NULL-pu 当日行（模拟回填前的一人多号计数）。"""
+def _seed_pre_migration_daily(conn, *, user_id, a1, a2):
+    """构造迁移前态：DROP 唯一索引后 raw 插两行当日行，迁移后应合并到 (真人,date) 一行。
+
+    决策 B 下 a1=用户账号(form-A)、a2=居民(form-B)：
+    - a1 行 pu=NULL，模拟 pre-M1（pu 列尚未回填），测迁移经 owner_binding 回填到真人；
+    - a2 行 pu=user_id，居民 daily 天然按真人（世界解析）计数、从不为 NULL（迁移期居民本不存在，
+      此行仅为让「同真人多行合并」路径可测）。
+    """
     conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_date")
-    for acct, cnt in ((a1, _C1), (a2, _C2)):
+    for acct, pu, cnt in ((a1, None, _C1), (a2, user_id, _C2)):
         conn.execute(
             "INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at) "
-            "VALUES (?, NULL, ?, ?, '2026-07-19 00:00:00')",
-            (acct, _DATE, cnt),
+            "VALUES (?, ?, ?, ?, '2026-07-19 00:00:00')",
+            (acct, pu, _DATE, cnt),
         )
 
 
@@ -45,7 +51,7 @@ def test_m0023_backfills_and_merges_multi_account_daily(fresh_db):
     """一人两号当日各有行：迁移后回填 pu + 合并求和为一行，两号共享读到合计。"""
     user_id, a1, a2 = _two_accounts_one_user("13800030001")
     with db.connect() as conn:
-        _seed_pre_migration_daily(conn, a1=a1, a2=a2)
+        _seed_pre_migration_daily(conn, user_id=user_id, a1=a1, a2=a2)
 
     with db.connect() as conn:
         _migration_0026_daily_usage_platform_user(conn)
@@ -112,7 +118,7 @@ def test_m0023_is_idempotent(fresh_db):
     """迁移可重复执行：第二次跑合并态已收敛，计数/主行不变。"""
     user_id, a1, a2 = _two_accounts_one_user("13800030002")
     with db.connect() as conn:
-        _seed_pre_migration_daily(conn, a1=a1, a2=a2)
+        _seed_pre_migration_daily(conn, user_id=user_id, a1=a1, a2=a2)
     with db.connect() as conn:
         _migration_0026_daily_usage_platform_user(conn)
     # 再跑一次（模拟重复应用）。

@@ -11,18 +11,46 @@ from scripts.precheck_wallet_migration import run_precheck
 
 
 def _make_user_with_accounts(phone: str, n: int) -> tuple:
-    """建一个 platform_user + n 个 active account（各自 wallet/binding/grant）。
+    """建一个 platform_user + n 个 active account（各自 binding，钱包由测试另补）。
+
+    决策 B / main #42：一手机号 × 一 App = 一个用户账号，故仅**首个** account 走真实注册入口
+    create_ai4all_account_for_user（form-A：binding + 共享钱包 + 一次赠权）。预检面向的「一人多号
+    多钱包」是 **pre-#42 / pre-M1 legacy** 存量（旧模型每号各有 binding+wallet），对第 2..n 个号
+    raw 建 account + active owner_binding——先 DROP #42 的 ux_owner_binding_active_user_app，
+    忠实复现迁移前「无一人一 active binding 约束」的存量形态（与各测试 DROP 钱包唯一索引同理）。
+    钱包由各测试用 _seed_extra_active_wallet 另补。
 
     返回 (platform_user_id, [account_id, ...])，account 顺序即创建顺序（最早在前）。
     """
+    from app.db._core import _new_account_id
+
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="预检用户")
-    account_ids = []
-    for i in range(n):
-        acc = db.create_ai4all_account_for_user(
-            platform_user_id=user["id"], display_name=f"居民{i}"
-        )
-        account_ids.append(acc["account"]["id"])
-    return user["id"], account_ids
+    uid = user["id"]
+    account_ids = [
+        db.create_ai4all_account_for_user(
+            platform_user_id=uid, display_name="居民0"
+        )["account"]["id"]
+    ]
+    if n > 1:
+        with db.connect() as conn:
+            conn.execute("DROP INDEX IF EXISTS ux_owner_binding_active_user_app")
+            for i in range(1, n):
+                acc = _new_account_id()
+                conn.execute(
+                    "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
+                    "VALUES (?, 'openclaw-weixin', ?, 'zhaoxi', "
+                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    (acc, f"居民{i}"),
+                )
+                conn.execute(
+                    "INSERT INTO account_owner_bindings("
+                    "platform_user_id, account_id, binding_method, status, app_id, updated_at) "
+                    "VALUES (?, ?, 'legacy', 'active', 'zhaoxi', "
+                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    (uid, acc),
+                )
+                account_ids.append(acc)
+    return uid, account_ids
 
 
 def _blocking_names(report) -> set:

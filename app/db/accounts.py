@@ -27,6 +27,7 @@ from app.db._core import (
     logger,
 )
 __all__ = [
+    'resolve_owner_platform_user_id',
     'clear_all_messages_for_account',
     'clear_session_messages',
     'consume_valid_verification_token',
@@ -1324,13 +1325,25 @@ def set_account_onboarding_state(*, account_id: str, state: str) -> None:
             logger.warning("analytics onboarding event emit failed account=%s error=%s", account_id, err)
 
 
-def _resolve_quota_subject(cursor, account_id: str) -> str:
-    """在给定连接/事务上把 account_id 解析成配额聚合键 platform_user_id（D-09 M1-3）。
+def resolve_owner_platform_user_id(cursor, account_id: str) -> Optional[str]:
+    """把 account_id 解析为它归属的真人 platform_user_id（canonical，两形态统一收口）。
 
-    冻结解析规则（与 get_platform_user_id_for_account、D-14 预检、迁移 m0022/m0023 一致）：
-    最早 active binding 的 platform_user_id 胜出。无 active binding 的孤儿号回退为 account_id
-    本身，保证配额仍按号强制（daily_usage.platform_user_id 无 FK，容此回退值）。刻意在**同一**
-    连接/事务上查，避免与调用方的写事务嵌套开新连接。
+    ⚠️ 「account」一词两义（历史命名债，详见
+    docs/tech_design/companion_world_account_model_reconciliation.md §1）：
+      - 形态 A（微信接入）：account 经 account_owner_bindings 绑到真人。**owner_binding 是
+        微信接入独有的产物**，记录「微信渠道把某 account 绑到某真人」，不是通用「用户账号」机制。
+      - 形态 B（朝夕相伴 App）：真人的世界里每个 AI 居民 = 一行 runtime account
+        （universe_residents.runtime_account_id → universes.owner_platform_user_id），
+        **不发 owner_binding**；纯朝夕相伴用户零 owner_binding。
+
+    解析链（账号模型对齐决策 B）：
+      1) account_owner_bindings 最早 active binding 的 platform_user_id（形态 A）；
+      2) 无则走「世界归属」：该 account 作为居民 runtime account 所属 universe 的 owner（形态 B）；
+      3) 都无 → None（孤儿号；调用方决定是否回退 account_id 本身）。
+
+    刻意在给定连接/事务上查，供写事务内复用、避免嵌套开新连接。form-A 存量账号世界表恒空、
+    走 (1) 即返回，行为与上迁前一致（零回归）。迁移期回填只认 owner_binding（居民为增量、
+    迁移时不存在），故仅**运行时**解析需要 (2) 这段 fallback。
     """
     row = cursor.execute(
         """
@@ -1342,7 +1355,34 @@ def _resolve_quota_subject(cursor, account_id: str) -> str:
         """,
         (account_id,),
     ).fetchone()
-    return str(row["platform_user_id"]) if row else account_id
+    if row is not None:
+        return str(row["platform_user_id"])
+    # 形态 B：朝夕相伴居民 runtime account 无 owner_binding，经世界归属解析到真人。
+    # ux_universe_residents_runtime 保证 runtime_account_id 唯一（WHERE 非空），至多命中一行。
+    world = cursor.execute(
+        """
+        SELECT u.owner_platform_user_id AS owner
+        FROM universe_residents r
+        JOIN universes u ON u.id = r.universe_id
+        WHERE r.runtime_account_id = ?
+        LIMIT 1
+        """,
+        (account_id,),
+    ).fetchone()
+    if world is not None and world["owner"] is not None:
+        return str(world["owner"])
+    return None
+
+
+def _resolve_quota_subject(cursor, account_id: str) -> str:
+    """在给定连接/事务上把 account_id 解析成配额聚合键 platform_user_id（D-09 M1-3）。
+
+    统一收口到 resolve_owner_platform_user_id（形态 A owner_binding → 形态 B 世界归属）。
+    无归属真人的孤儿号回退为 account_id 本身，保证配额仍按号强制（daily_usage.platform_user_id
+    无 FK，容此回退值）。冻结解析规则与 get_platform_user_id_for_account、D-14 预检、迁移
+    m0025/m0026 一致（迁移期回填只认 owner_binding，居民为运行时增量）。
+    """
+    return resolve_owner_platform_user_id(cursor, account_id) or account_id
 
 
 def get_daily_usage(*, account_id: str, date: str) -> int:
