@@ -1,4 +1,3 @@
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -64,24 +63,6 @@ _RELATIONSHIP_STATUS_TOOLS_SECTION = """## 关系状态工具
 
 - **session_status**：用户主动询问“认识多久/第一次聊天/连续聊几天”等关系事实时调用，基于工具结果回答；用户没主动询问就不要为寒暄、开场或普通聊天调用本工具。
 """
-
-# 八字资料与一般长期记忆共存于 MEMORY.md。该段是受工具管理的数据，不应被 Dreaming
-# 的普通记忆压缩覆盖；其余 MEMORY.md 内容仍保持现有 Dreaming 行为。
-_BAZI_PROFILE_HEADING = "## 八字资料（系统管理）"
-_BAZI_PROFILE_RE = re.compile(
-    rf"(?:^|\n){re.escape(_BAZI_PROFILE_HEADING)}\n```json\n(.*?)\n```\n?",
-    flags=re.DOTALL,
-)
-_BAZI_PROFILE_FIELDS = frozenset({
-    "birth_date",
-    "birth_time_text",
-    "birth_time_precision",
-    "birth_place",
-    "gender",
-    "calendar_type",
-    "subject_type",
-    "living_status",
-})
 
 
 @dataclass(frozen=True)
@@ -160,87 +141,17 @@ def read_context_file(account_id: str, filename: str) -> Optional[str]:
     return profile_storage.read_file(account_id, filename)
 
 
-def _extract_bazi_profile(memory: str) -> Dict[str, str]:
-    """从 MEMORY.md 的受管段读取八字资料；格式损坏时按空资料处理。"""
-    match = _BAZI_PROFILE_RE.search(memory or "")
-    if not match:
-        return {}
-    try:
-        parsed = json.loads(match.group(1))
-    except (TypeError, ValueError):
-        logger.warning("invalid managed bazi profile block")
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    return {
-        key: value.strip()
-        for key, value in parsed.items()
-        if key in _BAZI_PROFILE_FIELDS and isinstance(value, str) and value.strip()
-    }
-
-
-def _strip_bazi_profile(memory: str) -> str:
-    # 用 "" 替换：(?:^|\n) 匹配 ^ 时零宽，替换 "\n" 会插入多余前置换行；
-    # 改为 "" 后，紧前的 \n（若有）随匹配一起消除，尾部由 rstrip 清理。
-    return _BAZI_PROFILE_RE.sub("", memory or "").rstrip()
-
-
-def _render_bazi_profile(profile: Dict[str, str]) -> str:
-    return (
-        f"{_BAZI_PROFILE_HEADING}\n"
-        "```json\n"
-        f"{json.dumps(profile, ensure_ascii=False, sort_keys=True)}\n"
-        "```"
-    )
-
-
-def _with_bazi_profile(memory: str, profile: Dict[str, str]) -> str:
-    base = _strip_bazi_profile(memory)
-    if not profile:
-        return (base + "\n") if base else ""
-    if base:
-        base += "\n\n"
-    return base + _render_bazi_profile(profile) + "\n"
-
-
-def read_bazi_profile(account_id: str) -> Dict[str, str]:
-    """读取账号在 MEMORY.md 中受管的八字资料。"""
-    return _extract_bazi_profile(read_context_file(account_id, "MEMORY.md") or "")
-
-
-def write_bazi_profile(account_id: str, profile: Dict[str, str]) -> None:
-    """替换账号受管八字资料段，不影响同一 MEMORY.md 的普通长期记忆。"""
-    clean = {
-        key: value.strip()
-        for key, value in profile.items()
-        if key in _BAZI_PROFILE_FIELDS and isinstance(value, str) and value.strip()
-    }
-    current = read_context_file(account_id, "MEMORY.md") or "# MEMORY\n"
-    write_context_file(
-        account_id,
-        "MEMORY.md",
-        _with_bazi_profile(current, clean),
-        preserve_bazi_profile=False,
-    )
-
-
 def write_context_file(
     account_id: str,
     filename: str,
     content: str,
-    *,
-    preserve_bazi_profile: bool = True,
 ) -> None:
-    """整文件写入上下文文件；普通 MEMORY.md 重写会保留受管八字资料段。"""
+    """整文件写入上下文文件（system 级写磁盘，账号级按 account_id 入库）。"""
     if _is_system_context_file(filename):
         path = Path(settings.system_dir) / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         return
-    if filename == "MEMORY.md" and preserve_bazi_profile:
-        existing_profile = read_bazi_profile(account_id)
-        if existing_profile:
-            content = _with_bazi_profile(content, existing_profile)
     profile_storage.write_file(account_id, filename, content)
 
 

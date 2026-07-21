@@ -12,6 +12,7 @@ tmp/
 __pycache__/
 *.py[cod]
 .DS_Store
+.codex/
 data/
 !data/
 data/*

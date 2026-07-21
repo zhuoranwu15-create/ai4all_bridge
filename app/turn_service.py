@@ -27,8 +27,11 @@ from app.db import (
     get_active_content_invitation,
     get_daily_usage,
     get_duplicate_reply,
+    get_platform_user_id_for_account,
     increment_session_turn_count,
-    increment_daily_usage,
+    reserve_daily_quota,
+    confirm_daily_quota,
+    rollback_daily_quota,
     insert_debug_trace,
     insert_message,
     list_context_messages_for_session,
@@ -834,6 +837,8 @@ class _TurnSetup:
     debug_trace_enabled: bool
     onboarding_state: str
     onboarding_active: bool
+    # D-09 下半刀：daily 配额上限（per-account override 或 settings 默认），阶段B 原子预占用。
+    effective_daily: int
     llm_provider: LLMProviderConfig
     # 渠道能力（onboarding/active-scope/工具/TDAI/投递 的单一开关来源）。微信 cap 全 True，
     # 下游按 cap 分支后取值与历史逐字节一致；Web 等渠道由此获得保守行为而无需散落的 if channel==。
@@ -849,6 +854,9 @@ class _InboundResult:
     image_understanding_failed: bool
     inbound_screen: Any
     inbound_blocked: bool
+    # D-09 下半刀：本轮的配额预占 token（阶段B 预占，阶段D 按计费谓词 confirm/rollback）。
+    # None = 未预占（不应发生，因阶段B 预占失败会早返回 rate_limited）。
+    quota_reservation_id: Optional[str] = None
 
 
 @dataclass
@@ -1047,8 +1055,11 @@ def _prepare_turn(
         0.001,
     )
 
+    # D-09：RPM 按真人聚合，多居民共享一套滑窗。check_rpm 是与 web IP-keyed 调用共享的通用限流器，
+    # 不能内部解析，故在此把 account_id 解析成 platform_user subject（孤儿号回退 account_id）后传入。
+    quota_subject = get_platform_user_id_for_account(account_id=account_id) or account_id
     if effective_rpm > 0 and not rate_limiter.check_rpm(
-        account_id,
+        quota_subject,
         effective_rpm,
         window_seconds=effective_rpm_window_seconds,
     ):
@@ -1112,6 +1123,7 @@ def _prepare_turn(
         debug_trace_enabled=debug_trace_enabled,
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
+        effective_daily=effective_daily,
         llm_provider=resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)),
         cap=cap,
     )
@@ -1164,6 +1176,7 @@ def _persist_and_screen_inbound(
         text = "[voice message]"
 
     inbound_db_started = time.monotonic()
+    quota_reservation_id: Optional[str] = None
     with db_connect() as conn:
         inserted_id = insert_message(
             account_id=account_id,
@@ -1188,7 +1201,15 @@ def _persist_and_screen_inbound(
             conn=conn,
         )
         if inserted_id is not None:
-            increment_daily_usage(account_id=account_id, date=today, conn=conn)
+            # D-09 下半刀：去重(insert_message)先于预占、同一 conn（重试不吃配额）。原子预占取代
+            # 旧的「入站即 +1」——仅真正成功计费的 turn 在阶段D confirm 计入 message_count，
+            # moderation 拦截/模型失败/特殊命令一律 rollback（退款矩阵）。崩溃悬挂由 TTL 回收。
+            quota_reservation_id = reserve_daily_quota(
+                account_id=account_id,
+                date=today,
+                limit=setup.effective_daily,
+                conn=conn,
+            )
     _record_timing(timings, "inbound_db_ms", inbound_db_started)
     if inserted_id is None:
         duplicate_reply = get_duplicate_reply(
@@ -1200,6 +1221,22 @@ def _persist_and_screen_inbound(
             status="duplicate",
             reply=duplicate_reply or "刚刚这条消息我已经收到啦。",
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
+        )
+    if quota_reservation_id is None:
+        # 在途竞争到满：阶段A 读检已放行，但并发预占抢占了最后名额 → 拒本轮（本条已入库）。
+        # 常见「已满」在阶段A 无插入即拒；此分支仅覆盖罕见并发 race。
+        logger.info(
+            "openclaw_turn daily_limited(reserve) account=%s message_id=%s", account_id, message_id
+        )
+        latency_ms = _elapsed_ms(started_at)
+        return OpenClawTurnResponse(
+            status="rate_limited",
+            reply=settings.rate_limit_daily_message,
+            metadata={
+                **identity_response_metadata(identity, account_id),
+                "reason": "daily",
+                "latency_ms": latency_ms,
+            },
         )
 
     # 入站内容同步筛查（阿里云云审核为主 + 本地红线补充）。命中即停止本轮回复并进入人工队列。
@@ -1295,6 +1332,7 @@ def _persist_and_screen_inbound(
         image_understanding_failed=image_understanding_failed,
         inbound_screen=inbound_screen,
         inbound_blocked=inbound_blocked,
+        quota_reservation_id=quota_reservation_id,
     )
 
 
@@ -1480,7 +1518,9 @@ def _resolve_turn_reply(
                 now=now,
                 llm_provider=llm_provider,
                 message_type=ctx.message_type,
-                extra_blocks=_tdai_extra_blocks or None,
+                # 接缝①：域层注入块（ctx.extra_blocks，L3 等）在前 + tdai 召回块在后。
+                # 两者皆空 → None → assemble 既有 no-op 分支（form-A 逐字不变）。
+                extra_blocks=([*ctx.extra_blocks, *_tdai_extra_blocks] or None),
                 cap=setup.cap,
                 channel=setup.identity.channel,
             )
@@ -1925,7 +1965,11 @@ def _finalize_turn(
             _record_timing(timings, "outbound_moderation_enqueue_ms", outbound_moderation_started)
 
     billing_result = None
-    if not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS:
+    # D-09 下半刀：配额 confirm/rollback 与钱包计费共用同一谓词——「配额消耗 ⟺ 钱包计费」。
+    should_charge = bool(
+        not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS
+    )
+    if should_charge:
         billing_started = time.monotonic()
         try:
             billing_result = record_chat_usage_charge(
@@ -1947,6 +1991,24 @@ def _finalize_turn(
             logger.exception("chat usage charge failed account=%s reply=%s error=%s", account_id, reply_message_id, err)
         finally:
             _record_timing(timings, "billing_ms", billing_started)
+
+    # D-09 下半刀：配额结算（退款矩阵）。成功计费 → confirm（计入 daily_usage.message_count）；
+    # 否则 rollback（moderation 拦截/模型失败/特殊命令/未计费 onboarding 一律不扣）。reservation 为
+    # None（未预占）或行已被 TTL 回收时 confirm/rollback 皆 no-op。本段异常已吞（不影响回复投递），
+    # 崩溃/异常跳过本段的悬挂预占交 reservation TTL 兜底。
+    try:
+        if should_charge:
+            confirm_daily_quota(reservation_id=inbound.quota_reservation_id)
+        else:
+            rollback_daily_quota(reservation_id=inbound.quota_reservation_id)
+    except Exception as err:
+        logger.exception(
+            "daily quota settle failed account=%s reservation=%s should_charge=%s error=%s",
+            account_id,
+            inbound.quota_reservation_id,
+            should_charge,
+            err,
+        )
 
     # Advance onboarding state synchronously after reply so onboarding completion
     # does not depend on the after-turn background loop.
@@ -2133,6 +2195,10 @@ class ChannelTurnInput:
     force_web_search_enabled: Optional[bool] = None
     # 原 _openclaw_id_diagnostics 结果（渠道相关，对核心不透明），仅供日志。
     inbound_diagnostics: Dict[str, Any] = field(default_factory=dict)
+    # 域层注入的外部 context 块（L3 等，ADR §7.3 接缝①）。WeChat 入口不填 → 默认空 →
+    # 组装时退化 no-op；form-B（App）入口随 M2-C 由域层
+    # app.domains.companion_world.l3_context.read_universe_context 填入。
+    extra_blocks: List[ContextBlock] = field(default_factory=list)
 
 
 def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:

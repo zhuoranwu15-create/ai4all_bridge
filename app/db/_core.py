@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import math
@@ -44,6 +45,17 @@ _REFERRAL_CODE_GENERATION_RETRIES = 20
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
+
+
+def advisory_lock_key(subject: str) -> int:
+    """把任意字符串主体映射成稳定的 64 位有符号整数，作 pg_advisory_xact_lock 的键。
+
+    用 blake2b 取 8 字节（跨进程稳定、碰撞极低）。与 rate_limiter._advisory_key 同一算法，
+    抽到 _core 供配额预占（accounts.reserve_daily_quota）与 RPM 共用，避免 app.db → rate_limiter
+    循环导入。偶发碰撞只让两个无关主体短暂互斥，仅轻微竞争、不影响正确性。
+    """
+    digest = hashlib.blake2b(subject.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 def _new_account_id() -> str:
@@ -461,6 +473,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_cost_events_wallet_created
         ON cost_events(wallet_id, created_at);
 
+        -- owner_binding = 微信接入（形态 A）独有的产物：记录「微信渠道把某 account 绑到某真人」，
+        -- 非通用「用户账号」机制。朝夕相伴居民（form-B runtime account）不发 binding，经世界归属解析到
+        -- 真人（accounts.resolve_owner_platform_user_id）。详见 companion_world_account_model_reconciliation.md。
         CREATE TABLE IF NOT EXISTS account_owner_bindings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_user_id TEXT NOT NULL,
@@ -2024,6 +2039,335 @@ def _migration_0024_rename_channel_app_to_native(conn: Connection) -> None:
     conn.execute("UPDATE channel_bindings SET channel='native' WHERE channel='app'")
 
 
+def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
+    """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
+    上线前，把 entitlement_wallets 的「一 account 一钱包」上迁为「一真人一钱包、全部居民共用
+    一份余额」。本迁移刻意**保留** UNIQUE(account_id)：billing 改按 platform_user
+    get-or-create 后永不会为同一真人插入第二个钱包行，account_id 事实上仍唯一、保留无害，据此
+    完全避开 SQLite 表重建 / PG DROP CONSTRAINT 的高风险后端分叉（决策见 §D-14 item3）。只做：
+
+      1) 合并存量多钱包老用户（建号允许每真人 ≤10 account，历史上可能已有多钱包）：
+         选主钱包 = 该真人「最早 active binding 对应 account」的 active 钱包；余额求和入主钱包、
+         ledger/cost_events.wallet_id 归并到主、其余钱包置 status='merged'（保留审计，不删行避免 FK 冲突）。
+      2) 加局部唯一索引 ux_entitlement_wallets_user_active（合并后可满足；SQLite/PG 同一 DDL，无需分支）。
+
+    可重复执行（幂等）：再跑时每真人仅 1 active 钱包，不再进入合并分支。生产执行前须先跑
+    scripts/precheck_wallet_migration.py（四条阻断全过）；本迁移假定 primary 有定义、无歧义/
+    孤儿/漂移，万一取不到主钱包则告警跳过、不静默改数。
+    """
+    multi_wallet_users = conn.execute(
+        """
+        SELECT platform_user_id
+        FROM entitlement_wallets
+        WHERE status = 'active'
+        GROUP BY platform_user_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for row in multi_wallet_users:
+        user_id = row["platform_user_id"]
+        # 选主：该真人「最早 active binding 对应 account」的 active 钱包（冻结规则，与预检一致）。
+        primary = conn.execute(
+            """
+            SELECT w.id AS id
+            FROM entitlement_wallets w
+            JOIN account_owner_bindings b
+              ON b.account_id = w.account_id
+             AND b.status = 'active'
+             AND b.platform_user_id = w.platform_user_id
+            WHERE w.status = 'active' AND w.platform_user_id = ?
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        if primary is None:
+            logger.warning(
+                "m0025 skip merge: primary wallet undefined for platform_user=%s "
+                "(precheck should have blocked this)",
+                user_id,
+            )
+            continue
+        primary_id = primary["id"]
+        # 求和须在置 merged 之前（此刻全部候选钱包仍 active）。
+        total = conn.execute(
+            """
+            SELECT COALESCE(SUM(balance_shell_micros), 0) AS total
+            FROM entitlement_wallets
+            WHERE status = 'active' AND platform_user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()["total"]
+        conn.execute(
+            """
+            UPDATE entitlement_ledger SET wallet_id = ?
+            WHERE wallet_id IN (
+                SELECT id FROM entitlement_wallets
+                WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            )
+            """,
+            (primary_id, user_id, primary_id),
+        )
+        conn.execute(
+            """
+            UPDATE cost_events SET wallet_id = ?
+            WHERE wallet_id IN (
+                SELECT id FROM entitlement_wallets
+                WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            )
+            """,
+            (primary_id, user_id, primary_id),
+        )
+        conn.execute(
+            """
+            UPDATE entitlement_wallets SET status = 'merged'
+            WHERE status = 'active' AND platform_user_id = ? AND id <> ?
+            """,
+            (user_id, primary_id),
+        )
+        conn.execute(
+            "UPDATE entitlement_wallets SET balance_shell_micros = ? WHERE id = ?",
+            (int(total), primary_id),
+        )
+    # 合并后每真人至多 1 active 钱包，局部唯一索引可满足。
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_wallets_user_active
+        ON entitlement_wallets(platform_user_id)
+        WHERE status = 'active';
+        """
+    )
+
+
+def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
+    """D-09 M1-3/M1-4：daily 配额计数键从 account_id 上迁到 platform_user（一真人一套配额）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
+    上线前，把 daily_usage 的「一 account 一套额度」上迁为「一真人一套、全部居民共享」。同 D-14
+    钱包上迁刻意**保留** UNIQUE(account_id,date)：daily 三函数改按 platform_user get-or-create
+    后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开 SQLite 表重建 /
+    PG DROP CONSTRAINT 的后端分叉（决策见 §D-09 落地说明）。只做：
+
+      1) 新增 platform_user_id 列（无 FK，容 fallback 值）+ 从最早 active binding 回填。
+      2) 合并同 (真人,date) 多行（历史多号可能各有当日行）：message_count 求和入主行（MIN(id)）、
+         删其余行（daily_usage 无被引用，直接删，无需 status 保留）。须在建唯一索引前。
+      3) 加唯一索引 ux_daily_usage_user_date(platform_user_id, date)（合并后可满足；SQLite/PG
+         同一 DDL，NULL 行互不相等不冲突，无需分支）。
+
+    可重复执行（幂等）：再跑时每 (真人,date) 仅 1 行、回填只补 NULL、索引 IF NOT EXISTS。daily/rpm
+    是瞬态计数（无历史余额可损坏），故无需 precheck（owner 解析不变式已由 D-14 precheck 作同一 M1
+    发布闸覆盖）。无 active binding 的孤儿行**回退 platform_user_id=account_id**（镜像运行时
+    _resolve_quota_subject 的孤儿回退），保证写路径 ON CONFLICT(platform_user_id,date) 命中同一行、
+    不与保留的 UNIQUE(account_id,date) 冲突（否则孤儿号次日 increment 触 IntegrityError / 读取静默清零）。
+    """
+    # 1) 加列（幂等）+ 从最早 active binding 回填（冻结解析规则，与 get_platform_user_id_for_account
+    #    及 D-14 预检一致：ORDER BY b.created_at ASC, b.id ASC LIMIT 1）。
+    _ensure_column(conn, "daily_usage", "platform_user_id", "TEXT")
+    conn.execute(
+        """
+        UPDATE daily_usage
+        SET platform_user_id = (
+            SELECT b.platform_user_id
+            FROM account_owner_bindings b
+            WHERE b.account_id = daily_usage.account_id
+              AND b.status = 'active'
+            ORDER BY b.created_at ASC, b.id ASC
+            LIMIT 1
+        )
+        WHERE platform_user_id IS NULL
+        """
+    )
+    # 1b) 无 active binding 的孤儿行：回退 platform_user_id=account_id（同 _resolve_quota_subject 的
+    #     孤儿回退）。否则该行 platform_user_id 恒为 NULL，运行时 increment 以 subject=account_id 写入
+    #     时 ON CONFLICT(platform_user_id,date) 命不中 NULL 行、转而撞 UNIQUE(account_id,date) 无 arbiter
+    #     处理 → IntegrityError；读取按 platform_user_id 亦查不到 → 配额静默清零。幂等：仅补 NULL。
+    conn.execute(
+        "UPDATE daily_usage SET platform_user_id = account_id WHERE platform_user_id IS NULL"
+    )
+    # 2) 合并同 (真人,date) 多行（多号≈0，near-no-op；索引安全必需，须在建索引前）。
+    dup_groups = conn.execute(
+        """
+        SELECT platform_user_id, date
+        FROM daily_usage
+        WHERE platform_user_id IS NOT NULL
+        GROUP BY platform_user_id, date
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for grp in dup_groups:
+        pu = grp["platform_user_id"]
+        date = grp["date"]
+        primary_id = conn.execute(
+            "SELECT MIN(id) AS id FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (pu, date),
+        ).fetchone()["id"]
+        total = conn.execute(
+            "SELECT COALESCE(SUM(message_count), 0) AS total "
+            "FROM daily_usage WHERE platform_user_id = ? AND date = ?",
+            (pu, date),
+        ).fetchone()["total"]
+        conn.execute(
+            "DELETE FROM daily_usage WHERE platform_user_id = ? AND date = ? AND id <> ?",
+            (pu, date, primary_id),
+        )
+        conn.execute(
+            "UPDATE daily_usage SET message_count = ? WHERE id = ?",
+            (int(total), primary_id),
+        )
+    # 3) 合并后每 (真人,date) 至多 1 行，唯一索引可满足。
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_usage_user_date
+        ON daily_usage(platform_user_id, date);
+        """
+    )
+
+
+def _migration_0027_daily_quota_reservations(conn: Connection) -> None:
+    """D-09 下半刀：daily 配额原子预占的存储载体（每 reservation 一行 + TTL）。
+
+    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
+    P1 §2.7（锁序 L3 = pg_advisory_xact_lock('quota:'||platform_user_id)）。多居民聚合到真人后，
+    turn_service 的「读—处理—+1」有 TOCTOU；本表承载「预占（reserve）→确认(confirm)/回滚(rollback)」：
+    reserve 在 advisory 锁下按 message_count + 活跃 reservation 数校验 cap 后插一行；confirm/rollback/
+    TTL 一律 DELETE，故行只在「已预占未结算」态存在、不设 status 列。daily_usage.message_count 语义
+    不变（=已确认成功计费的计数），展示口径零改动。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。platform_user_id 无 FK（容孤儿号 fallback=account_id）。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS daily_quota_reservations (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            date TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            expires_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS ix_qres_pu_date ON daily_quota_reservations(platform_user_id, date);
+        CREATE INDEX IF NOT EXISTS ix_qres_expires ON daily_quota_reservations(expires_at);
+        """
+    )
+
+
+def _migration_0028_companion_world_core(conn: Connection) -> None:
+    """M2-A：朝夕相伴 P1 多居民核心四表（universe/template/resident/conversation）。
+
+    见 companion_world_p1_backend_spec.md §2.1–2.4。一真人一 home world（universes
+    UNIQUE(owner_platform_user_id) 幂等 bootstrap 依赖）；模板≠runtime account（同模板进两
+    世界=两 resident 两 account）；容量真相 = universe_residents.status='active' 计数（D-07，
+    world row lock 下校验 active≤10），偏唯一索引保证一 runtime account 至多一 resident；
+    ai_conversations 提供跨 session 稳定会话 ID（≠数值 session.id），owner 校验锚防越权。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。本刀不接线，无 live 读写。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universes (
+            id TEXT PRIMARY KEY,                          -- 内部世界 ID，非可分享公开码
+            owner_platform_user_id TEXT NOT NULL UNIQUE,  -- 一真人一 home world（幂等 bootstrap 依赖）
+            legacy_primary_account_id TEXT,               -- 老用户迁移/计费锚点（D-08 legacy 映射）
+            status TEXT NOT NULL DEFAULT 'active',         -- active | disabled
+            onboarding_state TEXT NOT NULL DEFAULT 'preparing',  -- preparing | selecting | confirmed
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS character_templates (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,                    -- official | operations | user_created | generated
+            owner_platform_user_id TEXT,                  -- 自建时非空；官方/运营为空
+            name TEXT NOT NULL,
+            avatar_ref TEXT,
+            summary TEXT,
+            tags_json TEXT,
+            persona_seed_json TEXT,                        -- 实例化时写入 runtime account 的 SOUL/IDENTITY 种子；不经 App DTO 下发
+            persona_version TEXT NOT NULL DEFAULT 'v1',    -- 版本；运营更新不静默改写既有关系
+            status TEXT NOT NULL DEFAULT 'active',          -- active | retired
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_character_templates_source ON character_templates(source_type, status);
+        CREATE INDEX IF NOT EXISTS ix_character_templates_owner ON character_templates(owner_platform_user_id);
+
+        CREATE TABLE IF NOT EXISTS universe_residents (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            character_template_id TEXT NOT NULL,
+            template_version TEXT NOT NULL,               -- 确认时刻钉住的模板版本
+            runtime_account_id TEXT,                       -- 激活后指向 account；candidate 期为空
+            origin TEXT NOT NULL,                          -- preset | custom | mailbox | legacy
+            status TEXT NOT NULL DEFAULT 'candidate',       -- candidate | active | offline | dismissed
+            joined_at TEXT,
+            offline_at TEXT,
+            departure_event_id TEXT,                        -- M4 用，P1 留列
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_residents_universe_status ON universe_residents(universe_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_runtime
+            ON universe_residents(runtime_account_id) WHERE runtime_account_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS ai_conversations (
+            id TEXT PRIMARY KEY,                           -- 客户端长期稳定会话 ID（≠ 数值 session.id）
+            universe_id TEXT NOT NULL,
+            resident_id TEXT NOT NULL,
+            owner_platform_user_id TEXT NOT NULL,          -- owner 校验锚（防越权）
+            runtime_account_id TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'active',            -- active | read_only（resident offline 后原子切换）
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(resident_id) REFERENCES universe_residents(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_conversations_resident ON ai_conversations(resident_id);
+        CREATE INDEX IF NOT EXISTS ix_ai_conversations_owner_state ON ai_conversations(owner_platform_user_id, state);
+        """
+    )
+
+
+def _migration_0029_universe_memory_l3(conn: Connection) -> None:
+    """M2-A：L3 共享沉淀记忆承载表 universe_memory_facts（append-only typed fact）。
+
+    见 companion_world_p1_backend_spec.md §2.5 + ADR §6.4/D-05/D-06。L3 锚 universe_id（非
+    account）；各 resident 只 INSERT 带 provenance 的结构化事实行、永不就地改写，天然规避
+    last-writer-wins；compact 由单 writer 打 status='superseded'+superseded_by。payload_json
+    是结构化事实体、非逐字原文（D-05 不共享聊天原文）。
+
+    空表迁移、无回填、幂等（IF NOT EXISTS）。本刀只落存储，读注入/sink 路由属 M2-B。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_memory_facts (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,                     -- L3 锚点（D-06），非 account
+            fact_type TEXT NOT NULL,                       -- §1 L3 类枚举
+            payload_json TEXT NOT NULL,                    -- 结构化事实体（非逐字原文，D-05）
+            source_account_id TEXT,                        -- 来源 resident 的 runtime account
+            source_resident_id TEXT,
+            source_message_id TEXT,
+            occurred_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',           -- active | superseded
+            superseded_by TEXT,                              -- compact 合并后新行的 id
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_read
+            ON universe_memory_facts(universe_id, fact_type, status);
+        CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_universe_time
+            ON universe_memory_facts(universe_id, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2044,6 +2388,11 @@ _MIGRATIONS = [
     (22, _migration_0022_account_app_id),
     (23, _migration_0023_owner_binding_active_unique),
     (24, _migration_0024_rename_channel_app_to_native),
+    (25, _migration_0025_wallet_unique_platform_user),
+    (26, _migration_0026_daily_usage_platform_user),
+    (27, _migration_0027_daily_quota_reservations),
+    (28, _migration_0028_companion_world_core),
+    (29, _migration_0029_universe_memory_l3),
 ]
 
 

@@ -82,6 +82,39 @@ def test_rate_limited_message_not_counted(client):
     assert res.json()["today"]["message_count"] == 3
 
 
+def test_failed_turn_rolls_back_daily_reservation(fresh_db, monkeypatch):
+    """D-09 下半刀退款矩阵：正常 turn 确认计入；模型失败 turn 回滚预占、不消耗 daily、不泄漏。"""
+    import app.turn_service as turn_service
+    from app.db import connect, get_usage_last_7_days
+
+    fresh_db.rate_limit_daily = 5
+    fresh_db.rate_limit_rpm = 0  # 关 RPM，避免单测受滑窗干扰
+    monkeypatch.setattr(turn_service, "settings", fresh_db)
+
+    def _total() -> int:
+        return sum(r["message_count"] for r in get_usage_last_7_days(account_id=AI4ALL_ACCOUNT_ID))
+
+    def _reservation_rows() -> int:
+        with connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) AS c FROM daily_quota_reservations").fetchone()["c"])
+
+    # 正常 turn：reserve → confirm，计入 1。
+    monkeypatch.setattr(turn_service, "generate_reply_with_tools", lambda **_: ("ok reply", None))
+    turn_service.handle_openclaw_turn(OpenClawTurnRequest(**make_payload("ok-1")))
+    assert _total() == 1
+    assert _reservation_rows() == 0  # 已 confirm，无在途
+
+    # 模型失败 turn：generation_error → should_charge False → rollback，计数不增、无残留。
+    def _boom(**_):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(turn_service, "generate_reply_with_tools", _boom)
+    res = turn_service.handle_openclaw_turn(OpenClawTurnRequest(**make_payload("fail-2")))
+    assert res.status != "rate_limited"  # 正常受理（兜底回复），非限流
+    assert _total() == 1  # 仍为 1：失败 turn 不消耗 daily
+    assert _reservation_rows() == 0  # 预占已回滚，无泄漏
+
+
 def test_usage_endpoint_returns_today_and_history(client):
     # First create the account by posting a turn
     client.post("/openclaw/turn", json=make_payload("m0"), headers=BRIDGE_HEADERS)

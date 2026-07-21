@@ -188,6 +188,12 @@ def _fetch_platform_user(platform_user_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _fetch_wallet(account_id: str) -> Optional[Dict[str, Any]]:
+    """按 account_id 取钱包行（仅用于孤儿号 owner 解析的兜底：无绑定号的钱包 account_id==自身）。
+
+    D-14 钱包已上迁真人级，故权威钱包按 owner platform_user_id 解析（见
+    _fetch_wallet_by_platform_user）；本函数只服务 resolve_platform_user_id 的 wallet_platform_user_id
+    兜底入参，不作预览余额来源。
+    """
     with connect() as conn:
         row = conn.execute(
             """
@@ -197,6 +203,25 @@ def _fetch_wallet(account_id: str) -> Optional[Dict[str, Any]]:
             WHERE account_id = ?
             """,
             (account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def _fetch_wallet_by_platform_user(platform_user_id: str) -> Optional[Dict[str, Any]]:
+    """按 owner platform_user_id 取权威 active 钱包（D-14 真人级；镜像 get_wallet_summary）。
+
+    同真人多个 account 共享一钱包、其 account_id 恒指向首号——故第 2 个号必须按 platform_user_id
+    解析，否则按 account_id 查漏空、dry-run 预览余额错记 0。
+    """
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id, account_id, platform_user_id, balance_shell_micros,
+                   status, created_at, updated_at
+            FROM entitlement_wallets
+            WHERE platform_user_id = ? AND status = 'active'
+            """,
+            (platform_user_id,),
         ).fetchone()
     return dict(row) if row else None
 
@@ -306,12 +331,16 @@ def prepare_operation(
             f"account status is {account.get('status')}; pass --allow-inactive-account to override"
         )
 
-    wallet = _fetch_wallet(cleaned_account_id)
+    # 先按 account_id 取钱包，仅为给 resolve_platform_user_id 提供孤儿号兜底（无绑定号钱包
+    # account_id==自身）。owner 解析后再按 platform_user_id 取**权威** active 钱包作预览余额来源
+    # ——D-14 钱包已上迁真人级，同真人第 2 个号按 account_id 查会漏空、dry-run 预览余额错记 0。
+    account_wallet = _fetch_wallet(cleaned_account_id)
     resolved_platform_user_id = resolve_platform_user_id(
         account_id=cleaned_account_id,
         requested_platform_user_id=platform_user_id,
-        wallet_platform_user_id=wallet["platform_user_id"] if wallet else None,
+        wallet_platform_user_id=account_wallet["platform_user_id"] if account_wallet else None,
     )
+    wallet = _fetch_wallet_by_platform_user(resolved_platform_user_id) or account_wallet
     if wallet and wallet["platform_user_id"] != resolved_platform_user_id:
         raise GrantShellsError(
             "wallet platform_user_id does not match resolved account owner; aborting"

@@ -63,3 +63,29 @@ def create_route(account_id: str, *, session_key: Optional[str] = None) -> None:
         chat_id="user@im.wechat",
         raw_identity={"source": "test"},
     )
+
+
+def make_resident_account(platform_user_id: str, display_name: str) -> str:
+    """为一个真人建「第 2..N 个账号」= 一个居民 runtime account（form-B），返回 account_id。
+
+    账号模型决策 B（docs/tech_design/companion_world_account_model_reconciliation.md）：main #42
+    收敛后「一手机号 × 一 App = 一个用户账号」，用 create_ai4all_account_for_user 建同一真人的第二号
+    会撞软检查 existing_count>=1。真人的多个 agent = 世界里的居民（form-B runtime account），经
+    「世界归属」解析共享真人钱包/配额、**不发 owner_binding**（owner_binding 是微信接入独有的产物）。
+    「一人多号共享钱包/配额」类测试用此建第 2..N 号（不再用用户注册入口伪造）。
+
+    幂等 get-or-create home universe + 一个官方模板 + 居民内部建号原语。
+    """
+    from app.db import (
+        create_character_template,
+        create_resident_runtime_account,
+        get_or_create_home_universe,
+    )
+
+    universe = get_or_create_home_universe(platform_user_id=platform_user_id)
+    template = create_character_template(source_type="official", name=f"tmpl-{display_name}")
+    return create_resident_runtime_account(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        display_name=display_name,
+    )["account"]["id"]
