@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
-更新时间：2026-07-18
-状态：**核心架构决策已冻结**；P1 schema/接口/迁移待技术评审后进入编码。含主动消息子系统改造（D-13 / §11）。本文为架构决策记录（ADR）性质，是 `docs/tmp/companion_app_backend_refactor_handoff.md` 讨论底稿的正式化产物，冻结口径以本文为准。
-核查基线：`main@abe6e2b`
+更新时间：2026-07-21
+状态：**核心架构决策已冻结；M2-C 产品门 §10.1/.2/.6 已冻结并 code-ready**。M3–M5 仍各自受 §10 对应产品门约束。含主动消息子系统改造（D-13 / §11）。本文为架构决策记录（ADR）性质，是 `docs/tmp/companion_app_backend_refactor_handoff.md` 讨论底稿的正式化产物，冻结口径以本文为准。
+核查基线：`main@3f42ee1`（PR #44 已合并）
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -101,8 +101,8 @@
 
 ### D-08 legacy resident 保留离开豁免（P1 阻断，**冻结 2026-07-19 = 保留豁免 + 修订 PRD**）
 - **决策【已冻结 = 保留豁免】**：微信 legacy 居民与 App legacy 居民共享同一 runtime account，“legacy 普通居民 + 微信零回归 + 不可逆 offline”三者互斥。**取「保留豁免」**——legacy 居民永不 offline，App 仅展示、不提供离开入口；工程上微信零回归天然满足（不动共享 runtime account）。**须同步修订客户端 PRD `ai_companion_universe_prd.md:634`「来源不构成豁免」记为已知偏离**（本轮不动客户端仓库，去客户端仓库时改；§10.4 已标注）。
-- **依据 / backfill**：`account_owner_bindings` 在 `platform_user_id` 无唯一约束、`get_first_active_account_for_user` 只取最早一个 → backfill 须显式处理已持 2+ account 的老用户（全部映射为 `origin=legacy` 居民，或仅第一个、其余处置随 §10.2）。
-- **依据**：底稿 §9；`account_owner_bindings` 在 `platform_user_id` 无唯一约束、`get_first_active_account_for_user` 只取最早一个 → backfill 须显式处理已持 2+ account 的老用户（全部映射为 `origin=legacy` 居民，或仅第一个、其余如何处置）。
+- **backfill【§10.2 已冻结 2026-07-21】**：同一真人的**全部 active binding** 各映射一个 `origin='legacy'` resident；最早 active binding 只写 `legacy_primary_account_id`（兼容旧 `/chat/*`，不是主角色）。不重放 onboarding、不自动补 4 位预设；无 active binding 按新用户 4 候选流程；满 10 全量保留并显示容量已满，不删历史、不强制降级。
+- **依据**：`account_owner_bindings` 历史上允许一真人多 account；只映射“第一个”会让其余既有 Soul/Profile/Session/Message/Memory 在新 App 中消失。全量加性映射才能同时满足历史保留、账号隔离与回滚安全。
 
 ### D-09 限流按用户聚合须原子预占/回滚（P1，配额键冻结 2026-07-19）
 - **决策【已冻结 = platform_user】**：daily/RPM 配额键**按 `platform_user` 聚合**（一个真人一套配额，多居民共享，不随居民数放大）。配套：daily 计数改**原子预占 + 失败回滚**（消除 `turn_service.py` 读—处理—+1 的 TOCTOU），RPM advisory 锁的 key 从 runtime account 迁到 `platform_user_id`。billing wallet 归属同真人（见 D-14 钱包上迁 + D-07 建号解耦）。
@@ -230,7 +230,7 @@ Agent Runtime       runtime account · Soul/Identity/Profile · session/message 
 - USER.md 用户画像拆分成本更高（与 dreaming 整文件读写耦合 `dreaming.py:373`）→ 二期。分流点即现有 `ALLOWED_TARGET_FILES` 的 USER.md/MEMORY.md 选择 + 八字段。
 
 ### 6.6 调度挂载
-L3 天级压缩挂 `scripts/run_proactive_scheduler.py` 单例 DreamingScheduler 旁，沿用“中心扫全量、节点不重复”单 writer 纪律。若 L3 引入新 active session scope，**必须在 `DEFAULT_ACTIVE_SESSION_KEYS`（`_core.py:27`）登记**，否则永不轮转——现状 App `__app_active__`（`channels.py:30` 定义、`:93` 使用）就漏在每日扫描外（扫描键仅 `__account_active__`+`__web_active__`），dreaming 被懒轮转压到用户下次请求延迟上；多居民后每居民各触发一次首条卡顿，P1 需决策 App scope 是否纳入定时扫描。
+L3 天级压缩挂 `scripts/run_proactive_scheduler.py` 单例 DreamingScheduler 旁，沿用“中心扫全量、节点不重复”单 writer 纪律。**§10.6 已冻结（2026-07-21）= App scope 纳入定时扫描**：把 `__app_active__` 登记进 `DEFAULT_ACTIVE_SESSION_KEYS`，每位 resident 的 L1/L2 Dreaming 仍按 runtime account 独立；universe L3 compact 按 `universe_id` 单 writer 执行，不因居民数重复 compact。保留 batch/幂等/监控，不产生主动消息或用户可见通知。否则 App session 永不定时轮转，Dreaming 会被懒轮转压到每位居民次日首条请求延迟上。
 
 ---
 
@@ -354,7 +354,7 @@ def create_resident_with_runtime(        # *
 - **R1 计费上迁（先行、独立发布）+ Agent Runtime facade**：
   - **R1a 计费/配额锚点上迁（从原 R2「一并解耦」抽出，独立先行）**：把钱包唯一键上迁 `platform_user`（D-14）、daily 原子预占 + RPM 锁键迁 `platform_user`（D-09）、容量脱建号计数（D-07）。**不依赖任何 universe 表**，可在领域层之前单独上线并发布。**注（口径修正 2026-07-19）**：建号允许每真人 ≤10 account，故存量可能已有多钱包老用户，**非无条件零合并**——须先跑生产预检、对多钱包用户自动合并（D-14 迁移方案），单钱包用户直迁。PG 并发为发布闸（§9）。仍必须先行：多居民上线后变 N 世界 × N 居民钱包，合并成本远高于现在。
   - **R1b Agent Runtime facade**：**仅新建** `AgentRuntimePort` + adapter 供**新代码**调用；**不**强推 legacy 微信/App 路径改走 facade（`turn_service` 最有状态，待第二个真实消费者再回收）。P1 实际只需 Runtime 三件事：不赠权建号、`conversation_id→runtime_account_id` 解析、复用现有 turn。
-- **R2 P1 Companion World**：universe/template/resident/ai_conversation；幂等 bootstrap + 1–10 居民确认；resident runtime 创建不重复赠权（**站在 R1a 已上迁的计费基座上，仅把容量真相落到 `universe_residents.status` 表**）；显式 AI conversation history/turn（不接受客户端 `account_id`）；老用户 primary account backfill（含多 account 老用户，D-08）；L3 首刀（八字段上提 universe 存储，§6.5）。
+- **R2 P1 Companion World**：universe/template/resident/ai_conversation；固定 4 位版本快照的幂等 bootstrap + 1–10 居民确认；resident runtime 创建不重复赠权（**站在 R1a 已上迁的计费基座上，仅把容量真相落到 `universe_residents.status` 表**）；显式 AI conversation history/turn（不接受客户端 `account_id`）；老用户全部 active binding backfill（不自动补居民，D-08/§10.2）；L3 首刀（通用 user typed fact + App Dreaming scope，§6.5/.6）。
 - **R3 Feed 与异步事件**：`universe_posts`、world-content scheduler/outbox、user/AI 文字动态与审核。事件用事务 outbox（领域状态与 outbox 同事务提交、worker 幂等消费）。**App 通知收件箱 + 真人级 proactive 上提域层（任务 T3-1～T3-8，见 §11.8）。**
 - **R4 Lifecycle 与 Mailbox**：cooldown/audit/safety freeze、last-resident protection、offline+farewell+read-only 原子事务、letters 与接受事务。
 - **R5 Visit 与 Human Chat**：三 slot、高熵 code、绝对过期与 ACL；访客只读 Feed；独立 human messages、到期只读、举报/拉黑。
@@ -384,14 +384,14 @@ def create_resident_with_runtime(        # *
 
 ---
 
-## 10. 待产品冻结项
+## 10. 产品冻结项
 
-1. 初始预设居民数量与版本策略。
-2. 老用户迁移后是否补充其他居民；已持多 account 老用户的居民映射策略（D-08）。
+1. **【已冻结 2026-07-21 = 4 位 + 版本快照】**：新用户 bootstrap 固定返回 4 位运营预设候选，可删减至至少 1 位、无主角色；已发布模板版本不可原地改写，更新须发新版本。bootstrap 将 `template_id + persona_version` 钉在 candidate/resident，运营换版只影响后续新世界，不漂移已选择/已确认关系。
+2. **【已冻结 2026-07-21 = 全部 legacy 映射、不自动补居民】**：全部 active binding 映射 legacy resident；最早一条仅作兼容锚；不重放 onboarding、不自动补 4 位预设。无 active binding 走新用户流程；满 10 全保留并禁新增（D-08）。
 3. 用户能否主动移除 active AI（须与 AI 自主离开区分）。
 4. **【已冻结 = 保留豁免】** legacy resident 豁免离开（D-08）；须修订客户端 PRD:634「来源不构成豁免」记为已知偏离。
 5. **【已冻结 = platform_user】daily/RPM 配额按真人聚合，多居民共享一套配额（D-09）**；daily 改原子预占+回滚、RPM advisory 锁迁 platform_user 键；schema 迁用户级、override 用户级优先、退款=仅成功计费扣、reservation 与入站幂等同事务、崩溃 reservation TTL 回收（D-09 精化 2026-07-19）。
-6. App scope 是否纳入定时 dreaming 扫描（§6.6）。
+6. **【已冻结 2026-07-21 = 纳入】**：`__app_active__` 加入 `DEFAULT_ACTIVE_SESSION_KEYS`；L1/L2 per-runtime Dreaming，L3 per-universe 单 writer compact（§6.6）。
 7. AI 动态首版是否只做文字及生成频率；mailbox 触发/冷却/过期/待处理上限。
 8. departure 证据窗口、cooldown、危机 freeze 与后台纠错 SOP。
 9. B 同时可持有多少好友世界 visit；邀请码兑换是否需 A 二次确认；真人历史保留/删除期限。
@@ -496,12 +496,12 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 |---|---|---|---|
 | **M0** 冻结·安全阀·脚手架 | R0 | 保护现状 + 防 N× 打扰 + 分层门禁 | 无，可立即开工 |
 | **M1** 计费/配额锚点上迁 | R1a | 钱包/配额/RPM 锚 `platform_user`，零迁移 | 无，可立即开工 |
-| **M2** Runtime facade + P1 多居民 | R1b+R2 | universe/resident/conversation + L3 首刀 | §10.1/.2/.6 |
+| **M2** Runtime facade + P1 多居民 | R1b+R2 | universe/resident/conversation + L3 首刀 | ✅ §10.1/.2/.6 已冻 2026-07-21 |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | R3 | outbox + App 收件箱 + 去 N× | §10.7/.11/.12/.13 |
 | **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | §10.3/.4/.8 |
 | **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | §10.9 |
 
-M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1 无产品门槛、code-ready；M2+ 对应 §10 冻结项未定不进编码。**
+M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1 已交付；M2-C 的 §10.1/.2/.6 已冻结、code-ready；M3–M5 对应 §10 冻结项未定前不进各自编码。**
 
 ### M0 — 冻结·脚手架·现状 characterization（可立即开工）
 
@@ -529,13 +529,13 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 | **D-07** 容量脱建号计数 | `billing.py:2090` `COUNT(*) binding >= 10` 与容量解耦 | 满 10 后仍可 offline 补新（历史 binding 不占位） |
 | PG 并发测试 | 跨居民同时扣款不双扣、`idempotency_key` 唯一守住 | §9 硬门禁 |
 
-### M2 — Runtime facade + P1 多居民（待冻 §10.1/.2/.6；**前置 M2-0 端口契约**）
+### M2 — Runtime facade + P1 多居民（§10.1/.2/.6 已冻结；**M2-C code-ready**）
 
 **前置 M2-0（编码前必做）**：定稿 §7.3 四接缝签名（初稿已写入「方法签名初稿」2026-07-19，均核过现有入口类型）+ 产出**正式 P1 后端规范**。规范已定稿 [`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)（`fact_type` 枚举全集 + 路由矩阵、5 张 P1 表 DDL/索引/唯一约束、DTO + 安全契约、稳定错误码表、**锁顺序细则 §2.7 + 老用户 backfill 分步伪码 §2.8**）；**M2-0 前置门清零**（剩余 offline 原子事务/visit 双世界锁随 M4/M5）。客户端 gap 文档只作输入、不替代后端规范。
 
-本体：`AgentRuntimePort`（R1b）+ universe/template/resident/ai_conversation 表 + 幂等 bootstrap + 1–10 确认事务（world row lock，容量真相 = `status='active'`）+ resident 建号走 M1-5 的 no-grant/no-cap 内部路径（world lock 保护，容量此处校验）+ 显式 conversation history/turn（不接受客户端 `account_id`）+ **L3 首刀**（`universe_storage.py` + `read_universe_context()` + `prompt_builder.extra_blocks` 加性注入；八字段后端改指 universe 存储，§6.1/6.5，append-only §6.4）+ 老用户 backfill（D-08）+ **防 N× 安全阀（从 M0 下沉）**：World-aware 判 primary/发声人（凭 `universe_residents`，**不用「最早 account」**），仅对明确属于 Companion World 的 resident 生效，形态 A/多 account 老用户不受影响。出口：跨 resident 不串线、L3 同世界可见他人世界不可见、真人级每人每窗口 ≤1、关 flag 退回 legacy。
+本体：`AgentRuntimePort`（R1b）+ universe/template/resident/ai_conversation 表 + **固定 4 位、版本快照**的幂等 bootstrap + 1–10 确认事务（world row lock，容量真相 = `status='active'`）+ resident 建号走 M1-5 的 no-grant/no-cap 内部路径（world lock 保护，容量此处校验）+ 显式 conversation history/turn（不接受客户端 `account_id`）+ **L3 首刀**（`read_universe_context()` + `prompt_builder.extra_blocks` 加性注入；通用 user fact typed sink，append-only §6.4）+ **全部 active binding 映射且不自动补居民**的老用户 backfill（D-08）+ App Dreaming scope 定时扫描（§6.6）+ **防 N× 安全阀（从 M0 下沉）**：只让 legacy primary 继续真人级微信触达，App-only 首版 fail-closed；per-resident reminder/commitment 不误杀。出口：跨 resident 不串线、L3 同世界可见他人世界不可见、真人级每人每窗口 ≤1、关 flag 退回 legacy。
 
-**落地说明（M2-A 数据基座+端口骨架已交付 2026-07-20）**：M2 按「产品门」拆刀落地——本刀 = **净空第一刀（不触 §10.1/.2/.6 冻结门）**，只铺**数据基座 + 端口形状**，**零 turn 路径改动、零行为变更**。交付：①迁移 `m0025_companion_world_core`（universes/character_templates/universe_residents/ai_conversations，含 `UNIQUE(owner_platform_user_id)`、偏唯一 `ux_universe_residents_runtime WHERE NOT NULL`、`ux_ai_conversations_resident`）+ `m0026_universe_memory_l3`（`universe_memory_facts` L3 承载），逐字落 P1 spec §2.1–2.5、双后端通吃（SQLite 风味 DDL 由 `_backend.translate_statement` 自动翻译）；②`app/db/companion_world.py` 底层 repo 原语（`get_or_create_home_universe` 幂等、`create_resident`/`count_active_residents` 容量真相、`create_ai_conversation` 幂等、**L3 `append_universe_fact`/`read_universe_facts`** append-only + `universe_id` 锚隔离）；③`app/agent_runtime/ports.py` 落 §7.3 四接缝**形状**（`MemoryEvent`/`MemorySink`、`ProactiveIntent`/`ProactiveDeliveryAdapter`、`UnitOfWork`、`AgentRuntimePort.send_turn`/`resolve_conversation_account`），纯类型零运行时耦合、未接线（`create_runtime`/`set_read_only`/`configure_persona` 按 D-02 待真实调用点再落）。门禁：SQLite 全量 1362 passed、PG 全量 1363 passed（含 L3 append-only 并发不覆盖 PG 用例，§9/D-12）。**后续刀**：**M2-B** = L3 端到端 vertical（`CompanionWorldMemorySink` 路由 + `read_universe_context()` 渲染 + `ChannelTurnInput.extra_blocks`/after-turn hook/`prompt_builder` 加性注入 + 八字段改指，形态 A no-op）——不触产品门、净空可开；**M2-C** = 居民 bootstrap/confirm/candidates/backfill + App 端点——**待 §10.1/.2/.6 产品冻结**。
+**落地说明（M2-A 数据基座+端口骨架已交付 2026-07-20）**：M2 按「产品门」拆刀落地——本刀 = **净空第一刀（当时不触 §10.1/.2/.6 冻结门）**，只铺**数据基座 + 端口形状**，**零 turn 路径改动、零行为变更**。交付：①迁移 `m0025_companion_world_core`（实际并主干后为 m0028）+ `m0026_universe_memory_l3`（实际为 m0029）；②`app/db/companion_world.py` 底层 repo 原语；③`app/agent_runtime/ports.py` 四接缝形状。**后续刀 M2-C 的 §10.1/.2/.6 已于 2026-07-21 冻结，实施以 [`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md) 为当前 plan。**
 
 **落地说明（M2-B1 L3 读注入接缝已交付 2026-07-21）**：M2-B 按风险再拆——本刀 B1 = **读注入接缝**，**零 live 行为变更、不碰 bazi**。交付：①域层 `app/domains/companion_world/l3_context.py::render_universe_l3_block(facts)`（纯渲染 active L3 facts→`ContextBlock`，只 import `app.prompt_builder`、过分层门禁）；②Runtime 层 `app/agent_runtime/l3_context.py::read_universe_context(universe_id)`（读 `status='active'` L3 facts + 域层渲染，`universe_id` 锚隔离）；③接缝①接线 `ChannelTurnInput.extra_blocks` 字段 + `build_turn_llm_input` 调用处 merge `[*ctx.extra_blocks, *_tdai_extra_blocks] or None`（加性、两空→None→assemble 既有 no-op）。**form-A no-op**：微信入口 `build_channel_input_from_openclaw` 不填 `extra_blocks`（默认空）；`read_universe_context` 本刀无 live 调用方（form-B App turn 适配器随 M2-C 调用并填 `ctx.extra_blocks`）。门禁：SQLite 全量 1370 passed、PG 全量 1371 passed（含「默认空 extra_blocks→prompt 无 L3 段」零回归用例）。**推迟**：通用 after-turn typed sink（seam②）因现 `write_memory` 无 fact_type 产出、按 ADR 随 form-B 居民产 fact 再落。~~**M2-B 剩余**：B2 八字段改指~~ → **已作废（2026-07-21），见下条落地说明**。
 
@@ -549,10 +549,10 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 
 ### 关键风险与门槛
 
-1. **产品冻结项**是 M2+ 硬前置：§10 未定不进对应里程碑编码；M0/M1 无此门槛。
+1. **产品冻结项**是各里程碑硬前置：M2-C 的 §10.1/.2/.6 已清零；M3–M5 仍须等待各自 §10 口径。
 2. **客户端口径冲突**：gap-analysis §4.2「默认隔离/白名单」与 D-05「全量共享沉淀记忆」相反，M2 落 L3 前需镜像对齐（本轮不动客户端仓库）。
 3. **money 路径**：M1 是唯一动扣款的里程碑，PG 并发测试是发布闸，SQLite 绿不作数（§9）。
-4. **App scope 漏扫**（§6.6）：`__app_active__` 不在 `DEFAULT_ACTIVE_SESSION_KEYS`，多居民后每居民首条卡顿——M2 需决策是否纳入定时扫描。
+4. **App scope 漏扫**（§6.6）已冻结修复：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并补 App scope 每日轮转回归。
 
 ---
 

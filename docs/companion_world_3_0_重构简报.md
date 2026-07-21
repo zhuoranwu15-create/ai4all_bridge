@@ -62,12 +62,12 @@
 
 ## 四、进度与剩余工作（截至 2026-07-21，决策 B 后）
 
-> **分支 `feat/companion-world-m0-m1-wallet`：已并入 origin/main #42，决策 B 后发布闸已清零；PR #44 → main 已开并更新。本简报不再内嵌易失效的 HEAD，接手时以 `git rev-parse HEAD` / PR 最新提交为准。**
+> **PR #44 已于 2026-07-21 合并到 main（merge commit `3f42ee1`）；M2-C 当前工作分支为 `feat/companion-world-m2c`。本简报不再内嵌易失效的 feature HEAD，接手时以 `git rev-parse HEAD` / 当前 PR 最新提交为准。**
 
 **已交付（均已 commit）：**
 - **M0** 全部：四个骨架包 + AST 分层门禁（含 Runtime→域层反向门）+ characterization 安全网。
 - **M1** 全套：D-14 钱包上迁真人键 + 一真人一次赠权、D-09 daily/RPM 配额上迁 + 原子预占/回滚/TTL、D-07 容量脱建号计数、#11 PG 并发硬闸。
-- **M2-A**：数据基座（5 张 P1 表迁移 m0025/m0026）+ Agent Runtime 四接缝端口**形状**（未接线）。
+- **M2-A**：数据基座（5 张 P1 表迁移，实际并主干后为 m0028/m0029）+ Agent Runtime 四接缝端口**形状**（未接线）。
 - **M2-B1**：L3「读注入」接缝（`read_universe_context` + `prompt_builder` 加性 `extra_blocks`），**form-A 微信零 live 行为变更**。
 - **八字无工具化**：八字降级为与 weather 同形态的无工具 skill，替代原「八字段改指 universe 存储」的 B2。
 - **codex 审查 5 findings 修复**（`1821ffd`）：M1 真人级上迁的冷路径漏扫——wipe 误删共享钱包、无 binding 孤儿行 daily 迁移、L3 跨 universe 写入隔离、Runtime→域层依赖反转、`grant_shells` 预览余额。
@@ -87,12 +87,14 @@
 
 **剩余工作：**
 
-*A. PR #44 合并门：*
-- **发布闸已清零**：PG 双档验证与混合 owner 解析并发用例均已完成，分支已更新到 PR #44。
-- **剩余唯一动作 = 合并到 main**；继续等用户明确点头，本轮只推分支、不合并（已承诺）。
+*A. PR #44：*
+- **✅ 已合并 main**：PG 双档验证与混合 owner 解析并发用例均通过，merge commit `3f42ee1`。
 
-*B. 卡产品冻结门 §10（非编码任务，是产品决策）：*
-- **M2-C（居民接入）** — universe/resident bootstrap·confirm·candidates、老用户补居民 backfill、App 端点、App turn 适配器填 `extra_blocks`。卡 §10.1/.2/.6（预设居民数量/版本、老用户补居民映射、App 是否纳入 dreaming 扫描）。
+*B. M2-C（产品门已清零，待计划确认后编码）：*
+- **§10.1 已冻结**：新用户固定 4 位预设候选；版本不可原地改写，bootstrap 快照模板版本。
+- **§10.2 已冻结**：老用户全部 active binding 映射 legacy resident，不自动补居民；零 binding 走新用户流程；满 10 全保留并禁新增。
+- **§10.6 已冻结**：`__app_active__` 纳入定时 Dreaming；L1/L2 per-runtime、L3 per-universe 单 writer compact。
+- **当前 plan**：[`plans/companion_world_m2c_implementation_plan.md`](plans/companion_world_m2c_implementation_plan.md)。
 - **M1-5 内部建号接线** — 原语已就绪（B-②），随 M2 建居民真正调用。
 - **seam② after-turn typed sink** — 随 form-B 居民真正产出 typed fact 再落。
 - **M3 / M4 / M5** — 各待对应 §10 冻结项。
@@ -103,8 +105,8 @@
 
 ## 五、如何从本文档接手
 
-1. **切到分支并取最新提交**：`git checkout feat/companion-world-m0-m1-wallet`；以 `git status` / `git rev-parse HEAD` 为准，不依赖文档里的静态 commit 号。
+1. **切到分支并取最新提交**：M0/M1/M2-A/B1 看 `main@3f42ee1`；M2-C 用 `feat/companion-world-m2c`。以 `git status` / `git rev-parse HEAD` 为准。
 2. **当前发布基线**：`make test-unit` = 562 passed；`make test` = 1379 passed / 6 skipped；`make test-pg` = 1381 passed / 4 skipped（全 29 迁移 + 并发不变量）。后续改动按风险复跑对应档。
-3. **PR #44 状态**：发布闸已清零；**合并动作等用户明确点头**。
+3. **PR #44 状态**：已合并；不要在旧分支继续堆 M2-C。
 4. **权威口径**：ADR `tech_design/companion_world_3_0_refactor_design.md`（§12 里程碑 / §7.3 端口 / D-01…D-14）、P1 规范 `..._p1_backend_spec.md`、账号模型 `..._account_model_reconciliation.md`。
-5. **主干下一步唯一钥匙**：推动 §10 产品冻结（§10.1 预设居民数量/版本、§10.2/D-08 老用户补居民映射、§10.6 App dreaming 扫描）——产品口径一冻结，M2-C 即 code-ready。
+5. **下一步**：确认 M2-C 文件级 plan 后，按 C0→C6 串行编码；M3–M5 继续等待各自产品门。

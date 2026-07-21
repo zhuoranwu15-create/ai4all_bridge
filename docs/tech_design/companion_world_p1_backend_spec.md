@@ -1,16 +1,17 @@
 # 技术设计：Companion World P1 后端规范（fact_type / schema / DTO / 错误码）
 
-> 状态：**定稿 2026-07-19**（M2-0 前置门完整交付：fact_type/schema/DTO/错误码 + 锁序 §2.7 + backfill §2.8）。
+> 状态：**定稿 2026-07-21，M2-C code-ready**（M2-0 前置门 + 产品冻结 §2.9 完整交付）。
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
 > 上位 ADR：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
-> 核查基线：`main@abe6e2b`（迁移 max 版本 = 21；App API 错误惯例 = `HTTPException(status, detail=<code>)`；待替换入口 `get_first_active_account_for_user`）
+> 核查基线：`main@3f42ee1`（PR #44 已合并；迁移 max 版本 = 29；App API 错误惯例 = `HTTPException(status, detail=<code>)`；待替换入口 `get_first_active_account_for_user`）
 
 ## 0. 范围与不做项
 
 **本规范覆盖（P1 = M2/R2 首个多居民闭环）**：
 - §1 `fact_type` 枚举全集 + 路由矩阵（ADR §7.3 接缝②的内容层定型）。
 - §2 P1 schema：`universes` / `character_templates` / `universe_residents` / `ai_conversations` / `universe_memory_facts`（L3 承载）。
+- §2.9 M2-C 冻结产品策略：4 位初始候选与版本快照、legacy 全量映射不自动补居民、App Dreaming scope。
 - §3 DTO：P1 端点请求/响应形状 + 安全契约（不接受客户端 `account_id`）。
 - §4 稳定错误码表。
 
@@ -53,7 +54,7 @@ ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**
 
 ## 2. P1 Schema
 
-DDL 沿用现有迁移惯例（见 `_core.py` m0012/m0013/m0021）：`TEXT` 主键、中国时区默认时间 `strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))`、`ix_`/`ux_` 索引命名、`_json` 结构化列、`FOREIGN KEY ... REFERENCES accounts(id)`；双后端差异由 `_backend` 垫片处理。**迁移号紧接 M1 之后顺延**（框架按 `version > MAX(已应用)` 判定，允许非连续，见 m0019 注释）；本组建议 `m0022_companion_world_core`（§2.1–2.4）+ `m0023_universe_memory_l3`（§2.5）两个迁移函数。
+DDL 沿用现有迁移惯例：`TEXT` 主键、中国时区默认时间 `strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))`、`ix_`/`ux_` 索引命名、`_json` 结构化列、`FOREIGN KEY ... REFERENCES accounts(id)`；双后端差异由 `_backend` 垫片处理。M2-A 五表已实际落为 **m0028/m0029**；M2-C 只追加 **m0030**（初始候选 rank + resident 模板唯一关系），不改写既有 28/29。
 
 ### 2.1 `universes`（一真人一 home world）
 
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS character_templates (
     tags_json TEXT,
     persona_seed_json TEXT,                        -- 实例化时写入 runtime account 的 SOUL/IDENTITY 种子；不经 App DTO 下发
     persona_version TEXT NOT NULL DEFAULT 'v1',    -- 版本；运营更新不静默改写既有关系
+    initial_candidate_rank INTEGER,                -- NULL=非初始候选；1..4=当前首发顺序（M2-C）
     status TEXT NOT NULL DEFAULT 'active',          -- active | retired
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
@@ -92,9 +94,13 @@ CREATE TABLE IF NOT EXISTS character_templates (
 );
 CREATE INDEX IF NOT EXISTS ix_character_templates_source ON character_templates(source_type, status);
 CREATE INDEX IF NOT EXISTS ix_character_templates_owner ON character_templates(owner_platform_user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_character_templates_initial_rank_active
+    ON character_templates(initial_candidate_rank)
+    WHERE status='active' AND initial_candidate_rank IS NOT NULL;
 ```
 - `persona_seed_json` / 内部策略**绝不进 App DTO**（客户端 §4.2）。同一官方模板进两个世界 → 生成两个 resident + 两个 runtime account，私聊/Memory 不共享（D-02）。
-- `persona_version` 钉在 resident 上（§2.3 `template_version`），运营改模板只影响新建关系。
+- **初始集合固定 4 位**：bootstrap 只接受恰好 rank 1..4 各一条 active 模板；缺位/重复 fail-closed 为 `preset_catalog_not_ready`，不静默少发或拿任意模板补位。
+- **版本不可变 + 快照**：已发布模板不原地改 `persona_seed_json/persona_version`；更新时插入新 template/version、退休旧版。bootstrap 创建 candidate 时把版本钉入 §2.3 `template_version`；已生成 candidate 即使旧版随后 retired 仍可完成本次 confirm，运营换版只影响后续新 world。
 
 ### 2.3 `universe_residents`（关系实例，容量真相）
 
@@ -120,10 +126,14 @@ CREATE INDEX IF NOT EXISTS ix_universe_residents_universe_status ON universe_res
 -- 一个 runtime account 至多绑定一个 resident（candidate 期 NULL 允许多行 → 偏索引）
 CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_runtime
     ON universe_residents(runtime_account_id) WHERE runtime_account_id IS NOT NULL;
+-- 非 legacy 关系：同一世界对同一模板只建立一段关系；legacy 多 account 共用哨兵模板，故豁免
+CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_universe_template
+    ON universe_residents(universe_id, character_template_id) WHERE origin <> 'legacy';
 ```
 - **容量真相脱离建号 binding 计数**（D-07）：active 数 = `COUNT(*) WHERE universe_id=? AND status='active'`，在 world row lock 下算；`offline`/`dismissed` 保留 account 与 binding 仅供只读历史、不计位。满 10 后仍可 offline 补新。
 - **偏唯一索引** `WHERE runtime_account_id IS NOT NULL`：SQLite(≥3.8)/PG 均支持（与 D-14 `UNIQUE(platform_user_id) WHERE status='active'` 同款）。
 - `origin='legacy'`：D-08 豁免离开（永不 offline）；backfill 把老用户现有 account 映射为 legacy resident。
+- bootstrap 首次创建 4 条 `origin='preset', status='candidate'`，重复请求命中既有 candidate，不叠加；confirm 将保留项激活、其余置 `dismissed`。
 
 ### 2.4 `ai_conversations`（跨 session 生命周期的稳定会话 ID）
 
@@ -178,7 +188,7 @@ CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_universe_time
 - ~~**L3 首刀**：`read_bazi_profile`/`write_bazi_profile` 后端改指本表（`fact_type='bazi'`）~~ **（废弃 2026-07-21：八字降级为无工具 skill、bazi 托管段整体移除；L3 首刀改由通用 `user_fact`/`user_preference` 承载）**。
 - **隔离测试点**：写入必带 `universe_id`；`INSERT` 前校验 `source_resident_id` 属于该 `universe_id`（跨 universe 写拒绝）；读取只在同 `universe_id` 内；访客/他人世界零泄漏（复用 visit ACL，M5）。
 
-### 2.6 事务与并发边界（P1 硬边界，细则待 M2-0 收尾）
+### 2.6 事务与并发边界（P1 硬边界，已冻结）
 
 - **create_runtime + resident 同一 PG 事务**（接缝④防孤儿账号）：`create_resident_with_runtime(..., uow)` 中 runtime account 插入 + `universe_residents` 插入 + `ai_conversations` 插入同 `uow.conn` 提交；任一失败整体回滚，不留无主 account。
 - **容量校验在 world row lock 下**：确认/建居民前 `SELECT ... FROM universes WHERE id=? FOR UPDATE`（PG），再 `COUNT(status='active')` 校验 `≤ 10`；SQLite 用等价事务语义（只验功能）。
@@ -235,13 +245,14 @@ def backfill_user(platform_user_id):
                ORDER BY created_at ASC, id ASC              # 与 get_first_active_account_for_user 同序
 
     if not bindings:                                        # 无活跃 account（已解绑/异常老用户）
-        set universe.onboarding_state = 'preparing'         # 只留空世界，不建 resident
+        set universe.onboarding_state = 'preparing'         # 不建 legacy resident；后续 bootstrap
+                                                            # 按新用户流程创建固定 4 位候选
         return
 
     # 3) legacy 计费/路由锚 = 最早 active account（仅当列为空时写 → 幂等）
     set_if_null(universe.legacy_primary_account_id, bindings[0].account_id)
-    set universe.onboarding_state = 'confirmed'             # 已有活跃居民即可用；
-                                                            # 是否重放 onboarding/补预设居民 → ADR §10.2 产品定
+    set universe.onboarding_state = 'confirmed'             # 已有活跃居民即可用；不重放 onboarding、
+                                                            # 不自动补 4 位预设（§2.9 冻结）
 
     # 4) 每个 active account → 一个 origin='legacy'、status='active' 的 resident（全部映射，D-08）
     for acc in bindings:
@@ -263,8 +274,19 @@ def backfill_user(platform_user_id):
 - `upsert_ai_conversation`：靠 `UNIQUE(resident_id)`（§2.4）。
 - **哨兵 legacy 模板**：预置一行 `character_templates`（`source_type='operations'`、`persona_seed_json=NULL`），仅为满足 `character_template_id NOT NULL`；legacy 居民的人设仍由其既有 account 的 SOUL/IDENTITY 承载，backfill 不注入种子（§2.2）。
 - **多 account（D-08）**：全部 active binding 各映射一个 `origin='legacy'` resident（保留豁免、永不 offline），与「取哪个当 primary」解耦——primary 仅用于 legacy `/chat/*` 路由与计费锚，不置顶、不写主角色字段（gap §7.1-4）。
-- **满-10 边界**：极少数持满 10 active account 的老用户 → 世界初始即满且 legacy 永不 offline → **无法再加 App 居民**；本规范只保证 backfill **不越 10、不报错**，后续处置随 ADR §10.2 产品定。
+- **满-10 边界【已冻结】**：极少数持满 10 active account 的老用户 → 10 个全部映射、世界显示容量已满；不删历史、不强制降级、不自动补预设。legacy 永不 offline，P1 不允许其继续新增居民。
 - **backfill 时序**：per-user UoW 持 L1（世界行锁），与该 world 上的在线 confirm/建居民（§2.7）串行；跨用户事务互不相干、可并行推进。**必须在 M1 之后运行**（依赖一真人一钱包已就位）。
+
+---
+
+### 2.9 M2-C 产品冻结策略（2026-07-21）
+
+1. **新用户初始集合 = 固定 4 位**：bootstrap 校验当前运营目录恰有 rank 1..4 四条 active 模板，并在同一 world 下幂等创建四条 candidate；用户 confirm 至少保留 1 位，无主角色。模板内容由运营提供，代码/迁移不得硬编码人设或密钥。
+2. **候选/版本快照**：candidate 钉住 `character_template_id + template_version`；已发布模板版本不可原地改写。运营换版用“新行 + 退休旧行”，只影响尚未 bootstrap 的新世界；既有 candidate 仍可确认，既有 runtime persona 永不被静默覆盖。
+3. **老用户全量映射、不自动补居民**：全部 active binding → legacy resident；最早一条只作 `legacy_primary_account_id` 兼容锚。已有居民即 `confirmed`，不重放 onboarding、不加四位预设；无 active binding 保持 `preparing`，按新用户 bootstrap；满 10 全保留并禁新增。
+4. **App Dreaming 纳入定时扫描**：`__app_active__` 加入 `DEFAULT_ACTIVE_SESSION_KEYS`；L1/L2 仍 per-runtime，L3 compact per-universe 单 writer。中心单例 scheduler 执行，节点不重复，不产生主动消息。
+5. **运营目录上线闸**：M2-C feature flag 默认关闭；启用前必须通过只读预检证明 rank 1..4 齐全、版本/persona/avatar 元数据完整。目录不完整时 bootstrap 返回 `preset_catalog_not_ready`，不得生成半套候选。
+6. **新旧 auth 切换**：flag 关闭时 `/v1/auth/session` 完全保持现状；flag 开启后，切换截点之后的新用户只创建 `platform_user + session`，不再预建默认 runtime account/binding，session 响应 `account` 可为空并进入 world bootstrap。截点前用户先完成 §2.8 backfill；启用须与支持该响应的客户端最低版本同步。
 
 ---
 
@@ -286,11 +308,11 @@ def backfill_user(platform_user_id):
 
 | 方法 | 路径 | 请求要点 | 响应要点 | 不变量 |
 |---|---|---|---|---|
-| POST | `/api/v1/worlds/home/bootstrap` | 空体；world 由 session `platform_user` 解析 | `data.world{id,onboarding_state,status}` + `data.candidates[]` | 幂等（§2.1 UNIQUE） |
-| GET | `/api/v1/worlds/home/resident-candidates` | — | `data.candidates[]{template_id,name,avatar_ref,summary,tags}` | **不含** `persona_seed_json`/内部策略 |
-| POST | `/api/v1/worlds/home/residents/confirm` | `{selections:[{template_id, display_name?}]}` | `data.residents[]{resident_id,name,conversation_id,status}` | 事务；确认后 active ∈ [1,10]；world row lock |
+| POST | `/api/v1/worlds/home/bootstrap` | 空体；world 由 session `platform_user` 解析 | `data.world{id,onboarding_state,status}` + 固定 4 条 `data.candidates[]` | 幂等；目录 rank 1..4 齐全；candidate/版本快照（§2.9） |
+| GET | `/api/v1/worlds/home/resident-candidates` | — | `data.candidates[]{template_id,template_version,name,avatar_ref,summary,tags}` | 只返回本 world 已快照 candidate；**不含** `persona_seed_json`/内部策略 |
+| POST | `/api/v1/worlds/home/residents/confirm` | `{selections:[{template_id, display_name?}]}` | `data.residents[]{resident_id,name,conversation_id,status}` | selections 必须来自本 world candidate；事务；确认后 active ∈ [1,10]；world row lock |
 | GET | `/api/v1/worlds/home/residents` | — | `data.residents[]{resident_id,name,status,conversation_id}`（active+offline） | owner-scoped |
-| POST | `/api/v1/worlds/home/residents` | `{template_id?}` 或 `{name,persona_hint?}`（自建） | `data.resident{...}` | 建前 world row lock 校验 active<10；no-grant 建号（M1-5） |
+| POST | `/api/v1/worlds/home/residents` | `{template_id?}` 或 `{name,persona_hint?}`（自建） | `data.resident{...}` | selecting 期至多创建 1 个自建 candidate；confirmed 期建前 world row lock 校验 active<10；no-grant 建号（M1-5） |
 | GET | `/api/v1/conversations` | `?cursor=` | `data.items[]{conversation_id,resident{id,name,avatar},state,last_preview,unread}`（P1 仅 AI） | owner-scoped；只读模型 |
 | GET | `/api/v1/ai-conversations/{id}/messages` | `?cursor=` | `data.messages[]` + `data.state` | owner 校验；offline→`read_only` |
 | POST | `/api/v1/ai-conversations/{id}/turn` | `{client_message_id, text? , media?}` | `data.reply{...}` | **不接受 `account_id`**；`state='read_only'` 拒写 |
@@ -327,7 +349,8 @@ def backfill_user(platform_user_id):
 | `world_not_ready` | 409 | home world 未 bootstrap | 客户端应先 bootstrap |
 | `world_disabled` | 403 | `universes.status='disabled'` | |
 | `template_not_found` | 404 | 选用模板不存在 | |
-| `template_not_available` | 409 | 模板 `status='retired'` 或非本人自建 | |
+| `template_not_available` | 409 | 直接新增时模板 `status='retired'` 或非本人自建 | 已快照到本 world 的 candidate 仍允许 confirm |
+| `preset_catalog_not_ready` | 503 | active 初始目录不是恰好 rank 1..4 四条或必需元数据缺失 | feature flag 上线前预检应阻断此状态 |
 | `resident_not_found` | 404 | resident 不存在**或非本人**（防枚举） | §3.4-2 |
 | `resident_capacity_exceeded` | 409 | 确认/建居民后 active > 10 | world row lock 下判定（D-07） |
 | `resident_capacity_empty` | 409 | confirm 集合为空（active 会 < 1） | 初始集合不为 0（ADR §9） |
@@ -347,4 +370,4 @@ HTTP 语义约定：400 请求契约违反 / 401 未鉴权 / 403 资源被禁 / 
 - **`app_notifications` / `universe_posts`**：M3（形状见 ADR §11.8 T3-1、§8 R3）。
 - **信箱 / 生命周期 / 访客 / 真人聊天**：M4–M5（客户端 §4.4–4.6）。
 - **客户端口径对齐**：gap-analysis §4.2「默认隔离/白名单」需按 D-05「全量共享沉淀记忆」镜像更新（本轮不动客户端仓库）。
-- **App scope 漏扫**（ADR §6.6）：`__app_active__` 是否纳入 `DEFAULT_ACTIVE_SESSION_KEYS` 定时扫描，M2 决策（非本规范表结构项）。
+- **App scope 漏扫已冻结修复**（ADR §6.6 / 本文 §2.9）：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并覆盖 App scope 每日轮转；L3 compact 仍是 per-universe 单 writer。
