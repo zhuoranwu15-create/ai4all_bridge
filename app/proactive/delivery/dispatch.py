@@ -13,6 +13,10 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from app.config import settings
+from app.platform import (
+    HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+    human_level_proactive_allowed,
+)
 from app.db import (
     claim_content_invitation_for_send,
     list_due_reactivation_candidate_accounts,
@@ -84,6 +88,17 @@ def dispatch_reactivation_candidate(
     发送公共路径不再有 LLM 调用。
     """
     current = now or beijing_naive_now()
+    if not human_level_proactive_allowed(account_id):
+        clear_reactivation_candidate(
+            account_id=account_id,
+            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+            now=current,
+        )
+        return _no_op(
+            account_id=account_id,
+            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+            now=current,
+        )
     allowed_windows = _account_allowed_windows(account_id)
     candidate = get_reactivation_candidate(account_id=account_id)
     if candidate is None:

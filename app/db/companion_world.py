@@ -50,6 +50,7 @@ __all__ = [
     "try_conversation_turn_lock",
     "list_active_account_ids_for_user",
     "resolve_resident_memory_scope",
+    "resolve_resident_proactive_scope",
     "append_universe_fact",
     "read_universe_facts",
     "list_universe_ids_for_memory_compact",
@@ -776,6 +777,24 @@ def resolve_resident_memory_scope(
             SELECT id AS resident_id, universe_id, status
             FROM universe_residents
             WHERE runtime_account_id = ? AND status IN ('active', 'offline')
+            """,
+            (runtime_account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def resolve_resident_proactive_scope(
+    *, runtime_account_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """解析 world resident 的真人级主动触达角色；form-A account 返回 None。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT r.id AS resident_id, r.universe_id, r.status,
+                   u.legacy_primary_account_id
+            FROM universe_residents r
+            JOIN universes u ON u.id = r.universe_id
+            WHERE r.runtime_account_id = ? AND r.status IN ('active', 'offline')
             """,
             (runtime_account_id,),
         ).fetchone()

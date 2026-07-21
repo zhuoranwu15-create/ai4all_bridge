@@ -22,6 +22,11 @@ from app.domains.companion_world.contracts import (
 )
 
 
+HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON = (
+    "companion_world_human_level_proactive_blocked"
+)
+
+
 def _decode_tags(raw: Optional[str]) -> Tuple[str, ...]:
     try:
         value = json.loads(raw or "[]")
@@ -391,6 +396,19 @@ class SqlCompanionWorldRepository(WorldRepository):
             )
         )
 
+    def allows_human_level_proactive(self, runtime_account_id: str) -> bool:
+        """form-A 放行；world resident 仅 legacy primary 可做人级主动触达。"""
+        scope = world_db.resolve_resident_proactive_scope(
+            runtime_account_id=runtime_account_id,
+            conn=self._conn,
+        )
+        if scope is None:
+            return True
+        primary_account_id = scope.get("legacy_primary_account_id")
+        return bool(primary_account_id) and str(primary_account_id) == str(
+            runtime_account_id
+        )
+
     def ensure_legacy_resident(
         self, world: WorldRecord, runtime_account_id: str
     ) -> ResidentRecord:
@@ -425,3 +443,17 @@ class SqlCompanionWorldRepository(WorldRepository):
         if row is None:
             raise RuntimeError("universe not found")
         return _world(row)
+
+
+def human_level_proactive_allowed(runtime_account_id: str) -> bool:
+    """返回某 runtime account 是否可承担真人级主动触达。"""
+    return SqlCompanionWorldRepository().allows_human_level_proactive(
+        runtime_account_id
+    )
+
+
+__all__ = [
+    "HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON",
+    "SqlCompanionWorldRepository",
+    "human_level_proactive_allowed",
+]
