@@ -62,7 +62,7 @@
 
 ## 四、进度与剩余工作（截至 2026-07-21，决策 B 后）
 
-> **分支 `feat/companion-world-m0-m1-wallet`：HEAD = `329ce59`，工作树干净，领先 origin/main 11 个 commit，本地已提交但尚未 push；PR #44 → main 已开（待推分支更新）。**
+> **分支 `feat/companion-world-m0-m1-wallet`：已并入 origin/main #42，决策 B 后发布闸已清零；PR #44 → main 已开并更新。本简报不再内嵌易失效的 HEAD，接手时以 `git rev-parse HEAD` / PR 最新提交为准。**
 
 **已交付（均已 commit）：**
 - **M0** 全部：四个骨架包 + AST 分层门禁（含 Runtime→域层反向门）+ characterization 安全网。
@@ -73,8 +73,9 @@
 - **codex 审查 5 findings 修复**（`1821ffd`）：M1 真人级上迁的冷路径漏扫——wipe 误删共享钱包、无 binding 孤儿行 daily 迁移、L3 跨 universe 写入隔离、Runtime→域层依赖反转、`grant_shells` 预览余额。
 - **并入 main #42**（`4a3cae1`）：main 已合并的「App/账号收敛 + 渠道化人设」（一手机号×一 App=一 active 账号、`ux_owner_binding_active_user_app`、`CHANNEL_APP 'app'→'native'`、迁移 22/23/24）。分支 M1 迁移先改号 22–26→25–29（`c2ba253`）让号，冲突仅 `_core.py`（registry 取并集 1–29）。
 - **✅ 账号模型对齐决策 B 实现**（`329ce59`）：见下节。
+- **✅ 决策 B 后 PG 并发硬闸补齐**：旧「一真人第二账号」测试夹具改走真实 form-B 居民路径；新增「微信 binding 账号 + 世界居民账号」同真人并发共享钱包用例，覆盖两条 owner 解析链汇聚且不丢更新。
 
-**发布闸：SQLite 全量 1379 passed / 5 skipped 全绿；PG 档（`make test-pg`）待决策 B 后重跑（接手第一步）。**
+**发布闸（2026-07-21）：unit 562 passed；SQLite 全量 1379 passed / 6 skipped；PG 聚焦并发 4 passed；PG 全量 1381 passed / 4 skipped。全 29 迁移与双后端发布闸均绿。**
 
 ### ✅ 账号模型对齐 —— 决策 B（已定 + 已实现，替代原「合并阻塞」）
 
@@ -86,10 +87,9 @@
 
 **剩余工作：**
 
-*A. 立即可做（不卡产品门，接手第一步）：*
-- **PG 双档验证**：`make test-pg`（pytest-postgresql 临时库跑全 29 迁移，与本地脏 dev PG 无关）。
-- **补 1 个 PG 并发用例**：「居民（经世界解析）与微信号（经 binding 解析）同一真人并发共享钱包不丢更新」。
-- **push 到 PR #44 分支**；**合并到 main 的动作等用户明确点头**（已承诺）。
+*A. PR #44 合并门：*
+- **发布闸已清零**：PG 双档验证与混合 owner 解析并发用例均已完成，分支已更新到 PR #44。
+- **剩余唯一动作 = 合并到 main**；继续等用户明确点头，本轮只推分支、不合并（已承诺）。
 
 *B. 卡产品冻结门 §10（非编码任务，是产品决策）：*
 - **M2-C（居民接入）** — universe/resident bootstrap·confirm·candidates、老用户补居民 backfill、App 端点、App turn 适配器填 `extra_blocks`。卡 §10.1/.2/.6（预设居民数量/版本、老用户补居民映射、App 是否纳入 dreaming 扫描）。
@@ -103,10 +103,8 @@
 
 ## 五、如何从本文档接手
 
-1. **切到分支**：`git checkout feat/companion-world-m0-m1-wallet`（HEAD 应为 `329ce59`，`git status` 干净、领先 origin/main 11 commit）。
-2. **拿秒级反馈**：`make test-unit`，再 `make test`（SQLite 全量，预期 1379 passed / 5 skipped）。
-3. **验 PG 档**：`make test-pg`（全 29 迁移 + 并发不变量）。
-4. **补 1 个 PG 并发用例**：见 §四-A 第 2 条（可仿 `tests/test_billing_concurrency_pg.py`、`tests/test_daily_quota_reservation.py` 的 PG 并发写法）。
-5. **推分支**：`git push` 更新 PR #44 → main；**合并动作等用户明确点头**。
-6. **权威口径**：ADR `tech_design/companion_world_3_0_refactor_design.md`（§12 里程碑 / §7.3 端口 / D-01…D-14）、P1 规范 `..._p1_backend_spec.md`、账号模型 `..._account_model_reconciliation.md`。
-7. **主干下一步唯一钥匙**：推动 §10 产品冻结（§10.1 预设居民数量/版本、§10.2/D-08 老用户补居民映射、§10.6 App dreaming 扫描）——产品口径一冻结，M2-C 即 code-ready。
+1. **切到分支并取最新提交**：`git checkout feat/companion-world-m0-m1-wallet`；以 `git status` / `git rev-parse HEAD` 为准，不依赖文档里的静态 commit 号。
+2. **当前发布基线**：`make test-unit` = 562 passed；`make test` = 1379 passed / 6 skipped；`make test-pg` = 1381 passed / 4 skipped（全 29 迁移 + 并发不变量）。后续改动按风险复跑对应档。
+3. **PR #44 状态**：发布闸已清零；**合并动作等用户明确点头**。
+4. **权威口径**：ADR `tech_design/companion_world_3_0_refactor_design.md`（§12 里程碑 / §7.3 端口 / D-01…D-14）、P1 规范 `..._p1_backend_spec.md`、账号模型 `..._account_model_reconciliation.md`。
+5. **主干下一步唯一钥匙**：推动 §10 产品冻结（§10.1 预设居民数量/版本、§10.2/D-08 老用户补居民映射、§10.6 App dreaming 扫描）——产品口径一冻结，M2-C 即 code-ready。
