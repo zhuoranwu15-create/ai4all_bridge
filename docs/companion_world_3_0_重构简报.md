@@ -60,25 +60,53 @@
 
 ---
 
-## 四、进度与剩余工作（截至 2026-07-21）
+## 四、进度与剩余工作（截至 2026-07-21，决策 B 后）
 
-**已交付（打包在分支 `feat/companion-world-m0-m1-wallet`，PR #44 → main）：**
-- **M0** 全部：四个骨架包 + AST 分层门禁 + characterization 安全网。
+> **分支 `feat/companion-world-m0-m1-wallet`：HEAD = `329ce59`，工作树干净，领先 origin/main 11 个 commit，本地已提交但尚未 push；PR #44 → main 已开（待推分支更新）。**
+
+**已交付（均已 commit）：**
+- **M0** 全部：四个骨架包 + AST 分层门禁（含 Runtime→域层反向门）+ characterization 安全网。
 - **M1** 全套：D-14 钱包上迁真人键 + 一真人一次赠权、D-09 daily/RPM 配额上迁 + 原子预占/回滚/TTL、D-07 容量脱建号计数、#11 PG 并发硬闸。
-- **M2-A**：数据基座（5 张 P1 表迁移）+ Agent Runtime 四接缝端口**形状**（未接线）。
+- **M2-A**：数据基座（5 张 P1 表迁移 m0025/m0026）+ Agent Runtime 四接缝端口**形状**（未接线）。
 - **M2-B1**：L3「读注入」接缝（`read_universe_context` + `prompt_builder` 加性 `extra_blocks`），**form-A 微信零 live 行为变更**。
 - **八字无工具化**：八字降级为与 weather 同形态的无工具 skill，替代原「八字段改指 universe 存储」的 B2。
+- **codex 审查 5 findings 修复**（`1821ffd`）：M1 真人级上迁的冷路径漏扫——wipe 误删共享钱包、无 binding 孤儿行 daily 迁移、L3 跨 universe 写入隔离、Runtime→域层依赖反转、`grant_shells` 预览余额。
+- **并入 main #42**（`4a3cae1`）：main 已合并的「App/账号收敛 + 渠道化人设」（一手机号×一 App=一 active 账号、`ux_owner_binding_active_user_app`、`CHANNEL_APP 'app'→'native'`、迁移 22/23/24）。分支 M1 迁移先改号 22–26→25–29（`c2ba253`）让号，冲突仅 `_core.py`（registry 取并集 1–29）。
+- **✅ 账号模型对齐决策 B 实现**（`329ce59`）：见下节。
 
-发布闸：SQLite 1368 / PG 1369 双档全绿。
+**发布闸：SQLite 全量 1379 passed / 5 skipped 全绿；PG 档（`make test-pg`）待决策 B 后重跑（接手第一步）。**
+
+### ✅ 账号模型对齐 —— 决策 B（已定 + 已实现，替代原「合并阻塞」）
+
+原「PR #44 合并阻塞」的根因是 **`account` 一词两义**（用户 App 账号 vs 居民 runtime 容器），**非产品矛盾**。已冻结为 **决策 B**（决策记录：[`tech_design/companion_world_account_model_reconciliation.md`](tech_design/companion_world_account_model_reconciliation.md)）：
+
+- **口径**：`owner_binding` 是**微信接入（形态 A）独有**的产物、不是通用「用户账号」机制；朝夕相伴居民**不发 binding**，纯朝夕相伴用户**零 binding**。
+- **解析链**（`accounts.resolve_owner_platform_user_id`）：`account →（1）owner_binding →〔无则〕（2）universe_residents.runtime_account_id → universes.owner_platform_user_id →〔无则〕（3）account_id 兜底`。居民从不建 active binding → #42 的唯一索引永不触发，**B 不破 #42**。
+- **落地**：B-① 解析函数收口钱包/配额/wipe 四处冷热路径；B-② `billing.create_resident_runtime_account`（M1-5 内部建号原语：建 account + `universe_residents` 映射，不发 binding / 不赠权 / 不占容量）；B-③ 测试夹具 `make_resident_account` + 13 个红夹具改走内部路径；B-④ 命名消歧注释 + ADR D-02/D-07 落地说明 + `tests/test_resident_runtime_account.py`。
 
 **剩余工作：**
-- **M2-C（居民接入）** — universe/resident bootstrap·confirm·candidates、老用户补居民 backfill、App 端点、App turn 适配器填 `extra_blocks`。**卡在产品冻结门 §10.1/.2/.6**（预设居民数量与版本、老用户补居民映射、App 是否纳入 dreaming 扫描）——**非编码任务，是产品决策**。
-- **M1-5** no-cap/no-grant 内部建号路径（随 M2 建居民接线）。
-- **seam② after-turn typed sink**（随 form-B 居民真正产出 typed fact 再落）。
+
+*A. 立即可做（不卡产品门，接手第一步）：*
+- **PG 双档验证**：`make test-pg`（pytest-postgresql 临时库跑全 29 迁移，与本地脏 dev PG 无关）。
+- **补 1 个 PG 并发用例**：「居民（经世界解析）与微信号（经 binding 解析）同一真人并发共享钱包不丢更新」。
+- **push 到 PR #44 分支**；**合并到 main 的动作等用户明确点头**（已承诺）。
+
+*B. 卡产品冻结门 §10（非编码任务，是产品决策）：*
+- **M2-C（居民接入）** — universe/resident bootstrap·confirm·candidates、老用户补居民 backfill、App 端点、App turn 适配器填 `extra_blocks`。卡 §10.1/.2/.6（预设居民数量/版本、老用户补居民映射、App 是否纳入 dreaming 扫描）。
+- **M1-5 内部建号接线** — 原语已就绪（B-②），随 M2 建居民真正调用。
+- **seam② after-turn typed sink** — 随 form-B 居民真正产出 typed fact 再落。
 - **M3 / M4 / M5** — 各待对应 §10 冻结项。
 
-**⚠️ 当前合并阻塞（一个窄技术决定，非产品矛盾）：** PR #44 与 main 已合并的 **#42「App/账号收敛」在用户面并不矛盾**——「一真人一手机号、一 App 一个用户账号、一个钱包」是二者共同的目标终态（#42 保证一 App 一 active 用户账号；M1 把钱包/配额锚到真人 = 一个钱包）。真正卡点是 **`account` 一词两义**：#42 眼里 account = 用户 App 账号（一个），朝夕相伴眼里每个 AI 居民各要一行 runtime `account`（1–10 个），共用同一张表。M1 靠 `account_owner_bindings` 把「某 account 属哪个真人（花哪个钱包）」解析出来，而 #42 的唯一索引限「一 (真人,App) 一条 active binding」→ 第 2…N 个居民账号解析不到钱包。**唯一待拍板** = 居民 runtime account 怎么挂到真人钱包：A. 居民也发 binding 但索引区分主账号/居民；**B（倾向）. 居民不发 binding，改用 `universes.owner_platform_user_id` 解析**。此项**与 §10 产品冻结无关**，是可单独定的内部接线。
+> ⚠️ **本地 dev PG 污染提示**：本地 dev PG 曾被旧改号（22–26）污染，手动脚本直连 ambient `DATABASE_URL` 会报 `column "app_id" does not exist`——那是 **dev 机 artifact、非代码 bug**（fresh 测试库/生产只见 #42 的 22/23/24，按序应用 1–29 正确）。`make test-pg` 用隔离临时库，不受影响。
 
 ---
 
-**下一步唯一的钥匙 = 推动 §10 产品冻结**（§10.1 预设居民数量/版本、§10.2/D-08 老用户补居民映射、§10.6 App dreaming 扫描）+ 定账号模型口径。产品口径一冻结，M2-C 即 code-ready。
+## 五、如何从本文档接手
+
+1. **切到分支**：`git checkout feat/companion-world-m0-m1-wallet`（HEAD 应为 `329ce59`，`git status` 干净、领先 origin/main 11 commit）。
+2. **拿秒级反馈**：`make test-unit`，再 `make test`（SQLite 全量，预期 1379 passed / 5 skipped）。
+3. **验 PG 档**：`make test-pg`（全 29 迁移 + 并发不变量）。
+4. **补 1 个 PG 并发用例**：见 §四-A 第 2 条（可仿 `tests/test_billing_concurrency_pg.py`、`tests/test_daily_quota_reservation.py` 的 PG 并发写法）。
+5. **推分支**：`git push` 更新 PR #44 → main；**合并动作等用户明确点头**。
+6. **权威口径**：ADR `tech_design/companion_world_3_0_refactor_design.md`（§12 里程碑 / §7.3 端口 / D-01…D-14）、P1 规范 `..._p1_backend_spec.md`、账号模型 `..._account_model_reconciliation.md`。
+7. **主干下一步唯一钥匙**：推动 §10 产品冻结（§10.1 预设居民数量/版本、§10.2/D-08 老用户补居民映射、§10.6 App dreaming 扫描）——产品口径一冻结，M2-C 即 code-ready。
