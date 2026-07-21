@@ -144,22 +144,22 @@ def test_scheduler_close_then_next_message_seeds_from_last_closed(fresh_db):
     assert (persisted.get("rolling_summary") or "").strip() == seed
 
 
-def test_daily_scan_rotates_both_weixin_and_web_scopes(fresh_db):
-    """§7.1 / Codex ②：dreaming 每日轮转必须同扫微信与 Web 两个 scope，各自按自身
-    active key 归档，各自生成 carryover。否则 __web_active__ 永不轮转。"""
+def test_daily_scan_rotates_weixin_web_and_app_scopes(fresh_db):
+    """§7.1：每日轮转同扫微信、Web、App，按各自 active key 归档且摘要不串线。"""
     from app.session_lifecycle import (
         get_or_create_account_active_session_with_dreaming,
         run_daily_dreaming_scan,
     )
     from app.db import (
         ACCOUNT_ACTIVE_SESSION_KEY,
+        APP_ACTIVE_SESSION_KEY,
         WEB_ACTIVE_SESSION_KEY,
         insert_message,
         get_session,
     )
 
-    account_id = "acc-dualscope"
-    # day1：同一账号分别在微信 scope 与 Web scope 各开一条 active session。
+    account_id = "acc-triscope"
+    # day1：同一账号分别在微信、Web 与 App scope 各开一条 active session。
     wx = get_or_create_account_active_session_with_dreaming(
         account_id=account_id, channel="openclaw-weixin", sender_id="s",
         sender_name=None, chat_id="c", business_day="2026-05-24",
@@ -169,27 +169,47 @@ def test_daily_scan_rotates_both_weixin_and_web_scopes(fresh_db):
         sender_name=None, chat_id=None, business_day="2026-05-24",
         active_session_key=WEB_ACTIVE_SESSION_KEY,
     )["session"]
+    app = get_or_create_account_active_session_with_dreaming(
+        account_id=account_id, channel="native", sender_id="s",
+        sender_name=None, chat_id=None, business_day="2026-05-24",
+        active_session_key=APP_ACTIVE_SESSION_KEY,
+    )["session"]
     assert wx["session_key"] == ACCOUNT_ACTIVE_SESSION_KEY
     assert web["session_key"] == WEB_ACTIVE_SESSION_KEY
-    assert wx["id"] != web["id"]
-    for sid, content in ((wx["id"], "微信侧昨天的对话"), (web["id"], "Web 侧昨天的对话")):
+    assert app["session_key"] == APP_ACTIVE_SESSION_KEY
+    assert len({wx["id"], web["id"], app["id"]}) == 3
+    scoped_content = (
+        (wx["id"], "微信侧唯一内容"),
+        (web["id"], "Web 侧唯一内容"),
+        (app["id"], "App 侧唯一内容"),
+    )
+    for sid, content in scoped_content:
         insert_message(
             account_id=account_id, session_id=int(sid), message_id=f"m-{sid}",
             reply_to_message_id=None, direction="inbound", role="user",
             message_type="text", content=content,
         )
 
-    # day2 04:05 scheduler 扫描：两 scope 的到期 active 都应被关闭。
+    # day2 04:05 scheduler 扫描：三个 scope 的到期 active 都应被关闭。
     scan = run_daily_dreaming_scan(now=datetime(2026, 5, 25, 4, 5, 0))
-    assert scan["scanned"] >= 2
+    assert scan["scanned"] >= 3
 
     closed_wx = get_session(session_id=int(wx["id"]))
     closed_web = get_session(session_id=int(web["id"]))
+    closed_app = get_session(session_id=int(app["id"]))
     assert closed_wx["status"] == "closed"
     assert closed_web["status"] == "closed"
+    assert closed_app["status"] == "closed"
     # 各自按自身 scope 前缀归档（互不串）。
     assert closed_wx["session_key"] == f"{ACCOUNT_ACTIVE_SESSION_KEY}:{wx['id']}"
     assert closed_web["session_key"] == f"{WEB_ACTIVE_SESSION_KEY}:{web['id']}"
+    assert closed_app["session_key"] == f"{APP_ACTIVE_SESSION_KEY}:{app['id']}"
+    closed = (closed_wx, closed_web, closed_app)
+    contents = tuple(content for _sid, content in scoped_content)
+    for index, session in enumerate(closed):
+        summary = session["carryover_summary"]
+        assert contents[index] in summary
+        assert all(other not in summary for other in contents if other != contents[index])
 
 
 def test_carryover_seed_isolated_by_scope(fresh_db):
@@ -228,5 +248,4 @@ def test_carryover_seed_isolated_by_scope(fresh_db):
     assert get_latest_closed_carryover_for_account(
         account_id=account_id
     ) == "微信侧的延续摘要"
-
 

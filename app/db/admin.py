@@ -848,8 +848,9 @@ def list_active_sessions_for_business_day_before(
 
     ``active_keys`` 指定要扫描的合法 active scope（§7.1 / Codex ②）。默认扫描
     ``DEFAULT_ACTIVE_SESSION_KEYS``（微信 ``__account_active__`` + Web
-    ``__web_active__``），使两 scope 的到期 active session 都能被每日轮转/dreaming 关闭；
-    否则 Web scope 永不轮转。默认含微信 key，故对纯微信数据行为等价现状。
+    ``__web_active__`` + App ``__app_active__``），使三个 scope 的到期 active session 都能
+    被每日轮转/dreaming 关闭；否则漏登记的 scope 永不轮转。默认含微信 key，故对纯微信
+    数据行为等价现状。
     """
     keys = list(active_keys) if active_keys else list(DEFAULT_ACTIVE_SESSION_KEYS)
     placeholders = ", ".join("?" for _ in keys)
@@ -888,5 +889,4 @@ def list_active_sessions_for_business_day_before(
                 (*keys, business_day, safe_limit),
             ).fetchall()
     return [dict(row) for row in rows]
-
 

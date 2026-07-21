@@ -23,9 +23,15 @@ ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
 # Web 渠道短期会话隔离键（conversation_scope，§7.1）。与 app.channels 的 web cap
 # active_session_key 取值必须一致（两处各留一份字面量以避免 channels↔db 循环依赖）。
 WEB_ACTIVE_SESSION_KEY = "__web_active__"
+# App 原生渠道短期会话隔离键；与 app.channels 的 app cap 保持字面量一致，避免反向依赖。
+APP_ACTIVE_SESSION_KEY = "__app_active__"
 # dreaming 每日轮转默认扫描的所有合法 active scope。新增 scope 时在此登记，否则该 scope
 # 的 active session 永不轮转/dreaming（§7.1 / Codex ②）。
-DEFAULT_ACTIVE_SESSION_KEYS = (ACCOUNT_ACTIVE_SESSION_KEY, WEB_ACTIVE_SESSION_KEY)
+DEFAULT_ACTIVE_SESSION_KEYS = (
+    ACCOUNT_ACTIVE_SESSION_KEY,
+    WEB_ACTIVE_SESSION_KEY,
+    APP_ACTIVE_SESSION_KEY,
+)
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
 SHELL_MICROS_PER_SHELL = 1_000_000
 SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
@@ -2368,6 +2374,26 @@ def _migration_0029_universe_memory_l3(conn: Connection) -> None:
     )
 
 
+def _migration_0030_companion_world_candidates(conn: Connection) -> None:
+    """M2-C：冻结初始候选目录顺序与同世界模板关系唯一性。
+
+    ``initial_candidate_rank`` 只约束 active 模板的非空 rank，允许 retired 历史版本保留
+    原 rank；同一世界的非 legacy resident 不得重复引用同一模板。legacy backfill 的多个
+    既有 account 共用一条哨兵模板，因此明确从后一个偏唯一索引豁免。
+    """
+    _ensure_column(conn, "character_templates", "initial_candidate_rank", "INTEGER")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_templates_active_initial_rank
+            ON character_templates(initial_candidate_rank)
+            WHERE status = 'active' AND initial_candidate_rank IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_template_nonlegacy
+            ON universe_residents(universe_id, character_template_id)
+            WHERE origin <> 'legacy';
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2393,6 +2419,7 @@ _MIGRATIONS = [
     (27, _migration_0027_daily_quota_reservations),
     (28, _migration_0028_companion_world_core),
     (29, _migration_0029_universe_memory_l3),
+    (30, _migration_0030_companion_world_candidates),
 ]
 
 
