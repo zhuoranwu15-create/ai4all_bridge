@@ -14,6 +14,7 @@ from app.domains.companion_world import (
     TemplateDraft,
 )
 from app.platform import SqlCompanionWorldRepository
+from tests.factories import make_resident_account
 
 
 def _draft(name: str) -> TemplateDraft:
@@ -79,3 +80,49 @@ def test_concurrent_tenth_and_eleventh_resident_only_one_commits(fresh_db):
         assert conn.execute(
             "SELECT COUNT(*) c FROM character_templates WHERE name LIKE '并发居民%'"
         ).fetchone()["c"] == 1
+
+
+def test_two_residents_concurrently_append_l3_without_overwrite(fresh_db):
+    if not is_postgres():
+        pytest.skip("L3 多 writer append 并发正确性以 PG 为准")
+
+    user_id = db.create_or_get_platform_user_by_phone(
+        phone="19950002002", display_name="L3 并发用户"
+    )["id"]
+    account_a = make_resident_account(user_id, "L3居民A")
+    account_b = make_resident_account(user_id, "L3居民B")
+    scope_a = db.resolve_resident_memory_scope(runtime_account_id=account_a)
+    scope_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)
+    assert scope_a["universe_id"] == scope_b["universe_id"]
+    universe_id = scope_a["universe_id"]
+    barrier = threading.Barrier(2)
+
+    def _append(account_id: str, resident_id: str, marker: str) -> str:
+        barrier.wait(timeout=5)
+        return db.append_universe_fact(
+            universe_id=universe_id,
+            fact_type="user_event",
+            payload_json=json.dumps({"marker": marker}),
+            source_account_id=account_id,
+            source_resident_id=resident_id,
+            source_message_id=f"message-{marker}",
+            occurred_at="2026-07-22T10:00:00+08:00",
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = (
+            executor.submit(
+                _append, account_a, scope_a["resident_id"], "a"
+            ),
+            executor.submit(
+                _append, account_b, scope_b["resident_id"], "b"
+            ),
+        )
+        fact_ids = {future.result(timeout=10) for future in futures}
+
+    facts = db.read_universe_facts(universe_id=universe_id)
+    assert {item["id"] for item in facts} == fact_ids
+    assert {json.loads(item["payload_json"])["marker"] for item in facts} == {
+        "a",
+        "b",
+    }

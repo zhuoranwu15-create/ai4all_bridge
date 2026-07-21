@@ -12,7 +12,10 @@ from app.time_utils import (
     beijing_weekday_str,
     format_history_timestamp,
 )
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
 
 from app.agent_self_state import build_agent_self_state_block
 from app.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
@@ -917,6 +920,7 @@ def _prepare_turn(
         business_day=business_day,
         active_session_key=cap.active_session_key,
         update_account_channel=identity.channel not in {CHANNEL_APP, CHANNEL_WEB},
+        memory_sink=ctx.memory_sink,
     )
     binding = upsert_channel_binding(
         account_id=account_id,
@@ -2199,6 +2203,8 @@ class ChannelTurnInput:
     # 组装时退化 no-op；form-B（App）入口随 M2-C 由域层
     # app.domains.companion_world.l3_context.read_universe_context 填入。
     extra_blocks: List[ContextBlock] = field(default_factory=list)
+    # 可选 typed memory 出向接缝；form-A 默认 None，Companion World App 由组合根注入。
+    memory_sink: Optional["MemorySink"] = None
 
 
 def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:

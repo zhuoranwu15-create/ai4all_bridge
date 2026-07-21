@@ -5,5 +5,13 @@
 from app.platform.companion_world_repository import (  # noqa: F401
     SqlCompanionWorldRepository,
 )
+from app.platform.companion_world_memory import (  # noqa: F401
+    build_companion_world_memory_sink,
+    compact_companion_world_memory_batch,
+)
 
-__all__ = ["SqlCompanionWorldRepository"]
+__all__ = [
+    "SqlCompanionWorldRepository",
+    "build_companion_world_memory_sink",
+    "compact_companion_world_memory_batch",
+]

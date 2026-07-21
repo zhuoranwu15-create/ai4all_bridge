@@ -1,7 +1,7 @@
 """现有 turn runtime 的默认 AgentRuntimePort adapter。"""
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from app.channels import CHANNEL_APP, CHANNELS
 from app.db.companion_world import resolve_conversation_for_owner
@@ -9,6 +9,9 @@ from app.identity import ResolvedIdentity
 from app.prompt_builder import ContextBlock
 from app.schemas import OpenClawTurnResponse
 from app.turn_service import ChannelTurnInput, run_turn_for_account
+
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
 
 
 class DefaultAgentRuntimeAdapter:
@@ -19,9 +22,11 @@ class DefaultAgentRuntimeAdapter:
         universe_context_loader: Optional[
             Callable[[str], Optional[ContextBlock]]
         ] = None,
+        memory_sink: Optional["MemorySink"] = None,
     ) -> None:
         # loader 由产品 composition root 注入；Runtime 不反向 import app.domains（D-06）。
         self._universe_context_loader = universe_context_loader
+        self._memory_sink = memory_sink
 
     def send_turn(self, ctx: ChannelTurnInput) -> OpenClawTurnResponse:
         """执行已由上层规范化并注入 context 的一次 turn。"""
@@ -82,5 +87,6 @@ class DefaultAgentRuntimeAdapter:
                 },
                 sender_name=sender_name,
                 extra_blocks=extra_blocks,
+                memory_sink=self._memory_sink,
             )
         )

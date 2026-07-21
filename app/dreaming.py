@@ -5,9 +5,10 @@ import logging
 import re
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from app.config import settings
+from app.time_utils import beijing_now
 from app.db import (
     create_dreaming_run,
     get_dreaming_memory_item,
@@ -29,6 +30,9 @@ from app.user_profiles import (
     read_context_file,
     write_context_file,
 )
+
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
 
 
 logger = logging.getLogger("ai4all.dreaming")
@@ -68,6 +72,7 @@ DREAMING_JSON_SCHEMA: Dict[str, Any] = {
             "items": {
                 "type": "object",
                 "required": [
+                    "fact_type",
                     "operation",
                     "target_file",
                     "category",
@@ -78,6 +83,17 @@ DREAMING_JSON_SCHEMA: Dict[str, Any] = {
                     "reason",
                 ],
                 "properties": {
+                    "fact_type": {
+                        "type": "string",
+                        "enum": [
+                            "user_identity",
+                            "user_preference",
+                            "user_profile_derived",
+                            "user_event",
+                            "relationship",
+                            "commitment",
+                        ],
+                    },
                     # 枚举值必须严格使用，便于下游自动应用判定（详见 prompt 说明）。
                     "operation": {
                         "type": "string",
@@ -112,6 +128,14 @@ ALLOWED_TARGET_FILES = {"MEMORY.md", "USER.md", "SOUL.md", "IDENTITY.md"}
 ALLOWED_OPERATIONS = {"add", "update", "delete", "downgrade"}
 ALLOWED_IMPORTANCE = {"high", "medium", "low"}
 ALLOWED_SENSITIVITY = {"normal", "sensitive", "highly_sensitive"}
+ALLOWED_FACT_TYPES = {
+    "user_identity",
+    "user_preference",
+    "user_profile_derived",
+    "user_event",
+    "relationship",
+    "commitment",
+}
 
 # 上下文文件初始占位符行，写入真实记忆时应被替换掉（见 _append_memory_line）。
 _MEMORY_PLACEHOLDER = "- 暂无"
@@ -229,11 +253,22 @@ def _normalize_dreaming_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
             sensitivity = "normal"
         category = _clean_text(raw_item.get("category")).lower() or "other"
+        raw_fact_type = _clean_text(raw_item.get("fact_type")).lower()
+        fact_type = raw_fact_type
+        if fact_type not in ALLOWED_FACT_TYPES:
+            # 兼容旧/异常模型输出：per-account 记忆仍按原规则应用，但共享路由会拒绝
+            # unclassified，避免缺少产品评审的新类型误进 L3。
+            fact_type = "unclassified"
+            logger.warning(
+                "dreaming: 缺失或非法 fact_type %r，L3 路由将 fail-closed",
+                raw_fact_type,
+            )
         reason = _clean_text(raw_item.get("reason"))
         source_message_ids = _coerce_string_list(raw_item.get("source_message_ids"))
         source_daily_note_dates = _coerce_string_list(raw_item.get("source_daily_note_dates"))
         items.append(
             {
+                "fact_type": fact_type,
                 "operation": operation,
                 "target_file": target_file,
                 "category": category[:80],
@@ -369,6 +404,13 @@ def _build_dreaming_prompt(
 - 如果没有长期记忆片段，输出空数组。
 
 每个 long_term_memory_items 元素的枚举字段必须严格使用以下英文取值，不要翻译、不要自创：
+- fact_type：
+  - user_identity：真人称呼、身份、基本信息
+  - user_preference：偏好、口味、禁忌
+  - user_profile_derived：派生画像、稳定性格或关系网认知
+  - user_event：关于用户的客观事件或里程碑（不是聊天原文）
+  - relationship：只属于当前 AI 与用户的关系阶段或共同历史
+  - commitment：当前 AI 对用户作出的承诺
 - operation：add | update | delete | downgrade
 - target_file：MEMORY.md（通用长期记忆）| USER.md（用户称呼/身份/偏好）| SOUL.md | IDENTITY.md
 - importance：high | medium | low
@@ -623,6 +665,8 @@ def _create_items_from_payload(
     payload: Dict[str, Any],
     actor_type: str,
     actor_id: Optional[str],
+    memory_sink: Optional["MemorySink"],
+    source_business_day: Optional[str],
 ) -> List[Dict[str, Any]]:
     created: List[Dict[str, Any]] = []
     for item in payload.get("long_term_memory_items", []):
@@ -643,6 +687,7 @@ def _create_items_from_payload(
             sensitivity=item["sensitivity"],
             reason=item.get("reason"),
             metadata={
+                "fact_type": item["fact_type"],
                 "source_message_ids": item.get("source_message_ids") or [],
                 "source_daily_note_dates": source_daily_note_dates,
             },
@@ -661,8 +706,68 @@ def _create_items_from_payload(
                 "sensitivity": db_item["sensitivity"],
             },
         )
-        created.append(_apply_memory_item(db_item, actor_type=actor_type, actor_id=actor_id))
+        applied_item = _apply_memory_item(
+            db_item, actor_type=actor_type, actor_id=actor_id
+        )
+        _emit_memory_item(
+            applied_item,
+            memory_sink=memory_sink,
+            source_business_day=source_business_day,
+        )
+        created.append(applied_item)
     return created
+
+
+def _emit_memory_item(
+    item: Dict[str, Any],
+    *,
+    memory_sink: Optional["MemorySink"],
+    source_business_day: Optional[str],
+) -> None:
+    """把已应用的蒸馏事实发往可选 typed sink；sink 失败不回滚 per-account 记忆。"""
+    if memory_sink is None or item.get("apply_status") != "applied":
+        return
+    from app.agent_runtime.ports import MemoryEvent, MemoryProvenance
+
+    metadata = item.get("metadata") or {}
+    source_message_ids = metadata.get("source_message_ids") or []
+    now = beijing_now()
+    event = MemoryEvent(
+        fact_type=str(metadata.get("fact_type") or "unclassified"),
+        payload={
+            "memory_text": str(item["memory_text"]),
+            "operation": str(item["operation"]),
+            "target_file": str(item["target_file"]),
+            "category": str(item["category"]),
+        },
+        provenance=MemoryProvenance(
+            source_account_id=str(item["account_id"]),
+            turn_message_id=(
+                str(source_message_ids[0]) if source_message_ids else None
+            ),
+            session_id=(
+                int(item["source_session_id"])
+                if item.get("source_session_id") is not None
+                else None
+            ),
+            business_day=str(
+                source_business_day
+                or item.get("source_daily_note_date")
+                or now.date().isoformat()
+            ),
+            occurred_at=now.isoformat(timespec="seconds"),
+        ),
+    )
+    try:
+        memory_sink.emit(event)
+    except Exception as exc:
+        logger.exception(
+            "dreaming typed memory sink failed account=%s item=%s fact_type=%s error=%s",
+            item.get("account_id"),
+            item.get("id"),
+            event.fact_type,
+            exc,
+        )
 
 
 def _source_files_metadata(records: List[Dict[str, object]]) -> List[Dict[str, Any]]:
@@ -733,8 +838,9 @@ def run_dreaming(
     actor_type: str = "admin",
     actor_id: Optional[str] = None,
     allow_fallback: bool = False,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, object]:
-    """Run LLM Dreaming for one account and auto-apply eligible memory items."""
+    """Run Dreaming, apply per-account memory, and emit eligible distilled facts."""
     from app.llm import get_active_llm_model
     from app.llm_providers import TASK_DREAMING, tier_for_task
 
@@ -883,6 +989,8 @@ def run_dreaming(
         payload=payload,
         actor_type=actor_type,
         actor_id=actor_id,
+        memory_sink=memory_sink,
+        source_business_day=source_business_day,
     )
     applied_count = sum(1 for item in items if item.get("apply_status") == "applied")
     skipped_count = sum(1 for item in items if item.get("apply_status") == "skipped")

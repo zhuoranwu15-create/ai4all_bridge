@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 from app.time_utils import beijing_now
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from app.config import settings
 from app.db import (
@@ -15,8 +15,18 @@ from app.db import (
     update_session_rolling_summary,
 )
 
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
+
 
 logger = logging.getLogger("ai4all.session_lifecycle")
+_default_memory_sink: Optional["MemorySink"] = None
+
+
+def configure_memory_sink(memory_sink: Optional["MemorySink"]) -> None:
+    """配置懒轮转使用的进程级默认 typed sink；传 None 清除。"""
+    global _default_memory_sink
+    _default_memory_sink = memory_sink
 
 
 def business_day_for(
@@ -52,6 +62,7 @@ def _fallback_close_summary(
     session_id: int,
     close_reason: str,
     source_business_day: Optional[str],
+    memory_sink: Optional["MemorySink"],
 ) -> Dict[str, Any]:
     from app.dreaming import DREAMING_PROMPT_VERSION, run_dreaming
 
@@ -65,6 +76,7 @@ def _fallback_close_summary(
         actor_type="system",
         actor_id="session_lifecycle",
         allow_fallback=True,
+        memory_sink=memory_sink,
     )
     summary = result.get("session_summary") or {}
     from app.llm import get_active_llm_model
@@ -85,15 +97,20 @@ def _rotate_session_with_dreaming(
     *,
     session: Dict[str, Any],
     close_reason: str,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     account_id = str(session["account_id"])
     session_id = int(session["id"])
     source_business_day = session.get("business_day")
+    effective_memory_sink = (
+        memory_sink if memory_sink is not None else _default_memory_sink
+    )
     summary = _fallback_close_summary(
         account_id=account_id,
         session_id=session_id,
         close_reason=close_reason,
         source_business_day=source_business_day,
+        memory_sink=effective_memory_sink,
     )
     # 按 session **自身** 的 active key 归档（§7.1）：被轮转的 session 一定是某个 scope
     # 的 active session，其 session_key 即该 scope 的 active key（微信 __account_active__
@@ -123,6 +140,7 @@ def get_or_create_account_active_session_with_dreaming(
     business_day: Optional[str] = None,
     active_session_key: str = ACCOUNT_ACTIVE_SESSION_KEY,
     update_account_channel: bool = True,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     """Return active session, rotating with LLM Dreaming before creating a new one.
 
@@ -156,6 +174,7 @@ def get_or_create_account_active_session_with_dreaming(
     summary = _rotate_session_with_dreaming(
         session=session,
         close_reason=close_reason,
+        memory_sink=memory_sink,
     )
     next_state = get_or_create_session(
         account_id=account_id,
@@ -215,6 +234,7 @@ def run_daily_dreaming_scan(
     now: Optional[datetime] = None,
     limit: int = 100,
     node_id: Optional[str] = None,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     """Scan active sessions from previous business days and rotate them.
 
@@ -236,6 +256,7 @@ def run_daily_dreaming_scan(
             _rotate_session_with_dreaming(
                 session=session,
                 close_reason="daily_dreaming",
+                memory_sink=memory_sink,
             )
             refreshed = get_session(session_id=int(session["id"]))
             results.append(

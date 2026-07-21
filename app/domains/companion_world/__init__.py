@@ -19,11 +19,15 @@ from app.domains.companion_world.contracts import (  # noqa: F401
     WorldRepository,
 )
 from app.domains.companion_world.service import CompanionWorldService  # noqa: F401
+from app.domains.companion_world.memory_sink import (  # noqa: F401
+    CompanionWorldMemorySink,
+)
 
 __all__ = [
     "BootstrapResult",
     "CandidateRecord",
     "CompanionWorldError",
+    "CompanionWorldMemorySink",
     "CompanionWorldService",
     "ConversationMessage",
     "ConversationSummary",

@@ -106,6 +106,59 @@ def test_rotation_seeds_new_session_rolling_summary_from_carryover(fresh_db):
     assert int(persisted["rolling_summary_upto_id"]) == 0
 
 
+def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch):
+    from app.db import insert_message
+    from app.session_lifecycle import (
+        configure_memory_sink,
+        get_or_create_account_active_session_with_dreaming,
+    )
+
+    account_id = "acc-default-memory-sink"
+    first = get_or_create_account_active_session_with_dreaming(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id="s",
+        sender_name=None,
+        chat_id="c",
+        business_day="2026-05-24",
+    )["session"]
+    insert_message(
+        account_id=account_id,
+        session_id=int(first["id"]),
+        message_id="default-sink-message",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="用户喜欢喝茶",
+    )
+    marker_sink = object()
+    captured = {}
+
+    def fake_run_dreaming(**kwargs):
+        captured.update(kwargs)
+        return {
+            "session_summary": {"carryover_summary": "继续聊喝茶偏好。"},
+            "reason": None,
+        }
+
+    monkeypatch.setattr("app.dreaming.run_dreaming", fake_run_dreaming)
+    configure_memory_sink(marker_sink)
+    try:
+        get_or_create_account_active_session_with_dreaming(
+            account_id=account_id,
+            channel="openclaw-weixin",
+            sender_id="s",
+            sender_name=None,
+            chat_id="c",
+            business_day="2026-05-25",
+        )
+    finally:
+        configure_memory_sink(None)
+
+    assert captured["memory_sink"] is marker_sink
+
+
 def test_scheduler_close_then_next_message_seeds_from_last_closed(fresh_db):
     """P1#1：4 点 scheduler 只关闭旧 session（不即时 seed），下一条消息懒创建的新 active
     应从最近已关闭 session 的 carryover 补种 rolling_summary——否则 scheduler 路径丢失前一天延续。"""
@@ -248,4 +301,3 @@ def test_carryover_seed_isolated_by_scope(fresh_db):
     assert get_latest_closed_carryover_for_account(
         account_id=account_id
     ) == "微信侧的延续摘要"
-

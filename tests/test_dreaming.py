@@ -77,6 +77,7 @@ def test_run_dreaming_writes_run_items_events_and_applies_memory(fresh_db, tmp_p
     payload = _llm_payload(
         items=[
             {
+                "fact_type": "user_identity",
                 "operation": "add",
                 "target_file": "MEMORY.md",
                 "category": "profile",
@@ -121,6 +122,7 @@ def test_run_dreaming_skips_sensitive_and_low_confidence_items(fresh_db, tmp_pat
     payload = _llm_payload(
         items=[
             {
+                "fact_type": "user_event",
                 "operation": "add",
                 "target_file": "MEMORY.md",
                 "category": "finance",
@@ -131,6 +133,7 @@ def test_run_dreaming_skips_sensitive_and_low_confidence_items(fresh_db, tmp_pat
                 "reason": "金融敏感信息",
             },
             {
+                "fact_type": "user_preference",
                 "operation": "add",
                 "target_file": "MEMORY.md",
                 "category": "other",
@@ -166,6 +169,7 @@ def test_rollback_applied_memory_item_restores_previous_file(fresh_db, tmp_path)
     payload = _llm_payload(
         items=[
             {
+                "fact_type": "user_preference",
                 "operation": "add",
                 "target_file": "MEMORY.md",
                 "category": "preference",
@@ -283,6 +287,7 @@ def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path)
     payload = _llm_payload(
         items=[
             {
+                "fact_type": "user_identity",
                 "operation": "add",
                 "target_file": "MEMORY.md",
                 "category": "preference",
@@ -340,6 +345,7 @@ def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, t
     payload = _llm_payload(
         items=[
             {
+                "fact_type": "user_identity",
                 "operation": "add",
                 "target_file": "USER.md",
                 "category": "identity",

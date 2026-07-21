@@ -28,7 +28,10 @@ from app.domains.companion_world import (
     ResidentSelection,
     TemplateDraft,
 )
-from app.platform import SqlCompanionWorldRepository
+from app.platform import (
+    SqlCompanionWorldRepository,
+    build_companion_world_memory_sink,
+)
 from app.time_utils import beijing_now
 
 router = APIRouter(prefix="/v1", tags=["companion-world"])
@@ -440,7 +443,8 @@ def conversation_turn(
             adapter = DefaultAgentRuntimeAdapter(
                 universe_context_loader=lambda universe_id: read_universe_context(
                     universe_id=universe_id
-                )
+                ),
+                memory_sink=build_companion_world_memory_sink(),
             )
             result = adapter.send_companion_world_turn(
                 conversation_id=target.conversation_id,

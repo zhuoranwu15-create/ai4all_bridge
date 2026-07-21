@@ -11,9 +11,11 @@ import 本模块，须经 app.agent_runtime 端口。二者同名不同包、互
 M2-A 只落存储 + 纯 DB 原语（无 live 调用方、零行为变更）；L3 读注入/sink 路由（M2-B）、
 居民 bootstrap/confirm/backfill（M2-C，待 ADR §10.1/.2/.6 产品冻结）为后续刀。
 """
+import json
+import re
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, advisory_lock_key, connect
@@ -47,8 +49,11 @@ __all__ = [
     "list_conversations_for_owner",
     "try_conversation_turn_lock",
     "list_active_account_ids_for_user",
+    "resolve_resident_memory_scope",
     "append_universe_fact",
     "read_universe_facts",
+    "list_universe_ids_for_memory_compact",
+    "compact_universe_facts",
 ]
 
 _SQLITE_CONVERSATION_LOCKS: Dict[str, threading.Lock] = {}
@@ -761,6 +766,22 @@ def list_active_account_ids_for_user(
     return [str(row["account_id"]) for row in rows]
 
 
+def resolve_resident_memory_scope(
+    *, runtime_account_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """按 runtime account 解析受管 resident/universe；form-A account 返回 None。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT id AS resident_id, universe_id, status
+            FROM universe_residents
+            WHERE runtime_account_id = ? AND status IN ('active', 'offline')
+            """,
+            (runtime_account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 # ---------------------------------------------------------------------------
 # L3 universe_memory_facts（append-only typed fact，§2.5 / ADR §6.4 / D-05 / D-06）
 # ---------------------------------------------------------------------------
@@ -853,3 +874,149 @@ def read_universe_facts(
             tuple(params),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_universe_ids_for_memory_compact(
+    *,
+    after_universe_id: Optional[str] = None,
+    limit: int = 100,
+    conn: Optional[Connection] = None,
+) -> Tuple[List[str], Optional[str]]:
+    """稳定分页列出有 active L3 facts 的 universe，并返回下一页游标。"""
+    clean_limit = max(1, min(int(limit), 1000))
+    after_clause = "AND u.id > ?" if after_universe_id else ""
+    params: List[Any] = []
+    if after_universe_id:
+        params.append(after_universe_id)
+    params.append(clean_limit + 1)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            SELECT u.id
+            FROM universes u
+            WHERE EXISTS (
+                SELECT 1 FROM universe_memory_facts f
+                WHERE f.universe_id = u.id AND f.status = 'active'
+            )
+              {after_clause}
+            ORDER BY u.id ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    ids = [str(row["id"]) for row in rows[:clean_limit]]
+    next_cursor = ids[-1] if len(rows) > clean_limit and ids else None
+    # 游标已到尾部时同一轮从头恢复，避免恰逢进程重启时长期停在空页。
+    if not ids and after_universe_id:
+        return list_universe_ids_for_memory_compact(
+            after_universe_id=None,
+            limit=clean_limit,
+            conn=conn,
+        )
+    return ids, next_cursor
+
+
+def _canonical_fact_payload(payload_json: str) -> Optional[str]:
+    """生成 compact 比较/落库共用的规范 JSON；坏 JSON 不参与自动合并。"""
+    try:
+        value = json.loads(payload_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+    def _normalize(item: Any) -> Any:
+        if isinstance(item, dict):
+            return {key: _normalize(item[key]) for key in sorted(item)}
+        if isinstance(item, list):
+            return [_normalize(value) for value in item]
+        if isinstance(item, str):
+            return re.sub(r"\s+", " ", item).strip()
+        return item
+
+    return json.dumps(
+        _normalize(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def compact_universe_facts(
+    *, universe_id: str, conn: Optional[Connection] = None
+) -> Dict[str, Any]:
+    """确定性折叠一个 universe 的 exact-normalized duplicate facts。
+
+    每组重复项新插一条规范行，沿用最新 provenance，并把组内旧行全部标记为
+    superseded；不物理删除。单 writer 重跑时只剩一条 active 行，因此结果幂等。
+    """
+    merged_fact_ids: List[str] = []
+    superseded_count = 0
+    with _tx(conn) as tx:
+        if is_postgres():
+            # 正常部署由 central scheduler 保证单 writer；同键事务锁额外兜住
+            # admin run-once 与定时任务偶发重叠，避免生成两条 active merged 行。
+            tx.execute(
+                "SELECT pg_advisory_xact_lock(?)",
+                (advisory_lock_key("l3-compact:" + str(universe_id)),),
+            )
+        rows = tx.execute(
+            """
+            SELECT * FROM universe_memory_facts
+            WHERE universe_id = ? AND status = 'active'
+            ORDER BY occurred_at ASC, created_at ASC, id ASC
+            """,
+            (universe_id,),
+        ).fetchall()
+        groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        for raw_row in rows:
+            row = dict(raw_row)
+            canonical_payload = _canonical_fact_payload(str(row["payload_json"]))
+            if canonical_payload is None:
+                continue
+            groups.setdefault(
+                (str(row["fact_type"]), canonical_payload), []
+            ).append(row)
+
+        for (fact_type, canonical_payload), duplicates in sorted(groups.items()):
+            if len(duplicates) < 2:
+                continue
+            latest = duplicates[-1]
+            merged_id = _new_id("uf")
+            tx.execute(
+                """
+                INSERT INTO universe_memory_facts(
+                    id, universe_id, fact_type, payload_json,
+                    source_account_id, source_resident_id, source_message_id,
+                    occurred_at, status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                """,
+                (
+                    merged_id,
+                    universe_id,
+                    fact_type,
+                    canonical_payload,
+                    latest.get("source_account_id"),
+                    latest.get("source_resident_id"),
+                    latest.get("source_message_id"),
+                    latest["occurred_at"],
+                ),
+            )
+            duplicate_ids = [str(item["id"]) for item in duplicates]
+            placeholders = ",".join("?" for _ in duplicate_ids)
+            tx.execute(
+                f"""
+                UPDATE universe_memory_facts
+                SET status = 'superseded', superseded_by = ?
+                WHERE universe_id = ? AND status = 'active'
+                  AND id IN ({placeholders})
+                """,
+                (merged_id, universe_id, *duplicate_ids),
+            )
+            merged_fact_ids.append(merged_id)
+            superseded_count += len(duplicate_ids)
+
+    return {
+        "universe_id": universe_id,
+        "merged_groups": len(merged_fact_ids),
+        "superseded_facts": superseded_count,
+        "merged_fact_ids": merged_fact_ids,
+    }
