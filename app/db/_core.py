@@ -1980,7 +1980,7 @@ def _migration_0021_dynamic_reminders(conn: Connection) -> None:
     )
 
 
-def _migration_0022_wallet_unique_platform_user(conn: Connection) -> None:
+def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
     """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
 
     见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
@@ -2026,7 +2026,7 @@ def _migration_0022_wallet_unique_platform_user(conn: Connection) -> None:
         ).fetchone()
         if primary is None:
             logger.warning(
-                "m0022 skip merge: primary wallet undefined for platform_user=%s "
+                "m0025 skip merge: primary wallet undefined for platform_user=%s "
                 "(precheck should have blocked this)",
                 user_id,
             )
@@ -2082,7 +2082,7 @@ def _migration_0022_wallet_unique_platform_user(conn: Connection) -> None:
     )
 
 
-def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
+def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
     """D-09 M1-3/M1-4：daily 配额计数键从 account_id 上迁到 platform_user（一真人一套配额）。
 
     见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
@@ -2166,7 +2166,7 @@ def _migration_0023_daily_usage_platform_user(conn: Connection) -> None:
     )
 
 
-def _migration_0024_daily_quota_reservations(conn: Connection) -> None:
+def _migration_0027_daily_quota_reservations(conn: Connection) -> None:
     """D-09 下半刀：daily 配额原子预占的存储载体（每 reservation 一行 + TTL）。
 
     见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
@@ -2194,7 +2194,7 @@ def _migration_0024_daily_quota_reservations(conn: Connection) -> None:
     )
 
 
-def _migration_0025_companion_world_core(conn: Connection) -> None:
+def _migration_0028_companion_world_core(conn: Connection) -> None:
     """M2-A：朝夕相伴 P1 多居民核心四表（universe/template/resident/conversation）。
 
     见 companion_world_p1_backend_spec.md §2.1–2.4。一真人一 home world（universes
@@ -2275,7 +2275,7 @@ def _migration_0025_companion_world_core(conn: Connection) -> None:
     )
 
 
-def _migration_0026_universe_memory_l3(conn: Connection) -> None:
+def _migration_0029_universe_memory_l3(conn: Connection) -> None:
     """M2-A：L3 共享沉淀记忆承载表 universe_memory_facts（append-only typed fact）。
 
     见 companion_world_p1_backend_spec.md §2.5 + ADR §6.4/D-05/D-06。L3 锚 universe_id（非
@@ -2326,11 +2326,11 @@ _MIGRATIONS = [
     (19, _migration_0019_campaign_ai_name_preset),
     (20, _migration_0020_campaign_visits),
     (21, _migration_0021_dynamic_reminders),
-    (22, _migration_0022_wallet_unique_platform_user),
-    (23, _migration_0023_daily_usage_platform_user),
-    (24, _migration_0024_daily_quota_reservations),
-    (25, _migration_0025_companion_world_core),
-    (26, _migration_0026_universe_memory_l3),
+    (25, _migration_0025_wallet_unique_platform_user),
+    (26, _migration_0026_daily_usage_platform_user),
+    (27, _migration_0027_daily_quota_reservations),
+    (28, _migration_0028_companion_world_core),
+    (29, _migration_0029_universe_memory_l3),
 ]
 
 

@@ -1,4 +1,4 @@
-"""m0022 钱包合并迁移的直接单测（app/db/_core._migration_0022_wallet_unique_platform_user）。
+"""m0025 钱包合并迁移的直接单测（app/db/_core._migration_0025_wallet_unique_platform_user）。
 
 fresh_db 建好时 m0022 已在空库上跑过（合并分支 = no-op），故合并逻辑本身无覆盖。此处手工
 构造「迁移前多钱包老用户」态（DROP 局部唯一索引 + raw 插入第二个 active 钱包及其
@@ -14,7 +14,7 @@ ledger/cost_events），再**直接调用**迁移函数，验证 money 路径的
 走内存/临时 SQLite（fresh_db）。
 """
 import app.db as db
-from app.db._core import _migration_0022_wallet_unique_platform_user
+from app.db._core import _migration_0025_wallet_unique_platform_user
 
 _B1 = 1_000  # 主钱包（a1）余额
 _B2 = 2_500  # 被并钱包（a2）余额
@@ -88,7 +88,7 @@ def test_m0022_merges_multi_wallet_user(fresh_db):
         )
 
     with db.connect() as conn:
-        _migration_0022_wallet_unique_platform_user(conn)
+        _migration_0025_wallet_unique_platform_user(conn)
 
     with db.connect() as conn:
         active = conn.execute(
@@ -128,10 +128,10 @@ def test_m0022_is_idempotent(fresh_db):
             conn, user_id=user_id, a1=a1, a2=a2
         )
     with db.connect() as conn:
-        _migration_0022_wallet_unique_platform_user(conn)
+        _migration_0025_wallet_unique_platform_user(conn)
     # 再跑一次（模拟重复应用）。
     with db.connect() as conn:
-        _migration_0022_wallet_unique_platform_user(conn)
+        _migration_0025_wallet_unique_platform_user(conn)
 
     with db.connect() as conn:
         active = conn.execute(

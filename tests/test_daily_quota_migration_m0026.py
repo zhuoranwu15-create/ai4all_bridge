@@ -1,4 +1,4 @@
-"""m0023 daily 配额上迁的直接单测（app/db/_core._migration_0023_daily_usage_platform_user）。
+"""m0026 daily 配额上迁的直接单测（app/db/_core._migration_0026_daily_usage_platform_user）。
 
 fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故合并逻辑本身无覆盖。此处手工
 构造「迁移前态」（DROP 唯一索引 + raw 插入同一真人两号的当日 NULL-pu 行），再**直接调用**
@@ -12,7 +12,7 @@ fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故�
 走内存/临时 SQLite（fresh_db）。
 """
 import app.db as db
-from app.db._core import _migration_0023_daily_usage_platform_user
+from app.db._core import _migration_0026_daily_usage_platform_user
 
 _DATE = "2026-07-19"
 _C1 = 3  # a1 当日计数
@@ -48,7 +48,7 @@ def test_m0023_backfills_and_merges_multi_account_daily(fresh_db):
         _seed_pre_migration_daily(conn, a1=a1, a2=a2)
 
     with db.connect() as conn:
-        _migration_0023_daily_usage_platform_user(conn)
+        _migration_0026_daily_usage_platform_user(conn)
 
     with db.connect() as conn:
         rows = conn.execute(
@@ -92,7 +92,7 @@ def test_m0023_orphan_no_binding_backfills_account_id(fresh_db):
         )
 
     with db.connect() as conn:
-        _migration_0023_daily_usage_platform_user(conn)
+        _migration_0026_daily_usage_platform_user(conn)
 
     with db.connect() as conn:
         row = conn.execute(
@@ -114,10 +114,10 @@ def test_m0023_is_idempotent(fresh_db):
     with db.connect() as conn:
         _seed_pre_migration_daily(conn, a1=a1, a2=a2)
     with db.connect() as conn:
-        _migration_0023_daily_usage_platform_user(conn)
+        _migration_0026_daily_usage_platform_user(conn)
     # 再跑一次（模拟重复应用）。
     with db.connect() as conn:
-        _migration_0023_daily_usage_platform_user(conn)
+        _migration_0026_daily_usage_platform_user(conn)
 
     with db.connect() as conn:
         rows = conn.execute(
