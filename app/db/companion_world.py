@@ -13,19 +13,35 @@ M2-A 只落存储 + 纯 DB 原语（无 live 调用方、零行为变更）；L3
 """
 from typing import Any, Dict, List, Optional, Sequence
 
-from app.db._backend import Connection
+from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
+
+LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
 __all__ = [
     "get_or_create_home_universe",
     "get_universe",
+    "lock_universe",
+    "set_universe_onboarding_state",
+    "mark_universe_legacy_confirmed",
     "create_character_template",
     "get_template",
+    "list_initial_character_templates",
+    "get_available_character_template",
+    "get_or_create_legacy_template",
     "create_resident",
+    "get_or_create_candidate_resident",
+    "list_candidate_residents",
+    "activate_candidate_resident",
+    "dismiss_unselected_candidate_residents",
+    "get_or_create_legacy_resident",
     "count_active_residents",
     "list_residents",
+    "list_resident_details_for_owner",
     "create_ai_conversation",
     "get_conversation",
+    "resolve_conversation_for_owner",
+    "list_active_account_ids_for_user",
     "append_universe_fact",
     "read_universe_facts",
 ]
@@ -82,6 +98,56 @@ def get_universe(
     return dict(row) if row else None
 
 
+def lock_universe(*, universe_id: str, conn: Connection) -> Optional[Dict[str, Any]]:
+    """在调用方事务内读取并锁住 world 行；PG 用 ``FOR UPDATE``，SQLite 验功能语义。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    row = conn.execute(
+        "SELECT * FROM universes WHERE id = ?" + suffix,
+        (universe_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def set_universe_onboarding_state(
+    *, universe_id: str, onboarding_state: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """更新一个 world 的 onboarding 状态并返回该行；调用方负责状态机合法性。"""
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            UPDATE universes
+            SET onboarding_state = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (onboarding_state, universe_id),
+        )
+        row = tx.execute("SELECT * FROM universes WHERE id = ?", (universe_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def mark_universe_legacy_confirmed(
+    *,
+    universe_id: str,
+    legacy_primary_account_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """幂等写入 legacy primary 锚并把老用户 world 标为 confirmed。"""
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            UPDATE universes
+            SET legacy_primary_account_id = COALESCE(legacy_primary_account_id, ?),
+                onboarding_state = 'confirmed',
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ?
+            """,
+            (legacy_primary_account_id, universe_id),
+        )
+        row = tx.execute("SELECT * FROM universes WHERE id = ?", (universe_id,)).fetchone()
+    return dict(row) if row else None
+
+
 # ---------------------------------------------------------------------------
 # character_template（模板≠runtime account，§2.2）
 # ---------------------------------------------------------------------------
@@ -96,6 +162,7 @@ def create_character_template(
     persona_seed_json: Optional[str] = None,
     persona_version: str = "v1",
     status: str = "active",
+    initial_candidate_rank: Optional[int] = None,
     conn: Optional[Connection] = None,
 ) -> Dict[str, Any]:
     """新建一个角色模板，返回行 dict。source_type ∈ official|operations|user_created|generated。
@@ -109,9 +176,9 @@ def create_character_template(
             """
             INSERT INTO character_templates(
                 id, source_type, owner_platform_user_id, name, avatar_ref, summary,
-                tags_json, persona_seed_json, persona_version, status
+                tags_json, persona_seed_json, persona_version, status, initial_candidate_rank
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 template_id,
@@ -124,6 +191,7 @@ def create_character_template(
                 persona_seed_json,
                 persona_version,
                 status,
+                initial_candidate_rank,
             ),
         )
         row = tx.execute(
@@ -141,6 +209,63 @@ def get_template(
             "SELECT * FROM character_templates WHERE id = ?", (template_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+def list_initial_character_templates(
+    *, conn: Optional[Connection] = None
+) -> List[Dict[str, Any]]:
+    """返回 active 且设置 initial rank 的运营目录，按 rank 升序；完整性由领域层校验。"""
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            """
+            SELECT * FROM character_templates
+            WHERE status = 'active' AND initial_candidate_rank IS NOT NULL
+            ORDER BY initial_candidate_rank ASC, id ASC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_available_character_template(
+    *,
+    template_id: str,
+    owner_platform_user_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """读取可直接新增的 active 模板；user_created 模板只允许其 owner 使用。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT * FROM character_templates
+            WHERE id = ? AND status = 'active'
+              AND (owner_platform_user_id IS NULL OR owner_platform_user_id = ?)
+            """,
+            (template_id, owner_platform_user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_or_create_legacy_template(
+    *, conn: Optional[Connection] = None
+) -> Dict[str, Any]:
+    """幂等建立 backfill 专用哨兵模板；不含 persona，绝不改写既有账号人设。"""
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            INSERT INTO character_templates(
+                id, source_type, name, persona_seed_json, persona_version, status
+            ) VALUES (?, 'operations', 'legacy', NULL, 'legacy', 'active')
+            ON CONFLICT(id) DO NOTHING
+            """,
+            (LEGACY_CHARACTER_TEMPLATE_ID,),
+        )
+        row = tx.execute(
+            "SELECT * FROM character_templates WHERE id = ?",
+            (LEGACY_CHARACTER_TEMPLATE_ID,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("legacy template was not created")
+    return dict(row)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +317,162 @@ def create_resident(
     return dict(row)
 
 
+def get_or_create_candidate_resident(
+    *,
+    universe_id: str,
+    character_template_id: str,
+    template_version: str,
+    origin: str,
+    conn: Optional[Connection] = None,
+) -> Dict[str, Any]:
+    """幂等快照一条非 legacy candidate；已存在 active/dismissed 关系也原样返回、不复活。"""
+    if origin == "legacy":
+        raise ValueError("legacy origin is not a candidate")
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            INSERT INTO universe_residents(
+                id, universe_id, character_template_id, template_version, origin, status
+            ) VALUES (?, ?, ?, ?, ?, 'candidate')
+            ON CONFLICT DO NOTHING
+            """,
+            (_new_id("res"), universe_id, character_template_id, template_version, origin),
+        )
+        row = tx.execute(
+            """
+            SELECT * FROM universe_residents
+            WHERE universe_id = ? AND character_template_id = ? AND origin <> 'legacy'
+            """,
+            (universe_id, character_template_id),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("candidate resident was not created")
+    return dict(row)
+
+
+def list_candidate_residents(
+    *,
+    universe_id: str,
+    statuses: Sequence[str] = ("candidate",),
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """列出 world 的非 legacy 候选关系并附模板内部字段；严格按 universe_id 隔离。"""
+    status_list = list(statuses)
+    if not status_list:
+        return []
+    placeholders = ",".join("?" for _ in status_list)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            SELECT
+                r.id AS resident_id, r.universe_id, r.character_template_id,
+                r.template_version, r.runtime_account_id, r.origin, r.status,
+                t.source_type, t.owner_platform_user_id, t.name, t.avatar_ref,
+                t.summary, t.tags_json, t.persona_seed_json, t.persona_version,
+                t.status AS template_status, t.initial_candidate_rank,
+                c.id AS conversation_id, c.state AS conversation_state
+            FROM universe_residents r
+            JOIN character_templates t ON t.id = r.character_template_id
+            LEFT JOIN ai_conversations c ON c.resident_id = r.id
+            WHERE r.universe_id = ? AND r.origin <> 'legacy'
+              AND r.status IN ({placeholders})
+            ORDER BY COALESCE(t.initial_candidate_rank, 999999) ASC, r.created_at ASC, r.id ASC
+            """,
+            (universe_id, *status_list),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def activate_candidate_resident(
+    *,
+    universe_id: str,
+    resident_id: str,
+    runtime_account_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """把本 world 的 candidate 原子激活并绑定 runtime；非 candidate 不做隐式状态跃迁。"""
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            UPDATE universe_residents
+            SET runtime_account_id = ?, status = 'active',
+                joined_at = COALESCE(joined_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ? AND universe_id = ?
+              AND status = 'candidate' AND runtime_account_id IS NULL
+            """,
+            (runtime_account_id, resident_id, universe_id),
+        )
+        row = tx.execute(
+            "SELECT * FROM universe_residents WHERE id = ? AND universe_id = ?",
+            (resident_id, universe_id),
+        ).fetchone()
+    if row is None or row["status"] != "active" or row["runtime_account_id"] != runtime_account_id:
+        return None
+    return dict(row)
+
+
+def dismiss_unselected_candidate_residents(
+    *,
+    universe_id: str,
+    selected_template_ids: Sequence[str],
+    conn: Optional[Connection] = None,
+) -> int:
+    """把未选择的 candidate 标为 dismissed；只作用于目标 world、绝不影响 active/legacy。"""
+    selected = list(selected_template_ids)
+    keep_clause = ""
+    params: List[Any] = [universe_id]
+    if selected:
+        keep_clause = f"AND character_template_id NOT IN ({','.join('?' for _ in selected)})"
+        params.extend(selected)
+    with _tx(conn) as tx:
+        cursor = tx.execute(
+            f"""
+            UPDATE universe_residents
+            SET status = 'dismissed',
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE universe_id = ? AND status = 'candidate' AND origin <> 'legacy'
+              {keep_clause}
+            """,
+            tuple(params),
+        )
+    return int(cursor.rowcount)
+
+
+def get_or_create_legacy_resident(
+    *,
+    universe_id: str,
+    runtime_account_id: str,
+    conn: Optional[Connection] = None,
+) -> Dict[str, Any]:
+    """幂等把一个既有 account 映射为 active legacy resident。"""
+    template = get_or_create_legacy_template(conn=conn)
+    with _tx(conn) as tx:
+        tx.execute(
+            """
+            INSERT INTO universe_residents(
+                id, universe_id, character_template_id, template_version,
+                runtime_account_id, origin, status, joined_at
+            ) VALUES (
+                ?, ?, ?, 'legacy', ?, 'legacy', 'active',
+                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            )
+            ON CONFLICT DO NOTHING
+            """,
+            (_new_id("res"), universe_id, template["id"], runtime_account_id),
+        )
+        row = tx.execute(
+            "SELECT * FROM universe_residents WHERE runtime_account_id = ?",
+            (runtime_account_id,),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("legacy resident was not created")
+    result = dict(row)
+    if str(result["universe_id"]) != str(universe_id) or result["origin"] != "legacy":
+        raise ValueError("runtime account already belongs to another resident")
+    return result
+
+
 def count_active_residents(
     *, universe_id: str, conn: Optional[Connection] = None
 ) -> int:
@@ -224,6 +505,38 @@ def list_residents(
             (universe_id, *status_list),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def list_resident_details_for_owner(
+    *,
+    owner_platform_user_id: str,
+    statuses: Sequence[str] = ("active", "offline"),
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """owner-scoped 列出居民与模板/conversation；越权 owner 得空列表。"""
+    status_list = list(statuses)
+    if not status_list:
+        return []
+    placeholders = ",".join("?" for _ in status_list)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            SELECT
+                r.id AS resident_id, r.universe_id, r.character_template_id,
+                r.template_version, r.runtime_account_id, r.origin, r.status,
+                COALESCE(p.display_name, t.name) AS name, t.avatar_ref,
+                c.id AS conversation_id, c.state AS conversation_state
+            FROM universe_residents r
+            JOIN universes u ON u.id = r.universe_id
+            JOIN character_templates t ON t.id = r.character_template_id
+            LEFT JOIN profiles p ON p.account_id = r.runtime_account_id
+            JOIN ai_conversations c ON c.resident_id = r.id
+            WHERE u.owner_platform_user_id = ? AND r.status IN ({placeholders})
+            ORDER BY r.created_at ASC, r.id ASC
+            """,
+            (owner_platform_user_id, *status_list),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +579,15 @@ def create_ai_conversation(
         ).fetchone()
     if row is None:  # 理论不可达
         raise RuntimeError("ai_conversation was not created")
-    return dict(row)
+    result = dict(row)
+    expected = {
+        "universe_id": universe_id,
+        "owner_platform_user_id": owner_platform_user_id,
+        "runtime_account_id": runtime_account_id,
+    }
+    if any(str(result[key]) != str(value) for key, value in expected.items()):
+        raise ValueError("resident conversation ownership mismatch")
+    return result
 
 
 def get_conversation(
@@ -287,6 +608,42 @@ def get_conversation(
                 "SELECT * FROM ai_conversations WHERE id = ?", (conversation_id,)
             ).fetchone()
     return dict(row) if row else None
+
+
+def resolve_conversation_for_owner(
+    *,
+    conversation_id: str,
+    owner_platform_user_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """owner-scoped 解析稳定 conversation 到 world/resident/runtime；越权与不存在均 None。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT id AS conversation_id, universe_id, resident_id,
+                   owner_platform_user_id, runtime_account_id, state
+            FROM ai_conversations
+            WHERE id = ? AND owner_platform_user_id = ?
+            """,
+            (conversation_id, owner_platform_user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_active_account_ids_for_user(
+    *, platform_user_id: str, conn: Optional[Connection] = None
+) -> List[str]:
+    """按既有最早 binding 顺序列出一个真人的全部 active legacy account。"""
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            """
+            SELECT account_id FROM account_owner_bindings
+            WHERE platform_user_id = ? AND status = 'active'
+            ORDER BY created_at ASC, id ASC
+            """,
+            (platform_user_id,),
+        ).fetchall()
+    return [str(row["account_id"]) for row in rows]
 
 
 # ---------------------------------------------------------------------------

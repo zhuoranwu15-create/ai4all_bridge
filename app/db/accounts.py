@@ -13,6 +13,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from app.config import settings
 from app.db._core import (
     ACCOUNT_ACTIVE_SESSION_KEY,
+    APP_ACTIVE_SESSION_KEY,
     MODERATION_BLOCKED_ERROR,
     _NON_CONTEXT_ASSISTANT_REPLY,
     _UNSET,
@@ -82,6 +83,7 @@ __all__ = [
     'list_recent_reactivation_outbound_messages',
     'list_session_messages',
     'list_session_messages_before',
+    'list_app_conversation_messages_before',
     'list_sessions',
     'list_sessions_for_account',
     'list_user_active_dates',
@@ -918,6 +920,55 @@ def list_session_messages_before(
               AND content != ''
               {before_clause}
             ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in reversed(rows)]
+
+
+def list_app_conversation_messages_before(
+    *,
+    runtime_account_id: str,
+    before_id: Optional[int] = None,
+    limit: int = 50,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """跨业务日读取一个 runtime account 的 App 私聊历史，按页内时间升序返回。
+
+    只接受 ``__app_active__`` 当前段及 ``__app_active__:<session_id>`` 已归档段；微信、Web
+    和同世界其他 resident 的 session 均不命中。查询同时约束 message/session 的 account_id，
+    即使调用方误传或库内存在脏关联也不会跨账号读取。
+    """
+    clean_limit = max(1, min(int(limit), 100))
+    prefix = f"{APP_ACTIVE_SESSION_KEY}:"
+    before_clause = "AND m.id < ?" if before_id is not None else ""
+    params: List[Any] = [
+        runtime_account_id,
+        runtime_account_id,
+        APP_ACTIVE_SESSION_KEY,
+        len(prefix),
+        prefix,
+    ]
+    if before_id is not None:
+        params.append(int(before_id))
+    params.append(clean_limit)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            SELECT m.id, m.message_id, m.reply_to_message_id, m.role,
+                   m.message_type, m.content, m.created_at
+            FROM messages m
+            JOIN sessions s ON s.id = m.session_id
+            WHERE m.account_id = ? AND s.account_id = ?
+              AND (
+                    s.session_key = ?
+                    OR substr(s.session_key, 1, ?) = ?
+              )
+              AND m.role IN ('user', 'assistant')
+              AND m.content IS NOT NULL AND m.content != ''
+              {before_clause}
+            ORDER BY m.id DESC
             LIMIT ?
             """,
             tuple(params),

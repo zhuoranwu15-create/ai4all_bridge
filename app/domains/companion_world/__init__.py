@@ -2,5 +2,32 @@
 
 分层不变量：本包只经 agent_runtime 端口访问 Agent Runtime，禁止直接
 import app.db.* / app.turn_service（由 tests/test_layer_boundaries.py 的
-stdlib-AST 边界门禁执行，D-12）。M0 为空骨架，暂无业务逻辑。
+stdlib-AST 边界门禁执行，D-12）。
 """
+from app.domains.companion_world.contracts import (  # noqa: F401
+    BootstrapResult,
+    CandidateRecord,
+    CompanionWorldError,
+    ConversationTarget,
+    ResidentRecord,
+    ResidentSelection,
+    TemplateDraft,
+    TemplateRecord,
+    WorldRecord,
+    WorldRepository,
+)
+from app.domains.companion_world.service import CompanionWorldService  # noqa: F401
+
+__all__ = [
+    "BootstrapResult",
+    "CandidateRecord",
+    "CompanionWorldError",
+    "CompanionWorldService",
+    "ConversationTarget",
+    "ResidentRecord",
+    "ResidentSelection",
+    "TemplateDraft",
+    "TemplateRecord",
+    "WorldRecord",
+    "WorldRepository",
+]
