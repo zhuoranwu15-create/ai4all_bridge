@@ -445,7 +445,7 @@ def create_resident_with_runtime(        # *
 
 ## 11. 主动消息（proactive）子系统改造
 
-> 历史 review 结论：原 proactive 全层按 `account_id` 键，一个真人 N 居民会形成 N 条独立管线。M2-C C5 已在生成和投递两侧接入 world-aware 安全阀，只允许 legacy primary 承担真人级触达；预算、due 队列、跨渠道活跃和 App 收件箱仍未上提，留 M3。类别登记表、策略和调度主干仍保持现有 per-account 结构。
+> 历史 review 结论：原 proactive 全层按 `account_id` 键，一个真人 N 居民会形成 N 条独立管线。M2-C C5 先以 world-aware 安全阀限制真人级触达；M3-4/M3-5 已进一步交付 App 收件箱、真人级预算/活跃聚合、按真人折叠 due 扫描及确定性发声人。底层候选状态仍兼容 account 存储，但 scheduler facade 与投递策略已按 owner 聚合；per-resident 义务继续保持原键。
 
 ### 11.1 两个正交轴（改造总纲）
 
@@ -485,9 +485,9 @@ def create_resident_with_runtime(        # *
 
 per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，不上提。
 
-### 11.5 活跃判断跨渠道聚合（已存在 bug，形态 B 放大）
+### 11.5 活跃判断跨渠道聚合（M3-5 已修复）
 
-拉活资格用 `get_account_last_inbound_at(channel=WEIXIN)` + 微信专属 touch-state（`touch_state.py:42`，仅微信入站刷新）→ **App 活跃用户在这套里看似沉默**，会误触发拉活且投递不到。真人级"是否活跃"须跨该真人**所有居民 + 所有渠道（含 App inbound）**聚合判断。
+旧路径只看 `get_account_last_inbound_at(channel=WEIXIN)` 与微信 touch-state，导致 App 活跃用户可能被误判沉默。M3-5 已改为跨 owner active bindings 与全部 resident runtime accounts 聚合真人入站；planning、候选后置取消与 avoidance/budget 均使用 owner 范围，App inbound 不再遗漏。per-resident reminder/commitment 仍只读所属 runtime account，避免扩大 L2 义务范围。
 
 ### 11.6 分期与防 N× 安全阀
 
@@ -530,12 +530,12 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 - [x] **T3-2 投递分支（M3-4）**：per-resident reminder/commitment 的 App 目标发 typed intent 给 `AppInboxAdapter`，由 adapter 解析 `platform_user_id/universe_id/resident_id` 并写通知；proactive 核心不直接写表。真实微信路由保持优先，`CHANNEL_APP.supports_proactive=false` 未修改；真人级 App source 继续 fail-closed 等待 M3-5。
 - [x] **T3-3 DB helpers（M3-4）**：`app/db/notifications.py` 已交付 visible 幂等写、all/unread tuple cursor、未读数、单条/read-all、7/30 天与 200 条 cleanup；所有 helper 强制 `platform_user_id` 锚，淘汰顺序为最旧 read → 最旧 unread，并保护当前事务新插入行。
 - [x] **T3-4 API router（M3-4）**：`GET /api/v1/notifications`、独立 unread-count、单条 read 与 read-all 已交付；session 解析 owner、拒绝 account/runtime/universe 注入、与 Feed 分面、`Cache-Control: no-store` 和稳定信封均有测试。
-- [ ] **T3-5 真人级上提 `companion_world` 域层**：universe 级 due 队列（重键或后聚合 `list_due_reactivation_candidate_accounts` `proactive.py:2213` / `list_due_proactive_account_states` `:2183` / 候选 `proactive_account_state.metadata_json`）；预算与活跃按 `platform_user` 聚合。App-only 真人级另加滚动 24 小时合计上限 1，不把 per-resident 义务计入。
-- [ ] **T3-6 发声人选择 helper**：实现 §10.12/D-15 的 App 确定性选择与投递前重选；微信路径固定 legacy primary 且校验真实 route；输出 `resident_id`/`runtime_account_id` 供 T3-1 通知或微信 adapter，不允许跨居民冒充。
-- [ ] **T3-7 跨渠道活跃聚合**：修 §11.5——真人级"是否沉默"跨该真人所有居民 + 所有渠道（含 App inbound）判断，替换 `get_account_last_inbound_at(channel=WEIXIN)` + 微信专属 touch-state（`touch_state.py:42`）单渠道口径。
+- [x] **T3-5 真人级上提 `companion_world` 域层（M3-5）**：领域 scope/route 决策已落地；scheduler facade 将 account-state 扫描按 `platform_user` 折叠，预算、avoidance 与入站取消跨 owner 全账号聚合。App-only 真人级以 hidden reservation 保证滚动 24 小时合计上限 1，per-resident 义务不计入。
+- [x] **T3-6 发声人选择 helper（M3-5）**：App 按最近真人入站、最近 App conversation activity、`joined_at DESC NULLS LAST`、`resident_id ASC` 确定；投递事务锁 owner 后重选并锁 resident。微信固定真实 legacy primary route，不允许借通道冒充；强绑定内容失活 cancel，显式通用内容才允许重选。
+- [x] **T3-7 跨渠道活跃聚合（M3-5）**：真人级"是否沉默"已跨 owner bindings 与全部 resident runtime accounts 聚合所有渠道入站，App inbound 纳入口径；planning、dispatch 后置取消和 policy avoidance 已统一使用该范围。
 - [x] **T3-8a central cleanup（M3-4）**：central proactive scheduler 每轮分批执行 reservation lease、7/30 天 TTL 与 200 条对账，node 不注入；单 owner/步骤失败隔离并进入 heartbeat，cleanup 不受 inbox flag 关闭影响。
 - [x] **T3-8b App-only 真人级独立 flag（M3-5）**：新增 `COMPANION_WORLD_APP_ONLY_HUMAN_PROACTIVE_ENABLED=false`，关闭时保持真人级 App-only fail-closed，微信与 App per-resident 投递不受影响。
-- [ ] **T3-9 正交 + 并发测试（PG）**：App reminder(per-resident)→收件箱；微信 legacy 拉活(真人级)→`send_weixin_text`；App-only flag on 时真人级每真人滚动 24 小时**收件箱一行、非 N 行**，off 时零行；通知单条/全部已读及清理不跨 `platform_user`；通知/Feed 数据面互不串；微信不受 App-only flag 影响。
+- [x] **T3-9 正交 + 并发测试（M3-4/M3-5，PG）**：已覆盖 App reminder/commitment 入箱、微信 legacy 真人级原路、App-only 双 flag、每真人滚动 24 小时单条、owner-scoped read/cleanup、Feed/通知分面、speaker 失活 cancel/reselect，以及同真人 N resident 并发 reservation/visible 不超配。
 
 ---
 

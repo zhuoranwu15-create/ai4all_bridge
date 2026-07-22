@@ -80,12 +80,14 @@
 - **M3-2**：用户文字直接发布、post+outbox 同事务、owner Feed API、opaque cursor 与 default-off Feed flag。
 - **M3-3**：独立中心 world-content scheduler、北京双窗口/7 日 eligibility、确定性 AI 作者、slot lease/retry/no-catch-up、outbox worker、heartbeat 与批量游标。
 - **M3-4**：App 通知 owner API、typed AppInboxAdapter、per-resident reminder/commitment 入箱、显式已读、7/30 天及 200 条 central cleanup；微信继续优先，真人级 App-only 仍关闭。
+- **M3-5**：真人级 due/预算/活跃按 owner 聚合，真实微信 legacy primary 优先，App-only 双 flag + 滚动 24 小时 reservation，投递前 speaker 重选/锁定。
+- **M3-6**：三 flag 灰度/回滚运行手册、central 单例约束、Feed/outbox/通知/真人级 heartbeat、只读对账 SQL 与最终门禁。
 
 ### 当前发布闸
 
-- `make test-unit`：**566 passed / 876 deselected**。
-- `make test`（SQLite）：**1459 passed / 14 skipped**。
-- `make test-pg`（PostgreSQL）：**1468 passed / 5 skipped**。
+- `make test-unit`：**567 passed / 912 deselected**。
+- `make test`（SQLite）：**1465 passed / 14 skipped**。
+- `make test-pg`（PostgreSQL）：**1474 passed / 5 skipped**。
 - `git diff --check`：通过。PG 继续作为容量竞争、single-flight、配额和 L3 并发的权威。
 - 非阻断告警：既有 Pydantic/FastAPI deprecated warning；`test_image_turn` mock 有一次 `asyncio.to_thread` 未 await RuntimeWarning，无失败。
 
@@ -100,7 +102,7 @@
 - D-06 composition 已移出 Runtime；D-09 override 已上迁 `platform_user`，reservation TTL 已接 central scheduler。开 flag 前仍须完成遗留 override 对账。
 - 生产模板导入、带固定 cutoff 的 backfill dry-run/实跑、数据对账尚待按 [后台管理说明](guides/admin_guide.md#companion-world-p1-发布运行手册) 现场执行。
 
-因此当前结论是：**M2-C 代码闭环完成、默认关闭、尚未达到生产开 flag 条件**。回滚始终是先关 flag；不删除 world/resident/conversation/L3 数据。
+因此当前结论是：**M2-C 与 M3 代码闭环均已完成、默认关闭，尚未达到生产开 flag 条件**。回滚始终是先关对应 flag；不删除 world/resident/conversation/L3、Feed/outbox/notification 加性数据。
 
 ### M3 产品项已冻结（2026-07-22）
 
@@ -125,4 +127,4 @@
 2. P1/M3 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3 数据对账和全量只读核验；不得把开发分支 m0033 等同于已部署。
 3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
 4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
-5. 若启动 M4，先冻结 §10.3/.4/.8；未冻结前不编码 lifecycle/mailbox。
+5. 若启动 M4，先冻结 §10.3/.8 与 mailbox 触发/冷却/过期/待处理上限，并把已冻结的 §10.4 legacy 离开豁免镜像到客户端；完成前不编码 lifecycle/mailbox。
