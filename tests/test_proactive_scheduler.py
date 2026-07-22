@@ -12,7 +12,7 @@ from tests.factories import create_account as _create_account
 from tests.factories import create_route as _create_route
 
 
-def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
+def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
     from app.proactive.orchestration.scheduler import ProactiveScheduler
 
     reminder_calls = []
