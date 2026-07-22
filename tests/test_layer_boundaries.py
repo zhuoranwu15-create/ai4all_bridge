@@ -23,7 +23,7 @@ RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
 FORBIDDEN_PREFIXES = ("app.db", "app.turn_service")
 
 # 禁止被 Agent Runtime 反向依赖的产品域层（D-06 形态无关：Runtime 不认识 Companion World）
-RUNTIME_FORBIDDEN_PREFIXES = ("app.domains",)
+RUNTIME_FORBIDDEN_PREFIXES = ("app.domains", "app.db.companion_world")
 
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
@@ -139,3 +139,11 @@ def test_runtime_does_not_import_product_domains():
         "Agent Runtime 反向依赖产品域层（破 D-06 形态无关；组合应下沉域层）：\n"
         + "\n".join(violations)
     )
+
+
+def test_runtime_adapter_has_no_companion_world_composition_methods():
+    """D-06：产品 conversation/L3/World turn 组装不得回流 Runtime adapter。"""
+    from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
+
+    assert not hasattr(DefaultAgentRuntimeAdapter, "resolve_conversation_account")
+    assert not hasattr(DefaultAgentRuntimeAdapter, "send_companion_world_turn")

@@ -153,6 +153,10 @@ from app.dreaming_scheduler import (
     start_dreaming_scheduler,
     stop_dreaming_scheduler,
 )
+from app.platform import (
+    build_companion_world_memory_sink,
+    compact_companion_world_memory_batch,
+)
 from app.user_meta_scheduler import (
     start_user_meta_scheduler,
     stop_user_meta_scheduler,
@@ -212,7 +216,7 @@ from app.dreaming import (
     summarize_dreaming_run_for_debug,
     summarize_memory_item_for_debug,
 )
-from app.session_lifecycle import run_daily_dreaming_scan
+from app.session_lifecycle import configure_memory_sink, run_daily_dreaming_scan
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
 from app.moderation import export as moderation_export
 from app.tools import get_web_search_tools
@@ -320,6 +324,9 @@ if settings.has_central_role:
     app.include_router(_web_router.router)
     from app.routers import app_api as _app_api_router  # noqa: E402
     app.include_router(_app_api_router.router)
+    from app.routers import companion_world as _companion_world_router  # noqa: E402
+    app.include_router(_companion_world_router.router)
+    _companion_world_router.install_exception_handlers(app)
     from app.routers import debug as _debug_router  # noqa: E402
     app.include_router(_debug_router.router)
     from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
@@ -505,6 +512,12 @@ async def startup_proactive_scheduler() -> None:
 
 
 @app.on_event("startup")
+async def startup_companion_world_memory_sink() -> None:
+    """为 API 进程内的懒 session 轮转注入通用 typed memory sink。"""
+    configure_memory_sink(build_companion_world_memory_sink())
+
+
+@app.on_event("startup")
 async def startup_dreaming_scheduler() -> None:
     if not getattr(settings, "dreaming_scheduler_enabled", False):
         return
@@ -518,6 +531,12 @@ async def startup_dreaming_scheduler() -> None:
         batch_size=settings.dreaming_scheduler_batch_size,
         start_hour=settings.conversation_session_business_day_start_hour,
         node_id=daily_scan_node_id,
+        memory_sink=build_companion_world_memory_sink(),
+        memory_compactor=(
+            compact_companion_world_memory_batch
+            if settings.has_central_role
+            else None
+        ),
     )
     logger.info("dreaming scheduler started: %s", scheduler.status())
 
@@ -537,6 +556,11 @@ async def startup_user_meta_scheduler() -> None:
 @app.on_event("shutdown")
 async def shutdown_proactive_scheduler() -> None:
     await stop_proactive_scheduler()
+
+
+@app.on_event("shutdown")
+async def shutdown_companion_world_memory_sink() -> None:
+    configure_memory_sink(None)
 
 
 @app.on_event("shutdown")

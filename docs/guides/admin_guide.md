@@ -115,6 +115,8 @@ curl -X PATCH http://127.0.0.1:8180/admin/accounts/aid_123456789 \
 - `daily_limit`
 - `rpm_limit`
 
+自 m0031 起，`daily_limit/rpm_limit` 对有归属真人的账号是 **platform_user 级** override：从任一 resident/account 修改都会同步该真人全部 runtime account；传 `null` 表示恢复全局默认。无归属真人的孤儿账号仍保留 per-account 兼容。
+
 当前支持的状态：
 
 - `active`
@@ -368,3 +370,196 @@ tail -120 ~/.openclaw/logs/gateway.log
 tail -120 ~/.openclaw/logs/gateway.err.log
 tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 ```
+
+## Companion World P1 发布运行手册
+
+本节只适用于 M2-C。发布原则是：**先以 flag=false 部署和迁移，再导入模板、按固定截点 backfill、对账，最后才允许小流量开 flag**。正式四位角色内容和客户端最低版本必须由产品/客户端团队提供，运维不得临时编造。
+
+注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../tech_design/companion_world_3_0_refactor_design.md`](../tech_design/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
+
+### 1. 发布前输入与备份
+
+必须具备：
+
+- 经运营签字的 UTF-8 JSON manifest，恰含 rank 1..4 四条模板；每条有稳定 `template_id`、名称、头像引用、简介、三个标签、非空 SOUL/IDENTITY persona 与 `persona_version`。
+- 已确认支持 `/v1/auth/session` 返回 `account:null` 并立即进入 world bootstrap 的客户端最低版本。
+- 客户端 PRD/技术说明已同步 D-05“同世界共享用户沉淀记忆”与 D-08“legacy resident 离开豁免”，不再保留相反口径。
+- 生产 PG 备份和可恢复点；记录发布人、时间、代码 SHA。
+- central/standalone 只运行一个 Dreaming scheduler。推荐独立 proactive 进程承担：`DREAMING_SCHEDULER_ENABLED=false`、`PROACTIVE_DREAMING_SCHEDULER_ENABLED=true`；纯 node 不运行 L3 compact。
+
+先确保：
+
+```bash
+COMPANION_WORLD_P1_ENABLED=false
+COMPANION_WORLD_L3_BACKGROUND_ENABLED=false
+COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
+make test-unit
+make test
+make test-pg
+git diff --check
+```
+
+### 2. flag=false 部署至 m0032
+
+部署代码并重启后检查：
+
+```bash
+curl -fsS http://127.0.0.1:8180/health/ready
+```
+
+确认 `schema_migrations` 最大版本为 32。m0031 将真人级 `daily_limit/rpm_limit` 设为 canonical override 来源并把 reservation TTL 回收接到 central proactive scheduler；m0032 将 PG `rpm_hits.hit_at` 升为双精度，避免 60 秒滑窗误删。
+
+此时 `/v1/worlds/*`、`/v1/conversations`、`/v1/ai-conversations/*` 应以 404 `not_found` 隐藏；旧 auth 与 legacy turn 路径保持原入口。完成 backfill 后，secondary legacy resident 的真人级 proactive 会被安全阀拦截；L3 因独立开关为 false 不读、不写、不 compact。不要在迁移后立刻开 API flag。
+
+### 3. 导入四模板目录
+
+脚本不会内置或打印 persona 正文；已发布 `template_id` 的内容不可原地修改，换版必须使用新 ID 并退休旧行。
+
+```bash
+.venv/bin/python scripts/import_companion_world_presets.py \
+  /secure/path/companion_world_presets.json --dry-run
+
+.venv/bin/python scripts/import_companion_world_presets.py \
+  /secure/path/companion_world_presets.json
+```
+
+预期：实际导入报告 `errors=[]`、`catalog_ready=true`。再次执行应只出现 `keep_ids`，不得新增重复模板。manifest 放受控目录，不提交密钥或生产 persona 到临时日志。
+
+### 4. 固定 cutoff 并 backfill
+
+在开始 backfill 前记录一个**北京墙钟、秒粒度且全程不变**的 cutoff。生产 PG 示例：
+
+```bash
+psql "$DATABASE_URL" -Atc \
+  "SELECT to_char(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD HH24:MI:SS')"
+```
+
+把输出保存为 `CUTOFF`。先 dry-run，从空 resume 开始；每批保存 JSON 报告中的 `next_resume_after`，反复执行直到 `scanned_users=0`：
+
+```bash
+CUTOFF='2026-07-22 12:00:00'
+
+.venv/bin/python scripts/backfill_companion_world.py \
+  --dry-run --batch-size 500 --created-before "$CUTOFF"
+
+.venv/bin/python scripts/backfill_companion_world.py \
+  --dry-run --batch-size 500 --created-before "$CUTOFF" \
+  --resume-after '<上一批 next_resume_after>'
+```
+
+任何 `errors` 都阻断发布。核对 `zero_binding_users`、`mapped_users`、`mapped_bindings`、`full_capacity_users` 分布后，用**同一个 cutoff**去掉 `--dry-run` 实跑，并以相同 resume 规则跑完。脚本逐 `platform_user` 单事务，可安全重放；不得更换 cutoff 混跑。
+
+### 5. 只读数据对账
+
+以下 `COUNT(*)` 查询均应返回 0，override 查询均应返回空结果集；示例时间字面量必须替换为第 4 步固定值：
+
+```sql
+-- cutoff 内 active legacy binding 必须都有 legacy resident 映射。
+SELECT COUNT(*)
+FROM account_owner_bindings b
+JOIN platform_users p ON p.id = b.platform_user_id
+LEFT JOIN universe_residents r
+  ON r.runtime_account_id = b.account_id AND r.origin = 'legacy'
+WHERE b.status = 'active'
+  AND p.created_at <= '2026-07-22 12:00:00'
+  AND r.id IS NULL;
+
+-- active/offline resident 不得缺 runtime account 或稳定 conversation。
+SELECT COUNT(*)
+FROM universe_residents r
+LEFT JOIN accounts a ON a.id = r.runtime_account_id
+LEFT JOIN ai_conversations c ON c.resident_id = r.id
+WHERE r.status IN ('active','offline') AND (a.id IS NULL OR c.id IS NULL);
+
+-- conversation 的 universe/runtime/owner 必须与 resident/world 一致。
+SELECT COUNT(*)
+FROM ai_conversations c
+JOIN universe_residents r ON r.id = c.resident_id
+JOIN universes u ON u.id = r.universe_id
+WHERE c.universe_id <> r.universe_id
+   OR c.runtime_account_id <> r.runtime_account_id
+   OR c.owner_platform_user_id <> u.owner_platform_user_id;
+
+-- 世界容量不得超过 10；有 legacy resident 的世界必须有 primary。
+SELECT COUNT(*) FROM (
+  SELECT universe_id FROM universe_residents
+  WHERE status = 'active' GROUP BY universe_id HAVING COUNT(*) > 10
+) over_capacity;
+
+SELECT COUNT(*)
+FROM universes u
+WHERE u.legacy_primary_account_id IS NULL
+  AND EXISTS (
+    SELECT 1 FROM universe_residents r
+    WHERE r.universe_id = u.id AND r.origin = 'legacy' AND r.status = 'active'
+  );
+
+-- L3 provenance resident 不得跨 universe。
+SELECT COUNT(*)
+FROM universe_memory_facts f
+JOIN universe_residents r ON r.id = f.source_resident_id
+WHERE f.source_resident_id IS NOT NULL AND f.universe_id <> r.universe_id;
+
+-- 同一真人的 active residents 不得保留不同的 legacy account 配额副本。
+-- m0031 运行时虽会按最严格值防绕过，任一返回行仍阻断开 flag。
+SELECT u.owner_platform_user_id
+FROM universes u
+JOIN universe_residents r ON r.universe_id = u.id AND r.status = 'active'
+JOIN accounts a ON a.id = r.runtime_account_id
+GROUP BY u.owner_platform_user_id
+HAVING COUNT(DISTINCT CASE WHEN a.daily_limit IS NULL THEN '__default__' ELSE CAST(a.daily_limit AS TEXT) END) > 1
+    OR COUNT(DISTINCT CASE WHEN a.rpm_limit IS NULL THEN '__default__' ELSE CAST(a.rpm_limit AS TEXT) END) > 1;
+
+-- canonical platform_user override 与 account 兼容副本必须一致。
+SELECT u.owner_platform_user_id, a.id AS runtime_account_id
+FROM universes u
+JOIN platform_users p ON p.id = u.owner_platform_user_id
+JOIN universe_residents r ON r.universe_id = u.id AND r.status = 'active'
+JOIN accounts a ON a.id = r.runtime_account_id
+WHERE (p.daily_limit IS NOT NULL AND (a.daily_limit IS NULL OR a.daily_limit <> p.daily_limit))
+   OR (p.rpm_limit IS NOT NULL AND (a.rpm_limit IS NULL OR a.rpm_limit <> p.rpm_limit));
+```
+
+模板目录还须恰好四条 active rank 1..4，且元数据非空；最稳妥的复核是再次运行模板脚本 `--dry-run`，报告应无错误且四个 ID 全部为 keep。m0031 后新增 resident 直接读取真人 canonical override；遗留 account 副本只作兼容和对账，不再决定 turn 上限。
+
+### 6. 开 flag 与冒烟
+
+只有模板、backfill、对账、客户端版本与口径同步、D-09 override 预检、双后端测试全部通过后，才把 central/backend 的：
+
+```bash
+COMPANION_WORLD_P1_ENABLED=true
+COMPANION_WORLD_L3_BACKGROUND_ENABLED=true
+COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
+```
+
+小流量重启后至少验证：
+
+1. 新用户登录返回 `account:null`，bootstrap 恰有四候选，确认 1 位后只建一个 runtime/resident/conversation，且无 owner binding/新客重复赠权。
+2. 老用户仍见全部 legacy residents，不自动补四候选；满 10 用户新增返回 `resident_capacity_exceeded`。
+3. conversation list/history 不出现 `runtime_account_id`；Web/微信/其他 resident 消息不混入 App history。
+4. 同 `client_message_id` 重试只落一条入站且 `deduplicated=true`；并发 turn 另一条返回 `turn_in_progress`。
+5. resident A 蒸馏的用户事实能被同世界 B 注入，其他世界不可见；relationship/commitment 不进 L3。
+6. 真人级 proactive 仅 legacy primary 允许；App-only 不发送；reminder/commitment 仍按 resident 独立。
+
+### 7. 观测与扩量闸
+
+首轮重点观察：
+
+- API：`preset_catalog_not_ready`、bootstrap/confirm 成功率、`resident_capacity_exceeded`、`conversation_not_found`、`turn_in_progress`、`rate_limited`。
+- 数据：runtime/resident/conversation 孤儿数（第 5 步 SQL）、active resident 容量分布、legacy primary 缺失数。
+- L3：append 量、`dreaming typed memory sink failed` 日志、compact 的 `merged_groups/superseded_facts`、跨 universe 对账。
+- 调度：`/admin/dreaming/scheduler` 的 `last_run.memory_compaction` 和 heartbeat；确认只有 central writer。
+- 主动消息：`companion_world_human_level_proactive_blocked` 命中量与每真人实际触达数，确认无 N×。
+
+扩量前再次运行 `make test-pg`、模板 dry-run、backfill 幂等复跑和第 5 步对账。
+
+### 8. 回滚
+
+发现数据隔离、孤儿、重复计费、客户端不兼容或调度多写时：
+
+1. 立即设置 `COMPANION_WORLD_P1_ENABLED=false`、`COMPANION_WORLD_L3_BACKGROUND_ENABLED=false` 并重启 backend；停止新入口与 L3 后台行为。
+2. 保留 m0032 和所有 universe/resident/conversation/L3 行，不执行删除或反向迁移。
+3. 微信、legacy `/chat/*` 与既有账号继续原入口。切换后创建且没有 legacy account 的少量新用户，回退后重新登录会走旧 auth 兼容建号；必须先枚举和记录这些用户。
+4. 若只是 Dreaming 重复 writer，先停多余 scheduler，保留 central 单例；不要删除 superseded L3 历史。
+5. 默认保留 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true`，避免 backfill 后的多居民放大真人级触达；只有明确要恢复旧 per-account 口径时才设为 false。不得删除 world 映射规避。
+6. 修复后从模板预检、固定 cutoff 对账与双后端门禁重新开始，不沿用未审计的半批状态。

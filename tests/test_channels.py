@@ -6,6 +6,7 @@
 
 from app.channels import (
     _DEFAULT_CAPABILITY,
+    _APP_ACTIVE_SESSION_KEY,
     CHANNEL_APP,
     CHANNEL_WEB,
     CHANNEL_WEIXIN,
@@ -13,7 +14,7 @@ from app.channels import (
     ChannelCapability,
     get_channel_capability,
 )
-from app.db import ACCOUNT_ACTIVE_SESSION_KEY
+from app.db import ACCOUNT_ACTIVE_SESSION_KEY, APP_ACTIVE_SESSION_KEY
 
 
 def test_weixin_capability_equivalent_to_current_behavior():
@@ -41,7 +42,8 @@ def test_web_capability_conservative_defaults():
 
 def test_app_capability_is_independent_and_sync_only():
     cap = CHANNELS[CHANNEL_APP]
-    assert cap.active_session_key == "__app_active__"
+    # channels 与 db 各保留一份字面量来避免循环依赖，必须由测试锁住一致性。
+    assert cap.active_session_key == _APP_ACTIVE_SESSION_KEY == APP_ACTIVE_SESSION_KEY
     assert cap.onboarding_enabled is False
     assert cap.default_reply_delivery == "sync_http"
     assert cap.supports_out_of_band_tool_final is False

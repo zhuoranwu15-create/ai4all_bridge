@@ -184,16 +184,22 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
         invite_code=payload.invite_code,
         invalid_otp_detail="验证凭证无效或已过期",
     )
-    # L4 名字兜底:App 首建账号且用户未起名时,以 zhaoxi 默认名「朝夕」播种,
-    # 使 IDENTITY/LLM 自称与 UI 展示一致。get_or_create 命中已有账号时不覆盖其名。
-    account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
-        display_name=_ZHAOXI_DEFAULT_AI_NAME,
-        plan="free",
-        campaign_code=payload.campaign_code,
-        initial_channel=CHANNEL_APP,
-        binding_method="app_otp",
-    )
+    if bool(getattr(settings, "companion_world_p1_enabled", False)):
+        # P1 新流程：只复用既有 legacy account；零 binding（含真正新用户）不预建默认
+        # runtime/binding，客户端收到 account:null 后进入 world bootstrap。
+        account_result = get_first_active_account_for_user(
+            platform_user_id=platform_user["id"]
+        )
+    else:
+        # flag 关闭保持旧 auth 行为：建/复用默认账号、赠权与 campaign 归因均逐字不变。
+        account_result = get_or_create_default_ai4all_account_for_user(
+            platform_user_id=platform_user["id"],
+            display_name=_ZHAOXI_DEFAULT_AI_NAME,
+            plan="free",
+            campaign_code=payload.campaign_code,
+            initial_channel=CHANNEL_APP,
+            binding_method="app_otp",
+        )
     session = create_platform_user_session(platform_user_id=platform_user["id"], days=30)
     _no_store(response)
     return {
@@ -205,8 +211,12 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
             "id": platform_user["id"],
             "phone_masked": f"{platform_user['phone'][:3]}****{platform_user['phone'][-4:]}",
         },
-        "account": _public_account(account_result),
-        "welcome_message": f"你好，我是{_ZHAOXI_DEFAULT_AI_NAME}。想聊聊此刻的心情，还是随便说点什么？",
+        "account": _public_account(account_result) if account_result else None,
+        "welcome_message": (
+            f"你好，我是{_ZHAOXI_DEFAULT_AI_NAME}。想聊聊此刻的心情，还是随便说点什么？"
+            if account_result
+            else None
+        ),
     }
 
 

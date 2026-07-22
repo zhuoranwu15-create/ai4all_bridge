@@ -10,6 +10,12 @@ import pytest
 
 import app.db as db
 from app.db._backend import IntegrityError, is_postgres
+from app.db._core import (
+    _MIGRATIONS,
+    _migration_0030_companion_world_candidates,
+    _migration_0031_platform_user_quota_overrides,
+    _migration_0032_rpm_hit_double_precision,
+)
 
 _P1_TABLES = (
     "universes",
@@ -59,6 +65,83 @@ def test_p1_tables_exist(fresh_db):
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 
 
+def test_m0030_schema_and_idempotency(fresh_db):
+    """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
+    assert _MIGRATIONS[-1] == (32, _migration_0032_rpm_hit_double_precision)
+    with db.connect() as conn:
+        version = conn.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+        assert int(version) == 32
+        _migration_0030_companion_world_candidates(conn)
+        _migration_0030_companion_world_candidates(conn)
+        conn.execute(
+            "SELECT initial_candidate_rank FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_active_initial_candidate_rank_is_unique(fresh_db):
+    """仅 active 模板的非空 initial rank 唯一；retired 历史版本可保留同 rank。"""
+    active = db.create_character_template(source_type="official", name="首发-A")
+    retired = db.create_character_template(
+        source_type="official", name="历史-A", status="retired"
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE character_templates SET initial_candidate_rank = 1 WHERE id = ?",
+            (active["id"],),
+        )
+        conn.execute(
+            "UPDATE character_templates SET initial_candidate_rank = 1 WHERE id = ?",
+            (retired["id"],),
+        )
+    with pytest.raises(IntegrityError):
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE character_templates SET status = 'active' WHERE id = ?",
+                (retired["id"],),
+            )
+
+
+def test_legacy_residents_can_share_sentinel_template(fresh_db):
+    """同世界多个 legacy account 可共用哨兵模板，不受非 legacy 模板唯一索引影响。"""
+    pu = _pu("19911110012")
+    world = db.get_or_create_home_universe(platform_user_id=pu)
+    sentinel = db.create_character_template(source_type="operations", name="legacy")
+    residents = [
+        db.create_resident(
+            universe_id=world["id"],
+            character_template_id=sentinel["id"],
+            template_version="legacy",
+            origin="legacy",
+            status="active",
+            runtime_account_id=_runtime_account(name),
+        )
+        for name in ("legacy-甲", "legacy-乙")
+    ]
+    assert len({resident["id"] for resident in residents}) == 2
+
+
+def test_nonlegacy_template_is_unique_within_universe(fresh_db):
+    """同一世界不能用同一模板建立两段非 legacy 关系。"""
+    pu = _pu("19911110013")
+    world = db.get_or_create_home_universe(platform_user_id=pu)
+    template = db.create_character_template(source_type="official", name="首发-B")
+    db.create_resident(
+        universe_id=world["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+    )
+    with pytest.raises(IntegrityError):
+        db.create_resident(
+            universe_id=world["id"],
+            character_template_id=template["id"],
+            template_version="v1",
+            origin="custom",
+        )
+
+
 def test_universe_owner_unique(fresh_db):
     pu = _pu("19911110001")
     w = db.get_or_create_home_universe(platform_user_id=pu)
@@ -78,10 +161,13 @@ def test_resident_runtime_partial_unique(fresh_db):
     pu = _pu("19911110002")
     w = db.get_or_create_home_universe(platform_user_id=pu)
     acc = _account(pu)
-    tmpl = db.create_character_template(source_type="official", name="小满")["id"]
+    templates = [
+        db.create_character_template(source_type="official", name=f"小满-{index}")["id"]
+        for index in range(4)
+    ]
     db.create_resident(
         universe_id=w["id"],
-        character_template_id=tmpl,
+        character_template_id=templates[0],
         template_version="v1",
         origin="preset",
         status="active",
@@ -91,7 +177,7 @@ def test_resident_runtime_partial_unique(fresh_db):
     with pytest.raises(IntegrityError):
         db.create_resident(
             universe_id=w["id"],
-            character_template_id=tmpl,
+            character_template_id=templates[1],
             template_version="v1",
             origin="preset",
             status="active",
@@ -99,10 +185,10 @@ def test_resident_runtime_partial_unique(fresh_db):
         )
     # candidate 期 runtime_account_id 为 NULL → 偏索引不约束，可多行。
     db.create_resident(
-        universe_id=w["id"], character_template_id=tmpl, template_version="v1", origin="preset"
+        universe_id=w["id"], character_template_id=templates[2], template_version="v1", origin="preset"
     )
     db.create_resident(
-        universe_id=w["id"], character_template_id=tmpl, template_version="v1", origin="preset"
+        universe_id=w["id"], character_template_id=templates[3], template_version="v1", origin="preset"
     )
 
 
@@ -151,20 +237,23 @@ def test_home_universe_idempotent(fresh_db):
 def test_count_active_residents_only_active(fresh_db):
     pu = _pu("19911110005")
     w = db.get_or_create_home_universe(platform_user_id=pu)
-    tmpl = db.create_character_template(source_type="official", name="小满")["id"]
+    templates = [
+        db.create_character_template(source_type="official", name=f"小满-{index}")["id"]
+        for index in range(3)
+    ]
     # 两个居民 runtime 容器账号（form-B bare account，非用户账号）。#42 收敛后同真人只有一个用户
     # 账号，故不能用 create_ai4all 建第二个；居民容器直接建 account 行即可。
     acc1, acc2 = _runtime_account("甲"), _runtime_account("乙")
     db.create_resident(
-        universe_id=w["id"], character_template_id=tmpl, template_version="v1",
+        universe_id=w["id"], character_template_id=templates[0], template_version="v1",
         origin="preset", status="active", runtime_account_id=acc1,
     )
     db.create_resident(
-        universe_id=w["id"], character_template_id=tmpl, template_version="v1",
+        universe_id=w["id"], character_template_id=templates[1], template_version="v1",
         origin="preset", status="offline", runtime_account_id=acc2,
     )
     db.create_resident(
-        universe_id=w["id"], character_template_id=tmpl, template_version="v1", origin="preset",
+        universe_id=w["id"], character_template_id=templates[2], template_version="v1", origin="preset",
         status="candidate",
     )
     # 容量真相 = status='active' 计数（D-07）：offline/candidate 不计位。

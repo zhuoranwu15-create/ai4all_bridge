@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from app.db._backend import Connection, IntegrityError, Row
+from app.db._backend import Connection, IntegrityError, Row, is_postgres
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -45,6 +45,7 @@ from app.db._core import (
 __all__ = [
     'create_ai4all_account_for_user',
     'create_resident_runtime_account',
+    'insert_resident_runtime_account',
     'create_binding_intent',
     'create_or_get_platform_user_by_phone',
     'ensure_wallet',
@@ -2174,6 +2175,81 @@ def create_ai4all_account_for_user(
     }
 
 
+def insert_resident_runtime_account(
+    *,
+    display_name: str,
+    system_prompt: str = "",
+    initial_channel: str = "native",
+    app_id: str = DEFAULT_APP_ID,
+    soul_seed: Optional[str] = None,
+    identity_seed: Optional[str] = None,
+    conn: Connection,
+) -> Dict[str, Any]:
+    """在调用方事务内只插入居民 runtime account、profile 与可选 persona 文件。
+
+    本原语刻意不建 owner binding、钱包、subscription、grant、resident 或 conversation；后两者
+    由 Companion World repository 使用同一 ``conn`` 串联，从而任一步失败都整体回滚。
+    ``soul_seed``/``identity_seed`` 只允许写固定文件名，避免模板内容控制存储路径。
+    """
+    from app import profile_storage
+
+    if not is_postgres() and not conn.in_transaction:
+        raise RuntimeError("insert_resident_runtime_account requires an active transaction")
+    cleaned_display_name = _clean_text(display_name)
+    if not cleaned_display_name:
+        raise ValueError("display_name is required")
+    cleaned_prompt = _clean_text(system_prompt)
+    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
+    last_integrity_error = None
+    for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
+        account_id = _new_account_id()
+        try:
+            with _savepoint(conn, "resident_account_ins"):
+                conn.execute(
+                    """
+                    INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
+                    VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    """,
+                    (
+                        account_id,
+                        _clean_text(initial_channel) or "native",
+                        cleaned_display_name,
+                        app_id_clean,
+                    ),
+                )
+            break
+        except IntegrityError as err:
+            if "accounts.id" not in str(err):
+                raise
+            last_integrity_error = err
+    else:
+        raise RuntimeError("failed to generate a unique account_id") from last_integrity_error
+
+    conn.execute(
+        """
+        INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
+        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        """,
+        (account_id, cleaned_display_name, cleaned_prompt),
+    )
+    for filename, content in (
+        ("SOUL.md", _clean_text(soul_seed)),
+        ("IDENTITY.md", _clean_text(identity_seed)),
+    ):
+        if content:
+            profile_storage.write_file(
+                account_id,
+                filename,
+                content.rstrip() + "\n",
+                conn=conn,
+            )
+    account = conn.execute("SELECT * FROM accounts WHERE id = ?", (account_id,)).fetchone()
+    profile = conn.execute(
+        "SELECT * FROM profiles WHERE account_id = ?", (account_id,)
+    ).fetchone()
+    return {"account": dict(account), "profile": dict(profile)}
+
+
 def create_resident_runtime_account(
     *,
     universe_id: str,
@@ -2206,43 +2282,24 @@ def create_resident_runtime_account(
     from app.db.accounts import get_account, get_profile_for_account
     from app.db.companion_world import create_resident
 
-    cleaned_display_name = _clean_text(display_name)
-    if not cleaned_display_name:
-        raise ValueError("display_name is required")
-    cleaned_prompt = _clean_text(system_prompt)
-    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
     with connect() as conn:
+        # SQLite 的最外层 SAVEPOINT 在 RELEASE 时会提交；先显式开启外层事务，确保后续
+        # resident 插入失败可把 account/profile 一并回滚。PG 首条查询会自动开启事务。
+        if not is_postgres():
+            conn.execute("BEGIN IMMEDIATE")
         # 世界归属解析的锚：universe 必须存在（否则居民永远解析不到真人钱包）。
         if conn.execute(
             "SELECT 1 FROM universes WHERE id = ?", (universe_id,)
         ).fetchone() is None:
             raise ValueError("universe not found")
-        last_integrity_error = None
-        for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
-            account_id = _new_account_id()
-            try:
-                with _savepoint(conn, "resident_account_ins"):
-                    conn.execute(
-                        """
-                        INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
-                        VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-                        """,
-                        (account_id, _clean_text(initial_channel) or "native", cleaned_display_name, app_id_clean),
-                    )
-                break
-            except IntegrityError as err:
-                if "accounts.id" not in str(err):
-                    raise
-                last_integrity_error = err
-        else:
-            raise RuntimeError("failed to generate a unique account_id") from last_integrity_error
-        conn.execute(
-            """
-            INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
-            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            """,
-            (account_id, cleaned_display_name, cleaned_prompt),
+        runtime = insert_resident_runtime_account(
+            display_name=display_name,
+            system_prompt=system_prompt,
+            initial_channel=initial_channel,
+            app_id=app_id,
+            conn=conn,
         )
+        account_id = runtime["account"]["id"]
         # 世界映射：resident.runtime_account_id = 本 account、status='active'（占容量位，D-07）。
         # 同一连接/事务插入，账号行与居民映射要么全成、要么整体回滚（不留孤儿号）。
         resident = create_resident(
@@ -3048,4 +3105,3 @@ def increment_session_turn_count(
             (session_id,),
         ).fetchone()
     return dict(row) if row else None
-

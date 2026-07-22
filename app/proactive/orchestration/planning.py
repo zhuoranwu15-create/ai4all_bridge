@@ -16,6 +16,10 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.onboarding import is_onboarding_done
+from app.platform import (
+    HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+    human_level_proactive_allowed,
+)
 from app.time_utils import beijing_naive_now, parse_db_timestamp
 from app.proactive.contract.common import format_reactivation_time
 from app.proactive.contract.candidate import ProactiveCandidate
@@ -214,6 +218,12 @@ def plan_reactivation_candidate(
     归位到 orchestration，plan 是规划不是派发。）
     """
     current = now or beijing_naive_now()
+    if not human_level_proactive_allowed(account_id):
+        return _no_op(
+            account_id=account_id,
+            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+            now=current,
+        )
     allowed_windows = _account_allowed_windows(account_id)
 
     # 每个种类一个 proposer：跑生成器 → 把产出适配成 ProactiveCandidate（无产出则 None）。
@@ -363,6 +373,12 @@ def plan_new_user_reactivation_candidate(
 ) -> Dict[str, Any]:
     """Plan the first-24h idle nudge, using topic_followup first and hot_topic fallback."""
     current = now or beijing_naive_now()
+    if not human_level_proactive_allowed(account_id):
+        return _no_op(
+            account_id=account_id,
+            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+            now=current,
+        )
     eligibility = _new_user_reactivation_eligibility(
         account_id=account_id,
         now=current,

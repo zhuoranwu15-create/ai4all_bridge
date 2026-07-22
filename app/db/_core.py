@@ -23,9 +23,15 @@ ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
 # Web 渠道短期会话隔离键（conversation_scope，§7.1）。与 app.channels 的 web cap
 # active_session_key 取值必须一致（两处各留一份字面量以避免 channels↔db 循环依赖）。
 WEB_ACTIVE_SESSION_KEY = "__web_active__"
+# App 原生渠道短期会话隔离键；与 app.channels 的 app cap 保持字面量一致，避免反向依赖。
+APP_ACTIVE_SESSION_KEY = "__app_active__"
 # dreaming 每日轮转默认扫描的所有合法 active scope。新增 scope 时在此登记，否则该 scope
 # 的 active session 永不轮转/dreaming（§7.1 / Codex ②）。
-DEFAULT_ACTIVE_SESSION_KEYS = (ACCOUNT_ACTIVE_SESSION_KEY, WEB_ACTIVE_SESSION_KEY)
+DEFAULT_ACTIVE_SESSION_KEYS = (
+    ACCOUNT_ACTIVE_SESSION_KEY,
+    WEB_ACTIVE_SESSION_KEY,
+    APP_ACTIVE_SESSION_KEY,
+)
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
 SHELL_MICROS_PER_SHELL = 1_000_000
 SHELL_BILLABLE_TOKENS_PER_SHELL = 1000
@@ -1640,7 +1646,7 @@ def _migration_0005_rpm_hits(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS rpm_hits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             account_id TEXT NOT NULL,
-            hit_at REAL NOT NULL
+            hit_at DOUBLE PRECISION NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_rpm_hits_account_hit ON rpm_hits(account_id, hit_at);
         """
@@ -2368,6 +2374,82 @@ def _migration_0029_universe_memory_l3(conn: Connection) -> None:
     )
 
 
+def _migration_0030_companion_world_candidates(conn: Connection) -> None:
+    """M2-C：冻结初始候选目录顺序与同世界模板关系唯一性。
+
+    ``initial_candidate_rank`` 只约束 active 模板的非空 rank，允许 retired 历史版本保留
+    原 rank；同一世界的非 legacy resident 不得重复引用同一模板。legacy backfill 的多个
+    既有 account 共用一条哨兵模板，因此明确从后一个偏唯一索引豁免。
+    """
+    _ensure_column(conn, "character_templates", "initial_candidate_rank", "INTEGER")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_templates_active_initial_rank
+            ON character_templates(initial_candidate_rank)
+            WHERE status = 'active' AND initial_candidate_rank IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_template_nonlegacy
+            ON universe_residents(universe_id, character_template_id)
+            WHERE origin <> 'legacy';
+        """
+    )
+
+
+def _migration_0031_platform_user_quota_overrides(conn: Connection) -> None:
+    """D-09：把 daily/RPM override 的 canonical 来源上迁到真人。
+
+    仅自动回填所有归属 account（owner binding + World resident）取值完全一致的非空
+    override；冲突值保留在 accounts 供运行时兼容 resolver 以最严格值收口，避免迁移时
+    静默改变配额。后续 Admin 写入由 accounts.update_account 统一写真人并传播副本。
+    """
+    _ensure_column(conn, "platform_users", "daily_limit", "INTEGER")
+    _ensure_column(conn, "platform_users", "rpm_limit", "INTEGER")
+    users = conn.execute("SELECT id FROM platform_users ORDER BY id").fetchall()
+    for user in users:
+        platform_user_id = str(user["id"])
+        rows = conn.execute(
+            """
+            SELECT a.daily_limit, a.rpm_limit
+            FROM accounts a
+            WHERE a.id IN (
+                SELECT b.account_id
+                FROM account_owner_bindings b
+                WHERE b.platform_user_id = ? AND b.status = 'active'
+                UNION
+                SELECT r.runtime_account_id
+                FROM universe_residents r
+                JOIN universes u ON u.id = r.universe_id
+                WHERE u.owner_platform_user_id = ?
+                  AND r.runtime_account_id IS NOT NULL
+            )
+            """,
+            (platform_user_id, platform_user_id),
+        ).fetchall()
+        daily_values = {row["daily_limit"] for row in rows}
+        rpm_values = {row["rpm_limit"] for row in rows}
+        daily = next(iter(daily_values)) if len(daily_values) == 1 else None
+        rpm = next(iter(rpm_values)) if len(rpm_values) == 1 else None
+        if daily is not None or rpm is not None:
+            conn.execute(
+                "UPDATE platform_users SET daily_limit = ?, rpm_limit = ?, "
+                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) "
+                "WHERE id = ?",
+                (daily, rpm, platform_user_id),
+            )
+
+
+def _migration_0032_rpm_hit_double_precision(conn: Connection) -> None:
+    """PG：把 Unix epoch 命中时间从单精度 REAL 升级为双精度。
+
+    PostgreSQL REAL 只有 24 位尾数，2026 epoch 的量化步长约 128 秒，会让 60 秒 RPM
+    窗口随机误删刚写入的命中；SQLite REAL 本就是 8 字节浮点，无需迁移。
+    """
+    if is_postgres():
+        conn.execute(
+            "ALTER TABLE rpm_hits ALTER COLUMN hit_at TYPE DOUBLE PRECISION "
+            "USING hit_at::double precision"
+        )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2393,6 +2475,9 @@ _MIGRATIONS = [
     (27, _migration_0027_daily_quota_reservations),
     (28, _migration_0028_companion_world_core),
     (29, _migration_0029_universe_memory_l3),
+    (30, _migration_0030_companion_world_candidates),
+    (31, _migration_0031_platform_user_quota_overrides),
+    (32, _migration_0032_rpm_hit_double_precision),
 ]
 
 

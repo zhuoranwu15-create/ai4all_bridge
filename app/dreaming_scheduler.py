@@ -3,10 +3,13 @@ import logging
 from datetime import datetime, timedelta
 
 from app.time_utils import beijing_now
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from app.db import record_scheduler_heartbeat
 from app.session_lifecycle import run_daily_dreaming_scan
+
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
 
 
 logger = logging.getLogger("ai4all.dreaming.scheduler")
@@ -39,11 +42,16 @@ class DreamingScheduler:
         batch_size: int = 100,
         start_hour: int = 4,
         node_id: Optional[str] = None,
+        memory_sink: Optional["MemorySink"] = None,
+        memory_compactor: Optional[Callable[..., Dict[str, Any]]] = None,
     ) -> None:
         self.batch_size = max(int(batch_size), 1)
         self.start_hour = max(0, min(int(start_hour), 23))
         # 厚节点改造 P4：节点角色时只扫本节点账号
         self.node_id: Optional[str] = node_id or None
+        self.memory_sink = memory_sink
+        self.memory_compactor = memory_compactor
+        self._memory_compact_cursor: Optional[str] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -64,6 +72,7 @@ class DreamingScheduler:
             ),
             "last_run": self.last_run,
             "last_error": self.last_error,
+            "memory_compact_cursor": self._memory_compact_cursor,
         }
 
     async def run_once(self, *, now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -72,7 +81,16 @@ class DreamingScheduler:
             now=now,
             limit=self.batch_size,
             node_id=self.node_id,
+            memory_sink=self.memory_sink,
         )
+        if self.memory_compactor is not None:
+            compact_result = await asyncio.to_thread(
+                self.memory_compactor,
+                limit=self.batch_size,
+                after_universe_id=self._memory_compact_cursor,
+            )
+            self._memory_compact_cursor = compact_result.get("next_cursor")
+            result["memory_compaction"] = compact_result
         self.last_run = result
         self.last_error = None
         return result
@@ -174,6 +192,8 @@ def start_dreaming_scheduler(
     batch_size: int,
     start_hour: int = 4,
     node_id: Optional[str] = None,
+    memory_sink: Optional["MemorySink"] = None,
+    memory_compactor: Optional[Callable[..., Dict[str, Any]]] = None,
 ) -> DreamingScheduler:
     global _scheduler
     if _scheduler is None:
@@ -181,6 +201,8 @@ def start_dreaming_scheduler(
             batch_size=batch_size,
             start_hour=start_hour,
             node_id=node_id,
+            memory_sink=memory_sink,
+            memory_compactor=memory_compactor,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -200,6 +222,13 @@ async def run_dreaming_scheduler_once(
     batch_size: int,
     node_id: Optional[str] = None,
     now: Optional[datetime] = None,
+    memory_sink: Optional["MemorySink"] = None,
+    memory_compactor: Optional[Callable[..., Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    scheduler = DreamingScheduler(batch_size=batch_size, node_id=node_id)
+    scheduler = DreamingScheduler(
+        batch_size=batch_size,
+        node_id=node_id,
+        memory_sink=memory_sink,
+        memory_compactor=memory_compactor,
+    )
     return await scheduler.run_once(now=now)

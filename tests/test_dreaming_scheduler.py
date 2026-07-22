@@ -66,3 +66,45 @@ def test_dreaming_scheduler_keeps_error_status_during_wait(monkeypatch):
     )
 
     assert heartbeats == [("error", "boom")]
+
+
+def test_dreaming_scheduler_injects_sink_and_runs_compact_batch(monkeypatch):
+    from app import dreaming_scheduler as module
+
+    marker_sink = object()
+    scan_calls = []
+    compact_calls = []
+
+    def fake_scan(**kwargs):
+        scan_calls.append(kwargs)
+        return {"status": "ok", "scanned": 0, "results": []}
+
+    def fake_compact(**kwargs):
+        compact_calls.append(kwargs)
+        return {
+            "scanned": 1,
+            "merged_groups": 1,
+            "superseded_facts": 2,
+            "next_cursor": "uni-next",
+            "results": [],
+        }
+
+    monkeypatch.setattr(module, "run_daily_dreaming_scan", fake_scan)
+    scheduler = module.DreamingScheduler(
+        batch_size=7,
+        memory_sink=marker_sink,
+        memory_compactor=fake_compact,
+    )
+    result = asyncio.run(scheduler.run_once(now=datetime(2026, 7, 22, 4, 5)))
+
+    assert scan_calls == [
+        {
+            "now": datetime(2026, 7, 22, 4, 5),
+            "limit": 7,
+            "node_id": None,
+            "memory_sink": marker_sink,
+        }
+    ]
+    assert compact_calls == [{"limit": 7, "after_universe_id": None}]
+    assert result["memory_compaction"]["merged_groups"] == 1
+    assert scheduler.status()["memory_compact_cursor"] == "uni-next"

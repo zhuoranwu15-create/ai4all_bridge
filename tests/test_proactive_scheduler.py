@@ -20,6 +20,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     account_calls = []
     reactivation_calls = []
     expired_content_calls = []
+    reclaim_calls = []
 
     def fake_dispatch_reminders(**kwargs):
         reminder_calls.append(kwargs)
@@ -41,6 +42,10 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         expired_content_calls.append(kwargs)
         return [{"status": "expired", "invitation_id": "ci-expired"}]
 
+    def fake_reclaim_quota_reservations(**kwargs):
+        reclaim_calls.append(kwargs)
+        return 2
+
     scheduler = ProactiveScheduler(
         interval_seconds=0,
         batch_size=5,
@@ -51,6 +56,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         dispatch_reactivation=fake_dispatch_reactivation,
         expire_content_invitations=fake_expire_content_invitations,
         scan_account_checks=fake_scan_account_checks,
+        reclaim_quota_reservations=fake_reclaim_quota_reservations,
     )
     now = datetime(2026, 5, 22, 10, 0)
 
@@ -62,6 +68,8 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert result["account_check_count"] == 1
     assert result["reactivation_count"] == 1
     assert result["expired_content_invitation_count"] == 1
+    assert result["reclaimed_quota_reservations"] == 2
+    assert reclaim_calls == [{"now": "2026-05-22 10:00:00", "limit": 5}]
     assert reactivation_calls == [{"now": now, "limit": 5, "node_id": None}]
     assert reminder_calls == [
         {
@@ -118,6 +126,7 @@ def test_proactive_scheduler_run_once_isolates_failing_step():
         dispatch_reactivation=fake_reactivation,
         expire_content_invitations=lambda **kw: [],
         scan_account_checks=lambda **kw: [],
+        reclaim_quota_reservations=lambda **kw: 0,
     )
     now = datetime(2026, 5, 22, 10, 0)
 

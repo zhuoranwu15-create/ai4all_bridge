@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta
 
 from app.time_utils import beijing_now
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from app.config import settings
 from app.db import (
@@ -15,8 +15,18 @@ from app.db import (
     update_session_rolling_summary,
 )
 
+if TYPE_CHECKING:
+    from app.agent_runtime.ports import MemorySink
+
 
 logger = logging.getLogger("ai4all.session_lifecycle")
+_default_memory_sink: Optional["MemorySink"] = None
+
+
+def configure_memory_sink(memory_sink: Optional["MemorySink"]) -> None:
+    """配置懒轮转使用的进程级默认 typed sink；传 None 清除。"""
+    global _default_memory_sink
+    _default_memory_sink = memory_sink
 
 
 def business_day_for(
@@ -52,6 +62,7 @@ def _fallback_close_summary(
     session_id: int,
     close_reason: str,
     source_business_day: Optional[str],
+    memory_sink: Optional["MemorySink"],
 ) -> Dict[str, Any]:
     from app.dreaming import DREAMING_PROMPT_VERSION, run_dreaming
 
@@ -65,6 +76,7 @@ def _fallback_close_summary(
         actor_type="system",
         actor_id="session_lifecycle",
         allow_fallback=True,
+        memory_sink=memory_sink,
     )
     summary = result.get("session_summary") or {}
     from app.llm import get_active_llm_model
@@ -85,20 +97,25 @@ def _rotate_session_with_dreaming(
     *,
     session: Dict[str, Any],
     close_reason: str,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     account_id = str(session["account_id"])
     session_id = int(session["id"])
     source_business_day = session.get("business_day")
+    effective_memory_sink = (
+        memory_sink if memory_sink is not None else _default_memory_sink
+    )
     summary = _fallback_close_summary(
         account_id=account_id,
         session_id=session_id,
         close_reason=close_reason,
         source_business_day=source_business_day,
+        memory_sink=effective_memory_sink,
     )
     # 按 session **自身** 的 active key 归档（§7.1）：被轮转的 session 一定是某个 scope
     # 的 active session，其 session_key 即该 scope 的 active key（微信 __account_active__
-    # / Web __web_active__）。据此归档使两 scope 的 closed 段各带自身前缀、互不串。回落到
-    # 微信常量仅为兼容极端缺字段的情况（正常路径 session_key 必有值）。
+    # / Web __web_active__ / App __app_active__）。据此归档使各 scope 的 closed 段都带自身
+    # 前缀、互不串。回落到微信常量仅为兼容极端缺字段的情况（正常路径 session_key 必有值）。
     active_key = str(session.get("session_key") or ACCOUNT_ACTIVE_SESSION_KEY)
     archived_session_key = f"{active_key}:{session_id}"
     close_session(
@@ -123,11 +140,12 @@ def get_or_create_account_active_session_with_dreaming(
     business_day: Optional[str] = None,
     active_session_key: str = ACCOUNT_ACTIVE_SESSION_KEY,
     update_account_channel: bool = True,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     """Return active session, rotating with LLM Dreaming before creating a new one.
 
     ``active_session_key`` 选定 conversation_scope（§7.1）：微信默认
-    ``__account_active__``（行为不变），Web 传 ``__web_active__``，两渠道各自独立对话线。
+    ``__account_active__``（行为不变），Web/App 传各自 active key，各渠道独立对话线。
 
     ``update_account_channel=False``（§3）：本次不改写已存在账号的 ``accounts.channel``
     （供 Web 首触已绑微信账号时保留原渠道）。默认 True，微信路径行为不变。
@@ -156,6 +174,7 @@ def get_or_create_account_active_session_with_dreaming(
     summary = _rotate_session_with_dreaming(
         session=session,
         close_reason=close_reason,
+        memory_sink=memory_sink,
     )
     next_state = get_or_create_session(
         account_id=account_id,
@@ -189,7 +208,7 @@ def _maybe_seed_new_session_from_last_closed(session: Dict[str, Any]) -> None:
     if int(session.get("turn_count") or 0) > 0:
         return
     # 只承接**同 scope** 的上一段 carryover（§7.2 Model B）：新 active session 的
-    # session_key 即其 scope 的 active key（微信 __account_active__ / Web __web_active__），
+    # session_key 即其 scope 的 active key（微信 / Web / App 各自的 active key），
     # 据此过滤归档段前缀，避免跨渠道 carryover 泄漏。微信单渠道下与不过滤等价现状。
     active_key = str(session.get("session_key") or ACCOUNT_ACTIVE_SESSION_KEY)
     seed = (
@@ -215,6 +234,7 @@ def run_daily_dreaming_scan(
     now: Optional[datetime] = None,
     limit: int = 100,
     node_id: Optional[str] = None,
+    memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, Any]:
     """Scan active sessions from previous business days and rotate them.
 
@@ -236,6 +256,7 @@ def run_daily_dreaming_scan(
             _rotate_session_with_dreaming(
                 session=session,
                 close_reason="daily_dreaming",
+                memory_sink=memory_sink,
             )
             refreshed = get_session(session_id=int(session["id"]))
             results.append(
