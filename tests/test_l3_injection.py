@@ -1,6 +1,6 @@
-"""M2-B1：L3 读注入接缝 —— 域层渲染 + read_universe_context + seam① extra_blocks 贯穿/no-op。
+"""M2-B1：L3 读注入接缝 —— 域层渲染 + platform composition + extra_blocks 贯穿/no-op。
 
-验证：①域层 render_universe_l3_block 分组渲染/空→None/坏 JSON 不崩；②read_universe_context
+验证：①域层 render_universe_l3_block 分组渲染/空→None/坏 JSON 不崩；②platform composition
 读 active L3 facts 渲染成块、空世界→None、跨 universe 锚隔离；③seam① 把 extra_blocks 贯穿到
 system prompt（build_turn_llm_input 直测 + run_turn_for_account 端到端）；④form-A 默认空 extra_blocks
 → prompt 无 L3 段（零回归）。
@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 import app.db as db
 from app.domains.companion_world.l3_context import (
-    read_universe_context,
     render_universe_l3_block,
 )
+from app.platform.companion_world_turn import read_companion_world_context
 from app.prompt_builder import ContextBlock
 
 _MARKER = "MARKER_L3_XYZ"
@@ -44,19 +44,19 @@ def test_render_bad_json_falls_back_no_throw():
 
 
 # ---------------------------------------------------------------------------
-# 2. read_universe_context（db）：读渲染 + 空→None + 跨 universe 锚隔离
+# 2. platform composition：读渲染 + 空→None + 跨 universe 锚隔离
 # ---------------------------------------------------------------------------
 def _pu_universe(phone: str):
     pu = db.create_or_get_platform_user_by_phone(phone=phone, display_name="x")["id"]
     return pu, db.get_or_create_home_universe(platform_user_id=pu)
 
 
-def test_read_universe_context_empty_is_none(fresh_db):
+def test_read_companion_world_context_empty_is_none(fresh_db):
     _, w = _pu_universe("19933330001")
-    assert read_universe_context(universe_id=w["id"]) is None  # 空世界 → 不注入
+    assert read_companion_world_context(w["id"]) is None  # 空世界 → 不注入
 
 
-def test_read_universe_context_renders_and_isolates(fresh_db):
+def test_read_companion_world_context_renders_and_isolates(fresh_db):
     _, wa = _pu_universe("19933330002")
     _, wb = _pu_universe("19933330003")
     db.append_universe_fact(
@@ -67,9 +67,22 @@ def test_read_universe_context_renders_and_isolates(fresh_db):
         universe_id=wb["id"], fact_type="user_identity",
         payload_json='{"name":"别人世界"}', occurred_at="2026-07-21 10:01:00",
     )
-    blk = read_universe_context(universe_id=wa["id"])
+    blk = read_companion_world_context(wa["id"])
     assert blk is not None and "birth_date：1990-01-01" in blk.text
     assert "别人世界" not in blk.text  # 跨 universe 锚隔离：只含本世界 facts
+
+
+def test_l3_background_switch_disables_read(fresh_db, monkeypatch):
+    _, world = _pu_universe("19933330004")
+    db.append_universe_fact(
+        universe_id=world["id"], fact_type="user_identity",
+        payload_json='{"name":"不应注入"}', occurred_at="2026-07-21 10:02:00",
+    )
+    monkeypatch.setattr(
+        "app.platform.companion_world_turn.settings.companion_world_l3_background_enabled",
+        False,
+    )
+    assert read_companion_world_context(world["id"]) is None
 
 
 # ---------------------------------------------------------------------------

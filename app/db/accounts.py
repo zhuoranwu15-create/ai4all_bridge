@@ -59,6 +59,7 @@ __all__ = [
     'get_session',
     'get_session_for_account_and_key',
     'get_usage_last_7_days',
+    'resolve_effective_quota_limits',
     'get_valid_verification_by_token',
     'get_verification_by_token',
     'increment_daily_usage',
@@ -1235,6 +1236,9 @@ def update_account(
     if current is None:
         return None
     with connect() as conn:
+        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        next_daily = current.get("daily_limit") if daily_limit is _UNSET else daily_limit
+        next_rpm = current.get("rpm_limit") if rpm_limit is _UNSET else rpm_limit
         conn.execute(
             """
             UPDATE accounts
@@ -1248,11 +1252,48 @@ def update_account(
             (
                 current.get("display_name") if display_name is _UNSET else display_name,
                 current.get("notes") if notes is _UNSET else notes,
-                current.get("daily_limit") if daily_limit is _UNSET else daily_limit,
-                current.get("rpm_limit") if rpm_limit is _UNSET else rpm_limit,
+                next_daily,
+                next_rpm,
                 account_id,
             ),
         )
+        if platform_user_id is not None and (
+            daily_limit is not _UNSET or rpm_limit is not _UNSET
+        ):
+            user_sets = []
+            user_params = []
+            if daily_limit is not _UNSET:
+                user_sets.append("daily_limit = ?")
+                user_params.append(daily_limit)
+            if rpm_limit is not _UNSET:
+                user_sets.append("rpm_limit = ?")
+                user_params.append(rpm_limit)
+            user_sets.append(
+                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+            )
+            conn.execute(
+                f"UPDATE platform_users SET {', '.join(user_sets)} WHERE id = ?",
+                (*user_params, platform_user_id),
+            )
+            owned_ids = _account_ids_for_platform_user(conn, platform_user_id)
+            if owned_ids:
+                placeholders = ", ".join("?" for _ in owned_ids)
+                account_sets = []
+                account_params = []
+                if daily_limit is not _UNSET:
+                    account_sets.append("daily_limit = ?")
+                    account_params.append(daily_limit)
+                if rpm_limit is not _UNSET:
+                    account_sets.append("rpm_limit = ?")
+                    account_params.append(rpm_limit)
+                account_sets.append(
+                    "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+                )
+                conn.execute(
+                    f"UPDATE accounts SET {', '.join(account_sets)} "
+                    f"WHERE id IN ({placeholders})",
+                    (*account_params, *owned_ids),
+                )
     return get_account(account_id=account_id)
 
 
@@ -1423,6 +1464,112 @@ def resolve_owner_platform_user_id(cursor, account_id: str) -> Optional[str]:
     if world is not None and world["owner"] is not None:
         return str(world["owner"])
     return None
+
+
+def _account_ids_for_platform_user(cursor, platform_user_id: str) -> List[str]:
+    """返回真人当前归属的形态 A accounts 与全部 World resident runtime accounts。"""
+    rows = cursor.execute(
+        """
+        SELECT account_id
+        FROM account_owner_bindings
+        WHERE platform_user_id = ? AND status = 'active'
+        UNION
+        SELECT r.runtime_account_id AS account_id
+        FROM universe_residents r
+        JOIN universes u ON u.id = r.universe_id
+        WHERE u.owner_platform_user_id = ? AND r.runtime_account_id IS NOT NULL
+        """,
+        (platform_user_id, platform_user_id),
+    ).fetchall()
+    return [str(row["account_id"]) for row in rows]
+
+
+def _strictest_effective_limit(values: List[Optional[int]], default: int) -> int:
+    """把遗留 account override 收敛为不可绕过的最严格有效上限。"""
+    effective = [int(default if value is None else value) for value in values]
+    finite = [value for value in effective if value > 0]
+    return min(finite) if finite else 0
+
+
+def resolve_effective_quota_limits(
+    *, account_id: str, default_daily: int, default_rpm: int
+) -> Dict[str, Any]:
+    """解析真人级 daily/RPM 上限；孤儿号保留 per-account 兼容。
+
+    canonical 来源为 ``platform_users``。m0031 前遗留冲突未被静默迁移时，临时读取该
+    真人全部 account 副本并取最严格有效值，保证切换 resident 不会获得更宽配额。
+    """
+    with connect() as conn:
+        account = conn.execute(
+            "SELECT daily_limit, rpm_limit FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        if account is None:
+            return {
+                "daily_limit": int(default_daily),
+                "rpm_limit": int(default_rpm),
+                "source": "default",
+            }
+        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        if platform_user_id is None:
+            return {
+                "daily_limit": int(
+                    default_daily
+                    if account["daily_limit"] is None
+                    else account["daily_limit"]
+                ),
+                "rpm_limit": int(
+                    default_rpm if account["rpm_limit"] is None else account["rpm_limit"]
+                ),
+                "source": "orphan_account",
+            }
+        user = conn.execute(
+            "SELECT daily_limit, rpm_limit FROM platform_users WHERE id = ?",
+            (platform_user_id,),
+        ).fetchone()
+        owned_ids = _account_ids_for_platform_user(conn, platform_user_id)
+        placeholders = ", ".join("?" for _ in owned_ids)
+        legacy_rows = (
+            conn.execute(
+                f"SELECT daily_limit, rpm_limit FROM accounts WHERE id IN ({placeholders})",
+                owned_ids,
+            ).fetchall()
+            if owned_ids
+            else [account]
+        )
+        daily_values = [row["daily_limit"] for row in legacy_rows]
+        rpm_values = [row["rpm_limit"] for row in legacy_rows]
+        canonical_daily = user["daily_limit"] if user is not None else None
+        canonical_rpm = user["rpm_limit"] if user is not None else None
+        daily = (
+            int(canonical_daily)
+            if canonical_daily is not None
+            else _strictest_effective_limit(daily_values, int(default_daily))
+        )
+        rpm = (
+            int(canonical_rpm)
+            if canonical_rpm is not None
+            else _strictest_effective_limit(rpm_values, int(default_rpm))
+        )
+        conflict = (
+            len({int(default_daily if value is None else value) for value in daily_values}) > 1
+            or len({int(default_rpm if value is None else value) for value in rpm_values}) > 1
+        )
+        if conflict and (canonical_daily is None or canonical_rpm is None):
+            logger.warning(
+                "legacy quota override conflict resolved strictly platform_user=%s account=%s "
+                "daily=%s rpm=%s",
+                platform_user_id,
+                account_id,
+                daily,
+                rpm,
+            )
+        return {
+            "daily_limit": daily,
+            "rpm_limit": rpm,
+            "source": "platform_user" if not conflict else "legacy_conflict_strict",
+            "platform_user_id": platform_user_id,
+        }
 
 
 def _resolve_quota_subject(cursor, account_id: str) -> str:

@@ -64,3 +64,13 @@ def test_window_slides_after_configured_window(fresh_db):
 
     # 35s after t0 — all previous hits fall outside the 30s window
     assert rl.check_rpm("acc", 3, window_seconds=30, _now=t0 + 35) is True
+
+
+def test_large_epoch_keeps_sub_window_precision(fresh_db):
+    """PG REAL(float32) 会把该 epoch 向下舍入 61 秒，误删 60 秒窗内刚写的 hit。"""
+    rl = RateLimiter()
+    now = 1_800_000_061.0
+
+    for _ in range(3):
+        assert rl.check_rpm("acc-epoch-precision", 3, _now=now) is True
+    assert rl.check_rpm("acc-epoch-precision", 3, _now=now) is False

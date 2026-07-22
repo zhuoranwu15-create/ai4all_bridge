@@ -1,23 +1,23 @@
 # Companion World M2-C 实施计划
 
-> 状态：**待用户确认后编码**
+> 状态：**已完成并归档（2026-07-22）**。本文件保留为实施 provenance，不再是后续待执行计划；后续接手以 [`../tech_design/companion_world_3_0_refactor_design.md`](../tech_design/companion_world_3_0_refactor_design.md) 为入口。
 >
 > 决策冻结：2026-07-21（ADR §10.1/.2/.6）
 >
 > 代码基线：`main@3f42ee1`（PR #44 已合并）
 >
-> 工作分支：`feat/companion-world-m2c`
+> 工作分支/核查基线：`feat/companion-world-m2c@6000c0b`，Draft PR #45
 
 ## 1. 目标
 
-在不改微信形态 A 行为的前提下，交付朝夕相伴形态 B 的第一个完整多居民闭环：
+在不改微信 turn/prompt/投递入口的前提下，交付朝夕相伴形态 B 的第一个完整多居民闭环；backfill 后 L3 后台沉淀与 proactive 安全阀会作用于 legacy resident，实际边界以上位 ADR 为准：
 
 - 新用户获得一个 home universe 和固定 4 位、版本快照的预设候选；确认后生成 1–10 位独立 runtime resident。
 - 老用户全部 active binding 加性映射为 legacy resident，不重写历史、不自动补居民。
 - App 使用显式 `conversation_id` 访问历史和发 turn，服务端解析 runtime account，客户端不能传 `account_id`。
 - 同世界居民共享新增的用户沉淀事实 L3，私聊原文、检索、L1/L2 继续隔离。
 - App session 纳入每日 Dreaming；真人级 proactive 不因 N 个居民放大。
-- 全功能由默认关闭的 feature flag 门控，可回退到 legacy App/微信路径。
+- 新 World API 与 auth 切换由默认关闭的 feature flag 门控，可退回 legacy App/微信入口。L3 后台链路与 world-aware proactive 安全阀不是该 flag 的子开关；真实回滚边界见上位 ADR“接手说明”。
 
 ## 2. 已冻结口径
 
@@ -55,20 +55,21 @@
 app/routers/companion_world.py
   → app/domains/companion_world/service.py（纯领域编排）
       → 注入的 WorldRepository Protocol
-      → 注入的 AgentRuntimePort
+  → app/agent_runtime/adapter.py（turn composition）
 
 app/platform/companion_world_repository.py
   → app/db/companion_world.py / billing.py / accounts.py
+  → 同一 UoW 内插 runtime account + 激活 resident + 建 conversation
 
 app/agent_runtime/adapter.py
   → app/turn_service.py + Runtime DB 入口
 ```
 
-`app.domains.companion_world.*` 不得 import `app.db.*` 或 `app.turn_service`；`tests/test_layer_boundaries.py` 继续作为阻塞门禁。
+`app.domains.companion_world.*` 不得 import `app.db.*` 或 `app.turn_service`；`app.agent_runtime.*` 不得反向 import `app.domains.*`；`tests/test_layer_boundaries.py` 继续作为阻塞门禁。P1 adapter/L3 I/O 仍含 World 专用参数和 DB 读取，已在上位 ADR 登记为 M3 前需收敛的 D-06 有界实现债。
 
 ## 5. 分批实施
 
-M2-C 各批串行提交；每批可独立测试，feature flag 关闭时 live 行为不变。
+M2-C 各批已串行提交；各批均可独立测试。feature flag 关闭时新 World API/auth 行为不启用，但 C4 L3 后台链路与 C5 proactive 安全阀按 world 数据生效，不能表述为所有 live 行为不变。
 
 ### C0：冻结 schema 补丁 + App Dreaming scope
 
@@ -204,15 +205,27 @@ PG 必须证明：
 5. 观察 bootstrap/confirm 成功率、孤儿数、容量冲突、turn 锁冲突、L3 append/compact、Dreaming 时延。
 6. 扩量前再跑 PG 并发档与 backfill 幂等复核。
 
-回滚：关闭 flag，停止新 world API 与新用户无默认 account 路径；不删除 universe/resident/conversation/L3 数据。既有微信与 legacy `/chat/*` 保持原路。切换后新建且没有 legacy account 的少量用户，回退时重新登录由旧 auth 兼容建号；该数量必须由切换监控可枚举。
+回滚：关闭 flag，停止新 world API 与新用户无默认 account 路径；不删除 universe/resident/conversation/L3 数据。既有微信与 legacy `/chat/*` 保持原入口，但 L3 sink 与 proactive 安全阀不会随 flag 撤销。切换后新建且没有 legacy account 的少量用户，回退时重新登录由旧 auth 兼容建号；该数量必须由切换监控可枚举。
 
-## 8. 编码前仍需的非代码输入
+## 8. 生产启用前仍需的非代码输入
 
 - 4 位首发角色的名称、头像引用、简介、三个标签、`persona_seed_json` 与 `persona_version`。
 - 支持新 auth 响应和 world API 的客户端最低版本号及上线窗口。
 
-这些输入不阻断 C0–C5 的代码/测试夹具开发，但阻断生产 flag 开启；实现不得自行编造正式角色内容。
+这些输入未阻断 C0–C5 的代码/测试夹具开发，但仍阻断生产 flag 开启；实现不得自行编造正式角色内容。客户端还须同步 D-05 L3 全量共享沉淀记忆与 D-08 legacy 离开豁免口径。
 
-## 9. 计划确认后的执行顺序
+## 9. 执行记录
 
-按 C0 → C1 → C2 → C3 → C4 → C5 → C6 串行推进。每批完成后先跑聚焦测试并自审；若发现必须改变冻结产品口径，立即停在该批并回到产品确认，不跨批猜测。
+已按 C0 → C1 → C2 → C3 → C4 → C5 → C6 串行完成：
+
+- C0 `7471ca8`：m0030 + App Dreaming scope。
+- C1 `2f419de`：World 领域/UoW/原子居民创建。
+- C2 `ec980ad`：API、模板导入、legacy backfill、auth 切换。
+- C3 `f5fd3c5`：conversation/history/text turn + PG single-flight。
+- C4 `244d7a7`：typed memory sink + L3 compact。
+- C5 `a47d41e`：真人级 proactive 防 N× 安全阀。
+- C6 `6000c0b`：发布运行手册及文档收尾。
+
+最终门禁：unit 565 passed；SQLite 1424 passed / 8 skipped；PostgreSQL 1428 passed / 4 skipped；`git diff --check` 通过。后续不得从本计划继续追加 C7；M3 起点、产品冻结项和已知偏差统一回到上位 ADR。
+
+M2-C 归档后的 M3 前置收口不计作 C7：m0031 将 quota override 上迁 `platform_user` 并接 central TTL 回收；m0032 修复 PG RPM epoch 单精度；World/L3 turn composition 从 `app.agent_runtime` 移至 `app.platform`。当前状态与门禁以 ADR“接手说明”为准。

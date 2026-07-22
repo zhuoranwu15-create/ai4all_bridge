@@ -41,6 +41,17 @@ def test_gate_allows_form_a_and_only_legacy_primary_resident(fresh_db):
     assert human_level_proactive_allowed(app_b) is False
 
 
+def test_safety_switch_can_restore_legacy_behavior(fresh_db, monkeypatch):
+    _, _primary, secondary = _resident_pair(
+        "19950004009", legacy_primary=True
+    )
+    monkeypatch.setattr(
+        "app.config.settings.companion_world_proactive_safety_enabled",
+        False,
+    )
+    assert human_level_proactive_allowed(secondary) is True
+
+
 def test_planning_blocks_before_human_level_generators(fresh_db):
     from app.proactive.orchestration.planning import (
         plan_new_user_reactivation_candidate,
@@ -211,4 +222,3 @@ def test_per_resident_reminder_and_commitment_are_not_gated(fresh_db, monkeypatc
     assert commitment["status"] == "sent" and len(commitment_calls) == 1
     assert reminder_calls[0]["source"] == "reminder"
     assert commitment_calls[0]["source"] == "commitment"
-

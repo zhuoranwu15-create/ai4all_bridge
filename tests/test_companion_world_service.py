@@ -186,16 +186,6 @@ def test_owner_scoped_resident_and_conversation_resolution(fresh_db):
     assert {item.resident_id for item in service.list_residents(user_a)} == {
         resident_a.resident_id
     }
-    from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
-
-    adapter = DefaultAgentRuntimeAdapter()
-    assert adapter.resolve_conversation_account(
-        resident_a.conversation_id, user_a
-    ) == resident_a.runtime_account_id
-    with pytest.raises(LookupError, match="conversation_not_found"):
-        adapter.resolve_conversation_account(resident_a.conversation_id, user_b)
-
-
 def test_selecting_allows_only_one_custom_candidate(fresh_db):
     user_id = _user("19920001007")
     _seed_catalog()

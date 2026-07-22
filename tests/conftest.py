@@ -292,6 +292,8 @@ def test_settings(tmp_path, db_dsn):
     s.asr_max_duration_ms = 60_000
     s.asr_mock_transcript = ""
     s.companion_world_p1_enabled = False
+    s.companion_world_l3_background_enabled = True
+    s.companion_world_proactive_safety_enabled = True
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""

@@ -5,6 +5,7 @@ import json
 from typing import Any, Dict, Optional
 
 from app.agent_runtime.ports import MemoryEvent, MemorySink
+from app.config import settings
 from app.db import companion_world as world_db
 from app.domains.companion_world.memory_sink import CompanionWorldMemorySink
 
@@ -32,8 +33,10 @@ def append_companion_world_memory_event(event: MemoryEvent) -> None:
     )
 
 
-def build_companion_world_memory_sink() -> MemorySink:
-    """构造生产用 typed memory sink；共享策略留在领域层，I/O 留平台层。"""
+def build_companion_world_memory_sink() -> Optional[MemorySink]:
+    """构造生产用 typed memory sink；后台 L3 开关关闭时返回 None。"""
+    if not bool(getattr(settings, "companion_world_l3_background_enabled", True)):
+        return None
     return CompanionWorldMemorySink(append_companion_world_memory_event)
 
 
@@ -41,6 +44,15 @@ def compact_companion_world_memory_batch(
     *, limit: int, after_universe_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """按稳定游标压缩一批 universe，供单例 DreamingScheduler 调用。"""
+    if not bool(getattr(settings, "companion_world_l3_background_enabled", True)):
+        return {
+            "scanned": 0,
+            "merged_groups": 0,
+            "superseded_facts": 0,
+            "next_cursor": None,
+            "results": [],
+            "disabled": True,
+        }
     universe_ids, next_cursor = world_db.list_universe_ids_for_memory_compact(
         after_universe_id=after_universe_id,
         limit=limit,

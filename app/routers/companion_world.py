@@ -18,8 +18,6 @@ from app.db import (
     get_platform_user_by_session_token,
     try_conversation_turn_lock,
 )
-from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
-from app.domains.companion_world.l3_context import read_universe_context
 from app.domains.companion_world import (
     CandidateRecord,
     CompanionWorldError,
@@ -30,7 +28,7 @@ from app.domains.companion_world import (
 )
 from app.platform import (
     SqlCompanionWorldRepository,
-    build_companion_world_memory_sink,
+    run_companion_world_turn,
 )
 from app.time_utils import beijing_now
 
@@ -440,13 +438,7 @@ def conversation_turn(
         if duplicate is not None:
             result = None
         else:
-            adapter = DefaultAgentRuntimeAdapter(
-                universe_context_loader=lambda universe_id: read_universe_context(
-                    universe_id=universe_id
-                ),
-                memory_sink=build_companion_world_memory_sink(),
-            )
-            result = adapter.send_companion_world_turn(
+            result = run_companion_world_turn(
                 conversation_id=target.conversation_id,
                 universe_id=target.universe_id,
                 resident_id=target.resident_id,

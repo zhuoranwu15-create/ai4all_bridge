@@ -92,6 +92,20 @@ def test_platform_sink_is_noop_for_form_a_and_isolates_universes(fresh_db):
     assert facts_b[0]["source_resident_id"] == scope_b["resident_id"]
 
 
+def test_l3_background_switch_disables_sink_and_compact(fresh_db, monkeypatch):
+    monkeypatch.setattr(
+        "app.platform.companion_world_memory.settings.companion_world_l3_background_enabled",
+        False,
+    )
+    assert build_companion_world_memory_sink() is None
+    assert compact_companion_world_memory_batch(limit=10) == {
+        "scanned": 0,
+        "merged_groups": 0,
+        "superseded_facts": 0,
+        "next_cursor": None,
+        "results": [],
+        "disabled": True,
+    }
 def test_dreaming_emits_only_applied_distilled_memory(fresh_db):
     from app import profile_storage
     from app.dreaming import read_long_term_memory, run_dreaming
@@ -210,4 +224,3 @@ def test_compact_exact_normalized_duplicates_is_idempotent(fresh_db):
     batch = compact_companion_world_memory_batch(limit=10)
     assert batch["scanned"] == 1
     assert batch["merged_groups"] == 0
-

@@ -116,14 +116,10 @@ class AgentRuntimePort(Protocol):
     """域层访问 Agent Runtime 的唯一入口；Runtime 不反向依赖 World（D-06）。
 
     L3 等 shared-context 经 ChannelTurnInput.extra_blocks 携带（接缝①），Runtime 只消费、
-    不认识 universe_id。P1 实际只需 send_turn / resolve_conversation_account
-    （conversation_id→runtime_account_id）/ create_runtime(no-grant, M1-5) / set_read_only(offline)；
-    后两者签名随各自真实调用点（M2-C/M4）落定，configure_persona / get_runtime_summary 无调用方
-    暂不定义（D-02，避免提前锁死）。本骨架先落已冻结、签名清晰的两个方法。
+    不认识 universe_id。P1 当前真实调用点只需 send_turn；conversation/resource owner 解析留在
+    产品 repository/composition，create_runtime(no-grant) 由共享 UoW 的 platform repository 承担。
+    set_read_only(offline) 随 M4 真实调用点落定，configure_persona / get_runtime_summary 无调用方
+    暂不定义（D-02，避免提前锁死）。
     """
 
     def send_turn(self, ctx: "ChannelTurnInput") -> "OpenClawTurnResponse": ...
-
-    def resolve_conversation_account(
-        self, conversation_id: str, owner_platform_user_id: str
-    ) -> str: ...

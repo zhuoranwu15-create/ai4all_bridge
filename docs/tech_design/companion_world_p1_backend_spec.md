@@ -4,7 +4,7 @@
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
 > 上位 ADR：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
-> 核查基线：`feat/companion-world-m2c@a47d41e`（迁移 max 版本 = 30；新世界端点使用稳定 envelope）。
+> 核查基线：当前开发环境 `feat/companion-world-m2c`，Draft PR #45（M3 前置收口后迁移 max 版本 = 32；新世界端点使用稳定 envelope）。
 
 ## 0. 范围与不做项
 
@@ -32,19 +32,23 @@
 - PG conversation single-flight 使用非阻塞 `pg_try_advisory_xact_lock(advisory_lock_key('conv:'+id))`；失败立即返回 `turn_in_progress`。SQLite 只用进程锁作功能回退，不作为并发证明。
 - L3 compact 只合并 fact_type + 规范 JSON 完全一致的重复项；复杂语义冲突不在 P1。central scheduler 单写，PG 同 universe advisory xact lock 兜住 admin run-once 重叠。
 - 真人级 proactive 在 M2 仅落安全阀：form-A 不变，world resident 只有 `legacy_primary_account_id` 放行，App-only fail-closed。App 收件箱/发声人/正式人级聚合仍属 M3。
+- `COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，不门控 L3 sink/compact 或 world-aware proactive 安全阀；关闭 flag 不撤销 backfill 后的数据与安全阀效果。
+- D-09 计数/锁键与 limit override 均已按 `platform_user` 聚合；m0031 一致回填 historical override，冲突遗留值在清理前按最严格值强制，批量 TTL 回收已接 central proactive scheduler。开 flag 前仍须完成 override 对账。
+- D-06 已在 M3 前收口：Runtime adapter 只保留 `send_turn`，World conversation/L3 I/O 与 `ChannelTurnInput` 组装在 `app/platform/companion_world_turn.py`。
+- API/auth、L3 后台与 proactive safety 现有三个正交开关；运行手册在 flag=false backfill 期停 L3、保留防 N× safety，避免把 API flag 误当后台总开关。
 
 ---
 
 ## 1. `fact_type` 枚举全集与路由矩阵（接缝②内容层）
 
-ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**形状**；本节冻结 `fact_type` 的**全集**与**路由目标**。路由决策在域层 `CompanionWorldMemorySink._route(fact_type)` 做，Runtime 只发不判（保持 form-agnostic）。
+ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**形状**；本节冻结 `fact_type` 的**全集**与**路由目标**。路由决策在域层 `CompanionWorldMemorySink.emit(event)` 做，未知类型 fail-closed；Runtime 只发不判。
 
 | `fact_type` | 语义 | 路由层 | 锚点 | 承载 | 依据 |
 |---|---|---|---|---|---|
 | `user_identity` | 真人称呼/身份/基本信息 | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 沉淀记忆全量共享 |
 | `user_preference` | 偏好/口味/禁忌 | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
 | `user_profile_derived` | 派生画像（性格/关系网等） | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
-| ~~`bazi`~~ | ~~八字/命理托管段（L3 首刀）~~ **已废弃 2026-07-21：八字降级为无工具 skill，出生信息走通用 `user_fact`** | — | — | — | ADR §6.5 |
+| ~~`bazi`~~ | ~~八字/命理托管段（L3 首刀）~~ **已废弃 2026-07-21：八字降级为无工具 skill，出生信息按语义归入四类 user facts** | — | — | — | ADR §6.5 |
 | `user_event` | 关于用户的客观事件/里程碑（**非聊天原文**） | **L3** 共享 | `universe_id` | `universe_memory_facts` | D-05 |
 | `relationship` | 关系阶段/漂移/共同历史 | **L2** 隔离 | `account_id` | `account_user_meta` + MEMORY 关系段（现状不变） | D-04/D-05 |
 | `commitment` | 本居民某轮许下的承诺 | **L2** 隔离 | `account_id` | `proactive_commitments`（现状不变） | ADR §11.2 |
@@ -52,10 +56,10 @@ ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**
 **永不走 sink（结构性排除，D-05 边界）**：各居民与用户的**原始聊天记录**（`messages`/session 逐字稿）与其**检索/证据回放**（`tool_evidence_replay`）——永远 per-account，既不产出 `MemoryEvent`、也不进 L3、不跨 `runtime_account`。sink 只承载「沉淀后的结构化事实」，不承载原文。
 
 **路由不变量（测试点）**：
-- L3 类（表 5 行前段）→ 写入必带 `universe_id` 锚；跨 universe 写入拒绝（§2.5）。
+- L3 四类（`user_identity` / `user_preference` / `user_profile_derived` / `user_event`）→ 写入必带 `universe_id` 锚；跨 universe 写入拒绝（§2.5）。
 - L2 类（`relationship`/`commitment`）→ 保持 per-account，**不得**因 sink 改造泄漏到同世界其他 resident。
 - 未知 `fact_type` → sink `emit` 拒绝（fail-closed），不静默丢弃或误路由。
-- 形态 A（微信）：无 `CompanionWorldMemorySink` 注册 → sink 无消费者 → 退化为现状 raw `write_memory`（memory_writer.py:119），零行为变更。
+- 形态 A（微信）：composition 会注册 sink；未映射 world 的 account 在 writer 解析 scope 时安全 no-op。legacy backfill 后的 account 会向对应 universe 追加 L3，但微信/legacy turn 不读取 L3 注入块；该后台行为不受 P1 flag 控制。
 
 `payload_json` 为结构化事实体，**约定不含逐字原文**；provenance（`source_account_id`/`source_resident_id`/`source_message_id`/`occurred_at`）用于审计与 compact 溯源，不进任何 resident 的可读上下文。
 
@@ -63,7 +67,7 @@ ADR §7.3 接缝②冻结了 `MemoryEvent(fact_type, payload, provenance)` 的**
 
 ## 2. P1 Schema
 
-DDL 沿用现有迁移惯例：`TEXT` 主键、中国时区默认时间 `strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))`、`ix_`/`ux_` 索引命名、`_json` 结构化列、`FOREIGN KEY ... REFERENCES accounts(id)`；双后端差异由 `_backend` 垫片处理。M2-A 五表已实际落为 **m0028/m0029**；M2-C 只追加 **m0030**（初始候选 rank + resident 模板唯一关系），不改写既有 28/29。
+DDL 沿用现有迁移惯例：`TEXT` 主键、中国时区默认时间 `strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))`、`ix_`/`ux_` 索引命名、`_json` 结构化列、`FOREIGN KEY ... REFERENCES accounts(id)`；双后端差异由 `_backend` 垫片处理。M2-A 五表落为 **m0028/m0029**，M2-C 追加 **m0030**（初始候选 rank + resident 模板唯一关系），M3 前置追加 **m0031**（真人级 quota override）与 **m0032**（PG RPM epoch 双精度）。
 
 ### 2.1 `universes`（一真人一 home world）
 
@@ -193,8 +197,8 @@ CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_universe_time
 ```
 - **写路径 = SQL 侧原子追加**（仿 `profile_storage.append_file`，ADR §6.3）：各 resident 只 `INSERT` 带 provenance 的事实行，**永不就地改写整表/整段**，天然规避 last-writer-wins（ADR §6.4）。
 - **compact = 单 writer**（挂 DreamingScheduler 单例，ADR §6.6）：合并/去重时 `INSERT` 一条合并行 + 把被合并行 `status='superseded'`、`superseded_by=<新行>`；append-only，不物理删。
-- **读注入（ADR §6.1）**：`read_universe_context(universe_id)` 选 `status='active'` 行按 `fact_type` 渲染文本 → 域层包成 `ContextBlock(name='universe_l3', ...)` 经 `ctx.extra_blocks` 注入（接缝①）。
-- ~~**L3 首刀**：`read_bazi_profile`/`write_bazi_profile` 后端改指本表（`fact_type='bazi'`）~~ **（废弃 2026-07-21：八字降级为无工具 skill、bazi 托管段整体移除；L3 首刀改由通用 `user_fact`/`user_preference` 承载）**。
+- **读注入（ADR §6.1）**：platform composition 的 `read_companion_world_context(universe_id)` 选 `status='active'` 行，调用域层纯渲染生成 `ContextBlock(name='universe_l3', ...)`，经 `ctx.extra_blocks` 注入（接缝①）；Runtime 不接触 `universe_id` 或 World DB。
+- ~~**L3 首刀**：`read_bazi_profile`/`write_bazi_profile` 后端改指本表（`fact_type='bazi'`）~~ **（废弃 2026-07-21：八字降级为无工具 skill、bazi 托管段整体移除；L3 首刀改由四类 user facts 承载）**。
 - **隔离测试点**：写入必带 `universe_id`；`INSERT` 前校验 `source_resident_id` 属于该 `universe_id`（跨 universe 写拒绝）；读取只在同 `universe_id` 内；访客/他人世界零泄漏（复用 visit ACL，M5）。
 
 ### 2.6 事务与并发边界（P1 硬边界，已冻结）
@@ -226,7 +230,7 @@ P1 全部涉锁操作共用**一条全局锁获取序**——按序获取、逆�
 1. **两 resident 并发确认 / 第 10-11 位竞争**：并发 confirm/建居民对**同一世界行**争 L1 → PG 行锁串行。先者取 L1 → `COUNT(status='active')` → 校验 `≤10` → 插 resident(`status='active'`) → 提交释 L1；后者取 L1 → **重新** COUNT（已见前者结果）→ 超限即 `resident_capacity_exceeded`（§4）。偏唯一索引 `ux_universe_residents_runtime` / `ux_ai_conversations_resident` 为确认**重放**的第二道幂等防线（同 account/同 resident 不生成第二行）。
 2. **offline 与新 turn 并发**（P1 只建 `ai_conversations.state` 列，原子切换在 M4）：offline 事务持 L1+L2 置 `state='read_only'`；turn 持**同一把** L2 读 `state` → 二者串行于 L2，不会出现「turn 读到 active、offline 已切 read_only」的撕裂。P1 只需保证 **turn 在 L2 下读 `state`**，`read_only` 即 `conversation_read_only`（§4）拒写。
 3. **同 universe 两 resident 并发写 L3**：**无锁**——L3 为 append-only typed fact（§2.5 / ADR §6.4），各 resident 只 `INSERT` 带 provenance 行，天然无写冲突、无 last-writer-wins；compact 由**单 writer**（DreamingScheduler 单例，ADR §6.6）串行执行 `INSERT 合并行 + status='superseded'`，不与在线写争锁。
-4. **跨居民同真人并发扣配额**：两 turn 同 `platform_user` 争 L3 → 串行预占、不超卖；失败**只回滚本 reservation**、不误伤他人配额（D-09 退款矩阵）。崩溃残留 reservation 由 TTL 回收（D-09-5）。
+4. **跨居民同真人并发扣配额**：两 turn 同 `platform_user` 争 L3 → 串行预占、不超卖；失败**只回滚本 reservation**、不误伤他人配额（D-09 退款矩阵）。崩溃残留 reservation 带 TTL，由下次 reserve 的 prune-on-touch 或 central proactive scheduler 批量清理。
 
 旧 App 路径的进程内 `threading.Lock` 不再承担 P1 world turn；新端点使用上表 L2，多节点一致。SQLite 档的进程锁只验功能（D-12），锁语义不作数。
 
@@ -294,7 +298,7 @@ def backfill_user(platform_user_id):
 2. **候选/版本快照**：candidate 钉住 `character_template_id + template_version`；已发布模板版本不可原地改写。运营换版用“新行 + 退休旧行”，只影响尚未 bootstrap 的新世界；既有 candidate 仍可确认，既有 runtime persona 永不被静默覆盖。
 3. **老用户全量映射、不自动补居民**：全部 active binding → legacy resident；最早一条只作 `legacy_primary_account_id` 兼容锚。已有居民即 `confirmed`，不重放 onboarding、不加四位预设；无 active binding 保持 `preparing`，按新用户 bootstrap；满 10 全保留并禁新增。
 4. **App Dreaming 纳入定时扫描**：`__app_active__` 加入 `DEFAULT_ACTIVE_SESSION_KEYS`；L1/L2 仍 per-runtime，L3 compact per-universe 单 writer。中心单例 scheduler 执行，节点不重复，不产生主动消息。
-5. **运营目录上线闸**：M2-C feature flag 默认关闭；启用前必须通过只读预检证明 rank 1..4 齐全、版本/persona/avatar 元数据完整。目录不完整时 bootstrap 返回 `preset_catalog_not_ready`，不得生成半套候选。
+5. **运营目录上线闸**：M2-C feature flag 默认关闭；启用前必须通过只读预检证明 rank 1..4 齐全、版本/persona/avatar 元数据完整。目录不完整时 bootstrap 返回 `preset_catalog_not_ready`，不得生成半套候选。该 flag 只控制新 API/auth，不是 L3/proactive 后台总开关。
 6. **新旧 auth 切换**：flag 关闭时 `/v1/auth/session` 完全保持现状；flag 开启后，切换截点之后的新用户只创建 `platform_user + session`，不再预建默认 runtime account/binding，session 响应 `account` 可为空并进入 world bootstrap。截点前用户先完成 §2.8 backfill；启用须与支持该响应的客户端最低版本同步。
 
 ---
@@ -386,10 +390,10 @@ HTTP 语义约定：400 请求契约违反 / 401 未鉴权 / 403 资源被禁 / 
 - **客户端口径对齐**：gap-analysis §4.2「默认隔离/白名单」需按 D-05「全量共享沉淀记忆」镜像更新（本轮不动客户端仓库）。
 - **App scope 漏扫已冻结修复**（ADR §6.6 / 本文 §2.9）：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并覆盖 App scope 每日轮转；L3 compact 仍是 per-universe 单 writer。
 
-## 6. 发布状态（2026-07-22）
+## 6. 发布与接手状态（2026-07-22）
 
-- C0–C5 代码已完成，迁移版本 30，`COMPANION_WORLD_P1_ENABLED` 默认 false。
-- 最终门禁：unit 565 passed；SQLite 1424 passed / 8 skipped；PostgreSQL 1428 passed / 4 skipped。
+- C0–C5 代码与 C6 文档/运行手册已完成；M3 前置 D-06/D-09 收口与 PG RPM 精度修复追加 m0031/m0032，`COMPANION_WORLD_P1_ENABLED` 默认 false；当前在 Draft PR #45，尚未并入 main。
+- 当前门禁：unit 566 passed；SQLite 1434 passed / 8 skipped；PostgreSQL 1438 passed / 4 skipped。
 - 已有运营工具：`scripts/import_companion_world_presets.py`（manifest 校验、dry-run、immutable/version 闸）与 `scripts/backfill_companion_world.py`（dry-run、cutoff、resume、逐用户事务）。
-- 代码完成不等于生产完成：正式四模板、客户端最低版本、生产模板导入/backfill/对账仍缺现场证据，故不得提前开 flag。
+- 代码完成不等于生产完成：正式四模板、客户端最低版本、客户端共享/legacy 豁免口径同步、生产模板导入/backfill/对账、D-09 override 冲突预检仍缺现场证据，故不得提前开 flag。
 - 发布和回滚步骤以 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册) 为准。

@@ -4,6 +4,7 @@
 > [`tech_design/companion_world_3_0_refactor_design.md`](tech_design/companion_world_3_0_refactor_design.md)
 > 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md) 为准；本文只做浓缩。
 > 更新日期：2026-07-22
+> 后续开发统一从上位 ADR 的“接手说明”开始；M2-C 实施计划已完成归档。
 
 ---
 
@@ -42,9 +43,9 @@
 ### 里程碑（M0→M5，串行、每阶段独立可回滚）
 | 里程碑 | 目标 | 产品冻结门槛 |
 |---|---|---|
-| **M0** 冻结·脚手架·护栏 | 保护现状 + 分层门禁 | 无，可立即开工 |
-| **M1** 计费/配额锚点上迁 | 钱包/配额/RPM 锚到 `platform_user`（趁多居民未上线先独立发布） | 无，可立即开工 |
-| **M2** Runtime facade + 多居民 | universe/resident/conversation + L3 首刀 | §10.1/.2/.6 |
+| **M0** 冻结·脚手架·护栏 | 保护现状 + 分层门禁 | ✅ 已交付 |
+| **M1** 计费/配额锚点上迁 | 钱包/配额/RPM 锚到 `platform_user`（趁多居民未上线先独立发布） | ✅ 已交付；m0031 收口 override/TTL |
+| **M2** Runtime facade + 多居民 | universe/resident/conversation + L3 首刀 | ✅ 代码已交付，default-off |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | outbox + App 收件箱 + 去 N× 打扰 | §10.7/.11/.12/.13 |
 | **M4** 生命周期 + 信箱 | offline+farewell 原子事务、信箱 | §10.3/.4/.8 |
 | **M5** 访客 + 真人聊天 | slot/高熵邀请码/ACL、真人分表 | §10.9 |
@@ -63,7 +64,7 @@
 ## 四、进度与发布状态（截至 2026-07-22）
 
 > PR #44 已于 2026-07-21 合并到 main（merge commit `3f42ee1`）。M2-C 已在
-> `feat/companion-world-m2c` 完成 C0–C5，feature flag 仍默认关闭。
+> `feat/companion-world-m2c@6000c0b` 完成 C0–C6，并提交为 Draft PR #45；feature flag 仍默认关闭。
 
 ### 已交付
 
@@ -74,21 +75,25 @@
 - **C3 `f5fd3c5`**：conversation list/history/text turn、owner ACL、防枚举、PG 非阻塞 advisory single-flight、L3 同世界注入。
 - **C4 `244d7a7`**：Dreaming `fact_type`、fail-closed typed sink、resident→universe L3 append、exact-normalized compact 与 central-only single writer。
 - **C5 `a47d41e`**：真人级 proactive 防 N× 安全阀；仅 legacy primary 可触发，App-only fail-closed；reminder/commitment 仍 per-resident。
+- **C6 `6000c0b`**：发布运行手册、测试结果和文档收尾。
 
 ### 当前发布闸
 
-- `make test-unit`：**565 passed / 867 deselected**。
-- `make test`（SQLite）：**1424 passed / 8 skipped**。
-- `make test-pg`（PostgreSQL）：**1428 passed / 4 skipped**。
+- `make test-unit`：**566 passed / 876 deselected**。
+- `make test`（SQLite）：**1434 passed / 8 skipped**。
+- `make test-pg`（PostgreSQL）：**1438 passed / 4 skipped**。
 - `git diff --check`：通过。PG 继续作为容量竞争、single-flight、配额和 L3 并发的权威。
 - 非阻断告警：既有 Pydantic/FastAPI deprecated warning；`test_image_turn` mock 有一次 `asyncio.to_thread` 未 await RuntimeWarning，无失败。
 
 ### 生产状态与阻断项
 
-- 代码迁移已到 **m0030**，但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
+- 代码迁移已到 **m0032**（M2-C m0030 + M3 前置 D-06/D-09 收口 + PG RPM epoch 精度修复），但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
 - `COMPANION_WORLD_P1_ENABLED=false` 仍是默认值；尚未授权开启。
+- API/auth、L3 后台、proactive safety 已拆成三个正交开关；发布期可在保留防 N× safety 的同时独立停止 L3，回滚不再需要临时发版。
 - 正式四位首发角色 manifest（名称、头像、简介、三个标签、persona、版本）尚未提供，代码没有编造默认人设。
 - 支持 `account:null` + world bootstrap 的客户端最低版本/上线窗口尚未提供。
+- 客户端文档仍需同步“L3 共享沉淀记忆”和“legacy resident 离开豁免”两项冻结口径。
+- D-06 composition 已移出 Runtime；D-09 override 已上迁 `platform_user`，reservation TTL 已接 central scheduler。开 flag 前仍须完成遗留 override 对账。
 - 生产模板导入、带固定 cutoff 的 backfill dry-run/实跑、数据对账尚待按 [后台管理说明](guides/admin_guide.md#companion-world-p1-发布运行手册) 现场执行。
 
 因此当前结论是：**M2-C 代码闭环完成、默认关闭、尚未达到生产开 flag 条件**。回滚始终是先关 flag；不删除 world/resident/conversation/L3 数据。
@@ -97,7 +102,8 @@
 
 ## 五、下一步
 
-1. 取得运营签字的四模板 manifest 与客户端最低版本。
-2. 在 flag=false 下部署 m0030，依次完成模板导入、固定 cutoff backfill 和只读对账。
-3. 复跑最终双后端门禁，小流量开启 flag 并观察 bootstrap/confirm/turn/L3/Dreaming 指标。
-4. M3–M5 继续等待各自 §10 产品冻结项；M3 负责 App 通知收件箱与真人级 proactive 正式上提，M4/M5 不在本次范围。
+1. 完成 Draft PR #45 评审；后续开发从上位 ADR 接手，不再从 M2-C plan 续写。
+2. 取得运营签字的四模板 manifest、客户端最低版本，并同步客户端两项冻结口径。
+3. 在 flag=false 下部署至 m0032，依次完成模板导入、固定 cutoff backfill、override 对账和全量只读核验。
+4. 复跑最终双后端门禁，小流量开启 flag 并观察 bootstrap/confirm/turn/L3/Dreaming 指标。
+5. D-06/D-09 前置已收口；M3 仍须等待 §10.7/.11/.12/.13 产品冻结项，不得提前编码。

@@ -14,7 +14,7 @@ from app.proactive.obligations.reminders import (
 from app.proactive.orchestration.planning import scan_due_proactive_account_checks
 from app.proactive.recall.hot_topic import refresh_hot_topic_pool
 from app.proactive.store.account_state import DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS
-from app.db import record_scheduler_heartbeat
+from app.db import reclaim_expired_reservations, record_scheduler_heartbeat
 from app.time_utils import beijing_naive_now
 
 
@@ -26,6 +26,7 @@ DispatchDueReactivation = Callable[..., List[Dict[str, Any]]]
 ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
 ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
 RefreshHotTopicPool = Callable[..., Dict[str, Any]]
+ReclaimExpiredReservations = Callable[..., int]
 
 logger = logging.getLogger("ai4all.proactive.scheduler")
 
@@ -49,6 +50,7 @@ class ProactiveScheduler:
         expire_content_invitations: ExpireContentInvitations = expire_stale_content_invitations,
         scan_account_checks: ScanDueAccountChecks = scan_due_proactive_account_checks,
         refresh_hot_topics: RefreshHotTopicPool = refresh_hot_topic_pool,
+        reclaim_quota_reservations: ReclaimExpiredReservations = reclaim_expired_reservations,
     ) -> None:
         self.interval_seconds = max(float(interval_seconds), 1.0)
         self.batch_size = max(int(batch_size), 1)
@@ -64,6 +66,7 @@ class ProactiveScheduler:
         self._expire_content_invitations = expire_content_invitations
         self._scan_account_checks = scan_account_checks
         self._refresh_hot_topics = refresh_hot_topics
+        self._reclaim_quota_reservations = reclaim_quota_reservations
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -90,6 +93,17 @@ class ProactiveScheduler:
         # 各步骤相互隔离：单个 dispatcher 抛错只记录并继续，不再让前面的步骤
         # （如 reminders）持续失败时把后面的 reactivation/commitment 发送整轮饿死。
         step_errors: Dict[str, str] = {}
+
+        reclaimed_quota_reservations = 0
+        try:
+            reclaimed_quota_reservations = await asyncio.to_thread(
+                self._reclaim_quota_reservations,
+                now=current.strftime("%Y-%m-%d %H:%M:%S"),
+                limit=self.batch_size,
+            )
+        except Exception as err:  # noqa: BLE001 — 维护步骤失败不拖垮主动消息主链路
+            logger.exception("proactive scheduler step quota_reservations failed: %s", err)
+            step_errors["quota_reservations"] = str(err)
 
         async def _step(name: str, fn: Callable[..., List[Dict[str, Any]]], **kwargs: Any) -> List[Dict[str, Any]]:
             try:
@@ -167,6 +181,7 @@ class ProactiveScheduler:
             "status": "ok" if not step_errors else "partial_error",
             "started_at": started_at.isoformat(timespec="seconds"),
             "finished_at": finished_at.isoformat(timespec="seconds"),
+            "reclaimed_quota_reservations": reclaimed_quota_reservations,
             "reminder_count": len(reminder_results),
             "reminders": reminder_results,
             "dynamic_reminder_count": len(dynamic_reminder_results),

@@ -54,7 +54,6 @@ def test_protocols_declare_methods():
     assert hasattr(ports.MemorySink, "emit")
     assert hasattr(ports.ProactiveDeliveryAdapter, "deliver")
     assert hasattr(ports.AgentRuntimePort, "send_turn")
-    assert hasattr(ports.AgentRuntimePort, "resolve_conversation_account")
     assert hasattr(ports.UnitOfWork, "__enter__") and hasattr(ports.UnitOfWork, "__exit__")
 
 

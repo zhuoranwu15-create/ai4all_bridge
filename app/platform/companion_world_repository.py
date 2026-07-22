@@ -447,6 +447,10 @@ class SqlCompanionWorldRepository(WorldRepository):
 
 def human_level_proactive_allowed(runtime_account_id: str) -> bool:
     """返回某 runtime account 是否可承担真人级主动触达。"""
+    from app.config import settings
+
+    if not bool(getattr(settings, "companion_world_proactive_safety_enabled", True)):
+        return True
     return SqlCompanionWorldRepository().allows_human_level_proactive(
         runtime_account_id
     )
