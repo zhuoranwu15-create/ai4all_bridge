@@ -35,6 +35,7 @@ TASK_USER_META = "user_meta"
 TASK_RELATIONSHIP_STATE = "relationship_state"
 TASK_PROACTIVE_RECALL = "proactive_recall"
 TASK_WEB_COMPLETION = "web_completion"
+TASK_WORLD_CONTENT = "world_content"
 
 # 默认路由：主对话用 pro，后台任务用 flash。可被 settings.llm_task_tiers(JSON) 逐项覆盖。
 _TASK_TIER_DEFAULTS: Dict[str, str] = {
@@ -47,6 +48,7 @@ _TASK_TIER_DEFAULTS: Dict[str, str] = {
     TASK_RELATIONSHIP_STATE: TIER_FLASH,
     TASK_PROACTIVE_RECALL: TIER_FLASH,
     TASK_WEB_COMPLETION: TIER_FLASH,
+    TASK_WORLD_CONTENT: TIER_FLASH,
 }
 _KEY_FIELD_ALIASES = {
     "LLM_API_KEY": "llm_api_key",

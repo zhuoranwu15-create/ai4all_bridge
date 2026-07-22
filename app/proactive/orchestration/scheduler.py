@@ -27,8 +27,40 @@ ExpireContentInvitations = Callable[..., List[Dict[str, Any]]]
 ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
 RefreshHotTopicPool = Callable[..., Dict[str, Any]]
 ReclaimExpiredReservations = Callable[..., int]
+CleanupAppNotifications = Callable[..., Dict[str, Any]]
 
 logger = logging.getLogger("ai4all.proactive.scheduler")
+
+_M3_OBSERVABILITY_KEYS = (
+    "human_claim_success",
+    "human_claim_blocked_24h",
+    "human_claim_blocked_inflight",
+    "human_speaker_cancelled",
+    "human_speaker_reselected",
+)
+
+
+def _collect_m3_observability(*values: Any) -> Dict[str, int]:
+    """递归汇总 dispatcher 返回的低基数真人级观测字段。"""
+
+    totals = {key: 0 for key in _M3_OBSERVABILITY_KEYS}
+
+    def _visit(value: Any) -> None:
+        if isinstance(value, dict):
+            observed = value.get("m3_observability")
+            if isinstance(observed, dict):
+                for key in _M3_OBSERVABILITY_KEYS:
+                    totals[key] += int(observed.get(key) or 0)
+            for key, nested in value.items():
+                if key != "m3_observability":
+                    _visit(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                _visit(nested)
+
+    for value in values:
+        _visit(value)
+    return totals
 
 
 class ProactiveScheduler:
@@ -51,6 +83,8 @@ class ProactiveScheduler:
         scan_account_checks: ScanDueAccountChecks = scan_due_proactive_account_checks,
         refresh_hot_topics: RefreshHotTopicPool = refresh_hot_topic_pool,
         reclaim_quota_reservations: ReclaimExpiredReservations = reclaim_expired_reservations,
+        cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
+        notification_cleanup_batch_size: int = 100,
     ) -> None:
         self.interval_seconds = max(float(interval_seconds), 1.0)
         self.batch_size = max(int(batch_size), 1)
@@ -67,6 +101,10 @@ class ProactiveScheduler:
         self._scan_account_checks = scan_account_checks
         self._refresh_hot_topics = refresh_hot_topics
         self._reclaim_quota_reservations = reclaim_quota_reservations
+        self._cleanup_app_notifications = cleanup_app_notifications
+        self.notification_cleanup_batch_size = max(
+            int(notification_cleanup_batch_size), 1
+        )
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -104,6 +142,25 @@ class ProactiveScheduler:
         except Exception as err:  # noqa: BLE001 — 维护步骤失败不拖垮主动消息主链路
             logger.exception("proactive scheduler step quota_reservations failed: %s", err)
             step_errors["quota_reservations"] = str(err)
+
+        notification_cleanup: Dict[str, Any] = {}
+        if self._cleanup_app_notifications is not None:
+            try:
+                notification_cleanup = await asyncio.to_thread(
+                    self._cleanup_app_notifications,
+                    now=current.strftime("%Y-%m-%d %H:%M:%S"),
+                    limit=self.notification_cleanup_batch_size,
+                )
+                if notification_cleanup.get("errors"):
+                    step_errors["app_notification_cleanup"] = str(
+                        notification_cleanup["errors"]
+                    )
+            except Exception as err:  # noqa: BLE001 — cleanup 与投递步骤相互隔离
+                logger.exception(
+                    "proactive scheduler step app_notification_cleanup failed: %s",
+                    err,
+                )
+                step_errors["app_notification_cleanup"] = str(err)
 
         async def _step(name: str, fn: Callable[..., List[Dict[str, Any]]], **kwargs: Any) -> List[Dict[str, Any]]:
             try:
@@ -176,12 +233,20 @@ class ProactiveScheduler:
             now=current,
             limit=self.batch_size,
         )
+        m3_observability = _collect_m3_observability(
+            reminder_results,
+            dynamic_reminder_results,
+            commitment_results,
+            account_results,
+            reactivation_results,
+        )
         finished_at = beijing_naive_now()
         result = {
             "status": "ok" if not step_errors else "partial_error",
             "started_at": started_at.isoformat(timespec="seconds"),
             "finished_at": finished_at.isoformat(timespec="seconds"),
             "reclaimed_quota_reservations": reclaimed_quota_reservations,
+            "app_notification_cleanup": notification_cleanup,
             "reminder_count": len(reminder_results),
             "reminders": reminder_results,
             "dynamic_reminder_count": len(dynamic_reminder_results),
@@ -197,6 +262,7 @@ class ProactiveScheduler:
             "expired_content_invitation_count": len(expired_content_results),
             "expired_content_invitations": expired_content_results,
             "hot_topic_pool": hot_topic_result,
+            "m3_observability": m3_observability,
             "errors": step_errors or None,
         }
         self.last_run = result
@@ -268,6 +334,19 @@ class ProactiveScheduler:
                     "batch_size": self.batch_size,
                     "bypass_quiet_hours": self.bypass_quiet_hours,
                     "planning_interval_seconds": self.planning_interval_seconds,
+                    "notification_cleanup_enabled": self._cleanup_app_notifications
+                    is not None,
+                    "notification_cleanup_batch_size": self.notification_cleanup_batch_size,
+                    "last_notification_cleanup": (
+                        self.last_run.get("app_notification_cleanup")
+                        if self.last_run
+                        else None
+                    ),
+                    "last_m3_observability": (
+                        self.last_run.get("m3_observability")
+                        if self.last_run
+                        else None
+                    ),
                 },
             )
         except Exception as err:
@@ -288,6 +367,8 @@ def start_proactive_scheduler(
     bypass_quiet_hours: bool = False,
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
     node_id: Optional[str] = None,
+    cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
+    notification_cleanup_batch_size: int = 100,
 ) -> ProactiveScheduler:
     global _scheduler
     if _scheduler is None:
@@ -297,6 +378,8 @@ def start_proactive_scheduler(
             bypass_quiet_hours=bypass_quiet_hours,
             planning_interval_seconds=planning_interval_seconds,
             node_id=node_id,
+            cleanup_app_notifications=cleanup_app_notifications,
+            notification_cleanup_batch_size=notification_cleanup_batch_size,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -318,6 +401,8 @@ async def run_proactive_scheduler_once(
     planning_interval_seconds: int = DEFAULT_ACCOUNT_CHECK_INTERVAL_SECONDS,
     node_id: Optional[str] = None,
     now: Optional[datetime] = None,
+    cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
+    notification_cleanup_batch_size: int = 100,
 ) -> Dict[str, Any]:
     scheduler = ProactiveScheduler(
         interval_seconds=60,
@@ -325,5 +410,7 @@ async def run_proactive_scheduler_once(
         bypass_quiet_hours=bypass_quiet_hours,
         planning_interval_seconds=planning_interval_seconds,
         node_id=node_id,
+        cleanup_app_notifications=cleanup_app_notifications,
+        notification_cleanup_batch_size=notification_cleanup_batch_size,
     )
     return await scheduler.run_once(now=now)

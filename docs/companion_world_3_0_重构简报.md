@@ -2,7 +2,7 @@
 
 > 面向：项目干系人 / 新加入者的快速通读。权威口径以 ADR
 > [`tech_design/companion_world_3_0_refactor_design.md`](tech_design/companion_world_3_0_refactor_design.md)
-> 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md) 为准；本文只做浓缩。
+> 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md)、M3 规范 [`tech_design/companion_world_m3_backend_spec.md`](tech_design/companion_world_m3_backend_spec.md) 为准；本文只做浓缩。
 > 更新日期：2026-07-22
 > 后续开发统一从上位 ADR 的“接手说明”开始；M2-C 实施计划已完成归档。
 
@@ -46,7 +46,7 @@
 | **M0** 冻结·脚手架·护栏 | 保护现状 + 分层门禁 | ✅ 已交付 |
 | **M1** 计费/配额锚点上迁 | 钱包/配额/RPM 锚到 `platform_user`（趁多居民未上线先独立发布） | ✅ 已交付；m0031 收口 override/TTL |
 | **M2** Runtime facade + 多居民 | universe/resident/conversation + L3 首刀 | ✅ 代码已交付，default-off |
-| **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | outbox + App 收件箱 + 去 N× 打扰 | §10.7/.11/.12/.13 |
+| **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | outbox + App 收件箱 + 去 N× 打扰 | ✅ M3-0…M3-6 已完成，default-off |
 | **M4** 生命周期 + 信箱 | offline+farewell 原子事务、信箱 | §10.3/.4/.8 |
 | **M5** 访客 + 真人聊天 | slot/高熵邀请码/ACL、真人分表 | §10.9 |
 
@@ -63,8 +63,8 @@
 
 ## 四、进度与发布状态（截至 2026-07-22）
 
-> PR #44 已于 2026-07-21 合并到 main（merge commit `3f42ee1`）。M2-C 已在
-> `feat/companion-world-m2c@6000c0b` 完成 C0–C6，并提交为 Draft PR #45；feature flag 仍默认关闭。
+> PR #45 已合并（merge commit `363500ea8364dcccd9e7c6e3c7c5eb5ce7ed9392`）。M3 当前在
+> `feat/companion-world-m3` 开发；feature flag 仍默认关闭。
 
 ### 已交付
 
@@ -76,18 +76,24 @@
 - **C4 `244d7a7`**：Dreaming `fact_type`、fail-closed typed sink、resident→universe L3 append、exact-normalized compact 与 central-only single writer。
 - **C5 `a47d41e`**：真人级 proactive 防 N× 安全阀；仅 legacy primary 可触发，App-only fail-closed；reminder/commitment 仍 per-resident。
 - **C6 `6000c0b`**：发布运行手册、测试结果和文档收尾。
+- **M3-1**：m0033 三表、Feed/outbox/通知 reservation 存储原语与领域契约。
+- **M3-2**：用户文字直接发布、post+outbox 同事务、owner Feed API、opaque cursor 与 default-off Feed flag。
+- **M3-3**：独立中心 world-content scheduler、北京双窗口/7 日 eligibility、确定性 AI 作者、slot lease/retry/no-catch-up、outbox worker、heartbeat 与批量游标。
+- **M3-4**：App 通知 owner API、typed AppInboxAdapter、per-resident reminder/commitment 入箱、显式已读、7/30 天及 200 条 central cleanup；微信继续优先，真人级 App-only 仍关闭。
+- **M3-5**：真人级 due/预算/活跃按 owner 聚合，真实微信 legacy primary 优先，App-only 双 flag + 滚动 24 小时 reservation，投递前 speaker 重选/锁定。
+- **M3-6**：三 flag 灰度/回滚运行手册、central 单例约束、Feed/outbox/通知/真人级 heartbeat、只读对账 SQL 与最终门禁。
 
 ### 当前发布闸
 
-- `make test-unit`：**566 passed / 876 deselected**。
-- `make test`（SQLite）：**1434 passed / 8 skipped**。
-- `make test-pg`（PostgreSQL）：**1438 passed / 4 skipped**。
+- `make test-unit`：**567 passed / 912 deselected**。
+- `make test`（SQLite）：**1465 passed / 14 skipped**。
+- `make test-pg`（PostgreSQL）：**1474 passed / 5 skipped**。
 - `git diff --check`：通过。PG 继续作为容量竞争、single-flight、配额和 L3 并发的权威。
 - 非阻断告警：既有 Pydantic/FastAPI deprecated warning；`test_image_turn` mock 有一次 `asyncio.to_thread` 未 await RuntimeWarning，无失败。
 
 ### 生产状态与阻断项
 
-- 代码迁移已到 **m0032**（M2-C m0030 + M3 前置 D-06/D-09 收口 + PG RPM epoch 精度修复），但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
+- 开发分支代码迁移已到 **m0033**（新增 Feed/outbox/通知三表），但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
 - `COMPANION_WORLD_P1_ENABLED=false` 仍是默认值；尚未授权开启。
 - API/auth、L3 后台、proactive safety 已拆成三个正交开关；发布期可在保留防 N× safety 的同时独立停止 L3，回滚不再需要临时发版。
 - 正式四位首发角色 manifest（名称、头像、简介、三个标签、persona、版本）尚未提供，代码没有编造默认人设。
@@ -96,14 +102,29 @@
 - D-06 composition 已移出 Runtime；D-09 override 已上迁 `platform_user`，reservation TTL 已接 central scheduler。开 flag 前仍须完成遗留 override 对账。
 - 生产模板导入、带固定 cutoff 的 backfill dry-run/实跑、数据对账尚待按 [后台管理说明](guides/admin_guide.md#companion-world-p1-发布运行手册) 现场执行。
 
-因此当前结论是：**M2-C 代码闭环完成、默认关闭、尚未达到生产开 flag 条件**。回滚始终是先关 flag；不删除 world/resident/conversation/L3 数据。
+因此当前结论是：**M2-C 与 M3 代码闭环均已完成、默认关闭，尚未达到生产开 flag 条件**。回滚始终是先关对应 flag；不删除 world/resident/conversation/L3、Feed/outbox/notification 加性数据。
+
+### M3 产品项已冻结（2026-07-22）
+
+- Feed 首版只做文字，按 universe 每个北京自然日最多 2 条、上午/傍晚各 1 条；只为已确认、存在 active resident、真人最近 7 天有任一渠道入站的世界生成，允许跳过、不补发。
+- Feed 与通知分入口、分红点；通知拉取不自动已读，支持单条/全部已读。已读保留 7 天、未读保留 30 天、每真人最多 200 条；写入事务内先清最旧已读、再清最旧未读，central scheduler 清到期行并对账。
+- App 真人级消息由最近收到用户入站的 active resident 发声，无历史时确定性回退；微信只允许 legacy primary 使用真实路由发声，首版不支持用户指定。
+- App-only 真人级首版启用但只进拉取式收件箱；独立 flag 默认关闭后灰度，开启后真人级合计每真人滚动 24 小时最多 1 条。per-resident reminder/commitment 不受该 flag 影响。
+- `character_letters`/mailbox 策略仍属 M4，不再阻断 M3。
+- M3-0 已评审冻结；Feed 默认直接发布，不接现有 account-scoped moderation，未来审核按 post/world/platform user 单独设计，AI 内容不得误处罚 resident account。
+- M3-1 已完成 m0033、repository 原语、纯领域契约及双后端/PG 并发门禁。
+- M3-2 已完成用户文字直接发布、事务 outbox、owner Feed API、opaque cursor 与独立 default-off Feed flag。
+- M3-3 已完成独立中心 AI Feed scheduler/outbox worker；生成器不读取私聊/L3，PG 已证明同 slot stale reclaim 单 winner、outbox claim 不重叠及旧 token CAS。生产 Feed 窗口仍未填写。
+- M3-4 已完成 default-off App 收件箱闭环：拉取不自动已读、owner 防枚举、单条/read-all、独立红点、7/30 天和 200 条清理均已接线；App per-resident reminder/commitment 不调用微信网关。
+- M3-5 已完成真人级 proactive 上提：真实微信 primary 优先；App-only 需 inbox + human 双 flag，按真人滚动 24 小时最多一条 visible；活跃与预算跨 owner 全账号聚合，due 扫描按真人折叠，最终 speaker 在投递事务重选并锁定。现有候选默认强绑定原 resident，失活 cancel；显式通用内容才允许重选。SQLite `1465 passed / 14 skipped`，PG `1474 passed / 5 skipped`。
+- M3-6 已完成运行手册、三 flag 灰度/回滚矩阵、central 单例约束、Feed/outbox/通知/真人级 heartbeat 与只读对账 SQL。最终门禁：unit `567 passed`，SQLite `1465 passed / 14 skipped`，PG `1474 passed / 5 skipped`，静态检查通过。
 
 ---
 
 ## 五、下一步
 
-1. 完成 Draft PR #45 评审；后续开发从上位 ADR 接手，不再从 M2-C plan 续写。
-2. 取得运营签字的四模板 manifest、客户端最低版本，并同步客户端两项冻结口径。
-3. 在 flag=false 下部署至 m0032，依次完成模板导入、固定 cutoff backfill、override 对账和全量只读核验。
-4. 复跑最终双后端门禁，小流量开启 flag 并观察 bootstrap/confirm/turn/L3/Dreaming 指标。
-5. D-06/D-09 前置已收口；M3 仍须等待 §10.7/.11/.12/.13 产品冻结项，不得提前编码。
+1. 取得运营签字的四模板 manifest、客户端最低版本，并同步客户端两项冻结口径。
+2. P1/M3 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3 数据对账和全量只读核验；不得把开发分支 m0033 等同于已部署。
+3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
+4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
+5. 若启动 M4，先冻结 §10.3/.8 与 mailbox 触发/冷却/过期/待处理上限，并把已冻结的 §10.4 legacy 离开豁免镜像到客户端；完成前不编码 lifecycle/mailbox。

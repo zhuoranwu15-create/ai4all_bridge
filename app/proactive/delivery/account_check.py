@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.channels import CHANNEL_APP
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
 from app.platform import (
@@ -40,9 +41,6 @@ def decide_account_check_action(
             reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
             now=current,
         )
-    if get_account_touch_state(account_id=account_id, now=current) == STALE:
-        return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
-
     state = get_proactive_account_state(account_id=account_id)
     if state is None:
         return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)
@@ -72,6 +70,14 @@ def decide_account_check_action(
             reason="missing_channel_route",
             now=current,
             metadata={"candidate_id": candidate["id"]},
+        )
+
+    if (
+        route.get("channel") != CHANNEL_APP
+        and get_account_touch_state(account_id=account_id, now=current) == STALE
+    ):
+        return _no_op(
+            account_id=account_id, reason="proactive_touch_stale", now=current
         )
 
     return {

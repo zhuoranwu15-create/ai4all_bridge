@@ -158,6 +158,17 @@ def evaluate_outbound_policy(
         "source": source,
         **(metadata or {}),
     }
+    raw_scope_ids = (metadata or {}).get("human_proactive_account_ids")
+    if isinstance(raw_scope_ids, (list, tuple)):
+        scope_account_ids = tuple(
+            dict.fromkeys(
+                str(item).strip() for item in raw_scope_ids if str(item).strip()
+            )
+        )
+    else:
+        scope_account_ids = ()
+    if account_id not in scope_account_ids:
+        scope_account_ids = (account_id, *scope_account_ids)
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -267,10 +278,13 @@ def evaluate_outbound_policy(
     daily_is_user = user_daily is not None
     daily_limit = user_daily if daily_is_user else _category_daily_limit(category)
     if daily_limit > 0:
-        current_count = get_outbound_daily_usage(
-            account_id=account_id,
-            quota_date=quota_date,
-            product_category=category.value,
+        current_count = sum(
+            get_outbound_daily_usage(
+                account_id=scope_account_id,
+                quota_date=quota_date,
+                product_category=category.value,
+            )
+            for scope_account_id in scope_account_ids
         )
         counts["daily_count"] = current_count
         counts["daily_limit"] = daily_limit
@@ -287,10 +301,13 @@ def evaluate_outbound_policy(
     weekly_limit = freq_limits.get("max_per_week")
     if weekly_limit:
         since = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-        weekly_count = count_outbound_in_window(
-            account_id=account_id,
-            product_category=category.value,
-            since=since,
+        weekly_count = sum(
+            count_outbound_in_window(
+                account_id=scope_account_id,
+                product_category=category.value,
+                since=since,
+            )
+            for scope_account_id in scope_account_ids
         )
         counts["weekly_count"] = weekly_count
         counts["weekly_limit"] = weekly_limit
@@ -306,9 +323,12 @@ def evaluate_outbound_policy(
     # 全局每日总量上限（所有非豁免分类合计）。提醒/task_result 等已在 fast-path 豁免，不计入。
     total_daily_limit = get_total_daily_limit(eff_settings)
     if total_daily_limit is not None:
-        total_count = count_total_proactive_outbound_for_quota_date(
-            account_id=account_id,
-            quota_date=quota_date,
+        total_count = sum(
+            count_total_proactive_outbound_for_quota_date(
+                account_id=scope_account_id,
+                quota_date=quota_date,
+            )
+            for scope_account_id in scope_account_ids
         )
         counts["total_daily_count"] = total_count
         counts["total_daily_limit"] = total_daily_limit
@@ -357,10 +377,13 @@ def evaluate_outbound_policy(
         if avoidance_hours > 0:
             window_start = now
             window_end = now + timedelta(hours=avoidance_hours)
-            reminder_count = get_pending_reminder_count_in_window(
-                account_id=account_id,
-                start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),
-                end_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
+            reminder_count = sum(
+                get_pending_reminder_count_in_window(
+                    account_id=scope_account_id,
+                    start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),
+                    end_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                for scope_account_id in scope_account_ids
             )
             counts["avoidance_user_reminder_count"] = reminder_count
             if reminder_count > 0:
@@ -373,10 +396,13 @@ def evaluate_outbound_policy(
                     metadata=policy_metadata,
                 )
             if spec.avoidance_check_companion:
-                companion_count = get_pending_companion_followup_count_in_window(
-                    account_id=account_id,
-                    start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),
-                    end_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
+                companion_count = sum(
+                    get_pending_companion_followup_count_in_window(
+                        account_id=scope_account_id,
+                        start_at=window_start.strftime("%Y-%m-%d %H:%M:%S"),
+                        end_at=window_end.strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    for scope_account_id in scope_account_ids
                 )
                 counts["avoidance_companion_followup_count"] = companion_count
                 if companion_count > 0:

@@ -332,6 +332,25 @@ class Settings(BaseSettings):
     # 后台安全开关与 API/auth flag 正交：默认保持已交付行为，事故时可独立停 L3 或恢复旧 proactive。
     companion_world_l3_background_enabled: bool = True
     companion_world_proactive_safety_enabled: bool = True
+    # M3 Feed API + 后续 world-content scheduler；与 P1/L3/proactive 开关正交。
+    companion_world_feed_enabled: bool = False
+    companion_world_feed_morning_start: str = ""
+    companion_world_feed_morning_end: str = ""
+    companion_world_feed_evening_start: str = ""
+    companion_world_feed_evening_end: str = ""
+    companion_world_feed_scheduler_interval_seconds: float = 60.0
+    companion_world_feed_scheduler_batch_size: int = 20
+    companion_world_feed_claim_lease_seconds: int = 300
+    companion_world_feed_retry_max_attempts: int = 3
+    companion_world_feed_retry_base_seconds: int = 30
+    companion_world_outbox_batch_size: int = 50
+    companion_world_outbox_claim_lease_seconds: int = 300
+    companion_world_outbox_max_attempts: int = 5
+    # M3 App 拉取式收件箱；读取/visible adapter default-off，已有数据 cleanup 独立运行。
+    companion_world_app_inbox_enabled: bool = False
+    # 真人级 App-only 触达的第二道独立闸；必须与 inbox flag 同时开启。
+    companion_world_app_only_human_proactive_enabled: bool = False
+    companion_world_notification_cleanup_batch_size: int = 100
 
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。

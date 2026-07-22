@@ -563,3 +563,115 @@ COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 4. 若只是 Dreaming 重复 writer，先停多余 scheduler，保留 central 单例；不要删除 superseded L3 历史。
 5. 默认保留 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true`，避免 backfill 后的多居民放大真人级触达；只有明确要恢复旧 per-account 口径时才设为 false。不得删除 world 映射规避。
 6. 修复后从模板预检、固定 cutoff 对账与双后端门禁重新开始，不沿用未审计的半批状态。
+
+## Companion World M3 发布运行手册
+
+本节覆盖文字 Feed、App 拉取式通知和 App-only 真人级主动触达。三项默认关闭、正交灰度；发布前仍须先满足上一节 P1 的模板、backfill、客户端版本和数据对账门槛。
+
+### 1. 开关依赖与回滚边界
+
+| 开关 | 实际门控 | 不门控 | 回滚动作 |
+|---|---|---|---|
+| `COMPANION_WORLD_FEED_ENABLED` | Feed API、AI world-content scheduler、Feed outbox consumer | P1 API、L3、proactive、通知 | 设为 false，并停止 `scripts/run_world_content_scheduler.py` |
+| `COMPANION_WORLD_APP_INBOX_ENABLED` | 通知 API、AppInboxAdapter visible 写入 | 微信 outbound、真人级候选生成、既有通知 cleanup | 设为 false；保留 cleanup 和已存在通知行 |
+| `COMPANION_WORLD_APP_ONLY_HUMAN_PROACTIVE_ENABLED` | 无真实微信路由时的真人级 App reservation/投递 | per-resident reminder/commitment、通知读取、微信 legacy 路径 | 单独设为 false，不要连带关闭 inbox |
+
+App-only 真人级触达的有效条件是 `COMPANION_WORLD_APP_INBOX_ENABLED && COMPANION_WORLD_APP_ONLY_HUMAN_PROACTIVE_ENABLED`。World API 仍另受 `COMPANION_WORLD_P1_ENABLED` 控制；L3 与主动消息安全阀仍分别受 `COMPANION_WORLD_L3_BACKGROUND_ENABLED`、`COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 控制。关闭 M3 开关不删除 post、outbox 或 notification 行，也不执行反向 migration。
+
+### 2. 进程拓扑与灰度顺序
+
+`scripts/run_world_content_scheduler.py` 必须只在一个 central-capable 实例运行。即使 PostgreSQL 的 slot claim 能阻止重复发布，也不得用多实例替代单例部署约束。outbox claim 支持 PG 多 worker，但当前脚本把生成与 outbox 串在同一单例中；不要在 aliyun1、aliyun2 厚节点各启动一份。通知 cleanup 只由 central proactive scheduler 执行，node scheduler 不重复执行。
+
+推荐顺序：
+
+1. 运行 m0033、部署 default-off 代码，确认三个 M3 flag 均为 false。
+2. 先开 `APP_INBOX`，验证 per-resident reminder/commitment、通知拉取/红点/显式已读及 cleanup。
+3. 再开 `FEED` 的用户文字 API；四个北京窗口配置有效后，只启动一份 world-content scheduler，小流量观察 AI Feed。
+4. 最后开 `APP_ONLY_HUMAN_PROACTIVE`，确认真实微信 route 仍唯一优先，再逐步扩量 App-only 真人级触达。
+5. Feed 审核策略未单独评审和测试前不接 moderation；当前语义保持默认直接发布。
+
+### 3. Heartbeat 与告警字段
+
+通过 `GET /admin/ops/status` 查看 `schedulers.heartbeats`：
+
+- `world_content_scheduler.metadata.last_run_metrics`：`feed_slot_claimed`、`feed_slot_claim_conflict`、`feed_slot_skipped`、`feed_retry_scheduled`、`feed_retry_exhausted`、`feed_published`，以及 `outbox_pending/processing/dead/lag_seconds` 和当轮 claim/deliver/fail。
+- `proactive_scheduler.metadata.last_notification_cleanup`：`cancelled_reservations`、`deleted`、`reconciled_users`、`errors`。
+- `proactive_scheduler.metadata.last_m3_observability`：`human_claim_success`、`human_claim_blocked_24h`、`human_claim_blocked_inflight`、`human_speaker_cancelled`、`human_speaker_reselected`。
+
+扩量时应阻断：heartbeat 陈旧/错误、outbox lag 持续增长、`dead>0`、cleanup 连续报错、speaker cancel 异常突增。24 小时拦截本身是正常安全阀命中，应结合成功 claim 与真人实际触达量判断，不按单次命中报警。
+
+### 4. 只读数据对账
+
+生产 PostgreSQL 先记录北京墙钟 `NOW_BJ` 与严格向前 24 小时的 `SINCE_24H`，替换下方示例字面量。除 outbox 状态汇总外，其余异常查询应返回空结果集。
+
+```sql
+-- 每个 universe 每个 AI slot 最多一行，单日最多 morning/evening 两行。
+SELECT universe_id, ai_local_date, ai_slot, COUNT(*) AS rows_in_slot
+FROM universe_posts
+WHERE source_type = 'ai_feed'
+GROUP BY universe_id, ai_local_date, ai_slot
+HAVING COUNT(*) > 1;
+
+SELECT universe_id, ai_local_date, COUNT(*) AS rows_in_day
+FROM universe_posts
+WHERE source_type = 'ai_feed'
+GROUP BY universe_id, ai_local_date
+HAVING COUNT(*) > 2;
+
+-- outbox 队列状态；pending/processing 应回落，dead 必须为 0。
+SELECT status, COUNT(*) AS total, MIN(created_at) AS oldest_created_at
+FROM companion_world_outbox
+GROUP BY status
+ORDER BY status;
+
+-- processing lease 陈旧行；300 秒须替换为部署的 claim lease。
+SELECT id, idempotency_key, attempts, claimed_at, last_error
+FROM companion_world_outbox
+WHERE status = 'processing'
+  AND claimed_at <= '2026-07-22 11:55:00';
+
+-- 每真人未过期 visible 通知不得超过 200。
+SELECT platform_user_id, COUNT(*) AS visible_total
+FROM app_notifications
+WHERE delivery_status = 'visible'
+  AND expires_at > '2026-07-22 12:00:00'
+GROUP BY platform_user_id
+HAVING COUNT(*) > 200;
+
+-- 同真人两次成功真人级 visible 的间隔不得严格小于 24 小时；恰好 24 小时允许。
+SELECT a.platform_user_id, a.id AS earlier_id, b.id AS later_id,
+       a.delivered_at AS earlier_at, b.delivered_at AS later_at
+FROM app_notifications a
+JOIN app_notifications b
+  ON b.platform_user_id = a.platform_user_id
+ AND b.scope = 'human' AND b.delivery_status = 'visible'
+ AND b.delivered_at > a.delivered_at
+ AND b.delivered_at::timestamp < a.delivered_at::timestamp + INTERVAL '24 hours'
+WHERE a.scope = 'human' AND a.delivery_status = 'visible';
+
+-- 同真人不得同时有多个未过期真人级 reservation。
+SELECT platform_user_id, COUNT(*) AS live_reservations
+FROM app_notifications
+WHERE scope = 'human' AND delivery_status = 'reserved'
+  AND claim_expires_at > '2026-07-22 12:00:00'
+GROUP BY platform_user_id
+HAVING COUNT(*) > 1;
+
+-- 最近 24 小时已有 visible 时不得再有 live reservation。
+SELECT DISTINCT r.platform_user_id
+FROM app_notifications r
+JOIN app_notifications v ON v.platform_user_id = r.platform_user_id
+WHERE r.scope = 'human' AND r.delivery_status = 'reserved'
+  AND r.claim_expires_at > '2026-07-22 12:00:00'
+  AND v.scope = 'human' AND v.delivery_status = 'visible'
+  AND v.delivered_at > '2026-07-21 12:00:00';
+```
+
+本地 SQLite 对账时，唯一需要改写的是 `::timestamp + INTERVAL '24 hours'`，替换为 `datetime(a.delivered_at, '+24 hours')`；其他查询可直接使用。示例时间不得原样用于生产。
+
+### 5. 回滚
+
+1. Feed 异常：关闭 `FEED` 并停止 world-content scheduler；保留 outbox，修复后由幂等 consumer 续跑。
+2. 真人级触达异常：只关闭 `APP_ONLY_HUMAN_PROACTIVE`；继续提供通知读取与 per-resident obligations。
+3. 通知写入/API 异常：关闭 `APP_INBOX`；cleanup 默认继续运行，只有确认 cleanup 自身有缺陷时才停 central proactive scheduler 的该步骤。
+4. 任意账号隔离、N× 触达、slot 超配或 visible 超过 200 的异常都阻断扩量；先保存对账结果和代码 SHA，不删除加性数据。

@@ -12,7 +12,7 @@ from tests.factories import create_account as _create_account
 from tests.factories import create_route as _create_route
 
 
-def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
+def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
     from app.proactive.orchestration.scheduler import ProactiveScheduler
 
     reminder_calls = []
@@ -21,6 +21,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     reactivation_calls = []
     expired_content_calls = []
     reclaim_calls = []
+    notification_cleanup_calls = []
 
     def fake_dispatch_reminders(**kwargs):
         reminder_calls.append(kwargs)
@@ -28,7 +29,18 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
 
     def fake_scan_account_checks(**kwargs):
         account_calls.append(kwargs)
-        return [{"status": "no_op", "account_id": "acc-1"}]
+        return [
+            {
+                "status": "sent",
+                "account_id": "acc-1",
+                "outbound_message": {
+                    "m3_observability": {
+                        "human_claim_success": 1,
+                        "human_speaker_reselected": 1,
+                    }
+                },
+            }
+        ]
 
     def fake_dispatch_commitments(**kwargs):
         commitment_calls.append(kwargs)
@@ -36,7 +48,15 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
 
     def fake_dispatch_reactivation(**kwargs):
         reactivation_calls.append(kwargs)
-        return [{"action": "would_send", "account_id": "acc-r"}]
+        return [
+            {
+                "action": "send_blocked",
+                "account_id": "acc-r",
+                "outbound_message": {
+                    "m3_observability": {"human_claim_blocked_24h": 1}
+                },
+            }
+        ]
 
     def fake_expire_content_invitations(**kwargs):
         expired_content_calls.append(kwargs)
@@ -45,6 +65,15 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     def fake_reclaim_quota_reservations(**kwargs):
         reclaim_calls.append(kwargs)
         return 2
+
+    def fake_cleanup_notifications(**kwargs):
+        notification_cleanup_calls.append(kwargs)
+        return {
+            "cancelled_reservations": 1,
+            "deleted": 2,
+            "reconciled_users": 1,
+            "errors": None,
+        }
 
     scheduler = ProactiveScheduler(
         interval_seconds=0,
@@ -57,10 +86,17 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
         expire_content_invitations=fake_expire_content_invitations,
         scan_account_checks=fake_scan_account_checks,
         reclaim_quota_reservations=fake_reclaim_quota_reservations,
+        cleanup_app_notifications=fake_cleanup_notifications,
+        notification_cleanup_batch_size=7,
     )
     now = datetime(2026, 5, 22, 10, 0)
 
     result = asyncio.run(scheduler.run_once(now=now))
+    scheduler._record_heartbeat(status="ok")
+
+    from app.db import get_scheduler_heartbeat
+
+    heartbeat = get_scheduler_heartbeat("proactive_scheduler")
 
     assert result["status"] == "ok"
     assert result["reminder_count"] == 1
@@ -70,6 +106,23 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch():
     assert result["expired_content_invitation_count"] == 1
     assert result["reclaimed_quota_reservations"] == 2
     assert reclaim_calls == [{"now": "2026-05-22 10:00:00", "limit": 5}]
+    assert notification_cleanup_calls == [
+        {"now": "2026-05-22 10:00:00", "limit": 7}
+    ]
+    assert result["app_notification_cleanup"]["deleted"] == 2
+    assert result["m3_observability"] == {
+        "human_claim_success": 1,
+        "human_claim_blocked_24h": 1,
+        "human_claim_blocked_inflight": 0,
+        "human_speaker_cancelled": 0,
+        "human_speaker_reselected": 1,
+    }
+    assert heartbeat["metadata"]["last_notification_cleanup"] == result[
+        "app_notification_cleanup"
+    ]
+    assert heartbeat["metadata"]["last_m3_observability"] == result[
+        "m3_observability"
+    ]
     assert reactivation_calls == [{"now": now, "limit": 5, "node_id": None}]
     assert reminder_calls == [
         {

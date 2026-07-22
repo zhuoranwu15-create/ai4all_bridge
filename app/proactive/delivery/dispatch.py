@@ -12,10 +12,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from app.channels import CHANNEL_APP
 from app.config import settings
 from app.platform import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+    count_human_proactive_inbound_after,
     human_level_proactive_allowed,
+    resolve_human_proactive_scope,
 )
 from app.db import (
     claim_content_invitation_for_send,
@@ -134,7 +137,14 @@ def dispatch_reactivation_candidate(
     # 仅统计入站消息（不含 bot 自身/提醒等出站），以候选 generated_at 为基准。
     generated_at = _parse_reactivation_time(candidate.get("generated_at"))
     if generated_at is not None:
-        inbound_since = _inbound_count_after(account_id=account_id, after=generated_at)
+        owner_inbound_since = count_human_proactive_inbound_after(
+            account_id, after=format_reactivation_time(generated_at)
+        )
+        inbound_since = (
+            owner_inbound_since
+            if owner_inbound_since is not None
+            else _inbound_count_after(account_id=account_id, after=generated_at)
+        )
         if inbound_since > 0:
             clear_reactivation_candidate(
                 account_id=account_id,
@@ -198,19 +208,21 @@ def dispatch_reactivation_candidate(
             metadata={"dedupe": dedupe},
         )
 
-    # 候选可能因 avoidance/失败已被多次改期到更晚的 slot，生成时的 touch_state 检查已经
-    # 过期，真正要发送前必须重新判定一次（见 docs/plans/主动消息送达窗口对齐.md）。
-    if get_account_touch_state(account_id=account_id, now=current) == STALE:
+    route = _select_route(account_id)
+    if route is None:
+        return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
+
+    # 微信仍要求 24h context token；App inbox 是原生拉取通道，不套微信可达窗口。
+    if (
+        route.get("channel") != CHANNEL_APP
+        and get_account_touch_state(account_id=account_id, now=current) == STALE
+    ):
         clear_reactivation_candidate(
             account_id=account_id,
             reason="proactive_touch_stale",
             now=current,
         )
         return _no_op(account_id=account_id, reason="proactive_touch_stale", now=current)
-
-    route = _select_route(account_id)
-    if route is None:
-        return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
 
     outbound_metadata = reactivation_outbound_metadata(
         candidate={**candidate, "dedupe": dedupe},
@@ -406,11 +418,21 @@ def dispatch_due_reactivation_candidates(
         return []
     due_accounts = list_due_reactivation_candidate_accounts(
         now=format_reactivation_time(current),
-        limit=limit,
+        limit=max(1, int(limit)) * 11,
         node_id=node_id,
     )
-    results: List[Dict[str, Any]] = []
+    grouped_accounts: Dict[str, str] = {}
     for account_id in due_accounts:
+        scope = resolve_human_proactive_scope(account_id)
+        key = scope.platform_user_id if scope else f"account:{account_id}"
+        existing = grouped_accounts.get(key)
+        if existing is None or (
+            human_level_proactive_allowed(account_id)
+            and not human_level_proactive_allowed(existing)
+        ):
+            grouped_accounts[key] = account_id
+    results: List[Dict[str, Any]] = []
+    for account_id in list(grouped_accounts.values())[: max(1, int(limit))]:
         results.append(
             dispatch_reactivation_candidate(
                 account_id=account_id,

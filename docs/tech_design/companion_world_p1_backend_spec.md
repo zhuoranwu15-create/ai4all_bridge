@@ -4,7 +4,7 @@
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
 > 上位 ADR：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
-> 核查基线：当前开发环境 `feat/companion-world-m2c`，Draft PR #45（M3 前置收口后迁移 max 版本 = 32；新世界端点使用稳定 envelope）。
+> 核查基线：PR #45 已合并；当前 M3 开发分支已追加 m0033，但不改变本文 P1 已实现范围。
 
 ## 0. 范围与不做项
 
@@ -16,7 +16,7 @@
 - §4 稳定错误码表。
 
 **明确不做（留后续里程碑，本规范不定义其表/DTO）**：
-- `universe_posts`（世界 Feed）→ M3；`app_notifications`（通知收件箱）→ M3（ADR §11.8 T3-1 已给形状）。
+- `universe_posts`（世界 Feed）与 `app_notifications`（通知收件箱）→ M3；实现级形状已在 [`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md) 冻结，M3-1 数据基座已落地，不属于本文 P1 API 闭环。
 - `character_letters`（信箱）、`resident_lifecycle_events`（离开事务）→ M4。
 - `universe_invites` / `universe_visits` / `human_conversations` / `human_messages` → M5。
 - **锁顺序细则**（§2.7）与 **backfill 分步伪码**（§2.8）本版已补齐——M2-0 前置门清零；未覆盖的仅剩 M4/M5 生命周期锁（offline 原子事务、visit 双世界锁）随对应里程碑。
@@ -31,11 +31,21 @@
 - 客户端不传 runtime account。入站幂等落在既有 `UNIQUE(account_id,message_id)`：服务端把公开锚映射成 `app:{conversation_id}:{client_message_id}`；同一 conversation 唯一对应一个 runtime account，因此等价承载 `(conversation, sender, client_message_id)` 的 P1 私聊不变量，且响应不泄露 runtime account ID。
 - PG conversation single-flight 使用非阻塞 `pg_try_advisory_xact_lock(advisory_lock_key('conv:'+id))`；失败立即返回 `turn_in_progress`。SQLite 只用进程锁作功能回退，不作为并发证明。
 - L3 compact 只合并 fact_type + 规范 JSON 完全一致的重复项；复杂语义冲突不在 P1。central scheduler 单写，PG 同 universe advisory xact lock 兜住 admin run-once 重叠。
-- 真人级 proactive 在 M2 仅落安全阀：form-A 不变，world resident 只有 `legacy_primary_account_id` 放行，App-only fail-closed。App 收件箱/发声人/正式人级聚合仍属 M3。
+- 真人级 proactive 在 M2 仅落安全阀：form-A 不变，world resident 只有 `legacy_primary_account_id` 放行，App-only fail-closed。M3 产品已冻结为 App-only 可启用、独立 flag 默认关闭灰度；在 M3 代码交付前，当前 M2 fail-closed 行为仍是实现真相。
 - `COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，不门控 L3 sink/compact 或 world-aware proactive 安全阀；关闭 flag 不撤销 backfill 后的数据与安全阀效果。
 - D-09 计数/锁键与 limit override 均已按 `platform_user` 聚合；m0031 一致回填 historical override，冲突遗留值在清理前按最严格值强制，批量 TTL 回收已接 central proactive scheduler。开 flag 前仍须完成 override 对账。
 - D-06 已在 M3 前收口：Runtime adapter 只保留 `send_turn`，World conversation/L3 I/O 与 `ChannelTurnInput` 组装在 `app/platform/companion_world_turn.py`。
 - API/auth、L3 后台与 proactive safety 现有三个正交开关；运行手册在 flag=false backfill 期停 L3、保留防 N× safety，避免把 API flag 误当后台总开关。
+
+### 0.2 M3 已冻结的后继契约（不属于本 P1 已实现范围）
+
+2026-07-22 已清零 ADR §10.7/.11/.12/.13 产品门；实现级细则见已冻结的 [`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md)。以下只约束 M3，**不得据此把 P1 生产状态写成已启用**：
+
+- Feed 首版只承载文字；AI 生成按 `universe` 每个北京自然日最多 2 条、上午/傍晚各最多 1 条，只处理 confirmed、存在 active resident、真人最近 7 天任一渠道有入站的世界；允许跳过、不补发。
+- `app_notifications` 与 Feed 分表/分入口/分红点；拉取不自动已读，支持单条/全部已读。read 保留 7 天、unread 保留 30 天、每真人最多 200 条；写入事务内按最旧 read→最旧 unread 维持硬上限，central scheduler 清到期行并对账。
+- App 真人级发声人优先最近收到用户入站的 active resident，无历史时按最近会话活动、`joined_at DESC`、`resident_id ASC` 回退，投递前失活重选；微信只允许 legacy primary 真实发声。
+- App-only 真人级首版产品上启用，但只写拉取式收件箱；独立 flag 默认关闭后灰度，开启后真人级合计每真人滚动 24 小时最多 1 条，并继续执行用户开关、跨渠道活跃、quiet hours、预算与安全策略。flag 不影响 per-resident reminder/commitment。
+- `character_letters`/mailbox 的触发、冷却、过期、待处理上限继续属于 M4，不阻断 M3。
 
 ---
 
@@ -385,15 +395,15 @@ HTTP 语义约定：400 请求契约违反 / 401 未鉴权 / 403 资源被禁 / 
 ## 5. 未覆盖与后续
 
 - **锁顺序细则 + backfill 伪码**：已补（§2.7 / §2.8），M2-0 前置门清零。剩余锁语义（offline 原子事务、visit 双世界锁）随 M4/M5。
-- **`app_notifications` / `universe_posts`**：M3（形状见 ADR §11.8 T3-1、§8 R3）。
+- **`app_notifications` / `universe_posts`**：M3（实现级形状见 [`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md)）。
 - **信箱 / 生命周期 / 访客 / 真人聊天**：M4–M5（客户端 §4.4–4.6）。
 - **客户端口径对齐**：gap-analysis §4.2「默认隔离/白名单」需按 D-05「全量共享沉淀记忆」镜像更新（本轮不动客户端仓库）。
 - **App scope 漏扫已冻结修复**（ADR §6.6 / 本文 §2.9）：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并覆盖 App scope 每日轮转；L3 compact 仍是 per-universe 单 writer。
 
 ## 6. 发布与接手状态（2026-07-22）
 
-- C0–C5 代码与 C6 文档/运行手册已完成；M3 前置 D-06/D-09 收口与 PG RPM 精度修复追加 m0031/m0032，`COMPANION_WORLD_P1_ENABLED` 默认 false；当前在 Draft PR #45，尚未并入 main。
-- 当前门禁：unit 566 passed；SQLite 1434 passed / 8 skipped；PostgreSQL 1438 passed / 4 skipped。
+- C0–C5 代码与 C6 文档/运行手册已完成并随 PR #45 合并；`COMPANION_WORLD_P1_ENABLED` 默认 false，P1 尚未生产启用。M3 开发分支另追加 m0033 数据基座。
+- 当前开发分支全量门禁：SQLite 1445 passed / 12 skipped；PostgreSQL 1452 passed / 5 skipped。
 - 已有运营工具：`scripts/import_companion_world_presets.py`（manifest 校验、dry-run、immutable/version 闸）与 `scripts/backfill_companion_world.py`（dry-run、cutoff、resume、逐用户事务）。
 - 代码完成不等于生产完成：正式四模板、客户端最低版本、客户端共享/legacy 豁免口径同步、生产模板导入/backfill/对账、D-09 override 冲突预检仍缺现场证据，故不得提前开 flag。
 - 发布和回滚步骤以 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册) 为准。

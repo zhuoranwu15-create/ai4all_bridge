@@ -1,0 +1,357 @@
+"""M3-5 真人级 proactive：owner 聚合、speaker、App-only claim/CAS。"""
+from datetime import datetime
+
+import app.db as db
+from app.platform import human_level_proactive_allowed
+from app.platform.app_inbox import AppInboxAdapter, HumanAppInboxIntent
+from app.proactive.contract.common import _select_route
+from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.proactive.delivery.outbound import enqueue_proactive_text
+from tests.factories import make_resident_account
+
+
+def _world_with_two_residents(phone: str):
+    user_id = db.create_or_get_platform_user_by_phone(
+        phone=phone, display_name="真人级主动触达用户"
+    )["id"]
+    account_a = make_resident_account(user_id, "居民甲")
+    account_b = make_resident_account(user_id, "居民乙")
+    scope = db.resolve_resident_memory_scope(runtime_account_id=account_a)
+    for account_id in (account_a, account_b):
+        resident_scope = db.resolve_resident_memory_scope(
+            runtime_account_id=account_id
+        )
+        db.create_ai_conversation(
+            universe_id=resident_scope["universe_id"],
+            resident_id=resident_scope["resident_id"],
+            owner_platform_user_id=user_id,
+            runtime_account_id=account_id,
+        )
+    db.set_universe_onboarding_state(
+        universe_id=scope["universe_id"], onboarding_state="confirmed"
+    )
+    return user_id, str(scope["universe_id"]), account_a, account_b
+
+
+def _insert_app_message(account_id: str, *, message_id: str, role: str, at: str):
+    session = db.get_or_create_session(
+        account_id=account_id,
+        channel="native",
+        sender_id="owner",
+        sender_name=None,
+        chat_id=None,
+        session_key="__app_active__",
+    )["session"]
+    inserted = db.insert_message(
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id=message_id,
+        reply_to_message_id=None,
+        direction="inbound" if role == "user" else "outbound",
+        role=role,
+        message_type="text",
+        content=message_id,
+    )
+    with db.connect() as conn:
+        conn.execute("UPDATE messages SET created_at=? WHERE id=?", (at, inserted))
+
+
+def test_app_speaker_prefers_resident_inbound_then_app_activity(fresh_db):
+    user_id, universe_id, account_a, account_b = _world_with_two_residents(
+        "19966001001"
+    )
+    _insert_app_message(
+        account_a, message_id="a-user", role="user", at="2026-07-22 09:00:00"
+    )
+    _insert_app_message(
+        account_b,
+        message_id="b-assistant",
+        role="assistant",
+        at="2026-07-22 10:00:00",
+    )
+
+    first = db.select_human_app_speaker(
+        platform_user_id=user_id, universe_id=universe_id
+    )
+    assert first["runtime_account_id"] == account_a
+
+    _insert_app_message(
+        account_b, message_id="b-user", role="user", at="2026-07-22 11:00:00"
+    )
+    second = db.select_human_app_speaker(
+        platform_user_id=user_id, universe_id=universe_id
+    )
+    assert second["runtime_account_id"] == account_b
+    assert db.get_owner_last_inbound_at(platform_user_id=user_id) == (
+        "2026-07-22 11:00:00"
+    )
+
+
+def test_app_only_human_dispatch_uses_double_flag_and_24h_bucket(fresh_db):
+    user_id, _universe_id, account_a, account_b = _world_with_two_residents(
+        "19966001002"
+    )
+    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.companion_world_app_only_human_proactive_enabled = True
+    allowed = [
+        account_id
+        for account_id in (account_a, account_b)
+        if human_level_proactive_allowed(account_id)
+    ]
+    assert len(allowed) == 1
+    speaker_account = allowed[0]
+    route = _select_route(speaker_account)
+    assert route is not None and route["channel"] == "native"
+
+    first = dispatch_proactive_text(
+        account_id=speaker_account,
+        channel=route["channel"],
+        channel_account_id=None,
+        to_user_id=user_id,
+        session_key=route.get("session_key"),
+        source="account_check",
+        text="今天也想来看看你。",
+        idempotency_key="human-account-check-due-1",
+        now=datetime(2026, 7, 22, 12, 0, 0),
+        product_category="companion_followup",
+        metadata={"candidate_id": "due-1"},
+    )
+    second = dispatch_proactive_text(
+        account_id=speaker_account,
+        channel=route["channel"],
+        channel_account_id=None,
+        to_user_id=user_id,
+        session_key=route.get("session_key"),
+        source="account_check",
+        text="一小时后不应再出现。",
+        idempotency_key="human-account-check-due-2",
+        now=datetime(2026, 7, 22, 13, 0, 0),
+        product_category="companion_followup",
+        metadata={"candidate_id": "due-2"},
+    )
+
+    assert first["status"] == "sent"
+    assert second["status"] == "cancelled"
+    assert first["m3_observability"] == {"human_claim_success": 1}
+    assert second["human_claim_reason"] == "blocked_24h"
+    assert second["m3_observability"] == {"human_claim_blocked_24h": 1}
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM app_notifications WHERE platform_user_id=?",
+            (user_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["scope"] == "human"
+    assert rows[0]["delivery_status"] == "visible"
+
+
+def test_old_reservation_token_cannot_finalize_or_cancel_reacquired_lease(fresh_db):
+    user_id, universe_id, _account_a, _account_b = _world_with_two_residents(
+        "19966001003"
+    )
+    speaker = db.select_human_app_speaker(
+        platform_user_id=user_id, universe_id=universe_id
+    )
+    kwargs = dict(
+        platform_user_id=user_id,
+        universe_id=universe_id,
+        category="content_invitation",
+        source_type="reactivation",
+        source_id="due-token",
+        idempotency_key="human-proactive:v1:content_invitation:token",
+        request_fingerprint="fingerprint-token",
+    )
+    reserved, acquired = db.reserve_human_app_notification(
+        **kwargs,
+        claim_token="old-token",
+        claim_expires_at="2026-07-22 10:05:00",
+        now="2026-07-22 10:00:00",
+        visible_since="2026-07-21 10:00:00",
+    )
+    reacquired, reacquired_ok = db.reserve_human_app_notification(
+        **kwargs,
+        claim_token="new-token",
+        claim_expires_at="2026-07-22 10:11:00",
+        now="2026-07-22 10:06:00",
+        visible_since="2026-07-21 10:06:00",
+    )
+    assert acquired is True and reacquired_ok is True
+    assert reacquired["id"] == reserved["id"]
+
+    _row, old_cancelled = db.cancel_human_app_notification(
+        notification_id=reserved["id"],
+        platform_user_id=user_id,
+        claim_token="old-token",
+        reason="old-worker",
+        now="2026-07-22 10:06:01",
+        expires_at="2026-07-29 10:06:01",
+    )
+    _row, old_finalized = db.finalize_human_app_notification(
+        notification_id=reserved["id"],
+        platform_user_id=user_id,
+        universe_id=universe_id,
+        claim_token="old-token",
+        expected_resident_id=speaker["resident_id"],
+        allow_speaker_reselection=True,
+        title=None,
+        body_text="旧 worker",
+        target_type="conversation",
+        target_id=speaker["conversation_id"],
+        delivered_at="2026-07-22 10:06:01",
+        expires_at="2026-08-21 10:06:01",
+        now="2026-07-22 10:06:01",
+    )
+    assert old_cancelled is False and old_finalized is False
+
+    current, finalized = db.finalize_human_app_notification(
+        notification_id=reserved["id"],
+        platform_user_id=user_id,
+        universe_id=universe_id,
+        claim_token="new-token",
+        expected_resident_id=speaker["resident_id"],
+        allow_speaker_reselection=True,
+        title=None,
+        body_text="新 worker",
+        target_type="conversation",
+        target_id=speaker["conversation_id"],
+        delivered_at="2026-07-22 10:06:02",
+        expires_at="2026-08-21 10:06:02",
+        now="2026-07-22 10:06:02",
+    )
+    assert finalized is True and current["delivery_status"] == "visible"
+
+    blocked, blocked_acquired = db.reserve_human_app_notification(
+        **{**kwargs, "source_id": "before-boundary", "idempotency_key": "human-proactive:v1:content_invitation:before-boundary"},
+        claim_token="before-boundary",
+        claim_expires_at="2026-07-23 10:10:00",
+        now="2026-07-23 10:06:01",
+        visible_since="2026-07-22 10:06:01",
+    )
+    assert blocked is None and blocked_acquired is False
+    boundary, boundary_acquired = db.reserve_human_app_notification(
+        **{**kwargs, "source_id": "at-boundary", "idempotency_key": "human-proactive:v1:content_invitation:at-boundary"},
+        claim_token="at-boundary",
+        claim_expires_at="2026-07-23 10:11:02",
+        now="2026-07-23 10:06:02",
+        visible_since="2026-07-22 10:06:02",
+    )
+    assert boundary_acquired is True and boundary["delivery_status"] == "reserved"
+
+
+def test_human_policy_budget_aggregates_other_resident_outbound(fresh_db):
+    user_id, _universe_id, account_a, account_b = _world_with_two_residents(
+        "19966001005"
+    )
+    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.companion_world_app_only_human_proactive_enabled = True
+    speaker_account = next(
+        account_id
+        for account_id in (account_a, account_b)
+        if human_level_proactive_allowed(account_id)
+    )
+    other_account = account_b if speaker_account == account_a else account_a
+    seeded = enqueue_proactive_text(
+        account_id=other_account,
+        channel="native",
+        channel_account_id=None,
+        to_user_id=user_id,
+        session_key="__app_active__",
+        source="account_check",
+        text="另一居民已占用今日真人级预算",
+        idempotency_key="other-resident-budget",
+        now=datetime(2026, 7, 22, 11, 0, 0),
+        product_category="companion_followup",
+    )
+    assert seeded["status"] == "pending"
+
+    route = _select_route(speaker_account)
+    result = dispatch_proactive_text(
+        account_id=speaker_account,
+        channel=route["channel"],
+        channel_account_id=None,
+        to_user_id=user_id,
+        session_key=route.get("session_key"),
+        source="account_check",
+        text="不应越过聚合预算",
+        idempotency_key="speaker-budget-attempt",
+        now=datetime(2026, 7, 22, 12, 0, 0),
+        product_category="companion_followup",
+        metadata={"candidate_id": "budget-attempt"},
+    )
+    assert result["status"] == "cancelled"
+    assert result["error"] == "daily_limit_exceeded"
+    with db.connect() as conn:
+        visible = conn.execute(
+            "SELECT COUNT(*) AS c FROM app_notifications "
+            "WHERE platform_user_id=? AND delivery_status='visible'",
+            (user_id,),
+        ).fetchone()["c"]
+    assert int(visible) == 0
+
+
+def test_finalize_reselects_generic_but_cancels_speaker_bound_content(fresh_db):
+    user_id, universe_id, account_a, account_b = _world_with_two_residents(
+        "19966001004"
+    )
+    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.companion_world_app_only_human_proactive_enabled = True
+    initial = db.select_human_app_speaker(
+        platform_user_id=user_id, universe_id=universe_id
+    )
+    other_account = account_a if initial["runtime_account_id"] == account_b else account_b
+
+    generic = HumanAppInboxIntent(
+        runtime_account_id=initial["runtime_account_id"],
+        category="companion_followup",
+        source_type="account_check",
+        source_dedupe_key="generic-reselect",
+        body_text="通用问候",
+    )
+    claim, acquired = AppInboxAdapter().reserve_human(
+        generic, now=datetime(2026, 7, 22, 14, 0, 0)
+    )
+    assert acquired is True and claim is not None
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE universe_residents SET status='offline' WHERE id=?",
+            (initial["resident_id"],),
+        )
+    notification, finalized = AppInboxAdapter().finalize_human(
+        claim, generic, now=datetime(2026, 7, 22, 14, 0, 1)
+    )
+    assert finalized is True
+    final_scope = db.resolve_resident_memory_scope(runtime_account_id=other_account)
+    assert notification.resident_id == final_scope["resident_id"]
+
+    # 恢复原 speaker 并让其重新成为 hint，再验证强绑定内容在 hint 失活时取消。
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE universe_residents SET status='active' WHERE id=?",
+            (initial["resident_id"],),
+        )
+        conn.execute(
+            "UPDATE app_notifications SET delivered_at='2026-07-21 13:59:59' WHERE id=?",
+            (claim.notification_id,),
+        )
+    bound = HumanAppInboxIntent(
+        runtime_account_id=initial["runtime_account_id"],
+        category="content_invitation",
+        source_type="reactivation",
+        source_dedupe_key="bound-cancel",
+        body_text="绑定原居民的内容",
+        speaker_bound=True,
+    )
+    bound_claim, bound_acquired = AppInboxAdapter().reserve_human(
+        bound, now=datetime(2026, 7, 22, 14, 0, 2)
+    )
+    assert bound_acquired is True and bound_claim is not None
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE universe_residents SET status='offline' WHERE id=?",
+            (bound_claim.expected_resident_id,),
+        )
+    bound_notification, bound_finalized = AppInboxAdapter().finalize_human(
+        bound_claim, bound, now=datetime(2026, 7, 22, 14, 0, 3)
+    )
+    assert bound_finalized is False
+    assert bound_notification.delivery_status == "cancelled"

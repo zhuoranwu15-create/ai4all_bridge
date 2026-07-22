@@ -18,7 +18,9 @@ from app.db import (
 from app.onboarding import is_onboarding_done
 from app.platform import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
+    get_human_proactive_last_inbound_at,
     human_level_proactive_allowed,
+    resolve_human_proactive_scope,
 )
 from app.time_utils import beijing_naive_now, parse_db_timestamp
 from app.proactive.contract.common import format_reactivation_time
@@ -141,10 +143,18 @@ def _new_user_reactivation_eligibility(
             "onboarding_state": onboarding_state,
         }
 
-    created_at = parse_db_timestamp(account.get("created_at"))
-    # 新用户拉活的 idle-hours 资格只看微信入站时间，不被其它渠道活跃污染（§7.5）。
+    human_scope = resolve_human_proactive_scope(account_id)
+    created_at = parse_db_timestamp(
+        human_scope.owner_created_at if human_scope else account.get("created_at")
+    )
+    # form-A 维持微信口径；world 按真人聚合 owner bindings + 全 resident 的跨渠道入站。
+    owner_last_inbound = get_human_proactive_last_inbound_at(account_id)
     last_inbound_at = parse_db_timestamp(
-        get_account_last_inbound_at(account_id=account_id, channel=CHANNEL_WEIXIN)
+        owner_last_inbound
+        if human_scope is not None
+        else get_account_last_inbound_at(
+            account_id=account_id, channel=CHANNEL_WEIXIN
+        )
     )
     if created_at is None:
         return {"eligible": False, "reason": "account_created_at_missing"}

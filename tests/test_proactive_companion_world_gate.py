@@ -32,6 +32,7 @@ def test_gate_allows_form_a_and_only_legacy_primary_resident(fresh_db):
     _, primary, secondary = _resident_pair(
         "19950004001", legacy_primary=True
     )
+    create_route(primary)
     _, app_a, app_b = _resident_pair("19950004002", legacy_primary=False)
 
     assert human_level_proactive_allowed(form_a) is True
@@ -41,15 +42,28 @@ def test_gate_allows_form_a_and_only_legacy_primary_resident(fresh_db):
     assert human_level_proactive_allowed(app_b) is False
 
 
-def test_safety_switch_can_restore_legacy_behavior(fresh_db, monkeypatch):
+def test_safety_switch_can_restore_legacy_behavior(fresh_db):
     _, _primary, secondary = _resident_pair(
         "19950004009", legacy_primary=True
     )
-    monkeypatch.setattr(
-        "app.config.settings.companion_world_proactive_safety_enabled",
-        False,
-    )
+    fresh_db.companion_world_proactive_safety_enabled = False
     assert human_level_proactive_allowed(secondary) is True
+
+
+def test_real_weixin_primary_wins_even_when_app_only_flags_are_on(fresh_db):
+    _, primary, secondary = _resident_pair(
+        "19950004010", legacy_primary=True
+    )
+    create_route(primary)
+    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.companion_world_app_only_human_proactive_enabled = True
+
+    assert human_level_proactive_allowed(primary) is True
+    assert human_level_proactive_allowed(secondary) is False
+    from app.proactive.contract.common import _select_route
+
+    route = _select_route(primary)
+    assert route is not None and route["channel"] == "openclaw-weixin"
 
 
 def test_planning_blocks_before_human_level_generators(fresh_db):
