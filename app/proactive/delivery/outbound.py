@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.channels import get_channel_capability
+from app.channels import CHANNEL_APP, get_channel_capability
 from app.config import settings
 from app.time_utils import beijing_naive_now, beijing_now
 from app.session_lifecycle import business_day_for
@@ -21,6 +21,12 @@ from app.db import (
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import create_sync_block_task, enqueue_outbound_for_moderation
 from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+from app.domains.companion_world.proactive import is_human_proactive_category
+from app.platform.app_inbox import (
+    AppInboxAdapter,
+    AppInboxIntent,
+    HumanAppInboxIntent,
+)
 from app.proactive.delivery.policy import (
     POLICY_VERSION,
     evaluate_outbound_policy,
@@ -29,6 +35,17 @@ from app.proactive.delivery.policy import (
 
 
 logger = logging.getLogger("ai4all.proactive.messaging")
+
+
+def _with_m3_observability(result: Dict[str, Any], **metrics: int) -> Dict[str, Any]:
+    """附加仅供 scheduler 聚合的低基数 M3 观测字段。"""
+
+    return {
+        **result,
+        "m3_observability": {
+            key: int(value) for key, value in metrics.items() if int(value) != 0
+        },
+    }
 
 
 def record_outbound_message_sent(
@@ -354,6 +371,283 @@ def dispatch_proactive_text(
 
     两分支返回同形 outbound dict(状态可能为 pending/cancelled/sent 等)。
     """
+    current = now or beijing_naive_now()
+    # App 仍保持 channels capability 的 supports_proactive=False；只有显式 inbox flag +
+    # active world resident 才走 typed adapter，绝不触达微信网关。
+    if channel == CHANNEL_APP and bool(
+        getattr(settings, "companion_world_app_inbox_enabled", False)
+    ):
+        category = normalize_outbound_category(
+            source=source, product_category=product_category
+        )
+        # commitment 虽归 companion_followup 分类，产品语义仍是 per-resident obligation，
+        # 不得误入真人级 24h 桶。
+        is_human = source not in {"reminder", "commitment"} and (
+            is_human_proactive_category(category.value)
+        )
+        if source not in {"reminder", "commitment"} and not is_human:
+            logger.warning(
+                "app inbox blocked unsupported source account=%s source=%s",
+                account_id,
+                source,
+            )
+            return {
+                "status": "cancelled",
+                "error": "app_inbox_human_proactive_disabled",
+                "account_id": account_id,
+                "channel": channel,
+            }
+        if is_human:
+            if not bool(
+                getattr(
+                    settings,
+                    "companion_world_app_only_human_proactive_enabled",
+                    False,
+                )
+            ):
+                return {
+                    "status": "cancelled",
+                    "error": "app_inbox_human_proactive_disabled",
+                    "account_id": account_id,
+                    "channel": channel,
+                }
+            source_metadata = metadata or {}
+            candidate = source_metadata.get("reactivation_candidate")
+            if not isinstance(candidate, dict):
+                candidate = source_metadata.get("account_check_candidate")
+            if not isinstance(candidate, dict):
+                candidate = {}
+            source_id = next(
+                (
+                    str(value)
+                    for value in (
+                        candidate.get("id"),
+                        source_metadata.get("content_invitation_id"),
+                        source_metadata.get("reactivation_candidate_id"),
+                        source_metadata.get("candidate_id"),
+                    )
+                    if value is not None and str(value).strip()
+                ),
+                str(idempotency_key or f"{source}:{current.date().isoformat()}"),
+            )
+            human_intent = HumanAppInboxIntent(
+                runtime_account_id=account_id,
+                category=category.value,
+                source_type=source,
+                source_id=source_id,
+                source_dedupe_key=str(
+                    source_metadata.get("human_proactive_due_key")
+                    or idempotency_key
+                    or source_id
+                ),
+                body_text=text,
+                speaker_bound=bool(
+                    # 现有候选均由某 resident 的私聊上下文/人设生成，默认强绑定；
+                    # 只有生成方明确声明为真人级通用内容时才允许 finalize 重选。
+                    source_metadata.get("human_proactive_speaker_bound", True)
+                ),
+                metadata=source_metadata,
+            )
+            adapter = AppInboxAdapter()
+            claim, acquired, claim_reason = adapter.reserve_human(
+                human_intent, now=current, include_observation=True
+            )
+            if claim is None:
+                return _with_m3_observability(
+                    {
+                        "status": "cancelled",
+                        "error": "app_inbox_human_proactive_not_claimed",
+                        "account_id": account_id,
+                        "channel": channel,
+                        "human_claim_reason": claim_reason,
+                    },
+                    human_claim_blocked_24h=(claim_reason == "blocked_24h"),
+                    human_claim_blocked_inflight=(
+                        claim_reason == "blocked_inflight"
+                    ),
+                )
+            if not acquired:
+                return {
+                    "status": (
+                        "sent" if claim.delivery_status == "visible" else "pending"
+                    ),
+                    "error": None,
+                    "account_id": account_id,
+                    "channel": channel,
+                    "app_notification_id": claim.notification_id,
+                    "idempotent_replay": claim.delivery_status == "visible",
+                }
+            human_metadata = {
+                **source_metadata,
+                "delivery": "app_inbox",
+                "human_proactive_scope": True,
+                "human_proactive_account_ids": list(claim.runtime_account_ids),
+                "app_notification_id": claim.notification_id,
+            }
+            outbound = enqueue_proactive_text(
+                account_id=account_id,
+                channel=channel,
+                channel_account_id=channel_account_id,
+                to_user_id=to_user_id,
+                session_key=session_key,
+                source=source,
+                text=text,
+                idempotency_key=idempotency_key,
+                now=current,
+                bypass_quiet_hours=bypass_quiet_hours,
+                product_category=product_category,
+                scheduled_at=scheduled_at,
+                metadata=human_metadata,
+            )
+            if outbound.get("status") != "pending":
+                adapter.cancel_human(
+                    claim,
+                    reason=str(outbound.get("error") or "policy_blocked"),
+                    now=current,
+                )
+                return _with_m3_observability(outbound, human_claim_success=1)
+            claimed = claim_pending_outbound_message(
+                outbound_message_id=int(outbound["id"])
+            )
+            if claimed is None:
+                adapter.cancel_human(
+                    claim, reason="outbound_claim_failed", now=current
+                )
+                return _with_m3_observability(outbound, human_claim_success=1)
+            try:
+                notification, finalized = adapter.finalize_human(
+                    claim, human_intent, now=current
+                )
+                if not finalized or notification is None:
+                    adapter.cancel_human(
+                        claim, reason="notification_finalize_failed", now=current
+                    )
+                    failed = mark_outbound_message_failed(
+                        outbound_message_id=int(claimed["id"]),
+                        error="app_notification_finalize_failed",
+                    )
+                    result = failed or claimed
+                    return _with_m3_observability(
+                        result,
+                        human_claim_success=1,
+                        human_speaker_cancelled=(
+                            notification is not None
+                            and notification.delivery_status == "cancelled"
+                        ),
+                    )
+                updated = update_outbound_message_metadata(
+                    outbound_message_id=int(claimed["id"]),
+                    metadata_patch={
+                        "delivery": "app_inbox",
+                        "app_notification_id": notification.id,
+                        "final_resident_id": notification.resident_id,
+                    },
+                )
+                sent = record_outbound_message_sent(
+                    outbound_message_id=int(claimed["id"]),
+                    gateway_message_id=None,
+                    fallback=updated or claimed,
+                )
+                result = sent or updated or claimed
+                return _with_m3_observability(
+                    result,
+                    human_claim_success=1,
+                    human_speaker_reselected=(
+                        notification.resident_id != claim.expected_resident_id
+                    ),
+                )
+            except Exception as err:
+                logger.exception(
+                    "human app inbox delivery failed account=%s source=%s error=%s",
+                    account_id,
+                    source,
+                    err,
+                )
+                adapter.cancel_human(claim, reason="delivery_failed", now=current)
+                failed = mark_outbound_message_failed(
+                    outbound_message_id=int(claimed["id"]), error=str(err)
+                )
+                return _with_m3_observability(
+                    failed or claimed, human_claim_success=1
+                )
+        outbound = enqueue_proactive_text(
+            account_id=account_id,
+            channel=channel,
+            channel_account_id=channel_account_id,
+            to_user_id=to_user_id,
+            session_key=session_key,
+            source=source,
+            text=text,
+            idempotency_key=idempotency_key,
+            now=now,
+            bypass_quiet_hours=bypass_quiet_hours,
+            product_category=product_category,
+            scheduled_at=scheduled_at,
+            metadata=metadata,
+        )
+        if outbound.get("status") != "pending":
+            return outbound
+        claimed = claim_pending_outbound_message(
+            outbound_message_id=int(outbound["id"])
+        )
+        if claimed is None:
+            return outbound
+        source_metadata = metadata or {}
+        source_id = next(
+            (
+                str(source_metadata[key])
+                for key in (
+                    "commitment_id",
+                    "reminder_id",
+                    "content_invitation_id",
+                    "source_id",
+                )
+                if source_metadata.get(key) is not None
+            ),
+            str(idempotency_key or claimed["id"]),
+        )
+        notification_key = f"resident-obligation:v1:{source}:{source_id}"
+        try:
+            notification, _created = AppInboxAdapter().deliver(
+                AppInboxIntent(
+                    runtime_account_id=account_id,
+                    category=str(product_category or source),
+                    source_type=source,
+                    source_id=source_id,
+                    idempotency_key=notification_key,
+                    body_text=text,
+                    metadata={
+                        **source_metadata,
+                        "outbound_message_id": claimed["id"],
+                    },
+                ),
+                now=now or beijing_naive_now(),
+            )
+            updated = update_outbound_message_metadata(
+                outbound_message_id=int(claimed["id"]),
+                metadata_patch={
+                    "delivery": "app_inbox",
+                    "app_notification_id": notification.id,
+                },
+            )
+            sent = record_outbound_message_sent(
+                outbound_message_id=int(claimed["id"]),
+                gateway_message_id=None,
+                fallback=updated or claimed,
+            )
+            return sent or updated or claimed
+        except Exception as err:
+            logger.exception(
+                "app inbox delivery failed account=%s source=%s error=%s",
+                account_id,
+                source,
+                err,
+            )
+            failed = mark_outbound_message_failed(
+                outbound_message_id=int(claimed["id"]), error=str(err)
+            )
+            return failed or claimed
+
     # 投递 fail-fast（§8.3，原则一硬需求）:``supports_proactive=False`` 的渠道(如 web)
     # 绝不进出站发送——底层 send_weixin_text 无条件走微信网关,不看 channel 参数,若放行
     # 会把 channel="web" 的主动消息误投微信网关。V1 只有 openclaw-weixin 可投,故对微信

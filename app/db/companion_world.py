@@ -15,10 +15,17 @@ import json
 import re
 import threading
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from app.db._backend import Connection, is_postgres
-from app.db._core import _new_id, _tx, advisory_lock_key, connect
+from app.db._core import (
+    APP_ACTIVE_SESSION_KEY,
+    _new_id,
+    _tx,
+    advisory_lock_key,
+    connect,
+)
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
@@ -49,12 +56,34 @@ __all__ = [
     "list_conversations_for_owner",
     "try_conversation_turn_lock",
     "list_active_account_ids_for_user",
+    "list_human_proactive_account_ids_for_user",
+    "get_human_proactive_owner_scope",
+    "get_owner_last_inbound_at",
+    "count_owner_inbound_after",
+    "has_legacy_primary_weixin_route",
+    "select_human_app_speaker",
     "resolve_resident_memory_scope",
     "resolve_resident_proactive_scope",
     "append_universe_fact",
     "read_universe_facts",
     "list_universe_ids_for_memory_compact",
     "compact_universe_facts",
+    "claim_ai_feed_slot",
+    "get_universe_post_for_owner",
+    "publish_user_feed_post_with_outbox",
+    "list_published_feed_posts_for_owner",
+    "delete_feed_post_with_outbox",
+    "publish_ai_feed_post_with_outbox",
+    "claim_companion_world_outbox",
+    "get_companion_world_outbox_metrics",
+    "list_ai_feed_eligible_worlds",
+    "select_ai_feed_author",
+    "get_ai_feed_author",
+    "defer_ai_feed_post",
+    "skip_ai_feed_post",
+    "close_expired_ai_feed_slots",
+    "complete_companion_world_outbox",
+    "fail_companion_world_outbox",
 ]
 
 _SQLITE_CONVERSATION_LOCKS: Dict[str, threading.Lock] = {}
@@ -801,6 +830,209 @@ def resolve_resident_proactive_scope(
     return dict(row) if row else None
 
 
+def list_human_proactive_account_ids_for_user(
+    *, platform_user_id: str, conn: Optional[Connection] = None
+) -> List[str]:
+    """列出真人级聚合范围：active owner bindings + 全部 resident runtime accounts。"""
+
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            """
+            SELECT account_id FROM (
+                SELECT b.account_id AS account_id
+                FROM account_owner_bindings b
+                WHERE b.platform_user_id = ? AND b.status = 'active'
+                UNION
+                SELECT r.runtime_account_id AS account_id
+                FROM universes u
+                JOIN universe_residents r ON r.universe_id = u.id
+                WHERE u.owner_platform_user_id = ?
+                  AND r.runtime_account_id IS NOT NULL
+            ) owned
+            ORDER BY account_id ASC
+            """,
+            (platform_user_id, platform_user_id),
+        ).fetchall()
+    return [str(row["account_id"]) for row in rows]
+
+
+def get_human_proactive_owner_scope(
+    *, runtime_account_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """把 world runtime account 解析到 owner/home universe；form-A 返回 None。"""
+
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT r.id AS resident_id, r.status AS resident_status,
+                   r.universe_id, u.owner_platform_user_id,
+                   u.legacy_primary_account_id, u.status AS universe_status,
+                   u.onboarding_state, pu.created_at AS owner_created_at
+            FROM universe_residents r
+            JOIN universes u ON u.id = r.universe_id
+            JOIN platform_users pu ON pu.id = u.owner_platform_user_id
+            WHERE r.runtime_account_id = ?
+              AND r.status IN ('active', 'offline')
+            """,
+            (runtime_account_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_owner_last_inbound_at(
+    *, platform_user_id: str, conn: Optional[Connection] = None
+) -> Optional[str]:
+    """聚合 owner bindings 与全部 resident account 的最近真人入站时间。"""
+
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT MAX(m.created_at) AS last_inbound_at
+            FROM messages m
+            WHERE m.direction = 'inbound' AND m.role = 'user'
+              AND m.account_id IN (
+                  SELECT b.account_id FROM account_owner_bindings b
+                  WHERE b.platform_user_id = ? AND b.status = 'active'
+                  UNION
+                  SELECT r.runtime_account_id
+                  FROM universes u
+                  JOIN universe_residents r ON r.universe_id = u.id
+                  WHERE u.owner_platform_user_id = ?
+                    AND r.runtime_account_id IS NOT NULL
+              )
+            """,
+            (platform_user_id, platform_user_id),
+        ).fetchone()
+    return str(row["last_inbound_at"]) if row and row["last_inbound_at"] else None
+
+
+def count_owner_inbound_after(
+    *, platform_user_id: str, after: str, conn: Optional[Connection] = None
+) -> int:
+    """统计真人级聚合范围在给定时刻后的全部真实入站。"""
+
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT COUNT(*) AS c FROM messages m
+            WHERE m.direction = 'inbound' AND m.role = 'user'
+              AND m.created_at > ?
+              AND m.account_id IN (
+                  SELECT b.account_id FROM account_owner_bindings b
+                  WHERE b.platform_user_id = ? AND b.status = 'active'
+                  UNION
+                  SELECT r.runtime_account_id
+                  FROM universes u
+                  JOIN universe_residents r ON r.universe_id = u.id
+                  WHERE u.owner_platform_user_id = ?
+                    AND r.runtime_account_id IS NOT NULL
+              )
+            """,
+            (after, platform_user_id, platform_user_id),
+        ).fetchone()
+    return int(row["c"] if row else 0)
+
+
+def has_legacy_primary_weixin_route(
+    *, universe_id: str, conn: Optional[Connection] = None
+) -> bool:
+    """判断 legacy primary 是否存在字段完整的真实微信主动路由。"""
+
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT 1
+            FROM universes u
+            JOIN channel_bindings b ON b.account_id = u.legacy_primary_account_id
+            WHERE u.id = ? AND u.legacy_primary_account_id IS NOT NULL
+              AND b.channel = 'openclaw-weixin'
+              AND b.channel_account_id IS NOT NULL AND b.channel_account_id <> ''
+              AND b.chat_id IS NOT NULL AND b.chat_id <> ''
+            LIMIT 1
+            """,
+            (universe_id,),
+        ).fetchone()
+    return row is not None
+
+
+def select_human_app_speaker(
+    *,
+    platform_user_id: str,
+    universe_id: str,
+    lock_resident: bool = False,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """按冻结排序选择 App 发声人；finalize 可要求锁定并复核 resident。"""
+
+    with _tx(conn) as tx:
+        for _attempt in range(2):
+            row = tx.execute(
+                """
+                WITH candidates AS (
+                SELECT r.id AS resident_id, r.runtime_account_id, r.joined_at,
+                       c.id AS conversation_id,
+                       (
+                           SELECT MAX(m.created_at) FROM messages m
+                           WHERE m.account_id = r.runtime_account_id
+                             AND m.direction = 'inbound' AND m.role = 'user'
+                       ) AS last_inbound_at,
+                       (
+                           SELECT MAX(m.created_at)
+                           FROM messages m
+                           JOIN sessions s ON s.id = m.session_id
+                           WHERE m.account_id = r.runtime_account_id
+                             AND s.account_id = r.runtime_account_id
+                             AND (
+                                 s.session_key = ?
+                                 OR substr(s.session_key, 1, ?) = ?
+                             )
+                       ) AS last_app_activity_at
+                FROM universe_residents r
+                JOIN universes u ON u.id = r.universe_id
+                JOIN ai_conversations c ON c.resident_id = r.id
+                WHERE u.id = ? AND u.owner_platform_user_id = ?
+                  AND u.status = 'active' AND u.onboarding_state = 'confirmed'
+                  AND r.status = 'active' AND r.runtime_account_id IS NOT NULL
+                )
+                SELECT * FROM candidates
+                ORDER BY
+                    CASE WHEN last_inbound_at IS NULL THEN 1 ELSE 0 END ASC,
+                    last_inbound_at DESC,
+                    CASE WHEN last_app_activity_at IS NULL THEN 1 ELSE 0 END ASC,
+                    last_app_activity_at DESC,
+                    CASE WHEN joined_at IS NULL THEN 1 ELSE 0 END ASC,
+                    joined_at DESC,
+                    resident_id ASC
+                LIMIT 1
+                """,
+                (
+                    APP_ACTIVE_SESSION_KEY,
+                    len(f"{APP_ACTIVE_SESSION_KEY}:"),
+                    f"{APP_ACTIVE_SESSION_KEY}:",
+                    universe_id,
+                    platform_user_id,
+                ),
+            ).fetchone()
+            if row is None:
+                return None
+            result = dict(row)
+            if not lock_resident:
+                return result
+            lock_suffix = " FOR UPDATE" if is_postgres() else ""
+            locked = tx.execute(
+                "SELECT id, status, runtime_account_id FROM universe_residents "
+                "WHERE id = ? AND universe_id = ?" + lock_suffix,
+                (result["resident_id"], universe_id),
+            ).fetchone()
+            if (
+                locked is not None
+                and locked["status"] == "active"
+                and locked["runtime_account_id"] is not None
+            ):
+                return result
+        return None
+
+
 # ---------------------------------------------------------------------------
 # L3 universe_memory_facts（append-only typed fact，§2.5 / ADR §6.4 / D-05 / D-06）
 # ---------------------------------------------------------------------------
@@ -1039,3 +1271,925 @@ def compact_universe_facts(
         "superseded_facts": superseded_count,
         "merged_fact_ids": merged_fact_ids,
     }
+
+
+# ---------------------------------------------------------------------------
+# M3 Feed / outbox（owner 锚为 universe/platform user，不复用 runtime account）
+# ---------------------------------------------------------------------------
+@contextmanager
+def _m3_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
+    """复用调用方事务或建立 M3 写事务；SQLite 用 IMMEDIATE 串行化读后写。"""
+    if conn is not None:
+        yield conn
+        return
+    with connect() as own:
+        if not is_postgres():
+            own.execute("BEGIN IMMEDIATE")
+        yield own
+
+
+def claim_ai_feed_slot(
+    *,
+    universe_id: str,
+    author_resident_id: str,
+    ai_local_date: str,
+    ai_slot: str,
+    slot_window_end_at: str,
+    claim_token: str,
+    claimed_at: str,
+    next_attempt_at: Optional[str] = None,
+    stale_before: Optional[str] = None,
+    max_attempts: Optional[int] = None,
+    conn: Optional[Connection] = None,
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """原子占用或重领一个 universe/date/slot；返回 ``(row, acquired)``。
+
+    INSERT 的 SELECT 同时验证 confirmed active world 与 active author 归属，避免调用方
+    先查后写产生跨 universe 作者污染。唯一索引是多 worker 竞争的最终裁决者。
+    """
+    if ai_slot not in {"morning", "evening"}:
+        raise ValueError("invalid ai_slot")
+    post_id = _new_id("post")
+    with _m3_write_tx(conn) as tx:
+        eligible = tx.execute(
+            """
+            SELECT 1
+            FROM universes u
+            JOIN universe_residents r ON r.universe_id = u.id
+            WHERE u.id = ? AND u.status = 'active'
+              AND u.onboarding_state = 'confirmed'
+              AND r.id = ? AND r.status = 'active'
+            """,
+            (universe_id, author_resident_id),
+        ).fetchone()
+        if eligible is None:
+            return None, False
+        tx.execute(
+            """
+            INSERT INTO universe_posts(
+                id, universe_id, author_type, author_resident_id, source_type,
+                content_type, status, ai_local_date, ai_slot, slot_window_end_at,
+                attempt_count, claimed_at, claim_token, next_attempt_at
+            )
+            SELECT ?, u.id, 'resident', r.id, 'ai_feed', 'text', 'generating',
+                   ?, ?, ?, 1, ?, ?, ?
+            FROM universes u
+            JOIN universe_residents r ON r.universe_id = u.id
+            WHERE u.id = ? AND u.status = 'active'
+              AND u.onboarding_state = 'confirmed'
+              AND r.id = ? AND r.status = 'active'
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                post_id,
+                ai_local_date,
+                ai_slot,
+                slot_window_end_at,
+                claimed_at,
+                claim_token,
+                next_attempt_at,
+                universe_id,
+                author_resident_id,
+            ),
+        )
+        row = tx.execute(
+            """
+            SELECT * FROM universe_posts
+            WHERE universe_id = ? AND source_type = 'ai_feed'
+              AND ai_local_date = ? AND ai_slot = ?
+            """,
+            (universe_id, ai_local_date, ai_slot),
+        ).fetchone()
+        if row is None:
+            return None, False
+        result = dict(row)
+        if str(result["id"]) == post_id:
+            return result, True
+        if stale_before is None or max_attempts is None:
+            return result, False
+        cursor = tx.execute(
+            """
+            UPDATE universe_posts
+            SET claimed_at = ?, claim_token = ?, next_attempt_at = NULL,
+                attempt_count = attempt_count + 1,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ? AND status = 'generating'
+              AND slot_window_end_at > ?
+              AND (claim_token IS NULL OR claimed_at <= ?)
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND attempt_count < ?
+            """,
+            (
+                claimed_at,
+                claim_token,
+                result["id"],
+                claimed_at,
+                stale_before,
+                claimed_at,
+                max(1, int(max_attempts)),
+            ),
+        )
+        if int(cursor.rowcount or 0) <= 0:
+            return result, False
+        reclaimed = tx.execute(
+            "SELECT * FROM universe_posts WHERE id = ?", (result["id"],)
+        ).fetchone()
+        if reclaimed is None:
+            raise RuntimeError("reclaimed AI feed post disappeared")
+        return dict(reclaimed), True
+
+
+def get_universe_post_for_owner(
+    *,
+    post_id: str,
+    owner_platform_user_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """按 post id + platform owner 读取；他人世界与不存在统一返回 None。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT p.*,
+                   CASE
+                     WHEN p.author_type = 'human' THEN human.display_name
+                     ELSE COALESCE(profile.display_name, template.name)
+                   END AS author_name,
+                   CASE
+                     WHEN p.author_type = 'resident' THEN template.avatar_ref
+                     ELSE NULL
+                   END AS author_avatar_ref
+            FROM universe_posts p
+            JOIN universes u ON u.id = p.universe_id
+            LEFT JOIN platform_users human ON human.id = p.author_platform_user_id
+            LEFT JOIN universe_residents resident ON resident.id = p.author_resident_id
+            LEFT JOIN character_templates template
+              ON template.id = resident.character_template_id
+            LEFT JOIN profiles profile
+              ON profile.account_id = resident.runtime_account_id
+            WHERE p.id = ? AND u.owner_platform_user_id = ?
+            """,
+            (post_id, owner_platform_user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def publish_user_feed_post_with_outbox(
+    *,
+    owner_platform_user_id: str,
+    client_request_id: str,
+    text: str,
+    request_fingerprint: str,
+    published_at: str,
+    conn: Optional[Connection] = None,
+) -> Tuple[Dict[str, Any], bool]:
+    """直接发布 owner 用户文字动态，并与 published outbox 同事务提交。"""
+    post_id = _new_id("post")
+    with _m3_write_tx(conn) as tx:
+        world = tx.execute(
+            """
+            SELECT u.*,
+                   EXISTS(
+                       SELECT 1 FROM universe_residents r
+                       WHERE r.universe_id = u.id AND r.status = 'active'
+                   ) AS has_active_resident
+            FROM universes u
+            WHERE u.owner_platform_user_id = ?
+            """,
+            (owner_platform_user_id,),
+        ).fetchone()
+        if world is None:
+            raise ValueError("world_not_ready")
+        world_row = dict(world)
+        if world_row["status"] != "active":
+            raise ValueError("world_disabled")
+        if (
+            world_row["onboarding_state"] != "confirmed"
+            or not bool(world_row["has_active_resident"])
+        ):
+            raise ValueError("world_not_ready")
+
+        tx.execute(
+            """
+            INSERT INTO universe_posts(
+                id, universe_id, author_type, author_platform_user_id,
+                source_type, content_type, text, status, client_request_id,
+                request_fingerprint, published_at
+            )
+            VALUES (?, ?, 'human', ?, 'user_post', 'text', ?, 'published', ?, ?, ?)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                post_id,
+                world_row["id"],
+                owner_platform_user_id,
+                text,
+                client_request_id,
+                request_fingerprint,
+                published_at,
+            ),
+        )
+        post = tx.execute(
+            """
+            SELECT * FROM universe_posts
+            WHERE universe_id = ? AND author_platform_user_id = ?
+              AND source_type = 'user_post' AND client_request_id = ?
+            """,
+            (world_row["id"], owner_platform_user_id, client_request_id),
+        ).fetchone()
+        if post is None:
+            raise RuntimeError("user feed post was not created")
+        post_row = dict(post)
+        if str(post_row.get("request_fingerprint") or "") != str(
+            request_fingerprint
+        ):
+            raise ValueError("idempotency_conflict")
+        created = str(post_row["id"]) == post_id
+
+        payload_json = json.dumps(
+            {
+                "v": 1,
+                "post_id": post_row["id"],
+                "universe_id": post_row["universe_id"],
+                "source_type": post_row["source_type"],
+                "published_at": post_row["published_at"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        outbox_key = f"world-post-published:v1:{post_row['id']}"
+        tx.execute(
+            """
+            INSERT INTO companion_world_outbox(
+                id, universe_id, post_id, event_type, idempotency_key,
+                payload_json, status, available_at
+            ) VALUES (?, ?, ?, 'universe_post.published.v1', ?, ?, 'pending', ?)
+            ON CONFLICT(idempotency_key) DO NOTHING
+            """,
+            (
+                _new_id("wout"),
+                post_row["universe_id"],
+                post_row["id"],
+                outbox_key,
+                payload_json,
+                post_row["published_at"],
+            ),
+        )
+        outbox = tx.execute(
+            "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
+            (outbox_key,),
+        ).fetchone()
+        if outbox is None:
+            raise RuntimeError("user feed published outbox was not created")
+        outbox_row = dict(outbox)
+        if (
+            str(outbox_row["post_id"]) != str(post_row["id"])
+            or str(outbox_row["payload_json"]) != payload_json
+        ):
+            raise ValueError("outbox idempotency conflict")
+        result = get_universe_post_for_owner(
+            post_id=str(post_row["id"]),
+            owner_platform_user_id=owner_platform_user_id,
+            conn=tx,
+        )
+        if result is None:
+            raise RuntimeError("published user post disappeared")
+    return result, created
+
+
+def list_published_feed_posts_for_owner(
+    *,
+    owner_platform_user_id: str,
+    cursor_published_at: Optional[str] = None,
+    cursor_post_id: Optional[str] = None,
+    limit: int = 21,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """按 tuple cursor 列出 owner home world 的 published posts。"""
+    if bool(cursor_published_at) != bool(cursor_post_id):
+        raise ValueError("invalid_cursor")
+    clean_limit = max(1, min(int(limit), 51))
+    cursor_clause = ""
+    params: List[Any] = [owner_platform_user_id]
+    if cursor_published_at and cursor_post_id:
+        cursor_clause = (
+            "AND (p.published_at < ? OR (p.published_at = ? AND p.id < ?))"
+        )
+        params.extend([cursor_published_at, cursor_published_at, cursor_post_id])
+    params.append(clean_limit)
+    with _tx(conn) as tx:
+        world = tx.execute(
+            """
+            SELECT u.*,
+                   EXISTS(
+                       SELECT 1 FROM universe_residents r
+                       WHERE r.universe_id = u.id AND r.status = 'active'
+                   ) AS has_active_resident
+            FROM universes u
+            WHERE u.owner_platform_user_id = ?
+            """,
+            (owner_platform_user_id,),
+        ).fetchone()
+        if world is None:
+            raise ValueError("world_not_ready")
+        world_row = dict(world)
+        if world_row["status"] != "active":
+            raise ValueError("world_disabled")
+        if (
+            world_row["onboarding_state"] != "confirmed"
+            or not bool(world_row["has_active_resident"])
+        ):
+            raise ValueError("world_not_ready")
+        rows = tx.execute(
+            f"""
+            SELECT p.*,
+                   CASE
+                     WHEN p.author_type = 'human' THEN human.display_name
+                     ELSE COALESCE(profile.display_name, template.name)
+                   END AS author_name,
+                   CASE
+                     WHEN p.author_type = 'resident' THEN template.avatar_ref
+                     ELSE NULL
+                   END AS author_avatar_ref
+            FROM universe_posts p
+            JOIN universes u ON u.id = p.universe_id
+            LEFT JOIN platform_users human ON human.id = p.author_platform_user_id
+            LEFT JOIN universe_residents resident ON resident.id = p.author_resident_id
+            LEFT JOIN character_templates template
+              ON template.id = resident.character_template_id
+            LEFT JOIN profiles profile
+              ON profile.account_id = resident.runtime_account_id
+            WHERE u.owner_platform_user_id = ? AND p.status = 'published'
+              {cursor_clause}
+            ORDER BY p.published_at DESC, p.id DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_feed_post_with_outbox(
+    *,
+    owner_platform_user_id: str,
+    post_id: str,
+    reason_code: str,
+    deleted_at: str,
+    conn: Optional[Connection] = None,
+) -> Dict[str, Any]:
+    """owner-scoped 下架 post 并原子追加 deleted outbox；暂不暴露 HTTP 路由。"""
+    with _m3_write_tx(conn) as tx:
+        current = tx.execute(
+            """
+            SELECT p.* FROM universe_posts p
+            JOIN universes u ON u.id = p.universe_id
+            WHERE p.id = ? AND u.owner_platform_user_id = ?
+            """,
+            (post_id, owner_platform_user_id),
+        ).fetchone()
+        if current is None:
+            raise ValueError("post_not_found")
+        current_row = dict(current)
+        if current_row["status"] == "published":
+            tx.execute(
+                """
+                UPDATE universe_posts
+                SET status = 'deleted', terminal_reason = ?, deleted_at = ?,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ? AND universe_id = ? AND status = 'published'
+                """,
+                (reason_code, deleted_at, post_id, current_row["universe_id"]),
+            )
+        elif current_row["status"] != "deleted":
+            raise ValueError("post_not_publishable")
+
+        payload_json = json.dumps(
+            {
+                "post_id": post_id,
+                "deleted_at": deleted_at,
+                "reason_code": reason_code,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        outbox_key = f"world-post-deleted:v1:{post_id}"
+        tx.execute(
+            """
+            INSERT INTO companion_world_outbox(
+                id, universe_id, post_id, event_type, idempotency_key,
+                payload_json, status, available_at
+            ) VALUES (?, ?, ?, 'universe_post.deleted.v1', ?, ?, 'pending', ?)
+            ON CONFLICT(idempotency_key) DO NOTHING
+            """,
+            (
+                _new_id("wout"),
+                current_row["universe_id"],
+                post_id,
+                outbox_key,
+                payload_json,
+                deleted_at,
+            ),
+        )
+        outbox = tx.execute(
+            "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
+            (outbox_key,),
+        ).fetchone()
+        if outbox is None or str(outbox["payload_json"]) != payload_json:
+            raise ValueError("outbox idempotency conflict")
+        result = get_universe_post_for_owner(
+            post_id=post_id,
+            owner_platform_user_id=owner_platform_user_id,
+            conn=tx,
+        )
+        if result is None:
+            raise RuntimeError("deleted post disappeared")
+    return result
+
+
+def publish_ai_feed_post_with_outbox(
+    *,
+    post_id: str,
+    claim_token: str,
+    text: str,
+    published_at: str,
+    outbox_idempotency_key: str,
+    payload: Dict[str, Any],
+    conn: Optional[Connection] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """把已 claim 的 AI post 与 published outbox 在同一事务提交。
+
+    发布前复核 author 仍 active 且未越过窗口；重复调用只在正文和 immutable outbox
+    完全一致时幂等返回。M3 默认直接发布，不创建 account-scoped moderation task。
+    """
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        raise ValueError("text is required")
+    payload_json = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    with _m3_write_tx(conn) as tx:
+        lock_suffix = " FOR UPDATE" if is_postgres() else ""
+        row = tx.execute(
+            """
+            SELECT p.*, r.status AS author_status
+            FROM universe_posts p
+            JOIN universe_residents r
+              ON r.id = p.author_resident_id AND r.universe_id = p.universe_id
+            WHERE p.id = ? AND p.source_type = 'ai_feed'
+            """
+            + lock_suffix,
+            (post_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("ai feed post not found")
+        current = dict(row)
+        if current["status"] == "generating":
+            if str(current.get("claim_token") or "") != str(claim_token):
+                raise ValueError("claim token mismatch")
+            if current["author_status"] != "active":
+                raise ValueError("author is not active")
+            if str(published_at) >= str(current["slot_window_end_at"]):
+                raise ValueError("slot window closed")
+            tx.execute(
+                """
+                UPDATE universe_posts
+                SET text = ?, status = 'published', published_at = ?,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ? AND status = 'generating' AND claim_token = ?
+                """,
+                (clean_text, published_at, post_id, claim_token),
+            )
+        elif current["status"] == "published":
+            if str(current.get("text") or "") != clean_text:
+                raise ValueError("published post content mismatch")
+        else:
+            raise ValueError("ai feed post is not publishable")
+
+        outbox_id = _new_id("wout")
+        tx.execute(
+            """
+            INSERT INTO companion_world_outbox(
+                id, universe_id, post_id, event_type, idempotency_key,
+                payload_json, status, available_at
+            )
+            VALUES (?, ?, ?, 'universe_post.published.v1', ?, ?, 'pending', ?)
+            ON CONFLICT(idempotency_key) DO NOTHING
+            """,
+            (
+                outbox_id,
+                current["universe_id"],
+                post_id,
+                outbox_idempotency_key,
+                payload_json,
+                published_at,
+            ),
+        )
+        outbox = tx.execute(
+            "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
+            (outbox_idempotency_key,),
+        ).fetchone()
+        if outbox is None:
+            raise RuntimeError("published outbox was not created")
+        outbox_result = dict(outbox)
+        if (
+            str(outbox_result["post_id"]) != str(post_id)
+            or str(outbox_result["universe_id"]) != str(current["universe_id"])
+            or str(outbox_result["payload_json"]) != payload_json
+        ):
+            raise ValueError("outbox idempotency conflict")
+        published = tx.execute(
+            "SELECT * FROM universe_posts WHERE id = ?", (post_id,)
+        ).fetchone()
+    if published is None:
+        raise RuntimeError("published post disappeared")
+    return dict(published), outbox_result
+
+
+def claim_companion_world_outbox(
+    *,
+    batch_size: int,
+    now: str,
+    claim_token: str,
+    stale_before: Optional[str] = None,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """claim 一批可投递/lease 过期 outbox；PG 以 SKIP LOCKED 防 worker 重叠。"""
+    clean_limit = max(1, int(batch_size))
+    with _m3_write_tx(conn) as tx:
+        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        stale_clause = ""
+        select_params: List[Any] = [now]
+        if stale_before is not None:
+            stale_clause = " OR (status = 'processing' AND claimed_at <= ?)"
+            select_params.append(stale_before)
+        select_params.append(clean_limit)
+        rows = tx.execute(
+            f"""
+            SELECT id FROM companion_world_outbox
+            WHERE (status = 'pending' AND available_at <= ?){stale_clause}
+            ORDER BY available_at ASC, id ASC
+            LIMIT ?
+            """
+            + lock_suffix,
+            tuple(select_params),
+        ).fetchall()
+        ids = [str(row["id"]) for row in rows]
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        update_stale_clause = ""
+        update_params: List[Any] = [now, claim_token, *ids]
+        if stale_before is not None:
+            update_stale_clause = " OR (status = 'processing' AND claimed_at <= ?)"
+            update_params.append(stale_before)
+        tx.execute(
+            f"""
+            UPDATE companion_world_outbox
+            SET status = 'processing', attempts = attempts + 1,
+                claimed_at = ?, claim_token = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id IN ({placeholders})
+              AND (status = 'pending'{update_stale_clause})
+            """,
+            tuple(update_params),
+        )
+        claimed = tx.execute(
+            f"""
+            SELECT * FROM companion_world_outbox
+            WHERE claim_token = ? AND status = 'processing'
+              AND id IN ({placeholders})
+            ORDER BY available_at ASC, id ASC
+            """,
+            (claim_token, *ids),
+        ).fetchall()
+    return [dict(row) for row in claimed]
+
+
+def get_companion_world_outbox_metrics(
+    *, now: str, conn: Optional[Connection] = None
+) -> Dict[str, Any]:
+    """返回 outbox 状态计数与最老未完成事件延迟，供 M3 heartbeat 使用。"""
+
+    try:
+        current = datetime.strptime(now, "%Y-%m-%d %H:%M:%S")
+    except ValueError as err:
+        raise ValueError("now must be Beijing naive database time") from err
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            """
+            SELECT status, COUNT(*) AS total, MIN(created_at) AS oldest_created_at
+            FROM companion_world_outbox
+            GROUP BY status
+            """
+        ).fetchall()
+    counts = {status: 0 for status in ("pending", "processing", "delivered", "dead")}
+    oldest_live: Optional[datetime] = None
+    for row in rows:
+        status = str(row["status"])
+        counts[status] = int(row["total"] or 0)
+        if status not in {"pending", "processing"} or not row["oldest_created_at"]:
+            continue
+        created_at = datetime.fromisoformat(str(row["oldest_created_at"]))
+        if oldest_live is None or created_at < oldest_live:
+            oldest_live = created_at
+    lag_seconds = (
+        max(0, int((current - oldest_live).total_seconds()))
+        if oldest_live is not None
+        else 0
+    )
+    return {**counts, "oldest_undelivered_lag_seconds": lag_seconds}
+
+
+def list_ai_feed_eligible_worlds(
+    *,
+    inbound_since: str,
+    after_universe_id: Optional[str] = None,
+    limit: int = 20,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """列出近 7 日有任一渠道真人入站的 confirmed worlds，按 universe id 稳定分页。"""
+    clean_limit = max(1, min(int(limit), 200))
+    cursor_clause = ""
+    params: List[Any] = [inbound_since]
+    if after_universe_id:
+        cursor_clause = "AND u.id > ?"
+        params.append(after_universe_id)
+    params.append(clean_limit)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            WITH candidates AS (
+                SELECT u.id AS universe_id, u.owner_platform_user_id,
+                       (
+                           SELECT MAX(m.created_at)
+                           FROM messages m
+                           WHERE m.direction = 'inbound' AND m.role = 'user'
+                             AND m.created_at >= ?
+                             AND m.account_id IN (
+                                 SELECT b.account_id
+                                 FROM account_owner_bindings b
+                                 WHERE b.platform_user_id = u.owner_platform_user_id
+                                   AND b.status = 'active'
+                                 UNION
+                                 SELECT owned.runtime_account_id
+                                 FROM universe_residents owned
+                                 WHERE owned.universe_id = u.id
+                                   AND owned.runtime_account_id IS NOT NULL
+                             )
+                       ) AS last_inbound_at
+                FROM universes u
+                WHERE u.status = 'active' AND u.onboarding_state = 'confirmed'
+                  AND EXISTS (
+                      SELECT 1 FROM universe_residents active_resident
+                      WHERE active_resident.universe_id = u.id
+                        AND active_resident.status = 'active'
+                        AND active_resident.runtime_account_id IS NOT NULL
+                  )
+                  {cursor_clause}
+            )
+            SELECT * FROM candidates
+            WHERE last_inbound_at IS NOT NULL
+            ORDER BY universe_id ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in rows if row["last_inbound_at"] is not None]
+
+
+def select_ai_feed_author(
+    *, universe_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """按 App 会话活动、joined_at DESC、resident id ASC 选择 active AI Feed 作者。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            WITH candidates AS (
+                SELECT r.id AS resident_id, r.universe_id, r.runtime_account_id,
+                       r.joined_at, COALESCE(p.display_name, t.name) AS name,
+                       t.avatar_ref,
+                       (
+                           SELECT MAX(m.created_at)
+                           FROM messages m
+                           JOIN sessions s ON s.id = m.session_id
+                           WHERE m.account_id = r.runtime_account_id
+                             AND s.session_key = ?
+                       ) AS app_last_activity_at
+                FROM universe_residents r
+                JOIN character_templates t ON t.id = r.character_template_id
+                LEFT JOIN profiles p ON p.account_id = r.runtime_account_id
+                WHERE r.universe_id = ? AND r.status = 'active'
+                  AND r.runtime_account_id IS NOT NULL
+            )
+            SELECT * FROM candidates
+            ORDER BY
+              CASE WHEN app_last_activity_at IS NULL THEN 1 ELSE 0 END ASC,
+              app_last_activity_at DESC,
+              CASE WHEN joined_at IS NULL THEN 1 ELSE 0 END ASC,
+              joined_at DESC,
+              resident_id ASC
+            LIMIT 1
+            """,
+            (APP_ACTIVE_SESSION_KEY, universe_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_ai_feed_author(
+    *,
+    universe_id: str,
+    resident_id: str,
+    require_active: bool = True,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """读取 slot 已绑定的 resident author；发布前可强制 active 复核。"""
+    active_clause = "AND r.status = 'active'" if require_active else ""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            f"""
+            SELECT r.id AS resident_id, r.universe_id, r.runtime_account_id,
+                   r.joined_at, r.status, COALESCE(p.display_name, t.name) AS name,
+                   t.avatar_ref
+            FROM universe_residents r
+            JOIN character_templates t ON t.id = r.character_template_id
+            LEFT JOIN profiles p ON p.account_id = r.runtime_account_id
+            WHERE r.universe_id = ? AND r.id = ?
+              AND r.runtime_account_id IS NOT NULL {active_clause}
+            """,
+            (universe_id, resident_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def defer_ai_feed_post(
+    *,
+    post_id: str,
+    claim_token: str,
+    next_attempt_at: str,
+    max_attempts: int,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """生成瞬时失败时释放 claim 并退避；达到上限则 terminal skipped。"""
+    with _m3_write_tx(conn) as tx:
+        row = tx.execute(
+            "SELECT * FROM universe_posts WHERE id = ? AND source_type = 'ai_feed'",
+            (post_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        current = dict(row)
+        if (
+            current["status"] != "generating"
+            or str(current.get("claim_token") or "") != str(claim_token)
+        ):
+            return current
+        if int(current.get("attempt_count") or 0) >= max(1, int(max_attempts)):
+            tx.execute(
+                """
+                UPDATE universe_posts
+                SET status = 'skipped', terminal_reason = 'retry_exhausted',
+                    claim_token = NULL, next_attempt_at = NULL,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ? AND status = 'generating' AND claim_token = ?
+                """,
+                (post_id, claim_token),
+            )
+        else:
+            tx.execute(
+                """
+                UPDATE universe_posts
+                SET claimed_at = NULL, claim_token = NULL, next_attempt_at = ?,
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ? AND status = 'generating' AND claim_token = ?
+                """,
+                (next_attempt_at, post_id, claim_token),
+            )
+        updated = tx.execute(
+            "SELECT * FROM universe_posts WHERE id = ?", (post_id,)
+        ).fetchone()
+    return dict(updated) if updated else None
+
+
+def skip_ai_feed_post(
+    *,
+    post_id: str,
+    reason: str,
+    claim_token: Optional[str] = None,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """把 generating AI slot CAS 为 skipped；可选 token 防旧 worker 覆盖。"""
+    token_clause = ""
+    params: List[Any] = [reason, post_id]
+    if claim_token is not None:
+        token_clause = "AND claim_token = ?"
+        params.append(claim_token)
+    with _m3_write_tx(conn) as tx:
+        tx.execute(
+            f"""
+            UPDATE universe_posts
+            SET status = 'skipped', terminal_reason = ?, claim_token = NULL,
+                next_attempt_at = NULL,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ? AND status = 'generating' {token_clause}
+            """,
+            tuple(params),
+        )
+        row = tx.execute(
+            "SELECT * FROM universe_posts WHERE id = ?", (post_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def close_expired_ai_feed_slots(
+    *, now: str, limit: int = 100, conn: Optional[Connection] = None
+) -> int:
+    """关闭已越过 slot window 的 generating 行；绝不跨窗口补发。"""
+    clean_limit = max(1, min(int(limit), 1000))
+    with _m3_write_tx(conn) as tx:
+        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        rows = tx.execute(
+            """
+            SELECT id FROM universe_posts
+            WHERE source_type = 'ai_feed' AND status = 'generating'
+              AND slot_window_end_at <= ?
+            ORDER BY slot_window_end_at ASC, id ASC
+            LIMIT ?
+            """
+            + lock_suffix,
+            (now, clean_limit),
+        ).fetchall()
+        ids = [str(row["id"]) for row in rows]
+        if not ids:
+            return 0
+        placeholders = ",".join("?" for _ in ids)
+        cursor = tx.execute(
+            f"""
+            UPDATE universe_posts
+            SET status = 'skipped', terminal_reason = 'window_closed',
+                claim_token = NULL, next_attempt_at = NULL,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE status = 'generating' AND id IN ({placeholders})
+            """,
+            tuple(ids),
+        )
+    return int(cursor.rowcount or 0)
+
+
+def complete_companion_world_outbox(
+    *,
+    outbox_id: str,
+    claim_token: str,
+    delivered_at: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """以 claim token CAS 完成 outbox；旧 worker 不得覆盖新 lease。"""
+    with _m3_write_tx(conn) as tx:
+        tx.execute(
+            """
+            UPDATE companion_world_outbox
+            SET status = 'delivered', delivered_at = ?, claim_token = NULL,
+                last_error = NULL,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ? AND status = 'processing' AND claim_token = ?
+            """,
+            (delivered_at, outbox_id, claim_token),
+        )
+        row = tx.execute(
+            "SELECT * FROM companion_world_outbox WHERE id = ?", (outbox_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def fail_companion_world_outbox(
+    *,
+    outbox_id: str,
+    claim_token: str,
+    error: str,
+    next_attempt_at: str,
+    max_attempts: int,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """outbox handler 失败时退避或转 dead；更新严格受当前 claim token 保护。"""
+    with _m3_write_tx(conn) as tx:
+        tx.execute(
+            """
+            UPDATE companion_world_outbox
+            SET status = CASE WHEN attempts >= ? THEN 'dead' ELSE 'pending' END,
+                available_at = ?, claim_token = NULL, claimed_at = NULL,
+                last_error = ?,
+                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id = ? AND status = 'processing' AND claim_token = ?
+            """,
+            (
+                max(1, int(max_attempts)),
+                next_attempt_at,
+                str(error or "")[:1000],
+                outbox_id,
+                claim_token,
+            ),
+        )
+        row = tx.execute(
+            "SELECT * FROM companion_world_outbox WHERE id = ?", (outbox_id,)
+        ).fetchone()
+    return dict(row) if row else None

@@ -6,9 +6,17 @@
 from datetime import datetime
 from unittest.mock import patch
 
-from app.db import get_or_create_session, upsert_channel_binding
+from app.db import (
+    connect,
+    create_or_get_platform_user_by_phone,
+    get_or_create_session,
+    resolve_resident_memory_scope,
+    set_universe_onboarding_state,
+    upsert_channel_binding,
+)
 from app.proactive.contract.common import _select_route
 from app.proactive.delivery.outbound import dispatch_proactive_text
+from tests.factories import make_resident_account
 
 
 def _ensure_account(account_id: str) -> None:
@@ -84,6 +92,81 @@ def test_dispatch_proactive_text_fail_fast_for_web_never_sends(fresh_db):
     send_mock.assert_not_called()
     assert result["status"] == "cancelled"
     assert result["error"] == "channel_not_proactive"
+
+
+def test_native_world_route_delivers_to_inbox_without_weixin(fresh_db):
+    user_id = create_or_get_platform_user_by_phone(
+        phone="19965001001", display_name="App 入箱用户"
+    )["id"]
+    account_id = make_resident_account(user_id, "App 入箱居民")
+    scope = resolve_resident_memory_scope(runtime_account_id=account_id)
+    set_universe_onboarding_state(
+        universe_id=scope["universe_id"], onboarding_state="confirmed"
+    )
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="native",
+        session_key="__app_active__",
+        channel_account_id=None,
+        sender_id=user_id,
+        chat_id=None,
+        raw_identity={"source": "test"},
+    )
+    assert _select_route(account_id) is None
+
+    fresh_db.companion_world_app_inbox_enabled = True
+    route = _select_route(account_id)
+    assert route is not None and route["channel"] == "native"
+    with patch("app.proactive.delivery.outbound.send_weixin_text") as send_mock:
+        result = dispatch_proactive_text(
+            account_id=account_id,
+            channel=route["channel"],
+            channel_account_id=route.get("channel_account_id"),
+            to_user_id=route["to_user_id"],
+            session_key=route.get("session_key"),
+            source="commitment",
+            text="这条只进入 App 收件箱",
+            idempotency_key="commitment-app-inbox-1",
+            now=datetime(2026, 7, 22, 12, 0, 0),
+            product_category="companion_followup",
+            metadata={"commitment_id": "app-inbox-1"},
+        )
+    send_mock.assert_not_called()
+    assert result["status"] == "sent"
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM app_notifications WHERE platform_user_id=?",
+            (user_id,),
+        ).fetchone()
+    assert row["delivery_status"] == "visible"
+    assert row["idempotency_key"] == (
+        "resident-obligation:v1:commitment:app-inbox-1"
+    )
+
+    blocked = dispatch_proactive_text(
+        account_id=account_id,
+        channel="native",
+        channel_account_id=None,
+        to_user_id=user_id,
+        session_key="__app_active__",
+        source="account_check",
+        text="M3-5 前不能提前入箱",
+        now=datetime(2026, 7, 22, 12, 1, 0),
+        product_category="companion_followup",
+    )
+    assert blocked["status"] == "cancelled"
+    assert blocked["error"] == "app_inbox_human_proactive_disabled"
+
+    upsert_channel_binding(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        session_key="wx-world-primary",
+        channel_account_id="bot-1",
+        sender_id="sender",
+        chat_id="wx-world-user@im",
+        raw_identity={"source": "test"},
+    )
+    assert _select_route(account_id)["channel"] == "openclaw-weixin"
 
 
 def test_dispatch_proactive_text_weixin_still_reaches_gateway(fresh_db):

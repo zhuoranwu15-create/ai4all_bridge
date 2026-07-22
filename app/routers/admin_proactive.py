@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.routers.deps import verify_admin_auth
 from app.routers.serializers import _beijing_display, _content_invitation_for_overview, _list_reactivation_candidate_admin_items, _normalize_optional_state_datetime, _normalize_ts, _proactive_message_settings_with_resolved, _proactive_state_for_overview, _redact_text_field
-from app.db import cancel_proactive_commitment, get_account, get_proactive_account_state, get_proactive_commitment, list_content_invitations_for_account, list_outbound_messages, list_proactive_commitments_for_account, list_proactive_message_setting_events, list_reactivation_outbound_messages_admin, list_reminders_for_account, upsert_proactive_account_state
+from app.db import cancel_proactive_commitment, cleanup_app_notifications_batch, get_account, get_proactive_account_state, get_proactive_commitment, list_content_invitations_for_account, list_outbound_messages, list_proactive_commitments_for_account, list_proactive_message_setting_events, list_reactivation_outbound_messages_admin, list_reminders_for_account, upsert_proactive_account_state
 from app.proactive.recall.manual_companion import clear_account_check_candidate_draft, generate_account_check_candidate_draft, promote_account_check_candidate_draft
 from app.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 from app.proactive.recall.content_invitation import generate_content_invitation_candidate
@@ -415,6 +415,10 @@ async def admin_proactive_scheduler_run_once(
         batch_size=limit,
         bypass_quiet_hours=bypass_quiet_hours,
         planning_interval_seconds=settings.proactive_planning_interval_seconds,
+        cleanup_app_notifications=cleanup_app_notifications_batch,
+        notification_cleanup_batch_size=(
+            settings.companion_world_notification_cleanup_batch_size
+        ),
     )
     dreaming = await asyncio.to_thread(run_daily_dreaming_scan, limit=limit)
     result["daily_dreaming"] = dreaming

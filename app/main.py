@@ -26,6 +26,7 @@ from app.db import (
     clear_session_messages,
     clear_all_messages_for_account,
     cancel_proactive_commitment,
+    cleanup_app_notifications_batch,
     claim_content_moderation_task,
     count_verifications_last_hour,
     create_ai4all_account_for_user,
@@ -327,6 +328,8 @@ if settings.has_central_role:
     from app.routers import companion_world as _companion_world_router  # noqa: E402
     app.include_router(_companion_world_router.router)
     _companion_world_router.install_exception_handlers(app)
+    from app.routers import app_notifications as _app_notifications_router  # noqa: E402
+    app.include_router(_app_notifications_router.router)
     from app.routers import debug as _debug_router  # noqa: E402
     app.include_router(_debug_router.router)
     from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
@@ -507,6 +510,10 @@ async def startup_proactive_scheduler() -> None:
         bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
         planning_interval_seconds=settings.proactive_planning_interval_seconds,
         node_id=settings.node_id or None,
+        cleanup_app_notifications=cleanup_app_notifications_batch,
+        notification_cleanup_batch_size=(
+            settings.companion_world_notification_cleanup_batch_size
+        ),
     )
     logger.info("proactive scheduler started: %s", scheduler.status())
 

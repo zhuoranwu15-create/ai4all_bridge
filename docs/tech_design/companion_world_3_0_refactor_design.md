@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-22
-状态：**M0/M1/M2-C 代码已完成，Draft PR #45 待评审；`COMPANION_WORLD_P1_ENABLED` 默认关闭，尚未生产启用。** M3–M5 仍各自受 §10 对应产品门约束。含主动消息子系统改造（D-13 / §11）。本文同时作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
-核查基线：当前开发环境 `feat/companion-world-m2c@6000c0b`，基线 `main@3f42ee1`（PR #44 已合并），待合并 Draft PR #45。
+状态：**M0/M1/M2-C 与 M3 代码已完成，PR #45 已合并；P1 与 M3 三个新 flag 均默认关闭，尚未生产启用。** M4–M5 仍各自受 §10 对应产品门约束。含主动消息子系统改造（D-13 / §11）。本文同时作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+核查基线：当前开发环境 `feat/companion-world-m3`，基于 PR #45 merge commit `363500ea8364dcccd9e7c6e3c7c5eb5ce7ed9392`。
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -22,17 +22,21 @@
 
 1. **本文 ADR**：产品/架构冻结决策、里程碑状态、已知偏差与下一阶段前置门。
 2. **[`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)**：M2-C 已实现的 schema、DTO、错误码、锁序与 backfill 细节。
-3. **[`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)**：生产模板导入、固定 cutoff backfill、对账、开关与回滚步骤。
-4. **[`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md)**：已完成的实施记录，仅作 provenance；不再是待执行计划。
+3. **[`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md)**：M3 已完成的三表、状态机、API、幂等、PG 锁序、可观测与 rollout 契约。
+4. **[`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)**：生产模板导入、固定 cutoff backfill、对账、开关与回滚步骤。
+5. **[`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md)**：已完成的实施记录，仅作 provenance；不再是待执行计划。
+6. **[`../plans/companion_world_m3_implementation_plan.md`](../plans/companion_world_m3_implementation_plan.md)**：M3-0…M3-6 已完成归档，仅作实施 provenance。
 
 当前代码地图：
 
 - API/composition root：`app/routers/companion_world.py`、`app/main.py`、`app/routers/app_api.py`。
-- 纯领域层：`app/domains/companion_world/{contracts,service,memory_sink,l3_context}.py`。
+- 纯领域层：`app/domains/companion_world/{contracts,service,feed,notifications,memory_sink,l3_context}.py`。
 - SQL/platform adapters：`app/platform/{companion_world_repository,companion_world_memory}.py`。
 - Runtime 接缝：`app/agent_runtime/{ports,adapter}.py`；现有 turn 核心仍在 `app/turn_service.py`。
 - 产品 composition：`app/platform/companion_world_turn.py` 负责 World 资源/L3 读取、渲染和 App turn 输入组装。
-- 数据与迁移：`app/db/companion_world.py`、`app/db/_core.py`（当前 max migration = m0032；m0032 修复 PG `rpm_hits.hit_at` 单精度 epoch 误删）。
+- Feed/内容调度：`app/domains/companion_world/feed.py`、`app/world_content/*`、`scripts/run_world_content_scheduler.py`（独立中心进程，default-off）。
+- 通知收件箱：`app/domains/companion_world/notifications.py`、`app/platform/app_inbox.py`、`app/routers/app_notifications.py`；per-resident App 路由位于 `app/proactive/{contract/common,delivery/outbound}.py`。
+- 数据与迁移：`app/db/companion_world.py`、`app/db/notifications.py`、`app/db/_core.py`（当前 max migration = m0033；三张 M3 表均已有 default-off 调用方）。
 - 运营工具：`scripts/import_companion_world_presets.py`、`scripts/backfill_companion_world.py`。
 - 核心测试：`tests/test_companion_world_*.py`、`tests/test_proactive_companion_world_gate.py`、`tests/test_layer_boundaries.py`。
 
@@ -200,6 +204,14 @@
 > - 测试：`tests/test_wallet_migration_m0025.py`（合并正确性 + 幂等）、`tests/test_characterization_baseline.py`（接缝 5 翻转为终态）、`tests/test_precheck_wallet_migration.py`（构造迁移前多钱包态）。**M1 整体发布仍以 M1-6 PG 并发闸为准**（本刀已过既有 PG billing 套件）。
 >
 > **落地说明（M1-6 钱包侧 PG 并发硬闸已交付 2026-07-19，#11）**：§9 发布闸的钱包侧显式并发用例补齐 = `tests/test_billing_concurrency_pg.py`（全部 PG-only，SQLite 下 skip）。证三条不变量在真 PG 上成立：①**跨居民并发扣款不丢更新**——同真人两 account 交替对共享钱包并发 `record_chat_usage_charge`（各不同 `idempotency_key`），余额恰为初始 − 各笔求和、`cost_events`/`entitlement_ledger` 各 N 行（靠 `balance = balance + ?` 原子自增，非读—改—写）；②**同 `idempotency_key` 并发恰扣一次**——8 worker 抢同一 key，`cost_events` 与 `entitlement_ledger`（`usage-charge-{key}`）双 UNIQUE 挡下双记，落库各 1 行、余额只扣一次，败者抛 `IntegrityError` 由 `connect()` 回滚半途扣减（不双记、不污染；真实 turn 路径经 `insert_message` 去重不可达此竞争、`turn_service` 亦 try/except 吞掉）；③**跨真人并发互不误伤**——两真人各自钱包扣减独立、无串扰（账号隔离核心不变量）。配额侧的并发不超卖/回滚不误伤已由 D-09 下半刀 `test_daily_quota_reservation.py::test_concurrent_reserve_no_oversell_pg` 覆盖。**至此 §9 钱包 + 配额并发硬闸齐备，M1 仅余 M1-5「no-cap/no-grant 内部建号路径」随 M2 建居民接线。**
+
+### D-15 M3 Feed、通知、发声人与 App-only 触达口径（产品冻结 2026-07-22）
+
+- **Feed 首版**：只生成文字动态，不生成图片、音视频、外链或工具结果。生成频率按 `universe` 聚合，不按 resident 扇出：每个北京自然日最多 2 条，上午、傍晚各最多 1 条；仅 `onboarding_state='confirmed'`、至少一位 active resident 且真人最近 7 天有任一渠道入站的世界可生成。窗口内允许因无合格内容或系统失败而跳过，错过后不补发、不跨日追赶。M3 用户文字动态默认直接发布，不接现有 account-scoped moderation；保留 post 下架接缝，审核主体/策略/测试后续按 post/world/platform user 单独设计，AI 内容不得误处罚 resident runtime account。
+- **通知收件箱**：与 Feed 分表、分入口、分红点；红点只等于当前真人未过期 `unread` 数量。拉取列表不自动已读，首版提供单条已读与全部已读。`read` 自 `read_at` 起保留 7 天，`unread` 自 `created_at` 起保留 30 天；列表/计数即时排除逻辑过期行，不等待物理清理。每个 `platform_user` 最多保留 200 条，写入事务内超限时先删最旧 `read`、仍超限再删最旧 `unread`，central scheduler 再分批清理到期行并对账上限。所有查询、标记与清理均以 `platform_user_id` 约束，不接受客户端 `account_id`。
+- **真人级发声人**：App 收件箱优先选择最近收到用户入站消息的 active resident；没有入站历史时依次按最近会话活动、`joined_at DESC`、`resident_id ASC` 确定，保证结果稳定。计划到投递之间若居民已非 active，必须在投递事务前重选。首版不提供用户指定“谁来找我”。微信只能由具备真实微信投递路由的 `legacy_primary_account_id` 对应 resident 发声，不借其通道冒充其他居民。
+- **App-only 真人级触达**：产品能力首版启用，但只写 App 拉取式收件箱，不做 APNs/FCM/system push；新增独立开关，代码默认关闭后灰度开启。开启后仍须同时通过用户主动触达开关、跨居民/跨渠道活跃判断、quiet hours、现有策略预算与内容安全；App-only 真人级类别合计每个 `platform_user` 滚动 24 小时最多 1 条。独立开关关闭时继续 fail-closed，但不影响 App 的 per-resident reminder/commitment 写收件箱。
+- **范围切割**：§10.7 原先并列的 `character_letters`/mailbox 触发、冷却、过期、待处理上限属于 M4，本次不冻结，也不再作为 M3 开工门。
 
 ---
 
@@ -421,13 +433,13 @@ def create_resident_with_runtime(        # *
 4. **【已冻结 = 保留豁免】** legacy resident 豁免离开（D-08）；客户端 PRD:634 仍写“来源不构成豁免”，必须在生产开 flag 前修订。
 5. **【已冻结 = platform_user】daily/RPM 配额按真人聚合，多居民共享一套配额（D-09）**；daily 原子预占+回滚、RPM 锁键/计数键、user-level override 来源与 reservation central TTL 回收均已完成（m0031）。
 6. **【已冻结 2026-07-21 = 纳入】**：`__app_active__` 加入 `DEFAULT_ACTIVE_SESSION_KEYS`；L1/L2 per-runtime Dreaming，L3 per-universe 单 writer compact（§6.6）。
-7. AI 动态首版是否只做文字及生成频率；mailbox 触发/冷却/过期/待处理上限。
+7. **【已冻结 2026-07-22 = 文字、universe 级每日最多 2 条】**：上午/傍晚各最多 1 条；仅已确认、至少一位 active resident、真人最近 7 天有任一渠道入站的世界生成；允许跳过、不补发。`character_letters`/mailbox 策略归 M4，不再混入 M3 门槛（D-15）。
 8. departure 证据窗口、cooldown、危机 freeze 与后台纠错 SOP。
 9. B 同时可持有多少好友世界 visit；邀请码兑换是否需 A 二次确认；真人历史保留/删除期限。
 10. **【已冻结】L3 共享范围 = 关于用户的沉淀记忆全量共享、无字段级白名单；但不共享聊天原文与检索（D-05，边界精化 2026-07-19）**。共享=对用户的沉淀认知（USER/MEMORY 事实段、派生画像）；不共享=各居民私聊逐字稿（`messages`）与 `tool_evidence_replay` 检索。产品意象：居民“八卦”对用户的认知，读不到彼此私聊。用户对 L3 的可见/编辑/清空为产品交互层、另做。
-11. **【已冻结 = A】App 主动消息投递面 = 拉取式通知/收件箱（D-13、§11.3）**；细分待定：通知收件箱与世界 Feed 的入口是否合并、未读/红点/清理策略（产品交互）。
-12. 真人级 proactive 的**发声人（resident）选择**策略（默认：该 universe 内最近互动的 active 居民；见 §11.4）——按什么选、能否用户指定"谁来找我"。
-13. 真人级触达在 App-only 用户上的**首版是否启用**（默认 fail-closed，先只微信 legacy 居民；见 §11.6 安全阀）。
+11. **【已冻结 2026-07-22 = Feed/通知分离 + 显式已读 + 分层保留】**：App 主动消息投递面仍为拉取式通知/收件箱（D-13）；Feed 与通知入口、红点独立，列表拉取不自动已读，提供单条/全部已读。已读保留 7 天、未读保留 30 天，每真人硬上限 200；写入事务按“最旧已读优先、再最旧未读”维持上限，central scheduler 清到期行并对账（D-15、§11.3）。
+12. **【已冻结 2026-07-22 = 最近用户入站 resident】**：App 真人级 proactive 由最近收到用户入站的 active resident 发声；无入站历史按最近会话活动、`joined_at DESC`、`resident_id ASC` 回退，投递前失活则重选；首版不支持用户指定。微信固定使用可真实投递的 legacy primary，不冒充其他居民（D-15、§11.4）。
+13. **【已冻结 2026-07-22 = App-only 首版启用、独立 flag 默认关闭灰度】**：只进拉取式收件箱、不做系统 Push；遵守用户开关、跨渠道活跃、quiet hours、策略预算与内容安全，真人级合计每真人滚动 24 小时最多 1 条。flag 关闭时 fail-closed，不影响 per-resident reminder/commitment（D-15、§11.6）。
 
 ---
 
@@ -459,8 +471,9 @@ def create_resident_with_runtime(        # *
 ### 11.3 投递面 = App 拉取式通知/收件箱（已冻结 = A，轴二）
 
 - **决策**：App 侧主动消息落一个**持久化的拉取式通知/收件箱**，客户端主动拉取；与世界 Feed（D-10）**分离入口**——Feed = 世界里发生了什么，通知 = 某个 AI 主动找你。不依赖 push、不误开 `supports_proactive`（`channels.py:98` 保持 False）。微信 legacy 居民继续走 `send_weixin_text`（`outbound.py:288`）原路。
-- **落点**：唯一出口 `dispatch_proactive_text`（`outbound.py:362`）新增一条投递分支——解析到 App 目标时写一行通知记录（新表，人级键 `platform_user_id` + 发声 `resident_id` + `category` + `status(unread/read)` + payload + `idempotency_key` 复用现有唯一约束思路），而非返回 `channel_not_proactive` 取消；`_select_route`（`common.py:40`）相应放行 App 目标到该分支。
-- **客户端**：新增 `GET /api/v1/notifications`（未读/游标分页）+ 已读回执，与 `/worlds/home/feed` 分离。
+- **落点**：唯一出口 `dispatch_proactive_text`（`outbound.py:362`）新增一条投递分支——解析到 App 目标时写一行通知记录（新表，人级键 `platform_user_id` + 发声 `resident_id` + `category` + `status(unread/read)` + payload + `idempotency_key` + `created_at/read_at`，过期按 D-15 的状态/时间规则计算），而非返回 `channel_not_proactive` 取消；`_select_route`（`common.py:40`）相应放行 App 目标到该分支。
+- **客户端**：新增 `GET /api/v1/notifications`（all/unread 状态过滤 + 游标分页，响应带独立 `unread_count`）、单条已读与全部已读；拉取不隐式已读，与 `/worlds/home/feed` 分离。
+- **保留/红点**：Feed 与通知分别计算红点；通知只统计未过期 `unread`。已读保留 7 天、未读保留 30 天，每真人最多 200 条；写入事务内按最旧已读→最旧未读维持硬上限，central scheduler 单写清理到期行并对账。清理失败隔离并进入 scheduler heartbeat，不阻塞其他阶段。
 - **覆盖范围**：收件箱同时承接 App 用户的 per-resident（reminder/commitment，轴一 L2）与真人级（拉活/邀请）消息——投递面与归层正交，两类都可能落 App 用户、都进收件箱。
 
 ### 11.4 真人级触达上提产品域层：三接缝 + 发声人
@@ -468,7 +481,7 @@ def create_resident_with_runtime(        # *
 真人级类别从 Runtime 侧上提到 `companion_world` 域层：
 1. **预算聚合**：`evaluate_outbound_policy`（`policy.py:145`）的计数（`get_outbound_daily_usage` `:270`、`count_total_...` `:309`、avoidance `:360-390`）对真人级类别跨 `account_owner_bindings` 扇出到 `platform_user`——**与 D-09 同源、同批解**。per-resident 类别保持 per-account。
 2. **扫描单位**：真人级 due 队列（`list_due_reactivation_candidate_accounts` `proactive.py:2213`、`list_due_proactive_account_states` `:2183`、候选存 `proactive_account_state.metadata_json`）改按 universe 聚合，每人每窗口 ≤1。per-resident due 队列（`reminders`/`proactive_commitments`）不动。
-3. **发声人选择（新职责）**：真人级消息须由某居民说出。默认策略 = 该 universe 内**最近互动的 active 居民**（备选：关系阶段最高 / 用户指定"谁来找我"）；作为待冻结产品项（§10.12）。
+3. **发声人选择（新职责，已冻结）**：App 优先选择最近收到用户入站消息的 active resident；无入站历史时按最近会话活动、`joined_at DESC`、`resident_id ASC` 稳定回退，投递前失活须重选。首版不支持用户指定。微信受真实 route 约束，只能选择 `legacy_primary_account_id` 对应 resident，不借其通道冒充其他居民（§10.12/D-15）。
 
 per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，不上提。
 
@@ -479,7 +492,7 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 ### 11.6 分期与防 N× 安全阀
 
 - **M2-C C5（已完成）安全阀**：真正聚合前先加 world-aware 人级闸——form-A account 不受影响；world resident 仅 `legacy_primary_account_id` 放行，非 primary 与 App-only 均 fail-closed。生成侧先拦以节省 LLM，投递侧再拦作防御纵深；per-resident reminder/commitment 不经过此闸。
-- **M3（待冻结并实施）**：真人级 proactive 整体上提 `companion_world` 域层，补预算/活跃聚合、universe due 队列、App 通知收件箱与发声人选择；per-resident reminder/commitment 留 Runtime 管线。
+- **M3-5（已完成 2026-07-22）**：真人级 proactive 已上提纯领域 scope/route/speaker 决策；due 扫描按 platform user 折叠，活跃/预算跨 owner bindings + 全 resident runtime accounts 聚合。真实微信 legacy primary 优先；无真实微信路由时仅双 flag 开启可抢 App reservation，成功 visible 才消耗滚动 24 小时额度。投递事务锁 owner、重选并锁 resident；现有候选默认强绑定，失活 cancel，显式通用内容才允许重选。M3-4 的 per-resident reminder/commitment 保持独立。
 
 ### 11.7 新增不变量与测试点
 
@@ -488,6 +501,8 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 - App 目标不再命中 `channel_not_proactive` 取消，而是落通知收件箱一行；微信 legacy 仍走 `send_weixin_text`。
 - App 活跃用户不被判为沉默（跨渠道 last-active）。
 - 通知收件箱与世界 Feed 数据面分离：通知不进 Feed、Feed 不进通知。
+- App-only 真人级 flag 关闭时零真人级通知；开启时同一真人滚动 24 小时合计 ≤1，per-resident reminder/commitment 不计入该真人级上限。
+- 通知拉取不改变状态；单条/全部已读只影响当前 `platform_user`。清理严格按 7/30 天和 200 条上限执行，不跨真人删除。
 
 ### 11.8 M2 安全阀 / M3 具体任务项
 
@@ -501,16 +516,26 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 - [x] **T0-4 App-only fail-closed**：App-only world 没有 legacy primary，真人级生成和投递均被拦截。
 - [x] **T0-5 characterization + 多居民回归测试**：`tests/test_proactive_companion_world_gate.py` 覆盖 form-A 不变、仅 legacy primary 放行、App-only 拦截，以及 reminder/commitment 不误杀。
 
-**R3 — App 拉取式通知收件箱 + 真人级触达上提域层**
+**R3-A — 文字 Feed + 事务 outbox**
 
-- [ ] **T3-1 新表 `app_notifications`（迁移函数追加 `_MIGRATIONS`）**：人级键 `platform_user_id`(FK) + `resident_id`/`runtime_account_id`(发声) + `universe_id` + `category` + `payload_json`(title/body) + `status`(unread/read) + `idempotency_key` UNIQUE + `created_at`/`read_at`；索引 `(platform_user_id, status, created_at)`。与 `universe_posts`（世界 Feed）**分表**。
-- [ ] **T3-2 投递分支（经 delivery adapter，遵 §7.3 方向）**：`dispatch_proactive_text`（`outbound.py:362`）解析到 App 目标时，**发 typed proactive intent 给 `AppInboxAdapter`，由 adapter 写 `app_notifications`**（幂等键复用现有唯一约束思路），而非返回 `channel_not_proactive`；`_select_route`（`common.py:40`）放行 App 目标到该分支。**Runtime/proactive 核心不直接 import/写 `app_notifications`**（§7.3 接缝③修依赖反转，`universe_id`/`resident_id` 由 adapter 填）。**微信 legacy 走 `WeixinAdapter=send_weixin_text`（`outbound.py:288`）不变。**
-- [ ] **T3-3 DB helpers**（新 `app/db/notifications.py` 或扩 `proactive.py`）：`insert_notification`(幂等)、`list_unread_notifications(platform_user_id, cursor)`、`mark_read`。
-- [ ] **T3-4 API router `app/routers/app_notifications.py`**：`GET /api/v1/notifications`（未读/游标分页，从 session 解析 `platform_user`，**不接受 `account_id`**）+ `POST /api/v1/notifications/{id}/read`；与 `/worlds/home/feed` 分离；`Cache-Control: no-store` + 稳定 code/request_id/server_time。**conftest 双 fixture 补 settings patch**。
-- [ ] **T3-5 真人级上提 `companion_world` 域层**：universe 级 due 队列（重键或后聚合 `list_due_reactivation_candidate_accounts` `proactive.py:2213` / `list_due_proactive_account_states` `:2183` / 候选 `proactive_account_state.metadata_json`）；预算跨 `account_owner_bindings` 聚合到 `platform_user`（`evaluate_outbound_policy` 的计数 `policy.py:270/:309/:360-390`，**与 D-09 同批**）。
-- [ ] **T3-6 发声人选择 helper**：默认该 universe 内**最近互动的 active 居民**（策略待冻结 §10.12）；输出 `resident_id` 供 T3-1 通知行。
+- [x] **T3-F1 schema + 存储原语（M3-1）**：m0033 已新增 `universe_posts` 与 World 专用事务 outbox；状态/outbox 原语同事务，Feed 与 `app_notifications` 分表。用户 API/完整状态机继续由 M3-2 接线。
+- [x] **T3-F2 owner API（M3-2）**：`GET /api/v1/worlds/home/feed` opaque cursor 分页与 POST 用户文字直接发布已交付；session user 服务端解析 home universe，客户端不能提交 owner/account/universe，响应不泄漏 runtime 字段。Feed 独立 flag 默认关闭。
+- [x] **T3-F3 AI generation scheduler（M3-3）**：独立中心进程按 `universe` + 北京自然日/窗口原子 claim，上午/傍晚各最多 1 条、全天最多 2 条；只扫描 confirmed、存在 active resident、真人最近 7 天任一渠道有入站的世界。跨 batch 游标避免后页饥饿并按 slot 重置；失败可跳过，错过不补发。
+- [x] **T3-F4 文字与作者选择（M3-3）**：首版生成器只接 resident 名/日期/slot，不读取私聊、L3 或 runtime account 内容；作者绑定本 universe active resident，发布前失活则 skip、不换署名；Feed 审核继续按 D-15 延后单独设计。
+- [x] **T3-F5 双后端/PG 门禁（M3-3）**：覆盖同世界同窗口及 stale reclaim 单 winner、outbox worker claim 不重叠/旧 token CAS、用户/AI 发帖 owner 隔离、7 日活跃、两窗口与不补发；SQLite 全量 `1454/13`、PG 全量 `1462/5`。
+
+**R3-B — App 拉取式通知收件箱 + 真人级触达上提域层**
+
+- [x] **T3-1 新表 `app_notifications`（M3-1）**：m0033 已按最终 M3 spec 落 `platform_user_id/universe_id/resident_id`、visible/reserved/cancelled、显式 read/expiry、每真人幂等键与清理索引；不存 `runtime_account_id`，与 Feed 分表。
+- [x] **T3-2 投递分支（M3-4）**：per-resident reminder/commitment 的 App 目标发 typed intent 给 `AppInboxAdapter`，由 adapter 解析 `platform_user_id/universe_id/resident_id` 并写通知；proactive 核心不直接写表。真实微信路由保持优先，`CHANNEL_APP.supports_proactive=false` 未修改；真人级 App source 继续 fail-closed 等待 M3-5。
+- [x] **T3-3 DB helpers（M3-4）**：`app/db/notifications.py` 已交付 visible 幂等写、all/unread tuple cursor、未读数、单条/read-all、7/30 天与 200 条 cleanup；所有 helper 强制 `platform_user_id` 锚，淘汰顺序为最旧 read → 最旧 unread，并保护当前事务新插入行。
+- [x] **T3-4 API router（M3-4）**：`GET /api/v1/notifications`、独立 unread-count、单条 read 与 read-all 已交付；session 解析 owner、拒绝 account/runtime/universe 注入、与 Feed 分面、`Cache-Control: no-store` 和稳定信封均有测试。
+- [ ] **T3-5 真人级上提 `companion_world` 域层**：universe 级 due 队列（重键或后聚合 `list_due_reactivation_candidate_accounts` `proactive.py:2213` / `list_due_proactive_account_states` `:2183` / 候选 `proactive_account_state.metadata_json`）；预算与活跃按 `platform_user` 聚合。App-only 真人级另加滚动 24 小时合计上限 1，不把 per-resident 义务计入。
+- [ ] **T3-6 发声人选择 helper**：实现 §10.12/D-15 的 App 确定性选择与投递前重选；微信路径固定 legacy primary 且校验真实 route；输出 `resident_id`/`runtime_account_id` 供 T3-1 通知或微信 adapter，不允许跨居民冒充。
 - [ ] **T3-7 跨渠道活跃聚合**：修 §11.5——真人级"是否沉默"跨该真人所有居民 + 所有渠道（含 App inbound）判断，替换 `get_account_last_inbound_at(channel=WEIXIN)` + 微信专属 touch-state（`touch_state.py:42`）单渠道口径。
-- [ ] **T3-8 正交 + 并发测试（PG）**：App reminder(per-resident)→收件箱；微信 legacy 拉活(真人级)→`send_weixin_text`；真人级→App 用户每人每窗口**收件箱一行、非 N 行**；通知/Feed 数据面互不串；feature-flag 关闭可退回（App 真人级 fail-closed、微信不受影响）。
+- [x] **T3-8a central cleanup（M3-4）**：central proactive scheduler 每轮分批执行 reservation lease、7/30 天 TTL 与 200 条对账，node 不注入；单 owner/步骤失败隔离并进入 heartbeat，cleanup 不受 inbox flag 关闭影响。
+- [x] **T3-8b App-only 真人级独立 flag（M3-5）**：新增 `COMPANION_WORLD_APP_ONLY_HUMAN_PROACTIVE_ENABLED=false`，关闭时保持真人级 App-only fail-closed，微信与 App per-resident 投递不受影响。
+- [ ] **T3-9 正交 + 并发测试（PG）**：App reminder(per-resident)→收件箱；微信 legacy 拉活(真人级)→`send_weixin_text`；App-only flag on 时真人级每真人滚动 24 小时**收件箱一行、非 N 行**，off 时零行；通知单条/全部已读及清理不跨 `platform_user`；通知/Feed 数据面互不串；微信不受 App-only flag 影响。
 
 ---
 
@@ -525,11 +550,11 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 | **M0** 冻结·脚手架 | R0 | 保护现状 + 分层门禁（防 N× 后移 M2-C） | ✅ 已交付 |
 | **M1** 计费/配额锚点上迁 | R1a | 钱包/配额/RPM 锚 `platform_user` | ✅ 已交付；override/批量 TTL 回收于 M3 前置 m0031 收口 |
 | **M2** Runtime facade + P1 多居民 | R1b+R2 | universe/resident/conversation + L3 首刀 | ✅ 已交付代码，default-off |
-| **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | R3 | outbox + App 收件箱 + 去 N× | §10.7/.11/.12/.13 |
+| **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | R3 | outbox + App 收件箱 + 去 N× | ✅ M3-0…M3-6 已完成，default-off |
 | **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | §10.3/.4/.8 |
 | **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | §10.9 |
 
-M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C 已交付代码；M2-C 保持默认关闭，生产启用仍受模板、backfill 和客户端版本发布闸约束；M3–M5 对应 §10 冻结项未定前不进各自编码。**
+M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C 与 M3 已交付代码；P1/M3 保持默认关闭，生产启用仍受模板、backfill、客户端版本和现场对账发布闸约束。M4/M5 仍不得在对应 §10 冻结项未定前编码。**
 
 ### M0 — 冻结·脚手架·现状 characterization（已完成）
 
@@ -580,15 +605,15 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 - 生产开启前仍必须完成四模板 manifest、固定 cutoff backfill、客户端最低版本、客户端共享/legacy 豁免口径同步与双后端门禁；详见 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)。
 - M3 前置收口门禁（2026-07-22）：unit 566 passed；SQLite 1434 passed / 8 skipped；PostgreSQL 1438 passed / 4 skipped；`git diff --check` 通过。
 
-### M3–M5（各待对应 §10 冻结）
+### M3（M3-0…M3-6 已完成）与 M4–M5（待对应 §10 冻结）
 
-- **M3**：`universe_posts` + 事务 outbox（领域状态与 outbox 同事务、worker 幂等）；App 通知收件箱 **T3-1…T3-8**；真人级 proactive 上提域层（预算跨 binding 聚合到 platform_user、universe 级 due 队列、发声人选择、跨渠道活跃聚合修 §11.5）。
+- **M3**：`universe_posts` + 事务 outbox（领域状态与 outbox 同事务、worker 幂等），按 universe 每日两窗口生成文字动态；App 通知收件箱 **T3-1…T3-9**（显式已读、7/30 天、200 条）; 真人级 proactive 上提域层（预算/活跃按 platform_user 聚合、universe 级 due 队列、确定性发声人、App-only 独立灰度 flag）。
 - **M4**：cooldown/audit/safety freeze、last-resident 保护、offline+farewell+read-only 原子事务、letters 接受事务（active `<8` 投递 / `<10` 接受）。
 - **M5**：三 slot + 高熵 code + 绝对过期 + visit ACL；`human_conversations`/`human_messages` 分表（D-11）、到期只读、举报/拉黑。
 
 ### 关键风险与门槛
 
-1. **产品冻结项**是各里程碑硬前置：M2-C 的 §10.1/.2/.6 已清零；M3–M5 仍须等待各自 §10 口径。
+1. **产品冻结项**是各里程碑硬前置：M2-C 的 §10.1/.2/.6 与 M3 的 §10.7/.11/.12/.13 已清零，PR #45 已合并，M3 已完成；M4/M5 仍等待各自 §10 口径。
 2. **客户端口径冲突（生产阻断）**：gap-analysis §4.2「默认隔离/白名单」与 D-05「全量共享沉淀记忆」相反，PRD 仍称来源不构成 legacy 离开豁免。M2-C 后端已实现，客户端文档与实现必须在开 flag 前镜像对齐。
 3. **money 路径**：M1 是唯一动扣款的里程碑，PG 并发测试是发布闸，SQLite 绿不作数（§9）。
 4. **App scope 漏扫**（§6.6）已冻结修复：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并补 App scope 每日轮转回归。
@@ -602,4 +627,4 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 - P1 后端实现规范（fact_type / schema / DTO / 错误码，M2-0 交付物）：[`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)
 - 客户端数据/API 初稿：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md)（§4.2 共享上下文口径需按 D-05 镜像更新）
 - 客户端 PRD 与客户端架构：`ai_companion_universe_prd.md`、`mobile_client_architecture.md`
-- 现存实现依据（核对基线 `feat/companion-world-m2c@6000c0b`）：见本文顶部“接手说明”的当前代码地图；历史 runtime 依据仍包括 `app/prompt_builder.py`、`app/user_profiles.py`、`app/profile_storage.py`、`app/agent_self_state.py`、`app/dreaming.py`、`app/memory_writer.py`、`app/rate_limiter.py`、`app/db/billing.py`、`app/channels.py`。
+- 现存实现依据（核对基线 `feat/companion-world-m2c@361d6ca`）：见本文顶部“接手说明”的当前代码地图；历史 runtime 依据仍包括 `app/prompt_builder.py`、`app/user_profiles.py`、`app/profile_storage.py`、`app/agent_self_state.py`、`app/dreaming.py`、`app/memory_writer.py`、`app/rate_limiter.py`、`app/db/billing.py`、`app/channels.py`。

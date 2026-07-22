@@ -196,6 +196,9 @@ def test_settings(tmp_path, db_dsn):
     s.proactive_scheduler_enabled = False
     s.proactive_scheduler_interval_seconds = 30.0
     s.proactive_scheduler_batch_size = 20
+    s.companion_world_app_inbox_enabled = False
+    s.companion_world_app_only_human_proactive_enabled = False
+    s.companion_world_notification_cleanup_batch_size = 100
     s.proactive_scheduler_bypass_quiet_hours = False
     s.proactive_planning_interval_seconds = 3600
     s.proactive_account_check_context_messages = 12
@@ -294,6 +297,19 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_p1_enabled = False
     s.companion_world_l3_background_enabled = True
     s.companion_world_proactive_safety_enabled = True
+    s.companion_world_feed_enabled = False
+    s.companion_world_feed_morning_start = "09:00"
+    s.companion_world_feed_morning_end = "11:00"
+    s.companion_world_feed_evening_start = "18:00"
+    s.companion_world_feed_evening_end = "21:00"
+    s.companion_world_feed_scheduler_interval_seconds = 60.0
+    s.companion_world_feed_scheduler_batch_size = 20
+    s.companion_world_feed_claim_lease_seconds = 300
+    s.companion_world_feed_retry_max_attempts = 3
+    s.companion_world_feed_retry_base_seconds = 30
+    s.companion_world_outbox_batch_size = 50
+    s.companion_world_outbox_claim_lease_seconds = 300
+    s.companion_world_outbox_max_attempts = 5
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""
@@ -363,6 +379,11 @@ def fresh_db(test_settings):
         patch("app.routers.web.settings", test_settings),
         patch("app.routers.app_api.settings", test_settings),
         patch("app.routers.companion_world.settings", test_settings),
+        patch("app.routers.app_notifications.settings", test_settings),
+        patch("app.platform.app_inbox.settings", test_settings),
+        patch("app.platform.companion_world_repository.settings", test_settings),
+        patch("app.proactive.contract.common.settings", test_settings),
+        patch("app.proactive.delivery.outbound.settings", test_settings),
         patch("app.asr.settings", test_settings),
         patch("app.routers.debug.settings", test_settings),
         patch("app.routers.admin_moderation.settings", test_settings),

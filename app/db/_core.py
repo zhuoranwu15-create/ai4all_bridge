@@ -2450,6 +2450,122 @@ def _migration_0032_rpm_hit_double_precision(conn: Connection) -> None:
         )
 
 
+def _migration_0033_companion_world_m3_content(conn: Connection) -> None:
+    """M3：文字 Feed/outbox 与 App 拉取式通知的加性数据基座。
+
+    Feed 归属锚为 universe/platform user，不复用 account-scoped moderation；M3 默认直接
+    发布，审核策略后续单独设计。通知按 platform user 隔离，reserved 行同时承载真人级
+    App-only 触达的并发 claim。三表均为空表迁移，不回填、不修改既有 Runtime 行为。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_posts (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            author_type TEXT NOT NULL,                 -- human | resident
+            author_platform_user_id TEXT,
+            author_resident_id TEXT,
+            source_type TEXT NOT NULL,                 -- user_post | ai_feed
+            content_type TEXT NOT NULL DEFAULT 'text',
+            text TEXT,
+            status TEXT NOT NULL,                      -- generating | published | skipped | deleted
+            client_request_id TEXT,
+            request_fingerprint TEXT,
+            ai_local_date TEXT,
+            ai_slot TEXT,                              -- morning | evening
+            slot_window_end_at TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            claimed_at TEXT,
+            claim_token TEXT,
+            next_attempt_at TEXT,
+            terminal_reason TEXT,
+            published_at TEXT,
+            deleted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(author_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(author_resident_id) REFERENCES universe_residents(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_user_request
+            ON universe_posts(universe_id, author_platform_user_id, client_request_id)
+            WHERE source_type = 'user_post';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_ai_slot
+            ON universe_posts(universe_id, ai_local_date, ai_slot)
+            WHERE source_type = 'ai_feed';
+        CREATE INDEX IF NOT EXISTS ix_universe_posts_feed
+            ON universe_posts(universe_id, status, published_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_universe_posts_ai_claim
+            ON universe_posts(source_type, status, next_attempt_at, claimed_at);
+
+        CREATE TABLE IF NOT EXISTS companion_world_outbox (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            payload_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',     -- pending | processing | delivered | dead
+            attempts INTEGER NOT NULL DEFAULT 0,
+            available_at TEXT NOT NULL,
+            claimed_at TEXT,
+            claim_token TEXT,
+            last_error TEXT,
+            delivered_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(post_id) REFERENCES universe_posts(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_companion_world_outbox_claim
+            ON companion_world_outbox(status, available_at, claimed_at, id);
+        CREATE INDEX IF NOT EXISTS ix_companion_world_outbox_post
+            ON companion_world_outbox(post_id, event_type);
+
+        CREATE TABLE IF NOT EXISTS app_notifications (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            universe_id TEXT NOT NULL,
+            resident_id TEXT,
+            scope TEXT NOT NULL,                         -- resident | human
+            category TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            delivery_status TEXT NOT NULL,               -- reserved | visible | cancelled
+            title TEXT,
+            body_text TEXT,
+            target_type TEXT NOT NULL DEFAULT 'none',
+            target_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            claim_token TEXT,
+            claim_expires_at TEXT,
+            delivered_at TEXT,
+            read_at TEXT,
+            expires_at TEXT,
+            cancelled_at TEXT,
+            terminal_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(resident_id) REFERENCES universe_residents(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_app_notifications_user_idempotency
+            ON app_notifications(platform_user_id, idempotency_key);
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_list
+            ON app_notifications(platform_user_id, delivery_status, delivered_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_unread
+            ON app_notifications(platform_user_id, delivery_status, read_at, expires_at);
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_human_window
+            ON app_notifications(platform_user_id, scope, delivery_status, delivered_at, claim_expires_at);
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_cleanup
+            ON app_notifications(delivery_status, expires_at, claim_expires_at, id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2478,6 +2594,7 @@ _MIGRATIONS = [
     (30, _migration_0030_companion_world_candidates),
     (31, _migration_0031_platform_user_quota_overrides),
     (32, _migration_0032_rpm_hit_double_precision),
+    (33, _migration_0033_companion_world_m3_content),
 ]
 
 

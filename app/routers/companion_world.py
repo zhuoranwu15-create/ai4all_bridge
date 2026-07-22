@@ -1,9 +1,12 @@
-"""Companion World P1 控制面：home bootstrap/candidates/confirm/residents。"""
+"""Companion World P1 控制面与 M3 文字 Feed owner API。"""
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -21,6 +24,7 @@ from app.db import (
 from app.domains.companion_world import (
     CandidateRecord,
     CompanionWorldError,
+    CompanionWorldFeedService,
     CompanionWorldService,
     ResidentRecord,
     ResidentSelection,
@@ -54,9 +58,16 @@ _ERROR_STATUS = {
     "turn_in_progress": 409,
     "rate_limited": 429,
     "account_disabled": 403,
+    "invalid_cursor": 400,
+    "idempotency_conflict": 409,
+    "notification_not_found": 404,
+    "invalid_request": 422,
 }
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_FEED_CLIENT_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_FEED_CURSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 class CompanionWorldApiError(Exception):
@@ -111,6 +122,23 @@ class ConversationTurnPayload(BaseModel):
         return self
 
 
+class FeedPostPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_request_id: str = Field(min_length=8, max_length=128)
+    text: str
+
+    @model_validator(mode="after")
+    def _clean_feed_post(self) -> "FeedPostPayload":
+        self.client_request_id = self.client_request_id.strip()
+        self.text = self.text.strip()
+        if not _FEED_CLIENT_REQUEST_ID_RE.fullmatch(self.client_request_id):
+            raise ValueError("invalid client_request_id")
+        if not self.text or len(self.text) > 2000:
+            raise ValueError("invalid feed text")
+        return self
+
+
 def _request_id(request: Request) -> str:
     current = getattr(request.state, "companion_world_request_id", None)
     if current:
@@ -153,8 +181,20 @@ def _require_world_session(
     return platform_user
 
 
+def _require_feed_session(
+    authorization: Optional[str] = Header(default=None),
+) -> dict:
+    if not bool(getattr(settings, "companion_world_feed_enabled", False)):
+        raise CompanionWorldApiError("not_found", 404)
+    return _require_world_session(authorization)
+
+
 def _service() -> CompanionWorldService:
     return CompanionWorldService(SqlCompanionWorldRepository())
+
+
+def _feed_service() -> CompanionWorldFeedService:
+    return CompanionWorldFeedService(SqlCompanionWorldRepository())
 
 
 def _run_domain(action: Callable):
@@ -204,6 +244,65 @@ def _conversation_data(item) -> dict:
         "last_preview": item.last_preview,
         "unread": item.unread,
     }
+
+
+def _feed_time(value: Optional[str]) -> Optional[str]:
+    """把 DB 北京 naive 时间转成带 +08:00 的公开 ISO 时间。"""
+    if not value:
+        return None
+    parsed = datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+    return parsed.replace(tzinfo=_BEIJING_TZ).isoformat()
+
+
+def _feed_item_data(item) -> dict:
+    """序列化 Feed 公开 DTO，不泄漏 owner/runtime/fingerprint/outbox 字段。"""
+    return {
+        "post_id": item.id,
+        "author": {
+            "type": item.author_type,
+            "resident_id": item.author_resident_id,
+            "name": item.author_name,
+            "avatar_ref": item.author_avatar_ref,
+        },
+        "content": {"type": "text", "text": item.text},
+        "source": item.source_type,
+        "published_at": _feed_time(item.published_at),
+    }
+
+
+def _encode_feed_cursor(item) -> str:
+    payload = json.dumps(
+        {"v": 1, "published_at": item.published_at, "id": item.id},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_feed_cursor(cursor: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if cursor is None:
+        return None, None
+    clean = cursor.strip()
+    if not clean:
+        raise CompanionWorldApiError("invalid_cursor")
+    try:
+        padded = clean + "=" * (-len(clean) % 4)
+        raw = base64.b64decode(
+            padded.encode("ascii"), altchars=b"-_", validate=True
+        )
+        value = json.loads(raw.decode("utf-8"))
+        if not isinstance(value, dict) or set(value) != {"v", "published_at", "id"}:
+            raise ValueError("invalid cursor shape")
+        if value["v"] != 1:
+            raise ValueError("invalid cursor version")
+        published_at = str(value["published_at"])
+        post_id = str(value["id"])
+        datetime.strptime(published_at, "%Y-%m-%d %H:%M:%S")
+        if not _FEED_CURSOR_ID_RE.fullmatch(post_id):
+            raise ValueError("invalid cursor id")
+    except (UnicodeError, ValueError, TypeError, binascii.Error, json.JSONDecodeError):
+        raise CompanionWorldApiError("invalid_cursor")
+    return published_at, post_id
 
 
 @router.post("/worlds/home/bootstrap")
@@ -323,6 +422,61 @@ def create_resident(
     else:
         data = {"resident": _resident_data(result)}
     return _envelope(request, code="ok", data=data)
+
+
+@router.get("/worlds/home/feed")
+def list_home_feed(
+    request: Request,
+    response: Response,
+    cursor: Optional[str] = Query(default=None, max_length=1024),
+    limit: int = Query(default=20, ge=1, le=50),
+    platform_user: dict = Depends(_require_feed_session),
+) -> dict:
+    cursor_published_at, cursor_post_id = _decode_feed_cursor(cursor)
+    rows = _run_domain(
+        lambda: _feed_service().list_published_posts(
+            platform_user["id"],
+            cursor_published_at=cursor_published_at,
+            cursor_post_id=cursor_post_id,
+            limit=limit + 1,
+        )
+    )
+    page = rows[:limit]
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "items": [_feed_item_data(item) for item in page],
+            "next_cursor": (
+                _encode_feed_cursor(page[-1]) if len(rows) > limit and page else None
+            ),
+        },
+    )
+
+
+@router.post("/worlds/home/feed/posts")
+def publish_home_feed_post(
+    payload: FeedPostPayload,
+    request: Request,
+    response: Response,
+    platform_user: dict = Depends(_require_feed_session),
+) -> dict:
+    post, created = _run_domain(
+        lambda: _feed_service().publish_user_post(
+            platform_user["id"],
+            client_request_id=payload.client_request_id,
+            text=payload.text,
+            published_at=beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    )
+    response.status_code = 201 if created else 200
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={"post": _feed_item_data(post)},
+    )
 
 
 @router.get("/conversations")
@@ -483,11 +637,16 @@ async def _api_error_handler(request: Request, exc: CompanionWorldApiError):
 
 async def _validation_error_handler(request: Request, exc: RequestValidationError):
     companion_path = request.url.path.startswith(
-        ("/v1/worlds/", "/v1/conversations", "/v1/ai-conversations/")
+        (
+            "/v1/worlds/",
+            "/v1/conversations",
+            "/v1/ai-conversations/",
+            "/v1/notifications",
+        )
     )
     if companion_path:
         forbidden_account_id = isinstance(exc.body, dict) and bool(
-            {"account_id", "runtime_account_id"}.intersection(exc.body)
+            {"account_id", "runtime_account_id", "universe_id"}.intersection(exc.body)
         )
         code = "account_id_not_accepted" if forbidden_account_id else "invalid_request"
         response = JSONResponse(

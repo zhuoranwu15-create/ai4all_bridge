@@ -5,20 +5,28 @@ import json
 from contextlib import contextmanager
 from typing import Iterator, Optional, Sequence, Tuple
 
+from app.config import settings
 from app.db import companion_world as world_db
 from app.db._backend import Connection, is_postgres
 from app.db._core import connect
 from app.db.billing import insert_resident_runtime_account
 from app.domains.companion_world.contracts import (
     CandidateRecord,
+    CompanionWorldError,
     ConversationMessage,
     ConversationSummary,
     ConversationTarget,
     ResidentRecord,
     TemplateDraft,
     TemplateRecord,
+    UniversePostRecord,
     WorldRecord,
     WorldRepository,
+)
+from app.domains.companion_world.proactive import (
+    HumanProactiveScope,
+    HumanProactiveSpeaker,
+    decide_human_proactive_delivery,
 )
 
 
@@ -100,6 +108,23 @@ def _resident(row: dict) -> ResidentRecord:
     )
 
 
+def _feed_post(row: dict) -> UniversePostRecord:
+    """把 owner-scoped Feed projection 转成不泄漏存储字段的领域 DTO。"""
+    return UniversePostRecord(
+        id=str(row["id"]),
+        universe_id=str(row["universe_id"]),
+        author_type=str(row["author_type"]),
+        source_type=str(row["source_type"]),
+        status=str(row["status"]),
+        text=row.get("text"),
+        author_platform_user_id=row.get("author_platform_user_id"),
+        author_resident_id=row.get("author_resident_id"),
+        author_name=row.get("author_name"),
+        author_avatar_ref=row.get("author_avatar_ref"),
+        published_at=row.get("published_at"),
+    )
+
+
 def _persona_parts(raw: Optional[str]) -> Tuple[str, str, str]:
     """解析受控 persona seed；兼容 ``soul`` 与 ``SOUL.md`` 两种键名。"""
     if not raw:
@@ -154,6 +179,84 @@ class SqlCompanionWorldRepository(WorldRepository):
             owner_platform_user_id=platform_user_id, conn=self._conn
         )
         return _world(row) if row else None
+
+    def get_post_for_owner(
+        self, post_id: str, platform_user_id: str
+    ) -> Optional[UniversePostRecord]:
+        row = world_db.get_universe_post_for_owner(
+            post_id=post_id,
+            owner_platform_user_id=platform_user_id,
+            conn=self._conn,
+        )
+        return _feed_post(row) if row else None
+
+    def publish_user_post(
+        self,
+        *,
+        platform_user_id: str,
+        client_request_id: str,
+        text: str,
+        request_fingerprint: str,
+        published_at: str,
+    ) -> Tuple[UniversePostRecord, bool]:
+        try:
+            row, created = world_db.publish_user_feed_post_with_outbox(
+                owner_platform_user_id=platform_user_id,
+                client_request_id=client_request_id,
+                text=text,
+                request_fingerprint=request_fingerprint,
+                published_at=published_at,
+                conn=self._conn,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code in {"world_not_ready", "world_disabled", "idempotency_conflict"}:
+                raise CompanionWorldError(code) from err
+            raise
+        return _feed_post(row), created
+
+    def list_published_posts(
+        self,
+        *,
+        platform_user_id: str,
+        cursor_published_at: Optional[str],
+        cursor_post_id: Optional[str],
+        limit: int,
+    ) -> Sequence[UniversePostRecord]:
+        try:
+            rows = world_db.list_published_feed_posts_for_owner(
+                owner_platform_user_id=platform_user_id,
+                cursor_published_at=cursor_published_at,
+                cursor_post_id=cursor_post_id,
+                limit=limit,
+                conn=self._conn,
+            )
+        except ValueError as err:
+            code = str(err)
+            if code in {"world_not_ready", "world_disabled", "invalid_cursor"}:
+                raise CompanionWorldError(code) from err
+            raise
+        return tuple(_feed_post(row) for row in rows)
+
+    def delete_post(
+        self,
+        *,
+        platform_user_id: str,
+        post_id: str,
+        reason_code: str,
+        deleted_at: str,
+    ) -> UniversePostRecord:
+        try:
+            row = world_db.delete_feed_post_with_outbox(
+                owner_platform_user_id=platform_user_id,
+                post_id=post_id,
+                reason_code=reason_code,
+                deleted_at=deleted_at,
+                conn=self._conn,
+            )
+        except ValueError as err:
+            raise CompanionWorldError(str(err)) from err
+        return _feed_post(row)
 
     def lock_universe(self, universe_id: str) -> WorldRecord:
         row = world_db.lock_universe(
@@ -397,16 +500,78 @@ class SqlCompanionWorldRepository(WorldRepository):
         )
 
     def allows_human_level_proactive(self, runtime_account_id: str) -> bool:
-        """form-A 放行；world resident 仅 legacy primary 可做人级主动触达。"""
-        scope = world_db.resolve_resident_proactive_scope(
-            runtime_account_id=runtime_account_id,
-            conn=self._conn,
-        )
+        """form-A 放行；world 按微信优先/App-only 双 flag/唯一 speaker 放行。"""
+        scope = self.get_human_proactive_scope(runtime_account_id)
         if scope is None:
             return True
-        primary_account_id = scope.get("legacy_primary_account_id")
-        return bool(primary_account_id) and str(primary_account_id) == str(
-            runtime_account_id
+        decision = decide_human_proactive_delivery(
+            legacy_weixin_route_available=scope.legacy_weixin_route_available,
+            app_inbox_enabled=bool(
+                getattr(settings, "companion_world_app_inbox_enabled", False)
+            ),
+            app_only_human_enabled=bool(
+                getattr(
+                    settings,
+                    "companion_world_app_only_human_proactive_enabled",
+                    False,
+                )
+            ),
+            has_app_speaker=scope.app_speaker is not None,
+        )
+        if decision.mode == "weixin":
+            return bool(scope.legacy_primary_account_id) and str(
+                scope.legacy_primary_account_id
+            ) == str(runtime_account_id)
+        if decision.mode == "app_inbox":
+            return bool(scope.app_speaker) and str(
+                scope.app_speaker.runtime_account_id
+            ) == str(runtime_account_id)
+        return False
+
+    def get_human_proactive_scope(
+        self, runtime_account_id: str
+    ) -> Optional[HumanProactiveScope]:
+        """解析真人级 owner/account 聚合、微信路由与确定性 App speaker。"""
+
+        row = world_db.get_human_proactive_owner_scope(
+            runtime_account_id=runtime_account_id, conn=self._conn
+        )
+        if row is None:
+            return None
+        platform_user_id = str(row["owner_platform_user_id"])
+        universe_id = str(row["universe_id"])
+        speaker_row = world_db.select_human_app_speaker(
+            platform_user_id=platform_user_id,
+            universe_id=universe_id,
+            conn=self._conn,
+        )
+        speaker = (
+            HumanProactiveSpeaker(
+                resident_id=str(speaker_row["resident_id"]),
+                runtime_account_id=str(speaker_row["runtime_account_id"]),
+                conversation_id=str(speaker_row["conversation_id"]),
+                last_inbound_at=speaker_row.get("last_inbound_at"),
+                last_app_activity_at=speaker_row.get("last_app_activity_at"),
+                joined_at=speaker_row.get("joined_at"),
+            )
+            if speaker_row
+            else None
+        )
+        return HumanProactiveScope(
+            platform_user_id=platform_user_id,
+            universe_id=universe_id,
+            runtime_account_ids=tuple(
+                world_db.list_human_proactive_account_ids_for_user(
+                    platform_user_id=platform_user_id, conn=self._conn
+                )
+            ),
+            requested_resident_id=str(row["resident_id"]),
+            owner_created_at=str(row["owner_created_at"]),
+            legacy_primary_account_id=row.get("legacy_primary_account_id"),
+            legacy_weixin_route_available=world_db.has_legacy_primary_weixin_route(
+                universe_id=universe_id, conn=self._conn
+            ),
+            app_speaker=speaker,
         )
 
     def ensure_legacy_resident(
@@ -447,8 +612,6 @@ class SqlCompanionWorldRepository(WorldRepository):
 
 def human_level_proactive_allowed(runtime_account_id: str) -> bool:
     """返回某 runtime account 是否可承担真人级主动触达。"""
-    from app.config import settings
-
     if not bool(getattr(settings, "companion_world_proactive_safety_enabled", True)):
         return True
     return SqlCompanionWorldRepository().allows_human_level_proactive(
@@ -456,8 +619,82 @@ def human_level_proactive_allowed(runtime_account_id: str) -> bool:
     )
 
 
+def resolve_human_proactive_scope(
+    runtime_account_id: str,
+) -> Optional[HumanProactiveScope]:
+    """公开 infrastructure helper：解析 world 真人级聚合 scope。"""
+
+    return SqlCompanionWorldRepository().get_human_proactive_scope(
+        runtime_account_id
+    )
+
+
+def human_level_app_route(runtime_account_id: str) -> Optional[dict]:
+    """当且仅当双 flag 开启且无真实微信路由时返回原生 App inbox route。"""
+
+    scope = resolve_human_proactive_scope(runtime_account_id)
+    if scope is None or scope.app_speaker is None:
+        return None
+    decision = decide_human_proactive_delivery(
+        legacy_weixin_route_available=scope.legacy_weixin_route_available,
+        app_inbox_enabled=bool(
+            getattr(settings, "companion_world_app_inbox_enabled", False)
+        ),
+        app_only_human_enabled=bool(
+            getattr(
+                settings,
+                "companion_world_app_only_human_proactive_enabled",
+                False,
+            )
+        ),
+        has_app_speaker=True,
+    )
+    if decision.mode != "app_inbox" or (
+        scope.app_speaker.runtime_account_id != runtime_account_id
+    ):
+        return None
+    return {
+        "channel_binding_id": None,
+        "channel": "native",
+        "channel_account_id": None,
+        "to_user_id": scope.platform_user_id,
+        "session_key": "__app_active__",
+        "delivery": "app_inbox",
+        "conversation_id": scope.app_speaker.conversation_id,
+        "resident_id": scope.app_speaker.resident_id,
+    }
+
+
+def get_human_proactive_last_inbound_at(runtime_account_id: str) -> Optional[str]:
+    """world 返回 owner 聚合 last inbound；form-A 返回 None 供调用方沿用旧查询。"""
+
+    scope = resolve_human_proactive_scope(runtime_account_id)
+    if scope is None:
+        return None
+    return world_db.get_owner_last_inbound_at(
+        platform_user_id=scope.platform_user_id
+    )
+
+
+def count_human_proactive_inbound_after(
+    runtime_account_id: str, *, after: str
+) -> Optional[int]:
+    """world 返回 owner 聚合入站数；form-A 返回 None。"""
+
+    scope = resolve_human_proactive_scope(runtime_account_id)
+    if scope is None:
+        return None
+    return world_db.count_owner_inbound_after(
+        platform_user_id=scope.platform_user_id, after=after
+    )
+
+
 __all__ = [
     "HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON",
     "SqlCompanionWorldRepository",
+    "count_human_proactive_inbound_after",
+    "get_human_proactive_last_inbound_at",
+    "human_level_app_route",
     "human_level_proactive_allowed",
+    "resolve_human_proactive_scope",
 ]
