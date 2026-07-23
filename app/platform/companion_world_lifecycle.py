@@ -1,18 +1,25 @@
-"""M4 lifecycle platform service：证据读取、候选评估与可逆审核状态推进。"""
+"""M4 lifecycle platform service：候选评估、审核与不可逆 offline 组合事务。"""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Dict, Mapping, Optional, Sequence
 
 from app.config import settings
 from app.db import (
+    commit_locked_resident_offline,
+    correct_committed_resident_lifecycle_event,
     create_resident_lifecycle_event,
     get_resident_lifecycle_event,
     list_resident_lifecycle_event_actions,
     list_resident_lifecycle_events_for_review,
     list_resident_lifecycle_scopes,
+    lock_resident_lifecycle_commit_scope,
     transition_resident_lifecycle_event,
+    try_conversation_transaction_lock,
 )
+from app.db._backend import is_postgres
+from app.db._core import connect
 from app.domains.companion_world.lifecycle import (
     LifecycleEvidenceRef,
     LifecyclePolicy,
@@ -27,6 +34,35 @@ from app.time_utils import parse_db_timestamp
 from app.world_lifecycle.evidence import StructuredLifecycleEvidenceAdapter
 
 LIFECYCLE_POLICY_FAMILY = "companion_world_lifecycle_v1"
+_LIFECYCLE_POLICY_VERSION_RE = re.compile(
+    rf"^{LIFECYCLE_POLICY_FAMILY}:i(?P<i>\d+):w(?P<w>\d+):n(?P<n>\d+):"
+    r"s(?P<s>\d+):c(?P<c>\d+):f(?P<f>\d+)$"
+)
+
+
+class LifecycleCommitError(Exception):
+    """M4-3 不可逆提交的稳定业务错误；事务会在异常离开时整体回滚。"""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _validate_lifecycle_policy(policy: LifecyclePolicy) -> LifecyclePolicy:
+    """验证冻结阈值范围，供配置构造与 event policy snapshot 恢复共用。"""
+    if not 1 <= policy.inactivity_days <= 365:
+        raise ValueError("lifecycle inactivity_days must be between 1 and 365")
+    if not 1 <= policy.evidence_window_days <= 180:
+        raise ValueError("lifecycle evidence_window_days must be between 1 and 180")
+    if not 1 <= policy.mismatch_min_events <= 100:
+        raise ValueError("lifecycle mismatch_min_events must be between 1 and 100")
+    if not 0 <= policy.mismatch_min_span_days <= policy.evidence_window_days:
+        raise ValueError("lifecycle mismatch span must fit evidence window")
+    if not 1 <= policy.cooldown_days <= 90:
+        raise ValueError("lifecycle cooldown_days must be between 1 and 90")
+    if not 1 <= policy.crisis_freeze_days <= 180:
+        raise ValueError("lifecycle crisis_freeze_days must be between 1 and 180")
+    return policy
 
 
 def build_lifecycle_policy(config: Any = settings) -> LifecyclePolicy:
@@ -48,18 +84,7 @@ def build_lifecycle_policy(config: Any = settings) -> LifecyclePolicy:
             config.companion_world_lifecycle_crisis_freeze_days
         ),
     )
-    if not 1 <= policy.inactivity_days <= 365:
-        raise ValueError("lifecycle inactivity_days must be between 1 and 365")
-    if not 1 <= policy.evidence_window_days <= 180:
-        raise ValueError("lifecycle evidence_window_days must be between 1 and 180")
-    if not 1 <= policy.mismatch_min_events <= 100:
-        raise ValueError("lifecycle mismatch_min_events must be between 1 and 100")
-    if not 0 <= policy.mismatch_min_span_days <= policy.evidence_window_days:
-        raise ValueError("lifecycle mismatch span must fit evidence window")
-    if not 1 <= policy.cooldown_days <= 90:
-        raise ValueError("lifecycle cooldown_days must be between 1 and 90")
-    if not 1 <= policy.crisis_freeze_days <= 180:
-        raise ValueError("lifecycle crisis_freeze_days must be between 1 and 180")
+    _validate_lifecycle_policy(policy)
     version = (
         f"{LIFECYCLE_POLICY_FAMILY}:i{policy.inactivity_days}:"
         f"w{policy.evidence_window_days}:n{policy.mismatch_min_events}:"
@@ -67,6 +92,25 @@ def build_lifecycle_policy(config: Any = settings) -> LifecyclePolicy:
         f"f{policy.crisis_freeze_days}"
     )
     return LifecyclePolicy(**{**policy.__dict__, "version": version})
+
+
+def _policy_from_event_version(version: object) -> LifecyclePolicy:
+    """从不可变 event version 恢复审批阈值；未知格式不得降级到当前配置。"""
+    match = _LIFECYCLE_POLICY_VERSION_RE.fullmatch(str(version or ""))
+    if match is None:
+        raise LifecycleCommitError("lifecycle_policy_invalid")
+    values = {key: int(value) for key, value in match.groupdict().items()}
+    return _validate_lifecycle_policy(
+        LifecyclePolicy(
+            version=str(version),
+            inactivity_days=values["i"],
+            evidence_window_days=values["w"],
+            mismatch_min_events=values["n"],
+            mismatch_min_span_days=values["s"],
+            cooldown_days=values["c"],
+            crisis_freeze_days=values["f"],
+        )
+    )
 
 
 def _db_time(value: datetime) -> str:
@@ -444,10 +488,218 @@ def list_lifecycle_review_events(
     ]
 
 
+def _farewell_result(
+    *, event: Mapping[str, Any], post: Mapping[str, Any], replayed: bool
+) -> Dict[str, Any]:
+    """构造 admin approve 返回，不暴露 outbox、runtime account 或内部 fingerprint。"""
+    return {
+        "event": serialize_lifecycle_event(event),
+        "farewell_post": {
+            "post_id": str(post["id"]),
+            "universe_id": str(post["universe_id"]),
+            "resident_id": str(post["author_resident_id"]),
+            "post_type": str(post.get("post_type") or "farewell"),
+            "status": str(post["status"]),
+            "published_at": post.get("published_at"),
+        },
+        "replayed": replayed,
+    }
+
+
+def approve_lifecycle_event(
+    *,
+    event_id: str,
+    farewell_text: str,
+    reason: str,
+    allow_last_resident_exception: bool,
+    admin_user_id: str,
+    now: datetime,
+    policy: Optional[LifecyclePolicy] = None,
+    evidence_adapter: Optional[StructuredLifecycleEvidenceAdapter] = None,
+) -> Dict[str, Any]:
+    """重校验全部 M4 规则并以单事务提交 offline/farewell/read-only/outbox。"""
+    clean_text = str(farewell_text or "").strip()
+    clean_reason = str(reason or "").strip()
+    if not clean_text or len(clean_text) > 2000 or "\x00" in clean_text:
+        raise LifecycleCommitError("farewell_invalid")
+    if not clean_reason:
+        raise LifecycleCommitError("lifecycle_event_not_reviewable")
+    adapter = evidence_adapter or StructuredLifecycleEvidenceAdapter()
+    now_text = _db_time(now)
+    try:
+        with connect() as tx:
+            if not is_postgres():
+                tx.execute("BEGIN IMMEDIATE")
+            scope = lock_resident_lifecycle_commit_scope(event_id=event_id, conn=tx)
+            if scope is None:
+                raise LifecycleCommitError("lifecycle_event_not_found")
+            if scope["status"] == "committed":
+                post = tx.execute(
+                    "SELECT * FROM universe_posts WHERE id = ?",
+                    (scope.get("farewell_post_id"),),
+                ).fetchone()
+                if post is None:
+                    raise RuntimeError("committed lifecycle event is missing farewell")
+                replay_event = get_resident_lifecycle_event(
+                    event_id=event_id, conn=tx
+                )
+                if replay_event is None:
+                    raise RuntimeError("committed lifecycle event disappeared")
+                return _farewell_result(
+                    event=replay_event,
+                    post=dict(post),
+                    replayed=True,
+                )
+            if scope["status"] != "review_pending":
+                raise LifecycleCommitError("lifecycle_event_not_reviewable")
+            if scope["world_status"] != "active" or scope[
+                "world_onboarding_state"
+            ] != "confirmed":
+                raise LifecycleCommitError("lifecycle_event_not_reviewable")
+            if scope["resident_origin"] == "legacy":
+                raise LifecycleCommitError("legacy_resident_departure_forbidden")
+            if scope["resident_status"] != "active" or not scope.get(
+                "runtime_account_id"
+            ):
+                raise LifecycleCommitError("lifecycle_event_not_reviewable")
+
+            try:
+                current_policy = _policy_from_event_version(scope["policy_version"])
+            except ValueError as err:
+                raise LifecycleCommitError("lifecycle_policy_invalid") from err
+            if policy is not None and current_policy.version != policy.version:
+                raise LifecycleCommitError("lifecycle_policy_invalid")
+
+            observations = adapter.observations_for_resident(
+                resident_id=str(scope["resident_id"]),
+                runtime_account_id=str(scope["runtime_account_id"]),
+                now=now,
+                policy=current_policy,
+                conn=tx,
+            )
+            event_type = str(scope["event_type"])
+            cooldown_until = parse_db_timestamp(scope.get("cooldown_until"))
+            if event_type != "severe_abuse" and (
+                cooldown_until is None or now < cooldown_until
+            ):
+                raise LifecycleCommitError("lifecycle_event_not_reviewable")
+            crisis_until = latest_crisis_freeze_until(
+                now=now,
+                observations=observations,
+                policy=current_policy,
+            )
+            if event_type != "severe_abuse" and crisis_until is not None:
+                raise LifecycleCommitError("crisis_freeze_active")
+
+            active_count = int(scope["active_resident_count"])
+            last_exception = (
+                event_type == "severe_abuse"
+                and bool(allow_last_resident_exception)
+            )
+            if active_count <= 1 and not last_exception:
+                raise LifecycleCommitError("last_resident_protected")
+
+            evidence_valid = False
+            if event_type == "severe_abuse":
+                evidence_valid = bool(
+                    severe_abuse_evidence(
+                        now=now,
+                        observations=observations,
+                        policy=current_policy,
+                    )
+                )
+            elif event_type == "value_misalignment":
+                evidence_valid = bool(
+                    value_misalignment_evidence(
+                        now=now,
+                        observations=observations,
+                        policy=current_policy,
+                    )
+                )
+            elif event_type == "inactivity":
+                anchor = parse_db_timestamp(scope.get("last_inbound_at"))
+                if anchor is None:
+                    anchor = parse_db_timestamp(scope.get("resident_joined_at"))
+                if anchor is None:
+                    anchor = parse_db_timestamp(scope.get("resident_created_at"))
+                evidence_valid = bool(
+                    anchor
+                    and inactivity_is_due(
+                        now=now,
+                        interaction_anchor_at=anchor,
+                        policy=current_policy,
+                    )
+                )
+            if not evidence_valid:
+                raise LifecycleCommitError("lifecycle_evidence_invalid")
+
+            conversation_id = str(scope["conversation_id"])
+            with try_conversation_transaction_lock(
+                conversation_id, conn=tx
+            ) as acquired:
+                if not acquired:
+                    raise LifecycleCommitError("conversation_busy")
+                conversation = tx.execute(
+                    "SELECT state FROM ai_conversations WHERE id = ?",
+                    (conversation_id,),
+                ).fetchone()
+                if conversation is None or conversation["state"] != "active":
+                    raise LifecycleCommitError("lifecycle_event_not_reviewable")
+                committed = commit_locked_resident_offline(
+                    event_id=str(scope["id"]),
+                    universe_id=str(scope["universe_id"]),
+                    resident_id=str(scope["resident_id"]),
+                    conversation_id=conversation_id,
+                    owner_platform_user_id=str(scope["owner_platform_user_id"]),
+                    farewell_text=clean_text,
+                    reviewed_by=str(admin_user_id),
+                    review_reason=clean_reason,
+                    allow_last_resident_exception=last_exception,
+                    now=now_text,
+                    conn=tx,
+                )
+                return _farewell_result(
+                    event=committed["event"],
+                    post=committed["post"],
+                    replayed=False,
+                )
+    except LifecycleCommitError:
+        raise
+    except ValueError as err:
+        raise LifecycleCommitError("lifecycle_commit_conflict") from err
+
+
+def correct_lifecycle_event(
+    *,
+    event_id: str,
+    reason: str,
+    hide_farewell: bool,
+    admin_user_id: str,
+    now: datetime,
+) -> Dict[str, Any]:
+    """执行不可逆提交后的审计纠错；只允许隐藏 farewell，不提供复活路径。"""
+    try:
+        updated = correct_committed_resident_lifecycle_event(
+            event_id=event_id,
+            corrected_by=admin_user_id,
+            correction_reason=reason,
+            hide_farewell=hide_farewell,
+            now=_db_time(now),
+        )
+    except ValueError as err:
+        raise LifecycleCommitError("lifecycle_event_not_correctable") from err
+    if updated is None:
+        raise LifecycleCommitError("lifecycle_event_not_found")
+    return {"event": serialize_lifecycle_event(updated)}
+
+
 __all__ = [
     "CompanionWorldLifecycleService",
+    "LifecycleCommitError",
     "LIFECYCLE_POLICY_FAMILY",
+    "approve_lifecycle_event",
     "build_lifecycle_policy",
+    "correct_lifecycle_event",
     "get_lifecycle_review_event",
     "list_lifecycle_review_events",
     "serialize_lifecycle_event",

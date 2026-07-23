@@ -363,6 +363,8 @@ class Settings(BaseSettings):
     companion_world_lifecycle_crisis_freeze_days: int = 30
     companion_world_mailbox_delivery_cooldown_days: int = 30
     companion_world_mailbox_letter_ttl_days: int = 30
+    # 仅供离线 catalog manifest HMAC-SHA256 校验；空值时 apply 必须 fail-closed。
+    companion_world_mailbox_manifest_hmac_secret: str = ""
     companion_world_lifecycle_scheduler_interval_seconds: float = 300.0
     companion_world_lifecycle_scheduler_batch_size: int = 50
 

@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any, Mapping, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from app.db import list_resident_lifecycle_evidence_tasks
+from app.db._backend import Connection
 from app.domains.companion_world.lifecycle import (
     LIFECYCLE_CRISIS_CATEGORIES,
     LIFECYCLE_SEVERE_ABUSE_CATEGORIES,
@@ -37,6 +38,7 @@ class StructuredLifecycleEvidenceAdapter:
         runtime_account_id: str,
         now: datetime,
         policy: LifecyclePolicy,
+        conn: Optional[Connection] = None,
     ) -> Tuple[LifecycleEvidenceRef, ...]:
         """读取有界窗口；账号条件由 DB 层强制，返回值不含正文或 account id。"""
         lookback_days = max(
@@ -49,6 +51,7 @@ class StructuredLifecycleEvidenceAdapter:
                 "%Y-%m-%d %H:%M:%S"
             ),
             until=now.strftime("%Y-%m-%d %H:%M:%S"),
+            conn=conn,
         )
         observations: list[LifecycleEvidenceRef] = []
         for task in tasks:

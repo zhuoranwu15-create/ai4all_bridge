@@ -1,4 +1,4 @@
-"""运行 Companion World M4 独立中心 lifecycle shadow scheduler。"""
+"""运行 Companion World M4 独立中心 lifecycle/mailbox scheduler。"""
 import asyncio
 import logging
 import signal
@@ -19,10 +19,11 @@ logger = logging.getLogger("ai4all.world_lifecycle.process")
 
 
 async def main() -> None:
-    if not settings.companion_world_lifecycle_evaluation_enabled:
+    lifecycle_enabled = settings.companion_world_lifecycle_evaluation_enabled
+    mailbox_enabled = settings.companion_world_mailbox_enabled
+    if not lifecycle_enabled and not mailbox_enabled:
         logger.warning(
-            "world-lifecycle scheduler disabled by "
-            "COMPANION_WORLD_LIFECYCLE_EVALUATION_ENABLED=false"
+            "world-lifecycle scheduler disabled: lifecycle evaluation and mailbox false"
         )
         return
     if not settings.has_central_role:
@@ -31,7 +32,8 @@ async def main() -> None:
     configure_error_log_alerting(settings)
     verify_host_timezone()
     scheduler = WorldLifecycleScheduler(
-        enabled=True,
+        enabled=lifecycle_enabled,
+        mailbox_enabled=mailbox_enabled,
         interval_seconds=(
             settings.companion_world_lifecycle_scheduler_interval_seconds
         ),

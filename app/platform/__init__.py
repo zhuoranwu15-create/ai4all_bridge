@@ -21,9 +21,20 @@ from app.platform.companion_world_turn import (  # noqa: F401
 )
 from app.platform.companion_world_lifecycle import (  # noqa: F401
     CompanionWorldLifecycleService,
+    LifecycleCommitError,
+    approve_lifecycle_event,
     build_lifecycle_policy,
+    correct_lifecycle_event,
     get_lifecycle_review_event,
     list_lifecycle_review_events,
+)
+from app.platform.companion_world_mailbox import (  # noqa: F401
+    CompanionWorldMailboxService,
+    MailboxError,
+    build_mailbox_policy,
+    create_mailbox_catalog_entry,
+    list_mailbox_catalog,
+    retire_mailbox_catalog_entry,
 )
 from app.platform.app_inbox import (  # noqa: F401
     AppInboxAdapter,
@@ -39,6 +50,9 @@ __all__ = [
     "AppInboxAdapter",
     "AppInboxIntent",
     "CompanionWorldLifecycleService",
+    "CompanionWorldMailboxService",
+    "LifecycleCommitError",
+    "MailboxError",
     "HumanAppInboxClaim",
     "HumanAppInboxIntent",
     "HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON",
@@ -48,10 +62,16 @@ __all__ = [
     "human_level_proactive_allowed",
     "resolve_human_proactive_scope",
     "build_companion_world_memory_sink",
+    "approve_lifecycle_event",
     "build_lifecycle_policy",
+    "build_mailbox_policy",
     "compact_companion_world_memory_batch",
+    "correct_lifecycle_event",
+    "create_mailbox_catalog_entry",
     "get_lifecycle_review_event",
     "list_lifecycle_review_events",
+    "list_mailbox_catalog",
     "read_companion_world_context",
+    "retire_mailbox_catalog_entry",
     "run_companion_world_turn",
 ]

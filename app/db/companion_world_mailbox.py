@@ -16,10 +16,18 @@ from app.db._core import _new_id, _tx, connect
 __all__ = [
     "count_unread_character_letters",
     "create_character_letter_catalog_entry",
+    "expire_due_character_letters",
+    "get_accepted_character_letter_resident",
     "get_character_letter_for_owner",
+    "has_nonlegacy_resident_for_template",
     "insert_character_letter",
     "list_character_letter_catalog",
     "list_character_letters_for_owner",
+    "list_mailbox_delivery_worlds",
+    "lock_character_letter_accept_scope",
+    "mark_locked_character_letter_accepted",
+    "mark_locked_character_letter_expired",
+    "prepare_character_letter_delivery",
     "retire_character_letter_catalog_entry",
     "transition_open_character_letter",
 ]
@@ -229,6 +237,173 @@ def list_character_letter_catalog(
     return [_catalog(row) for row in rows]
 
 
+def list_mailbox_delivery_worlds(
+    *,
+    after_universe_id: Optional[str] = None,
+    limit: int = 100,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """按 universe id 稳定分页列出 active+confirmed world 投递锚。"""
+    cursor_clause = ""
+    params: List[Any] = []
+    if after_universe_id:
+        cursor_clause = "AND id > ?"
+        params.append(str(after_universe_id))
+    params.append(max(1, min(int(limit), 500)))
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"""
+            SELECT id AS universe_id, owner_platform_user_id
+            FROM universes
+            WHERE status = 'active' AND onboarding_state = 'confirmed'
+              {cursor_clause}
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def expire_due_character_letters(
+    *,
+    now: str,
+    owner_platform_user_id: Optional[str] = None,
+    universe_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    conn: Optional[Connection] = None,
+) -> int:
+    """CAS 过期 ``expires_at <= now`` 的 open letters，返回本次实际更新数。"""
+    clauses = ["status IN ('unread', 'read', 'deferred')", "expires_at <= ?"]
+    clean_now = _clean_required(now, "now")
+    filter_params: List[Any] = [clean_now]
+    if owner_platform_user_id is not None:
+        clauses.append("owner_platform_user_id = ?")
+        filter_params.append(
+            _clean_required(owner_platform_user_id, "owner_platform_user_id")
+        )
+    if universe_id is not None:
+        clauses.append("universe_id = ?")
+        filter_params.append(_clean_required(universe_id, "universe_id"))
+    limit_clause = ""
+    if limit is not None:
+        limit_clause = " LIMIT ?"
+        filter_params.append(max(1, min(int(limit), 2000)))
+    with _letter_write_tx(conn) as tx:
+        cursor = tx.execute(
+            f"""
+            UPDATE character_letters
+            SET status = 'expired', handled_at = ?, terminal_reason = 'ttl_expired',
+                updated_at = ?
+            WHERE id IN (
+                SELECT id FROM character_letters
+                WHERE {' AND '.join(clauses)}
+                ORDER BY expires_at ASC, id ASC{limit_clause}
+            )
+              AND status IN ('unread', 'read', 'deferred')
+              AND expires_at <= ?
+            """,
+            (clean_now, clean_now, *filter_params, clean_now),
+        )
+    return int(cursor.rowcount or 0)
+
+
+def prepare_character_letter_delivery(
+    *,
+    universe_id: str,
+    now: str,
+    cooldown_since: str,
+    active_limit: int,
+    conn: Connection,
+) -> Dict[str, Any]:
+    """锁定 world、过期旧信并重算投递资格，返回确定性 catalog 候选。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    world = conn.execute(
+        "SELECT * FROM universes WHERE id = ?" + suffix,
+        (_clean_required(universe_id, "universe_id"),),
+    ).fetchone()
+    if (
+        world is None
+        or world["status"] != "active"
+        or world["onboarding_state"] != "confirmed"
+    ):
+        return {"status": "world_ineligible", "expired": 0}
+    expired = expire_due_character_letters(
+        now=now,
+        universe_id=universe_id,
+        conn=conn,
+    )
+    active_row = conn.execute(
+        "SELECT COUNT(*) AS c FROM universe_residents "
+        "WHERE universe_id = ? AND status = 'active'",
+        (universe_id,),
+    ).fetchone()
+    active_count = int(active_row["c"] if active_row else 0)
+    base = {
+        "owner_platform_user_id": str(world["owner_platform_user_id"]),
+        "universe_id": str(world["id"]),
+        "active_count": active_count,
+        "expired": expired,
+    }
+    if active_count >= int(active_limit):
+        return {**base, "status": "blocked_capacity"}
+    open_row = conn.execute(
+        "SELECT id FROM character_letters WHERE universe_id = ? "
+        "AND status IN ('unread', 'read', 'deferred') LIMIT 1",
+        (universe_id,),
+    ).fetchone()
+    if open_row is not None:
+        return {**base, "status": "blocked_open"}
+    last_row = conn.execute(
+        "SELECT delivered_at FROM character_letters WHERE universe_id = ? "
+        "ORDER BY delivered_at DESC, id DESC LIMIT 1",
+        (universe_id,),
+    ).fetchone()
+    if last_row is not None and str(last_row["delivered_at"]) > str(cooldown_since):
+        return {
+            **base,
+            "status": "blocked_cooldown",
+            "last_delivered_at": str(last_row["delivered_at"]),
+        }
+    catalog_lock = " FOR UPDATE OF c" if is_postgres() else ""
+    catalog = conn.execute(
+        """
+        SELECT c.*
+        FROM character_letter_catalog c
+        JOIN character_templates t ON t.id = c.character_template_id
+        WHERE c.status = 'active'
+          AND (c.available_from IS NULL OR c.available_from <= ?)
+          AND (c.available_until IS NULL OR c.available_until > ?)
+          AND t.status = 'active'
+          AND t.source_type IN ('official', 'operations')
+          AND t.persona_version = c.template_version
+          AND NOT EXISTS (
+              SELECT 1 FROM character_letters used
+              WHERE used.universe_id = ? AND used.character_key = c.character_key
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM universe_residents resident
+              WHERE resident.universe_id = ? AND resident.origin <> 'legacy'
+                AND (
+                    resident.character_template_id = c.character_template_id
+                    OR EXISTS (
+                        SELECT 1 FROM character_letter_catalog known_version
+                        WHERE known_version.character_template_id = resident.character_template_id
+                          AND known_version.character_key = c.character_key
+                    )
+                )
+          )
+        ORDER BY c.priority DESC, c.id ASC
+        LIMIT 1
+        """
+        + catalog_lock,
+        (now, now, universe_id, universe_id),
+    ).fetchone()
+    if catalog is None:
+        return {**base, "status": "catalog_empty"}
+    return {**base, "status": "eligible", "catalog": _catalog(catalog)}
+
+
 def insert_character_letter(
     *,
     owner_platform_user_id: str,
@@ -343,6 +518,120 @@ def get_character_letter_for_owner(
             (letter_id, owner_platform_user_id),
         ).fetchone()
     return _letter(row) if row else None
+
+
+def lock_character_letter_accept_scope(
+    *,
+    letter_id: str,
+    owner_platform_user_id: str,
+    conn: Connection,
+) -> Optional[Dict[str, Any]]:
+    """按 ``world → letter/catalog/template`` 顺序锁定一次 owner accept 的事实快照。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    world = conn.execute(
+        "SELECT * FROM universes WHERE owner_platform_user_id = ? "
+        "AND status = 'active' AND onboarding_state = 'confirmed'" + suffix,
+        (owner_platform_user_id,),
+    ).fetchone()
+    if world is None:
+        return None
+    row_lock = " FOR UPDATE OF l, c, t" if is_postgres() else ""
+    row = conn.execute(
+        """
+        SELECT l.*,
+               c.status AS catalog_status,
+               c.character_key AS catalog_character_key,
+               c.character_template_id AS catalog_character_template_id,
+               c.template_version AS catalog_template_version,
+               t.status AS template_status,
+               t.source_type AS template_source_type,
+               t.persona_version AS current_template_version,
+               t.persona_seed_json,
+               t.name AS character_name,
+               t.avatar_ref,
+               t.summary,
+               t.tags_json
+        FROM character_letters l
+        JOIN character_letter_catalog c ON c.id = l.catalog_id
+        JOIN character_templates t ON t.id = l.character_template_id
+        WHERE l.id = ? AND l.owner_platform_user_id = ? AND l.universe_id = ?
+        """
+        + row_lock,
+        (letter_id, owner_platform_user_id, world["id"]),
+    ).fetchone()
+    return _letter(row) if row else None
+
+
+def has_nonlegacy_resident_for_template(
+    *, universe_id: str, character_template_id: str, conn: Connection
+) -> bool:
+    """返回本 world 是否已有相同模板的 non-legacy 关系。"""
+    row = conn.execute(
+        "SELECT 1 FROM universe_residents WHERE universe_id = ? "
+        "AND character_template_id = ? AND origin <> 'legacy' LIMIT 1",
+        (universe_id, character_template_id),
+    ).fetchone()
+    return row is not None
+
+
+def mark_locked_character_letter_expired(
+    *, letter_id: str, owner_platform_user_id: str, now: str, conn: Connection
+) -> bool:
+    """把已锁定且到期的 open letter CAS 为 expired。"""
+    cursor = conn.execute(
+        """
+        UPDATE character_letters
+        SET status = 'expired', handled_at = ?, terminal_reason = 'ttl_expired',
+            updated_at = ?
+        WHERE id = ? AND owner_platform_user_id = ?
+          AND status IN ('unread', 'read', 'deferred') AND expires_at <= ?
+        """,
+        (now, now, letter_id, owner_platform_user_id, now),
+    )
+    return int(cursor.rowcount or 0) == 1
+
+
+def mark_locked_character_letter_accepted(
+    *,
+    letter_id: str,
+    owner_platform_user_id: str,
+    resident_id: str,
+    now: str,
+    conn: Connection,
+) -> bool:
+    """把已锁定的 open letter CAS 为 accepted，并钉住创建出的 resident。"""
+    cursor = conn.execute(
+        """
+        UPDATE character_letters
+        SET status = 'accepted', accepted_resident_id = ?, handled_at = ?,
+            terminal_reason = NULL, updated_at = ?
+        WHERE id = ? AND owner_platform_user_id = ?
+          AND status IN ('unread', 'read', 'deferred') AND expires_at > ?
+        """,
+        (resident_id, now, now, letter_id, owner_platform_user_id, now),
+    )
+    return int(cursor.rowcount or 0) == 1
+
+
+def get_accepted_character_letter_resident(
+    *, letter_id: str, owner_platform_user_id: str, conn: Connection
+) -> Optional[Dict[str, Any]]:
+    """读取 accepted letter 对应的公开 resident/conversation 投影。"""
+    row = conn.execute(
+        """
+        SELECT r.id AS resident_id, r.origin, r.status,
+               COALESCE(p.display_name, t.name) AS name, t.avatar_ref,
+               c.id AS conversation_id, c.state AS conversation_state
+        FROM character_letters l
+        JOIN universe_residents r ON r.id = l.accepted_resident_id
+        JOIN character_templates t ON t.id = r.character_template_id
+        LEFT JOIN profiles p ON p.account_id = r.runtime_account_id
+        JOIN ai_conversations c ON c.resident_id = r.id
+        WHERE l.id = ? AND l.owner_platform_user_id = ? AND l.status = 'accepted'
+        """,
+        (letter_id, owner_platform_user_id),
+    ).fetchone()
+    return dict(row) if row else None
 
 
 def list_character_letters_for_owner(

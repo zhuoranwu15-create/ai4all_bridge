@@ -11,6 +11,16 @@ LETTER_TERMINAL_STATUSES = frozenset({"accepted", "declined", "expired"})
 
 
 @dataclass(frozen=True)
+class MailboxPolicy:
+    """投递时钉住的 mailbox 策略；容量阈值是不可漂移产品常量。"""
+
+    version: str
+    delivery_cooldown_days: int = 30
+    letter_ttl_days: int = 30
+    delivery_active_limit: int = 8
+
+
+@dataclass(frozen=True)
 class LetterCatalogRecord:
     """一个不可变的运营来信角色版本。"""
 
@@ -46,6 +56,13 @@ class CharacterLetterRecord:
     delivered_at: str
     expires_at: str
     accepted_resident_id: Optional[str] = None
+    read_at: Optional[str] = None
+    deferred_at: Optional[str] = None
+    handled_at: Optional[str] = None
+    character_name: Optional[str] = None
+    avatar_ref: Optional[str] = None
+    summary: Optional[str] = None
+    tags: Tuple[str, ...] = ()
 
 
 def letter_is_open(status: str) -> bool:
@@ -135,6 +152,7 @@ __all__ = [
     "LETTER_TERMINAL_STATUSES",
     "CharacterLetterRecord",
     "LetterCatalogRecord",
+    "MailboxPolicy",
     "MailboxRepository",
     "letter_delivery_fingerprint",
     "letter_is_open",

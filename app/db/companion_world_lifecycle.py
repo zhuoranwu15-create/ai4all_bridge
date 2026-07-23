@@ -1,7 +1,7 @@
 """M4 Companion World resident lifecycle 的审计型存储原语。
 
-本模块只铺 event/action 数据基座；不可逆 ``committed`` 必须由 M4-3 的
-offline+farewell+read-only 组合事务完成，禁止通过通用状态更新绕过原子边界。
+不可逆 ``committed`` 只能由本模块的 locked offline+farewell+read-only 组合写完成；
+通用状态更新明确禁止写 committed，事务编排与证据重校验由 platform service 持有。
 """
 from __future__ import annotations
 
@@ -13,12 +13,15 @@ from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
+    "commit_locked_resident_offline",
+    "correct_committed_resident_lifecycle_event",
     "create_resident_lifecycle_event",
     "get_resident_lifecycle_event",
     "list_resident_lifecycle_evidence_tasks",
     "list_resident_lifecycle_event_actions",
     "list_resident_lifecycle_events_for_review",
     "list_resident_lifecycle_scopes",
+    "lock_resident_lifecycle_commit_scope",
     "transition_resident_lifecycle_event",
 ]
 
@@ -291,6 +294,330 @@ def get_resident_lifecycle_event(
             "SELECT * FROM resident_lifecycle_events WHERE id = ?", (event_id,)
         ).fetchone()
     return _event(row) if row else None
+
+
+def lock_resident_lifecycle_commit_scope(
+    *, event_id: str, conn: Connection
+) -> Optional[Dict[str, Any]]:
+    """按 event→world→resident 顺序锁定 offline 提交锚并返回重校验快照。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    event_row = conn.execute(
+        "SELECT * FROM resident_lifecycle_events WHERE id = ?" + suffix,
+        (_clean_required(event_id, "event_id"),),
+    ).fetchone()
+    if event_row is None:
+        return None
+    event = _event(event_row)
+    world = conn.execute(
+        "SELECT * FROM universes WHERE id = ? AND owner_platform_user_id = ?"
+        + suffix,
+        (event["universe_id"], event["owner_platform_user_id"]),
+    ).fetchone()
+    if world is None:
+        raise ValueError("lifecycle universe ownership mismatch")
+    resident = conn.execute(
+        "SELECT * FROM universe_residents WHERE id = ? AND universe_id = ?"
+        + suffix,
+        (event["resident_id"], event["universe_id"]),
+    ).fetchone()
+    if resident is None:
+        raise ValueError("lifecycle resident ownership mismatch")
+    conversation = conn.execute(
+        """
+        SELECT * FROM ai_conversations
+        WHERE resident_id = ? AND universe_id = ? AND owner_platform_user_id = ?
+        """,
+        (
+            event["resident_id"],
+            event["universe_id"],
+            event["owner_platform_user_id"],
+        ),
+    ).fetchone()
+    if conversation is None:
+        raise ValueError("lifecycle conversation ownership mismatch")
+    active_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM universe_residents "
+        "WHERE universe_id = ? AND status = 'active'",
+        (event["universe_id"],),
+    ).fetchone()
+    last_inbound = conn.execute(
+        """
+        SELECT id, created_at FROM messages
+        WHERE account_id = ? AND direction = 'inbound' AND role = 'user'
+        ORDER BY created_at DESC, id DESC LIMIT 1
+        """,
+        (resident["runtime_account_id"],),
+    ).fetchone()
+    return {
+        **event,
+        "world_status": world["status"],
+        "world_onboarding_state": world["onboarding_state"],
+        "resident_origin": resident["origin"],
+        "resident_status": resident["status"],
+        "resident_joined_at": resident["joined_at"],
+        "resident_created_at": resident["created_at"],
+        "runtime_account_id": resident["runtime_account_id"],
+        "conversation_id": conversation["id"],
+        "conversation_state": conversation["state"],
+        "active_resident_count": int(active_count["c"] if active_count else 0),
+        "last_inbound_message_id": last_inbound["id"] if last_inbound else None,
+        "last_inbound_at": last_inbound["created_at"] if last_inbound else None,
+    }
+
+
+def commit_locked_resident_offline(
+    *,
+    event_id: str,
+    universe_id: str,
+    resident_id: str,
+    conversation_id: str,
+    owner_platform_user_id: str,
+    farewell_text: str,
+    reviewed_by: str,
+    review_reason: str,
+    allow_last_resident_exception: bool,
+    now: str,
+    conn: Connection,
+) -> Dict[str, Any]:
+    """在已持 event/world/resident/conv 锁的事务内完成不可逆 offline 组合写。"""
+    clean_text = _clean_required(farewell_text, "farewell_text")
+    clean_now = _clean_required(now, "now")
+    post_id = _new_id("post")
+    conn.execute(
+        """
+        INSERT INTO universe_posts(
+            id, universe_id, author_type, author_resident_id, source_type,
+            content_type, text, status, post_type, departure_event_id,
+            published_at, created_at, updated_at
+        ) VALUES (?, ?, 'resident', ?, 'lifecycle_farewell', 'text', ?,
+                  'published', 'farewell', ?, ?, ?, ?)
+        """,
+        (
+            post_id,
+            universe_id,
+            resident_id,
+            clean_text,
+            event_id,
+            clean_now,
+            clean_now,
+            clean_now,
+        ),
+    )
+    payload_json = json.dumps(
+        {
+            "v": 1,
+            "post_id": post_id,
+            "universe_id": universe_id,
+            "source_type": "lifecycle_farewell",
+            "post_type": "farewell",
+            "published_at": clean_now,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    outbox_key = f"departure-farewell:v1:{event_id}"
+    conn.execute(
+        """
+        INSERT INTO companion_world_outbox(
+            id, universe_id, post_id, event_type, idempotency_key,
+            payload_json, status, available_at
+        ) VALUES (?, ?, ?, 'universe_post.published.v1', ?, ?, 'pending', ?)
+        ON CONFLICT(idempotency_key) DO NOTHING
+        """,
+        (
+            _new_id("wout"),
+            universe_id,
+            post_id,
+            outbox_key,
+            payload_json,
+            clean_now,
+        ),
+    )
+    outbox = conn.execute(
+        "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
+        (outbox_key,),
+    ).fetchone()
+    if (
+        outbox is None
+        or str(outbox["post_id"]) != post_id
+        or str(outbox["payload_json"]) != payload_json
+    ):
+        raise ValueError("lifecycle farewell outbox conflict")
+    resident_update = conn.execute(
+        """
+        UPDATE universe_residents
+        SET status = 'offline', offline_at = ?, departure_event_id = ?, updated_at = ?
+        WHERE id = ? AND universe_id = ? AND status = 'active' AND origin <> 'legacy'
+        """,
+        (clean_now, event_id, clean_now, resident_id, universe_id),
+    )
+    if int(resident_update.rowcount or 0) != 1:
+        raise ValueError("lifecycle resident state changed")
+    conversation_update = conn.execute(
+        """
+        UPDATE ai_conversations
+        SET state = 'read_only', updated_at = ?
+        WHERE id = ? AND resident_id = ? AND owner_platform_user_id = ?
+          AND state = 'active'
+        """,
+        (
+            clean_now,
+            conversation_id,
+            resident_id,
+            owner_platform_user_id,
+        ),
+    )
+    if int(conversation_update.rowcount or 0) != 1:
+        raise ValueError("lifecycle conversation state changed")
+    event_update = conn.execute(
+        """
+        UPDATE resident_lifecycle_events
+        SET status = 'committed', farewell_text = ?, reviewed_by = ?,
+            reviewed_at = ?, terminal_reason = ?, committed_at = ?,
+            farewell_post_id = ?, updated_at = ?
+        WHERE id = ? AND universe_id = ? AND resident_id = ?
+          AND status = 'review_pending'
+        """,
+        (
+            clean_text,
+            _clean_required(reviewed_by, "reviewed_by"),
+            clean_now,
+            _clean_required(review_reason, "review_reason"),
+            clean_now,
+            post_id,
+            clean_now,
+            event_id,
+            universe_id,
+            resident_id,
+        ),
+    )
+    if int(event_update.rowcount or 0) != 1:
+        raise ValueError("lifecycle event state changed")
+    _append_action(
+        conn,
+        event_id=event_id,
+        action="admin_committed_offline",
+        actor_type="admin",
+        actor_id=reviewed_by,
+        metadata={
+            "farewell_post_id": post_id,
+            "last_resident_exception": bool(allow_last_resident_exception),
+        },
+        created_at=clean_now,
+    )
+    committed = conn.execute(
+        "SELECT * FROM resident_lifecycle_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    post = conn.execute(
+        "SELECT * FROM universe_posts WHERE id = ?", (post_id,)
+    ).fetchone()
+    if committed is None or post is None:
+        raise RuntimeError("lifecycle offline commit disappeared")
+    return {"event": _event(committed), "post": dict(post), "outbox": dict(outbox)}
+
+
+def correct_committed_resident_lifecycle_event(
+    *,
+    event_id: str,
+    corrected_by: str,
+    correction_reason: str,
+    hide_farewell: bool,
+    now: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """追加 post-commit 纠错审计；可隐藏 farewell，但绝不恢复 resident/conversation。"""
+    clean_now = _clean_required(now, "now")
+    with _lifecycle_write_tx(conn) as tx:
+        scope = lock_resident_lifecycle_commit_scope(event_id=event_id, conn=tx)
+        if scope is None:
+            return None
+        if scope["status"] != "committed":
+            raise ValueError("lifecycle event is not committed")
+        current_status = str(scope.get("correction_status") or "none")
+        target_status = (
+            "farewell_hidden"
+            if hide_farewell or current_status == "farewell_hidden"
+            else "acknowledged"
+        )
+        post_id = str(scope.get("farewell_post_id") or "")
+        if not post_id:
+            raise RuntimeError("committed lifecycle event is missing farewell")
+        if hide_farewell and current_status != "farewell_hidden":
+            tx.execute(
+                """
+                UPDATE universe_posts
+                SET status = 'deleted', terminal_reason = 'admin_correction',
+                    deleted_at = ?, updated_at = ?
+                WHERE id = ? AND departure_event_id = ? AND status = 'published'
+                """,
+                (clean_now, clean_now, post_id, event_id),
+            )
+            payload_json = json.dumps(
+                {
+                    "v": 1,
+                    "post_id": post_id,
+                    "universe_id": scope["universe_id"],
+                    "reason_code": "admin_correction",
+                    "deleted_at": clean_now,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            outbox_key = f"departure-farewell-hidden:v1:{event_id}"
+            tx.execute(
+                """
+                INSERT INTO companion_world_outbox(
+                    id, universe_id, post_id, event_type, idempotency_key,
+                    payload_json, status, available_at
+                ) VALUES (?, ?, ?, 'universe_post.deleted.v1', ?, ?, 'pending', ?)
+                ON CONFLICT(idempotency_key) DO NOTHING
+                """,
+                (
+                    _new_id("wout"),
+                    scope["universe_id"],
+                    post_id,
+                    outbox_key,
+                    payload_json,
+                    clean_now,
+                ),
+            )
+            outbox = tx.execute(
+                "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
+                (outbox_key,),
+            ).fetchone()
+            if outbox is None or str(outbox["payload_json"]) != payload_json:
+                raise ValueError("lifecycle correction outbox conflict")
+        tx.execute(
+            """
+            UPDATE resident_lifecycle_events
+            SET correction_status = ?, corrected_by = ?, corrected_at = ?,
+                correction_reason = ?, updated_at = ?
+            WHERE id = ? AND status = 'committed'
+            """,
+            (
+                target_status,
+                _clean_required(corrected_by, "corrected_by"),
+                clean_now,
+                _clean_required(correction_reason, "correction_reason"),
+                clean_now,
+                event_id,
+            ),
+        )
+        _append_action(
+            tx,
+            event_id=event_id,
+            action=("admin_hid_farewell" if hide_farewell else "admin_corrected"),
+            actor_type="admin",
+            actor_id=corrected_by,
+            metadata={"correction_status": target_status},
+            created_at=clean_now,
+        )
+        updated = tx.execute(
+            "SELECT * FROM resident_lifecycle_events WHERE id = ?", (event_id,)
+        ).fetchone()
+    return _event(updated) if updated else None
 
 
 def list_resident_lifecycle_scopes(

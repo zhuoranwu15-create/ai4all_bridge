@@ -1,4 +1,4 @@
-"""M4 独立中心 lifecycle shadow scheduler。"""
+"""M4 独立中心 lifecycle evaluation + mailbox maintenance scheduler。"""
 from __future__ import annotations
 
 import asyncio
@@ -11,13 +11,14 @@ from app.platform.companion_world_lifecycle import (
     CompanionWorldLifecycleService,
     build_lifecycle_policy,
 )
+from app.platform.companion_world_mailbox import CompanionWorldMailboxService
 from app.time_utils import BEIJING_TZ, beijing_naive_now
 
 logger = logging.getLogger("ai4all.world_lifecycle.scheduler")
 
 
 class WorldLifecycleScheduler:
-    """按稳定 resident cursor 分页运行 lifecycle shadow evaluation。"""
+    """分别按 resident/world cursor 运行 lifecycle 与 mailbox，互不借 flag。"""
 
     def __init__(
         self,
@@ -26,14 +27,23 @@ class WorldLifecycleScheduler:
         interval_seconds: float,
         batch_size: int,
         service: Optional[CompanionWorldLifecycleService] = None,
+        mailbox_enabled: bool = False,
+        mailbox_service: Optional[CompanionWorldMailboxService] = None,
     ) -> None:
         self.enabled = bool(enabled)
+        self.mailbox_enabled = bool(mailbox_enabled)
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.batch_size = max(1, min(int(batch_size), 500))
-        self.service = service or CompanionWorldLifecycleService(
-            policy=build_lifecycle_policy()
+        self.service = service or (
+            CompanionWorldLifecycleService(policy=build_lifecycle_policy())
+            if self.enabled
+            else None
+        )
+        self.mailbox_service = mailbox_service or (
+            CompanionWorldMailboxService() if self.mailbox_enabled else None
         )
         self._after_resident_id: Optional[str] = None
+        self._after_universe_id: Optional[str] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -47,22 +57,47 @@ class WorldLifecycleScheduler:
         current = now or beijing_naive_now()
         if current.tzinfo is not None:
             current = current.astimezone(BEIJING_TZ).replace(tzinfo=None)
-        if not self.enabled:
+        if not self.enabled and not self.mailbox_enabled:
             result = {
                 "status": "disabled",
                 "metrics": None,
+                "mailbox_metrics": None,
                 "next_after_resident_id": None,
+                "next_after_universe_id": None,
             }
             self.last_run = result
             return result
-        evaluation = await asyncio.to_thread(
-            self.service.evaluate_batch,
-            now=current,
-            after_resident_id=self._after_resident_id,
-            batch_size=self.batch_size,
-        )
-        self._after_resident_id = evaluation.get("next_after_resident_id")
-        result = {"status": "ok", **evaluation}
+        evaluation = None
+        if self.enabled:
+            if self.service is None:
+                raise RuntimeError("lifecycle service is unavailable")
+            evaluation = await asyncio.to_thread(
+                self.service.evaluate_batch,
+                now=current,
+                after_resident_id=self._after_resident_id,
+                batch_size=self.batch_size,
+            )
+            self._after_resident_id = evaluation.get("next_after_resident_id")
+        mailbox = None
+        if self.mailbox_enabled:
+            if self.mailbox_service is None:
+                raise RuntimeError("mailbox service is unavailable")
+            mailbox = await asyncio.to_thread(
+                self.mailbox_service.maintain_batch,
+                now=current,
+                after_universe_id=self._after_universe_id,
+                batch_size=self.batch_size,
+            )
+            self._after_universe_id = mailbox.get("next_after_universe_id")
+        result = {
+            "status": "ok",
+            "metrics": evaluation.get("metrics") if evaluation else None,
+            "mailbox_metrics": mailbox.get("metrics") if mailbox else None,
+            "results": evaluation.get("results") if evaluation else [],
+            "mailbox_results": mailbox.get("results") if mailbox else [],
+            "next_after_resident_id": self._after_resident_id,
+            "next_after_universe_id": self._after_universe_id,
+        }
         self.last_run = result
         self.last_error = None
         return result
@@ -121,10 +156,16 @@ class WorldLifecycleScheduler:
                 error=error,
                 metadata={
                     "enabled": self.enabled,
+                    "mailbox_enabled": self.mailbox_enabled,
                     "interval_seconds": self.interval_seconds,
                     "batch_size": self.batch_size,
                     "last_run_metrics": (
                         self.last_run.get("metrics") if self.last_run else None
+                    ),
+                    "last_run_mailbox_metrics": (
+                        self.last_run.get("mailbox_metrics")
+                        if self.last_run
+                        else None
                     ),
                 },
             )

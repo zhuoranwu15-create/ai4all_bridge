@@ -122,6 +122,7 @@ def _feed_post(row: dict) -> UniversePostRecord:
         author_name=row.get("author_name"),
         author_avatar_ref=row.get("author_avatar_ref"),
         published_at=row.get("published_at"),
+        post_type=str(row.get("post_type") or "normal"),
     )
 
 

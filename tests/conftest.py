@@ -210,6 +210,7 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_lifecycle_crisis_freeze_days = 30
     s.companion_world_mailbox_delivery_cooldown_days = 30
     s.companion_world_mailbox_letter_ttl_days = 30
+    s.companion_world_mailbox_manifest_hmac_secret = ""
     s.companion_world_lifecycle_scheduler_interval_seconds = 300.0
     s.companion_world_lifecycle_scheduler_batch_size = 50
     s.proactive_scheduler_bypass_quiet_hours = False
