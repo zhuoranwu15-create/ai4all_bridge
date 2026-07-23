@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-23
-状态：**M0/M1/M2-C、M3 与 M4 已完成；M4-0…M4-6 已归档；M5-0 已冻结。** PR #46 已合并，M4 Draft PR #47 尚未合并；P1/M3/M4 flag 均默认关闭且尚未生产启用。M5 §10.9 产品门已关闭，后续实现以 M5 backend spec 为准。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
-核查基线：当前开发环境 `feat/companion-world-m5`，堆叠于已完成并推送的 M4 提交 `af03382`；M4 Draft PR #47 仍未合并。M5-0 只冻结文档，M5-1 尚未编码。
+状态：**M0/M1/M2-C、M3 与 M4 已完成；M4-0…M4-6 已归档；M5-0/M5-1 已完成。** PR #46 已合并，M4 Draft PR #47 尚未合并；P1/M3/M4/M5 flag 均默认关闭且尚未生产启用。M5 §10.9 产品门已关闭，m0035/纯领域/DB 原语已落地但尚无 live API，后续实现以 M5 backend spec 为准。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+核查基线：当前开发环境 `feat/companion-world-m5`，堆叠于已完成并推送的 M4 提交 `af03382`；M4 Draft PR #47 仍未合并。M5-0=`1c981be`；M5-1 已完成待提交。
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -613,7 +613,7 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 
 - **M3**：`universe_posts` + 事务 outbox（领域状态与 outbox 同事务、worker 幂等），按 universe 每日两窗口生成文字动态；App 通知收件箱 **T3-1…T3-9**（显式已读、7/30 天、200 条）; 真人级 proactive 上提域层（预算/活跃按 platform_user 聚合、universe 级 due 队列、确定性发声人、App-only 独立灰度 flag）。
 - **M4**：M4-0 已冻结 cooldown/audit/safety、last-resident、不可逆纠错和 mailbox 策略；M4-1 已交付 m0034、owner-scoped DB 原语、纯领域 DTO/ports 与 default-off 配置；M4-2 已交付 evidence/review/scheduler；M4-3 已交付 offline 原子事务；M4-4 已交付 signed catalog、world-lock delivery/expiry 与 owner 私密读取/处理；M4-5 已交付 no-binding/no-grant letter accept 单事务；M4-6 已补运行手册、只读对账、catalog-retire PG 竞态与最终双后端门禁。三 flag 仍默认关闭，详见 [`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md) 归档。
-- **M5**：M5-0 已冻结。A 世界 invite/pending/active 共用三 slot，B 跨世界 pending+active 也最多 3；高熵一次性 code 兑换后先 pending，A 接受才获得 30 天 visit ACL；`human_conversations`/`human_messages` 分表（D-11），终止只读、历史默认保留/self-hide、举报证据独立、拉黑立即撤权。详见 [`companion_world_m5_backend_spec.md`](./companion_world_m5_backend_spec.md)。
+- **M5**：M5-0 已冻结，M5-1 已交付 m0035 七表、纯领域状态规则、owner/visitor-scoped DB 原语与两个 default-off flag，尚未接 live API。A 世界 invite/pending/active 共用三 slot，B 跨世界 pending+active 也最多 3；高熵一次性 code 兑换后先 pending，A 接受才获得 30 天 visit ACL；`human_conversations`/`human_messages` 分表（D-11），终止只读、历史默认保留/self-hide、举报证据独立、拉黑立即撤权。详见 [`companion_world_m5_backend_spec.md`](./companion_world_m5_backend_spec.md)。
 
 ### 关键风险与门槛
 

@@ -213,6 +213,8 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_mailbox_manifest_hmac_secret = ""
     s.companion_world_lifecycle_scheduler_interval_seconds = 300.0
     s.companion_world_lifecycle_scheduler_batch_size = 50
+    s.companion_world_visits_enabled = False
+    s.companion_world_human_chat_enabled = False
     s.proactive_scheduler_bypass_quiet_hours = False
     s.proactive_planning_interval_seconds = 3600
     s.proactive_account_check_context_messages = 12
@@ -324,6 +326,8 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_outbox_batch_size = 50
     s.companion_world_outbox_claim_lease_seconds = 300
     s.companion_world_outbox_max_attempts = 5
+    s.companion_world_visits_enabled = False
+    s.companion_world_human_chat_enabled = False
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""

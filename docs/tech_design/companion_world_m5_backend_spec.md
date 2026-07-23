@@ -1,6 +1,6 @@
 # Companion World M5 Visit + Human Chat 后端实现规范
 
-> 状态：**M5-0 已冻结（2026-07-23）；M5-1 尚未编码。**
+> 状态：**M5-0 已冻结；M5-1 已完成（2026-07-23），M5-2 待开始。**
 >
 > 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；Draft PR #47 尚未合并，M5 PR 在其合并前不得转 Ready。
 >
@@ -65,7 +65,7 @@ M5 不包含：
 
 ## 2. m0035 加性数据模型
 
-历史 migration 不改写。M5-1 只在 `_MIGRATIONS` 末尾追加 `m0035_companion_world_visit_human_chat`。
+历史 migration 不改写。M5-1 已在 `_MIGRATIONS` 末尾追加 `m0035_companion_world_visit_human_chat`。
 
 ### 2.1 `universe_visit_slots`
 
@@ -393,3 +393,9 @@ git diff --check
 2. 客户端实现 pending/owner accept、到期缓存清理、no-store、终态只读与隐藏语义。
 3. 运营/法务确认举报 evidence retention 配置；未确认前不运行自动清理。
 4. 两个 flag 按 schema → read/history → invite/pending → active Feed → human write 顺序小流量开启。
+
+## 11. M5-1 落地记录
+
+已交付 m0035 七表/索引、`visits.py`/`human_chat.py` 纯领域 DTO 与状态规则、两个 owner/visitor-scoped DB 原语模块，以及 `COMPANION_WORLD_VISITS_ENABLED` / `COMPANION_WORLD_HUMAN_CHAT_ENABLED` 两个 default-off flag。新模块仅由 `app.db` 重导出，没有注册路由、scheduler 或 Runtime 调用方。
+
+验证：M5/schema/边界 SQLite `23 passed / 1 skipped`、PostgreSQL `24 passed`；Companion World SQLite 联合 `106 passed / 16 skipped`；unit `570 passed / 955 deselected`；compileall 与 diff check 通过。

@@ -2717,6 +2717,151 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
     )
 
 
+def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
+    """M5：限时 visit、独立真人聊天、拉黑与举报证据的加性数据基座。
+
+    本迁移只增加空表和索引，不注册 API/scheduler，也不把真人消息接入 Runtime。
+    owner 世界三个 slot 由后续事务在 world lock 内按需幂等补齐。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_visit_slots (
+            universe_id TEXT NOT NULL,
+            slot_no INTEGER NOT NULL,
+            occupant_type TEXT,
+            occupant_id TEXT,
+            occupied_at TEXT,
+            PRIMARY KEY (universe_id, slot_no),
+            UNIQUE (occupant_type, occupant_id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_visit_slots_occupant
+            ON universe_visit_slots(occupant_type, occupant_id);
+
+        CREATE TABLE IF NOT EXISTS universe_invites (
+            id TEXT PRIMARY KEY,
+            universe_id TEXT NOT NULL,
+            owner_platform_user_id TEXT NOT NULL,
+            code_hash TEXT NOT NULL UNIQUE,
+            code_prefix TEXT NOT NULL,
+            status TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            redeemed_by_platform_user_id TEXT,
+            redeemed_visit_id TEXT,
+            redeemed_at TEXT,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(redeemed_by_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_universe_invites_owner
+            ON universe_invites(owner_platform_user_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_universe_invites_expiry
+            ON universe_invites(status, expires_at, id);
+
+        CREATE TABLE IF NOT EXISTS universe_visits (
+            id TEXT PRIMARY KEY,
+            invite_id TEXT NOT NULL UNIQUE,
+            universe_id TEXT NOT NULL,
+            owner_platform_user_id TEXT NOT NULL,
+            visitor_platform_user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            pending_expires_at TEXT NOT NULL,
+            accepted_at TEXT,
+            expires_at TEXT,
+            terminal_at TEXT,
+            terminal_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(invite_id) REFERENCES universe_invites(id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(visitor_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_visits_open_pair
+            ON universe_visits(universe_id, visitor_platform_user_id)
+            WHERE status IN ('pending', 'active');
+        CREATE INDEX IF NOT EXISTS ix_universe_visits_visitor
+            ON universe_visits(visitor_platform_user_id, status, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_universe_visits_owner
+            ON universe_visits(owner_platform_user_id, status, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_universe_visits_expiry
+            ON universe_visits(status, pending_expires_at, expires_at, id);
+
+        CREATE TABLE IF NOT EXISTS human_conversations (
+            id TEXT PRIMARY KEY,
+            visit_id TEXT NOT NULL UNIQUE,
+            owner_platform_user_id TEXT NOT NULL,
+            visitor_platform_user_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            owner_hidden_at TEXT,
+            visitor_hidden_at TEXT,
+            owner_last_read_at TEXT,
+            visitor_last_read_at TEXT,
+            last_message_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(visit_id) REFERENCES universe_visits(id),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(visitor_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_human_conversations_owner
+            ON human_conversations(owner_platform_user_id, last_message_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_human_conversations_visitor
+            ON human_conversations(visitor_platform_user_id, last_message_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS human_messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            sender_platform_user_id TEXT NOT NULL,
+            client_message_id TEXT NOT NULL,
+            body_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
+            FOREIGN KEY(sender_platform_user_id) REFERENCES platform_users(id),
+            UNIQUE(conversation_id, sender_platform_user_id, client_message_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_human_messages_list
+            ON human_messages(conversation_id, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS platform_user_blocks (
+            blocker_platform_user_id TEXT NOT NULL,
+            blocked_platform_user_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(blocker_platform_user_id, blocked_platform_user_id),
+            FOREIGN KEY(blocker_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(blocked_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_platform_user_blocks_blocked
+            ON platform_user_blocks(blocked_platform_user_id, blocker_platform_user_id);
+
+        CREATE TABLE IF NOT EXISTS human_chat_reports (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            reporter_platform_user_id TEXT NOT NULL,
+            reported_platform_user_id TEXT NOT NULL,
+            reported_message_id TEXT,
+            reason_code TEXT NOT NULL,
+            details_text TEXT,
+            evidence_snapshot_json TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            retained_until TEXT,
+            created_at TEXT NOT NULL,
+            reviewed_at TEXT,
+            reviewed_by TEXT,
+            FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
+            FOREIGN KEY(reporter_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(reported_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(reported_message_id) REFERENCES human_messages(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_human_chat_reports_queue
+            ON human_chat_reports(status, created_at, id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2747,6 +2892,7 @@ _MIGRATIONS = [
     (32, _migration_0032_rpm_hit_double_precision),
     (33, _migration_0033_companion_world_m3_content),
     (34, _migration_0034_companion_world_lifecycle_mailbox),
+    (35, _migration_0035_companion_world_visit_human_chat),
 ]
 
 

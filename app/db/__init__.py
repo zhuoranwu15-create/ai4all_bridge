@@ -9,6 +9,8 @@ from app.db.accounts import *  # noqa: F401,F403
 from app.db.companion_world import *  # noqa: F401,F403
 from app.db.companion_world_lifecycle import *  # noqa: F401,F403
 from app.db.companion_world_mailbox import *  # noqa: F401,F403
+from app.db.companion_world_visits import *  # noqa: F401,F403
+from app.db.companion_world_human_chat import *  # noqa: F401,F403
 from app.db.notifications import *  # noqa: F401,F403
 from app.db.proactive import *  # noqa: F401,F403
 from app.db.lifecycle import *  # noqa: F401,F403

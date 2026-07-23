@@ -1,6 +1,6 @@
 # Companion World M5 实施计划
 
-> 状态：**M5-0 已完成（2026-07-23）；M5-1 待开始。**
+> 状态：**M5-0/M5-1 已完成（2026-07-23）；M5-2 待开始。**
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
@@ -36,6 +36,8 @@
 
 ### M5-1：m0035、DTO/状态机、DB 原语与 flags
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - `app/db/_core.py`：只追加 m0035。
@@ -44,9 +46,11 @@
 - `app/config.py`、`.env.example`、`tests/conftest.py`。
 - `tests/test_companion_world_m5_schema.py`、分层测试。
 
-交付：七张加性表/索引、owner/visitor-scoped 读写原语、纯状态机、两个 default-off flag；不接 API/scheduler，不改变现有行为。
+交付：七张加性表/索引、owner/visitor-scoped 读写原语、纯状态机、两个 default-off flag；未接 API/scheduler，现有行为不变。最大 migration 已更新为 m0035，历史 m0033 版本断言同步修正。
 
 出口：SQLite/PG migration 幂等；旧 M2–M4 测试不变；领域层不依赖 DB/FastAPI/Runtime。
+
+验证：M5/schema/边界 SQLite `23 passed / 1 skipped`、PostgreSQL `24 passed`；Companion World SQLite 联合 `106 passed / 16 skipped`；unit `570 passed / 955 deselected`；compileall/diff check 通过。
 
 ### M5-2：Invite、pending approval 与 active visit
 
