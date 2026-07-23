@@ -1,0 +1,27 @@
+{
+  "$version": "1.0",
+  "type": "object",
+  "required": ["microGoal", "firstStep", "estimatedMinutes", "options", "successCriteria"],
+  "properties": {
+    "microGoal": {"type": "string", "description": "最小目标描述（一句话）"},
+    "firstStep": {"type": "string", "description": "第一步（来自超小步的 firstMove）"},
+    "estimatedMinutes": {"type": "number", "minimum": 1},
+    "options": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["level", "label", "title", "firstMove", "suggestedMinutes"],
+        "properties": {
+          "level": {"type": "string", "enum": ["tiny", "light", "normal"]},
+          "label": {"type": "string"},
+          "title": {"type": "string", "description": "具体动作"},
+          "firstMove": {"type": "string", "description": "第一下（不超过15字）"},
+          "suggestedMinutes": {"type": "number", "minimum": 1}
+        }
+      }
+    },
+    "successCriteria": {"type": "string", "description": "完成标准（一句话）"}
+  }
+}

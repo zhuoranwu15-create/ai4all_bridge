@@ -227,6 +227,11 @@ class Settings(BaseSettings):
 
     dashscope_api_key: str = ""
 
+    # ===== Agent Runtime 专属 LLM（nooki-* skills）=====
+    agent_llm_base_url: str = ""
+    agent_llm_model: str = ""
+    agent_llm_api_key_env: str = ""  # 指向哪个 env var 存 API key，如 DASHSCOPE_API_KEY
+
     # ===== 图片理解（DashScope qwen3-vl-plus）=====
     # 总开关：关闭时图片轮直接走兜底，不调 VL、不扣图片费。
     image_understanding_enabled: bool = False

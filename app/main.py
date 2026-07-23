@@ -348,6 +348,8 @@ if settings.has_central_role:
     app.include_router(_admin_security_router.router)
     from app.routers import admin_campaigns as _admin_campaigns_router  # noqa: E402
     app.include_router(_admin_campaigns_router.router)
+    from app.routers import agent as _agent_router  # noqa: E402
+    app.include_router(_agent_router.router)
 
 # Local-dev convenience: production nginx serves the static frontend at "/" and
 # "/user/*" (the frontend hardcodes those absolute paths). Replicate that mapping

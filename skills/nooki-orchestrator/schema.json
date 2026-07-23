@@ -1,0 +1,30 @@
+{
+  "$version": "1.0",
+  "type": "object",
+  "required": ["reply", "actions"],
+  "properties": {
+    "reply": {
+      "type": "string",
+      "description": "对话回复（以角色身份，60字以内）"
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["none", "single_task_intent", "create_step_options", "ask_clarifying_question", "create_task_plan", "capture_later_item", "mark_completed", "shrink_action"]
+          },
+          "payload": {"type": "object"},
+          "originalGoal": {"type": "string"},
+          "options": {"type": "array"},
+          "planDraft": {"type": "object"},
+          "question": {"type": "string"}
+        }
+      }
+    }
+  }
+}
