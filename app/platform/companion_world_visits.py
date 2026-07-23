@@ -17,7 +17,12 @@ from app.db import (
     get_universe_visit,
     has_platform_user_block,
     insert_pending_universe_visit,
+    insert_platform_user_block,
     insert_universe_invite,
+    list_due_universe_invites,
+    list_due_universe_visits,
+    list_open_universe_visits_between,
+    list_published_feed_posts_for_owner,
     list_universe_invites_for_owner,
     list_universe_visits_for_participant,
     lock_platform_user_for_visit,
@@ -134,6 +139,19 @@ class CompanionWorldVisitService:
             )
         )
 
+    def list_invites_current(
+        self, platform_user_id: str, *, now: datetime
+    ) -> Sequence[Dict[str, Any]]:
+        """request-time 清理 owner 到期 invite 后返回当前状态。"""
+        for invite in list_universe_invites_for_owner(
+            owner_platform_user_id=platform_user_id,
+            statuses=("active",),
+            limit=100,
+        ):
+            if now >= parse_db_timestamp(invite["expires_at"]):
+                self._expire_invite_candidate(invite, now=now)
+        return self.list_invites(platform_user_id)
+
     def revoke_invite(
         self, platform_user_id: str, *, invite_id: str, now: datetime
     ) -> Dict[str, Any]:
@@ -239,6 +257,27 @@ class CompanionWorldVisitService:
             platform_user_id=platform_user_id, statuses=statuses, limit=100
         )
         return tuple(_visit_public(row, platform_user_id) for row in rows)
+
+    def list_visits_current(
+        self,
+        platform_user_id: str,
+        *,
+        now: datetime,
+        statuses: Optional[Sequence[str]] = None,
+    ) -> Sequence[Dict[str, Any]]:
+        """request-time 终结当前 participant 已到期 visits 后返回列表。"""
+        rows = list_universe_visits_for_participant(
+            platform_user_id=platform_user_id,
+            statuses=("pending", "active"),
+            limit=100,
+        )
+        for row in rows:
+            due_at = row.get(
+                "pending_expires_at" if row["status"] == "pending" else "expires_at"
+            )
+            if due_at and now >= parse_db_timestamp(due_at):
+                self._expire_visit_candidate(row, now=now)
+        return self.list_visits(platform_user_id, statuses=statuses)
 
     def accept(
         self, platform_user_id: str, *, visit_id: str, now: datetime
@@ -356,6 +395,219 @@ class CompanionWorldVisitService:
                 conn=conn,
             )
         return visit
+
+    def list_feed(
+        self,
+        platform_user_id: str,
+        *,
+        visit_id: str,
+        now: datetime,
+        cursor_published_at: Optional[str],
+        cursor_post_id: Optional[str],
+        limit: int,
+    ) -> Sequence[Dict[str, Any]]:
+        """用 server-resolved active visit 读取 published Feed，绝不接受 world id。"""
+        preview = get_universe_visit(visit_id=visit_id)
+        if preview is None or preview["visitor_platform_user_id"] != platform_user_id:
+            raise VisitError("visit_not_found")
+        expired = False
+        blocked = False
+        rows: Sequence[Dict[str, Any]] = ()
+        with connect() as conn:
+            _write_begin(conn)
+            lock_platform_user_for_visit(platform_user_id=platform_user_id, conn=conn)
+            lock_universe(universe_id=preview["universe_id"], conn=conn)
+            locked = lock_universe_visit(visit_id=visit_id, conn=conn)
+            if locked is None or locked["visitor_platform_user_id"] != platform_user_id:
+                raise VisitError("visit_not_found")
+            if locked["status"] != "active":
+                raise VisitError("visit_not_active")
+            if now >= parse_db_timestamp(locked["expires_at"]):
+                mark_universe_visit_terminal(
+                    visit_id=visit_id,
+                    expected_status="active",
+                    target_status="expired",
+                    now=_db_time(now),
+                    terminal_reason="active_expired",
+                    conn=conn,
+                )
+                expired = True
+            elif has_platform_user_block(
+                first_platform_user_id=locked["owner_platform_user_id"],
+                second_platform_user_id=locked["visitor_platform_user_id"],
+                conn=conn,
+            ):
+                mark_universe_visit_terminal(
+                    visit_id=visit_id,
+                    expected_status="active",
+                    target_status="blocked",
+                    now=_db_time(now),
+                    terminal_reason="contact_blocked",
+                    conn=conn,
+                )
+                blocked = True
+            else:
+                try:
+                    rows = tuple(
+                        list_published_feed_posts_for_owner(
+                            owner_platform_user_id=locked[
+                                "owner_platform_user_id"
+                            ],
+                            cursor_published_at=cursor_published_at,
+                            cursor_post_id=cursor_post_id,
+                            limit=limit,
+                            conn=conn,
+                        )
+                    )
+                except ValueError as err:
+                    if str(err) == "invalid_cursor":
+                        raise VisitError("invalid_cursor") from err
+                    raise VisitError("visit_not_active") from err
+        if expired:
+            raise VisitError("visit_not_active")
+        if blocked:
+            raise VisitError("visit_contact_blocked")
+        return rows
+
+    def block(
+        self, platform_user_id: str, *, visit_id: str, now: datetime
+    ) -> Dict[str, Any]:
+        """当前 participant 拉黑对方，并终结双方任一方向全部 open visits。"""
+        preview = get_universe_visit(visit_id=visit_id)
+        if preview is None or platform_user_id not in {
+            preview["owner_platform_user_id"],
+            preview["visitor_platform_user_id"],
+        }:
+            raise VisitError("visit_not_found")
+        counterpart = (
+            preview["visitor_platform_user_id"]
+            if preview["owner_platform_user_id"] == platform_user_id
+            else preview["owner_platform_user_id"]
+        )
+        terminated = 0
+        with connect() as conn:
+            _write_begin(conn)
+            for user_id in sorted({platform_user_id, counterpart}):
+                lock_platform_user_for_visit(platform_user_id=user_id, conn=conn)
+            open_visits = list_open_universe_visits_between(
+                first_platform_user_id=platform_user_id,
+                second_platform_user_id=counterpart,
+                conn=conn,
+            )
+            for universe_id in sorted({row["universe_id"] for row in open_visits}):
+                lock_universe(universe_id=universe_id, conn=conn)
+            insert_platform_user_block(
+                blocker_platform_user_id=platform_user_id,
+                blocked_platform_user_id=counterpart,
+                created_at=_db_time(now),
+                conn=conn,
+            )
+            for row in open_visits:
+                locked = lock_universe_visit(visit_id=row["id"], conn=conn)
+                if locked is None or locked["status"] not in {"pending", "active"}:
+                    continue
+                mark_universe_visit_terminal(
+                    visit_id=locked["id"],
+                    expected_status=locked["status"],
+                    target_status="blocked",
+                    now=_db_time(now),
+                    terminal_reason="contact_blocked",
+                    conn=conn,
+                )
+                terminated += 1
+        return {"blocked": True, "terminated_visits": terminated}
+
+    def _expire_invite_candidate(
+        self, candidate: Dict[str, Any], *, now: datetime
+    ) -> bool:
+        """按 owner→world 锁序重查并终结一个 due invite。"""
+        changed = False
+        with connect() as conn:
+            _write_begin(conn)
+            lock_platform_user_for_visit(
+                platform_user_id=candidate["owner_platform_user_id"], conn=conn
+            )
+            lock_universe(universe_id=candidate["universe_id"], conn=conn)
+            locked = get_universe_invite_by_code_hash(
+                code_hash=candidate["code_hash"], conn=conn, for_update=True
+            )
+            if (
+                locked is not None
+                and locked["status"] == "active"
+                and now >= parse_db_timestamp(locked["expires_at"])
+            ):
+                mark_universe_invite_terminal(
+                    invite_id=locked["id"],
+                    owner_platform_user_id=locked["owner_platform_user_id"],
+                    target_status="expired",
+                    now=_db_time(now),
+                    conn=conn,
+                )
+                changed = True
+        return changed
+
+    def _expire_visit_candidate(
+        self, candidate: Dict[str, Any], *, now: datetime
+    ) -> bool:
+        """按 visitor→world→visit 锁序重查并终结一个 due visit。"""
+        changed = False
+        with connect() as conn:
+            _write_begin(conn)
+            lock_platform_user_for_visit(
+                platform_user_id=candidate["visitor_platform_user_id"], conn=conn
+            )
+            lock_universe(universe_id=candidate["universe_id"], conn=conn)
+            locked = lock_universe_visit(visit_id=candidate["id"], conn=conn)
+            if locked is None or locked["status"] not in {"pending", "active"}:
+                return False
+            due_raw = locked[
+                "pending_expires_at" if locked["status"] == "pending" else "expires_at"
+            ]
+            if due_raw and now >= parse_db_timestamp(due_raw):
+                mark_universe_visit_terminal(
+                    visit_id=locked["id"],
+                    expected_status=locked["status"],
+                    target_status="expired",
+                    now=_db_time(now),
+                    terminal_reason=(
+                        "pending_expired"
+                        if locked["status"] == "pending"
+                        else "active_expired"
+                    ),
+                    conn=conn,
+                )
+                changed = True
+        return changed
+
+    def maintain_expiry_batch(
+        self, *, now: datetime, batch_size: int
+    ) -> Dict[str, Any]:
+        """central scheduler 有界清理 invite/pending/active expiry。"""
+        clean_limit = max(1, min(int(batch_size), 500))
+        invite_candidates = list_due_universe_invites(
+            now=_db_time(now), limit=clean_limit
+        )
+        remaining = max(0, clean_limit - len(invite_candidates))
+        visit_candidates = (
+            list_due_universe_visits(now=_db_time(now), limit=remaining)
+            if remaining
+            else []
+        )
+        expired_invites = sum(
+            int(self._expire_invite_candidate(item, now=now))
+            for item in invite_candidates
+        )
+        expired_visits = sum(
+            int(self._expire_visit_candidate(item, now=now))
+            for item in visit_candidates
+        )
+        return {
+            "metrics": {
+                "scanned": len(invite_candidates) + len(visit_candidates),
+                "expired_invites": expired_invites,
+                "expired_visits": expired_visits,
+            }
+        }
 
 
 __all__ = ["CompanionWorldVisitService", "VisitError"]

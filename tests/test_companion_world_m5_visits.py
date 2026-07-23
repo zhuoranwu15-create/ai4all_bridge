@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import asyncio
 from datetime import datetime, timedelta
 
 import pytest
@@ -12,6 +13,7 @@ from app.platform.companion_world_visits import (
     CompanionWorldVisitService,
     VisitError,
 )
+from app.world_lifecycle.scheduler import WorldLifecycleScheduler
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 
@@ -60,6 +62,39 @@ def _owner_invite(phone: str) -> tuple[str, dict]:
     owner = _user(phone)
     _confirm_world(owner)
     return owner, CompanionWorldVisitService().create_invite(owner, now=NOW)
+
+
+def _active_visit(owner_phone: str, visitor_phone: str) -> tuple[str, str, dict]:
+    owner, invitation = _owner_invite(owner_phone)
+    visitor = _user(visitor_phone)
+    visit = CompanionWorldVisitService().redeem(
+        visitor, code=invitation["code"], now=NOW
+    )
+    CompanionWorldVisitService().accept(owner, visit_id=visit["id"], now=NOW)
+    return owner, visitor, db.get_universe_visit(visit_id=visit["id"])
+
+
+def _publish(owner_id: str, text: str = "只公开这一条") -> dict:
+    world = db.get_universe(owner_platform_user_id=owner_id)
+    template = db.create_character_template(
+        source_type="operations", name="feed-resident"
+    )
+    db.create_resident(
+        universe_id=world["id"],
+        character_template_id=template["id"],
+        template_version=template["persona_version"],
+        origin="preset",
+        status="active",
+        runtime_account_id=None,
+    )
+    post, _created = db.publish_user_feed_post_with_outbox(
+        owner_platform_user_id=owner_id,
+        client_request_id=f"feed-{owner_id[-8:]}",
+        text=text,
+        request_fingerprint=f"fp-{owner_id}",
+        published_at="2026-07-23 11:00:00",
+    )
+    return post
 
 
 def test_visit_flag_off_is_hidden(client):
@@ -235,6 +270,142 @@ def test_exact_pending_expiry_is_terminal_and_releases_slot(fresh_db):
     assert occupied == 0
 
 
+def test_visitor_feed_is_active_visit_only_and_published_projection(
+    client, fresh_db, monkeypatch
+):
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965104601")
+    visitor_headers, visitor_login = _login(client, "19965104602")
+    outsider_headers, _outsider_login = _login(client, "19965104603")
+    owner_id = owner_login["platform_user"]["id"]
+    _confirm_world(owner_id)
+    post = _publish(owner_id)
+    created = client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+        "invite"
+    ]
+    pending = client.post(
+        "/v1/visits/redeem",
+        headers=visitor_headers,
+        json={"code": created["code"]},
+    ).json()["data"]["visit"]
+
+    pending_feed = client.get(
+        f"/v1/visits/{pending['visit_id']}/feed", headers=visitor_headers
+    )
+    assert pending_feed.status_code == 409
+    assert pending_feed.json()["code"] == "visit_not_active"
+    assert client.post(
+        f"/v1/visits/{pending['visit_id']}/accept", headers=owner_headers
+    ).status_code == 200
+
+    feed = client.get(
+        f"/v1/visits/{pending['visit_id']}/feed", headers=visitor_headers
+    )
+    assert feed.status_code == 200, feed.text
+    assert [item["post_id"] for item in feed.json()["data"]["items"]] == [post["id"]]
+    item = feed.json()["data"]["items"][0]
+    assert item["content"]["text"] == "只公开这一条"
+    assert not {
+        "universe_id",
+        "owner_platform_user_id",
+        "runtime_account_id",
+        "request_fingerprint",
+    }.intersection(item)
+    assert client.get(
+        f"/v1/visits/{pending['visit_id']}/feed", headers=owner_headers
+    ).status_code == 404
+    assert client.get(
+        f"/v1/visits/{pending['visit_id']}/feed", headers=outsider_headers
+    ).status_code == 404
+
+
+def test_exact_active_expiry_revokes_feed_and_makes_chat_read_only(fresh_db):
+    owner, visitor, visit = _active_visit("19965104701", "19965104702")
+    _publish(owner)
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE universe_visits SET expires_at = ? WHERE id = ?",
+            ("2026-07-23 12:00:00", visit["id"]),
+        )
+    with pytest.raises(VisitError) as exc:
+        CompanionWorldVisitService().list_feed(
+            visitor,
+            visit_id=visit["id"],
+            now=NOW,
+            cursor_published_at=None,
+            cursor_post_id=None,
+            limit=20,
+        )
+    assert exc.value.code == "visit_not_active"
+    assert db.get_universe_visit(visit_id=visit["id"])["status"] == "expired"
+    conversation = db.get_human_conversation_for_visit(visit_id=visit["id"])
+    assert conversation["status"] == "read_only"
+
+
+def test_block_terminates_both_directions_and_prevents_future_redeem(fresh_db):
+    first, second, forward = _active_visit("19965104801", "19965104802")
+    _confirm_world(second)
+    reverse_invitation = CompanionWorldVisitService().create_invite(second, now=NOW)
+    reverse = CompanionWorldVisitService().redeem(
+        first, code=reverse_invitation["code"], now=NOW
+    )
+
+    result = CompanionWorldVisitService().block(
+        first, visit_id=forward["id"], now=NOW
+    )
+    assert result == {"blocked": True, "terminated_visits": 2}
+    assert db.get_universe_visit(visit_id=forward["id"])["status"] == "blocked"
+    assert db.get_universe_visit(visit_id=reverse["id"])["status"] == "blocked"
+    assert db.get_human_conversation_for_visit(
+        visit_id=forward["id"]
+    )["status"] == "read_only"
+
+    new_invitation = CompanionWorldVisitService().create_invite(second, now=NOW)
+    with pytest.raises(VisitError) as exc:
+        CompanionWorldVisitService().redeem(
+            first, code=new_invitation["code"], now=NOW
+        )
+    assert exc.value.code == "visit_contact_blocked"
+
+
+def test_visit_expiry_scheduler_is_bounded_and_reuses_existing_process(fresh_db):
+    owner, invitation = _owner_invite("19965104901")
+    visitor = _user("19965104902")
+    visit = CompanionWorldVisitService().redeem(
+        visitor, code=invitation["code"], now=NOW
+    )
+    CompanionWorldVisitService().accept(owner, visit_id=visit["id"], now=NOW)
+    _other_owner, other_invitation = _owner_invite("19965104903")
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE universe_visits SET expires_at = ? WHERE id = ?",
+            ("2026-07-23 11:59:59", visit["id"]),
+        )
+        conn.execute(
+            "UPDATE universe_invites SET expires_at = ? WHERE id = ?",
+            ("2026-07-23 11:59:59", other_invitation["invite"]["id"]),
+        )
+    scheduler = WorldLifecycleScheduler(
+        enabled=False,
+        mailbox_enabled=False,
+        visits_enabled=True,
+        interval_seconds=300,
+        batch_size=10,
+    )
+    result = asyncio.run(scheduler.run_once(now=NOW))
+    assert result["status"] == "ok"
+    assert result["visit_metrics"] == {
+        "scanned": 2,
+        "expired_invites": 1,
+        "expired_visits": 1,
+    }
+    assert db.get_universe_visit(visit_id=visit["id"])["status"] == "expired"
+    assert db.get_universe_invite_for_owner(
+        invite_id=other_invitation["invite"]["id"],
+        owner_platform_user_id=other_invitation["invite"]["owner_platform_user_id"],
+    )["status"] == "expired"
+
+
 def test_pg_same_code_double_redeem_has_one_winner(fresh_db):
     if not is_postgres():
         pytest.skip("PG 并发权威门禁")
@@ -344,3 +515,80 @@ def test_pg_accept_vs_cancel_has_one_terminal_decision(fresh_db):
     assert results.count("visit_not_pending") == 1
     stored = db.get_universe_visit(visit_id=visit["id"])
     assert stored["status"] in {"active", "cancelled"}
+
+
+def test_pg_revoke_vs_feed_serializes_acl_decision(fresh_db):
+    if not is_postgres():
+        pytest.skip("PG 并发权威门禁")
+    owner, visitor, visit = _active_visit("19965109001", "19965109002")
+    _publish(owner)
+
+    def read_feed() -> str:
+        try:
+            CompanionWorldVisitService().list_feed(
+                visitor,
+                visit_id=visit["id"],
+                now=NOW,
+                cursor_published_at=None,
+                cursor_post_id=None,
+                limit=20,
+            )
+            return "read"
+        except VisitError as err:
+            return err.code
+
+    def revoke() -> str:
+        CompanionWorldVisitService().terminate(
+            owner, visit_id=visit["id"], action="revoke", now=NOW
+        )
+        return "revoked"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        results = [pool.submit(read_feed), pool.submit(revoke)]
+        outcomes = [future.result() for future in results]
+    assert "revoked" in outcomes
+    assert outcomes[0] in {"read", "visit_not_active"}
+    assert db.get_universe_visit(visit_id=visit["id"])["status"] == "revoked"
+    with pytest.raises(VisitError) as exc:
+        CompanionWorldVisitService().list_feed(
+            visitor,
+            visit_id=visit["id"],
+            now=NOW,
+            cursor_published_at=None,
+            cursor_post_id=None,
+            limit=20,
+        )
+    assert exc.value.code == "visit_not_active"
+
+
+def test_pg_block_vs_reverse_redeem_finishes_fail_closed(fresh_db):
+    if not is_postgres():
+        pytest.skip("PG 并发权威门禁")
+    first, second, forward = _active_visit("19965110001", "19965110002")
+    _confirm_world(second)
+    reverse_invitation = CompanionWorldVisitService().create_invite(second, now=NOW)
+
+    def block() -> str:
+        CompanionWorldVisitService().block(first, visit_id=forward["id"], now=NOW)
+        return "blocked"
+
+    def redeem() -> str:
+        try:
+            CompanionWorldVisitService().redeem(
+                first, code=reverse_invitation["code"], now=NOW
+            )
+            return "redeemed"
+        except VisitError as err:
+            return err.code
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = [pool.submit(block), pool.submit(redeem)]
+        results = [future.result() for future in outcomes]
+    assert "blocked" in results
+    assert results[1] in {"redeemed", "visit_contact_blocked"}
+    assert db.has_platform_user_block(
+        first_platform_user_id=first, second_platform_user_id=second
+    ) is True
+    assert db.list_open_universe_visits_between(
+        first_platform_user_id=first, second_platform_user_id=second
+    ) == []

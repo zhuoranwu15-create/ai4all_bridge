@@ -1,10 +1,12 @@
 """Companion World M5 invite/pending/active visit owner/visitor API。"""
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, Request, Response
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
@@ -12,6 +14,7 @@ from app.platform import CompanionWorldVisitService, VisitError
 from app.routers.companion_world import (
     CompanionWorldApiError,
     _envelope,
+    _decode_feed_cursor,
     _no_store,
     _require_world_session,
 )
@@ -109,6 +112,32 @@ def _visit_data(row: dict, platform_user_id: str) -> dict:
     }
 
 
+def _feed_data(row: dict) -> dict:
+    """复用 M3 Feed 公开形状，不返回 owner/world/runtime/fingerprint。"""
+    return {
+        "post_id": row["id"],
+        "author": {
+            "type": row["author_type"],
+            "resident_id": row.get("author_resident_id"),
+            "name": row.get("author_name"),
+            "avatar_ref": row.get("author_avatar_ref"),
+        },
+        "content": {"type": "text", "text": row.get("text")},
+        "post_type": row.get("post_type") or "normal",
+        "source": row["source_type"],
+        "published_at": _public_time(row.get("published_at")),
+    }
+
+
+def _encode_feed_cursor(row: dict) -> str:
+    payload = json.dumps(
+        {"v": 1, "published_at": row["published_at"], "id": row["id"]},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
 def _call(action):
     try:
         return action()
@@ -140,7 +169,9 @@ def list_world_invites(
     response: Response,
     platform_user: dict = Depends(_require_visit_session),
 ) -> dict:
-    rows = _service().list_invites(str(platform_user["id"]))
+    rows = _service().list_invites_current(
+        str(platform_user["id"]), now=_now()
+    )
     _no_store(response)
     return _envelope(
         request, code="ok", data={"items": [_invite_data(row) for row in rows]}
@@ -189,7 +220,9 @@ def list_world_visits(
     response: Response,
     platform_user: dict = Depends(_require_visit_session),
 ) -> dict:
-    rows = _service().list_visits(str(platform_user["id"]))
+    rows = _service().list_visits_current(
+        str(platform_user["id"]), now=_now()
+    )
     _no_store(response)
     return _envelope(
         request,
@@ -328,6 +361,57 @@ def revoke_world_visit(
         response=response,
         platform_user=platform_user,
     )
+
+
+@router.get("/visits/{visit_id}/feed")
+def list_visited_world_feed(
+    visit_id: str,
+    request: Request,
+    response: Response,
+    cursor: Optional[str] = Query(default=None, max_length=1024),
+    limit: int = Query(default=20, ge=1, le=50),
+    platform_user: dict = Depends(_require_visit_session),
+) -> dict:
+    cursor_published_at, cursor_post_id = _decode_feed_cursor(cursor)
+    rows = _call(
+        lambda: _service().list_feed(
+            str(platform_user["id"]),
+            visit_id=visit_id,
+            now=_now(),
+            cursor_published_at=cursor_published_at,
+            cursor_post_id=cursor_post_id,
+            limit=limit + 1,
+        )
+    )
+    page = rows[:limit]
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "items": [_feed_data(row) for row in page],
+            "next_cursor": (
+                _encode_feed_cursor(page[-1]) if len(rows) > limit and page else None
+            ),
+        },
+    )
+
+
+@router.post("/visits/{visit_id}/block")
+def block_visit_counterpart(
+    visit_id: str,
+    request: Request,
+    response: Response,
+    payload: Optional[EmptyPayload] = None,
+    platform_user: dict = Depends(_require_visit_session),
+) -> dict:
+    result = _call(
+        lambda: _service().block(
+            str(platform_user["id"]), visit_id=visit_id, now=_now()
+        )
+    )
+    _no_store(response)
+    return _envelope(request, code="ok", data=result)
 
 
 __all__ = ["router"]

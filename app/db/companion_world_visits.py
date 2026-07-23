@@ -20,6 +20,9 @@ __all__ = [
     "get_universe_visit_for_participant",
     "insert_pending_universe_visit",
     "insert_universe_invite",
+    "list_due_universe_invites",
+    "list_due_universe_visits",
+    "list_open_universe_visits_between",
     "lock_platform_user_for_visit",
     "lock_universe_visit",
     "list_universe_invites_for_owner",
@@ -378,6 +381,58 @@ def list_universe_visits_for_participant(
             + " AND ".join(where)
             + " ORDER BY v.created_at DESC, v.id DESC LIMIT ?",
             tuple(params),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_due_universe_invites(
+    *, now: str, limit: int = 100, conn: Optional[Connection] = None
+) -> List[Dict[str, Any]]:
+    """列出到期 active invites；调用方按 owner→world 锁序逐条终结。"""
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            "SELECT * FROM universe_invites WHERE status = 'active' AND expires_at <= ? "
+            "ORDER BY expires_at ASC, id ASC LIMIT ?",
+            (now, max(1, min(int(limit), 500))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_due_universe_visits(
+    *, now: str, limit: int = 100, conn: Optional[Connection] = None
+) -> List[Dict[str, Any]]:
+    """列出到期 pending/active visits；调用方在锁内重查精确期限。"""
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            "SELECT * FROM universe_visits WHERE "
+            "(status = 'pending' AND pending_expires_at <= ?) OR "
+            "(status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?) "
+            "ORDER BY CASE WHEN status = 'pending' THEN pending_expires_at ELSE expires_at END ASC, "
+            "id ASC LIMIT ?",
+            (now, now, max(1, min(int(limit), 500))),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_open_universe_visits_between(
+    *,
+    first_platform_user_id: str,
+    second_platform_user_id: str,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """列出两真人任一方向的 pending/active visits，供 block 强事务使用。"""
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            "SELECT * FROM universe_visits WHERE status IN ('pending', 'active') AND "
+            "((owner_platform_user_id = ? AND visitor_platform_user_id = ?) OR "
+            "(owner_platform_user_id = ? AND visitor_platform_user_id = ?)) "
+            "ORDER BY universe_id ASC, id ASC",
+            (
+                first_platform_user_id,
+                second_platform_user_id,
+                second_platform_user_id,
+                first_platform_user_id,
+            ),
         ).fetchall()
     return [dict(row) for row in rows]
 

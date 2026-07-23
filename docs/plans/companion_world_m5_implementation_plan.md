@@ -1,6 +1,6 @@
 # Companion World M5 实施计划
 
-> 状态：**M5-0…M5-2 已完成（2026-07-23）；M5-3 待开始。**
+> 状态：**M5-0…M5-3 已完成（2026-07-23）；M5-4 待开始。**
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
@@ -72,6 +72,8 @@
 
 ### M5-3：Visitor Feed、expiry 与 block
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - visit platform facade/router。
@@ -81,6 +83,10 @@
 交付：`visit_id` capability、published-only Feed、request-time 精确 expiry、central 兜底、终态释放 slot、双向 contact block。
 
 出口：到期/撤销/离开/block 与 Feed 并发 fail-closed；没有任意 world id、L2/L3/runtime 读取。
+
+实现结果：visitor Feed 只接受 session+B 自己的 active visit id 并复用 M3 公开投影；list/Feed request-time expiry 与 existing central scheduler 兜底均已接通。任一方 block 以双方 user/涉及 worlds 排序锁终结所有双向 open visits并把 chat 只读，未来兑换拒绝。
+
+验证：M5 SQLite `18 passed / 4 skipped`、PostgreSQL `26 passed`；Companion World SQLite 联合 `116 passed / 22 skipped`；unit `570 passed / 971 deselected`；compileall/diff check 通过。
 
 ### M5-4：独立 Human Chat 与举报
 
