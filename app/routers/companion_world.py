@@ -65,6 +65,19 @@ _ERROR_STATUS = {
     "letter_not_open": 409,
     "letter_expired": 409,
     "letter_template_unavailable": 409,
+    "invalid_invite_code": 400,
+    "self_invite_not_allowed": 403,
+    "visit_contact_blocked": 403,
+    "invite_not_found": 404,
+    "visit_not_found": 404,
+    "invite_expired": 409,
+    "invite_unavailable": 409,
+    "visitor_visit_limit_reached": 409,
+    "world_visit_limit_reached": 409,
+    "visit_already_open": 409,
+    "visit_pending_expired": 409,
+    "visit_not_pending": 409,
+    "visit_not_active": 409,
     "invalid_request": 422,
 }
 
@@ -647,6 +660,8 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
             "/v1/conversations",
             "/v1/ai-conversations/",
             "/v1/notifications",
+            "/v1/world/invites",
+            "/v1/visits",
         )
     )
     if companion_path:

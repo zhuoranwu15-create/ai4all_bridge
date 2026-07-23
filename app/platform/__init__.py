@@ -36,6 +36,10 @@ from app.platform.companion_world_mailbox import (  # noqa: F401
     list_mailbox_catalog,
     retire_mailbox_catalog_entry,
 )
+from app.platform.companion_world_visits import (  # noqa: F401
+    CompanionWorldVisitService,
+    VisitError,
+)
 from app.platform.app_inbox import (  # noqa: F401
     AppInboxAdapter,
     AppInboxIntent,
@@ -51,8 +55,10 @@ __all__ = [
     "AppInboxIntent",
     "CompanionWorldLifecycleService",
     "CompanionWorldMailboxService",
+    "CompanionWorldVisitService",
     "LifecycleCommitError",
     "MailboxError",
+    "VisitError",
     "HumanAppInboxClaim",
     "HumanAppInboxIntent",
     "HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON",

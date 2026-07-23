@@ -10,6 +10,7 @@ from app.db._core import _new_id, _tx, connect
 __all__ = [
     "create_human_conversation_for_visit",
     "get_human_conversation_for_participant",
+    "get_human_conversation_for_visit",
     "has_platform_user_block",
     "insert_platform_user_block",
     "list_human_conversations_for_participant",
@@ -101,6 +102,17 @@ def get_human_conversation_for_participant(
             "SELECT * FROM human_conversations WHERE id = ? "
             "AND (owner_platform_user_id = ? OR visitor_platform_user_id = ?)",
             (conversation_id, platform_user_id, platform_user_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_human_conversation_for_visit(
+    *, visit_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """内部按 visit 读取会话；公开 API 必须使用 participant-scoped 查询。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            "SELECT * FROM human_conversations WHERE visit_id = ?", (visit_id,)
         ).fetchone()
     return dict(row) if row else None
 

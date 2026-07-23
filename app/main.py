@@ -330,6 +330,8 @@ if settings.has_central_role:
     _companion_world_router.install_exception_handlers(app)
     from app.routers import companion_world_mailbox as _companion_world_mailbox_router  # noqa: E402
     app.include_router(_companion_world_mailbox_router.router)
+    from app.routers import companion_world_visits as _companion_world_visits_router  # noqa: E402
+    app.include_router(_companion_world_visits_router.router)
     from app.routers import app_notifications as _app_notifications_router  # noqa: E402
     app.include_router(_app_notifications_router.router)
     from app.routers import debug as _debug_router  # noqa: E402

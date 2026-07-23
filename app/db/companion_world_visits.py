@@ -16,11 +16,17 @@ __all__ = [
     "ensure_universe_visit_slots",
     "get_universe_invite_by_code_hash",
     "get_universe_invite_for_owner",
+    "get_universe_visit",
     "get_universe_visit_for_participant",
     "insert_pending_universe_visit",
     "insert_universe_invite",
+    "lock_platform_user_for_visit",
+    "lock_universe_visit",
     "list_universe_invites_for_owner",
     "list_universe_visits_for_participant",
+    "mark_universe_invite_terminal",
+    "mark_universe_visit_active",
+    "mark_universe_visit_terminal",
 ]
 
 _INVITE_STATUSES = {"active", "redeemed", "revoked", "expired"}
@@ -332,6 +338,17 @@ def get_universe_visit_for_participant(
     return dict(row) if row else None
 
 
+def get_universe_visit(
+    *, visit_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """内部按 id 读取 visit；公开调用必须改用 participant-scoped 版本。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            "SELECT * FROM universe_visits WHERE id = ?", (visit_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def list_universe_visits_for_participant(
     *,
     platform_user_id: str,
@@ -342,19 +359,155 @@ def list_universe_visits_for_participant(
     """列出当前真人作为 owner 或 visitor 参与的 visits。"""
     safe_limit = max(1, min(int(limit), 100))
     params: list[Any] = [platform_user_id, platform_user_id]
-    where = ["(owner_platform_user_id = ? OR visitor_platform_user_id = ?)"]
+    where = ["(v.owner_platform_user_id = ? OR v.visitor_platform_user_id = ?)"]
     if statuses:
         cleaned = [status for status in statuses if status in _VISIT_STATUSES]
         if not cleaned:
             return []
-        where.append("status IN (" + ",".join("?" for _ in cleaned) + ")")
+        where.append("v.status IN (" + ",".join("?" for _ in cleaned) + ")")
         params.extend(cleaned)
     params.append(safe_limit)
     with _tx(conn) as tx:
         rows = tx.execute(
-            "SELECT * FROM universe_visits WHERE "
+            "SELECT v.*, owner.display_name AS owner_display_name, "
+            "visitor.display_name AS visitor_display_name "
+            "FROM universe_visits v "
+            "JOIN platform_users owner ON owner.id = v.owner_platform_user_id "
+            "JOIN platform_users visitor ON visitor.id = v.visitor_platform_user_id "
+            "WHERE "
             + " AND ".join(where)
-            + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            + " ORDER BY v.created_at DESC, v.id DESC LIMIT ?",
             tuple(params),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def lock_platform_user_for_visit(
+    *, platform_user_id: str, conn: Connection
+) -> Dict[str, Any]:
+    """按 M5 总锁序锁一个真人主体；不存在时拒绝继续。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    row = conn.execute(
+        "SELECT id, display_name FROM platform_users WHERE id = ?" + suffix,
+        (platform_user_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("platform user not found")
+    return dict(row)
+
+
+def lock_universe_visit(
+    *, visit_id: str, conn: Connection
+) -> Optional[Dict[str, Any]]:
+    """在调用方事务内锁 visit 行。"""
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    row = conn.execute(
+        "SELECT * FROM universe_visits WHERE id = ?" + suffix, (visit_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_universe_invite_terminal(
+    *,
+    invite_id: str,
+    owner_platform_user_id: str,
+    target_status: str,
+    now: str,
+    conn: Connection,
+) -> Optional[Dict[str, Any]]:
+    """把 active invite 置 revoked/expired 并释放其 world slot。"""
+    if target_status not in {"revoked", "expired"}:
+        raise ValueError("invalid invite terminal status")
+    suffix = " FOR UPDATE" if is_postgres() else ""
+    row = conn.execute(
+        "SELECT * FROM universe_invites WHERE id = ? AND owner_platform_user_id = ?"
+        + suffix,
+        (invite_id, owner_platform_user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    if row["status"] == target_status:
+        return dict(row)
+    if row["status"] != "active":
+        raise ValueError("invite is not active")
+    if target_status == "revoked":
+        conn.execute(
+            "UPDATE universe_invites SET status = 'revoked', revoked_at = ?, "
+            "updated_at = ? WHERE id = ? AND status = 'active'",
+            (now, now, invite_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE universe_invites SET status = 'expired', updated_at = ? "
+            "WHERE id = ? AND status = 'active'",
+            (now, invite_id),
+        )
+    conn.execute(
+        "UPDATE universe_visit_slots SET occupant_type = NULL, occupant_id = NULL, "
+        "occupied_at = NULL WHERE universe_id = ? AND occupant_type = 'invite' "
+        "AND occupant_id = ?",
+        (row["universe_id"], invite_id),
+    )
+    updated = conn.execute(
+        "SELECT * FROM universe_invites WHERE id = ?", (invite_id,)
+    ).fetchone()
+    return dict(updated) if updated else None
+
+
+def mark_universe_visit_active(
+    *, visit_id: str, accepted_at: str, expires_at: str, conn: Connection
+) -> Dict[str, Any]:
+    """把已锁定 pending visit 单向转 active；slot occupant 保持不变。"""
+    updated = conn.execute(
+        "UPDATE universe_visits SET status = 'active', accepted_at = ?, expires_at = ?, "
+        "updated_at = ? WHERE id = ? AND status = 'pending'",
+        (accepted_at, expires_at, accepted_at, visit_id),
+    )
+    if updated.rowcount != 1:
+        raise ValueError("visit is not pending")
+    row = conn.execute(
+        "SELECT * FROM universe_visits WHERE id = ?", (visit_id,)
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("visit disappeared after activation")
+    return dict(row)
+
+
+def mark_universe_visit_terminal(
+    *,
+    visit_id: str,
+    expected_status: str,
+    target_status: str,
+    now: str,
+    terminal_reason: str,
+    conn: Connection,
+) -> Dict[str, Any]:
+    """终结 pending/active visit、释放 slot，并把既有真人会话单向只读。"""
+    if expected_status not in {"pending", "active"}:
+        raise ValueError("invalid expected visit status")
+    if target_status not in _VISIT_STATUSES - {"pending", "active"}:
+        raise ValueError("invalid visit terminal status")
+    updated = conn.execute(
+        "UPDATE universe_visits SET status = ?, terminal_at = ?, terminal_reason = ?, "
+        "updated_at = ? WHERE id = ? AND status = ?",
+        (target_status, now, terminal_reason, now, visit_id, expected_status),
+    )
+    if updated.rowcount != 1:
+        raise ValueError(f"visit is not {expected_status}")
+    row = conn.execute(
+        "SELECT * FROM universe_visits WHERE id = ?", (visit_id,)
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("visit disappeared after terminal transition")
+    conn.execute(
+        "UPDATE universe_visit_slots SET occupant_type = NULL, occupant_id = NULL, "
+        "occupied_at = NULL WHERE universe_id = ? AND occupant_type = 'visit' "
+        "AND occupant_id = ?",
+        (row["universe_id"], visit_id),
+    )
+    conn.execute(
+        "UPDATE human_conversations SET status = 'read_only', updated_at = ? "
+        "WHERE visit_id = ? AND status = 'active'",
+        (now, visit_id),
+    )
+    return dict(row)

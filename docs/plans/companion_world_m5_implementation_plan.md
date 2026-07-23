@@ -1,6 +1,6 @@
 # Companion World M5 实施计划
 
-> 状态：**M5-0/M5-1 已完成（2026-07-23）；M5-2 待开始。**
+> 状态：**M5-0…M5-2 已完成（2026-07-23）；M5-3 待开始。**
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
@@ -54,6 +54,8 @@
 
 ### M5-2：Invite、pending approval 与 active visit
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - `app/platform/companion_world_visits.py`。
@@ -63,6 +65,10 @@
 交付：create/list/revoke、redeem、owner accept/reject、visitor cancel/leave、owner revoke；A 三 slot 与 B 三 visit 双侧容量；accept 同事务创建 human conversation。
 
 出口：同码双花、B 第 3/4、A 第 3/4、accept 竞态均由 PG 门禁守住；pending 无任何 Feed/chat ACL。
+
+实现结果：一次性 code 只存 SHA-256，redeem 只创建 pending；accept 同事务写 active/30 天 expiry/human conversation，所有终态释放 slot 并将既有会话只读。公开 DTO 不返回 hash、内部 user/world/runtime id，visit flag 仍默认关闭。
+
+验证：M5 SQLite `16 passed / 4 skipped`、PostgreSQL `20 passed`；Companion World SQLite 联合 `112 passed / 20 skipped`；unit `570 passed / 965 deselected`；compileall/diff check 通过。
 
 ### M5-3：Visitor Feed、expiry 与 block
 

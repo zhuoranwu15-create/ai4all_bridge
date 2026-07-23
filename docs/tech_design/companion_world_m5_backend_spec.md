@@ -1,6 +1,6 @@
 # Companion World M5 Visit + Human Chat 后端实现规范
 
-> 状态：**M5-0 已冻结；M5-1 已完成（2026-07-23），M5-2 待开始。**
+> 状态：**M5-0…M5-2 已完成（2026-07-23）；M5-3 待开始。**
 >
 > 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；Draft PR #47 尚未合并，M5 PR 在其合并前不得转 Ready。
 >
@@ -399,3 +399,9 @@ git diff --check
 已交付 m0035 七表/索引、`visits.py`/`human_chat.py` 纯领域 DTO 与状态规则、两个 owner/visitor-scoped DB 原语模块，以及 `COMPANION_WORLD_VISITS_ENABLED` / `COMPANION_WORLD_HUMAN_CHAT_ENABLED` 两个 default-off flag。新模块仅由 `app.db` 重导出，没有注册路由、scheduler 或 Runtime 调用方。
 
 验证：M5/schema/边界 SQLite `23 passed / 1 skipped`、PostgreSQL `24 passed`；Companion World SQLite 联合 `106 passed / 16 skipped`；unit `570 passed / 955 deselected`；compileall 与 diff check 通过。
+
+## 12. M5-2 落地记录
+
+已交付 owner invite create/list/revoke、visitor redeem、owner accept/reject、visitor cancel/leave、owner revoke。code 使用 `secrets.token_urlsafe(32)` 且只持久化 SHA-256；redeem 只产生 pending，accept 在同事务写 active 30 天 expiry 与独立 human conversation。A 三 slot 与 B `pending+active<=3` 分别以 owner/world 和 visitor user 锁保护，终态释放 slot 并把既有会话只读。路由与稳定错误信封已接入，但 visit flag 保持 default-off。
+
+验证：M5 SQLite `16 passed / 4 skipped`、PostgreSQL `20 passed`；PG 覆盖同码双花、A/B 第 3/4 容量及 accept/cancel 竞态；Companion World SQLite 联合 `112 passed / 20 skipped`；unit `570 passed / 965 deselected`；compileall/diff check 通过。
