@@ -12,13 +12,14 @@ from app.platform.companion_world_lifecycle import (
     build_lifecycle_policy,
 )
 from app.platform.companion_world_mailbox import CompanionWorldMailboxService
+from app.platform.companion_world_visits import CompanionWorldVisitService
 from app.time_utils import BEIJING_TZ, beijing_naive_now
 
 logger = logging.getLogger("ai4all.world_lifecycle.scheduler")
 
 
 class WorldLifecycleScheduler:
-    """分别按 resident/world cursor 运行 lifecycle 与 mailbox，互不借 flag。"""
+    """运行 lifecycle/mailbox/visit expiry 三个独立、可关闭的有界步骤。"""
 
     def __init__(
         self,
@@ -29,9 +30,12 @@ class WorldLifecycleScheduler:
         service: Optional[CompanionWorldLifecycleService] = None,
         mailbox_enabled: bool = False,
         mailbox_service: Optional[CompanionWorldMailboxService] = None,
+        visits_enabled: bool = False,
+        visits_service: Optional[CompanionWorldVisitService] = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.mailbox_enabled = bool(mailbox_enabled)
+        self.visits_enabled = bool(visits_enabled)
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.batch_size = max(1, min(int(batch_size), 500))
         self.service = service or (
@@ -41,6 +45,9 @@ class WorldLifecycleScheduler:
         )
         self.mailbox_service = mailbox_service or (
             CompanionWorldMailboxService() if self.mailbox_enabled else None
+        )
+        self.visits_service = visits_service or (
+            CompanionWorldVisitService() if self.visits_enabled else None
         )
         self._after_resident_id: Optional[str] = None
         self._after_universe_id: Optional[str] = None
@@ -57,11 +64,12 @@ class WorldLifecycleScheduler:
         current = now or beijing_naive_now()
         if current.tzinfo is not None:
             current = current.astimezone(BEIJING_TZ).replace(tzinfo=None)
-        if not self.enabled and not self.mailbox_enabled:
+        if not self.enabled and not self.mailbox_enabled and not self.visits_enabled:
             result = {
                 "status": "disabled",
                 "metrics": None,
                 "mailbox_metrics": None,
+                "visit_metrics": None,
                 "next_after_resident_id": None,
                 "next_after_universe_id": None,
             }
@@ -89,10 +97,20 @@ class WorldLifecycleScheduler:
                 batch_size=self.batch_size,
             )
             self._after_universe_id = mailbox.get("next_after_universe_id")
+        visits = None
+        if self.visits_enabled:
+            if self.visits_service is None:
+                raise RuntimeError("visit expiry service is unavailable")
+            visits = await asyncio.to_thread(
+                self.visits_service.maintain_expiry_batch,
+                now=current,
+                batch_size=self.batch_size,
+            )
         result = {
             "status": "ok",
             "metrics": evaluation.get("metrics") if evaluation else None,
             "mailbox_metrics": mailbox.get("metrics") if mailbox else None,
+            "visit_metrics": visits.get("metrics") if visits else None,
             "results": evaluation.get("results") if evaluation else [],
             "mailbox_results": mailbox.get("results") if mailbox else [],
             "next_after_resident_id": self._after_resident_id,
@@ -157,6 +175,7 @@ class WorldLifecycleScheduler:
                 metadata={
                     "enabled": self.enabled,
                     "mailbox_enabled": self.mailbox_enabled,
+                    "visits_enabled": self.visits_enabled,
                     "interval_seconds": self.interval_seconds,
                     "batch_size": self.batch_size,
                     "last_run_metrics": (
@@ -164,6 +183,11 @@ class WorldLifecycleScheduler:
                     ),
                     "last_run_mailbox_metrics": (
                         self.last_run.get("mailbox_metrics")
+                        if self.last_run
+                        else None
+                    ),
+                    "last_run_visit_metrics": (
+                        self.last_run.get("visit_metrics")
                         if self.last_run
                         else None
                     ),

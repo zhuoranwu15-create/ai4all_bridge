@@ -367,6 +367,9 @@ class Settings(BaseSettings):
     companion_world_mailbox_manifest_hmac_secret: str = ""
     companion_world_lifecycle_scheduler_interval_seconds: float = 300.0
     companion_world_lifecycle_scheduler_batch_size: int = 50
+    # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
+    companion_world_visits_enabled: bool = False
+    companion_world_human_chat_enabled: bool = False
 
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。

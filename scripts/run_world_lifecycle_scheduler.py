@@ -21,9 +21,10 @@ logger = logging.getLogger("ai4all.world_lifecycle.process")
 async def main() -> None:
     lifecycle_enabled = settings.companion_world_lifecycle_evaluation_enabled
     mailbox_enabled = settings.companion_world_mailbox_enabled
-    if not lifecycle_enabled and not mailbox_enabled:
+    visits_enabled = settings.companion_world_visits_enabled
+    if not lifecycle_enabled and not mailbox_enabled and not visits_enabled:
         logger.warning(
-            "world-lifecycle scheduler disabled: lifecycle evaluation and mailbox false"
+            "world-lifecycle scheduler disabled: lifecycle, mailbox and visits false"
         )
         return
     if not settings.has_central_role:
@@ -34,6 +35,7 @@ async def main() -> None:
     scheduler = WorldLifecycleScheduler(
         enabled=lifecycle_enabled,
         mailbox_enabled=mailbox_enabled,
+        visits_enabled=visits_enabled,
         interval_seconds=(
             settings.companion_world_lifecycle_scheduler_interval_seconds
         ),

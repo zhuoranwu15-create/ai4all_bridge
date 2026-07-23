@@ -808,3 +808,124 @@ SQLite 执行最后一条时，把取值表达式替换为 `COALESCE(json_extrac
 2. 不可逆提交异常：立即关闭 commit；已经 committed 的 offline/read-only/farewell 不自动恢复，按 correction 流程追加审计。
 3. mailbox 异常：关闭 mailbox 并停止投递；保留历史 letter 和已接受 resident，不反向删除 runtime。
 4. heartbeat 陈旧、对账非空、PG 并发门禁失败或 outbox dead 非零时阻断扩量，保存代码 SHA 与查询结果后再处理。
+
+## Companion World M5 发布运行手册
+
+M5 限时来访与真人聊天使用 m0035 加性表，并复用 `scripts/run_world_lifecycle_scheduler.py` 做 invite/pending/active expiry。两个开关默认关闭：
+
+```bash
+COMPANION_WORLD_VISITS_ENABLED=false
+COMPANION_WORLD_HUMAN_CHAT_ENABLED=false
+```
+
+`VISITS_ENABLED` 门控 invite/redeem/accept/visitor Feed 等 visit API，并决定独立进程是否运行 visit expiry 步骤；它不删除已有 visit/chat。`HUMAN_CHAT_ENABLED` 只允许新真人文字消息，关闭时 conversation/message 历史、read、self-hide、report 和 block 仍可用。两者都依赖 `COMPANION_WORLD_P1_ENABLED=true` 的 World session；M5 不依赖 M3 Feed 生成开关读取已发布历史。
+
+### 1. 上线前阻断项与顺序
+
+1. PR #47/M4 已合并，M5 分支已校准 `main`；生产部署时再次确认目标版本包含该基线，运行 m0035 后确认两个 M5 flag 仍为 false。
+2. 客户端必须同步“24h invite → 7d pending → A 接受后独立 30d visit”，不得继续按旧“12h/兑换即生效”实现。
+3. 客户端必须在 visit 终止时清除好友世界页面/媒体缓存；旧深链不得绕过服务端 `visit_id` ACL。
+4. 运营/法务必须确认 `human_chat_reports.retained_until` 的合规期限与清理 SOP；未确认前 evidence fail-safe 保留，不启动自动删除。
+5. 先开放 human conversation/history 读模型，再小流量开 `VISITS_ENABLED` 验证 create/redeem/pending/accept/Feed，最后开 `HUMAN_CHAT_ENABLED` 写消息。
+6. 只允许一个 central-capable 实例运行 world lifecycle scheduler。`GET /admin/ops/status` 中 `configured.world_lifecycle.visits_enabled` 与部署值一致，heartbeat `last_run_visit_metrics` 只含 `scanned/expired_invites/expired_visits`。
+
+邀请码兑换同时按真人 10 RPM、来源 IP 30 RPM 做 DB-backed 滑动窗口限流；出现 `rate_limited`、同码双花、第三/第四名额冲突或 block 后仍兑换成功时立即阻断扩量。
+
+### 2. M5 只读数据对账
+
+以下异常查询应全部返回空结果集。
+
+```sql
+-- 已初始化 slot 的 world 必须恰好为 1/2/3 三个固定槽。
+SELECT universe_id, COUNT(*) AS slot_count,
+       MIN(slot_no) AS min_slot, MAX(slot_no) AS max_slot
+FROM universe_visit_slots
+GROUP BY universe_id
+HAVING COUNT(*) <> 3 OR MIN(slot_no) <> 1 OR MAX(slot_no) <> 3;
+
+-- slot occupant 必须同空同非空，且只能指向 active invite 或 open visit。
+SELECT s.*
+FROM universe_visit_slots s
+LEFT JOIN universe_invites i
+  ON s.occupant_type = 'invite' AND i.id = s.occupant_id
+LEFT JOIN universe_visits v
+  ON s.occupant_type = 'visit' AND v.id = s.occupant_id
+WHERE (s.occupant_type IS NULL) <> (s.occupant_id IS NULL)
+   OR (s.occupant_type = 'invite' AND (i.id IS NULL OR i.status <> 'active'))
+   OR (s.occupant_type = 'visit' AND (v.id IS NULL OR v.status NOT IN ('pending','active')))
+   OR (s.occupant_type IS NOT NULL AND s.occupant_type NOT IN ('invite','visit'));
+
+-- B 跨好友世界 pending+active 合计不得超过 3。
+SELECT visitor_platform_user_id, COUNT(*) AS open_visits
+FROM universe_visits
+WHERE status IN ('pending','active')
+GROUP BY visitor_platform_user_id
+HAVING COUNT(*) > 3;
+
+-- redeemed invite 必须与 visit 双向同锚；其他 invite 不得挂 redeemed_visit_id。
+SELECT i.id, i.status, i.redeemed_visit_id, v.id AS visit_id
+FROM universe_invites i
+LEFT JOIN universe_visits v ON v.id = i.redeemed_visit_id
+WHERE (i.status = 'redeemed' AND (
+         v.id IS NULL OR v.invite_id <> i.id OR v.universe_id <> i.universe_id
+         OR v.owner_platform_user_id <> i.owner_platform_user_id
+         OR v.visitor_platform_user_id <> i.redeemed_by_platform_user_id))
+   OR (i.status <> 'redeemed' AND i.redeemed_visit_id IS NOT NULL);
+
+-- active visit 必须有绝对期限和恰好一个 active human conversation。
+SELECT v.id, v.status, v.expires_at, COUNT(c.id) AS conversations,
+       MIN(c.status) AS conversation_status
+FROM universe_visits v
+LEFT JOIN human_conversations c ON c.visit_id = v.id
+WHERE v.status = 'active'
+GROUP BY v.id, v.status, v.expires_at
+HAVING v.expires_at IS NULL OR COUNT(c.id) <> 1 OR MIN(c.status) <> 'active';
+
+-- visit 终态不得继续占 slot；已有 conversation 必须 read_only。
+SELECT v.id, v.status, s.slot_no, c.status AS conversation_status
+FROM universe_visits v
+LEFT JOIN universe_visit_slots s
+  ON s.occupant_type = 'visit' AND s.occupant_id = v.id
+LEFT JOIN human_conversations c ON c.visit_id = v.id
+WHERE v.status IN ('expired','rejected','cancelled','left','revoked','blocked')
+  AND (s.slot_no IS NOT NULL OR (c.id IS NOT NULL AND c.status <> 'read_only'));
+
+-- 真人消息 sender 必须是会话双方，sequence 从 1 连续且无删除空洞。
+SELECT c.id AS conversation_id, COUNT(m.id) AS message_count,
+       COALESCE(MAX(m.sequence_no), 0) AS max_sequence
+FROM human_conversations c
+LEFT JOIN human_messages m ON m.conversation_id = c.id
+GROUP BY c.id
+HAVING COUNT(m.id) <> COALESCE(MAX(m.sequence_no), 0);
+
+SELECT m.id, m.conversation_id, m.sender_platform_user_id
+FROM human_messages m
+JOIN human_conversations c ON c.id = m.conversation_id
+WHERE m.sender_platform_user_id NOT IN (
+  c.owner_platform_user_id, c.visitor_platform_user_id
+);
+
+-- 任一方向 block 后，两人之间不得仍有 open visit。
+SELECT b.blocker_platform_user_id, b.blocked_platform_user_id, v.id AS visit_id
+FROM platform_user_blocks b
+JOIN universe_visits v
+  ON v.status IN ('pending','active')
+ AND ((v.owner_platform_user_id = b.blocker_platform_user_id
+       AND v.visitor_platform_user_id = b.blocked_platform_user_id)
+   OR (v.owner_platform_user_id = b.blocked_platform_user_id
+       AND v.visitor_platform_user_id = b.blocker_platform_user_id));
+
+-- 举报必须有可解析、非空的独立 evidence snapshot；retained_until 为空表示等待合规期限配置。
+SELECT id, conversation_id, reason_code, retained_until
+FROM human_chat_reports
+WHERE evidence_snapshot_json IS NULL OR evidence_snapshot_json = '';
+```
+
+对账只能读，不能通过删除 slot/visit/message/report 来消除异常。`self-hide` 只写 conversation 的 participant hidden 字段，`human_messages` 和 `human_chat_reports` 行数不应因此减少。
+
+### 3. 回滚
+
+1. invite/ACL/Feed 异常：关闭 `COMPANION_WORLD_VISITS_ENABLED` 并停止 visit expiry step；保留 m0035 和全部状态。已有 human history/report/block 仍可访问。
+2. 真人发送异常：只关闭 `COMPANION_WORLD_HUMAN_CHAT_ENABLED`；新 send 返回 `human_chat_read_only`，历史/read/hide/report/block 保持可用。
+3. 已 `expired/rejected/cancelled/left/revoked/blocked` 的 visit 不恢复；解除 block 也不复活旧 visit，重新来访必须新 invite。
+4. 举报 evidence retention 未确认、heartbeat 陈旧、任一异常 SQL 非空或 PG 并发门禁失败时不得扩量；保存代码 SHA、查询结果和时间窗口后修复。
