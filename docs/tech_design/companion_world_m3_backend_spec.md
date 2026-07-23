@@ -6,7 +6,7 @@
 >
 > 实施计划：[`../plans/companion_world_m3_implementation_plan.md`](../plans/companion_world_m3_implementation_plan.md)。
 >
-> 核查基线：PR #45 merge commit `363500ea8364dcccd9e7c6e3c7c5eb5ce7ed9392`；`feat/companion-world-m3` 当前 migration max = m0033。
+> 历史交付基线：PR #45 merge commit `363500ea8364dcccd9e7c6e3c7c5eb5ce7ed9392`；M3 交付时 migration max = m0033。其后 M4/M5 已顺序追加 m0034/m0035，m0036 再修复历史编号碰撞；当前整体交付状态以总 ADR 为准。
 
 ## 0. 范围、术语与不变量
 

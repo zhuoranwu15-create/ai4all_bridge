@@ -1,12 +1,12 @@
 # AI4ALL 微信个人 AI 陪伴服务总体架构
 
-更新时间：2026-06-13
+更新时间：2026-07-23
 
 ## 一句话理解
 
-AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL 一对多个人 AI 后端** + **账号级 Agent 体验与运营控制面**。
+AI4ALL = **多渠道接入** + **Companion World 产品领域层** + **形态无关 Agent Runtime** + **真人级平台服务与中心调度**。
 
-它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 负责微信连接、消息收发和 hook runtime；AI4ALL Backend 负责普通用户注册、账号隔离、陪伴式 Agent、记忆、提醒、权益、拉新和运营管理。
+它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 只负责微信连接、消息收发和 hook runtime；AI4ALL Backend 同时服务微信 1:1 Agent、Web 和「朝夕相伴」Native App，持有产品用户、世界/居民、关系运行时、记忆、权益、主动触达和运营状态。
 
 ## 文档分层
 
@@ -28,107 +28,86 @@ AI4ALL 微信个人 AI 陪伴服务 = **微信/OpenClaw 通道层** + **AI4ALL �
 
 ## 1. 顶层架构
 
-```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                                Ordinary User                                 │
-│                                                                              │
-│       Web/H5 Onboarding                         WeChat Private Chat          │
-│  phone + captcha + OTP + QR                         text / voice             │
-└───────────────┬──────────────────────────────────────────────┬───────────────┘
-                │                                              │
-                ▼                                              ▼
-┌────────────────────────────────┐           ┌─────────────────────────────────┐
-│          AI4ALL Web API         │           │        OpenClaw Runtime          │
-│  register / binding intent      │           │  openclaw-weixin + Gateway       │
-│  admin / user visible pages      │           │  channel login / recv / send     │
-└───────────────┬────────────────┘           └───────────────┬─────────────────┘
-                │                                            │
-                │                                            ▼
-                │                            ┌─────────────────────────────────┐
-                │                            │    ai4all-openclaw-bridge       │
-                │                            │  before_agent_reply hook         │
-                │                            │  normalize payload + synthetic   │
-                │                            │  reply / shadow trace            │
-                │                            └───────────────┬─────────────────┘
-                │                                            │
-                └──────────────────────┬─────────────────────┘
-                                       ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              AI4ALL Backend                                  │
-│                                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
-│  │ Identity &   │  │ Conversation │  │ Agent Context &   │  │ Tools &      │ │
-│  │ Binding      │  │ Runtime      │  │ Memory            │  │ Providers    │ │
-│  │              │  │              │  │                   │  │              │ │
-│  │ platform_user│  │ turn service │  │ SOUL / USER       │  │ LLM / Search │ │
-│  │ aid_...      │  │ prompt build │  │ daily notes       │  │ Search       │ │
-│  │ channel bind │  │ LLM reply    │  │ Dreaming          │  │ content src  │ │
-│  └──────┬───────┘  └──────┬───────┘  └────────┬─────────┘  └──────┬───────┘ │
-│         │                 │                   │                   │         │
-│         ▼                 ▼                   ▼                   ▼         │
-│  ┌──────────────────────────────────────────────────────────────────────┐   │
-│  │              Proactive Scheduler & Outbound Runtime                  │   │
-│  │ reminders / commitment / content push / scheduler                    │   │
-│  └──────────────────────────────────────┬───────────────────────────────┘   │
-│                                         ▼                                   │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐ │
-│  │ Entitlement  │  │ Growth       │  │ Control Plane     │  │ Observability│ │
-│  │ wallet/ledger│  │ referral     │  │ Admin / Support   │  │ traces/logs  │ │
-│  └──────────────┘  └──────────────┘  └──────────────────┘  └──────────────┘ │
-└──────────────────────────────────────────────────────────────────────────────┘
-                                       │
-                                       ▼
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                         Storage & Infrastructure                             │
-│                                                                              │
-│   Phase 1 local/demo: SQLite + files + optional in-process scheduler          │
-│   Internal beta target: PostgreSQL + Redis + scheduler worker + object/file storage │
-└──────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph clients["用户与运营入口"]
+        wx["微信私聊<br/>text / upstream voice transcript"]
+        web["Web / H5<br/>注册、扫码、用户中心"]
+        native["朝夕相伴 Native App<br/>世界、居民、Feed、信箱、访客、真人聊天"]
+        ops["Admin / Staff / Reviewer<br/>运营、审核、Debug"]
+    end
+
+    subgraph access["接入层"]
+        openclaw["OpenClaw access nodes<br/>openclaw-weixin + Gateway"]
+        bridge["ai4all-openclaw-bridge + node agent<br/>入站转发、同步回复、登录 push、出站 pull"]
+    end
+
+    subgraph central["Central 模块化单体（唯一业务写入面）"]
+        api["API adapters / composition root<br/>WeChat · Web · App · Admin"]
+        world["Companion World 产品领域层<br/>universe · resident · L3 · Feed · lifecycle/mailbox<br/>visit ACL · human chat"]
+        runtime["Agent Runtime（form-agnostic）<br/>runtime account · L1/L2 · session/messages<br/>prompt/turn/tools · Memory/Dreaming · AI moderation"]
+        platform["平台服务<br/>platform user/auth · wallet/quota · binding/routing<br/>outbox/notification · audit/observability"]
+        schedulers["Central single-writer schedulers<br/>proactive + Dreaming/L3 compact<br/>world content + lifecycle/mailbox/visit expiry"]
+
+        api --> world
+        api --> runtime
+        world -->|"AgentRuntimePort + extra context / typed sink"| runtime
+        world --> platform
+        runtime --> platform
+        schedulers --> world
+        schedulers --> runtime
+        schedulers --> platform
+    end
+
+    subgraph state["状态与外部依赖"]
+        pg["PostgreSQL<br/>生产中心 source of truth / 并发权威"]
+        sqlite["SQLite<br/>开发、测试默认 + 回滚通道"]
+        systemFiles["data/system<br/>系统级 context / 配置视图"]
+        channelState["接入节点本地状态<br/>微信凭据 / context token"]
+        providers["LLM · Search · SMS/Captcha · WeChat iLink"]
+    end
+
+    wx --> openclaw --> bridge
+    bridge -->|"POST /openclaw/turn"| api
+    api -->|"被动回复原路返回"| bridge
+    web --> api
+    native --> api
+    ops --> api
+    api -->|"登录/登出 push"| bridge
+    bridge -->|"主动消息 pull / 结果回报"| api
+
+    platform --> pg
+    world --> pg
+    runtime --> pg
+    platform -.->|"同一 repository 契约二选一"| sqlite
+    runtime --> systemFiles
+    openclaw --> channelState
+    api --> providers
+    runtime --> providers
 ```
 
 核心原则：
 
-- **通道层薄**：OpenClaw / Bridge 不保存长期业务状态。
-- **账号隔离强**：所有业务状态都挂到 `ai4all_account_id`。
+- **通道层薄**：OpenClaw / Bridge 只持有微信运行态，不保存 AI4ALL 长期业务状态。
+- **隔离锚点显式**：真人级权益/配额锚 `platform_user_id`；世界共享状态锚 `universe_id`；每位 Agent 的 L1/L2、session/messages 锚 runtime `account_id`。任何未带正确作用域的查询都是 bug。
+- **Runtime 形态无关**：Companion World 只能通过 `AgentRuntimePort` 和加性 context/memory 接缝调用 Runtime；Runtime 不反向依赖 World，真人聊天不进入 AI `messages`/prompt/Dreaming。
+- **模块化单体 + 中心单 writer**：当前正确性依赖中心 PostgreSQL 的事务、行锁/advisory lock/唯一约束，以及指定 central scheduler 的单 writer 纪律；进入 active-active 或分片前必须先设计 lease/fencing。
 - **同步链路短**：普通聊天和普通 Web Search 尽量在当前 turn 同步返回；长耗时搜索、复杂整理或后台报告请求直接返回失败/不支持说明，不创建后台任务。语音当前依赖上游转写后进入普通文本链路。
 - **主动触达受控**：所有主动消息经过 outbound ledger 和类型化策略；用户提醒按用户设定时间发送，陪伴跟进和内容推送受 quiet hours、日上限和偏好约束。
 - **运营可见**：账号、绑定、会话、消息、提醒/主动发送、用量、权益、错误都需要能被 Admin 追踪。
+- **新产品默认关闭**：Companion World P1/M3/M4/M5 能力均由正交 flag 灰度；代码合入或 migration 就绪不等于生产开量。
 
 ## 2. 核心概念分层
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│ Channel Layer                                                │
-│ OpenClaw Gateway / openclaw-weixin / Bridge / Gateway send   │
-│ 只负责微信通道、hook、收发消息和 raw payload                  │
-├─────────────────────────────────────────────────────────────┤
-│ Identity & Account Layer                                     │
-│ platform_user / ai4all_account / binding_intent / binding    │
-│ 决定“这条消息属于哪个 AI4ALL Account”                         │
-├─────────────────────────────────────────────────────────────┤
-│ Conversation & Agent Runtime Layer                           │
-│ session / messages / turn_service / prompt_builder / LLM     │
-│ 处理普通聊天、上下文、回复生成和 after-turn 动作               │
-├─────────────────────────────────────────────────────────────┤
-│ Context & Memory Layer                                       │
-│ AGENTS / SOUL / IDENTITY / USER / TOOLS / MEMORY / Dreaming  │
-│ 提供陪伴感、持续性、偏好和长期记忆                           │
-├─────────────────────────────────────────────────────────────┤
-│ Proactive Scheduler & Outbound Layer                         │
-│ reminder / commitment / 内容邀请 / reactivation 拉活 / 账号主动检查 │
-│ 处理提醒、陪伴跟进、内容邀请、拉活和发送幂等                 │
-├─────────────────────────────────────────────────────────────┤
-│ Entitlement & Growth Layer                                   │
-│ wallet / ledger / usage metering / referral / pay deferred   │
-│ 管理内测权益、扣减、拉新奖励；支付后置                       │
-├─────────────────────────────────────────────────────────────┤
-│ Control & Observability Layer                                │
-│ Admin UI/API / support / debug traces / logs / audit         │
-│ 让内测运营、排障、补偿和风控可执行                           │
-└─────────────────────────────────────────────────────────────┘
-```
+| 层 | 当前职责 | 依赖约束 |
+| --- | --- | --- |
+| 接入与产品 API | WeChat/OpenClaw、Web、Native App、Admin 的协议适配与 composition | 只做认证、DTO、路由和组合，不持有领域真相 |
+| Companion World 产品领域 | universe/resident、L3、Feed/通知、lifecycle/mailbox、visit/human chat | 可调用 `AgentRuntimePort` 和平台服务；不得把 World 概念下沉 Runtime |
+| Agent Runtime | runtime account、L1/L2、session/messages、prompt/turn/tool、Memory/Dreaming、AI moderation | 形态无关；不得反向 import Companion World；human chat 永不进入 AI 路径 |
+| 平台服务 | platform user/auth、binding/routing、wallet/quota、DB/repository、outbox、审计观测 | 真人级共享能力锚 `platform_user_id`；为上层提供事务与基础设施 |
+| 状态与基础设施 | PostgreSQL/SQLite、system context、OpenClaw 节点状态、外部 provider | 中心业务状态只进 AI4ALL DB；节点永不直连中心 DB |
 
-这套分层与 OpenClaw 的 Channel、Session、Agent、Plugin、Model 分层有相似处，但 AI4ALL 多了产品账号、权益、运营和一对多隔离层。
+依赖方向固定为 `API adapter → product domain → AgentRuntimePort → runtime implementation`，产品域旁挂平台服务。形态 A（微信）可由 API 直接调用 Runtime；形态 B（朝夕相伴）必须先经过 Companion World 解析 owner/ACL/shared context。
 
 ## 3. AI4ALL Conversation Turn
 
@@ -228,31 +207,35 @@ Gateway send + status writeback
 | --- | --- | --- |
 | 微信登录态、context token | OpenClaw / openclaw-weixin | AI4ALL 暂不复制底层通道 token |
 | 平台用户和手机号 | AI4ALL Backend | `platform_users` |
-| 业务隔离账号 | AI4ALL Backend | `ai4all_account_id` / 当前 DB `account_id` |
+| 真人级权益、配额与偏好 | AI4ALL Backend | `platform_user_id` 是 wallet、daily/RPM quota、App 通知和真人级触达的共享锚点 |
+| Agent 关系运行容器 | AI4ALL Backend | 概念名 `agent_runtime_id`，当前兼容表/字段仍为 `accounts.id` / `account_id`；每位居民对应独立 runtime account |
 | 通道绑定关系 | AI4ALL Backend | `channel_bindings` + raw identity |
 | 会话和消息 | AI4ALL Backend | `sessions` / `messages` |
-| Soul、Profile、Context Files | AI4ALL Backend | 文件视图 + 后续结构化存储 |
-| daily notes / long-term memory | AI4ALL Backend | 学习 OpenClaw Dreaming，但账号级隔离 |
+| Soul、Profile、Context Files | AI4ALL Backend | `account_profile_files` 是账号级权威存储；Markdown/文件是可读视图或 system context |
+| L1 人设/使命、L2 关系状态 | AI4ALL Backend | runtime `account_id` 隔离，各 Agent 独立 |
+| L3 用户沉淀记忆 | AI4ALL Backend | `universe_memory_facts` 按 `universe_id` append-only 共享；不含各居民私聊原文 |
+| 世界、居民与 AI 会话 | AI4ALL Backend | `universes` / `universe_residents` / `ai_conversations`，owner ACL 以 `platform_user_id` 校验 |
+| 世界内容与通知 | AI4ALL Backend | Feed/outbox 与 App notifications 分表、分入口、分红点，不复用 AI `messages` |
+| 生命周期、信箱、访客与真人聊天 | AI4ALL Backend | Companion World 独立领域表与 ACL；human messages 永不进入 Agent Runtime |
 | reminders / commitments / content push | AI4ALL Backend | 不放入 OpenClaw Cron 作为主状态 |
 | Web Search provider trace | AI4ALL Backend | `tool_invocations` / `search_provider_runs` / `cost_events` |
-| 权益代币/点数和扣减流水 | AI4ALL Backend | 未来可拆 billing 服务 |
 | Debug trace / audit | AI4ALL Backend | 可包含 OpenClaw shadow trace |
 
 ## 6. 与 OpenClaw 的关系
 
 AI4ALL 借鉴 OpenClaw 的“Agent OS”思想，但产品边界不同：
 
-| 维度 | OpenClaw | AI4ALL Phase 1 |
+| 维度 | OpenClaw | AI4ALL 当前架构 |
 | --- | --- | --- |
 | 使用者 | 单个 owner 或开发者 | 普通 C 端用户 |
-| 运行模型 | 本地一对一 agent runtime | Backend 一对多服务 |
-| 通道 | 多通道 Gateway | Phase 1 先微信/OpenClawBot |
-| 状态 | 实例/workspace/session 为主 | `ai4all_account_id` 为主 |
-| Prompt | 本地 agent context | 账号级 context + 后端策略 |
-| Memory | 本地 memory/Dreaming | 账号级记忆 + 运营审计 |
-| Tools | agent 可直接调用工具 | 后端按账号/权益/权限启用 |
-| Cron/定时检查 | 单用户 agent 循环 | 系统 scheduler + 账号级检查 |
-| 运营 | 用户自管理 | Admin/Support/Entitlement 控制面 |
+| 运行模型 | 本地一对一 agent runtime | 中心模块化单体：产品域组合多个隔离 Agent Runtime |
+| 通道 | 多通道 Gateway | 微信/OpenClaw、Web、Native App 三类显式 `ChannelCapability` |
+| 状态 | 实例/workspace/session 为主 | `platform_user_id` / `universe_id` / runtime `account_id` 分层锚定 |
+| Prompt | 本地 agent context | runtime L1/L2 + 产品域注入的 universe L3 + 后端策略 |
+| Memory | 本地 memory/Dreaming | runtime 独立记忆 + universe typed facts + 可审计 Dreaming |
+| Tools | agent 可直接调用工具 | 后端按渠道、账号、权益和权限启用 |
+| Cron/定时检查 | 单用户 agent 循环 | central single-writer scheduler + 账号/真人/世界级策略 |
+| 运营 | 用户自管理 | Admin/Support/Entitlement/Moderation 控制面 |
 
 OpenClaw 仍然是重要参考，尤其是 Agent Loop、context engine、tool schema、Dreaming、定时检查和 trace。但 AI4ALL 的业务状态必须留在自己的后端。
 
@@ -261,38 +244,35 @@ OpenClaw 仍然是重要参考，尤其是 Agent Loop、context engine、tool sc
 ### 当前本地形态
 
 ```text
-FastAPI Backend
-SQLite
-data/user_profiles/*
-OpenClaw Gateway local process
-ai4all-openclaw-bridge plugin
-optional in-process scheduler
+AI4ALL_ROLE=standalone
+FastAPI Backend + Web/App/Admin routes
+DATABASE_URL 为空 → SQLite；非空 → PostgreSQL
+OpenClaw Gateway + ai4all-openclaw-bridge local process
+single-worker 时可启用 in-process scheduler；推荐独立 scheduler 进程
 ```
 
-适合开发、验证真实微信链路和单机内测。
+适合开发、双后端测试和真实微信链路验证。SQLite 是 dev/test 默认与生产回滚通道，属于刻意保留的受支持路径；它不是当前生产主后端。
 
-### 内测目标形态
+### 当前生产形态（aliyun1 中心 + aliyun1/aliyun2 接入）
 
 ```text
 Nginx / HTTPS
         │
         ▼
-AI4ALL Backend API
+aliyun1 Central FastAPI + central schedulers
         │
-        ├── PostgreSQL
-        ├── Redis
-        ├── Scheduler worker
-        ├── Object or shared file storage
-        └── OpenClaw Gateway / channel runtime
+        ├── PostgreSQL（唯一业务写入库）
+        ├── aliyun1 OpenClaw / node agent
+        └── aliyun2 OpenClaw / node agent（HTTP 接入中心，不直连 DB）
 ```
 
-关键生产化要求：
+当前拓扑不变量：
 
-- FastAPI 和 scheduler 明确进程边界，避免多实例重复扫描。
-- reminder 和 outbound 必须原子 claim。
-- Redis 承担短期限流、锁、队列或缓存。
-- SQLite 文件模型不能成为长期生产依赖。
-- OpenClaw 插件和 Gateway 能力要有启动前检查和版本固定。
+- 中心 FastAPI 是业务读写入口，生产 PostgreSQL 是唯一业务 source of truth；接入节点永不直连 DB。
+- proactive/Dreaming、world content、lifecycle/mailbox/visit expiry 等 scheduler 必须指定 central 单例运行，避免重复扫描。
+- reminder、outbound、Feed slot、visit/chat 等竞争路径依赖 PG 原子 claim、行锁/advisory lock、唯一约束和幂等键。
+- OpenClaw 插件/Gateway 能力必须做版本固定和补丁检查；微信凭据只留在账号所属接入节点。
+- Redis、消息队列、对象存储和 active-active 不是当前正确性的前提；只有出现明确扩缩容信号后再引入，且不得绕过现有状态所有权。
 
 ### 多机接入形态（中心大脑 + 瘦接入节点）
 
@@ -329,16 +309,13 @@ AI4ALL Backend API
 
 `standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/tech_design/multi_node_access_refactor.md`](tech_design/multi_node_access_refactor.md)。
 
-## 8. Phase 1 架构主线
+## 8. 当前架构状态与下一阶段边界
 
-Phase 1 的架构收口顺序：
+1. 微信形态 A 继续复用既有 Agent Runtime，保持 1 真人 ↔ 1 Agent 的兼容行为；Web/native channel 由 `ChannelCapability` 显式声明会话、投递、onboarding、proactive 和 TDAI 能力。
+2. Companion World 形态 B 的 M2–M5 后端闭环已合入主干：多居民、L3、Feed/通知、lifecycle/mailbox、visit 和 human chat 均已实现并由 AST 分层门禁保护。
+3. 真人级 wallet/quota/override 已上迁 `platform_user`；每位居民仍以独立 runtime account 持有 L1/L2、session/messages，World 只通过端口组合 Runtime。
+4. 当前生产为中心 PostgreSQL + 多 OpenClaw 接入节点；SQLite 继续承担开发、测试和回滚。竞态正确性以 PostgreSQL 测试为权威。
+5. Companion World P1/M3/M4/M5 flag 仍默认关闭。代码就绪不代表生产已迁移或开量；客户端口径、模板/backfill、钱包与 override 对账、evidence retention 和只读发布核验仍是开旗门槛。
+6. 当前模块化单体与 central single-writer 拓扑是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
 
-1. 接入与绑定稳定：OTP、QR、重复绑定、解绑、异常状态。
-2. 对话主链路稳定：身份、去重、限流、prompt、LLM、trace。
-3. 记忆产品化：daily notes、Dreaming、查看/重置/禁用/纠错。
-4. Web Search 同步工具调用：provider、回退、引用、失败说明、成本事件和 5 贝壳扣减。
-5. 主动触达闭环：reminder、commitment、content push、冷却和设置。
-6. 权益和增长：内测赠送、扣减流水、拉新奖励、客服处理。
-7. 内测部署：PostgreSQL/Redis/scheduler worker、日志、告警、Admin UI。
-
-详细数据模型和工作包摘要见 `docs/system_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。
+详细数据模型和历史工作包摘要见 `docs/system_design.md`；3.0 冻结决策与代码地图见 `docs/tech_design/companion_world_3_0_refactor_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。

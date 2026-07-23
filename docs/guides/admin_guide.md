@@ -387,6 +387,14 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 - 生产 PG 备份和可恢复点；记录发布人、时间、代码 SHA。
 - central/standalone 只运行一个 Dreaming scheduler。推荐独立 proactive 进程承担：`DREAMING_SCHEDULER_ENABLED=false`、`PROACTIVE_DREAMING_SCHEDULER_ENABLED=true`；纯 node 不运行 L3 compact。
 
+在部署任何包含 m0025 钱包上迁的代码前，必须对**生产 PG**运行只读预检（本地 SQLite 结果不作发布依据）：
+
+```bash
+.venv/bin/python scripts/precheck_wallet_migration.py
+```
+
+命令读取当前部署环境的 `DATABASE_URL`，不要把含凭证的连接串直接写进发布记录或共享命令行。预期输出 `is_postgres = True`、退出码为 0/`PASS`，四类 BLOCK（`ambiguous_owner`、`orphan_wallet`、`owner_drift`、`primary_undefined`）均为 0；多钱包/多次赠权清单须归档到发布记录。任何 BLOCK 非零都必须先人工修数，禁止依赖 m0025 自动猜测归属。若生产已执行 m0025，仍须保存当前只读复核结果，但不得把迁移后的 PASS 倒推成“迁移前已预检”。
+
 先确保：
 
 ```bash
@@ -555,7 +563,7 @@ WHERE (p.daily_limit IS NOT NULL AND (a.daily_limit IS NULL OR a.daily_limit <> 
 
 ### 6. 开 flag 与冒烟
 
-只有模板、backfill、对账、客户端版本与口径同步、D-09 override 预检、双后端测试全部通过后，才把 central/backend 的：
+只有 D-14 钱包预检、模板、backfill、对账、客户端版本与口径同步、D-09 override 预检、双后端测试全部通过后，才把 central/backend 的：
 
 ```bash
 COMPANION_WORLD_P1_ENABLED=true
@@ -822,7 +830,7 @@ COMPANION_WORLD_HUMAN_CHAT_ENABLED=false
 
 ### 1. 上线前阻断项与顺序
 
-1. PR #47/M4 已合并，M5 分支已校准 `main`；生产部署时再次确认目标版本包含该基线，运行 m0035 后确认两个 M5 flag 仍为 false。
+1. M5 PR #48 已合入 `main`（归档核查基线 `3403380`）；生产部署目标须包含 m0035 及后续 m0036 `app_id` 漂移修复。迁移后确认 `accounts` / `account_owner_bindings` 均有 `app_id`、`ux_owner_binding_active_user_app` 存在，且两个 M5 flag 仍为 false。
 2. 客户端必须同步“24h invite → 7d pending → A 接受后独立 30d visit”，不得继续按旧“12h/兑换即生效”实现。
 3. 客户端必须在 visit 终止时清除好友世界页面/媒体缓存；旧深链不得绕过服务端 `visit_id` ACL。
 4. 运营/法务必须确认 `human_chat_reports.retained_until` 的合规期限与清理 SOP；未确认前 evidence fail-safe 保留，不启动自动删除。

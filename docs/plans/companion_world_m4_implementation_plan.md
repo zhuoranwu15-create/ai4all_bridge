@@ -181,11 +181,11 @@
 - 三 flag 灰度/回滚矩阵与 central 单例部署说明。
 - 同步 ADR、M4 spec/计划、简报、Admin guide、`.env.example`。
 - 运行 unit、SQLite 全量、PG 全量、compileall、diff check。
-- PR 保持 Draft；Ready/合并仍需用户明确授权。
+- 交付阶段 PR 保持 Draft；其后 M4 PR #47 已按用户确认完成合并。
 
 实现结果：复用既有 `GET /admin/ops/status` 与 `world_lifecycle_scheduler` heartbeat，没有新增 health endpoint、指标系统或配置。Admin guide 已补 M4 灰度顺序、heartbeat 核验、SQLite/PG 只读对账和不可逆回滚边界；PG 新增 accept-vs-catalog-retire 竞态门禁。M4 权威 spec、计划、总设计与简报已归档对齐。
 
-最终验证：mailbox PostgreSQL `20 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 7 skipped`、PostgreSQL `32 passed`；unit `568 passed / 951 deselected`；SQLite 全量 `1498 passed / 21 skipped`；PostgreSQL 全量 `1514 passed / 5 skipped`；`compileall` 与 `git diff --check` 通过。三个 M4 flag 均保持默认关闭，未执行生产迁移、开量、Ready 或合并。
+最终验证：mailbox PostgreSQL `20 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 7 skipped`、PostgreSQL `32 passed`；unit `568 passed / 951 deselected`；SQLite 全量 `1498 passed / 21 skipped`；PostgreSQL 全量 `1514 passed / 5 skipped`；`compileall` 与 `git diff --check` 通过。M4 PR #47 已合并；三个 M4 flag 均保持默认关闭，未执行生产迁移或开量。
 
 ## 5. 测试与验收
 

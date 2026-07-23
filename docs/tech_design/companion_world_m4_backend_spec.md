@@ -2,7 +2,7 @@
 
 > 状态：**M4-0 已冻结；M4-1…M4-6 已完成并归档（2026-07-23）。**
 >
-> 基线：PR #46 已合并为 `origin/main@e230844`；`feat/companion-world-m4` 已校准到该基线，M4-0 文档提交为 `4ff932b`。
+> 历史交付基线：PR #46 已合并为当时的 `origin/main@e230844`，M4-0 文档提交为 `4ff932b`。M4 PR #47 后续已合并，M5 再追加 m0035，m0036 修复历史编号碰撞；当前整体交付状态以总 ADR 为准。
 >
 > 权威上位决策：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md) D-02/D-06/D-08/D-12、§9、§10.3/.4/.8、§12 M4。
 
@@ -67,7 +67,7 @@ M4 不包含：
 
 ## 2. m0034 加性数据模型
 
-历史 migration 不改写。M4-1 已在 `_MIGRATIONS` 末尾追加 `m0034_companion_world_lifecycle_mailbox`；当前最大版本 m0034。
+历史 migration 不改写。M4-1 已在当时的 `_MIGRATIONS` 末尾追加 `m0034_companion_world_lifecycle_mailbox`；M4 交付时最大版本为 m0034，后续 M5 顺序追加 m0035，m0036 再以前向迁移修复历史编号碰撞。
 
 ### 2.1 扩展 `universe_posts`
 
@@ -516,4 +516,4 @@ M4 default-off 部署不等于生产启用；P1/M3 的模板、backfill、客户
 - Admin guide 已补 lifecycle/mailbox 独立开关、central 单例、灰度顺序、聚合 heartbeat、SQLite/PG 只读对账与不可逆回滚说明。
 - PG accept-vs-catalog-retire 竞态证明：结果只能是 accepted 后 catalog retired，或 retire 先完成导致 `letter_template_unavailable`；两种结果均无孤儿 runtime/resident/conversation。
 - 最终门禁：mailbox PG `20 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 7 skipped`、PG `32 passed`；unit `568 passed / 951 deselected`；SQLite 全量 `1498 passed / 21 skipped`；PG 全量 `1514 passed / 5 skipped`；`compileall` 与 `git diff --check` 通过。
-- M4 全部 flag 保持默认关闭；本归档不代表生产已执行 m0034、导入 catalog、启动 scheduler、开量、Ready 或合并。
+- M4 全部 flag 保持默认关闭；PR #47 已合并，但本归档不代表生产已执行 m0034、导入 catalog、启动 scheduler 或开量。

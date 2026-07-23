@@ -159,7 +159,7 @@ world-content scheduler → domain command → outbox worker → moderated unive
 - 更新 ADR、M3 backend spec、简报、Admin guide 与 `.env.example` 开关矩阵。
 - 增加 Feed/outbox、通知、真人级聚合的 metrics/heartbeat 字段和只读对账 SQL。
 - 完成聚焦、SQLite 全量、PG 全量、`compileall` 与 `git diff --check`。
-- PR 保持 Draft，直到所有 M3 出口和双后端检查通过；Ready/合并需用户明确授权。
+- 交付阶段 PR 保持 Draft，直到所有 M3 出口和双后端检查通过；其后 M3 PR #46 已按用户确认完成合并。
 
 ## 6. 测试与验收
 
