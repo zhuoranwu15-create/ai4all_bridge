@@ -104,6 +104,7 @@ def test_feed_publish_replay_conflict_and_public_dto(client, fresh_db):
     assert first_post["content"] == {"type": "text", "text": "今天心情很好。"}
     assert first_post["author"]["type"] == "human"
     assert first_post["author"]["resident_id"] is None
+    assert first_post["post_type"] == "normal"
     assert first_post["source"] == "user_post"
     assert first_post["published_at"].endswith("+08:00")
     assert first.headers["Cache-Control"] == "no-store"

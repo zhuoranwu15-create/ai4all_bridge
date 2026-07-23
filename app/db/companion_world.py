@@ -54,6 +54,7 @@ __all__ = [
     "get_conversation",
     "resolve_conversation_for_owner",
     "list_conversations_for_owner",
+    "try_conversation_transaction_lock",
     "try_conversation_turn_lock",
     "list_active_account_ids_for_user",
     "list_human_proactive_account_ids_for_user",
@@ -756,19 +757,21 @@ def list_conversations_for_owner(
 
 
 @contextmanager
-def try_conversation_turn_lock(conversation_id: str) -> Iterator[bool]:
-    """非阻塞获取 conversation single-flight 锁，并在上下文退出时释放。
+def try_conversation_transaction_lock(
+    conversation_id: str, *, conn: Connection
+) -> Iterator[bool]:
+    """在调用方事务内非阻塞获取 conversation 锁。
 
-    PG 使用事务级 advisory lock，跨进程/跨节点可见；SQLite 仅以进程锁作功能回退。
+    PG 锁随 ``conn`` 的事务提交/回滚释放；SQLite 复用 turn 的进程锁，供 M4
+    offline 组合事务与既有 turn 在同一 ``conv:`` 边界上串行。
     """
     key = str(conversation_id)
     if is_postgres():
-        with connect() as conn:
-            row = conn.execute(
-                "SELECT pg_try_advisory_xact_lock(?) AS acquired",
-                (advisory_lock_key("conv:" + key),),
-            ).fetchone()
-            yield bool(row and row["acquired"])
+        row = conn.execute(
+            "SELECT pg_try_advisory_xact_lock(?) AS acquired",
+            (advisory_lock_key("conv:" + key),),
+        ).fetchone()
+        yield bool(row and row["acquired"])
         return
     with _SQLITE_CONVERSATION_LOCKS_GUARD:
         lock = _SQLITE_CONVERSATION_LOCKS.setdefault(key, threading.Lock())
@@ -778,6 +781,16 @@ def try_conversation_turn_lock(conversation_id: str) -> Iterator[bool]:
     finally:
         if acquired:
             lock.release()
+
+
+@contextmanager
+def try_conversation_turn_lock(conversation_id: str) -> Iterator[bool]:
+    """非阻塞获取 conversation single-flight 锁，并在上下文退出时释放。"""
+    with connect() as conn:
+        with try_conversation_transaction_lock(
+            conversation_id, conn=conn
+        ) as acquired:
+            yield acquired
 
 
 def list_active_account_ids_for_user(
@@ -1584,7 +1597,13 @@ def list_published_feed_posts_for_owner(
                    EXISTS(
                        SELECT 1 FROM universe_residents r
                        WHERE r.universe_id = u.id AND r.status = 'active'
-                   ) AS has_active_resident
+                   ) AS has_active_resident,
+                   EXISTS(
+                       SELECT 1 FROM universe_posts farewell
+                       WHERE farewell.universe_id = u.id
+                         AND farewell.post_type = 'farewell'
+                         AND farewell.status = 'published'
+                   ) AS has_published_farewell
             FROM universes u
             WHERE u.owner_platform_user_id = ?
             """,
@@ -1597,7 +1616,10 @@ def list_published_feed_posts_for_owner(
             raise ValueError("world_disabled")
         if (
             world_row["onboarding_state"] != "confirmed"
-            or not bool(world_row["has_active_resident"])
+            or not (
+                bool(world_row["has_active_resident"])
+                or bool(world_row["has_published_farewell"])
+            )
         ):
             raise ValueError("world_not_ready")
         rows = tx.execute(

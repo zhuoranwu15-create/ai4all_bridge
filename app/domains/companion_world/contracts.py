@@ -157,6 +157,7 @@ class UniversePostRecord:
     author_name: Optional[str] = None
     author_avatar_ref: Optional[str] = None
     published_at: Optional[str] = None
+    post_type: str = "normal"
 
 
 @dataclass(frozen=True)

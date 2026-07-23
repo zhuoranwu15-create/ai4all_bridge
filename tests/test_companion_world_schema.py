@@ -16,6 +16,7 @@ from app.db._core import (
     _migration_0031_platform_user_quota_overrides,
     _migration_0032_rpm_hit_double_precision,
     _migration_0033_companion_world_m3_content,
+    _migration_0034_companion_world_lifecycle_mailbox,
 )
 
 _P1_TABLES = (
@@ -68,14 +69,19 @@ def test_p1_tables_exist(fresh_db):
 
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
-    assert _MIGRATIONS[-1] == (33, _migration_0033_companion_world_m3_content)
+    assert _MIGRATIONS[-1] == (
+        34,
+        _migration_0034_companion_world_lifecycle_mailbox,
+    )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 33
+        assert int(version) == 34
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
+        _migration_0034_companion_world_lifecycle_mailbox(conn)
+        _migration_0034_companion_world_lifecycle_mailbox(conn)
         conn.execute(
             "SELECT initial_candidate_rank FROM character_templates WHERE 1 = 0"
         ).fetchall()

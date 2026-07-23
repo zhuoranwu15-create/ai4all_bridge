@@ -61,6 +61,10 @@ _ERROR_STATUS = {
     "invalid_cursor": 400,
     "idempotency_conflict": 409,
     "notification_not_found": 404,
+    "letter_not_found": 404,
+    "letter_not_open": 409,
+    "letter_expired": 409,
+    "letter_template_unavailable": 409,
     "invalid_request": 422,
 }
 
@@ -265,6 +269,7 @@ def _feed_item_data(item) -> dict:
             "avatar_ref": item.author_avatar_ref,
         },
         "content": {"type": "text", "text": item.text},
+        "post_type": item.post_type,
         "source": item.source_type,
         "published_at": _feed_time(item.published_at),
     }
