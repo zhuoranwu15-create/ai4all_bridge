@@ -1,6 +1,6 @@
 # Companion World M4 实施计划
 
-> 状态：**M4-0…M4-6 已完成并归档（2026-07-23）。M5 仍受 ADR §10.9 产品门约束。**
+> 状态：**M4-0…M4-6 已完成并归档（2026-07-23）。后续更新：M5 ADR §10.9 已冻结，见 M5 spec。**
 >
 > 决策冻结：ADR §10.3/.4/.8 与 [`companion_world_m4_backend_spec.md`](../tech_design/companion_world_m4_backend_spec.md)。
 >

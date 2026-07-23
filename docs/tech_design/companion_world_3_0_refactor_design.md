@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-23
-状态：**M0/M1/M2-C、M3 与 M4 已完成；M4-0…M4-6 已归档。** PR #46 已合并；P1/M3/M4 flag 均默认关闭且尚未生产启用，M5 仍受 §10.9 产品门约束。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
-核查基线：当前开发环境 `feat/companion-world-m4`，已校准到 `origin/main@e230844`（PR #46 merge commit）；M4-0=`4ff932b`、M4-1=`0815740`、M4-2=`792d4fe`，M4-3…M4-6 已完成但尚未提交/推送。
+状态：**M0/M1/M2-C、M3 与 M4 已完成；M4-0…M4-6 已归档；M5-0 已冻结。** PR #46 已合并，M4 Draft PR #47 尚未合并；P1/M3/M4 flag 均默认关闭且尚未生产启用。M5 §10.9 产品门已关闭，后续实现以 M5 backend spec 为准。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+核查基线：当前开发环境 `feat/companion-world-m5`，堆叠于已完成并推送的 M4 提交 `af03382`；M4 Draft PR #47 仍未合并。M5-0 只冻结文档，M5-1 尚未编码。
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -24,9 +24,11 @@
 2. **[`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)**：M2-C 已实现的 schema、DTO、错误码、锁序与 backfill 细节。
 3. **[`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md)**：M3 已完成的三表、状态机、API、幂等、PG 锁序、可观测与 rollout 契约。
 4. **[`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md)**：M4-0 已冻结的 lifecycle/mailbox schema、状态机、API、锁序、安全策略与 rollout 契约。
-5. **[`../plans/companion_world_m4_implementation_plan.md`](../plans/companion_world_m4_implementation_plan.md)**：M4 已完成的归档计划与最终门禁记录。
-6. **[`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)**：生产模板导入、固定 cutoff backfill、对账、开关与回滚步骤。
-7. **[`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md)**、**[`../plans/companion_world_m3_implementation_plan.md`](../plans/companion_world_m3_implementation_plan.md)**：已完成归档，仅作实施 provenance。
+5. **[`companion_world_m5_backend_spec.md`](./companion_world_m5_backend_spec.md)**：M5-0 已冻结的 invite/pending/visit/human chat schema、双侧容量、ACL、锁序与保留契约。
+6. **[`../plans/companion_world_m5_implementation_plan.md`](../plans/companion_world_m5_implementation_plan.md)**：M5-0…M5-5 的当前执行计划。
+7. **[`../plans/companion_world_m4_implementation_plan.md`](../plans/companion_world_m4_implementation_plan.md)**：M4 已完成的归档计划与最终门禁记录。
+8. **[`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)**：生产模板导入、固定 cutoff backfill、对账、开关与回滚步骤。
+9. **[`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md)**、**[`../plans/companion_world_m3_implementation_plan.md`](../plans/companion_world_m3_implementation_plan.md)**：已完成归档，仅作实施 provenance。
 
 当前代码地图：
 
@@ -437,7 +439,7 @@ def create_resident_with_runtime(        # *
 6. **【已冻结 2026-07-21 = 纳入】**：`__app_active__` 加入 `DEFAULT_ACTIVE_SESSION_KEYS`；L1/L2 per-runtime Dreaming，L3 per-universe 单 writer compact（§6.6）。
 7. **【已冻结 2026-07-22 = 文字、universe 级每日最多 2 条】**：上午/傍晚各最多 1 条；仅已确认、至少一位 active resident、真人最近 7 天有任一渠道入站的世界生成；允许跳过、不补发。`character_letters`/mailbox 策略归 M4，不再混入 M3 门槛（D-15）。
 8. **【已冻结 2026-07-23 = 保守 shadow + 人工提交】**：inactivity=连续 60 天无 owner→resident 入站；value mismatch=滚动 30 天内至少 3 次独立证据且跨度至少 14 天；cooldown=7 天；最近危机/自伤/高度脆弱信号后 freeze 30 天。自动流程只生成候选，所有不可逆 offline 首版均需 full admin 批准；普通最后居民永久阻断，severe-abuse 例外仍需显式批准。提交前可取消/驳回；提交后禁止 `offline→active`，纠错只追加审计并可隐藏 farewell。Mailbox 同批冻结：active `<8` 投递、`<10` 接受、每世界 open=1、30 天投递间隔/TTL、defer 不续期、同角色不重投、仅运营版本化目录。详见 M4 spec。
-9. B 同时可持有多少好友世界 visit；邀请码兑换是否需 A 二次确认；真人历史保留/删除期限。
+9. **【已冻结 2026-07-23】** B 跨好友世界 `pending + active` visit 合计最多 3 个，可主动取消 pending；邀请码兑换只创建 pending，A 二次接受后才建立 ACL；visit 终止后真人聊天立即只读且默认保留，手动删除仅 self-hide，举报证据独立按合规期限保留。派生参数：invite 24h、pending 7d、accept 后 visit 30d，均绝对到期不续期；任一方 block 立即终止访问与 chat 写权限。详见 M5 spec。
 10. **【已冻结】L3 共享范围 = 关于用户的沉淀记忆全量共享、无字段级白名单；但不共享聊天原文与检索（D-05，边界精化 2026-07-19）**。共享=对用户的沉淀认知（USER/MEMORY 事实段、派生画像）；不共享=各居民私聊逐字稿（`messages`）与 `tool_evidence_replay` 检索。产品意象：居民“八卦”对用户的认知，读不到彼此私聊。用户对 L3 的可见/编辑/清空为产品交互层、另做。
 11. **【已冻结 2026-07-22 = Feed/通知分离 + 显式已读 + 分层保留】**：App 主动消息投递面仍为拉取式通知/收件箱（D-13）；Feed 与通知入口、红点独立，列表拉取不自动已读，提供单条/全部已读。已读保留 7 天、未读保留 30 天，每真人硬上限 200；写入事务按“最旧已读优先、再最旧未读”维持上限，central scheduler 清到期行并对账（D-15、§11.3）。
 12. **【已冻结 2026-07-22 = 最近用户入站 resident】**：App 真人级 proactive 由最近收到用户入站的 active resident 发声；无入站历史按最近会话活动、`joined_at DESC`、`resident_id ASC` 回退，投递前失活则重选；首版不支持用户指定。微信固定使用可真实投递的 legacy primary，不冒充其他居民（D-15、§11.4）。
@@ -554,9 +556,9 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 | **M2** Runtime facade + P1 多居民 | R1b+R2 | universe/resident/conversation + L3 首刀 | ✅ 已交付代码，default-off |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | R3 | outbox + App 收件箱 + 去 N× | ✅ M3-0…M3-6 已完成，default-off |
 | **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | ✅ M4-0…M4-6 完成 |
-| **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | §10.9 |
+| **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | ✅ §10.9 已冻结；M5-0 完成 |
 
-M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C、M3 与 M4 已交付代码；P1/M3/M4 保持默认关闭，生产启用仍受模板、backfill、客户端版本和现场对账发布闸约束。M5 仍不得在 §10.9 未冻结前编码。**
+M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C、M3 与 M4 已交付代码；P1/M3/M4 保持默认关闭，生产启用仍受模板、backfill、客户端版本和现场对账发布闸约束。M5 §10.9 已冻结，M5-1 可按正式 backend spec 开始。**
 
 ### M0 — 冻结·脚手架·现状 characterization（已完成）
 
@@ -611,11 +613,11 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 
 - **M3**：`universe_posts` + 事务 outbox（领域状态与 outbox 同事务、worker 幂等），按 universe 每日两窗口生成文字动态；App 通知收件箱 **T3-1…T3-9**（显式已读、7/30 天、200 条）; 真人级 proactive 上提域层（预算/活跃按 platform_user 聚合、universe 级 due 队列、确定性发声人、App-only 独立灰度 flag）。
 - **M4**：M4-0 已冻结 cooldown/audit/safety、last-resident、不可逆纠错和 mailbox 策略；M4-1 已交付 m0034、owner-scoped DB 原语、纯领域 DTO/ports 与 default-off 配置；M4-2 已交付 evidence/review/scheduler；M4-3 已交付 offline 原子事务；M4-4 已交付 signed catalog、world-lock delivery/expiry 与 owner 私密读取/处理；M4-5 已交付 no-binding/no-grant letter accept 单事务；M4-6 已补运行手册、只读对账、catalog-retire PG 竞态与最终双后端门禁。三 flag 仍默认关闭，详见 [`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md) 归档。
-- **M5**：三 slot + 高熵 code + 绝对过期 + visit ACL；`human_conversations`/`human_messages` 分表（D-11）、到期只读、举报/拉黑。
+- **M5**：M5-0 已冻结。A 世界 invite/pending/active 共用三 slot，B 跨世界 pending+active 也最多 3；高熵一次性 code 兑换后先 pending，A 接受才获得 30 天 visit ACL；`human_conversations`/`human_messages` 分表（D-11），终止只读、历史默认保留/self-hide、举报证据独立、拉黑立即撤权。详见 [`companion_world_m5_backend_spec.md`](./companion_world_m5_backend_spec.md)。
 
 ### 关键风险与门槛
 
-1. **产品冻结项**是各里程碑硬前置：M2-C、M3 与 M4 的对应 §10 门均已清零；PR #46 已合并且 M4 已完成归档。M5 仍等待 §10.9。
+1. **产品冻结项**是各里程碑硬前置：M2-C、M3、M4 与 M5 的对应 §10 门均已清零；PR #46 已合并且 M4 已完成归档，M4 Draft PR #47 尚未合并。M5 分支暂堆叠于 M4，PR #47 合并前不得把 M5 PR 转 Ready。
 2. **客户端口径冲突（生产阻断）**：gap-analysis §4.2「默认隔离/白名单」与 D-05「全量共享沉淀记忆」相反，PRD 仍称来源不构成 legacy 离开豁免。M2-C 后端已实现，客户端文档与实现必须在开 flag 前镜像对齐。
 3. **money 路径**：M1 是唯一动扣款的里程碑，PG 并发测试是发布闸，SQLite 绿不作数（§9）。
 4. **App scope 漏扫**（§6.6）已冻结修复：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并补 App scope 每日轮转回归。
