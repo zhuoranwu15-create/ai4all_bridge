@@ -1,6 +1,6 @@
 # Companion World M4 实施计划
 
-> 状态：**M4-0、M4-1、M4-2 已完成（2026-07-23）；下一批为 M4-3。**
+> 状态：**M4-0…M4-6 已完成并归档（2026-07-23）。M5 仍受 ADR §10.9 产品门约束。**
 >
 > 决策冻结：ADR §10.3/.4/.8 与 [`companion_world_m4_backend_spec.md`](../tech_design/companion_world_m4_backend_spec.md)。
 >
@@ -104,6 +104,8 @@
 
 ### M4-3：Offline + farewell + read-only 原子事务
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - `app/platform/companion_world_lifecycle.py`：transaction-bound L1→L2。
@@ -120,7 +122,13 @@
 
 出口：所有故障注入全回滚；approve 重放恰好一个 farewell/outbox；legacy/last-resident/crisis 在事务内重校验。
 
+实现结果：full-admin approve 已在 transaction-bound event→world→resident→`conv:` 锁序下接通；event policy snapshot、runtime evidence/crisis、legacy、active count 和 severe-abuse 最后居民例外均在事务内重校验。farewell/outbox/resident/conversation/event/action 一次提交，重复 approve 幂等返回；correct 只追加审计并可隐藏 farewell，不提供复活。Feed 公开 DTO 新增 `post_type`，active=0 的 severe-abuse 世界仍可只读 farewell，普通发布门禁不变。
+
+验证：聚焦 SQLite `34 passed / 2 skipped`、PostgreSQL `36 passed`；unit `568 passed / 931 deselected`；SQLite 全量 `1483 passed / 16 skipped`；PostgreSQL 全量 `1494 passed / 5 skipped`。覆盖原子回滚、conversation busy/retry、double approve、offline 后 read-only/Feed/proactive 边界及 correction。M4 commit flag 仍默认关闭，M4-3 尚未提交/推送。
+
 ### M4-4：Mailbox catalog、投递、expiry 与 owner 读取
+
+**状态：已完成（2026-07-23）。**
 
 主要文件：
 
@@ -139,13 +147,18 @@
 
 出口：同 world 并发 scheduler 最多一封 open letter；同 character 不重投；所有 API owner 隔离、防枚举、no-store。
 
+实现结果：staff/admin catalog create/list/retire、HMAC-SHA256 signed manifest dry-run/apply、confirmed world cursor、world lock 下 `<8`/open=0/30 天 cooldown、确定性 catalog 选择、scheduler/request-time expiry 及 owner list/detail/unread/read/defer/decline 已接通。mailbox 与 lifecycle scheduler 使用独立 flag/cursor；无 Push/app_notifications；accept 在本批未接线，现已由 M4-5 完成。
+
+验证：M4 聚焦 SQLite `27 passed / 3 skipped`、PostgreSQL `30 passed`；unit `568 passed / 941 deselected`；SQLite 全量 `1492 passed / 17 skipped`；PostgreSQL 全量 `1504 passed / 5 skipped`。M4-3/M4-4 尚未提交/推送，三个 M4 flag 仍默认关闭。
+
 ### M4-5：Letter accept 强事务
+
+**状态：已完成（2026-07-23，按最小闭环实施）。**
 
 主要文件：
 
-- `app/domains/companion_world/mailbox.py`。
-- `app/platform/companion_world_mailbox.py`、`companion_world_repository.py`。
-- `app/db/{mailbox,companion_world,billing}.py` 的既有 no-grant UoW 接缝。
+- `app/platform/companion_world_mailbox.py`。
+- `app/db/companion_world_mailbox.py` 与既有 `companion_world`/`billing` no-grant UoW 接缝。
 - owner accept API 与 PG concurrency tests。
 
 交付：
@@ -156,13 +169,23 @@
 
 出口：PG 双 accept 单 winner、第 10/11 位竞争不超限；不新增钱包、赠权或 owner binding。
 
+实现结果：owner `POST /v1/mailbox/letters/{id}/accept` 已接通。事务按 world→letter/catalog/template 锁序复核 owner/world、精确 expiry、open/accepted、catalog/template 版本与状态、同模板既有关系及 active `<10`，随后一次提交 runtime account（无 binding/grant）+ mailbox resident + conversation + accepted letter。重复接受返回同一 resident/conversation；精确到期先提交 expired 再返回稳定错误；任一步异常整体回滚。
+
+验证：mailbox 聚焦 SQLite `15 passed / 4 skipped`、PostgreSQL `19 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 6 skipped`、PostgreSQL `31 passed`；unit `568 passed / 950 deselected`；SQLite 全量 `1498 passed / 20 skipped`；PostgreSQL 全量 `1513 passed / 5 skipped`。覆盖公开 DTO 白名单、no-binding/no-wallet/no-notification、重放、精确 expiry、retired catalog/template、满 10、owner 防枚举、runtime 后故障回滚；PG 覆盖 double accept、mailbox 与常规建居民争抢第 10 位、accept-vs-expiry。为尽快完成重构，本批不增加通知/欢迎消息/自动 turn/补偿框架/新配置；catalog-retire 专项并发压测留在 M4-6 回归矩阵，当前事务已对 catalog/template 行加锁并实时复核。
+
 ### M4-6：全量门禁、运行手册与交付
+
+**状态：已完成（2026-07-23，精简收口）。**
 
 - heartbeat 低基数指标、admin health、SQLite/PG 对账 SQL。
 - 三 flag 灰度/回滚矩阵与 central 单例部署说明。
 - 同步 ADR、M4 spec/计划、简报、Admin guide、`.env.example`。
 - 运行 unit、SQLite 全量、PG 全量、compileall、diff check。
 - PR 保持 Draft；Ready/合并仍需用户明确授权。
+
+实现结果：复用既有 `GET /admin/ops/status` 与 `world_lifecycle_scheduler` heartbeat，没有新增 health endpoint、指标系统或配置。Admin guide 已补 M4 灰度顺序、heartbeat 核验、SQLite/PG 只读对账和不可逆回滚边界；PG 新增 accept-vs-catalog-retire 竞态门禁。M4 权威 spec、计划、总设计与简报已归档对齐。
+
+最终验证：mailbox PostgreSQL `20 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 7 skipped`、PostgreSQL `32 passed`；unit `568 passed / 951 deselected`；SQLite 全量 `1498 passed / 21 skipped`；PostgreSQL 全量 `1514 passed / 5 skipped`；`compileall` 与 `git diff --check` 通过。三个 M4 flag 均保持默认关闭，未执行生产迁移、开量、Ready 或合并。
 
 ## 5. 测试与验收
 
@@ -196,7 +219,7 @@ git diff --check
 4. 回滚关 flags/停 scheduler；不反向迁移、不复活 offline、不撤销已接受 resident。
 5. M4 生产开量仍依赖 P1/M3 客户端、模板、backfill、迁移和现场对账门。
 
-## 7. M4-3 开工门
+## 7. M4-3 开工门（已通过）
 
 - [x] §10.3/.4/.8 与 mailbox 决策已冻结。
 - [x] backend spec 已覆盖 schema/state/API/lock/flag/test/rollout。
@@ -204,3 +227,4 @@ git diff --check
 - [x] M4-1 仅落 schema、DB 原语、纯领域 DTO/ports 与 default-off 配置，未接 live scheduler/API。
 - [x] M4-2 仅接 shadow evaluation、脱敏 review API 与 central heartbeat；commit flag 默认关闭且 approve 无提交能力。
 - [x] SQLite/PG 已覆盖 runtime 证据隔离、精确时间边界、恢复/crisis/最后居民、admin 权限与双 scheduler 单 open event。
+- [x] M4-3 已覆盖 event policy snapshot、原子回滚、共用 conversation lock、double approve 与 full-admin correction；commit flag 保持默认关闭。

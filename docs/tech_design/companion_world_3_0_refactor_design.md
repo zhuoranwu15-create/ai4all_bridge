@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-23
-状态：**M0/M1/M2-C、M3 与 M4-2 已完成；下一批为 M4-3。** PR #46 已合并；P1/M3/M4 flag 均默认关闭且尚未生产启用，M5 仍受 §10.9 产品门约束。含主动消息子系统改造（D-13 / §11）。本文同时作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
-核查基线：当前开发环境 `feat/companion-world-m4`，已校准到 `origin/main@e230844`（PR #46 merge commit）；M4-0 文档提交为 `4ff932b`，M4-1/M4-2 改动尚未提交。
+状态：**M0/M1/M2-C、M3 与 M4 已完成；M4-0…M4-6 已归档。** PR #46 已合并；P1/M3/M4 flag 均默认关闭且尚未生产启用，M5 仍受 §10.9 产品门约束。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+核查基线：当前开发环境 `feat/companion-world-m4`，已校准到 `origin/main@e230844`（PR #46 merge commit）；M4-0=`4ff932b`、M4-1=`0815740`、M4-2=`792d4fe`，M4-3…M4-6 已完成但尚未提交/推送。
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -24,7 +24,7 @@
 2. **[`companion_world_p1_backend_spec.md`](./companion_world_p1_backend_spec.md)**：M2-C 已实现的 schema、DTO、错误码、锁序与 backfill 细节。
 3. **[`companion_world_m3_backend_spec.md`](./companion_world_m3_backend_spec.md)**：M3 已完成的三表、状态机、API、幂等、PG 锁序、可观测与 rollout 契约。
 4. **[`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md)**：M4-0 已冻结的 lifecycle/mailbox schema、状态机、API、锁序、安全策略与 rollout 契约。
-5. **[`../plans/companion_world_m4_implementation_plan.md`](../plans/companion_world_m4_implementation_plan.md)**：当前待执行计划；M4-2 已完成，下一批为 M4-3。
+5. **[`../plans/companion_world_m4_implementation_plan.md`](../plans/companion_world_m4_implementation_plan.md)**：M4 已完成的归档计划与最终门禁记录。
 6. **[`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)**：生产模板导入、固定 cutoff backfill、对账、开关与回滚步骤。
 7. **[`../plans/companion_world_m2c_implementation_plan.md`](../plans/companion_world_m2c_implementation_plan.md)**、**[`../plans/companion_world_m3_implementation_plan.md`](../plans/companion_world_m3_implementation_plan.md)**：已完成归档，仅作实施 provenance。
 
@@ -553,10 +553,10 @@ per-resident 义务（reminder/commitment）仍留在现有 Runtime 侧管线，
 | **M1** 计费/配额锚点上迁 | R1a | 钱包/配额/RPM 锚 `platform_user` | ✅ 已交付；override/批量 TTL 回收于 M3 前置 m0031 收口 |
 | **M2** Runtime facade + P1 多居民 | R1b+R2 | universe/resident/conversation + L3 首刀 | ✅ 已交付代码，default-off |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | R3 | outbox + App 收件箱 + 去 N× | ✅ M3-0…M3-6 已完成，default-off |
-| **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | 🚧 M4-0…M4-2 完成；M4-3 下一批 |
+| **M4** Lifecycle + Mailbox | R4 | offline+farewell 原子事务、信箱 | ✅ M4-0…M4-6 完成 |
 | **M5** Visit + Human Chat | R5 | 三 slot/高熵 code/ACL、真人分表 | §10.9 |
 
-M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C、M3 与 M4-2 已交付代码；P1/M3/M4 保持默认关闭，生产启用仍受模板、backfill、客户端版本和现场对账发布闸约束。M4 下一批为 M4-3；M5 仍不得在 §10.9 未冻结前编码。**
+M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M1/M2-C、M3 与 M4 已交付代码；P1/M3/M4 保持默认关闭，生产启用仍受模板、backfill、客户端版本和现场对账发布闸约束。M5 仍不得在 §10.9 未冻结前编码。**
 
 ### M0 — 冻结·脚手架·现状 characterization（已完成）
 
@@ -607,15 +607,15 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 - 生产开启前仍必须完成四模板 manifest、固定 cutoff backfill、客户端最低版本、客户端共享/legacy 豁免口径同步与双后端门禁；详见 [`../guides/admin_guide.md`](../guides/admin_guide.md#companion-world-p1-发布运行手册)。
 - M3 前置收口门禁（2026-07-22）：unit 566 passed；SQLite 1434 passed / 8 skipped；PostgreSQL 1438 passed / 4 skipped；`git diff --check` 通过。
 
-### M3（M3-0…M3-6 已完成）、M4（M4-0…M4-2 已完成）与 M5
+### M3（M3-0…M3-6 已完成）、M4（M4-0…M4-6 已完成）与 M5
 
 - **M3**：`universe_posts` + 事务 outbox（领域状态与 outbox 同事务、worker 幂等），按 universe 每日两窗口生成文字动态；App 通知收件箱 **T3-1…T3-9**（显式已读、7/30 天、200 条）; 真人级 proactive 上提域层（预算/活跃按 platform_user 聚合、universe 级 due 队列、确定性发声人、App-only 独立灰度 flag）。
-- **M4**：M4-0 已冻结 cooldown/audit/safety、last-resident、不可逆纠错和 mailbox 策略；M4-1 已交付 m0034、owner-scoped DB 原语、纯领域 DTO/ports 与 default-off 配置；M4-2 已交付 runtime-scoped evidence、cooldown/recovery/crisis/last-resident 复核、脱敏 admin review queue 与 central scheduler heartbeat。commit 仍关闭且无用户可见写入；下一批按 [`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md) 实现 M4-3 offline+farewell+read-only 原子事务。
+- **M4**：M4-0 已冻结 cooldown/audit/safety、last-resident、不可逆纠错和 mailbox 策略；M4-1 已交付 m0034、owner-scoped DB 原语、纯领域 DTO/ports 与 default-off 配置；M4-2 已交付 evidence/review/scheduler；M4-3 已交付 offline 原子事务；M4-4 已交付 signed catalog、world-lock delivery/expiry 与 owner 私密读取/处理；M4-5 已交付 no-binding/no-grant letter accept 单事务；M4-6 已补运行手册、只读对账、catalog-retire PG 竞态与最终双后端门禁。三 flag 仍默认关闭，详见 [`companion_world_m4_backend_spec.md`](./companion_world_m4_backend_spec.md) 归档。
 - **M5**：三 slot + 高熵 code + 绝对过期 + visit ACL；`human_conversations`/`human_messages` 分表（D-11）、到期只读、举报/拉黑。
 
 ### 关键风险与门槛
 
-1. **产品冻结项**是各里程碑硬前置：M2-C、M3 与 M4 的对应 §10 门均已清零；PR #46 已合并且 M4 基线已校准，M4-2 已完成，下一批为 M4-3。M5 仍等待 §10.9。
+1. **产品冻结项**是各里程碑硬前置：M2-C、M3 与 M4 的对应 §10 门均已清零；PR #46 已合并且 M4 已完成归档。M5 仍等待 §10.9。
 2. **客户端口径冲突（生产阻断）**：gap-analysis §4.2「默认隔离/白名单」与 D-05「全量共享沉淀记忆」相反，PRD 仍称来源不构成 legacy 离开豁免。M2-C 后端已实现，客户端文档与实现必须在开 flag 前镜像对齐。
 3. **money 路径**：M1 是唯一动扣款的里程碑，PG 并发测试是发布闸，SQLite 绿不作数（§9）。
 4. **App scope 漏扫**（§6.6）已冻结修复：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并补 App scope 每日轮转回归。

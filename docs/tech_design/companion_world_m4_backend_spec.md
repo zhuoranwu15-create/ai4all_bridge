@@ -1,6 +1,6 @@
 # Companion World M4 Lifecycle + Mailbox 后端实现规范
 
-> 状态：**M4-0 已冻结；M4-1 与 M4-2 已完成（2026-07-23），下一批为 M4-3 offline 原子事务。**
+> 状态：**M4-0 已冻结；M4-1…M4-6 已完成并归档（2026-07-23）。**
 >
 > 基线：PR #46 已合并为 `origin/main@e230844`；`feat/companion-world-m4` 已校准到该基线，M4-0 文档提交为 `4ff932b`。
 >
@@ -396,13 +396,19 @@ world lifecycle scheduler 必须运行在 central-capable 独立进程。请求�
 | `letter_expired` | 409 | 接受边界已过期 |
 | `letter_template_unavailable` | 409 | catalog/template 已不可接受 |
 | `resident_capacity_exceeded` | 409 | 接受时 active 已满 10 |
+| `mailbox_catalog_not_found` | 404 | admin catalog 不存在 |
+| `mailbox_catalog_invalid` | 422 | catalog 内容、模板版本或时间窗非法/冲突 |
 | `lifecycle_event_not_found` | 404 | admin event 不存在 |
 | `lifecycle_event_not_reviewable` | 409 | event 非 review_pending |
 | `lifecycle_commit_disabled` | 503 | commit flag 关闭 |
 | `legacy_resident_departure_forbidden` | 409 | D-08 豁免 |
 | `last_resident_protected` | 409 | 普通离开撞最后居民保护 |
 | `crisis_freeze_active` | 409 | 普通离开仍在 freeze |
+| `lifecycle_evidence_invalid` | 409 | 事务时证据已恢复或不再达标 |
+| `lifecycle_policy_invalid` | 409 | event 的冻结 policy version 无法安全恢复 |
 | `conversation_busy` | 409 | offline 未取得 L2 锁 |
+| `lifecycle_commit_conflict` | 409 | 组合事务唯一键/CAS 冲突并已整体回滚 |
+| `lifecycle_event_not_correctable` | 409 | 非 committed event 请求 post-commit 纠错 |
 | `farewell_invalid` | 422 | 最终文案为空/超长/未通过安全校验 |
 
 flag 关闭的 owner mailbox API 与现有 World 规则一致，对外表现为 404；不得借错误码泄漏未开放能力。
@@ -412,7 +418,7 @@ flag 关闭的 owner mailbox API 与现有 World 规则一致，对外表现为 
 `world_lifecycle_scheduler` heartbeat 使用低基数字段：
 
 - lifecycle：scanned、candidate_created、cooldown_advanced、recovery_cancelled、crisis_frozen、last_resident_blocked、legacy_skipped、review_pending、commit_success/failure。
-- mailbox：world_scanned、eligible、delivered、blocked_open、blocked_cooldown、blocked_capacity、catalog_empty、expired、accept_success/conflict。
+- mailbox scheduler：world_scanned、eligible、delivered、blocked_open、blocked_cooldown、blocked_capacity、catalog_empty、expired。首版不为 owner accept 另建内存指标系统；接受结果由稳定 HTTP code 与下方只读事实对账覆盖。
 
 发布前只读对账至少证明：
 
@@ -476,3 +482,38 @@ M4 default-off 部署不等于生产启用；P1/M3 的模板、backfill、客户
 - central scheduler 已接 resident cursor、低基数 heartbeat、7 天精确 cooldown、恢复/证据失效取消、30 天 crisis freeze、legacy/普通最后居民保护；PG 并发门证明同 resident 最多一个 open event。
 - staff/admin 可 list/detail/reject/cancel；reviewer 无权限。full admin approve 契约已预留，但 commit flag 默认 false，M4-3 原子事务接入前即使误开也 fail-closed。
 - 验证：M4 聚焦 SQLite `27 passed / 2 skipped`、PG `29 passed`；unit `568 passed / 926 deselected`；SQLite 全量 `1479 passed / 15 skipped`；PG 全量 `1489 passed / 5 skipped`。
+
+## 15. M4-3 实现对齐（2026-07-23）
+
+- M4-1、M4-2 已分别提交为 `0815740`、`792d4fe`；M4-3/M4-4/M4-5 当前在 `feat/companion-world-m4` 工作树，尚未提交/推送。
+- full-admin approve 已接 `COMPANION_WORLD_LIFECYCLE_COMMIT_ENABLED`：事务内按 event→world→resident→`conv:` 锁序重读 owner/runtime/conversation，按 event policy version 恢复阈值并重校验 evidence、crisis、legacy、active count 与最后居民例外。
+- 同一事务写唯一 farewell post/published outbox、resident `active→offline`、conversation `active→read_only`、event `review_pending→committed` 与 append-only action；任一唯一键/CAS 冲突整体回滚，重复 approve 返回既有 committed event/post。
+- turn 与 offline 共用同一个 `conv:{conversation_id}` try-lock；offline resident 仍可读历史，但不能再 turn、成为普通 Feed author 或 proactive speaker。最后居民 severe-abuse 例外后，即使 active=0，仍允许只读已发布 farewell；不因此开放普通 Feed 写入。
+- full-admin correct 只追加纠错审计，可把 farewell `published→deleted` 并写 deleted outbox；resident/conversation 保持 offline/read-only，不存在恢复入口。
+- farewell 在事务外由 full admin 确定安全终稿；后端只做非空、2000 codepoint 与 NUL 结构校验，事务内不调用 LLM/远程审核服务。
+- 验证：聚焦 SQLite `34 passed / 2 skipped`、PostgreSQL `36 passed`；unit `568 passed / 931 deselected`；SQLite 全量 `1483 passed / 16 skipped`；PostgreSQL 全量 `1494 passed / 5 skipped`。覆盖 outbox 冲突全回滚、同键 turn lock、double approve 单 farewell/outbox、policy snapshot、公开 farewell projection 与 correction。
+
+## 16. M4-4 实现对齐（2026-07-23）
+
+- `CompanionWorldMailboxService` 已接 confirmed world cursor、world row lock、active `<8`、open=0、30 天 delivery cooldown/TTL 与确定性 `priority DESC,id ASC` catalog 选择；排除历史已投递 `character_key` 和世界中已有 non-legacy template。
+- scheduler 与 owner request 均先执行 `expires_at <= now` 的 CAS expiry；精确 30 天边界可在同一轮释放 open 名额并投递下一封。mailbox maintenance 与 lifecycle evaluation 使用独立 flag/cursor，任一关闭不借用另一方开关。
+- owner API 已交付 list/detail/unread/read/defer/decline、opaque tuple cursor、no-store 与跨 owner 防枚举；列表不自动已读，defer 不延长 TTL，公开 DTO 不返回 owner/catalog/policy/eligibility/runtime/persona。
+- staff/admin 已可 create/list/retire 不可变 catalog；reviewer 无权限。签名 manifest import 使用标准库 HMAC-SHA256，密钥来自 `COMPANION_WORLD_MAILBOX_MANIFEST_HMAC_SECRET`，dry-run/apply 均先验签，报告不输出正文、签名或密钥。
+- PG world lock 与 partial unique index 已证明同 world 两个 scheduler 最多一封 open letter；runtime/resident/conversation 接受组合已在 M4-5 接通。
+- 验证：M4 聚焦 SQLite `27 passed / 3 skipped`、PostgreSQL `30 passed`；unit `568 passed / 941 deselected`；SQLite 全量 `1492 passed / 17 skipped`；PostgreSQL 全量 `1504 passed / 5 skipped`。
+
+## 17. M4-5 实现对齐（2026-07-23）
+
+- owner accept 只提供 `POST /v1/mailbox/letters/{id}/accept`；不新增通知、欢迎消息、自动 turn、补偿 workflow、配置项或通用 UoW 抽象。
+- 单事务按 world→owner-scoped letter/catalog/template 加锁并复核精确 expiry、open/accepted、catalog/template active+版本+来源、同模板 non-legacy 关系和 active `<10`。`now >= expires_at` 会先提交 expired，再返回 `letter_expired`。
+- 创建链复用既有 no-binding/no-grant runtime 原语，随后写 `origin='mailbox'` active resident、AI conversation 和 accepted letter，一次提交；失败不留 account/profile/persona/resident/conversation 孤儿。
+- accepted 重放返回同一 resident/conversation；公开响应只含 letter/resident 白名单，不下发 runtime、owner、catalog、policy、persona 或 eligibility。
+- mailbox 聚焦 SQLite `15 passed / 4 skipped`、PG `19 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 6 skipped`、PG `31 passed`；unit `568 passed / 950 deselected`；SQLite 全量 `1498 passed / 20 skipped`；PG 全量 `1513 passed / 5 skipped`。PG 已证明 double accept、与常规建居民争抢第 10 位、accept-vs-expiry 不撕裂。catalog-retire 专项并发压测由 M4-6 补齐。
+
+## 18. M4-6 最终实现对齐（2026-07-23）
+
+- 精简收口复用既有 `GET /admin/ops/status` 和 `world_lifecycle_scheduler` heartbeat；未新增 health endpoint、accept 指标系统、配置、通知或产品行为。
+- Admin guide 已补 lifecycle/mailbox 独立开关、central 单例、灰度顺序、聚合 heartbeat、SQLite/PG 只读对账与不可逆回滚说明。
+- PG accept-vs-catalog-retire 竞态证明：结果只能是 accepted 后 catalog retired，或 retire 先完成导致 `letter_template_unavailable`；两种结果均无孤儿 runtime/resident/conversation。
+- 最终门禁：mailbox PG `20 passed`；lifecycle+mailbox 联合 SQLite `25 passed / 7 skipped`、PG `32 passed`；unit `568 passed / 951 deselected`；SQLite 全量 `1498 passed / 21 skipped`；PG 全量 `1514 passed / 5 skipped`；`compileall` 与 `git diff --check` 通过。
+- M4 全部 flag 保持默认关闭；本归档不代表生产已执行 m0034、导入 catalog、启动 scheduler、开量、Ready 或合并。

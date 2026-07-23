@@ -425,6 +425,37 @@ curl -fsS http://127.0.0.1:8180/health/ready
 
 预期：实际导入报告 `errors=[]`、`catalog_ready=true`。再次执行应只出现 `keep_ids`，不得新增重复模板。manifest 放受控目录，不提交密钥或生产 persona 到临时日志。
 
+### M4 Mailbox 签名 catalog（默认关闭）
+
+M4 mailbox catalog 只接受运营已发布的 official/operations template，不在代码或导入器中生成角色、人设或来信正文。manifest 顶层必须严格为 `version=1`、`entries`、`signature`；`signature` 是去掉自身后，对 canonical JSON `{"entries":...,"version":1}`（UTF-8、key 排序、无多余空格）计算的 HMAC-SHA256 hex。签名必须由受控发布流程产生。
+
+密钥只从 secret manager 注入，不写入 manifest、命令行参数、仓库或日志：
+
+```bash
+export COMPANION_WORLD_MAILBOX_MANIFEST_HMAC_SECRET='<from-secret-manager>'
+```
+
+先保持 `COMPANION_WORLD_MAILBOX_ENABLED=false`，执行验签 dry-run：
+
+```bash
+.venv/bin/python scripts/import_companion_world_mailbox_catalog.py \
+  /secure/path/companion_world_mailbox_catalog.json --dry-run
+```
+
+预期 `errors=[]`；检查 `create_ids/keep_ids/retire_ids` 与运营签字清单完全一致后再 apply：
+
+```bash
+.venv/bin/python scripts/import_companion_world_mailbox_catalog.py \
+  /secure/path/companion_world_mailbox_catalog.json --apply \
+  --actor '<release-ticket-or-operator-id>'
+```
+
+apply 在单事务内 retire 旧 character 版本并创建新版本；已投递 letter 快照不改写，retired catalog id 不复活。重放应只出现 `keep_ids`。报告不会输出 letter body、签名或密钥。
+
+Mailbox 使用独立 `COMPANION_WORLD_MAILBOX_ENABLED`。独立中心进程 `scripts/run_world_lifecycle_scheduler.py` 在 lifecycle evaluation=false、mailbox=true 时仍会运行 mailbox delivery/expiry；两个 flag 不互相代开。启用前至少核对：active resident `<8`、每世界 open letter `<=1`、最近投递已满 30 天、同 `character_key` 从未投递。关闭 flag 会同时隐藏 owner API并停止新投递/expiry；不会撤销已投递或未来已接受的关系。
+
+接受来信只由 owner session 调用 `POST /v1/mailbox/letters/{letter_id}/accept`。后端会在 world 锁内重查精确 expiry、catalog/template 和 active `<10`，一次提交 runtime account、`origin='mailbox'` resident、conversation 与 accepted letter；重复调用返回同一 resident。该路径不会创建 owner binding、钱包、subscription/grant、App notification、outbound、欢迎消息或自动 turn。关闭 mailbox flag 只阻止后续 API/投递，不删除已接受 resident。
+
 ### 4. 固定 cutoff 并 backfill
 
 在开始 backfill 前记录一个**北京墙钟、秒粒度且全程不变**的 cutoff。生产 PG 示例：
@@ -675,3 +706,105 @@ WHERE r.scope = 'human' AND r.delivery_status = 'reserved'
 2. 真人级触达异常：只关闭 `APP_ONLY_HUMAN_PROACTIVE`；继续提供通知读取与 per-resident obligations。
 3. 通知写入/API 异常：关闭 `APP_INBOX`；cleanup 默认继续运行，只有确认 cleanup 自身有缺陷时才停 central proactive scheduler 的该步骤。
 4. 任意账号隔离、N× 触达、slot 超配或 visible 超过 200 的异常都阻断扩量；先保存对账结果和代码 SHA，不删除加性数据。
+
+## Companion World M4 发布运行手册
+
+M4 lifecycle 与 mailbox 共用 `scripts/run_world_lifecycle_scheduler.py`，但使用独立开关和游标。部署时三个开关必须保持默认关闭：
+
+- `COMPANION_WORLD_LIFECYCLE_EVALUATION_ENABLED=false`
+- `COMPANION_WORLD_LIFECYCLE_COMMIT_ENABLED=false`
+- `COMPANION_WORLD_MAILBOX_ENABLED=false`
+
+只允许一个 central-capable 实例运行 scheduler。`GET /admin/ops/status` 的 `schedulers.heartbeats` 中，`world_lifecycle_scheduler` 必须持续更新；`metadata.enabled` 与 `metadata.mailbox_enabled` 应与部署开关一致，`last_run_metrics` 和 `last_run_mailbox_metrics` 只能包含聚合计数，不应出现 owner、resident、account 或 evidence 明细。
+
+推荐灰度顺序：先以全 false 部署 m0034 并完成下方对账；再只开 lifecycle evaluation 做 shadow；人工核验 review queue 后才允许小流量开 commit；mailbox 先导入签名 catalog 并开放只读 API，再启动投递和 accept。任何阶段都不得跳过 P1/M3 的模板、backfill、客户端版本与对账门。
+
+### M4 只读数据对账
+
+除 outbox 状态汇总外，以下异常查询都应返回空结果集。
+
+```sql
+-- offline 组合事务必须同时具备 committed event、read_only conversation 和 farewell。
+SELECT r.id AS resident_id, r.departure_event_id,
+       e.status AS event_status, c.state AS conversation_state,
+       p.id AS farewell_post_id
+FROM universe_residents r
+LEFT JOIN resident_lifecycle_events e ON e.id = r.departure_event_id
+LEFT JOIN ai_conversations c ON c.resident_id = r.id
+LEFT JOIN universe_posts p
+  ON p.id = e.farewell_post_id AND p.departure_event_id = e.id
+WHERE r.status = 'offline'
+  AND (r.origin = 'legacy' OR e.status <> 'committed'
+       OR c.state <> 'read_only' OR p.id IS NULL);
+
+-- active resident 不得绑定 committed departure。
+SELECT r.id, r.departure_event_id
+FROM universe_residents r
+JOIN resident_lifecycle_events e ON e.id = r.departure_event_id
+WHERE r.status = 'active' AND e.status = 'committed';
+
+-- committed event 必须有唯一 commit action。
+SELECT e.id, COUNT(a.id) AS commit_actions
+FROM resident_lifecycle_events e
+LEFT JOIN resident_lifecycle_event_actions a
+  ON a.event_id = e.id AND a.action = 'admin_committed_offline'
+WHERE e.status = 'committed'
+GROUP BY e.id
+HAVING COUNT(a.id) <> 1;
+
+-- 每个 world 的 active resident 不得超过 10；open letter 不得超过 1。
+SELECT universe_id, COUNT(*) AS active_count
+FROM universe_residents
+WHERE status = 'active'
+GROUP BY universe_id
+HAVING COUNT(*) > 10;
+
+SELECT universe_id, COUNT(*) AS open_count
+FROM character_letters
+WHERE status IN ('unread', 'read', 'deferred')
+GROUP BY universe_id
+HAVING COUNT(*) > 1;
+
+-- accepted letter 必须指向同 world 的 mailbox resident 和唯一 conversation。
+SELECT l.id, l.universe_id, l.accepted_resident_id,
+       r.universe_id AS resident_universe_id, r.origin,
+       COUNT(c.id) AS conversations
+FROM character_letters l
+LEFT JOIN universe_residents r ON r.id = l.accepted_resident_id
+LEFT JOIN ai_conversations c ON c.resident_id = r.id
+WHERE l.status = 'accepted'
+GROUP BY l.id, l.universe_id, l.accepted_resident_id,
+         r.universe_id, r.origin
+HAVING l.accepted_resident_id IS NULL
+    OR r.universe_id <> l.universe_id
+    OR r.origin <> 'mailbox'
+    OR COUNT(c.id) <> 1;
+
+-- 非 accepted letter 不得携带 accepted_resident_id。
+SELECT id, status, accepted_resident_id
+FROM character_letters
+WHERE status <> 'accepted' AND accepted_resident_id IS NOT NULL;
+
+-- farewell outbox 汇总；dead 必须为 0，pending/processing 应持续回落。
+SELECT status, COUNT(*) AS total, MIN(created_at) AS oldest_created_at
+FROM companion_world_outbox
+WHERE idempotency_key LIKE 'departure-farewell:v1:%'
+GROUP BY status
+ORDER BY status;
+
+-- PostgreSQL：投递快照必须满足 active_count < 8。
+SELECT id, universe_id, eligibility_snapshot_json
+FROM character_letters
+WHERE COALESCE(
+  (eligibility_snapshot_json::jsonb ->> 'active_count')::integer, 999
+) >= 8;
+```
+
+SQLite 执行最后一条时，把取值表达式替换为 `COALESCE(json_extract(eligibility_snapshot_json, '$.active_count'), 999)`；其余查询可直接使用。对账只读，不得通过删除 event、letter、resident 或 outbox 来“修复”结果。
+
+### M4 回滚
+
+1. lifecycle shadow 异常：关闭 evaluation 并停止其扫描；保留已有 candidate/audit。
+2. 不可逆提交异常：立即关闭 commit；已经 committed 的 offline/read-only/farewell 不自动恢复，按 correction 流程追加审计。
+3. mailbox 异常：关闭 mailbox 并停止投递；保留历史 letter 和已接受 resident，不反向删除 runtime。
+4. heartbeat 陈旧、对账非空、PG 并发门禁失败或 outbox dead 非零时阻断扩量，保存代码 SHA 与查询结果后再处理。
