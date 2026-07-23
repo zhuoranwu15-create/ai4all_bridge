@@ -2,7 +2,7 @@
 
 > 状态：**M5-0…M5-5 已完成并归档（2026-07-23）。**
 >
-> 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；M5 Draft PR #48 临时以 `feat/companion-world-m4` 为 base。PR #47 合并后须 retarget `main` 并重跑 CI，之前不得转 Ready。
+> 分支基线：M4 PR #47 已合并；`feat/companion-world-m5` 已同步 `origin/main@d41f26f`。M5 Draft PR #48 现以 `main` 为 base 并重跑 CI，尚未转 Ready 或合并。
 >
 > 权威上位决策：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md) D-02/D-06/D-11/D-12、§9、§10.9、§12 M5。
 
@@ -391,7 +391,7 @@ git diff --check
 
 生产启用还要求：
 
-1. PR #47 合并，M5 branch 校准到最新 main；m0035 双后端迁移与只读对账通过。
+1. M4 PR #47 合并与 M5 branch 校准最新 main 已完成；生产启用前仍须让 m0035 双后端迁移与只读对账通过。
 2. 客户端实现 pending/owner accept、到期缓存清理、no-store、终态只读与隐藏语义。
 3. 运营/法务确认举报 evidence retention 配置；未确认前不运行自动清理。
 4. 两个 flag 按 schema → read/history → invite/pending → active Feed → human write 顺序小流量开启。

@@ -822,7 +822,7 @@ COMPANION_WORLD_HUMAN_CHAT_ENABLED=false
 
 ### 1. 上线前阻断项与顺序
 
-1. PR #47/M4 必须先合并，M5 分支校准最新 main；运行 m0035 后确认两个 M5 flag 仍为 false。
+1. PR #47/M4 已合并，M5 分支已校准 `main`；生产部署时再次确认目标版本包含该基线，运行 m0035 后确认两个 M5 flag 仍为 false。
 2. 客户端必须同步“24h invite → 7d pending → A 接受后独立 30d visit”，不得继续按旧“12h/兑换即生效”实现。
 3. 客户端必须在 visit 终止时清除好友世界页面/媒体缓存；旧深链不得绕过服务端 `visit_id` ACL。
 4. 运营/法务必须确认 `human_chat_reports.retained_until` 的合规期限与清理 SOP；未确认前 evidence fail-safe 保留，不启动自动删除。

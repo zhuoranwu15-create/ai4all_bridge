@@ -4,7 +4,7 @@
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
-> 分支基线：`feat/companion-world-m5` 堆叠于 M4 完成提交 `af03382`；M5 Draft PR #48 临时以 M4 branch 为 base。PR #47 合并后 retarget `main`，之前不得转 Ready。
+> 分支基线：M4 PR #47 已合并；`feat/companion-world-m5` 已同步 `origin/main@d41f26f`。M5 Draft PR #48 现以 `main` 为 base 并重跑 CI，尚未转 Ready 或合并。
 
 ## 1. 目标与精简原则
 
@@ -113,9 +113,9 @@
 - Admin guide 增加 flags、scheduler、只读对账、回滚与 evidence retention 未决闸。
 - 同步 ADR/spec/计划/简报/`.env.example`。
 - 运行 unit、SQLite 全量、PG 全量、compileall、diff check。
-- 整理提交、推送并创建 Draft PR；PR #47 合并前不转 Ready。
+- 整理提交、推送并创建 Draft PR；PR #47 合并后 retarget `main` 并重跑 CI，未经用户明确授权不转 Ready。
 
-实现结果：Admin guide 已补双 flag 真实边界、单 central scheduler、heartbeat、只读对账 SQL、evidence retention 闸与不可逆终态回滚；redeem 增加真人 10 RPM + IP 30 RPM 的 DB-backed 限流；admin ops 暴露 world lifecycle 配置。Draft PR #48 已创建；最终未执行生产 migration/开量/Ready/合并。
+实现结果：Admin guide 已补双 flag 真实边界、单 central scheduler、heartbeat、只读对账 SQL、evidence retention 闸与不可逆终态回滚；redeem 增加真人 10 RPM + IP 30 RPM 的 DB-backed 限流；admin ops 暴露 world lifecycle 配置。Draft PR #48 已创建并在 M4 PR #47 合并后 retarget `main`；仍未执行生产 migration/开量/Ready/合并。
 
 最终验证：unit `571 passed / 978 deselected`；SQLite 全量 `1521 passed / 30 skipped`；PostgreSQL 全量 `1546 passed / 5 skipped`；compileall/diff check 通过。既存 deprecation/async mock warnings 不阻断。
 

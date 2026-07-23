@@ -2,9 +2,9 @@
 
 > 面向：项目干系人 / 新加入者的快速通读。权威口径以 ADR
 > [`tech_design/companion_world_3_0_refactor_design.md`](tech_design/companion_world_3_0_refactor_design.md)
-> 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md)、M3 规范 [`tech_design/companion_world_m3_backend_spec.md`](tech_design/companion_world_m3_backend_spec.md)、M4 规范 [`tech_design/companion_world_m4_backend_spec.md`](tech_design/companion_world_m4_backend_spec.md) 为准；本文只做浓缩。
+> 与 P1 规范 [`tech_design/companion_world_p1_backend_spec.md`](tech_design/companion_world_p1_backend_spec.md)、M3 规范 [`tech_design/companion_world_m3_backend_spec.md`](tech_design/companion_world_m3_backend_spec.md)、M4 规范 [`tech_design/companion_world_m4_backend_spec.md`](tech_design/companion_world_m4_backend_spec.md)、M5 规范 [`tech_design/companion_world_m5_backend_spec.md`](tech_design/companion_world_m5_backend_spec.md) 为准；本文只做浓缩。
 > 更新日期：2026-07-23
-> 后续开发统一从上位 ADR 的“接手说明”开始；当前执行计划为 [`plans/companion_world_m4_implementation_plan.md`](plans/companion_world_m4_implementation_plan.md)。
+> 后续开发统一从上位 ADR 的“接手说明”开始；M5 已完成归档，生产发布以 [`guides/admin_guide.md`](guides/admin_guide.md) 为准。
 
 ---
 
@@ -63,7 +63,7 @@
 
 ## 四、进度与发布状态（截至 2026-07-23）
 
-> PR #45、PR #46 均已合并。M4 分支 `feat/companion-world-m4` 已校准到 `origin/main@e230844`；M4-1=`0815740`、M4-2=`792d4fe`，M4-3…M4-6 已完成但尚未提交/推送。P1/M3/M4 feature flag 均默认关闭。
+> PR #45、PR #46 与 M4 PR #47 均已合并。M5 Draft PR #48 已改以 `main` 为 base 并重跑 CI，尚未转 Ready 或合并。P1/M3/M4/M5 feature flag 均默认关闭。
 
 ### 已交付
 
@@ -141,10 +141,10 @@
 ## 五、下一步
 
 1. 取得运营签字的四模板 manifest、客户端最低版本，并同步客户端两项冻结口径。
-2. P1/M3/M4 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3/M4 数据对账和全量只读核验；不得把开发分支 m0034 等同于已部署。
+2. P1/M3/M4/M5 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3/M4/M5 数据对账和全量只读核验；不得把开发分支的 m0034/m0035 等同于已部署。
 3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
 4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
-5. M4 Draft PR #47 尚未合并；M5 Draft PR #48 已创建并临时以 M4 branch 为 base。#47 合并后 retarget main，Ready/合并仍由用户明确决定。
+5. M4 PR #47 已合并；M5 Draft PR #48 已 retarget `main` 并重跑 CI，Ready/合并仍由用户明确决定。
 6. 客户端仍须镜像 D-05 L3 全量共享与 D-08 legacy 离开豁免；M4 backend 冻结不替代客户端文档修订。
 7. 客户端还须把旧“邀请码默认 12h/兑换即生效”改为 M5 冻结口径：24h invite、兑换后 pending、A 接受后独立 30d visit；这是生产开 M5 flag 的阻断项。
 8. 3.0 后端开发闭环已完成；生产发布仍须依次完成客户端缓存/口径、report evidence retention、m0035 对账与 default-off 灰度，不得把开发完成等同于已上线。

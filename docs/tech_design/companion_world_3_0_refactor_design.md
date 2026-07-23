@@ -1,8 +1,8 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-23
-状态：**M0/M1/M2-C、M3、M4 与 M5 均已完成；M5-0…M5-5 已归档。** PR #46 已合并，M4 Draft PR #47 与堆叠 M5 Draft PR #48 尚未合并；P1/M3/M4/M5 flag 均默认关闭且尚未生产启用。3.0 后端重构开发闭环已完成，后续重点转为 PR 合并、客户端口径同步与生产发布门。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
-核查基线：当前开发环境 `feat/companion-world-m5`，堆叠于已完成并推送的 M4 提交 `af03382`；M5 Draft PR #48 临时以 M4 branch 为 base。M5-0=`1c981be`、M5-1=`99dd92b`、M5-2=`c372479`、M5-3=`82073ad`、M5-4=`c19c6b8`、M5-5=`b1e8911`。
+状态：**M0/M1/M2-C、M3、M4 与 M5 均已完成；M5-0…M5-5 已归档。** PR #46 与 M4 PR #47 已合并；M5 Draft PR #48 已改以 `main` 为 base 并重跑 CI，尚未转 Ready 或合并。P1/M3/M4/M5 flag 均默认关闭且尚未生产启用。3.0 后端重构开发闭环已完成，后续重点转为 M5 PR 验收、客户端口径同步与生产发布门。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+核查基线：当前开发环境 `feat/companion-world-m5`，已合并 `origin/main@d41f26f`（PR #47 merge commit）并推送；M5 Draft PR #48 以 `main` 为 base。M5-0=`1c981be`、M5-1=`99dd92b`、M5-2=`c372479`、M5-3=`82073ad`、M5-4=`c19c6b8`、M5-5=`b1e8911`。
 
 关联产品 PRD（客户端仓库）：
 - [`ai_companion_universe_prd.md`](../../../ai4all-companion-app-rn/docs/product/ai_companion_universe_prd.md)
@@ -617,7 +617,7 @@ M2–M5 不并行，每阶段无下一阶段仍是完整可回滚体验。**M0/M
 
 ### 关键风险与门槛
 
-1. **产品冻结项**是各里程碑硬前置：M2-C、M3、M4 与 M5 的对应 §10 门均已清零，3.0 后端开发已完成。M4 Draft PR #47 尚未合并；M5 Draft PR #48 暂以 M4 branch 为 base，#47 合并后再 retarget main，未经用户明确授权不得转 Ready。
+1. **产品冻结项**是各里程碑硬前置：M2-C、M3、M4 与 M5 的对应 §10 门均已清零，3.0 后端开发已完成。M4 PR #47 已合并；M5 Draft PR #48 已 retarget `main` 并重跑 CI，未经用户明确授权不得转 Ready 或合并。
 2. **客户端口径冲突（生产阻断）**：gap-analysis §4.2「默认隔离/白名单」与 D-05「全量共享沉淀记忆」相反，PRD 仍称来源不构成 legacy 离开豁免。M2-C 后端已实现，客户端文档与实现必须在开 flag 前镜像对齐。
 3. **money 路径**：M1 是唯一动扣款的里程碑，PG 并发测试是发布闸，SQLite 绿不作数（§9）。
 4. **App scope 漏扫**（§6.6）已冻结修复：M2-C 将 `__app_active__` 纳入 `DEFAULT_ACTIVE_SESSION_KEYS`，并补 App scope 每日轮转回归。
