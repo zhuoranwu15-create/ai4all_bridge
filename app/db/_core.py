@@ -2864,6 +2864,18 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
     )
 
 
+def _migration_0036_repair_account_app_id(conn: Connection) -> None:
+    """修复旧分支迁移编号碰撞导致的账号 App schema 漂移。
+
+    部分已升级数据库曾在旧 Companion World 分支把 22–24 登记为另一组迁移，
+    因而合并后的 m0022–m0024 会被版本表误判为已执行。使用新的前向版本幂等
+    重放三步，避免删除或改写历史 migration 记录。
+    """
+    _migration_0022_account_app_id(conn)
+    _migration_0023_owner_binding_active_unique(conn)
+    _migration_0024_rename_channel_app_to_native(conn)
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2895,6 +2907,7 @@ _MIGRATIONS = [
     (33, _migration_0033_companion_world_m3_content),
     (34, _migration_0034_companion_world_lifecycle_mailbox),
     (35, _migration_0035_companion_world_visit_human_chat),
+    (36, _migration_0036_repair_account_app_id),
 ]
 
 

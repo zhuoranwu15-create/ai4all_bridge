@@ -2,7 +2,7 @@
 
 > 状态：**M5-0…M5-5 已完成并归档（2026-07-23）。**
 >
-> 分支基线：M4 PR #47 已合并；`feat/companion-world-m5` 已同步 `origin/main@d41f26f`。M5 Draft PR #48 现以 `main` 为 base 并重跑 CI，尚未转 Ready 或合并。
+> 交付基线：M5 PR #48 已合并为 `origin/main@3403380`；SQLite/PostgreSQL 全量 CI 均通过。M5 flags 继续 default-off，未执行生产 migration 或开量。
 >
 > 权威上位决策：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md) D-02/D-06/D-11/D-12、§9、§10.9、§12 M5。
 
@@ -391,7 +391,7 @@ git diff --check
 
 生产启用还要求：
 
-1. M4 PR #47 合并与 M5 branch 校准最新 main 已完成；生产启用前仍须让 m0035 双后端迁移与只读对账通过。
+1. M4 PR #47 合并与 M5 branch 校准最新 main 已完成；生产启用前须升级到当前 m0036，并让 m0035 M5 schema、m0036 `app_id` 修复和全部只读对账通过。
 2. 客户端实现 pending/owner accept、到期缓存清理、no-store、终态只读与隐藏语义。
 3. 运营/法务确认举报 evidence retention 配置；未确认前不运行自动清理。
 4. 两个 flag 按 schema → read/history → invite/pending → active Feed → human write 顺序小流量开启。
@@ -422,6 +422,6 @@ git diff --check
 
 ## 15. M5-5 最终归档
 
-已补兑换 user/IP DB-backed 限流、`/admin/ops/status` world lifecycle 配置、Admin guide 灰度/heartbeat/只读对账/回滚与 evidence retention 发布闸。最终未执行生产 migration、开 flag、数据清理、PR Ready 或合并。
+已补兑换 user/IP DB-backed 限流、`/admin/ops/status` world lifecycle 配置、Admin guide 灰度/heartbeat/只读对账/回滚与 evidence retention 发布闸。M5 PR #48 已合并为 `origin/main@3403380`；未执行生产 migration、开 flag 或数据清理。
 
 最终验证：unit `571 passed / 978 deselected`；SQLite 全量 `1521 passed / 30 skipped`；PostgreSQL 全量 `1546 passed / 5 skipped`；compileall 与 `git diff --check` 通过。保留的 warnings 仅为既存 Pydantic/FastAPI deprecation 与偶发 async mock runtime warning。

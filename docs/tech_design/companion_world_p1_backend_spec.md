@@ -4,7 +4,7 @@
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
 > 上位 ADR：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
-> 核查基线：PR #45 已合并；当前 M3 开发分支已追加 m0033，但不改变本文 P1 已实现范围。
+> 历史交付基线：PR #45 已合并；其后 M3 追加 m0033、M4 追加 m0034、M5 追加 m0035，m0036 修复历史编号碰撞；均不改变本文 P1 已实现范围。当前整体交付状态以总 ADR 为准。
 
 ## 0. 范围与不做项
 

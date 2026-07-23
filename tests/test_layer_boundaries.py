@@ -97,6 +97,28 @@ def _runtime_py_files() -> list[Path]:
     return sorted(RUNTIME_LAYER.rglob("*.py"))
 
 
+def _module_export_names(module_rel: str) -> tuple[str, ...]:
+    """AST 静态读取某模块 __all__ 的字符串成员（不 import，沿用本文件纯 AST 纪律）。
+
+    用于把「经 `app/db/__init__.py` 的 `import *` 再导出」的符号名封进门禁：AI 路径写
+    `from app.db import insert_human_message` 会 yield `app.db.insert_human_message`，
+    绕过「完整模块路径」前缀检查；逐个再导出符号名封住这条缝（见 D-11 门禁）。
+    """
+    module_file = REPO_ROOT / module_rel
+    tree = ast.parse(module_file.read_text(encoding="utf-8"), filename=str(module_file))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+        ):
+            if isinstance(node.value, (ast.List, ast.Tuple)):
+                return tuple(
+                    elt.value
+                    for elt in node.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                )
+    return ()
+
+
 def test_scaffold_packages_exist():
     """M0-4：三层空骨架包与 __init__.py 就位（AST 边界门可识别层）。"""
     for pkg in SCAFFOLD_PACKAGES:
@@ -160,10 +182,19 @@ def test_ai_paths_do_not_import_human_chat_storage():
         REPO_ROOT / "app" / "agent_runtime",
         REPO_ROOT / "app" / "proactive",
     ]
+    # `app/db/__init__.py` 以 `from app.db.companion_world_human_chat import *` 再导出全部写
+    # helper；仅禁完整模块路径会漏掉 `from app.db import insert_human_message` 这条再导出缝。
+    # 逐个把 human-chat 的 __all__ 符号名封为 `app.db.<name>`（不封裸 `app.db`，AI 路径合法用它）。
+    human_chat_exports = _module_export_names("app/db/companion_world_human_chat.py")
+    assert human_chat_exports, (
+        "未能解析 app/db/companion_world_human_chat.py 的 __all__；"
+        "D-11 再导出门禁将失效，请检查该模块是否仍声明 __all__。"
+    )
     forbidden = (
         "app.db.companion_world_human_chat",
         "app.platform.companion_world_human_chat",
         "app.domains.companion_world.human_chat",
+        *(f"app.db.{name}" for name in human_chat_exports),
     )
     violations: list[str] = []
     files: list[Path] = []

@@ -70,8 +70,8 @@ def test_m0033_is_idempotent(fresh_db):
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-    # 当前库已继续追加 M4 m0034/M5 m0035；重跑历史 m0033 不得回退或推进版本。
-    assert int(version) == 35
+    # 当前库已继续追加到修复迁移 m0036；重跑历史 m0033 不得回退或推进版本。
+    assert int(version) == 36
 
 
 def test_feed_slot_owner_isolation_and_atomic_outbox(fresh_db):
