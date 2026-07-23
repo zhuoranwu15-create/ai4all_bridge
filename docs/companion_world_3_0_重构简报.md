@@ -144,7 +144,7 @@
 2. P1/M3/M4 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3/M4 数据对账和全量只读核验；不得把开发分支 m0034 等同于已部署。
 3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
 4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
-5. M4 Draft PR #47 尚未合并；M5 已完成并将创建以 M4 branch 为临时 base 的 Draft PR。#47 合并后 retarget main，Ready/合并仍由用户明确决定。
+5. M4 Draft PR #47 尚未合并；M5 Draft PR #48 已创建并临时以 M4 branch 为 base。#47 合并后 retarget main，Ready/合并仍由用户明确决定。
 6. 客户端仍须镜像 D-05 L3 全量共享与 D-08 legacy 离开豁免；M4 backend 冻结不替代客户端文档修订。
 7. 客户端还须把旧“邀请码默认 12h/兑换即生效”改为 M5 冻结口径：24h invite、兑换后 pending、A 接受后独立 30d visit；这是生产开 M5 flag 的阻断项。
 8. 3.0 后端开发闭环已完成；生产发布仍须依次完成客户端缓存/口径、report evidence retention、m0035 对账与 default-off 灰度，不得把开发完成等同于已上线。

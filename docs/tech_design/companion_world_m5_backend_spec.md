@@ -2,7 +2,7 @@
 
 > 状态：**M5-0…M5-5 已完成并归档（2026-07-23）。**
 >
-> 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；Draft PR #47 尚未合并，M5 PR 在其合并前不得转 Ready。
+> 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；M5 Draft PR #48 临时以 `feat/companion-world-m4` 为 base。PR #47 合并后须 retarget `main` 并重跑 CI，之前不得转 Ready。
 >
 > 权威上位决策：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md) D-02/D-06/D-11/D-12、§9、§10.9、§12 M5。
 
