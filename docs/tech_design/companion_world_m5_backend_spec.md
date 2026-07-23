@@ -1,6 +1,6 @@
 # Companion World M5 Visit + Human Chat 后端实现规范
 
-> 状态：**M5-0…M5-4 已完成（2026-07-23）；M5-5 待收口。**
+> 状态：**M5-0…M5-5 已完成并归档（2026-07-23）。**
 >
 > 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；Draft PR #47 尚未合并，M5 PR 在其合并前不得转 Ready。
 >
@@ -351,7 +351,7 @@ SQLite 复用进程锁做功能回退；PG `FOR UPDATE`/advisory lock 与唯一�
 
 ## 8. 安全与滥用防护
 
-- redeem 仅对已登录用户开放，按 user + source IP 使用现有 API 限流接缝；失败日志不含完整 code。
+- redeem 仅对已登录用户开放，使用现有 DB-backed 滑动窗口按真人 **10 RPM**、source IP **30 RPM** 限流；失败日志不含完整 code。
 - 文本发送做长度/空白/控制字符校验和现有真人内容安全入口；M5 不把内容送进 AI prompt moderation。
 - 公开 DTO 不返回手机号、login identity、code hash、internal owner id、runtime account、L2/L3 或举报 evidence。
 - report 后允许用户选择 block；服务端不因举报自动判罚，admin 只读 review queue 后续按现有 staff/full-admin 权限接入。
@@ -418,4 +418,10 @@ git diff --check
 
 已交付 human conversation list、message list/send/read、participant-scoped idempotency、visit 终态只读历史、self-hide、独立 report evidence snapshot，以及 conversation block 入口。Chat write flag 关闭只阻止新消息，历史/read/hide/report/block 仍可用。消息在 conversation lock 下分配递增 `sequence_no`，同秒多消息按真实提交顺序分页；真人消息没有任何 AI `messages`/turn/prompt/dreaming/memory/proactive 调用方，AST 门禁持续阻断反向接入。
 
-验证：最终 M5 聚焦 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；PG 覆盖同 client id 双发、send-vs-block、send-vs-exact-expiry；Companion World SQLite 联合（sequence 修复前，业务面等价）`122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。M5-5 将复跑最终全量门禁。
+验证：最终 M5 聚焦 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；PG 覆盖同 client id 双发、send-vs-block、send-vs-exact-expiry；Companion World SQLite 联合（sequence 修复前，业务面等价）`122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。最终全量结果见下节。
+
+## 15. M5-5 最终归档
+
+已补兑换 user/IP DB-backed 限流、`/admin/ops/status` world lifecycle 配置、Admin guide 灰度/heartbeat/只读对账/回滚与 evidence retention 发布闸。最终未执行生产 migration、开 flag、数据清理、PR Ready 或合并。
+
+最终验证：unit `571 passed / 978 deselected`；SQLite 全量 `1521 passed / 30 skipped`；PostgreSQL 全量 `1546 passed / 5 skipped`；compileall 与 `git diff --check` 通过。保留的 warnings 仅为既存 Pydantic/FastAPI deprecation 与偶发 async mock runtime warning。

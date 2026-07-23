@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
 from app.platform import CompanionWorldVisitService, VisitError
+from app.rate_limiter import RateLimiter
 from app.routers.companion_world import (
     CompanionWorldApiError,
     _envelope,
@@ -22,6 +23,9 @@ from app.time_utils import beijing_naive_now
 
 router = APIRouter(prefix="/v1", tags=["companion-world-visits"])
 _BEIJING_TZ = timezone(timedelta(hours=8))
+_REDEEM_USER_RPM = 10
+_REDEEM_IP_RPM = 30
+_redeem_rate_limiter = RateLimiter()
 
 
 class EmptyPayload(BaseModel):
@@ -201,16 +205,28 @@ def redeem_world_invite(
     response: Response,
     platform_user: dict = Depends(_require_visit_session),
 ) -> dict:
+    platform_user_id = str(platform_user["id"])
+    client_host = request.client.host if request.client else "unknown"
+    if not _redeem_rate_limiter.check_rpm(
+        f"world-invite-redeem:user:{platform_user_id}",
+        _REDEEM_USER_RPM,
+        window_seconds=60.0,
+    ) or not _redeem_rate_limiter.check_rpm(
+        f"world-invite-redeem:ip:{client_host}",
+        _REDEEM_IP_RPM,
+        window_seconds=60.0,
+    ):
+        raise CompanionWorldApiError("rate_limited")
     row = _call(
         lambda: _service().redeem(
-            str(platform_user["id"]), code=payload.code, now=_now()
+            platform_user_id, code=payload.code, now=_now()
         )
     )
     _no_store(response)
     return _envelope(
         request,
         code="ok",
-        data={"visit": _visit_data(row, str(platform_user["id"]))},
+        data={"visit": _visit_data(row, platform_user_id)},
     )
 
 

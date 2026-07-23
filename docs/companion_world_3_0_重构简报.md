@@ -48,7 +48,7 @@
 | **M2** Runtime facade + 多居民 | universe/resident/conversation + L3 首刀 | ✅ 代码已交付，default-off |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | outbox + App 收件箱 + 去 N× 打扰 | ✅ M3-0…M3-6 已完成，default-off |
 | **M4** 生命周期 + 信箱 | offline+farewell 原子事务、信箱 | ✅ M4-0…M4-6 已完成 |
-| **M5** 访客 + 真人聊天 | slot/高熵邀请码/ACL、真人分表 | M5-0…M5-4 完成，待最终收口 |
+| **M5** 访客 + 真人聊天 | slot/高熵邀请码/ACL、真人分表 | ✅ M5-0…M5-5 完成，default-off |
 
 > **关键重排**：把「计费/配额上迁」从建号解耦里抽成 **独立先行的 M1**——趁 fork 最浅（多居民还没上线）先把钱包/配额从 account 迁到「真人」维度，零迁移窗口；少量多钱包老用户走**预检 + 自动合并**。
 
@@ -144,6 +144,7 @@
 2. P1/M3/M4 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3/M4 数据对账和全量只读核验；不得把开发分支 m0034 等同于已部署。
 3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
 4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
-5. M4 已整理到 Draft PR #47，Ready/合并仍由用户明确决定。M5 visit + human chat 功能闭环已完成，待 M5-5 全量门禁、运行手册和 Draft PR；分支暂堆叠于 M4，#47 合并前不得转 Ready。
+5. M4 Draft PR #47 尚未合并；M5 已完成并将创建以 M4 branch 为临时 base 的 Draft PR。#47 合并后 retarget main，Ready/合并仍由用户明确决定。
 6. 客户端仍须镜像 D-05 L3 全量共享与 D-08 legacy 离开豁免；M4 backend 冻结不替代客户端文档修订。
 7. 客户端还须把旧“邀请码默认 12h/兑换即生效”改为 M5 冻结口径：24h invite、兑换后 pending、A 接受后独立 30d visit；这是生产开 M5 flag 的阻断项。
+8. 3.0 后端开发闭环已完成；生产发布仍须依次完成客户端缓存/口径、report evidence retention、m0035 对账与 default-off 灰度，不得把开发完成等同于已上线。

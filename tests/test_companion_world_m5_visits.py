@@ -234,6 +234,35 @@ def test_world_three_slots_are_hard_cap_and_revoke_releases_slot(
     assert client.post("/v1/world/invites", headers=headers).status_code == 200
 
 
+def test_redeem_uses_db_backed_user_rate_limit(client, fresh_db, monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(
+        "app.routers.companion_world_visits._REDEEM_USER_RPM", 1
+    )
+    owner_headers, owner_login = _login(client, "19965103501")
+    visitor_headers, _visitor_login = _login(client, "19965103502")
+    _confirm_world(owner_login["platform_user"]["id"])
+    invites = [
+        client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+            "invite"
+        ]
+        for _ in range(2)
+    ]
+    first = client.post(
+        "/v1/visits/redeem",
+        headers=visitor_headers,
+        json={"code": invites[0]["code"]},
+    )
+    assert first.status_code == 200
+    limited = client.post(
+        "/v1/visits/redeem",
+        headers=visitor_headers,
+        json={"code": invites[1]["code"]},
+    )
+    assert limited.status_code == 429
+    assert limited.json()["code"] == "rate_limited"
+
+
 def test_visitor_pending_plus_active_limit_is_three(fresh_db):
     visitor = _user("19965104000")
     service = CompanionWorldVisitService()

@@ -1,6 +1,6 @@
 # Companion World M5 实施计划
 
-> 状态：**M5-0…M5-4 已完成（2026-07-23）；M5-5 待收口。**
+> 状态：**M5-0…M5-5 已完成并归档（2026-07-23）。**
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
@@ -104,14 +104,20 @@
 
 实现结果：独立 router/platform/DB 链路已完成；chat flag 只门控新 send，历史与安全动作不关闭。self-hide 只写当前 participant 字段，report 复制必要 immutable snapshot。发送在 conversation lock 下分配 `sequence_no`，同秒消息顺序不依赖 UUID。AST 门禁新增 AI paths 禁止 human chat storage/platform/domain import。
 
-验证：M5 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；Companion World SQLite 联合 `122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。最终全量在 M5-5 复跑。
+验证：M5 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；Companion World SQLite 联合 `122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。最终全量结果见 M5-5。
 
 ### M5-5：全量门禁、运行手册与交付
+
+**状态：已完成（2026-07-23）。**
 
 - Admin guide 增加 flags、scheduler、只读对账、回滚与 evidence retention 未决闸。
 - 同步 ADR/spec/计划/简报/`.env.example`。
 - 运行 unit、SQLite 全量、PG 全量、compileall、diff check。
 - 整理提交、推送并创建 Draft PR；PR #47 合并前不转 Ready。
+
+实现结果：Admin guide 已补双 flag 真实边界、单 central scheduler、heartbeat、只读对账 SQL、evidence retention 闸与不可逆终态回滚；redeem 增加真人 10 RPM + IP 30 RPM 的 DB-backed 限流；admin ops 暴露 world lifecycle 配置。最终未执行生产 migration/开量/Ready/合并。
+
+最终验证：unit `571 passed / 978 deselected`；SQLite 全量 `1521 passed / 30 skipped`；PostgreSQL 全量 `1546 passed / 5 skipped`；compileall/diff check 通过。既存 deprecation/async mock warnings 不阻断。
 
 ## 4. 测试与发布
 
@@ -125,4 +131,4 @@ make test-pg
 git diff --check
 ```
 
-发布顺序：m0035/default-off → read/history → invite/pending → active visitor Feed → human write。回滚关 flags/停 expiry step，不删数据、不恢复终态、不解除 block。
+发布顺序：m0035/default-off → read/history → invite/pending → active visitor Feed → human write。回滚关 flags/停 expiry step，不删数据、不恢复终态、不解除 block。M5 实施计划至此归档，后续生产发布以 Admin guide 为准。
