@@ -1,8 +1,8 @@
 # Companion World M4 Lifecycle + Mailbox 后端实现规范
 
-> 状态：**M4-0 已冻结（2026-07-23），可以进入 M4-1；尚未实现。**
+> 状态：**M4-0 已冻结；M4-1 与 M4-2 已完成（2026-07-23），下一批为 M4-3 offline 原子事务。**
 >
-> 基线：`feat/companion-world-m4` 从 M3 已验证提交 `01552c9` 切出；PR #46 仍为 Draft、尚未合并，因此本分支暂为依赖 M3 的堆叠分支。
+> 基线：PR #46 已合并为 `origin/main@e230844`；`feat/companion-world-m4` 已校准到该基线，M4-0 文档提交为 `4ff932b`。
 >
 > 权威上位决策：[`companion_world_3_0_refactor_design.md`](./companion_world_3_0_refactor_design.md) D-02/D-06/D-08/D-12、§9、§10.3/.4/.8、§12 M4。
 
@@ -67,7 +67,7 @@ M4 不包含：
 
 ## 2. m0034 加性数据模型
 
-历史 migration 不改写。M4-1 只在 `_MIGRATIONS` 末尾追加 `m0034_companion_world_lifecycle_mailbox`；当前最大版本 m0033。
+历史 migration 不改写。M4-1 已在 `_MIGRATIONS` 末尾追加 `m0034_companion_world_lifecycle_mailbox`；当前最大版本 m0034。
 
 ### 2.1 扩展 `universe_posts`
 
@@ -104,6 +104,7 @@ CREATE TABLE IF NOT EXISTS resident_lifecycle_events (
     crisis_freeze_until TEXT,
     last_resident_exception_requested INTEGER NOT NULL DEFAULT 0,
     idempotency_key TEXT NOT NULL UNIQUE,
+    request_fingerprint TEXT NOT NULL,
     farewell_text TEXT,
     reviewed_by TEXT,
     reviewed_at TEXT,
@@ -181,6 +182,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_character_version
 CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_active_character
     ON character_letter_catalog(character_key)
     WHERE status = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_template
+    ON character_letter_catalog(character_template_id);
 CREATE INDEX IF NOT EXISTS ix_letter_catalog_selection
     ON character_letter_catalog(status, priority DESC, id);
 ```
@@ -201,6 +204,7 @@ CREATE TABLE IF NOT EXISTS character_letters (
     body_text TEXT NOT NULL,
     status TEXT NOT NULL,                  -- unread | read | deferred | accepted | declined | expired
     idempotency_key TEXT NOT NULL UNIQUE,
+    request_fingerprint TEXT NOT NULL,
     eligibility_snapshot_json TEXT NOT NULL DEFAULT '{}',
     policy_version TEXT NOT NULL,
     delivered_at TEXT NOT NULL,
@@ -463,4 +467,12 @@ M4 default-off 部署不等于生产启用；P1/M3 的模板、backfill、客户
 - [x] §10.8：60/30/3/14/7/30 数值、安全冻结、人工审批和纠错 SOP 已冻结。
 - [x] Mailbox：`<8` 投递、`<10` 接受、open=1、30 天间隔/TTL、运营目录已冻结。
 - [x] m0034 schema、状态机、API、错误码、锁序、flags、scheduler 和 PG 门禁可直接进入实现。
-- [ ] PR #46 合并后，把 M4 分支基线校准到最新 main；不把 M4 提交放进 PR #46。
+- [x] PR #46 已合并，M4 分支已校准到 `origin/main@e230844`；M4 提交未进入 PR #46。
+
+## 14. M4-2 实现对齐（2026-07-23）
+
+- lifecycle 扫描以 `resident.runtime_account_id` 为证据隔离锚；inactivity 只读目标 runtime 的 owner 入站，value mismatch 只消费 moderation task 中显式 `confirmed` 的结构化 observation。
+- crisis/self-harm/high-vulnerability 与 severe-abuse/credible-threat/hate-harassment 复用目标 runtime moderation category；事件和 admin DTO 仅保留 opaque source id、category、confidence、policy version、observed time 白名单，不落聊天原文。
+- central scheduler 已接 resident cursor、低基数 heartbeat、7 天精确 cooldown、恢复/证据失效取消、30 天 crisis freeze、legacy/普通最后居民保护；PG 并发门证明同 resident 最多一个 open event。
+- staff/admin 可 list/detail/reject/cancel；reviewer 无权限。full admin approve 契约已预留，但 commit flag 默认 false，M4-3 原子事务接入前即使误开也 fail-closed。
+- 验证：M4 聚焦 SQLite `27 passed / 2 skipped`、PG `29 passed`；unit `568 passed / 926 deselected`；SQLite 全量 `1479 passed / 15 skipped`；PG 全量 `1489 passed / 5 skipped`。

@@ -47,7 +47,7 @@
 | **M1** 计费/配额锚点上迁 | 钱包/配额/RPM 锚到 `platform_user`（趁多居民未上线先独立发布） | ✅ 已交付；m0031 收口 override/TTL |
 | **M2** Runtime facade + 多居民 | universe/resident/conversation + L3 首刀 | ✅ 代码已交付，default-off |
 | **M3** Feed + 通知收件箱 + 真人级 proactive 上提 | outbox + App 收件箱 + 去 N× 打扰 | ✅ M3-0…M3-6 已完成，default-off |
-| **M4** 生命周期 + 信箱 | offline+farewell 原子事务、信箱 | ✅ M4-0 产品门/实现规范已冻结；runtime 待开发 |
+| **M4** 生命周期 + 信箱 | offline+farewell 原子事务、信箱 | 🚧 M4-0…M4-2 已完成；M4-3 下一批 |
 | **M5** 访客 + 真人聊天 | slot/高熵邀请码/ACL、真人分表 | §10.9 |
 
 > **关键重排**：把「计费/配额上迁」从建号解耦里抽成 **独立先行的 M1**——趁 fork 最浅（多居民还没上线）先把钱包/配额从 account 迁到「真人」维度，零迁移窗口；少量多钱包老用户走**预检 + 自动合并**。
@@ -63,7 +63,7 @@
 
 ## 四、进度与发布状态（截至 2026-07-23）
 
-> PR #45 已合并。M3 PR #46 仍为 Draft；M4 分支 `feat/companion-world-m4` 暂从 M3 已验证提交 `01552c9` 切出，是依赖 M3 的堆叠分支。P1/M3 feature flag 仍默认关闭。
+> PR #45、PR #46 均已合并。M4 分支 `feat/companion-world-m4` 已校准到 `origin/main@e230844`，M4-1/M4-2 改动尚未提交。P1/M3/M4 feature flag 均默认关闭。
 
 ### 已交付
 
@@ -82,18 +82,20 @@
 - **M3-5**：真人级 due/预算/活跃按 owner 聚合，真实微信 legacy primary 优先，App-only 双 flag + 滚动 24 小时 reservation，投递前 speaker 重选/锁定。
 - **M3-6**：三 flag 灰度/回滚运行手册、central 单例约束、Feed/outbox/通知/真人级 heartbeat、只读对账 SQL 与最终门禁。
 - **M4-0**：已冻结用户不得移除 active resident、legacy 永久豁免、60/30/3/14/7/30 lifecycle 策略、人工不可逆提交、最后居民/crisis 保护，以及 mailbox `<8/<10`、open=1、30 天间隔/TTL；m0034/schema/API/锁序/flags/PG 门禁已形成实现级规范。
+- **M4-1**：已追加 m0034 farewell/lifecycle/mailbox schema，交付 owner-scoped DB 原语、纯领域 DTO/ports 与三个 default-off flag；未接 scheduler、API 或不可逆 live 行为。
+- **M4-2**：已交付 runtime-scoped inactivity/value mismatch/crisis/severe-abuse evidence、cooldown/recovery/last-resident 复核、脱敏 staff/admin review queue 与独立中心 scheduler heartbeat；证据不存原文，commit 保持关闭。
 
 ### 当前发布闸
 
-- `make test-unit`：**567 passed / 912 deselected**。
-- `make test`（SQLite）：**1465 passed / 14 skipped**。
-- `make test-pg`（PostgreSQL）：**1474 passed / 5 skipped**。
+- `make test-unit`：**568 passed / 926 deselected**。
+- `make test`（SQLite）：**1479 passed / 15 skipped**。
+- `make test-pg`（PostgreSQL）：**1489 passed / 5 skipped**。
 - `git diff --check`：通过。PG 继续作为容量竞争、single-flight、配额和 L3 并发的权威。
 - 非阻断告警：既有 Pydantic/FastAPI deprecated warning；`test_image_turn` mock 有一次 `asyncio.to_thread` 未 await RuntimeWarning，无失败。
 
 ### 生产状态与阻断项
 
-- 开发分支代码迁移已到 **m0033**（新增 Feed/outbox/通知三表），但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
+- 开发分支代码迁移已到 **m0034**（新增 lifecycle/mailbox 四表并扩展 farewell post），但本仓库没有生产执行证据；不能把“代码已就绪”写成“生产已迁移”。
 - `COMPANION_WORLD_P1_ENABLED=false` 仍是默认值；尚未授权开启。
 - API/auth、L3 后台、proactive safety 已拆成三个正交开关；发布期可在保留防 N× safety 的同时独立停止 L3，回滚不再需要临时发版。
 - 正式四位首发角色 manifest（名称、头像、简介、三个标签、persona、版本）尚未提供，代码没有编造默认人设。
@@ -125,15 +127,15 @@
 - 自动流程首版只产生 departure candidate；所有 offline 由 full admin 人工批准。inactivity=60 天，value mismatch=30 天内 3 次且跨度 14 天，cooldown=7 天，crisis freeze=30 天。
 - 普通最后居民离开永久阻断；severe-abuse 例外仍需审批。offline 不可恢复，提交后纠错只追加审计并可隐藏 farewell。
 - mailbox 仅运营版本化目录；active `<8` 投递、`<10` 接受，每世界 open=1，投递间隔与 TTL 均为 30 天，defer 不续期、同角色不重投；不做 Push、不写 M3 notification。
-- M4-0 backend spec 与 M4-1…M4-6 实施计划已完成；尚无 m0034 或 runtime 代码，不能写成已实现。
+- M4-0 backend spec 与 M4-1…M4-6 实施计划已完成；M4-1/M4-2 已实现 schema、DB 原语、纯领域契约、shadow scheduler 与脱敏 review API。不可逆 offline 提交仍未接线。
 
 ---
 
 ## 五、下一步
 
 1. 取得运营签字的四模板 manifest、客户端最低版本，并同步客户端两项冻结口径。
-2. P1/M3 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3 数据对账和全量只读核验；不得把开发分支 m0033 等同于已部署。
+2. P1/M3/M4 生产发布仍在 flag=false 下完成模板导入、固定 cutoff backfill、override/M3/M4 数据对账和全量只读核验；不得把开发分支 m0034 等同于已部署。
 3. 发布前复跑最终双后端门禁，按 Admin guide 顺序小流量开启 App inbox、用户 Feed、AI scheduler、App-only human，并观察 heartbeat。
 4. M3 后续严格保持 Feed/通知分面、Runtime 不依赖 World DB、三个 flag default-off，并继续以 PG 并发测试作为权威门禁。
-5. PR #46 合并后把 M4 分支校准到最新 main，进入 M4-1（仅 m0034 schema/DTO/ports）；若要在 PR #46 合并前继续堆叠 runtime，须显式接受 stacked-branch 风险。
+5. 进入 M4-3：实现 `offline + farewell + conversation read_only + outbox` 单事务、full-admin approve/correct 与 PG turn 并发门禁；事务内重校验 legacy、crisis 和最后居民保护。
 6. 客户端仍须镜像 D-05 L3 全量共享与 D-08 legacy 离开豁免；M4 backend 冻结不替代客户端文档修订。

@@ -19,6 +19,12 @@ from app.platform.companion_world_turn import (  # noqa: F401
     read_companion_world_context,
     run_companion_world_turn,
 )
+from app.platform.companion_world_lifecycle import (  # noqa: F401
+    CompanionWorldLifecycleService,
+    build_lifecycle_policy,
+    get_lifecycle_review_event,
+    list_lifecycle_review_events,
+)
 from app.platform.app_inbox import (  # noqa: F401
     AppInboxAdapter,
     AppInboxIntent,
@@ -32,6 +38,7 @@ __all__ = [
     "SqlAppNotificationRepository",
     "AppInboxAdapter",
     "AppInboxIntent",
+    "CompanionWorldLifecycleService",
     "HumanAppInboxClaim",
     "HumanAppInboxIntent",
     "HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON",
@@ -41,7 +48,10 @@ __all__ = [
     "human_level_proactive_allowed",
     "resolve_human_proactive_scope",
     "build_companion_world_memory_sink",
+    "build_lifecycle_policy",
     "compact_companion_world_memory_batch",
+    "get_lifecycle_review_event",
+    "list_lifecycle_review_events",
     "read_companion_world_context",
     "run_companion_world_turn",
 ]

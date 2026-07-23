@@ -1,10 +1,10 @@
 # Companion World M4 实施计划
 
-> 状态：**M4-0 已完成（2026-07-23）；M4-1 待开始。**
+> 状态：**M4-0、M4-1、M4-2 已完成（2026-07-23）；下一批为 M4-3。**
 >
 > 决策冻结：ADR §10.3/.4/.8 与 [`companion_world_m4_backend_spec.md`](../tech_design/companion_world_m4_backend_spec.md)。
 >
-> 分支基线：`feat/companion-world-m4` 暂从 M3 已验证提交 `01552c9` 切出。PR #46 尚未合并，本分支是依赖 M3 的堆叠分支；M4 runtime 提交前须确认 M3 已合并并校准 main。
+> 分支基线：PR #46 已合并为 `origin/main@e230844`；`feat/companion-world-m4` 已 rebase 到该基线，M4-0 文档提交为 `4ff932b`。
 
 ## 1. 目标
 
@@ -58,6 +58,8 @@
 
 ### M4-1：m0034 schema、DTO/ports 与迁移门禁
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - `app/db/_core.py`：只追加 m0034。
@@ -74,7 +76,11 @@
 
 出口：SQLite/PG 迁移顺序和幂等均通过；旧 M3 post/Feed 行为不变；owner 查询没有无锚读取。
 
+验证：M4 聚焦 SQLite `25 passed / 1 skipped`，PostgreSQL `26 passed`；unit `567 passed / 920 deselected`，SQLite 全量 `1473 passed / 14 skipped`，PostgreSQL 全量 `1482 passed / 5 skipped`。三个 M4 flag 均保持默认关闭，未接 scheduler、API 或不可逆 live 行为。
+
 ### M4-2：Lifecycle evidence、cooldown、freeze 与 admin review queue
+
+**状态：已完成（2026-07-23）。**
 
 主要文件：
 
@@ -91,6 +97,10 @@
 - scheduler heartbeat 与分页游标，central 单例 + DB 唯一约束防重复。
 
 出口：evaluation flag off 零候选；on/commit off 只写内部审计，不产生任何用户可见变化；event 不存聊天原文。
+
+实现结果：按 resident runtime 隔离扫描 owner 入站与 moderation task；value mismatch 只消费显式 `confirmed` 结构化 observation，crisis/severe-abuse 复用结构化 category。事件只保存 opaque ref 白名单，staff/admin queue、detail、reject/cancel 已接线；approve 在 M4-3 前由 commit flag/未实现闸双重阻断。central scheduler 使用 resident cursor 与低基数 heartbeat；PG 并发测试证明同 resident 两个 scheduler 只产生一个 open event。
+
+验证：M4 聚焦 SQLite `27 passed / 2 skipped`，PostgreSQL `29 passed`；unit `568 passed / 926 deselected`，SQLite 全量 `1479 passed / 15 skipped`，PostgreSQL 全量 `1489 passed / 5 skipped`。三个 M4 flag 仍默认关闭；没有 offline、farewell、read-only 或其他用户可见写入。
 
 ### M4-3：Offline + farewell + read-only 原子事务
 
@@ -186,9 +196,11 @@ git diff --check
 4. 回滚关 flags/停 scheduler；不反向迁移、不复活 offline、不撤销已接受 resident。
 5. M4 生产开量仍依赖 P1/M3 客户端、模板、backfill、迁移和现场对账门。
 
-## 7. M4-1 开工门
+## 7. M4-3 开工门
 
 - [x] §10.3/.4/.8 与 mailbox 决策已冻结。
 - [x] backend spec 已覆盖 schema/state/API/lock/flag/test/rollout。
-- [ ] PR #46 合并并同步最新 main；或明确授权继续以堆叠分支开发 runtime。
-- [ ] 确认 M4-1 仅落 schema/ports，不在同批接 live scheduler/API。
+- [x] PR #46 已合并，分支已同步 `origin/main@e230844`。
+- [x] M4-1 仅落 schema、DB 原语、纯领域 DTO/ports 与 default-off 配置，未接 live scheduler/API。
+- [x] M4-2 仅接 shadow evaluation、脱敏 review API 与 central heartbeat；commit flag 默认关闭且 approve 无提交能力。
+- [x] SQLite/PG 已覆盖 runtime 证据隔离、精确时间边界、恢复/crisis/最后居民、admin 权限与双 scheduler 单 open event。
