@@ -351,6 +351,20 @@ class Settings(BaseSettings):
     # 真人级 App-only 触达的第二道独立闸；必须与 inbox flag 同时开启。
     companion_world_app_only_human_proactive_enabled: bool = False
     companion_world_notification_cleanup_batch_size: int = 100
+    # M4 Lifecycle/Mailbox：evaluation、不可逆 commit 与 mailbox 三个独立 default-off 闸。
+    companion_world_lifecycle_evaluation_enabled: bool = False
+    companion_world_lifecycle_commit_enabled: bool = False
+    companion_world_mailbox_enabled: bool = False
+    companion_world_lifecycle_inactivity_days: int = 60
+    companion_world_lifecycle_evidence_window_days: int = 30
+    companion_world_lifecycle_mismatch_min_events: int = 3
+    companion_world_lifecycle_mismatch_min_span_days: int = 14
+    companion_world_lifecycle_cooldown_days: int = 7
+    companion_world_lifecycle_crisis_freeze_days: int = 30
+    companion_world_mailbox_delivery_cooldown_days: int = 30
+    companion_world_mailbox_letter_ttl_days: int = 30
+    companion_world_lifecycle_scheduler_interval_seconds: float = 300.0
+    companion_world_lifecycle_scheduler_batch_size: int = 50
 
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。

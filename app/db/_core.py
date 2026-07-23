@@ -2566,6 +2566,157 @@ def _migration_0033_companion_world_m3_content(conn: Connection) -> None:
     )
 
 
+def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
+    """M4：resident lifecycle 审计、唯一 farewell 与私密 mailbox 数据基座。
+
+    本迁移只增加表、列和索引，不接入 scheduler/API，也不改变既有 resident、conversation
+    或 Feed 行为。历史 M3 post 统一以 ``post_type='normal'`` 兼容读取。
+    """
+    _ensure_column(
+        conn,
+        "universe_posts",
+        "post_type",
+        "TEXT NOT NULL DEFAULT 'normal'",
+    )
+    _ensure_column(conn, "universe_posts", "departure_event_id", "TEXT")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_departure_event
+            ON universe_posts(departure_event_id)
+            WHERE departure_event_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS resident_lifecycle_events (
+            id TEXT PRIMARY KEY,
+            owner_platform_user_id TEXT NOT NULL,
+            universe_id TEXT NOT NULL,
+            resident_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            evidence_window_start TEXT NOT NULL,
+            evidence_window_end TEXT NOT NULL,
+            evidence_count INTEGER NOT NULL,
+            evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+            cooldown_until TEXT,
+            crisis_freeze_until TEXT,
+            last_resident_exception_requested INTEGER NOT NULL DEFAULT 0,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            request_fingerprint TEXT NOT NULL,
+            farewell_text TEXT,
+            reviewed_by TEXT,
+            reviewed_at TEXT,
+            terminal_reason TEXT,
+            committed_at TEXT,
+            farewell_post_id TEXT,
+            correction_status TEXT NOT NULL DEFAULT 'none',
+            corrected_by TEXT,
+            corrected_at TEXT,
+            correction_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(resident_id) REFERENCES universe_residents(id),
+            FOREIGN KEY(farewell_post_id) REFERENCES universe_posts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_lifecycle_resident_open
+            ON resident_lifecycle_events(resident_id)
+            WHERE status IN ('cooling_down', 'review_pending');
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_lifecycle_resident_committed
+            ON resident_lifecycle_events(resident_id)
+            WHERE status = 'committed';
+        CREATE INDEX IF NOT EXISTS ix_lifecycle_review_queue
+            ON resident_lifecycle_events(status, cooldown_until, created_at, id);
+        CREATE INDEX IF NOT EXISTS ix_lifecycle_owner
+            ON resident_lifecycle_events(owner_platform_user_id, created_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_universe_residents_lifecycle_scan
+            ON universe_residents(status, id);
+        CREATE INDEX IF NOT EXISTS ix_messages_account_inbound_created
+            ON messages(account_id, direction, role, created_at DESC, id DESC);
+
+        CREATE TABLE IF NOT EXISTS resident_lifecycle_event_actions (
+            id TEXT PRIMARY KEY,
+            event_id TEXT NOT NULL,
+            action TEXT NOT NULL,
+            actor_type TEXT NOT NULL,
+            actor_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(event_id) REFERENCES resident_lifecycle_events(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_lifecycle_actions_event
+            ON resident_lifecycle_event_actions(event_id, created_at, id);
+
+        CREATE TABLE IF NOT EXISTS character_letter_catalog (
+            id TEXT PRIMARY KEY,
+            character_key TEXT NOT NULL,
+            character_template_id TEXT NOT NULL,
+            template_version TEXT NOT NULL,
+            letter_body TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            available_from TEXT,
+            available_until TEXT,
+            created_by TEXT NOT NULL,
+            retired_by TEXT,
+            retired_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(character_template_id) REFERENCES character_templates(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_character_version
+            ON character_letter_catalog(character_key, template_version);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_active_character
+            ON character_letter_catalog(character_key)
+            WHERE status = 'active';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_template
+            ON character_letter_catalog(character_template_id);
+        CREATE INDEX IF NOT EXISTS ix_letter_catalog_selection
+            ON character_letter_catalog(status, priority DESC, id);
+
+        CREATE TABLE IF NOT EXISTS character_letters (
+            id TEXT PRIMARY KEY,
+            owner_platform_user_id TEXT NOT NULL,
+            universe_id TEXT NOT NULL,
+            catalog_id TEXT NOT NULL,
+            character_key TEXT NOT NULL,
+            character_template_id TEXT NOT NULL,
+            template_version TEXT NOT NULL,
+            body_text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            request_fingerprint TEXT NOT NULL,
+            eligibility_snapshot_json TEXT NOT NULL DEFAULT '{}',
+            policy_version TEXT NOT NULL,
+            delivered_at TEXT NOT NULL,
+            read_at TEXT,
+            deferred_at TEXT,
+            handled_at TEXT,
+            expires_at TEXT NOT NULL,
+            accepted_resident_id TEXT,
+            terminal_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(catalog_id) REFERENCES character_letter_catalog(id),
+            FOREIGN KEY(character_template_id) REFERENCES character_templates(id),
+            FOREIGN KEY(accepted_resident_id) REFERENCES universe_residents(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_letters_open_world
+            ON character_letters(universe_id)
+            WHERE status IN ('unread', 'read', 'deferred');
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_letters_world_character
+            ON character_letters(universe_id, character_key);
+        CREATE INDEX IF NOT EXISTS ix_character_letters_owner_list
+            ON character_letters(owner_platform_user_id, delivered_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_character_letters_expiry
+            ON character_letters(status, expires_at, id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2595,6 +2746,7 @@ _MIGRATIONS = [
     (31, _migration_0031_platform_user_quota_overrides),
     (32, _migration_0032_rpm_hit_double_precision),
     (33, _migration_0033_companion_world_m3_content),
+    (34, _migration_0034_companion_world_lifecycle_mailbox),
 ]
 
 
