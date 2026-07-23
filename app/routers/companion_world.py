@@ -78,6 +78,9 @@ _ERROR_STATUS = {
     "visit_pending_expired": 409,
     "visit_not_pending": 409,
     "visit_not_active": 409,
+    "human_conversation_not_found": 404,
+    "human_message_not_found": 404,
+    "human_chat_read_only": 409,
     "invalid_request": 422,
 }
 
@@ -662,6 +665,7 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
             "/v1/notifications",
             "/v1/world/invites",
             "/v1/visits",
+            "/v1/human-conversations",
         )
     )
     if companion_path:

@@ -1,6 +1,6 @@
 # Companion World M5 实施计划
 
-> 状态：**M5-0…M5-3 已完成（2026-07-23）；M5-4 待开始。**
+> 状态：**M5-0…M5-4 已完成（2026-07-23）；M5-5 待收口。**
 >
 > 决策冻结：ADR §10.9 与 [`companion_world_m5_backend_spec.md`](../tech_design/companion_world_m5_backend_spec.md)。
 >
@@ -90,6 +90,8 @@
 
 ### M5-4：独立 Human Chat 与举报
 
+**状态：已完成（2026-07-23）。**
+
 主要文件：
 
 - `app/platform/companion_world_human_chat.py`。
@@ -99,6 +101,10 @@
 交付：conversation list、message list/send/read、client idempotency、visit 终态只读、self-hide、report evidence snapshot、block。
 
 出口：真人消息永不进入 AI tables/prompt/dreaming/proactive；跨 participant 防枚举；send vs expiry/block PG 竞态通过。
+
+实现结果：独立 router/platform/DB 链路已完成；chat flag 只门控新 send，历史与安全动作不关闭。self-hide 只写当前 participant 字段，report 复制必要 immutable snapshot。发送在 conversation lock 下分配 `sequence_no`，同秒消息顺序不依赖 UUID。AST 门禁新增 AI paths 禁止 human chat storage/platform/domain import。
+
+验证：M5 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；Companion World SQLite 联合 `122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。最终全量在 M5-5 复跑。
 
 ### M5-5：全量门禁、运行手册与交付
 

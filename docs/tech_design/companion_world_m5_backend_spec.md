@@ -1,6 +1,6 @@
 # Companion World M5 Visit + Human Chat 后端实现规范
 
-> 状态：**M5-0…M5-3 已完成（2026-07-23）；M5-4 待开始。**
+> 状态：**M5-0…M5-4 已完成（2026-07-23）；M5-5 待收口。**
 >
 > 分支基线：`feat/companion-world-m5` 堆叠于已完成且全量测试通过的 M4 提交 `af03382`；Draft PR #47 尚未合并，M5 PR 在其合并前不得转 Ready。
 >
@@ -184,17 +184,19 @@ CREATE TABLE human_messages (
     conversation_id TEXT NOT NULL,
     sender_platform_user_id TEXT NOT NULL,
     client_message_id TEXT NOT NULL,
+    sequence_no INTEGER NOT NULL,
     body_text TEXT NOT NULL,
     created_at TEXT NOT NULL,
     FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
     FOREIGN KEY(sender_platform_user_id) REFERENCES platform_users(id),
-    UNIQUE(conversation_id, sender_platform_user_id, client_message_id)
+    UNIQUE(conversation_id, sender_platform_user_id, client_message_id),
+    UNIQUE(conversation_id, sequence_no)
 );
 CREATE INDEX ix_human_messages_list
-    ON human_messages(conversation_id, created_at DESC, id DESC);
+    ON human_messages(conversation_id, sequence_no DESC);
 ```
 
-正文首版只允许 UTF-8 文字并设置既有 API 同等级长度上限。sender 必须是 conversation 两方之一；服务端从 session 推导，客户端不可冒充。
+正文首版只允许 UTF-8 文字并设置既有 API 同等级长度上限。sender 必须是 conversation 两方之一；服务端从 session 推导，客户端不可冒充。发送事务在 conversation row lock 下分配递增 `sequence_no`，列表/游标按 sequence，避免同秒消息被随机 ID 打乱。
 
 ### 2.6 `platform_user_blocks`
 
@@ -411,3 +413,9 @@ git diff --check
 已交付 `GET /v1/visits/{visit_id}/feed` 的 visitor-only published projection；pending/owner/第三方均无 ACL，客户端不能提交 world id。Feed 请求与 visit 列表执行 request-time 精确 expiry；central `world_lifecycle_scheduler` 增加独立 visit expiry 步骤，复用现有进程/heartbeat。`POST /v1/visits/{visit_id}/block` 按双 user/双 world 有序锁一次终止双方任一方向的 open visits、释放 slot 并把真人会话只读，未来兑换 fail-closed。
 
 验证：M5 SQLite `18 passed / 4 skipped`、PostgreSQL `26 passed`；PG 新增 revoke-vs-Feed、block-vs-反向 redeem 无死锁门禁；Companion World SQLite 联合 `116 passed / 22 skipped`；unit `570 passed / 971 deselected`；compileall/diff check 通过。
+
+## 14. M5-4 落地记录
+
+已交付 human conversation list、message list/send/read、participant-scoped idempotency、visit 终态只读历史、self-hide、独立 report evidence snapshot，以及 conversation block 入口。Chat write flag 关闭只阻止新消息，历史/read/hide/report/block 仍可用。消息在 conversation lock 下分配递增 `sequence_no`，同秒多消息按真实提交顺序分页；真人消息没有任何 AI `messages`/turn/prompt/dreaming/memory/proactive 调用方，AST 门禁持续阻断反向接入。
+
+验证：最终 M5 聚焦 SQLite `26 passed / 9 skipped`、PostgreSQL `35 passed`；PG 覆盖同 client id 双发、send-vs-block、send-vs-exact-expiry；Companion World SQLite 联合（sequence 修复前，业务面等价）`122 passed / 24 skipped`；unit `571 passed / 978 deselected`；compileall/diff check 通过。M5-5 将复跑最终全量门禁。

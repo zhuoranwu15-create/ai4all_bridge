@@ -2817,14 +2817,16 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             conversation_id TEXT NOT NULL,
             sender_platform_user_id TEXT NOT NULL,
             client_message_id TEXT NOT NULL,
+            sequence_no INTEGER NOT NULL,
             body_text TEXT NOT NULL,
             created_at TEXT NOT NULL,
             FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
             FOREIGN KEY(sender_platform_user_id) REFERENCES platform_users(id),
-            UNIQUE(conversation_id, sender_platform_user_id, client_message_id)
+            UNIQUE(conversation_id, sender_platform_user_id, client_message_id),
+            UNIQUE(conversation_id, sequence_no)
         );
         CREATE INDEX IF NOT EXISTS ix_human_messages_list
-            ON human_messages(conversation_id, created_at DESC, id DESC);
+            ON human_messages(conversation_id, sequence_no DESC);
 
         CREATE TABLE IF NOT EXISTS platform_user_blocks (
             blocker_platform_user_id TEXT NOT NULL,

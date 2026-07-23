@@ -147,3 +147,32 @@ def test_runtime_adapter_has_no_companion_world_composition_methods():
 
     assert not hasattr(DefaultAgentRuntimeAdapter, "resolve_conversation_account")
     assert not hasattr(DefaultAgentRuntimeAdapter, "send_companion_world_turn")
+
+
+def test_ai_paths_do_not_import_human_chat_storage():
+    """D-11：真人消息不得进入 turn/prompt/dreaming/memory/proactive/Runtime。"""
+    roots = [
+        REPO_ROOT / "app" / "turn_service.py",
+        REPO_ROOT / "app" / "prompt_builder.py",
+        REPO_ROOT / "app" / "dreaming.py",
+        REPO_ROOT / "app" / "dreaming_scheduler.py",
+        REPO_ROOT / "app" / "memory_writer.py",
+        REPO_ROOT / "app" / "agent_runtime",
+        REPO_ROOT / "app" / "proactive",
+    ]
+    forbidden = (
+        "app.db.companion_world_human_chat",
+        "app.platform.companion_world_human_chat",
+        "app.domains.companion_world.human_chat",
+    )
+    violations: list[str] = []
+    files: list[Path] = []
+    for root in roots:
+        files.extend(root.rglob("*.py") if root.is_dir() else [root])
+    for py_file in files:
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        package = _module_package(py_file)
+        for module in _iter_imported_modules(tree, package):
+            if _is_forbidden(module, forbidden):
+                violations.append(f"{py_file.relative_to(REPO_ROOT)} → import {module}")
+    assert not violations, "真人聊天越界进入 AI 路径：\n" + "\n".join(violations)
