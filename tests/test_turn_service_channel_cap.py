@@ -4,19 +4,32 @@
 仅当渠道能力保守（如 Web V1：supports_proactive=False）时才裁剪「产生未来投递」工具。
 """
 from app.platform.channels import CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
-from app.tools import get_default_tools
-from app.turn_service import _PROACTIVE_DELIVERY_TOOLS, _build_tooling_envelope, _tool_name
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY, get_default_tools
+from app.turn_service import _build_tooling_envelope, _tool_name
+
+_PROACTIVE_DELIVERY_TOOLS = {
+    "create_reminder",
+    "create_commitment",
+    "update_reminder",
+    "list_reminders",
+    "cancel_reminder",
+}
 
 
 def _envelope(cap: ChannelCapability, *, onboarding_active: bool = False):
     return _build_tooling_envelope(
         onboarding_active=onboarding_active,
-        web_search_enabled=False,
-        active_content_invitation=None,
-        has_mission=False,
+        tool_flags={
+            "web_search_enabled": False,
+            "content_invitation_response_enabled": False,
+            "has_mission": False,
+            "tdai_search_enabled": False,
+        },
+        tool_metadata={},
         text="你好",
         include_tool_instructions=True,
         cap=cap,
+        tool_policy=ZHAOXI_TOOL_POLICY,
     )
 
 

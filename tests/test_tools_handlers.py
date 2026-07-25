@@ -4,6 +4,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def _make_ctx(account_id="acc-tool"):
@@ -15,6 +16,7 @@ def _make_ctx(account_id="acc-tool"):
     return TurnContext(
         account_id=account_id,
         app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": account_id},
         session={"id": 1},
         identity=identity,

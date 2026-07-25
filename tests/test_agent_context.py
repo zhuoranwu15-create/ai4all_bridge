@@ -97,7 +97,7 @@ def test_default_chat_tools_have_trigger_guidance_somewhere():
     "每个默认工具名都必须出现在 TOOLS.md" 不变量，改为确保没有任何默认工具落到
     "schema 与 TOOLS.md 两处都没有触发说明" 的空档。
     """
-    from app.tools import get_default_tools
+    from app.products.zhaoxi.tools.registry import get_default_tools
     from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
     tools_text = _default_system_templates()["TOOLS.md"]

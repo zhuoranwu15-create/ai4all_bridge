@@ -21,7 +21,9 @@ from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.products.zhaoxi.proactive.contract.common import _clean_text, _select_route, _truncate_text
 from app.products.zhaoxi.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.products.zhaoxi.infrastructure.profiles import read_agent_context
-from app.tools import get_content_invitation_generation_tools, get_web_search_tools
+from app.products.zhaoxi.tools.definitions import get_content_invitation_generation_tools
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
+from app.tools import get_web_search_tools
 from app.agent_runtime.context.models import TurnContext
 from app.products.zhaoxi.proactive.contract.prompts import CONTENT_INVITATION_SYSTEM_PROMPT
 from app.products.zhaoxi.proactive.recall._shared import _format_decision_time, _latest_session_history, _no_op
@@ -176,6 +178,7 @@ def generate_content_invitation_candidate(
     ctx = TurnContext(
         account_id=account_id,
         app_id=ZHAOXI_APP_ID,
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account=account,
         session=session,
         identity=None,

@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def _setup_ctx(account_id: str):
@@ -24,6 +25,7 @@ def _setup_ctx(account_id: str):
     return TurnContext(
         account_id=account_id,
         app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": account_id},
         session=session,
         identity=identity,

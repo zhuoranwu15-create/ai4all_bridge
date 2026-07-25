@@ -6,7 +6,7 @@ from tests.factories import create_account as _create_account
 
 
 def test_tools_registered_in_default_set():
-    from app.tools import get_default_tools
+    from app.products.zhaoxi.tools.registry import get_default_tools
 
     names = [t["function"]["name"] for t in get_default_tools()]
     assert "get_proactive_message_settings" in names
@@ -114,7 +114,14 @@ def test_executor_routes_update_with_invocation_id(fresh_db):
         tool_name="update_proactive_message_settings",
         args={"master_enabled": False},
     )
-    ctx = SimpleNamespace(account_id="acc-exec", web_search_enabled=False)
+    from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
+
+    ctx = SimpleNamespace(
+        account_id="acc-exec",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
+        web_search_enabled=False,
+    )
     out = execute_tool_call(
         "update_proactive_message_settings",
         {"master_enabled": False},
@@ -130,6 +137,13 @@ def test_executor_routes_get(fresh_db):
     from app.tools.executor import execute_tool_call
 
     _create_account("acc-execget")
-    ctx = SimpleNamespace(account_id="acc-execget", web_search_enabled=False)
+    from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
+
+    ctx = SimpleNamespace(
+        account_id="acc-execget",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
+        web_search_enabled=False,
+    )
     out = execute_tool_call("get_proactive_message_settings", {}, ctx)
     assert out["status"] == "ok"

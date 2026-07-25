@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from app.config import settings
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 from app.time_utils import beijing_naive_now
 
 logger = logging.getLogger("ai4all.proactive.fulfillment")
@@ -145,6 +146,7 @@ def _build_synthetic_ctx(reminder: Dict[str, Any], now: datetime):
     return TurnContext(
         account_id=account_id,
         app_id=ZHAOXI_APP_ID,
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account=account,
         session={},  # 无会话行：tool invocation 记录 session_id=None
         identity=None,

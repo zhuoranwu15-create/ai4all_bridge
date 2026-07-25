@@ -51,6 +51,7 @@ from app.products.zhaoxi.infrastructure.profiles import (
     read_user_profile,
 )
 from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 logger = logging.getLogger("ai4all.products.zhaoxi.turn_services")
 
@@ -96,6 +97,7 @@ class ZhaoxiTurnServices:
     """朝夕现有 turn 业务规则的显式 ProductTurnServices 实现。"""
 
     app_id = ZHAOXI_APP_ID
+    tool_policy = ZHAOXI_TOOL_POLICY
     onboarding_pending = ONBOARDING_PENDING
     onboarding_step1_sent = ONBOARDING_STEP1_SENT
     onboarding_step2_sent = ONBOARDING_STEP2_SENT
@@ -242,14 +244,40 @@ class ZhaoxiTurnServices:
                 has_forced_soul_preset=bool((attribution or {}).get("soul_preset_key")),
                 has_forced_ai_name=bool((attribution or {}).get("ai_name_preset")),
             )
+        tool_instructions = None
+        if active_invitation is not None:
+            title_count = len(active_invitation.get("title_items") or [])
+            tool_instructions = "\n".join(
+                [
+                    "## 当前内容邀请",
+                    "",
+                    (
+                        f"- 当前存在待回应内容邀请：id={active_invitation['id']}，"
+                        f"topic={active_invitation['topic']}，标题数={title_count}。"
+                    ),
+                    (
+                        "- 本轮提供内容邀请回复工具：send_content_invitation_titles、"
+                        "record_content_invitation_feedback。"
+                    ),
+                ]
+            )
         return ProductPromptContext(
             soul=extract_section(file_profile, "Soul"),
             user_prefs=extract_section(file_profile, "User Preferences"),
             long_term_memory=extract_section(file_profile, "Long-term Memory"),
             agent_context_blocks=agent_context.blocks,
             agent_context_metadata=agent_context.metadata(),
-            active_content_invitation=active_invitation,
-            has_mission=mission is not None,
+            tool_flags={
+                "content_invitation_response_enabled": active_invitation is not None,
+                "has_mission": mission is not None,
+            },
+            tool_metadata={
+                "active_content_invitation_id": (
+                    active_invitation["id"] if active_invitation is not None else None
+                ),
+                "has_mission": mission is not None,
+            },
+            tool_instructions=tool_instructions,
             agent_self_state=self_state,
             onboarding_context=onboarding_context,
         )

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -61,7 +60,7 @@ from app.agent_runtime.context.window import compute_floor_count, trim_history_r
 from app.prompt_builder import ContextBlock, PromptBuilder
 from app.platform.quota.rate_limiter import rate_limiter
 from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
-from app.tools import get_default_tools, iter_specs
+from app.tools.registry import DEFAULT_NEVER, ToolPolicy
 from app.agent_runtime.context.models import TurnContext
 from app.platform.gateways import node_gateway
 
@@ -166,38 +165,6 @@ def _log_turn_timing(
         error,
     )
 
-# 检测用户是否在表达"更新主动消息设置"的意图。命中时主对话首轮强制对应工具，避免
-# DeepSeek 先反问确认。**仅供主对话 turn 路径调用**：通用 LLM 入口 generate_reply_with_tools
-# 不再内置此判定，主动消息生成路径也不调用它，从而不会把内嵌的历史聊天文本误判成当前
-# 意图（曾导致强制一个该路径 tools 不含的工具 → DeepSeek 400）。
-_PROACTIVE_COUNT_RE = r"(?:[0-9０-９]+|[一二两三四五六七八九十]+)"
-_PROACTIVE_UPDATE_RE = re.compile(
-    # frequency: "每天最多1条" / "总共2条" / "一周3次"
-    rf"(每天|每日|一天|总共|一周|每周)\s*(最多|最少|只|就)?\s*发?\s*{_PROACTIVE_COUNT_RE}\s*(条|次)"
-    # e.g. "条数改为3" / "上限设为2" / "改为3条"
-    rf"|(条数|上限|频次).{{0,6}}(改为|设为|调整为|改|设|调|限|调整).{{0,8}}{_PROACTIVE_COUNT_RE}"
-    rf"|(改为|设为|调整为|改成|设成).{{0,6}}{_PROACTIVE_COUNT_RE}.{{0,4}}(条|次)"
-    rf"|{_PROACTIVE_COUNT_RE}.{{0,5}}(条|次).{{0,8}}(就够|就行|为限|上限|够了)"
-    # on/off/mute
-    r"|别(再|继续)?(主动|发).{0,10}(消息|找|发)"
-    r"|(关掉?|开启?|暂停|停止|恢复).{0,6}主动"
-    # action verbs only (exclude noun "设置")
-    r"|主动消息.{0,10}(关闭|开启|暂停|停止|修改|调整|改为|设为|限制|减少|增加)"
-    r"|(?:主动消息|主动|找我|联系我).{0,8}(?:多|少)发.{0,4}(?:点|些|次|条)"
-    r"|(?:多|少)发.{0,4}(?:点|些|次|条).{0,8}(?:主动消息|主动找我|找我|联系我)"
-    r"|总(共|量).{0,8}(条数|上限|改为|设为|[0-9０-９])",
-    re.IGNORECASE,
-)
-
-
-def _infer_proactive_update_tool_choice(user_text: str) -> Any:
-    """命中"主动设置更新"意图时返回强制 tool_choice dict，否则返回 "auto"。"""
-    if _PROACTIVE_UPDATE_RE.search(str(user_text or "")):
-        logger.debug("proactive_update_intent detected, forcing tool_choice")
-        return {"type": "function", "function": {"name": "update_proactive_message_settings"}}
-    return "auto"
-
-
 def _ensure_pending_onboarding_question(
     reply: str, *, product_services: ProductTurnServices
 ) -> str:
@@ -218,41 +185,6 @@ def _extract_onboarding_info_sync(
             current_state=current_state,
         )
     )
-
-
-def _extract_ai_name_from_context(blocks: dict) -> Optional[str]:
-    import re
-    identity = blocks.get("IDENTITY", "")
-    m = re.search(r"AI 名字[:：]\s*(.+)", identity)
-    if m:
-        return m.group(1).strip()
-    return None
-
-
-def _extract_user_name_from_context(blocks: dict) -> Optional[str]:
-    import re
-    user = blocks.get("USER", "")
-    m = re.search(r"用户称呼[:：]\s*(.+)", user)
-    if m:
-        return m.group(1).strip()
-    return None
-
-
-def _tool_instructions(
-    *,
-    active_content_invitation: Optional[dict] = None,
-) -> str:
-    if not active_content_invitation:
-        return ""
-
-    title_count = len(active_content_invitation.get("title_items") or [])
-    instructions = [
-        "## 当前内容邀请",
-        "",
-        f"- 当前存在待回应内容邀请：id={active_content_invitation['id']}，topic={active_content_invitation['topic']}，标题数={title_count}。",
-        "- 本轮提供内容邀请回复工具：send_content_invitation_titles、record_content_invitation_feedback。",
-    ]
-    return "\n".join(instructions)
 
 
 def _tool_name(schema: Dict[str, Any]) -> str:
@@ -281,58 +213,35 @@ def _summarize_history_rows(history_rows: List[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
-# default_when_flag -> (available 时的 reason, disabled 时的 reason)；新增按 flag 门控的
-# 工具只需在此加一行，不必再手写一对 elif 分支（曾经是两条要手动保持同步的 elif 链）。
-_TOOL_GATE_REASONS: Dict[str, tuple] = {
-    "web_search_enabled": ("web_search_enabled", "web_search_disabled"),
-    "content_invitation_response_enabled": ("active_content_invitation", "no_active_content_invitation"),
-    "has_mission": ("has_mission", "no_mission_assigned"),
-    "tdai_search_enabled": ("tdai_search_enabled", "tdai_search_disabled"),
-}
-
-# 「产生未来投递」的工具：为提醒/承诺埋下将来主动外呼的动作。渠道不支持主动消息
-# （ChannelCapability.supports_proactive=False，如 Web V1）时从工具集剔除——否则模型会
-# 承诺一条永不送达的提醒（§8.3）。微信 supports_proactive=True，集合原样不变（字节级等价）。
-_PROACTIVE_DELIVERY_TOOLS: frozenset = frozenset(
-    {"create_reminder", "create_commitment", "update_reminder", "list_reminders", "cancel_reminder"}
-)
-
-
 def _build_tooling_envelope(
     *,
     onboarding_active: bool,
-    web_search_enabled: bool,
-    active_content_invitation: Optional[dict],
-    has_mission: bool,
-    tdai_search_enabled: bool = False,
+    tool_flags: Dict[str, bool],
+    tool_metadata: Dict[str, Any],
     text: str,
     include_tool_instructions: bool,
     cap: ChannelCapability,
+    tool_policy: ToolPolicy,
 ) -> Dict[str, Any]:
     """Return tool schemas plus debug metadata for the main chat tool set.
 
-    ``cap`` 携带渠道能力：``supports_proactive=False`` 的渠道剔除「产生未来投递」工具
-    （见 ``_PROACTIVE_DELIVERY_TOOLS``）。微信 cap 全 True → 工具集与历史逐字节一致。
+    ``cap`` 携带渠道能力；具体工具是否要求该能力由产品 ToolPolicy 声明。
     """
-    content_invitation_enabled = bool(active_content_invitation)
     tools: List[Dict[str, Any]] = []
     available: List[Dict[str, Any]] = []
     disabled: List[Dict[str, Any]] = []
     enabled_names: set[str] = set()
+    flags = dict(tool_flags)
 
     if not onboarding_active:
-        tools = get_default_tools(
-            web_search_enabled=web_search_enabled,
-            content_invitation_response_enabled=content_invitation_enabled,
-            has_mission=has_mission,
-            tdai_search_enabled=tdai_search_enabled,
+        tools = tool_policy.get_default_tools(
+            flags=flags,
+            capabilities={"supports_proactive": cap.supports_proactive},
         )
-        if not cap.supports_proactive:
-            tools = [s for s in tools if _tool_name(s) not in _PROACTIVE_DELIVERY_TOOLS]
         enabled_names = {_tool_name(schema) for schema in tools}
 
-    for spec in iter_specs():
-        if spec.default_when_flag == "never":
+    for spec in tool_policy.iter_specs():
+        if spec.default_when_flag == DEFAULT_NEVER:
             continue
         if onboarding_active:
             disabled.append(
@@ -344,26 +253,26 @@ def _build_tooling_envelope(
             )
             continue
         if spec.name in enabled_names:
-            reason = _TOOL_GATE_REASONS.get(spec.default_when_flag, ("default", "disabled"))[0]
             available.append(
                 {
                     "name": spec.name,
                     "group": spec.group,
-                    "reason": reason,
+                    "reason": spec.enabled_reason,
                     "schema": spec.schema,
                 }
             )
             continue
-        reason = _TOOL_GATE_REASONS.get(spec.default_when_flag, ("default", "disabled"))[1]
         disabled.append(
             {
                 "name": spec.name,
                 "group": spec.group,
-                "reason": reason,
+                "reason": spec.disabled_reason,
             }
         )
 
-    first_round_tool_choice: Any = "none" if onboarding_active else _infer_proactive_update_tool_choice(text)
+    first_round_tool_choice: Any = (
+        "none" if onboarding_active else tool_policy.first_round_tool_choice(text)
+    )
     return {
         "mode": "plain" if onboarding_active else "tools",
         "tools": tools,
@@ -373,10 +282,8 @@ def _build_tooling_envelope(
         "first_round_tool_choice": first_round_tool_choice,
         "max_tool_rounds": int(getattr(settings, "llm_max_tool_rounds", 3) or 3),
         "include_tool_instructions": bool(include_tool_instructions and not onboarding_active),
-        "web_search_enabled": web_search_enabled,
-        "content_invitation_response_enabled": content_invitation_enabled,
-        "active_content_invitation_id": active_content_invitation.get("id") if active_content_invitation else None,
-        "has_mission": has_mission,
+        **flags,
+        **tool_metadata,
     }
 
 
@@ -577,25 +484,20 @@ def build_product_turn_llm_input(
     if debug_dry_run:
         metadata["debug_dry_run"] = True
 
-    active_content_invitation = product_context.active_content_invitation
-    if active_content_invitation is not None:
-        metadata["active_content_invitation_id"] = (
-            active_content_invitation["id"] if active_content_invitation else None
-        )
-    # has_mission 门控 mission_status/record_mission_moment 两个工具（未分配使命的存量
-    # 账号、onboarding 中、或 mission_id 不可解析（脏数据/模板下线）都不出现，不暴露
-    # "调了也只会失败"的工具，见 §6.3 与 app.products.zhaoxi.application.missions.state.resolve_account_mission）。
-    has_mission = product_context.has_mission
-    metadata["has_mission"] = has_mission
+    metadata.update(product_context.tool_metadata)
+    tool_flags = {
+        **product_context.tool_flags,
+        "web_search_enabled": web_search_enabled,
+        "tdai_search_enabled": tdai_search_enabled,
+    }
     tooling = _build_tooling_envelope(
         onboarding_active=onboarding_active,
-        web_search_enabled=web_search_enabled,
-        active_content_invitation=active_content_invitation,
-        has_mission=has_mission,
-        tdai_search_enabled=tdai_search_enabled,
+        tool_flags=tool_flags,
+        tool_metadata=product_context.tool_metadata,
         text=text,
         include_tool_instructions=include_tool_instructions,
         cap=cap,
+        tool_policy=product_services.tool_policy,
     )
 
     # Onboarding 期间尚未分配使命/关系状态未成形，跳过注入（agent_self_prd.md §4.4）。
@@ -625,9 +527,9 @@ def build_product_turn_llm_input(
         tools=tooling["available_tool_names"] if _tool_surface_enabled else None,
         skills=skill_catalog or None,
         tool_instructions=(
-            None if onboarding_active or not include_tool_instructions else _tool_instructions(
-                active_content_invitation=active_content_invitation,
-            )
+            None
+            if onboarding_active or not include_tool_instructions
+            else product_context.tool_instructions
         ),
         extra_blocks=extra_blocks or None,
         reply_presentation=cap.reply_presentation,
@@ -666,7 +568,6 @@ def build_product_turn_llm_input(
         "carryover": carryover_metadata,
         "tooling": tooling,
         "tools": tooling["tools"],
-        "active_content_invitation": active_content_invitation,
         "agent_context": product_context.agent_context_blocks,
     }
 
@@ -1493,6 +1394,7 @@ def _resolve_turn_reply(
             ctx = TurnContext(
                 account_id=account_id,
                 app_id=ctx.app_id,
+                tool_policy=product_services.tool_policy,
                 account=account,
                 session=session,
                 identity=identity,

@@ -1,10 +1,12 @@
 from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def test_turn_context_fields():
     ctx = TurnContext(
         account_id="acc-1",
         app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": "acc-1"},
         session={"id": 1},
         identity=None,

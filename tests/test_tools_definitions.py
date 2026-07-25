@@ -1,8 +1,10 @@
-from app.tools import (
+from app.products.zhaoxi.tools.definitions import (
     get_content_invitation_response_tools,
-    get_default_tools,
     get_proactive_message_settings_tools,
     get_reminder_tools,
+)
+from app.products.zhaoxi.tools.registry import get_default_tools
+from app.tools import (
     get_web_search_tools,
 )
 

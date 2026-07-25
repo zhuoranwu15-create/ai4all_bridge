@@ -1,9 +1,11 @@
 """P1-5：主动设置更新意图检测的单元测试。
 
-`_infer_proactive_update_tool_choice` 从通用 LLM 入口移到 turn 域后，意图检测正/负例
+朝夕 ToolPolicy 的首轮工具选择意图检测正/负例。
 在这里单测；通用入口只消费调用方传入的 first_round_tool_choice（见 test_llm_tools.py）。
 """
-from app.turn_service import _infer_proactive_update_tool_choice
+from app.products.zhaoxi.tools.registry import (
+    _first_round_tool_choice as _infer_proactive_update_tool_choice,
+)
 
 _FORCED = {"type": "function", "function": {"name": "update_proactive_message_settings"}}
 

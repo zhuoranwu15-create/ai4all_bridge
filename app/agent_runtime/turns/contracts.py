@@ -5,10 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, Optional, Protocol, Tuple
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Optional, Protocol, Tuple
 
 from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import ChannelCapability
+
+if TYPE_CHECKING:
+    from app.tools.registry import ToolPolicy
 
 
 @dataclass(frozen=True)
@@ -29,8 +32,9 @@ class ProductPromptContext:
     long_term_memory: str
     agent_context_blocks: Dict[str, str]
     agent_context_metadata: Dict[str, Any]
-    active_content_invitation: Optional[dict]
-    has_mission: bool
+    tool_flags: Dict[str, bool]
+    tool_metadata: Dict[str, Any]
+    tool_instructions: Optional[str]
     agent_self_state: Optional[str]
     onboarding_context: str
 
@@ -65,6 +69,7 @@ class ProductTurnServices(Protocol):
     """Runtime 所需的最小产品能力；实现由产品 manifest 显式注入。"""
 
     app_id: str
+    tool_policy: "ToolPolicy"
     onboarding_pending: str
     onboarding_step1_sent: str
     onboarding_step2_sent: str

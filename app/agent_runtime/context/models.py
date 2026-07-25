@@ -3,13 +3,17 @@
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional
+
+if TYPE_CHECKING:
+    from app.tools.registry import ToolPolicy
 
 
 @dataclass
 class TurnContext:
     account_id: str
     app_id: str
+    tool_policy: "ToolPolicy"
     account: dict
     session: dict
     identity: Any                     # OpenClawIdentity
