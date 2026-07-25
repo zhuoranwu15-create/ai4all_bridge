@@ -1166,7 +1166,7 @@ def test_dispatch_reactivation_reschedules_when_send_failed_downstream(fresh_db,
     而应改期到下一个 slot，降为每-slot 重试。"""
     import app.proactive.delivery.outbound as outbound_mod
     from app.db import list_outbound_messages
-    from app.openclaw_gateway import OpenClawRateLimited
+    from app.platform.gateways.openclaw import OpenClawRateLimited
     from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
     from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
     from app.proactive.store.account_state import ensure_account_state
@@ -1228,7 +1228,7 @@ def test_dispatch_reactivation_clears_when_send_failed_at_final_slot(fresh_db, m
     """failed 分支：最后一个 slot 下游拒收、已无下一 slot 时，应清除候选（等下次 planning
     重生成），而不是把过期候选永远留着每 tick 重发。"""
     import app.proactive.delivery.outbound as outbound_mod
-    from app.openclaw_gateway import OpenClawRateLimited
+    from app.platform.gateways.openclaw import OpenClawRateLimited
     from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
     from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
     from app.proactive.store.account_state import ensure_account_state

@@ -1,3 +1,5 @@
+"""OpenClaw 入站身份解析与兼容元数据。"""
+
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 

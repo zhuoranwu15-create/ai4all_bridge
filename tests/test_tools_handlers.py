@@ -3,7 +3,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 
 
 def _make_ctx(account_id="acc-tool"):

@@ -4,11 +4,11 @@ from __future__ import annotations
 from typing import Optional
 
 from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
-from app.channels import CHANNEL_APP, CHANNELS
+from app.platform.channels import CHANNEL_APP, CHANNELS
 from app.config import settings
 from app.products.zhaoxi.infrastructure.persistence.companion_world import read_universe_facts
 from app.products.zhaoxi.domain.companion_world.l3_context import render_universe_l3_block
-from app.identity import ResolvedIdentity
+from app.platform.auth.identity import ResolvedIdentity
 from app.prompt_builder import ContextBlock
 from app.schemas import OpenClawTurnResponse
 from app.turn_service import ChannelTurnInput

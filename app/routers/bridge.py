@@ -1,7 +1,7 @@
 """OpenClaw bridge / 多机节点路由（Bearer bridge_secret）。
 
 从 app.main 拆出（结构优化，函数体逐字保留）。后台事件循环改为请求时从
-app.app_runtime.get_background_loop() 读取。
+app.bootstrap.runtime.get_background_loop() 读取。
 """
 import logging
 import uuid
@@ -10,8 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from app.config import settings
-from app.app_runtime import get_background_loop
-from app.identity import identity_response_metadata, resolve_openclaw_identity
+from app.bootstrap.runtime import get_background_loop
+from app.platform.auth.identity import identity_response_metadata, resolve_openclaw_identity
 from app.turn_service import handle_openclaw_turn
 from app.schemas import (
     NodeHeartbeatRequest,

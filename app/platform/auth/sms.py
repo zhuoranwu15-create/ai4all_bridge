@@ -1,3 +1,5 @@
+"""平台短信验证码发送能力。"""
+
 import json
 import logging
 import secrets

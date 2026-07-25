@@ -17,8 +17,8 @@ from app.db import (
     list_recent_inbound_message_dates,
     update_account_user_meta_relationship,
 )
-from app.llm import generate_completion
-from app.llm_providers import TASK_RELATIONSHIP_STATE, tier_for_task
+from app.agent_runtime.llm.service import generate_completion
+from app.agent_runtime.llm.providers import TASK_RELATIONSHIP_STATE, tier_for_task
 from app.prompts.user_meta_relationship import (
     build_relationship_eval_prompt,
     parse_relationship_payload,

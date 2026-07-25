@@ -15,7 +15,7 @@ from app.reminder_utils import compute_first_due_at, validate_due_at, validate_r
 from app.time_utils import beijing_naive_now
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 logger = logging.getLogger("ai4all.tools.reminder_handlers")
 

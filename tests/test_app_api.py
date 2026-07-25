@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from app.channels import CHANNEL_APP
+from app.platform.channels import CHANNEL_APP
 from app.db import (
     connect,
     create_phone_verification,
@@ -43,7 +43,7 @@ def test_app_config_exposes_only_public_settings(client, fresh_db):
 
 
 def test_app_session_creates_app_account_without_weixin_qr(client, fresh_db):
-    with patch("app.openclaw_gateway.start_weixin_qr_login") as qr_mock:
+    with patch("app.platform.gateways.openclaw.start_weixin_qr_login") as qr_mock:
         headers, data = _login(client)
 
     assert data["is_new_user"] is True

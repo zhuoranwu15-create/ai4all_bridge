@@ -4,8 +4,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from app.config import settings
-from app.llm import generate_completion, get_active_llm_model
-from app.llm_providers import TASK_MODERATION, tier_for_task
+from app.agent_runtime.llm.service import generate_completion, get_active_llm_model
+from app.agent_runtime.llm.providers import TASK_MODERATION, tier_for_task
 from app.moderation.models import MachineReviewResult, normalize_risk_level
 
 logger = logging.getLogger("ai4all.moderation.llm_review")

@@ -1,3 +1,5 @@
+"""平台 Web Search provider 适配器。"""
+
 import time
 from datetime import datetime, timezone
 from html.parser import HTMLParser

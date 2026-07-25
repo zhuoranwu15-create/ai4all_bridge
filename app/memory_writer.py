@@ -6,7 +6,7 @@ from app.time_utils import beijing_now_str
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 from app.config import settings
 from app.user_profiles import _safe_account_dir_name
 

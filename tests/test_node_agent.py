@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.openclaw_gateway import OpenClawGatewayError
+from app.platform.gateways.openclaw import OpenClawGatewayError
 
 
 _BEARER = {"Authorization": "Bearer test-secret"}
@@ -51,7 +51,7 @@ def _seed_outbound(idem, node_id="aliyun2", account_id="acc-node"):
 # ===== exec 端点:鉴权 + logout 错误文案穿透 =====
 
 def test_exec_logout_requires_bearer_and_surfaces_unsupported(monkeypatch):
-    from app import node_agent
+    from app.platform.gateways import node_agent
 
     monkeypatch.setattr(
         node_agent, "settings", Settings(ai4all_bridge_secret="test-secret", node_id="aliyun2")
@@ -79,7 +79,8 @@ def test_exec_logout_requires_bearer_and_surfaces_unsupported(monkeypatch):
 def test_remote_logout_unsupported_not_misjudged_as_failed(monkeypatch, fresh_db):
     """中心远程 logout 一个 openclaw 不支持 logout 的节点:_exec_post 必须把原始文案
     透出,使 main._cleanup 分类为 'unsupported'(修复前会因 httpx 错误串丢文案被误判 'failed')。"""
-    from app import main, node_agent, node_gateway
+    from app import main
+    from app.platform.gateways import node_agent, node_gateway
     from app.routers import web
     from app.db import upsert_access_node
 
@@ -134,7 +135,7 @@ def _node_settings():
 
 
 def test_node_pull_once_sends_and_marks_sent(client, monkeypatch):
-    from app import node_agent
+    from app.platform.gateways import node_agent
     from app.db import get_outbound_message
 
     row = _seed_outbound("pull-ok")
@@ -153,7 +154,7 @@ def test_node_pull_once_sends_and_marks_sent(client, monkeypatch):
 
 
 def test_node_pull_once_reports_failure(client, monkeypatch):
-    from app import node_agent
+    from app.platform.gateways import node_agent
     from app.db import get_outbound_message
 
     row = _seed_outbound("pull-fail")
@@ -279,7 +280,7 @@ def test_enqueue_onboarding_welcome_routes_to_assigned_node(fresh_db):
 
 def test_exec_send_text_requires_bearer_and_surfaces_error(monkeypatch):
     """/node/exec/send/text:缺 bearer→401;openclaw 报错→502 且 body 含原始文案。"""
-    from app import node_agent
+    from app.platform.gateways import node_agent
 
     monkeypatch.setattr(
         node_agent, "settings", Settings(ai4all_bridge_secret="test-secret", node_id="aliyun2")
@@ -309,7 +310,7 @@ def test_exec_send_text_requires_bearer_and_surfaces_error(monkeypatch):
 
 def test_node_send_text_local_direct_call(monkeypatch):
     """standalone/本机账号:node_send_text 直调本机 openclaw,不走 HTTP。"""
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
 
     monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="standalone"))
     captured = {}
@@ -335,7 +336,7 @@ def test_node_send_text_local_direct_call(monkeypatch):
 
 def test_node_send_text_remote_pushes_to_owning_node(monkeypatch, fresh_db):
     """远程账号:node_send_text HTTP push 到归属节点 /node/exec/send/text,节点本机发。"""
-    from app import node_agent, node_gateway
+    from app.platform.gateways import node_agent, node_gateway
     from app.db import upsert_access_node
 
     upsert_access_node(node_id="aliyun2", base_url="http://aliyun2")

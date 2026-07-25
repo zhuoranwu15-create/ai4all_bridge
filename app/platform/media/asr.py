@@ -1,4 +1,4 @@
-"""Provider-neutral batch speech-to-text service for the App V1 channel."""
+"""Provider-neutral batch speech-to-text service for application channels."""
 
 from __future__ import annotations
 

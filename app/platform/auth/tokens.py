@@ -1,4 +1,4 @@
-"""Bearer 鉴权比较 helper：恒定时间比较 + 空 token 永不通过。
+"""平台 Bearer 鉴权比较 helper：恒定时间比较 + 空 token 永不通过。
 
 刻意做成只依赖 stdlib `hmac` 的独立小模块：瘦接入节点 `node_agent`（设计上不拉起
 中心 app/db 栈）也能复用，避免各处重复 `authorization == f"Bearer {token}"` 写法

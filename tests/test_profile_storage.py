@@ -3,7 +3,7 @@
 覆盖：读缺失 vs 空文件、整文件写入与 version 递增、append 新建/续写、删除、
 按前缀列举、账号隔离、delete_account 全删。fresh_db 注入隔离临时库（两后端通用）。
 """
-from app import profile_storage as ps
+from app.agent_runtime.persistence import profile_storage as ps
 
 
 def _version(account_id: str, filename: str) -> int:

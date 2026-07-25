@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.config import settings
 from app.db import SessionPrincipal
 from app.products.zhaoxi.application import CompanionWorldVisitService, VisitError
-from app.rate_limiter import RateLimiter
+from app.platform.quota.rate_limiter import RateLimiter
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,

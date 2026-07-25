@@ -14,8 +14,8 @@ from app.db import (
     mark_proactive_commitment_failed,
     mark_proactive_commitment_sent,
 )
-from app.llm import generate_completion, is_llm_configured
-from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
+from app.agent_runtime.llm.service import generate_completion, is_llm_configured
+from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.contract.prompts import COMMITMENT_EXTRACTION_SYSTEM_PROMPT
 from app.proactive.delivery.outbound import dispatch_proactive_text

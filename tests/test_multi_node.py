@@ -196,7 +196,7 @@ def test_enqueue_node_id_none_in_standalone(fresh_db):
 
 def test_node_gateway_standalone_always_local(monkeypatch):
     """standalone 下即便 node_id 是远程名,也走本机直调(零网络跳,保证零回归)。"""
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
 
     calls = {}
 
@@ -217,7 +217,7 @@ def test_node_gateway_standalone_always_local(monkeypatch):
 
 
 def test_node_gateway_local_when_node_id_matches(monkeypatch):
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
     from app.config import Settings
 
     monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="central,node", node_id="aliyun1"))
@@ -236,9 +236,9 @@ def test_node_gateway_local_when_node_id_matches(monkeypatch):
 def test_node_gateway_remote_unregistered_raises(monkeypatch, fresh_db):
     """非本机 node_id 且 access_nodes 无 base_url 登记 → 抛 OpenClawGatewayError
     (映射进 main.py 既有 except → set_binding_intent_error,行为一致)。"""
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
     from app.config import Settings
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="central", node_id="aliyun1"))
     with patch("app.db.settings", fresh_db):

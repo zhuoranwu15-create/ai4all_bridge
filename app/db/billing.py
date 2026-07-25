@@ -2584,7 +2584,7 @@ def insert_resident_runtime_account(
     串联，从而任一步失败都整体回滚。
     ``soul_seed``/``identity_seed`` 只允许写固定文件名，避免模板内容控制存储路径。
     """
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     if not is_postgres() and not conn.in_transaction:
         raise RuntimeError("insert_resident_runtime_account requires an active transaction")

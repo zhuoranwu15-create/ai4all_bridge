@@ -79,7 +79,7 @@ class FakeWs:
 
 
 def _client(incoming, settings=None):
-    from app.openclaw_gateway_ws import OpenClawPersistentGatewayClient
+    from app.platform.gateways.openclaw_ws import OpenClawPersistentGatewayClient
 
     created = []
 
@@ -189,7 +189,7 @@ def test_ws_client_supports_auth_none_and_configured_protocol():
 
 
 def test_ws_client_rejects_missing_nonce_and_closes():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, created = _client([_challenge("")])
 
@@ -201,7 +201,7 @@ def test_ws_client_rejects_missing_nonce_and_closes():
 
 
 def test_ws_client_rejects_missing_operator_write_scope():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, created = _client(
         [_challenge(), _response_for_last(_hello(scopes=["operator.read"]))]
@@ -214,7 +214,7 @@ def test_ws_client_rejects_missing_operator_write_scope():
 
 
 def test_ws_client_rejects_missing_send_method():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, created = _client(
         [_challenge(), _response_for_last(_hello(methods=["health"]))]
@@ -227,7 +227,7 @@ def test_ws_client_rejects_missing_send_method():
 
 
 def test_ws_client_surfaces_gateway_error_message():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, created = _client(
         [
@@ -244,7 +244,7 @@ def test_ws_client_surfaces_gateway_error_message():
 
 
 def test_ws_client_closes_on_invalid_json():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, created = _client([_challenge(), "not-json"])
 
@@ -270,7 +270,7 @@ def test_ws_client_ignores_tick_while_waiting_for_response():
 
 
 def test_ws_client_rejects_local_wss_without_pinned_tls():
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     client, _created = _client(
         [],

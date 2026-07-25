@@ -1,4 +1,4 @@
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 
 
 def test_turn_context_fields():

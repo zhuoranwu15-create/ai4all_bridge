@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.auth_utils import bearer_matches
+from app.platform.auth.tokens import bearer_matches
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.config import settings
 from app.db import SessionPrincipal, resolve_session_principal, upsert_admin_user

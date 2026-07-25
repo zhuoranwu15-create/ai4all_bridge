@@ -4,8 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from app.llm import generate_completion
-from app.llm_providers import TASK_WORLD_CONTENT, tier_for_task
+from app.agent_runtime.llm.service import generate_completion
+from app.agent_runtime.llm.providers import TASK_WORLD_CONTENT, tier_for_task
 
 
 @dataclass(frozen=True)

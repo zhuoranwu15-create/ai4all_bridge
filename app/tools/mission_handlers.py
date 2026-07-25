@@ -12,7 +12,7 @@ from app.db import count_mission_moments, record_mission_moment
 from app.mission_state import resolve_account_mission, snapshot_account_mission
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 
 def handle_mission_status(args: dict, ctx: "TurnContext") -> dict:

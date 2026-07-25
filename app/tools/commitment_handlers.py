@@ -7,7 +7,7 @@ from app.proactive.obligations.commitments import _commitment_max_days, _parse_d
 from app.time_utils import beijing_naive_now
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 
 def handle_create_commitment(args: dict, ctx: "TurnContext") -> dict:

@@ -12,7 +12,7 @@ from app.db import get_first_user_message_at, list_user_active_dates
 from app.time_utils import beijing_now
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 logger = logging.getLogger("ai4all.tools.session_status_handlers")
 

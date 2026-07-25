@@ -207,7 +207,7 @@ def test_failed_outbound_does_not_record_session_delivery(fresh_db):
 
 def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
     """被限速时退避重试，重试用尽后落 failed（不再静默标 sent）。"""
-    from app.openclaw_gateway import OpenClawRateLimited
+    from app.platform.gateways.openclaw import OpenClawRateLimited
     from app.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3
@@ -243,7 +243,7 @@ def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
 
 def test_send_proactive_text_recovers_after_rate_limit_retry(fresh_db):
     """首次限速、重试成功 → 最终 sent。"""
-    from app.openclaw_gateway import OpenClawRateLimited
+    from app.platform.gateways.openclaw import OpenClawRateLimited
     from app.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3

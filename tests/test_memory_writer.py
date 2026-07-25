@@ -3,7 +3,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,7 +52,7 @@ class TestWriteMemoryRawArchive:
         s.llm_api_key = ""
         with (
             patch("app.memory_writer.settings", s),
-            patch("app.llm.generate_completion") as mock_generate_completion,
+            patch("app.agent_runtime.llm.service.generate_completion") as mock_generate_completion,
         ):
             from app.memory_writer import write_memory
             asyncio.run(

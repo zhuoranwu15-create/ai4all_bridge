@@ -178,7 +178,16 @@ app/
 │       ├── infrastructure/        # persistence/repositories/adapters
 │       └── jobs/                  # world content/lifecycle jobs
 ├── agent_runtime/                 # 跨产品，保持形态无关（原位）
+│   ├── context/                   # turn context、窗口裁剪、摘要与证据回灌
+│   ├── llm/                       # 模型调用、provider 选择与协议适配
+│   └── persistence/               # Runtime 账号画像持久化适配器
 ├── platform/                      # 跨产品平台能力（identity/auth/billing/quota/channels/…）
+│   ├── auth/                      # token、身份、验证码与短信
+│   ├── gateways/                  # OpenClaw 与接入节点网关
+│   ├── media/                     # ASR、图片理解
+│   ├── observability/             # 告警与脱敏
+│   ├── quota/                     # 产品级 RPM 限流
+│   └── search/                    # Web Search、TDAI adapters
 └── (其余历史平铺模块由 MP-07A 后续批次按明确归属渐进收敛)
 ```
 

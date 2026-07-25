@@ -16,8 +16,8 @@ from app.db import (
     record_scheduler_heartbeat,
     upsert_account_user_meta,
 )
-from app.llm import generate_completion
-from app.llm_providers import TASK_USER_META, tier_for_task
+from app.agent_runtime.llm.service import generate_completion
+from app.agent_runtime.llm.providers import TASK_USER_META, tier_for_task
 from app.prompts.user_meta_companion_type import (
     COMPANION_TYPE_ENUM,
     build_companion_classify_prompt,

@@ -1,3 +1,5 @@
+"""平台验证码校验能力。"""
+
 import logging
 
 from app.config import settings

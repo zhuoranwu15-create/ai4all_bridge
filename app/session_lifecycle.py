@@ -79,7 +79,7 @@ def _fallback_close_summary(
         memory_sink=memory_sink,
     )
     summary = result.get("session_summary") or {}
-    from app.llm import get_active_llm_model
+    from app.agent_runtime.llm.service import get_active_llm_model
 
     return {
         # rough_summary 停产后，session_summary 统一取 carryover（单一摘要）。

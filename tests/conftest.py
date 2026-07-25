@@ -402,15 +402,15 @@ def fresh_db(test_settings):
         patch("app.products.zhaoxi.infrastructure.repositories.companion_world.settings", test_settings),
         patch("app.proactive.contract.common.settings", test_settings),
         patch("app.proactive.delivery.outbound.settings", test_settings),
-        patch("app.asr.settings", test_settings),
+        patch("app.platform.media.asr.settings", test_settings),
         patch("app.routers.debug.settings", test_settings),
         patch("app.routers.admin_moderation.settings", test_settings),
         patch("app.routers.admin_proactive.settings", test_settings),
         patch("app.routers.admin_dreaming.settings", test_settings),
         patch("app.routers.admin_ops.settings", test_settings),
         patch("app.routers.admin_llm.settings", test_settings),
-        patch("app.llm.settings", test_settings),
-        patch("app.llm_providers.settings", test_settings),
+        patch("app.agent_runtime.llm.service.settings", test_settings),
+        patch("app.agent_runtime.llm.providers.settings", test_settings),
         patch("app.user_profiles.settings", test_settings),
         patch("app.dreaming.settings", test_settings),
         patch("app.session_lifecycle.settings", test_settings),
@@ -466,7 +466,7 @@ def client(fresh_db):
     """FastAPI TestClient with isolated DB, test settings, mocked LLM."""
     from fastapi.testclient import TestClient
     from app.main import app
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
 
     patches = [
         patch("app.main.settings", fresh_db),
@@ -477,15 +477,15 @@ def client(fresh_db):
         patch("app.routers.web.settings", fresh_db),
         patch("app.routers.app_api.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
-        patch("app.asr.settings", fresh_db),
+        patch("app.platform.media.asr.settings", fresh_db),
         patch("app.routers.debug.settings", fresh_db),
         patch("app.routers.admin_moderation.settings", fresh_db),
         patch("app.routers.admin_proactive.settings", fresh_db),
         patch("app.routers.admin_dreaming.settings", fresh_db),
         patch("app.routers.admin_ops.settings", fresh_db),
         patch("app.routers.admin_llm.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm_providers.settings", fresh_db),
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.providers.settings", fresh_db),
         patch("app.turn_service.settings", fresh_db),
         patch("app.proactive.delivery.outbound.settings", fresh_db),
         patch("app.proactive.recall.hot_topic.settings", fresh_db),

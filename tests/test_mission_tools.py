@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from app.tools.executor import execute_tool_call
 from app.tools.mission_handlers import handle_mission_status, handle_record_mission_moment
 from app.tools.registry import get_default_tools, get_spec
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 
 
 def _make_ctx(account_id="acc-tool", session_id=1, message_id="msg-1"):

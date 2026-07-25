@@ -3,7 +3,7 @@
 核心不变量（原则一）：微信 cap（supports_proactive=True 等全 True）下工具集与历史逐字节一致；
 仅当渠道能力保守（如 Web V1：supports_proactive=False）时才裁剪「产生未来投递」工具。
 """
-from app.channels import CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
+from app.platform.channels import CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.tools import get_default_tools
 from app.turn_service import _PROACTIVE_DELIVERY_TOOLS, _build_tooling_envelope, _tool_name
 

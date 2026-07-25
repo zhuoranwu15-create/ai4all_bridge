@@ -15,7 +15,7 @@ from collections import deque
 from datetime import datetime
 from typing import Deque, Optional, Tuple
 
-from app.alerting import _send_feishu_text, redact_alert_text
+from app.platform.observability.alerting import _send_feishu_text, redact_alert_text
 from app.config import settings
 
 logger = logging.getLogger("ai4all.moderation.aliyun_alerting")

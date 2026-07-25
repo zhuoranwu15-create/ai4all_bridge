@@ -22,7 +22,7 @@ from app.db import (
     update_dreaming_run,
     update_session_summary,
 )
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 from app.user_profiles import (
     account_profile_dir,
     context_file_path,
@@ -449,8 +449,8 @@ def _call_dreaming_llm(
     session_messages: str,
     daily_notes: str,
 ) -> Tuple[Dict[str, Any], Optional[Dict[str, Optional[int]]]]:
-    from app.llm import generate_completion_with_usage, is_llm_configured
-    from app.llm_providers import TASK_DREAMING, tier_for_task
+    from app.agent_runtime.llm.service import generate_completion_with_usage, is_llm_configured
+    from app.agent_runtime.llm.providers import TASK_DREAMING, tier_for_task
 
     tier = tier_for_task(TASK_DREAMING)
     if not is_llm_configured(tier):
@@ -841,8 +841,8 @@ def run_dreaming(
     memory_sink: Optional["MemorySink"] = None,
 ) -> Dict[str, object]:
     """Run Dreaming, apply per-account memory, and emit eligible distilled facts."""
-    from app.llm import get_active_llm_model
-    from app.llm_providers import TASK_DREAMING, tier_for_task
+    from app.agent_runtime.llm.service import get_active_llm_model
+    from app.agent_runtime.llm.providers import TASK_DREAMING, tier_for_task
 
     today = today or date.today().isoformat()
     days = max(1, min(days, 30))

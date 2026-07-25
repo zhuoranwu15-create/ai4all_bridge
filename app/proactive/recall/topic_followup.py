@@ -11,8 +11,8 @@ from app.db import (
     list_recent_messages_for_account_since,
     list_recent_reactivation_outbound_messages,
 )
-from app.llm import generate_completion, is_llm_configured
-from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
+from app.agent_runtime.llm.service import generate_completion, is_llm_configured
+from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import httpx
 
 from app.config import settings
-from app.llm_providers import LLMProviderConfig
+from app.agent_runtime.llm.providers import LLMProviderConfig
 
 
 logger = logging.getLogger("ai4all.llm.adapters")

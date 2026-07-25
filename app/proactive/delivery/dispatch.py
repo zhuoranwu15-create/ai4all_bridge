@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from app.channels import CHANNEL_APP
+from app.platform.channels import CHANNEL_APP
 from app.config import settings
 from app.products.zhaoxi.application import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,

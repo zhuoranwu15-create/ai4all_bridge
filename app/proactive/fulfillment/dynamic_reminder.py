@@ -1,7 +1,7 @@
 """动态提醒履约器：合成轮次 + 可配工具集，产出一条带来源的简报正文。
 
 设计要点（见动态提醒设计文档 §5）：
-- 复用普通对话的 tool loop（app.llm.generate_reply_with_tools），因此天然可用完整工具注册表；
+- 复用普通对话的 tool loop（app.agent_runtime.llm.service.generate_reply_with_tools），因此天然可用完整工具注册表；
   工具集由履约 policy 决定，v1 只带 web_search 且首轮强制。
 - 「强制搜索」用 first_round_tool_choice 表达，不靠砍工具集；将来放开工具集时该约束仍独立。
 - 校验「至少一次搜索成功」用 ctx.web_search_success_count（web_search handler 成功时自增）；
@@ -133,7 +133,7 @@ def _build_synthetic_ctx(reminder: Dict[str, Any], now: datetime):
     """构造无用户输入的合成 TurnContext：account 隔离 + 放行 web_search。"""
     from app.db import get_account
     from app.session_lifecycle import business_day_for
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
     account_id = reminder["account_id"]
     account = get_account(account_id=account_id) or {"id": account_id}
@@ -169,7 +169,7 @@ def fulfill_dynamic_reminder(
         return FulfillmentResult(ok=False, error="no_fulfillment_tools_configured")
 
     try:
-        from app.llm import TIER_PRO, generate_reply_with_tools
+        from app.agent_runtime.llm.service import TIER_PRO, generate_reply_with_tools
 
         ctx = _build_synthetic_ctx(reminder, current)
         prompt = _build_prompt(reminder, current)

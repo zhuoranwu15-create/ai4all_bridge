@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from app.agent_runtime.ports import MemorySink
 
 from app.agent_self_state import build_agent_self_state_block
-from app.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
+from app.platform.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.config import settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
@@ -49,14 +49,14 @@ from app.db import (
     set_account_onboarding_state,
     upsert_channel_binding,
 )
-from app.identity import ResolvedIdentity, identity_response_metadata, resolve_openclaw_identity
-from app.image_understanding import describe_image
-from app.llm import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
-from app.llm_providers import TASK_MAIN_REPLY, tier_for_task
+from app.platform.auth.identity import ResolvedIdentity, identity_response_metadata, resolve_openclaw_identity
+from app.platform.media.image_understanding import describe_image
+from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
 from app.db.campaign import get_campaign_attribution
 from app.mission_assignment import assign_mission_if_absent
 from app.mission_state import resolve_account_mission
-from app.llm_providers import LLMProviderConfig
+from app.agent_runtime.llm.providers import LLMProviderConfig
 from app.memory_writer import write_memory
 from app.relationship_state import maybe_update_relationship_state_after_turn
 from app.moderation.sensitive_words import check_sync_guard
@@ -65,13 +65,13 @@ from app.moderation.service import (
     enqueue_message_for_moderation,
     screen_inbound_message_sync,
 )
-from app.context_window import compute_floor_count, trim_history_rows
+from app.agent_runtime.context.window import compute_floor_count, trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
 from app.proactive.store.account_state import ensure_account_state
-from app.rate_limiter import rate_limiter
+from app.platform.quota.rate_limiter import rate_limiter
 from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools, iter_specs
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
 from app.onboarding import (
     apply_extracted_onboarding_info,
@@ -86,7 +86,7 @@ from app.onboarding import (
     ONBOARDING_STEP3_SENT,
     ONBOARDING_WELCOME_TEXT,
 )
-from app import node_gateway
+from app.platform.gateways import node_gateway
 from app.user_profiles import (
     ensure_agent_context_files,
     ensure_user_profile,
@@ -536,7 +536,7 @@ def build_turn_llm_input(
                 _history_timestamped_count += 1
         history.append({"role": row["role"], "content": content})
     if getattr(settings, "llm_tool_evidence_replay_enabled", True):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         # history 由 kept_rows 构建，inject 内部 zip(history, rows) 需 1:1 对齐，故同传 kept_rows。
         history = inject_tool_evidence_replay(
             history,
@@ -1438,14 +1438,14 @@ def _resolve_turn_reply(
         _tdai_volume_eligible = (
             _tdai_memory_volume_eligible(account_id) if setup.cap.tdai_enabled else False
         )
-        from app.tdai_client import search_allowed as _tdai_search_allowed
+        from app.platform.search.tdai import search_allowed as _tdai_search_allowed
         tdai_search_enabled_for_turn = bool(setup.cap.tdai_enabled) and _tdai_search_allowed(
             account_id, volume_eligible=_tdai_volume_eligible
         )
 
         _tdai_extra_blocks: List[ContextBlock] = []
         if not onboarding_active and setup.cap.tdai_enabled:
-            from app.tdai_client import recall as _tdai_recall
+            from app.platform.search.tdai import recall as _tdai_recall
             _tdai_t0 = time.monotonic()
             _tdai_result = _tdai_recall(
                 account_id=account_id, query=text, volume_eligible=_tdai_volume_eligible
@@ -1697,7 +1697,7 @@ def _after_turn_rolling_summary(atx: "_AfterTurnContext"):
     """P3 Token 压力滚动摘要（默认关）：仅在开关开时挂任务，避免无谓调度。"""
     if not getattr(settings, "llm_rolling_summary_enabled", False):
         return None
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
     return asyncio.to_thread(
         maybe_update_rolling_summary,
         account_id=atx.account_id,
@@ -1720,7 +1720,7 @@ def _after_turn_tdai_capture(atx: "_AfterTurnContext"):
         and not atx.image_understanding_failed
     ):
         return None
-    from app.tdai_client import capture_turn as _tdai_capture
+    from app.platform.search.tdai import capture_turn as _tdai_capture
     return _tdai_capture(
         account_id=atx.account_id,
         session_id=int(atx.session["id"]),

@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 
 
 def _settings(tmp_path):

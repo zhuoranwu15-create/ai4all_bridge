@@ -1,5 +1,5 @@
 """app.mission_assignment：使命分配编排（agent_mission_and_orchestration_design.md §5）。"""
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 from app.mission_assignment import _pick_mission_id, assign_mission_if_absent
 from app.mission_registry import get_mission_template
 

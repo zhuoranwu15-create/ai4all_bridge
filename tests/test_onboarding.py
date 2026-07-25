@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 
 
 # ---------------------------------------------------------------------------
@@ -271,7 +271,7 @@ def test_prompt_context_step2_forced_soul_preset_only_confirms_ai_name():
 
 def test_apply_extracted_onboarding_info_forced_soul_preset_skips_persona(tmp_path, fresh_db):
     from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-soul"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
@@ -288,7 +288,7 @@ def test_apply_extracted_onboarding_info_forced_soul_preset_skips_persona(tmp_pa
 
 def test_apply_extracted_onboarding_info_applies_persona_without_forced_preset(tmp_path, fresh_db):
     from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-normal-soul"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
@@ -311,7 +311,7 @@ def test_extract_ai_name_uses_llm_result():
     from app.onboarding import extract_onboarding_info_async
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小A", "persona": null, "persona_custom": null, "skip": false}',
     ):
         result = asyncio.run(
@@ -329,7 +329,7 @@ def test_extract_combined_ai_name_and_modified_preset():
     from app.onboarding import extract_onboarding_info_async
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
     ):
         result = asyncio.run(
@@ -348,7 +348,7 @@ def test_extract_ai_name_does_not_guess_when_llm_fails():
     import asyncio
     from app.onboarding import extract_onboarding_info_async
 
-    with patch("app.llm.generate_completion", side_effect=RuntimeError("llm unavailable")):
+    with patch("app.agent_runtime.llm.service.generate_completion", side_effect=RuntimeError("llm unavailable")):
         result = asyncio.run(
             extract_onboarding_info_async(
                 user_text="小A",
@@ -690,7 +690,7 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
         return "好，那我就是小满了。我们慢慢来。"
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
     ), patch("app.turn_service.generate_reply", side_effect=fake_generate_reply):
         res = client.post(
@@ -880,7 +880,7 @@ def test_prompt_context_step2_ai_name_only_confirms_persona_keeps_name():
 def test_apply_extracted_forced_ai_name_does_not_overwrite_identity(fresh_db):
     """强制 ai_name 账号：用户回复里抽出的 ai_name 不应写 IDENTITY 覆盖已定死的名字。"""
     from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-ainame"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")
@@ -901,7 +901,7 @@ def test_apply_extracted_forced_ai_name_does_not_overwrite_identity(fresh_db):
 def test_apply_extracted_forced_ai_name_skips_preset_default_name(fresh_db):
     """强制 ai_name 账号选了带名字预设（人设未强制）：不应用预设默认名回填覆盖强制名字。"""
     from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-ainame-preset"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")

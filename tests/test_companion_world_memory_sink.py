@@ -107,7 +107,7 @@ def test_l3_background_switch_disables_sink_and_compact(fresh_db, monkeypatch):
         "disabled": True,
     }
 def test_dreaming_emits_only_applied_distilled_memory(fresh_db):
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
     from app.dreaming import read_long_term_memory, run_dreaming
 
     fresh_db.llm_api_key = "fake-key"
@@ -146,7 +146,7 @@ def test_dreaming_emits_only_applied_distilled_memory(fresh_db):
     events = []
     sink = CompanionWorldMemorySink(events.append)
     with patch(
-        "app.llm.generate_completion_with_usage", return_value=(payload, None)
+        "app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)
     ):
         result = run_dreaming(
             account_id=account_id,

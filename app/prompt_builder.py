@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # token 估算口径与历史裁剪共用同一实现，避免两处 len/1.5 公式漂移（见 context_window）。
-from app.context_window import ROLLING_SUMMARY_MAX_CHARS
-from app.context_window import estimate_tokens as _estimate_tokens
+from app.agent_runtime.context.window import ROLLING_SUMMARY_MAX_CHARS
+from app.agent_runtime.context.window import estimate_tokens as _estimate_tokens
 
 
 logger = logging.getLogger("ai4all.prompt_builder")

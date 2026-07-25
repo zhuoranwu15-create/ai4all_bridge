@@ -249,8 +249,8 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools", side_effect=responses) as mock_llm,
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools", side_effect=responses) as mock_llm,
     ):
         result = generate_content_invitation_candidate(
             account_id="acc-content-generate",
@@ -299,8 +299,8 @@ def test_account_check_content_invitation_generation_avoids_pending_user_reminde
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools") as mock_llm,
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools") as mock_llm,
     ):
         result = generate_content_invitation_candidate(
             account_id="acc-content-avoid",
@@ -362,8 +362,8 @@ def test_admin_run_proactive_check_once_displays_generated_content_invitation(cl
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools", side_effect=responses),
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools", side_effect=responses),
     ):
         res = client.post(
             "/admin/accounts/acc-content-admin-run/proactive-check/run-once",

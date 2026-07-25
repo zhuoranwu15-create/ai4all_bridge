@@ -1,4 +1,4 @@
-from app.identity import resolve_openclaw_identity
+from app.platform.auth.identity import resolve_openclaw_identity
 
 
 def test_openclaw_identity_uses_session_key_as_ai4all_account_id():

@@ -11,7 +11,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from app.channels import CHANNEL_WEIXIN
+from app.platform.channels import CHANNEL_WEIXIN
 from app.db import get_account_last_inbound_at
 from app.proactive.store.candidates import _parse_reactivation_time
 from app.time_utils import beijing_naive_now

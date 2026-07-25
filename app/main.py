@@ -18,8 +18,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.captcha import verify_captcha
-from app.sms import generate_otp, send_otp
+from app.platform.auth.captcha import verify_captcha
+from app.platform.auth.sms import generate_otp, send_otp
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     close_pg_pool,
@@ -138,10 +138,10 @@ from app.db import (
     unbind_and_wipe_account,
     reenable_proactive_after_rebind,
 )
-from app.identity import identity_response_metadata, resolve_openclaw_identity
-from app.llm import generate_completion
+from app.platform.auth.identity import identity_response_metadata, resolve_openclaw_identity
+from app.agent_runtime.llm.service import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
-from app.openclaw_gateway import (
+from app.platform.gateways.openclaw import (
     close_persistent_gateway_client,
     send_weixin_text,
     warmup_persistent_gateway_client,
@@ -200,7 +200,7 @@ from app.schemas import (
     OpenClawTurnRequest,
     OpenClawTurnResponse,
 )
-from app import node_gateway
+from app.platform.gateways import node_gateway
 from app.db import (
     claim_pending_outbound_by_node,
     insert_outbound_delivery_message,
@@ -221,7 +221,7 @@ from app.turn_service import build_turn_llm_input, handle_openclaw_turn
 from app.moderation import export as moderation_export
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
-from app.rate_limiter import RateLimiter
+from app.platform.quota.rate_limiter import RateLimiter
 import shutil
 
 import httpx
@@ -234,8 +234,8 @@ from app.user_profiles import (
     read_agent_context,
     read_user_profile,
 )
-from app.alerting import configure_error_log_alerting
-from app.app_runtime import set_background_loop, get_background_loop
+from app.platform.observability.alerting import configure_error_log_alerting
+from app.bootstrap.runtime import set_background_loop, get_background_loop
 from app.routers.deps import *  # noqa: F401,F403 鉴权依赖（搬出后回引，供留存 handler 用）
 from app.routers.serializers import *  # noqa: F401,F403 序列化/脱敏 helper 回引
 from app.routers.health import _build_ready_status
@@ -441,7 +441,7 @@ async def verify_tdai_multitenant() -> None:
     """
     if not (getattr(settings, "tdai_enabled", False) and getattr(settings, "tdai_search_enabled", False)):
         return
-    from app.tdai_client import mark_multitenant_unsafe, verify_multitenant
+    from app.platform.search.tdai import mark_multitenant_unsafe, verify_multitenant
 
     ok = await asyncio.to_thread(verify_multitenant)
     if ok is False:

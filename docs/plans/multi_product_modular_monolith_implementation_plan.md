@@ -322,8 +322,11 @@ PRD 冻结后再按真实调用点拆三类工单：产品 API/composition、Run
 
 Phase 1 已生产发布。当前执行 MP-07A，并按独立 PR 分三批推进：
 
-1. Companion World 垂直切片归入 `app/products/zhaoxi/`，路由组合收口到 `app/bootstrap/`。
-2. 对根目录中归属明确的共享能力做 platform/agent_runtime 归位。
+1. Companion World 垂直切片归入 `app/products/zhaoxi/`，路由组合收口到 `app/bootstrap/`（已合入 PR #53）。
+2. 对根目录中归属明确的共享能力做 platform/agent_runtime 归位（已完成开发与聚焦回归）：
+   - 平台层按 `auth`、`quota`、`media`、`search`、`gateways`、`observability` 归组；
+   - Runtime 按 `llm`、`context`、`persistence` 归组；
+   - `app.main:app`、`scripts/run_*.py` 入口保持不变。
 3. 对 onboarding、memory、mission、relationship 等朝夕模块归位并记录仍需等待真实调用点的过渡模块。
 
 MP-07A 不创建 `app/products/fatetell/`，不修改数据库或外部 API。Fatetell 的产品命名空间、

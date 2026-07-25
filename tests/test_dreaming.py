@@ -12,7 +12,7 @@ BRIDGE_HEADERS = {"Authorization": "Bearer test-secret"}
 
 def _write_daily(base: Path, account_id: str, date_str: str, content: str) -> None:
     """写一条 daily-notes 记录（P2 后入库；base 仅保留以兼容调用方签名）。"""
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     profile_storage.write_file(account_id, f"memory/{date_str}.md", content)
 
@@ -44,7 +44,7 @@ def test_run_dreaming_records_token_usage(fresh_db, tmp_path):
     usage = {"input": 1234, "output": 56}
 
     with patch(
-        "app.llm.generate_completion_with_usage", return_value=(_llm_payload(), usage)
+        "app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(_llm_payload(), usage)
     ):
         run_dreaming(account_id=account_id, today=TODAY, days=1)
 
@@ -91,7 +91,7 @@ def test_run_dreaming_writes_run_items_events_and_applies_memory(fresh_db, tmp_p
         ]
     )
 
-    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["status"] == "updated"
@@ -146,7 +146,7 @@ def test_run_dreaming_skips_sensitive_and_low_confidence_items(fresh_db, tmp_pat
         ]
     )
 
-    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["applied_count"] == 0
@@ -182,7 +182,7 @@ def test_rollback_applied_memory_item_restores_previous_file(fresh_db, tmp_path)
         ]
     )
 
-    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)):
         run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     item = list_dreaming_memory_items(account_id=account_id)[0]
@@ -221,7 +221,7 @@ def test_session_lifecycle_uses_llm_carryover_when_available(fresh_db, tmp_path)
         content="昨天的上下文",
     )
 
-    with patch("app.llm.generate_completion_with_usage", return_value=(_llm_payload(), None)):
+    with patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(_llm_payload(), None)):
         second = get_or_create_account_active_session_with_dreaming(
             account_id=account_id,
             channel="openclaw-weixin",
@@ -276,7 +276,7 @@ def test_session_lifecycle_falls_back_when_llm_fails(fresh_db, tmp_path):
 
 
 def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path):
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     fresh_db.llm_api_key = "fake-key"
     account_id = "sk-admin-dream"
@@ -315,7 +315,7 @@ def test_admin_dreaming_endpoint_and_debug_redaction(client, fresh_db, tmp_path)
     )
     assert res.status_code == 200
 
-    with patch("app.routers.admin_dreaming.date_cls") as mock_date, patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.routers.admin_dreaming.date_cls") as mock_date, patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)):
         mock_date.today.return_value.isoformat.return_value = TODAY
         res = client.post(
             f"/admin/accounts/{account_id}/dreaming?days=1",
@@ -358,7 +358,7 @@ def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, t
         ]
     )
 
-    with patch("app.llm.generate_completion_with_usage", return_value=(payload, None)):
+    with patch("app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)):
         result = run_dreaming(account_id=account_id, today=TODAY, days=1)
 
     assert result["applied_count"] == 1
@@ -366,7 +366,7 @@ def test_run_dreaming_applies_when_model_returns_invalid_sensitivity(fresh_db, t
     assert items[0]["sensitivity"] == "normal"
     assert items[0]["apply_status"] == "applied"
     # USER.md 落地（read_long_term_memory 读 MEMORY.md，这里直接读 USER.md）
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     assert "二哥" in profile_storage.read_file(account_id, "USER.md")
 

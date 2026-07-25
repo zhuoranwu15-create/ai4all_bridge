@@ -7,7 +7,7 @@
 """
 import pytest
 
-from app import tdai_client
+from app.platform.search import tdai as tdai_client
 
 
 def test_session_key_format():

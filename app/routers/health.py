@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.db import connect as db_connect
-from app.llm import is_llm_configured
+from app.agent_runtime.llm.service import is_llm_configured
 
 router = APIRouter()
 

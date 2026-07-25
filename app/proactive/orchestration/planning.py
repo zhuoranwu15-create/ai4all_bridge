@@ -7,7 +7,7 @@ scan_due_proactive_account_checks：扫到期账号 → claim → 发到期 comp
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
-from app.channels import CHANNEL_WEIXIN
+from app.platform.channels import CHANNEL_WEIXIN
 from app.config import settings
 from app.db import (
     get_account,

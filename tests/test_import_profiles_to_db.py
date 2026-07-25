@@ -5,7 +5,7 @@ storage 读写经 app.db._core.connect() 路由到 fresh_db 隔离库；
 """
 from pathlib import Path
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 from scripts.import_profiles_to_db import (
     STATUS_NEW,
     STATUS_OVERWRITE,

@@ -27,7 +27,7 @@ from typing import Dict, Iterable, List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 from app.config import settings
 from app.db import init_db, list_accounts
 from app.user_profiles import _safe_account_dir_name

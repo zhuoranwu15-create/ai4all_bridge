@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.alerting import configure_error_log_alerting  # noqa: E402
+from app.platform.observability.alerting import configure_error_log_alerting  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.time_utils import verify_host_timezone  # noqa: E402

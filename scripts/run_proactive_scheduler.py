@@ -16,7 +16,7 @@ from app.products.zhaoxi.application import (  # noqa: E402
     build_companion_world_memory_sink,
     compact_companion_world_memory_batch,
 )
-from app.alerting import configure_error_log_alerting  # noqa: E402
+from app.platform.observability.alerting import configure_error_log_alerting  # noqa: E402
 from app.time_utils import verify_host_timezone  # noqa: E402
 
 

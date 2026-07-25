@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 from app.time_utils import beijing_naive_now
 from app.tools.commitment_handlers import handle_create_commitment
 from app.tools.registry import get_default_tools
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 
 
 def _make_ctx(account_id="acc-com-tool", session_id=1, message_id="msg-1"):

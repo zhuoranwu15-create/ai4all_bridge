@@ -18,10 +18,10 @@ import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel
 
-from app import openclaw_gateway
-from app.auth_utils import bearer_matches  # 仅依赖 stdlib hmac，不拉起中心 app/db 栈
+from app.platform.gateways import openclaw as openclaw_gateway
+from app.platform.auth.tokens import bearer_matches  # 仅依赖 stdlib hmac，不拉起中心 app/db 栈
 from app.config import settings
-from app.openclaw_gateway import DEFAULT_WEIXIN_CHANNEL, OpenClawGatewayError
+from app.platform.gateways.openclaw import DEFAULT_WEIXIN_CHANNEL, OpenClawGatewayError
 
 logger = logging.getLogger("ai4all.node_agent")
 

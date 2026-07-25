@@ -18,7 +18,7 @@ def _get_verified_token(phone: str) -> str:
 
 def _login(client, phone: str, campaign_code=None):
     with patch("app.routers.web._schedule_binding_wait"), patch(
-        "app.openclaw_gateway.start_weixin_qr_login",
+        "app.platform.gateways.openclaw.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": f"login-{phone}"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         payload = {"phone": phone, "verified_token": _get_verified_token(phone)}
@@ -51,7 +51,7 @@ def test_valid_campaign_code_creates_attribution(client, fresh_db):
 
 
 def test_valid_campaign_code_immediately_applies_soul_preset(client, fresh_db):
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
 
     create_campaign_code(code="SOULC", campaign_key="a", soul_preset_key="ju")
 
@@ -120,7 +120,7 @@ def test_register_and_binding_intent_applies_campaign_attribution(client, fresh_
     phone = "13900000007"
 
     with patch("app.routers.web._schedule_binding_wait"), patch(
-        "app.openclaw_gateway.start_weixin_qr_login",
+        "app.platform.gateways.openclaw.start_weixin_qr_login",
         return_value={"qrDataUrl": "data:image/png;base64,ZmFrZQ==", "sessionKey": "rbi-key"},
     ), patch("app.main.settings.openclaw_login_auto_start", True):
         res = client.post(

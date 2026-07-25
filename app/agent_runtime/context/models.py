@@ -1,3 +1,5 @@
+"""一次 Agent turn 的运行时上下文模型。"""
+
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path

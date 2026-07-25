@@ -20,10 +20,10 @@ _NON_CONTEXT_ASSISTANT_REPLY = "我这边刚刚有点卡住了，你可以稍后
 # 入站内容被同步审核拦截后写入 messages.error 的标记；用于将命中原文从所有 LLM 上下文路径中剔除。
 MODERATION_BLOCKED_ERROR = "moderation_blocked"
 ACCOUNT_ACTIVE_SESSION_KEY = "__account_active__"
-# Web 渠道短期会话隔离键（conversation_scope，§7.1）。与 app.channels 的 web cap
+# Web 渠道短期会话隔离键（conversation_scope，§7.1）。与 app.platform.channels 的 web cap
 # active_session_key 取值必须一致（两处各留一份字面量以避免 channels↔db 循环依赖）。
 WEB_ACTIVE_SESSION_KEY = "__web_active__"
-# App 原生渠道短期会话隔离键；与 app.channels 的 app cap 保持字面量一致，避免反向依赖。
+# App 原生渠道短期会话隔离键；与 app.platform.channels 的 app cap 保持字面量一致，避免反向依赖。
 APP_ACTIVE_SESSION_KEY = "__app_active__"
 # dreaming 每日轮转默认扫描的所有合法 active scope。新增 scope 时在此登记，否则该 scope
 # 的 active session 永不轮转/dreaming（§7.1 / Codex ②）。

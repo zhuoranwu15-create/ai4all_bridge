@@ -15,7 +15,7 @@ from app.proactive.preferences import (
 )
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 logger = logging.getLogger("ai4all.tools.proactive_settings_handlers")
 

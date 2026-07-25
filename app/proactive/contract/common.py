@@ -5,8 +5,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.channels import get_channel_capability
-from app.channels import CHANNEL_APP
+from app.platform.channels import get_channel_capability
+from app.platform.channels import CHANNEL_APP
 from app.config import settings
 from app.db import list_channel_bindings_for_account
 from app.products.zhaoxi.infrastructure.app_inbox import AppInboxAdapter

@@ -102,7 +102,7 @@ def test_failure_triggers_alert_and_nonzero_exit(env, tmp_path, monkeypatch):
 
     alerts = []
     # 拦截真正的飞书发送
-    import app.alerting as alerting
+    import app.platform.observability.alerting as alerting
     monkeypatch.setattr(alerting, "_send_feishu_text", lambda url, text, timeout: alerts.append(text))
 
     rc = backup_data.main([

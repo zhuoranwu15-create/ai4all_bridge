@@ -69,7 +69,7 @@ def test_multi_account_rpm_shares_subject(fresh_db):
         create_or_get_platform_user_by_phone,
         get_platform_user_id_for_account,
     )
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
     from tests.factories import make_resident_account
 
     with patch("app.db.settings", fresh_db):

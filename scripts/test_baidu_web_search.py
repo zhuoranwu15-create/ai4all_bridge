@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import settings  # noqa: E402
-from app.web_search import BaiduSearchError, baidu_ai_search  # noqa: E402
+from app.platform.search.web import BaiduSearchError, baidu_ai_search  # noqa: E402
 
 
 def _mask_secret(value: str) -> str:

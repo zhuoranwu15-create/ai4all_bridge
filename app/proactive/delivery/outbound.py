@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.channels import CHANNEL_APP, get_channel_capability
+from app.platform.channels import CHANNEL_APP, get_channel_capability
 from app.config import settings
 from app.time_utils import beijing_naive_now, beijing_now
 from app.session_lifecycle import business_day_for
@@ -20,7 +20,7 @@ from app.db import (
 )
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import create_sync_block_task, enqueue_outbound_for_moderation
-from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
+from app.platform.gateways.openclaw import OpenClawRateLimited, send_weixin_text
 from app.products.zhaoxi.domain.companion_world.proactive import is_human_proactive_category
 from app.products.zhaoxi.infrastructure.app_inbox import (
     AppInboxAdapter,

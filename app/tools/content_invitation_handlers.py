@@ -13,7 +13,7 @@ from app.db import (
 )
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 
 FEEDBACK_TYPES = {"decline", "block_topic", "less_like_this", "more_like_this"}

@@ -362,7 +362,7 @@ def wipe_account_data(
             (account_id,),
         ).rowcount
         # P2：账号 profile 文件内容入库后，wipe 在同一事务内删行（原子，不再删磁盘目录）。
-        from app import profile_storage  # noqa: PLC0415  延迟导入避开 app.db 包初始化期循环
+        from app.agent_runtime.persistence import profile_storage  # noqa: PLC0415  延迟导入避开 app.db 包初始化期循环
         profile_files = profile_storage.delete_account(account_id, conn=conn)
         account_owner_bindings = conn.execute(
             "DELETE FROM account_owner_bindings WHERE account_id = ?",

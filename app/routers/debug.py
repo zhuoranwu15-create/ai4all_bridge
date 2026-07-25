@@ -10,13 +10,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from app.config import settings
-from app.app_runtime import get_background_loop
+from app.bootstrap.runtime import get_background_loop
 from app.routers.deps import get_admin_user, verify_admin_auth
 from app.routers.serializers import _audit_plaintext_access, _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _normalize_ts, _profile_for_view, _prompt_lab_messages_for_view, _prompt_lab_session_for_account, _redact_raw_payload, _redacted_flag_for_account, _require_plaintext_access, _session_for_view, _trace_for_view, _validate_prompt_lab_messages
 from app.routers.models import ProfileUpdateRequest
 from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
-from app.llm import generate_completion, get_active_llm_model, resolve_active_llm_provider
-from app.llm_providers import get_llm_provider
+from app.agent_runtime.llm.service import generate_completion, get_active_llm_model, resolve_active_llm_provider
+from app.agent_runtime.llm.providers import get_llm_provider
 from app.onboarding import is_onboarding_active
 from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
@@ -751,7 +751,7 @@ def debug_reset_onboarding(
     Safe to call multiple times. Useful for re-testing the full onboarding flow
     without needing to re-bind a WeChat account.
     """
-    from app import profile_storage
+    from app.agent_runtime.persistence import profile_storage
     from app.user_profiles import delete_context_file, ensure_agent_context_files
 
     account = get_account(account_id=account_id)

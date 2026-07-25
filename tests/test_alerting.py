@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 
 def test_feishu_error_log_handler_sends_error_log():
-    from app.alerting import FeishuErrorLogHandler
+    from app.platform.observability.alerting import FeishuErrorLogHandler
 
     sent = []
 
@@ -38,7 +38,7 @@ def test_feishu_error_log_handler_sends_error_log():
 
 
 def test_feishu_error_log_handler_ignores_warning():
-    from app.alerting import FeishuErrorLogHandler
+    from app.platform.observability.alerting import FeishuErrorLogHandler
 
     sent = []
     handler = FeishuErrorLogHandler(
@@ -63,7 +63,7 @@ def test_feishu_error_log_handler_ignores_warning():
 
 
 def test_feishu_error_log_handler_suppresses_same_signature_within_cooldown():
-    from app.alerting import FeishuErrorLogHandler
+    from app.platform.observability.alerting import FeishuErrorLogHandler
 
     sent = []
     handler = FeishuErrorLogHandler(
@@ -99,7 +99,7 @@ def test_feishu_error_log_handler_suppresses_same_signature_within_cooldown():
 
 
 def test_redact_alert_text_masks_secrets_and_webhooks():
-    from app.alerting import redact_alert_text
+    from app.platform.observability.alerting import redact_alert_text
 
     text = (
         "Authorization: Bearer abc.def "
@@ -119,7 +119,7 @@ def test_redact_alert_text_masks_secrets_and_webhooks():
 
 
 def test_configure_error_log_alerting_requires_webhook():
-    from app.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
+    from app.platform.observability.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
 
     logger = logging.getLogger("ai4all")
     settings = SimpleNamespace(feishu_error_log_alert_enabled=True, feishu_alert_webhook_url="")
@@ -131,7 +131,7 @@ def test_configure_error_log_alerting_requires_webhook():
 
 
 def test_configure_error_log_alerting_does_not_change_logger_level():
-    from app.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
+    from app.platform.observability.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
 
     logger = logging.getLogger("ai4all")
     original_level = logger.level
@@ -157,7 +157,7 @@ def test_configure_error_log_alerting_does_not_change_logger_level():
 
 
 def test_configure_error_log_alerting_replaces_existing_handler():
-    from app.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
+    from app.platform.observability.alerting import _FEISHU_ERROR_HANDLER_NAME, configure_error_log_alerting
 
     logger = logging.getLogger("ai4all")
     settings = SimpleNamespace(

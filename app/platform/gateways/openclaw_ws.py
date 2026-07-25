@@ -1,3 +1,5 @@
+"""OpenClaw 持久 WebSocket 网关客户端。"""
+
 import ipaddress
 import json
 import logging
@@ -13,7 +15,7 @@ from uuid import uuid4
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect as websocket_connect
 
-from app.openclaw_gateway import OpenClawGatewayError
+from app.platform.gateways.openclaw import OpenClawGatewayError
 
 
 logger = logging.getLogger("ai4all.openclaw_gateway_ws")

@@ -1,3 +1,5 @@
+"""OpenClaw 命令行与持久连接网关。"""
+
 import base64
 import io
 import json
@@ -53,7 +55,7 @@ def _persistent_gateway_client() -> Any:
     global _gateway_ws_client
     with _gateway_ws_client_lock:
         if _gateway_ws_client is None:
-            from app.openclaw_gateway_ws import OpenClawPersistentGatewayClient
+            from app.platform.gateways.openclaw_ws import OpenClawPersistentGatewayClient
 
             _gateway_ws_client = OpenClawPersistentGatewayClient(settings)
         return _gateway_ws_client

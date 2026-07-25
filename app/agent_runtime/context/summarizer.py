@@ -17,7 +17,7 @@ import logging
 from typing import Any, Dict, List
 
 from app.config import settings
-from app.context_window import ROLLING_SUMMARY_MAX_CHARS, compute_floor_count, estimate_tokens
+from app.agent_runtime.context.window import ROLLING_SUMMARY_MAX_CHARS, compute_floor_count, estimate_tokens
 from app.db import (
     get_session,
     list_context_messages_for_session,
@@ -73,8 +73,8 @@ def _summarize(candidates: List[Dict[str, Any]], prev_summary: str) -> str:
     if not transcript and not prev_summary:
         return ""
     try:
-        from app.llm import generate_completion_with_usage, is_llm_configured
-        from app.llm_providers import TASK_ROLLING_SUMMARY, tier_for_task
+        from app.agent_runtime.llm.service import generate_completion_with_usage, is_llm_configured
+        from app.agent_runtime.llm.providers import TASK_ROLLING_SUMMARY, tier_for_task
 
         tier = tier_for_task(TASK_ROLLING_SUMMARY)
         if not is_llm_configured(tier):

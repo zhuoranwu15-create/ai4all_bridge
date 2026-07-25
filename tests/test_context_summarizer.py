@@ -63,17 +63,17 @@ def test_messages_account_id_index_exists(fresh_db):
 # ---------------------------------------------------------------------------
 
 def test_rolling_summary_disabled_by_default(fresh_db):
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
 
     # 默认 enabled=False
-    with patch("app.context_summarizer.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id="acc", session_id=1)
     assert result["status"] == "disabled"
 
 
 def test_rolling_summary_compresses_oldest_chunk_on_overflow(fresh_db):
     """token chunk：尾窗超预算时，压最老 max(chunk, 溢出量) token 的整条消息，压完把 raw 降到预算内。"""
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
     from app.db import get_session
 
     account_id = "acc-rolling"
@@ -89,8 +89,8 @@ def test_rolling_summary_compresses_oldest_chunk_on_overflow(fresh_db):
     fresh_db.llm_context_floor_minutes = 0     # 关硬底，单验 chunk 逻辑
     fresh_db.llm_context_floor_turns = 0
     # LLM 未配置 → _summarize 走确定性兜底，无外部调用。
-    with patch("app.context_summarizer.settings", fresh_db), \
-         patch("app.llm.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db), \
+         patch("app.agent_runtime.llm.service.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
 
     assert result["status"] == "updated"
@@ -103,7 +103,7 @@ def test_rolling_summary_compresses_oldest_chunk_on_overflow(fresh_db):
 
 def test_rolling_summary_chunk_leaves_headroom_when_overflow_small(fresh_db):
     """溢出 < chunk 时也压满一个 chunk，留出 headroom，避免下轮又立刻压。"""
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
 
     account_id = "acc-rolling-headroom"
     sess = _session(account_id, "s1")
@@ -116,8 +116,8 @@ def test_rolling_summary_chunk_leaves_headroom_when_overflow_small(fresh_db):
     fresh_db.rolling_summary_chunk_tokens = 80  # chunk 远大于溢出
     fresh_db.llm_context_floor_minutes = 0
     fresh_db.llm_context_floor_turns = 0
-    with patch("app.context_summarizer.settings", fresh_db), \
-         patch("app.llm.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db), \
+         patch("app.agent_runtime.llm.service.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
 
     # target=max(80,20)=80 → 压最老 4 条(80 token)，剩 6 条(120 token)远低于 180 → 有 headroom。
@@ -127,7 +127,7 @@ def test_rolling_summary_chunk_leaves_headroom_when_overflow_small(fresh_db):
 
 def test_rolling_summary_skips_within_budget(fresh_db):
     """尾窗 token 在预算内 → 不压。"""
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
 
     account_id = "acc-rolling-small"
     sess = _session(account_id, "s1")
@@ -137,7 +137,7 @@ def test_rolling_summary_skips_within_budget(fresh_db):
 
     fresh_db.llm_rolling_summary_enabled = True
     fresh_db.llm_context_token_budget = 1000   # 远大于 3 条短消息 → 无溢出
-    with patch("app.context_summarizer.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
     assert result["status"] == "skip"
     assert result["reason"] == "within_budget"
@@ -145,7 +145,7 @@ def test_rolling_summary_skips_within_budget(fresh_db):
 
 def test_rolling_summary_skips_when_overflow_within_floor(fresh_db):
     """溢出全落在硬底（近场）内 → 不压，宁可短暂超预算（与组装期硬底优先一致）。"""
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
 
     account_id = "acc-rolling-floor"
     sess = _session(account_id, "s1")
@@ -157,8 +157,8 @@ def test_rolling_summary_skips_when_overflow_within_floor(fresh_db):
     fresh_db.llm_context_token_budget = 40     # raw=80 超预算
     fresh_db.llm_context_floor_minutes = 15    # 4 条都在 15min 内、≤10 轮 → 全被硬底保护
     fresh_db.llm_context_floor_turns = 10
-    with patch("app.context_summarizer.settings", fresh_db), \
-         patch("app.llm.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db), \
+         patch("app.agent_runtime.llm.service.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
     assert result["status"] == "skip"
     assert result["reason"] == "all_within_floor"
@@ -170,7 +170,7 @@ def test_rolling_summary_covers_token_budget_dropped_messages(fresh_db):
     旧实现按 llm_context_messages 条数判 below_window（10<=100 → 跳过），漏掉被 token
     预算丢弃的 9 条。新实现用 trim_history_rows 同口径分界，应正常生成摘要。
     """
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
     from app.db import get_session
 
     account_id = "acc-budget-overflow"
@@ -185,8 +185,8 @@ def test_rolling_summary_covers_token_budget_dropped_messages(fresh_db):
     fresh_db.llm_context_message_max_chars = 0
     fresh_db.llm_context_floor_minutes = 0     # 隔离：关硬底，单验 token 预算溢出口径
     fresh_db.llm_context_floor_turns = 0
-    with patch("app.context_summarizer.settings", fresh_db), \
-         patch("app.llm.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db), \
+         patch("app.agent_runtime.llm.service.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
 
     assert result["status"] == "updated"
@@ -201,9 +201,9 @@ def test_rolling_summary_pages_from_watermark(fresh_db):
     旧实现固定 after_id=0 + limit=1000，session 超 1000 条后只取头 1000 条、水位线卡死。
     这里用 spy 断言查询确实从已有水位线起分页，直接验证根因修复。
     """
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
     from app.db import update_session_rolling_summary
-    import app.context_summarizer as cs
+    import app.agent_runtime.context.summarizer as cs
 
     account_id = "acc-watermark-paging"
     sess = _session(account_id, "s1")
@@ -234,8 +234,8 @@ def test_rolling_summary_pages_from_watermark(fresh_db):
             limit=limit,
         )
 
-    with patch("app.context_summarizer.settings", fresh_db), \
-         patch("app.llm.settings", fresh_db), \
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db), \
+         patch("app.agent_runtime.llm.service.settings", fresh_db), \
          patch.object(cs, "list_context_messages_for_session", _spy):
         result = maybe_update_rolling_summary(account_id=account_id, session_id=session_id)
 
@@ -247,12 +247,12 @@ def test_rolling_summary_pages_from_watermark(fresh_db):
 
 def test_rolling_summary_rejects_cross_account(fresh_db):
     """账号隔离：session 不归属传入 account_id 时拒绝。"""
-    from app.context_summarizer import maybe_update_rolling_summary
+    from app.agent_runtime.context.summarizer import maybe_update_rolling_summary
 
     sess = _session("acc-owner", "s1")
     session_id = int(sess["session"]["id"])
     fresh_db.llm_rolling_summary_enabled = True
-    with patch("app.context_summarizer.settings", fresh_db):
+    with patch("app.agent_runtime.context.summarizer.settings", fresh_db):
         result = maybe_update_rolling_summary(account_id="acc-other", session_id=session_id)
     assert result["status"] == "skip"
     assert result["reason"] == "session_mismatch"

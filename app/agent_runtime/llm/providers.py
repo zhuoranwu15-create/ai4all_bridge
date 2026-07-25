@@ -1,6 +1,6 @@
 """LLM provider configuration resolution.
 
-The rest of the application talks to app.llm only.  This module keeps provider
+The rest of the application talks to app.agent_runtime.llm.service only.  This module keeps provider
 selection and protocol/model details out of turn/proactive/dreaming code.
 """
 from __future__ import annotations
@@ -390,7 +390,7 @@ def resolve_provider_for_tier(
 ) -> LLMProviderConfig:
     """Resolve the provider serving a tier: per-tier override → active family × tier → fallbacks.
 
-    override_provider_id / family 由调用方（app.llm）从运行时绑定读出后传入，本模块保持无 DB 依赖。
+    override_provider_id / family 由调用方（app.agent_runtime.llm.service）从运行时绑定读出后传入，本模块保持无 DB 依赖。
     """
     tier = tier if tier in SUPPORTED_TIERS else TIER_PRO
     providers = _safe_list_providers(settings_obj)

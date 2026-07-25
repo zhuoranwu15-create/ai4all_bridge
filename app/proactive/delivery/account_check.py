@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.channels import CHANNEL_APP
+from app.platform.channels import CHANNEL_APP
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
 from app.products.zhaoxi.application import (

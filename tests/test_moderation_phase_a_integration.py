@@ -23,7 +23,7 @@ from tests.factories import create_account as _create_account
 
 def test_turn_sync_guard_blocks_original_reply(monkeypatch, fresh_db):
     from app.db import list_content_moderation_tasks, list_recent_messages_for_account
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
 
     monkeypatch.setattr(turn_service, "settings", fresh_db)
     monkeypatch.setattr(turn_service, "rate_limiter", RateLimiter())
@@ -59,7 +59,7 @@ def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
 
     from app.db import list_content_moderation_tasks, list_recent_messages_for_account
     from app.moderation.models import MachineReviewResult
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
 
     fresh_db.moderation_aliyun_enabled = True
     monkeypatch.setattr(turn_service, "settings", fresh_db)

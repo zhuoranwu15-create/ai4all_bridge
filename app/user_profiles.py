@@ -5,8 +5,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
-from app import profile_storage
-from app.channels import CHANNEL_WEIXIN
+from app.agent_runtime.persistence import profile_storage
+from app.platform.channels import CHANNEL_WEIXIN
 from app.config import settings
 
 logger = logging.getLogger("ai4all.user_profiles")

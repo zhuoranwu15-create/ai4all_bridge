@@ -17,8 +17,8 @@ from typing import Any, Dict, Optional
 from app.config import settings
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state, upsert_proactive_account_state
-from app.llm import generate_completion, is_llm_configured
-from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
+from app.agent_runtime.llm.service import generate_completion, is_llm_configured
+from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context

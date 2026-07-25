@@ -1,3 +1,5 @@
+"""Agent Runtime 的模型调用编排入口。"""
+
 import copy
 import json
 import logging
@@ -5,8 +7,8 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.config import settings
-from app.llm_adapters import chat_completion
-from app.llm_providers import (
+from app.agent_runtime.llm.adapters import chat_completion
+from app.agent_runtime.llm.providers import (
     TIER_PRO,
     LLMProviderConfig,
     get_llm_provider,

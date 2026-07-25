@@ -1,3 +1,5 @@
+"""平台日志告警与敏感信息脱敏能力。"""
+
 import json
 import logging
 import re

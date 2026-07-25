@@ -19,13 +19,13 @@ from fastapi import (
 )
 from pydantic import BaseModel, Field, field_validator
 
-from app.asr import (
+from app.platform.media.asr import (
     ASRNotConfiguredError,
     ASRProviderError,
     is_asr_available,
     transcribe_audio,
 )
-from app.channels import CHANNEL_APP, CHANNELS
+from app.platform.channels import CHANNEL_APP, CHANNELS
 from app.config import settings
 from app.db import (
     SessionPrincipal,
@@ -39,7 +39,7 @@ from app.db import (
     revoke_platform_user_session,
 )
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
-from app.identity import ResolvedIdentity
+from app.platform.auth.identity import ResolvedIdentity
 from app.routers.deps import _require_session
 from app.routers.web import (
     SendOtpRequest,

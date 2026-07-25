@@ -15,13 +15,13 @@ from app.db import (
     list_sessions_for_account,
     upsert_proactive_account_state,
 )
-from app.llm import generate_reply_with_tools, is_llm_configured
-from app.llm_providers import TASK_PROACTIVE_RECALL, tier_for_task
+from app.agent_runtime.llm.service import generate_reply_with_tools, is_llm_configured
+from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.user_profiles import read_agent_context
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
 from app.proactive.contract.prompts import CONTENT_INVITATION_SYSTEM_PROMPT
 from app.proactive.recall._shared import _format_decision_time, _latest_session_history, _no_op
 
