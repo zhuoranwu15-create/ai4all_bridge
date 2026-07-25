@@ -17,8 +17,8 @@ from app.db import (
     set_active_family,
     set_tier_provider_override,
 )
-from app.llm_adapters import chat_completion
-from app.llm_providers import (
+from app.agent_runtime.llm.adapters import chat_completion
+from app.agent_runtime.llm.providers import (
     SUPPORTED_TIERS,
     TIER_FLASH,
     TIER_PRO,

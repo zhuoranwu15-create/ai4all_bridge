@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def _make_ctx():
@@ -14,6 +15,8 @@ def _make_ctx():
     identity.session_key = "sk-1"
     return TurnContext(
         account_id="acc-1",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": "acc-1"},
         session={"id": 1},
         identity=identity,
@@ -62,7 +65,7 @@ def _tool_call_response(tool_name: str, arguments: dict) -> dict:
 
 
 def test_generate_reply_with_tools_direct_response():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
@@ -75,8 +78,8 @@ def test_generate_reply_with_tools_direct_response():
     settings_mock.llm_force_ipv4 = False
     settings_mock.llm_default_prompt = "你是助手"
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的，我明白了")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好的，我明白了")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="你好",
                 history=[],
@@ -96,7 +99,7 @@ def test_generate_reply_with_tools_direct_response():
 
 
 def test_generate_reply_with_tools_tool_call():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
@@ -113,9 +116,9 @@ def test_generate_reply_with_tools_tool_call():
     tool_result = {"status": "created", "reminder_id": "rem-1", "due_at": "2026-06-01 10:00:00"}
     final_text = "好的，我会在6月1日上午10点提醒你开会。"
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp, _direct_text_response(final_text)],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
@@ -132,8 +135,8 @@ def test_generate_reply_with_tools_tool_call():
 
 
 def test_generate_reply_with_tools_reuses_provider_snapshot_across_tool_rounds():
-    from app.llm import generate_reply_with_tools
-    from app.llm_providers import LLMProviderConfig
+    from app.agent_runtime.llm.service import generate_reply_with_tools
+    from app.agent_runtime.llm.providers import LLMProviderConfig
 
     provider = LLMProviderConfig(
         id="snapshot-provider",
@@ -146,9 +149,9 @@ def test_generate_reply_with_tools_reuses_provider_snapshot_across_tool_rounds()
     tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
     final_text = "已设置提醒。"
 
-    with patch("app.llm._active_llm_provider") as mock_active:
+    with patch("app.agent_runtime.llm.service._active_llm_provider") as mock_active:
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp, _direct_text_response(final_text)],
         ) as mock_chat:
             with patch("app.tools.executor.execute_tool_call", return_value={"status": "created"}):
@@ -169,15 +172,15 @@ def test_generate_reply_with_tools_reuses_provider_snapshot_across_tool_rounds()
 
 
 def test_generate_reply_with_tools_does_not_duplicate_current_history():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
     settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_default_prompt = "你是助手"
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="你好",
                 history=[{"role": "user", "content": "你好"}],
@@ -195,15 +198,15 @@ def test_generate_reply_with_tools_does_not_duplicate_current_history():
 
 
 def test_generate_reply_with_tools_preserves_explicit_user_prompt_history():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
     settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_default_prompt = "你是助手"
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="content_invitation_generation",
                 history=[{"role": "user", "content": "请生成一条内容邀请候选"}],
@@ -221,7 +224,7 @@ def test_generate_reply_with_tools_preserves_explicit_user_prompt_history():
 
 
 def test_generate_reply_with_tools_uses_explicit_messages_without_rebuild():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
@@ -232,8 +235,8 @@ def test_generate_reply_with_tools_uses_explicit_messages_without_rebuild():
         {"role": "user", "content": "已经包含当前消息"},
     ]
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好的")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="不应被追加",
                 history=[],
@@ -249,7 +252,7 @@ def test_generate_reply_with_tools_uses_explicit_messages_without_rebuild():
 
 
 def test_generate_reply_no_api_key_local_uses_explicit_messages_for_mock():
-    from app.llm import generate_reply
+    from app.agent_runtime.llm.service import generate_reply
 
     settings_mock = MagicMock()
     settings_mock.app_env = "local"
@@ -259,7 +262,7 @@ def test_generate_reply_no_api_key_local_uses_explicit_messages_for_mock():
         {"role": "user", "content": "来自 envelope 的当前消息"},
     ]
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         reply = generate_reply(
             user_text="原始 user_text 不应优先",
             history=[],
@@ -273,13 +276,13 @@ def test_generate_reply_no_api_key_local_uses_explicit_messages_for_mock():
 
 
 def test_generate_reply_no_api_key_production_raises():
-    from app.llm import generate_reply
+    from app.agent_runtime.llm.service import generate_reply
 
     settings_mock = MagicMock()
     settings_mock.app_env = "production"
     settings_mock.llm_api_key = ""
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         with pytest.raises(RuntimeError, match="LLM API key is missing"):
             generate_reply(
                 user_text="你好",
@@ -291,7 +294,7 @@ def test_generate_reply_no_api_key_production_raises():
 
 def test_generate_reply_with_tools_forwards_caller_first_round_tool_choice():
     """通用入口不再自行推断意图：调用方传入的 first_round_tool_choice 原样用于第一轮。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
@@ -299,8 +302,8 @@ def test_generate_reply_with_tools_forwards_caller_first_round_tool_choice():
     settings_mock.llm_default_prompt = "你是助手"
 
     forced = {"type": "function", "function": {"name": "update_proactive_message_settings"}}
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("已调整")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("已调整")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="以后每天最多1条主动消息",
                 history=[],
@@ -318,15 +321,15 @@ def test_generate_reply_with_tools_forwards_caller_first_round_tool_choice():
 
 def test_generate_reply_with_tools_downgrades_force_when_tool_absent():
     """防御保留：调用方传入的强制工具不在本次 tools 中时降级为 auto（避免 deepseek 400）。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
     settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_default_prompt = "你是助手"
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 user_text="content_invitation_generation",
                 history=[],
@@ -344,15 +347,15 @@ def test_generate_reply_with_tools_downgrades_force_when_tool_absent():
 def test_generate_reply_with_tools_defaults_to_auto_and_does_not_infer():
     """不传 first_round_tool_choice 时默认 auto；通用入口不再从内嵌历史文本推断意图
     （主动消息生成路径正依赖这一点，避免历史里的触发语导致 400）。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.llm_api_key = "test-key"
     settings_mock.llm_max_tool_rounds = 3
     settings_mock.llm_default_prompt = "你是助手"
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好")) as mock_chat:
             reply, err = generate_reply_with_tools(
                 # 内嵌历史里有触发语，但不传 first_round_tool_choice → 不应强制任何工具
                 user_text="content_invitation_generation",
@@ -368,7 +371,7 @@ def test_generate_reply_with_tools_defaults_to_auto_and_does_not_infer():
 
 
 def test_http_chat_with_tools_rejects_invalid_json():
-    from app.llm import _http_chat_with_tools
+    from app.agent_runtime.llm.service import _http_chat_with_tools
 
     class FakeResponse:
         def raise_for_status(self):
@@ -396,20 +399,20 @@ def test_http_chat_with_tools_rejects_invalid_json():
     settings_mock.llm_max_retries = 0
     settings_mock.llm_force_ipv4 = False
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.adapters.httpx.Client", return_value=FakeClient()):
             with pytest.raises(RuntimeError, match="LLM returned invalid JSON"):
                 _http_chat_with_tools([{"role": "user", "content": "hi"}], [])
 
 
 def test_generate_reply_with_tools_no_api_key_returns_fallback():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.app_env = "local"
     settings_mock.llm_api_key = ""
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         reply, err = generate_reply_with_tools(
             user_text="你好",
             history=[],
@@ -423,7 +426,7 @@ def test_generate_reply_with_tools_no_api_key_returns_fallback():
 
 
 def test_generate_reply_with_tools_no_api_key_local_uses_explicit_messages_for_mock():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.app_env = "test"
@@ -433,7 +436,7 @@ def test_generate_reply_with_tools_no_api_key_local_uses_explicit_messages_for_m
         {"role": "user", "content": "工具路径 envelope 当前消息"},
     ]
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         reply, err = generate_reply_with_tools(
             user_text="旧 user_text",
             history=[],
@@ -450,13 +453,13 @@ def test_generate_reply_with_tools_no_api_key_local_uses_explicit_messages_for_m
 
 
 def test_generate_reply_with_tools_no_api_key_production_returns_error():
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     settings_mock = MagicMock()
     settings_mock.app_env = "production"
     settings_mock.llm_api_key = ""
 
-    with patch("app.llm.settings", settings_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
         reply, err = generate_reply_with_tools(
             user_text="你好",
             history=[],
@@ -484,11 +487,11 @@ def _settings_mock_for_tool_thinking():
 
 def test_on_tool_detected_not_called_for_direct_response():
     """直接回复路径不触发 callback。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     callback = MagicMock()
-    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("好的")):
+    with patch("app.agent_runtime.llm.service.settings", _settings_mock_for_tool_thinking()):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("好的")):
             reply, err = generate_reply_with_tools(
                 user_text="你好",
                 history=[],
@@ -505,16 +508,16 @@ def test_on_tool_detected_not_called_for_direct_response():
 
 def test_on_tool_detected_called_once_even_across_multiple_tool_rounds():
     """多轮工具调用时 callback 只在第一轮触发一次，且传入工具名列表。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     callback = MagicMock()
     tool_resp_1 = _tool_call_response("web_search", {"query": "今天天气"})
     tool_resp_2 = _tool_call_response("create_reminder", {"text": "提醒"})
     final = _direct_text_response("搜完了")
 
-    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+    with patch("app.agent_runtime.llm.service.settings", _settings_mock_for_tool_thinking()):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp_1, tool_resp_2, final],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value={"result": "ok"}):
@@ -542,13 +545,13 @@ def test_on_tool_detected_called_for_dsml_tool_call():
     DSML→tool_calls 转换在 llm_adapters._normalize_openai_chat_payload 完成；
     此处 mock 在 _http_chat_with_tools 层，模拟 adapter 已规范化后的形态。
     """
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     callback = MagicMock()
 
-    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+    with patch("app.agent_runtime.llm.service.settings", _settings_mock_for_tool_thinking()):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[
                 _tool_call_response("web_search", {"query": "今日新闻"}),
                 _direct_text_response("新闻已找到"),
@@ -572,7 +575,7 @@ def test_on_tool_detected_called_for_dsml_tool_call():
 
 def test_on_tool_detected_exception_does_not_affect_reply():
     """callback 抛异常不影响工具执行和最终回复。"""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     def exploding_callback(tool_names):
         raise RuntimeError("callback 炸了")
@@ -580,9 +583,9 @@ def test_on_tool_detected_exception_does_not_affect_reply():
     tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
     final_text = "已帮你设置提醒。"
 
-    with patch("app.llm.settings", _settings_mock_for_tool_thinking()):
+    with patch("app.agent_runtime.llm.service.settings", _settings_mock_for_tool_thinking()):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp, _direct_text_response(final_text)],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value={"status": "created"}):
@@ -613,7 +616,7 @@ def test_external_tool_result_gets_untrusted_wrapper():
     settings_mock.llm_default_prompt = "你是助手"
     settings_mock.llm_external_content_wrapper_enabled = True
 
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     search_result = {
         "status": "succeeded",
@@ -623,8 +626,8 @@ def test_external_tool_result_gets_untrusted_wrapper():
     final_text = "今天北京晴天。"
     http_mock = MagicMock(side_effect=[tool_resp, _direct_text_response(final_text)])
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", http_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", http_mock):
             with patch("app.tools.executor.execute_tool_call", return_value=search_result):
                 reply, err = generate_reply_with_tools(
                     user_text="北京今天天气",
@@ -660,15 +663,15 @@ def test_internal_tool_result_has_no_wrapper():
     settings_mock.llm_default_prompt = "你是助手"
     settings_mock.llm_external_content_wrapper_enabled = True
 
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     tool_result = {"status": "created", "reminder_id": "rem-1"}
     tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
     final_text = "提醒已设置。"
     http_mock = MagicMock(side_effect=[tool_resp, _direct_text_response(final_text)])
 
-    with patch("app.llm.settings", settings_mock):
-        with patch("app.llm._http_chat_with_tools", http_mock):
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", http_mock):
             with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
                 reply, err = generate_reply_with_tools(
                     user_text="提醒我开会",
@@ -706,11 +709,11 @@ def _make_settings_mock():
 
 def test_round_trace_collector_direct_response():
     """Single-round (no tools): collector records one entry with finish_reason=stop."""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     collector = []
-    with patch("app.llm.settings", _make_settings_mock()):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("答复")):
+    with patch("app.agent_runtime.llm.service.settings", _make_settings_mock()):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("答复")):
             reply, err = generate_reply_with_tools(
                 user_text="你好",
                 history=[],
@@ -732,16 +735,16 @@ def test_round_trace_collector_direct_response():
 
 def test_round_trace_collector_two_rounds():
     """Tool call followed by final response: collector has 2 entries."""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
     tool_result = {"status": "created", "reminder_id": "rem-1"}
     final_text = "已设置提醒。"
 
     collector = []
-    with patch("app.llm.settings", _make_settings_mock()):
+    with patch("app.agent_runtime.llm.service.settings", _make_settings_mock()):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp, _direct_text_response(final_text)],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value=tool_result):
@@ -771,10 +774,10 @@ def test_round_trace_collector_two_rounds():
 
 def test_round_trace_collector_none_is_noop():
     """Passing no collector (None) does not break the function."""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
-    with patch("app.llm.settings", _make_settings_mock()):
-        with patch("app.llm._http_chat_with_tools", return_value=_direct_text_response("ok")):
+    with patch("app.agent_runtime.llm.service.settings", _make_settings_mock()):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", return_value=_direct_text_response("ok")):
             reply, err = generate_reply_with_tools(
                 user_text="你好",
                 history=[],
@@ -790,16 +793,16 @@ def test_round_trace_collector_none_is_noop():
 
 def test_round_trace_collector_messages_are_snapshots():
     """Each round's messages are independent deep copies, not shared references."""
-    from app.llm import generate_reply_with_tools
+    from app.agent_runtime.llm.service import generate_reply_with_tools
 
     tool_resp = _tool_call_response("create_reminder", {"text": "开会"})
     tool_result = {"status": "created", "reminder_id": "rem-1"}
     final_text = "已设置。"
 
     collector = []
-    with patch("app.llm.settings", _make_settings_mock()):
+    with patch("app.agent_runtime.llm.service.settings", _make_settings_mock()):
         with patch(
-            "app.llm._http_chat_with_tools",
+            "app.agent_runtime.llm.service._http_chat_with_tools",
             side_effect=[tool_resp, _direct_text_response(final_text)],
         ):
             with patch("app.tools.executor.execute_tool_call", return_value=tool_result):

@@ -11,8 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import fetch_recent_inbound_messages, init_db  # noqa: E402
-from app.prompts.user_meta_companion_type import build_companion_classify_prompt  # noqa: E402
-from app.user_meta_scheduler import classify_companion_type  # noqa: E402
+from app.products.zhaoxi.application.prompts.companion_type import build_companion_classify_prompt  # noqa: E402
+from app.products.zhaoxi.jobs.user_meta.scheduler import classify_companion_type  # noqa: E402
 
 
 def main() -> int:

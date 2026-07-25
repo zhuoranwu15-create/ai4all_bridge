@@ -13,7 +13,7 @@ from tests.factories import create_route as _create_route
 
 
 def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
-    from app.proactive.orchestration.scheduler import ProactiveScheduler
+    from app.products.zhaoxi.proactive.orchestration.scheduler import ProactiveScheduler
 
     reminder_calls = []
     commitment_calls = []
@@ -160,7 +160,7 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
 
 def test_proactive_scheduler_run_once_isolates_failing_step():
     """单个步骤抛错不应饿死后续步骤（尤其排在后面的 reactivation 发送）。"""
-    from app.proactive.orchestration.scheduler import ProactiveScheduler
+    from app.products.zhaoxi.proactive.orchestration.scheduler import ProactiveScheduler
 
     reactivation_calls = []
 
@@ -211,9 +211,9 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_reminder(client, fres
 
     fresh_db.proactive_outbound_daily_limit = 3
     with (
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:scheduled-reminder"},
         ) as mock_send,
     ):
@@ -253,7 +253,7 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_commitment(client, fr
         get_proactive_commitment,
         list_outbound_messages,
     )
-    from app.proactive.store.account_state import ensure_account_state, get_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state, get_account_state
 
     fresh_db.proactive_outbound_daily_limit = 3
     fresh_db.proactive_quiet_hours_start = "00:00"
@@ -274,9 +274,9 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_commitment(client, fr
     )
 
     with (
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:scheduled-commitment"},
         ) as mock_send,
     ):
@@ -302,7 +302,7 @@ def test_admin_proactive_scheduler_run_once_dispatches_due_commitment(client, fr
 
 
 def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db):
-    from app.proactive.store.account_state import ensure_account_state, get_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state, get_account_state
 
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
@@ -313,7 +313,7 @@ def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db)
         next_scan_at=datetime(2000, 1, 1, 0, 0),
     )
 
-    with patch("app.proactive.recall.manual_companion.settings", fresh_db):
+    with patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db):
         res = client.post(
             "/admin/proactive/scheduler/run-once?limit=5",
             headers=ADMIN_HEADERS,
@@ -331,7 +331,7 @@ def test_admin_proactive_scheduler_run_once_scans_due_accounts(client, fresh_db)
 
 def test_admin_proactive_scheduler_run_once_executes_explicit_account_check_candidate(client, fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     fresh_db.proactive_outbound_daily_limit = 3
     fresh_db.proactive_quiet_hours_start = "00:00"
@@ -351,10 +351,10 @@ def test_admin_proactive_scheduler_run_once_executes_explicit_account_check_cand
     )
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:scheduled-account-check"},
         ) as mock_send,
     ):

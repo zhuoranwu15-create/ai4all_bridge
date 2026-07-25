@@ -33,7 +33,7 @@ def _message(*, account_id: str = "acc-mod", content: str, message_type: str = "
 
 def test_enqueue_message_records_passed_rule_result(fresh_db):
     from app.db import list_content_moderation_results
-    from app.moderation.service import enqueue_message_for_moderation
+    from app.platform.moderation.service import enqueue_message_for_moderation
 
     session, message_db_id = _message(content="hello, this is a normal long enough message")
     task = enqueue_message_for_moderation(
@@ -67,7 +67,7 @@ def test_enqueue_message_records_passed_rule_result(fresh_db):
 
 def test_enqueue_message_rule_hit_enters_review_queue(fresh_db):
     from app.db import list_content_moderation_results
-    from app.moderation.service import enqueue_message_for_moderation
+    from app.platform.moderation.service import enqueue_message_for_moderation
 
     session, message_db_id = _message(content="please check MODERATION_TEST_BLOCK")
     task = enqueue_message_for_moderation(
@@ -88,7 +88,7 @@ def test_enqueue_message_rule_hit_enters_review_queue(fresh_db):
 
 
 def test_enqueue_image_message_keeps_media_reference_without_file_read(fresh_db):
-    from app.moderation.service import enqueue_message_for_moderation
+    from app.platform.moderation.service import enqueue_message_for_moderation
 
     session, message_db_id = _message(
         account_id="acc-image",

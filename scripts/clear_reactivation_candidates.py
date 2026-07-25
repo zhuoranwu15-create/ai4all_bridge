@@ -24,7 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.db import connect  # noqa: E402
-from app.proactive.store.candidates import clear_reactivation_candidate, get_reactivation_candidate_from_metadata  # noqa: E402
+from app.products.zhaoxi.proactive.store.candidates import clear_reactivation_candidate, get_reactivation_candidate_from_metadata  # noqa: E402
 
 
 def _accounts_with_candidate():

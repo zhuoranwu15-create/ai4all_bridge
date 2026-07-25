@@ -1,7 +1,7 @@
-"""app.db.campaign：营销活码配置与注册归因快照（campaign_codes_technical_design.md §1/§2）。"""
+"""app.products.zhaoxi.infrastructure.persistence.campaign：营销活码配置与注册归因快照（campaign_codes_technical_design.md §1/§2）。"""
 import pytest
 
-from app.db.campaign import (
+from app.products.zhaoxi.infrastructure.persistence.campaign import (
     create_campaign_code,
     get_campaign_attribution,
     get_campaign_code,
@@ -268,7 +268,7 @@ def test_write_campaign_attribution_does_not_overwrite(fresh_db):
 # ---------------------------------------------------------------------------
 
 def test_create_with_ai_name_preset_persists_and_validates(fresh_db):
-    from app.db.campaign import get_campaign_code
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_code
 
     created = create_campaign_code(code="AINAME1", campaign_key="a", ai_name_preset="小满")
     assert created["ai_name_preset"] == "小满"
@@ -297,7 +297,7 @@ def test_create_ai_name_preset_rejects_too_long(fresh_db):
 
 
 def test_update_ai_name_preset(fresh_db):
-    from app.db.campaign import get_campaign_code
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_code
 
     create_campaign_code(code="AINAMEUPD", campaign_key="a")
     update_campaign_code(code="AINAMEUPD", ai_name_preset="小月")
@@ -308,8 +308,8 @@ def test_update_ai_name_preset(fresh_db):
 
 
 def test_apply_attribution_writes_forced_ai_name_to_identity(fresh_db):
-    from app.db.campaign import apply_campaign_code_attribution, get_campaign_attribution
-    from app.user_profiles import read_context_file
+    from app.products.zhaoxi.infrastructure.persistence.campaign import apply_campaign_code_attribution, get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.profiles import read_context_file
 
     create_campaign_code(
         code="AINAMEATT", campaign_key="a", soul_preset_key="xiaotaiyang", ai_name_preset="小满"

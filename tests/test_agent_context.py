@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 
 
 def _settings(tmp_path):
@@ -14,8 +14,8 @@ def _settings(tmp_path):
 
 def test_agent_context_user_files_created_from_blank_template(fresh_db, tmp_path):
     s = fresh_db  # 提供隔离 DB（含 account_profile_files 表）+ 同 tmp_path 的 dirs
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import (
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import (
             SYSTEM_CONTEXT_FILES,
             USER_CONTEXT_FILE_ORDER,
             account_profile_dir,
@@ -56,7 +56,7 @@ def test_agent_context_user_files_created_from_blank_template(fresh_db, tmp_path
 
 
 def test_checked_in_system_tools_file_matches_default_template():
-    from app.user_profiles import _default_system_templates
+    from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
     repo_root = Path(__file__).resolve().parents[1]
     checked_in = (repo_root / "data" / "system" / "TOOLS.md").read_text(encoding="utf-8")
@@ -65,7 +65,7 @@ def test_checked_in_system_tools_file_matches_default_template():
 
 
 def test_checked_in_system_agents_file_matches_default_template():
-    from app.user_profiles import _default_system_templates
+    from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
     repo_root = Path(__file__).resolve().parents[1]
     checked_in = (repo_root / "data" / "system" / "AGENTS.md").read_text(encoding="utf-8")
@@ -75,7 +75,7 @@ def test_checked_in_system_agents_file_matches_default_template():
 
 def test_previous_full_tools_default_is_known_and_upgradable():
     """瘦身前的上一版完整 TOOLS.md 应被识别为已知默认，可被自愈升级。"""
-    from app.user_profiles import (
+    from app.products.zhaoxi.infrastructure.profiles import (
         _PREV_DEFAULT_TOOLS_V1,
         _PREV_DEFAULT_TOOLS_V2,
         _PREV_DEFAULT_TOOLS_V4,
@@ -97,8 +97,8 @@ def test_default_chat_tools_have_trigger_guidance_somewhere():
     "每个默认工具名都必须出现在 TOOLS.md" 不变量，改为确保没有任何默认工具落到
     "schema 与 TOOLS.md 两处都没有触发说明" 的空档。
     """
-    from app.tools import get_default_tools
-    from app.user_profiles import _default_system_templates
+    from app.products.zhaoxi.tools.registry import get_default_tools
+    from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
     tools_text = _default_system_templates()["TOOLS.md"]
     default_tools = get_default_tools(
@@ -122,8 +122,8 @@ def test_default_chat_tools_have_trigger_guidance_somewhere():
 
 def test_agent_context_ignores_legacy_user_profile_when_creating_files(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         profile_storage.write_file(
             "acc-legacy-ignored",
@@ -154,8 +154,8 @@ def test_agent_context_ignores_legacy_user_profile_when_creating_files(fresh_db,
 
 def test_agent_context_does_not_overwrite_existing_user_files(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         profile_storage.write_file("acc-existing", "SOUL.md", "custom soul")
 
@@ -169,8 +169,8 @@ def test_agent_context_does_not_overwrite_existing_user_files(fresh_db, tmp_path
 
 def test_ensure_agent_context_files_skips_default_render_when_files_exist(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import (
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import (
             USER_CONTEXT_FILE_ORDER,
             ensure_agent_context_files,
         )
@@ -179,7 +179,7 @@ def test_ensure_agent_context_files_skips_default_render_when_files_exist(fresh_
             profile_storage.write_file("acc-existing-all", filename, f"# {filename}\n\ncustom\n")
 
         with patch(
-            "app.user_profiles._default_user_context_templates",
+            "app.products.zhaoxi.infrastructure.profiles._default_user_context_templates",
             side_effect=AssertionError("default templates should not be rendered"),
         ):
             created = ensure_agent_context_files("acc-existing-all", display_name="测试助手")
@@ -189,8 +189,8 @@ def test_ensure_agent_context_files_skips_default_render_when_files_exist(fresh_
 
 def test_agent_context_repairs_empty_soul_file_with_blank_template(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         profile_storage.write_file("acc-empty-soul", "SOUL.md", "\n  \n")
 
@@ -204,8 +204,8 @@ def test_agent_context_repairs_empty_soul_file_with_blank_template(fresh_db, tmp
 
 def test_agent_context_default_assistant_name_not_written_to_soul(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         context = read_agent_context("acc-default-name", display_name="AI4ALL 助手")
 
@@ -220,7 +220,7 @@ def test_all_soul_templates_render_without_duplicate_possessive():
     模板里若再手写「的」或「在」会拼出病句。强制人设 SOUL 建号时一次性落库、
     不重渲，坏串会长期驻留，故用例覆盖有名/无名两种渲染。
     """
-    from app import user_profiles
+    from app.products.zhaoxi.infrastructure import profiles as user_profiles
 
     for name, template in user_profiles._SOUL_TEMPLATES.items():
         for user_name in (None, "小明"):
@@ -233,7 +233,7 @@ def test_all_soul_templates_render_without_duplicate_possessive():
 
 
 def test_missing_blank_soul_template_logs_error_and_falls_back(tmp_path, caplog):
-    from app import user_profiles
+    from app.products.zhaoxi.infrastructure import profiles as user_profiles
 
     template_dir = tmp_path / "templates"
     template_dir.mkdir(parents=True, exist_ok=True)
@@ -243,7 +243,7 @@ def test_missing_blank_soul_template_logs_error_and_falls_back(tmp_path, caplog)
         (template_dir / f"{name}.md").write_text("# SOUL\n\n{name_clause}\n", encoding="utf-8")
 
     caplog.set_level(logging.ERROR, logger="ai4all.user_profiles")
-    with patch("app.user_profiles._SOUL_TEMPLATES_DIR", template_dir):
+    with patch("app.products.zhaoxi.infrastructure.profiles._SOUL_TEMPLATES_DIR", template_dir):
         templates = user_profiles._load_soul_templates()
 
     assert "个人 AI 陪伴与生活助理" in templates["blank"]
@@ -252,8 +252,8 @@ def test_missing_blank_soul_template_logs_error_and_falls_back(tmp_path, caplog)
 
 def test_existing_account_heartbeat_file_is_preserved_but_not_returned(fresh_db, tmp_path):
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         # 非受管的额外文件（如历史 HEARTBEAT.md）入库后不应被 read_agent_context 返回，也不被删
         profile_storage.write_file("acc-old-heartbeat", "user_profile.md", "# User Profile\n")
@@ -268,8 +268,8 @@ def test_existing_account_heartbeat_file_is_preserved_but_not_returned(fresh_db,
 
 def test_context_file_path_routes_system_files_to_system_dir(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import context_file_path
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
         agents_path = context_file_path("any-account", "AGENTS.md")
         tools_path = context_file_path("any-account", "TOOLS.md")
@@ -279,8 +279,8 @@ def test_context_file_path_routes_system_files_to_system_dir(tmp_path):
 
 def test_context_file_path_routes_user_files_to_account_dir(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import context_file_path
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
         soul_path = context_file_path("my-account", "SOUL.md")
         assert "my-account" in str(soul_path)
@@ -289,8 +289,8 @@ def test_context_file_path_routes_user_files_to_account_dir(tmp_path):
 
 def test_context_file_path_rejects_unknown_file(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import context_file_path
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
         try:
             context_file_path("acc", "UNKNOWN.md")
@@ -302,8 +302,8 @@ def test_context_file_path_rejects_unknown_file(tmp_path):
 
 def test_context_file_path_rejects_account_level_heartbeat(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import context_file_path
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
         try:
             context_file_path("acc", "HEARTBEAT.md")
@@ -315,8 +315,8 @@ def test_context_file_path_rejects_account_level_heartbeat(tmp_path):
 
 def test_legacy_default_tools_file_is_upgraded(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import ensure_system_context_files
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import ensure_system_context_files
 
         system_dir = tmp_path / "system"
         system_dir.mkdir(parents=True, exist_ok=True)
@@ -347,8 +347,8 @@ def test_legacy_default_tools_file_is_upgraded(tmp_path):
 
 def test_previous_default_tools_file_without_session_status_is_upgraded(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import (
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import (
             _RELATIONSHIP_STATUS_TOOLS_SECTION,
             _default_system_templates,
             ensure_system_context_files,
@@ -371,8 +371,8 @@ def test_previous_default_tools_file_without_session_status_is_upgraded(tmp_path
 
 def test_previous_default_tools_file_without_image_capability_is_upgraded(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import (
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import (
             _PREV_DEFAULT_TOOLS_V2,
             _default_system_templates,
             ensure_system_context_files,
@@ -395,8 +395,8 @@ def test_previous_default_tools_file_without_image_capability_is_upgraded(tmp_pa
 def test_previous_default_tools_file_before_dedup_slim_is_upgraded(tmp_path):
     """精简提醒/跟进/主动消息三节前的默认（V4）应被识别为已知默认并自愈升级到瘦身版。"""
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import (
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import (
             _PREV_DEFAULT_TOOLS_V4,
             _default_system_templates,
             ensure_system_context_files,
@@ -419,8 +419,8 @@ def test_previous_default_tools_file_before_dedup_slim_is_upgraded(tmp_path):
 
 def test_custom_system_tools_file_is_not_overwritten(tmp_path):
     s = _settings(tmp_path)
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import ensure_system_context_files
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import ensure_system_context_files
 
         system_dir = tmp_path / "system"
         system_dir.mkdir(parents=True, exist_ok=True)
@@ -440,7 +440,7 @@ def test_custom_system_tools_file_is_not_overwritten(tmp_path):
 
 def test_identity_seed_is_channel_aware_weixin_unchanged_native_neutral():
     """L2:weixin 播种保持现状原文（原则一）；native 去「微信」字样。"""
-    from app.user_profiles import _default_user_context_templates
+    from app.products.zhaoxi.infrastructure.profiles import _default_user_context_templates
 
     weixin = _default_user_context_templates(display_name=None)  # 默认 channel=weixin
     native = _default_user_context_templates(display_name=None, channel="native")
@@ -453,7 +453,7 @@ def test_identity_seed_is_channel_aware_weixin_unchanged_native_neutral():
 
 def test_resolve_system_context_path_channel_variant(tmp_path):
     """L1:weixin 读原文件（字节不变）；native 优先读变体，缺失回落原文件（无回归）。"""
-    from app.user_profiles import _resolve_system_context_path
+    from app.products.zhaoxi.infrastructure.profiles import _resolve_system_context_path
 
     sd = tmp_path
     (sd / "AGENTS.md").write_text("base", encoding="utf-8")
@@ -468,8 +468,8 @@ def test_resolve_system_context_path_channel_variant(tmp_path):
 def test_read_agent_context_native_seeds_neutral_identity(fresh_db, tmp_path):
     """L2 端到端:native 渠道首建账号,IDENTITY 不含「微信」。"""
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
-        from app.user_profiles import read_agent_context
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+        from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
         context = read_agent_context("acc-native", display_name=None, channel="native")
         assert "微信" not in context.blocks["IDENTITY"]

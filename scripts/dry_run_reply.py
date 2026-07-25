@@ -16,8 +16,8 @@ from app.db import (
     get_profile_for_account,
     list_sessions_for_account,
 )
-from app.llm import generate_completion, get_active_llm_model
-from app.onboarding import is_onboarding_active
+from app.agent_runtime.llm.service import generate_completion, get_active_llm_model
+from app.products.zhaoxi.application.onboarding import is_onboarding_active
 from app.time_utils import beijing_now
 from app.turn_service import build_turn_llm_input
 

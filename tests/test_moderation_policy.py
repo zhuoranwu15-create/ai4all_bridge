@@ -1,5 +1,5 @@
 def test_moderation_sampling_is_deterministic(fresh_db):
-    from app.moderation.policy import should_run_llm_review
+    from app.platform.moderation.policy import should_run_llm_review
 
     first = should_run_llm_review(
         account_id="acc-policy",
@@ -26,7 +26,7 @@ def test_moderation_sampling_is_deterministic(fresh_db):
 
 
 def test_moderation_policy_short_text_skips_llm_for_normal_user(fresh_db):
-    from app.moderation.policy import should_run_llm_review
+    from app.platform.moderation.policy import should_run_llm_review
 
     decision = should_run_llm_review(
         account_id="acc-policy",
@@ -44,7 +44,7 @@ def test_moderation_policy_short_text_skips_llm_for_normal_user(fresh_db):
 
 
 def test_moderation_policy_proactive_defaults_to_full_sampling(fresh_db):
-    from app.moderation.policy import should_run_llm_review
+    from app.platform.moderation.policy import should_run_llm_review
 
     decision = should_run_llm_review(
         account_id="acc-policy",

@@ -6,7 +6,7 @@
 不会自动补上，需要本脚本一次性回填——主要为方便内部测试（见 docs/tech_design/
 agent_mission_and_orchestration_design.md §5.1/§11 的存量账号回填决定）。
 
-幂等：复用 app.mission_assignment.assign_mission_if_absent，已分配使命的
+幂等：复用 app.products.zhaoxi.application.missions.assignment.assign_mission_if_absent，已分配使命的
 账号会被直接跳过，可安全重复运行。
 
 默认 dry-run，只打印将要发生什么；确认无误后加 --apply 真正写入。
@@ -29,8 +29,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import settings
 from app.db import get_account_mission, list_accounts
-from app.mission_assignment import _pick_mission_id, assign_mission_if_absent
-from app.mission_registry import get_mission_template
+from app.products.zhaoxi.application.missions.assignment import _pick_mission_id, assign_mission_if_absent
+from app.products.zhaoxi.domain.missions.registry import get_mission_template
 
 
 def main() -> int:

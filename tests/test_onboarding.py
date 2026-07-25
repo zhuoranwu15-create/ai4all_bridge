@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from app import profile_storage
+from app.agent_runtime.persistence import profile_storage
 
 
 # ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ def test_set_onboarding_state_emits_analytics_event(fresh_db):
 
 
 def test_is_onboarding_active_states():
-    from app.onboarding import is_onboarding_active
+    from app.products.zhaoxi.application.onboarding import is_onboarding_active
     assert is_onboarding_active("pending") is True
     assert is_onboarding_active("step1_sent") is True
     assert is_onboarding_active("step2_sent") is True
@@ -49,7 +49,7 @@ def test_is_onboarding_active_states():
 
 
 def test_next_state_from_pending():
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="pending",
         extracted={"user_name": None, "skip": False},
@@ -60,7 +60,7 @@ def test_next_state_from_pending():
 
 
 def test_next_state_from_step1():
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step1_sent",
         extracted={"user_name": "小明", "skip": False},
@@ -71,7 +71,7 @@ def test_next_state_from_step1():
 
 
 def test_next_state_from_step2():
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step2_sent",
         extracted={"ai_name": "星星", "persona": "xiaotaiyang", "skip": False},
@@ -82,7 +82,7 @@ def test_next_state_from_step2():
 
 
 def test_next_state_from_step3_to_complete():
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step3_sent",
         extracted={"persona": "xiaotaiyang", "skip": False},
@@ -93,7 +93,7 @@ def test_next_state_from_step3_to_complete():
 
 
 def test_next_state_step3_skip_also_completes():
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step3_sent",
         extracted={"persona": None, "skip": True},
@@ -108,7 +108,7 @@ def test_next_state_step3_skip_also_completes():
 # ---------------------------------------------------------------------------
 
 def test_prompt_context_pending_includes_step1_guidance():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="pending",
         user_name=None,
@@ -124,7 +124,7 @@ def test_prompt_context_pending_includes_step1_guidance():
 
 
 def test_prompt_context_step1_includes_user_name_and_combined_question():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step1_sent",
         user_name="小晨",
@@ -140,7 +140,7 @@ def test_prompt_context_step1_includes_user_name_and_combined_question():
 
 def test_prompt_context_step1_includes_combined_options():
     # step1_sent = user just replied to user-name question; LLM should now ask the combined setup question
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step1_sent",
         user_name="小晨",
@@ -157,7 +157,7 @@ def test_prompt_context_step1_includes_combined_options():
 
 
 def test_prompt_context_step2_is_wrapup_for_combined_reply():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
 
     ctx = build_onboarding_prompt_context(
         state="step2_sent",
@@ -176,7 +176,7 @@ def test_prompt_context_step2_is_wrapup_for_combined_reply():
 
 def test_prompt_context_step3_is_wrapup():
     # step3_sent = user just replied to persona question; LLM should wrap up
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step3_sent",
         user_name="小晨",
@@ -192,7 +192,7 @@ def test_prompt_context_step3_is_wrapup():
 
 
 def test_prompt_context_empty_when_complete():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="complete",
         user_name="小晨",
@@ -210,7 +210,7 @@ def test_prompt_context_empty_when_complete():
 # ---------------------------------------------------------------------------
 
 def test_prompt_context_appends_onboarding_script_override():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="pending",
         user_name=None,
@@ -225,7 +225,7 @@ def test_prompt_context_appends_onboarding_script_override():
 
 
 def test_prompt_context_no_override_section_when_absent():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="pending",
         user_name=None,
@@ -238,7 +238,7 @@ def test_prompt_context_no_override_section_when_absent():
 
 
 def test_prompt_context_step1_forced_soul_preset_skips_persona_options():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step1_sent",
         user_name="小晨",
@@ -255,7 +255,7 @@ def test_prompt_context_step1_forced_soul_preset_skips_persona_options():
 
 
 def test_prompt_context_step2_forced_soul_preset_only_confirms_ai_name():
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step2_sent",
         user_name="小晨",
@@ -270,8 +270,8 @@ def test_prompt_context_step2_forced_soul_preset_only_confirms_ai_name():
 
 
 def test_apply_extracted_onboarding_info_forced_soul_preset_skips_persona(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-soul"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
@@ -287,8 +287,8 @@ def test_apply_extracted_onboarding_info_forced_soul_preset_skips_persona(tmp_pa
 
 
 def test_apply_extracted_onboarding_info_applies_persona_without_forced_preset(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-normal-soul"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- 你的名字是 小满，用它自称。\n")
@@ -308,10 +308,10 @@ def test_apply_extracted_onboarding_info_applies_persona_without_forced_preset(t
 
 def test_extract_ai_name_uses_llm_result():
     import asyncio
-    from app.onboarding import extract_onboarding_info_async
+    from app.products.zhaoxi.application.onboarding import extract_onboarding_info_async
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小A", "persona": null, "persona_custom": null, "skip": false}',
     ):
         result = asyncio.run(
@@ -326,10 +326,10 @@ def test_extract_ai_name_uses_llm_result():
 
 def test_extract_combined_ai_name_and_modified_preset():
     import asyncio
-    from app.onboarding import extract_onboarding_info_async
+    from app.products.zhaoxi.application.onboarding import extract_onboarding_info_async
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
     ):
         result = asyncio.run(
@@ -346,9 +346,9 @@ def test_extract_combined_ai_name_and_modified_preset():
 
 def test_extract_ai_name_does_not_guess_when_llm_fails():
     import asyncio
-    from app.onboarding import extract_onboarding_info_async
+    from app.products.zhaoxi.application.onboarding import extract_onboarding_info_async
 
-    with patch("app.llm.generate_completion", side_effect=RuntimeError("llm unavailable")):
+    with patch("app.agent_runtime.llm.service.generate_completion", side_effect=RuntimeError("llm unavailable")):
         result = asyncio.run(
             extract_onboarding_info_async(
                 user_text="小A",
@@ -388,7 +388,7 @@ def test_get_and_set_onboarding_state(fresh_db):
 # ---------------------------------------------------------------------------
 
 def test_write_user_name_creates_user_md(tmp_path, fresh_db):
-    from app.user_profiles import write_user_name, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name, context_file_path
 
     account_id = "test-write-user-name"
     write_user_name(account_id, "小晨")
@@ -400,7 +400,7 @@ def test_write_user_name_creates_user_md(tmp_path, fresh_db):
 
 
 def test_write_user_name_updates_existing(tmp_path, fresh_db):
-    from app.user_profiles import write_user_name, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name, context_file_path
 
     account_id = "test-update-user-name"
     write_user_name(account_id, "小晨")
@@ -412,7 +412,7 @@ def test_write_user_name_updates_existing(tmp_path, fresh_db):
 
 
 def test_write_ai_name_to_identity(tmp_path, fresh_db):
-    from app.user_profiles import write_ai_name_to_identity, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import write_ai_name_to_identity, context_file_path
 
     account_id = "test-ai-name"
     write_ai_name_to_identity(account_id, "星星")
@@ -423,7 +423,7 @@ def test_write_ai_name_to_identity(tmp_path, fresh_db):
 
 
 def test_apply_soul_preset_blank(tmp_path, fresh_db):
-    from app.user_profiles import apply_soul_preset, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset, context_file_path
 
     account_id = "test-soul-blank"
     apply_soul_preset(account_id, "blank")
@@ -435,7 +435,7 @@ def test_apply_soul_preset_blank(tmp_path, fresh_db):
 
 
 def test_apply_soul_preset_xiaotaiyang(tmp_path, fresh_db):
-    from app.user_profiles import apply_soul_preset, write_ai_name_to_identity, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset, write_ai_name_to_identity, context_file_path
 
     account_id = "test-soul-xiaotaiyang"
     write_ai_name_to_identity(account_id, "小太阳")
@@ -447,7 +447,7 @@ def test_apply_soul_preset_xiaotaiyang(tmp_path, fresh_db):
 
 
 def test_apply_soul_preset_with_ai_name(tmp_path, fresh_db):
-    from app.user_profiles import apply_soul_preset, write_ai_name_to_identity, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset, write_ai_name_to_identity, context_file_path
 
     account_id = "test-soul-with-name"
     write_ai_name_to_identity(account_id, "星星")
@@ -458,8 +458,8 @@ def test_apply_soul_preset_with_ai_name(tmp_path, fresh_db):
 
 
 def test_persona_preset_preserves_existing_ai_name(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app.user_profiles import context_file_path, write_ai_name_to_identity
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path, write_ai_name_to_identity
 
     account_id = "test-persona-keeps-ai-name"
     write_ai_name_to_identity(account_id, "小A")
@@ -480,8 +480,8 @@ def test_persona_preset_preserves_existing_ai_name(tmp_path, fresh_db):
 
 
 def test_step2_modified_preset_writes_custom_ai_name_and_preset_soul(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app.user_profiles import context_file_path
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
     account_id = "test-step2-modified-preset"
 
@@ -506,8 +506,8 @@ def test_step2_modified_preset_writes_custom_ai_name_and_preset_soul(tmp_path, f
 
 
 def test_step2_blank_does_not_fix_ai_name(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app.user_profiles import context_file_path
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
     account_id = "test-step2-blank"
 
@@ -524,8 +524,8 @@ def test_step2_blank_does_not_fix_ai_name(tmp_path, fresh_db):
 
 
 def test_step2_custom_persona_writes_summary(tmp_path, fresh_db):
-    from app.onboarding import apply_extracted_onboarding_info
-    from app.user_profiles import context_file_path
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
     account_id = "test-step2-custom"
 
@@ -598,7 +598,7 @@ def test_first_turn_enters_onboarding_mode(client, fresh_db):
 
 def test_pending_onboarding_welcome_uses_chat_id_as_weixin_target(client, fresh_db):
     """The real Weixin bridge puts the sendable peer in chat_id, not sender_id."""
-    from app.user_profiles import context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path
     from unittest.mock import patch
 
     session_key = "agent:main:openclaw-weixin:bot-a:direct:peer-a@im.wechat"
@@ -671,7 +671,7 @@ def test_pending_onboarding_fallback_reply_still_asks_user_name(client, fresh_db
 
 def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
     from app.db import get_account_onboarding_state, set_account_onboarding_state
-    from app.user_profiles import context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import context_file_path
 
     session_key = "onboard-step2-combined"
 
@@ -690,7 +690,7 @@ def test_step2_combined_reply_writes_settings_and_completes(client, fresh_db):
         return "好，那我就是小满了。我们慢慢来。"
 
     with patch(
-        "app.llm.generate_completion",
+        "app.agent_runtime.llm.service.generate_completion",
         return_value='{"user_name": null, "ai_name": "小满", "ai_name_source": "modified_preset", "persona": "xiaotaiyang", "persona_custom": null, "skip": false, "needs_confirmation": false}',
     ), patch("app.turn_service.generate_reply", side_effect=fake_generate_reply):
         res = client.post(
@@ -734,7 +734,9 @@ def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
     set_account_onboarding_state(account_id=session_key, state="complete")
 
     with patch("app.turn_service.generate_reply", return_value="好的！"), \
-         patch("app.turn_service.build_onboarding_prompt_context") as mock_ctx:
+         patch(
+             "app.products.zhaoxi.application.turn_services.build_onboarding_prompt_context"
+         ) as mock_ctx:
         res = client.post(
             "/openclaw/turn",
             json=_turn_payload(session_key, session_key, "帮我查天气", "msg-2"),
@@ -748,7 +750,7 @@ def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
 
 def test_write_user_name_preserves_existing_memory(tmp_path, fresh_db):
     """#1 回归：USER.md 已有 dreaming 记忆且无'用户称呼'行时，写名字不得整文件覆盖。"""
-    from app.user_profiles import write_user_name, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name, context_file_path
 
     account_id = "test-preserve-mem"
     profile_storage.write_file(account_id, "USER.md", "# USER\n\n- 用户自称冲哥。\n- 用户是马刺球迷。\n")
@@ -763,7 +765,7 @@ def test_write_user_name_preserves_existing_memory(tmp_path, fresh_db):
 
 def test_write_user_name_uses_bullet_and_clears_placeholder(tmp_path, fresh_db):
     """#2 回归：默认占位符被清掉，用户称呼以统一 bullet 格式写入。"""
-    from app.user_profiles import write_user_name, context_file_path, ensure_agent_context_files
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name, context_file_path, ensure_agent_context_files
 
     account_id = "test-bullet-fmt"
     ensure_agent_context_files(account_id)  # 生成 '# USER\n\n- 暂无'
@@ -776,7 +778,7 @@ def test_write_user_name_uses_bullet_and_clears_placeholder(tmp_path, fresh_db):
 
 def test_write_user_name_migrates_legacy_format_in_place(tmp_path, fresh_db):
     """旧格式（无 bullet '用户称呼：X'）在再次写入时原地迁移为 bullet，且保留其它行。"""
-    from app.user_profiles import write_user_name, context_file_path
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name, context_file_path
 
     account_id = "test-migrate-fmt"
     profile_storage.write_file(account_id, "USER.md", "# USER\n\n用户称呼：老薛\n- 用户是球迷。\n")
@@ -796,7 +798,7 @@ def test_write_user_name_migrates_legacy_format_in_place(tmp_path, fresh_db):
 
 def test_next_state_both_forced_step1_jumps_to_complete():
     """soul + ai_name 都强制：step1_sent 收到用户称呼后无更多可问，直接完成。"""
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step1_sent",
         extracted={"user_name": "小明", "skip": False},
@@ -810,7 +812,7 @@ def test_next_state_both_forced_step1_jumps_to_complete():
 
 def test_next_state_ai_name_only_still_goes_step2():
     """仅强制 ai_name（人设未定）：仍需在 step2 问人设，不提前完成。"""
-    from app.onboarding import next_onboarding_state
+    from app.products.zhaoxi.application.onboarding import next_onboarding_state
     result = next_onboarding_state(
         current_state="step1_sent",
         extracted={"user_name": "小明", "skip": False},
@@ -824,7 +826,7 @@ def test_next_state_ai_name_only_still_goes_step2():
 
 def test_prompt_context_step1_both_forced_asks_nothing_self_intro():
     """两者都强制：step1 不问 AI 名字/人设，确认用户称呼 + 自我介绍 + 破冰。"""
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step1_sent",
         user_name="小晨",
@@ -844,7 +846,7 @@ def test_prompt_context_step1_both_forced_asks_nothing_self_intro():
 
 def test_prompt_context_step1_ai_name_only_shows_persona_menu_no_name_question():
     """仅强制 ai_name：给人设菜单，但不问 AI 名字、不邀请改名（名字-only 简化处理）。"""
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step1_sent",
         user_name="小晨",
@@ -862,7 +864,7 @@ def test_prompt_context_step1_ai_name_only_shows_persona_menu_no_name_question()
 
 def test_prompt_context_step2_ai_name_only_confirms_persona_keeps_name():
     """仅强制 ai_name：step2 处理人设选择，确认时不改名。"""
-    from app.onboarding import build_onboarding_prompt_context
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context
     ctx = build_onboarding_prompt_context(
         state="step2_sent",
         user_name="小晨",
@@ -879,8 +881,8 @@ def test_prompt_context_step2_ai_name_only_confirms_persona_keeps_name():
 
 def test_apply_extracted_forced_ai_name_does_not_overwrite_identity(fresh_db):
     """强制 ai_name 账号：用户回复里抽出的 ai_name 不应写 IDENTITY 覆盖已定死的名字。"""
-    from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-ainame"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")
@@ -900,8 +902,8 @@ def test_apply_extracted_forced_ai_name_does_not_overwrite_identity(fresh_db):
 
 def test_apply_extracted_forced_ai_name_skips_preset_default_name(fresh_db):
     """强制 ai_name 账号选了带名字预设（人设未强制）：不应用预设默认名回填覆盖强制名字。"""
-    from app.onboarding import apply_extracted_onboarding_info
-    from app import profile_storage
+    from app.products.zhaoxi.application.onboarding import apply_extracted_onboarding_info
+    from app.agent_runtime.persistence import profile_storage
 
     account_id = "acc-forced-ainame-preset"
     profile_storage.write_file(account_id, "IDENTITY.md", "# IDENTITY\n- AI 名字：小满\n")

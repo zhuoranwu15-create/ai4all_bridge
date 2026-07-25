@@ -45,7 +45,7 @@ def _clean_env():
 # ---------------------------------------------------------------------------
 
 def test_builtin_matrix_has_family_and_tier_tags():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     with _clean_env():
         providers = list_llm_providers(_settings())
@@ -67,7 +67,7 @@ def test_builtin_matrix_has_family_and_tier_tags():
 
 
 def test_builtin_provider_templates_use_provider_specific_keys_and_models():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     settings = _settings(
         llm_openai_api_key="openai-key",
@@ -89,7 +89,7 @@ def test_builtin_provider_templates_use_provider_specific_keys_and_models():
 
 
 def test_get_llm_provider_default_returns_active_family_pro():
-    from app.llm_providers import get_llm_provider
+    from app.agent_runtime.llm.providers import get_llm_provider
 
     provider = get_llm_provider(None, settings_obj=_settings())
 
@@ -99,7 +99,7 @@ def test_get_llm_provider_default_returns_active_family_pro():
 
 
 def test_get_llm_provider_default_follows_active_family():
-    from app.llm_providers import get_llm_provider
+    from app.agent_runtime.llm.providers import get_llm_provider
 
     settings = _settings(llm_active_family="openai", llm_openai_api_key="openai-key")
     provider = get_llm_provider(None, settings_obj=settings)
@@ -114,7 +114,7 @@ def test_get_llm_provider_default_follows_active_family():
 
 def test_json_entry_must_declare_family_tier_no_inheritance():
     """JSON 覆盖内置 id 时不做隐式继承：省略 family/tier → 默认 family=""、tier="pro"。"""
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     providers_json = json.dumps(
         [
@@ -138,7 +138,7 @@ def test_json_entry_must_declare_family_tier_no_inheritance():
 
 
 def test_json_with_explicit_family_tier_is_honored():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     providers_json = json.dumps(
         [
@@ -163,7 +163,7 @@ def test_json_with_explicit_family_tier_is_honored():
 
 
 def test_json_can_add_new_family_tier_cell():
-    from app.llm_providers import list_llm_providers, resolve_provider_for_tier
+    from app.agent_runtime.llm.providers import list_llm_providers, resolve_provider_for_tier
 
     providers_json = json.dumps(
         [
@@ -189,7 +189,7 @@ def test_json_can_add_new_family_tier_cell():
 
 
 def test_unknown_provider_protocol_is_rejected():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     settings = _settings(
         llm_providers_json=json.dumps(
@@ -202,7 +202,7 @@ def test_unknown_provider_protocol_is_rejected():
 
 
 def test_unknown_tier_is_rejected():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     settings = _settings(
         llm_providers_json=json.dumps(
@@ -223,7 +223,7 @@ def test_unknown_tier_is_rejected():
 
 
 def test_inline_provider_api_key_is_rejected():
-    from app.llm_providers import list_llm_providers
+    from app.agent_runtime.llm.providers import list_llm_providers
 
     settings = _settings(
         llm_providers_json=json.dumps(
@@ -248,7 +248,7 @@ def test_inline_provider_api_key_is_rejected():
 # ---------------------------------------------------------------------------
 
 def test_resolve_tier_picks_family_pro_and_flash():
-    from app.llm_providers import resolve_provider_for_tier
+    from app.agent_runtime.llm.providers import resolve_provider_for_tier
 
     settings = _settings()
     assert resolve_provider_for_tier("pro", settings_obj=settings).id == "deepseek-v4-pro"
@@ -256,7 +256,7 @@ def test_resolve_tier_picks_family_pro_and_flash():
 
 
 def test_resolve_tier_override_wins_and_can_cross_family():
-    from app.llm_providers import resolve_provider_for_tier
+    from app.agent_runtime.llm.providers import resolve_provider_for_tier
 
     settings = _settings(llm_anthropic_api_key="anthropic-key")
     # flash 档 override 到跨家族的 claude(anthropic/pro)
@@ -267,7 +267,7 @@ def test_resolve_tier_override_wins_and_can_cross_family():
 
 
 def test_resolve_tier_falls_back_to_family_pro_when_flash_missing():
-    from app.llm_providers import resolve_provider_for_tier
+    from app.agent_runtime.llm.providers import resolve_provider_for_tier
 
     # openai 家族内置只有 pro，请求 flash 应兜底到 openai pro。
     settings = _settings(llm_active_family="openai", llm_openai_api_key="openai-key")
@@ -277,11 +277,11 @@ def test_resolve_tier_falls_back_to_family_pro_when_flash_missing():
 
 
 def test_resolve_falls_back_to_builtins_when_json_invalid():
-    from app.llm import resolve_active_llm_provider
+    from app.agent_runtime.llm.service import resolve_active_llm_provider
 
     settings = _settings(llm_providers_json="{not valid json")
 
-    with patch("app.llm.settings", settings), patch("app.llm._runtime_bindings", return_value={}):
+    with patch("app.agent_runtime.llm.service.settings", settings), patch("app.agent_runtime.llm.service._runtime_bindings", return_value={}):
         provider = resolve_active_llm_provider()  # 默认 pro
 
     assert provider.id == "deepseek-v4-pro"
@@ -293,7 +293,7 @@ def test_resolve_falls_back_to_builtins_when_json_invalid():
 # ---------------------------------------------------------------------------
 
 def test_tier_for_task_defaults():
-    from app.llm_providers import (
+    from app.agent_runtime.llm.providers import (
         TASK_MAIN_REPLY,
         TASK_MODERATION,
         TASK_ONBOARDING_EXTRACTION,
@@ -307,7 +307,7 @@ def test_tier_for_task_defaults():
 
 
 def test_tier_for_task_env_override():
-    from app.llm_providers import (
+    from app.agent_runtime.llm.providers import (
         TASK_MAIN_REPLY,
         TASK_MODERATION,
         TASK_ONBOARDING_EXTRACTION,
@@ -323,13 +323,13 @@ def test_tier_for_task_env_override():
 
 
 def test_tier_for_task_unknown_task_defaults_flash():
-    from app.llm_providers import tier_for_task
+    from app.agent_runtime.llm.providers import tier_for_task
 
     assert tier_for_task("not_a_real_task", settings_obj=_settings()) == "flash"
 
 
 def test_tier_for_task_ignores_bad_override_value():
-    from app.llm_providers import TASK_MODERATION, tier_for_task
+    from app.agent_runtime.llm.providers import TASK_MODERATION, tier_for_task
 
     settings = _settings(llm_task_tiers=json.dumps({"moderation": "turbo"}))
     assert tier_for_task(TASK_MODERATION, settings_obj=settings) == "flash"

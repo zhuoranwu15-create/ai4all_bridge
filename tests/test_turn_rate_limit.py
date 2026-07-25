@@ -38,7 +38,7 @@ def test_daily_rate_limit_blocks_after_limit(client):
 
 
 def test_rpm_rate_limit_uses_configured_window(fresh_db, monkeypatch):
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
     import app.turn_service as turn_service
 
     fresh_db.rate_limit_daily = 0

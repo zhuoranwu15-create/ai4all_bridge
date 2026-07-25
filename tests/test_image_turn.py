@@ -53,7 +53,7 @@ def _text_payload(msg_id, *, text, sender="sender-img", session="acc-img"):
 
 def _setup(monkeypatch, fresh_db, *, describe_return="一只橘猫趴在窗台上，阳光温暖，氛围惬意", capture=None):
     """Patch turn_service for an enabled image-understanding run; return the capture dict."""
-    from app.rate_limiter import RateLimiter
+    from app.platform.quota.rate_limiter import RateLimiter
 
     fresh_db.image_understanding_enabled = True
     monkeypatch.setattr(turn_service, "settings", fresh_db)
@@ -165,7 +165,9 @@ def test_account_isolation(monkeypatch, fresh_db):
 def test_memory_write_receives_image_modality(monkeypatch, fresh_db):
     cap = _setup(monkeypatch, fresh_db)
     write_spy = MagicMock(return_value=None)
-    monkeypatch.setattr(turn_service, "write_memory", write_spy)
+    monkeypatch.setattr(
+        "app.products.zhaoxi.application.turn_services.write_memory", write_spy
+    )
     loop = MagicMock()
     loop.is_closed.return_value = False  # 模拟一个可用（未关闭）的后台事件循环
     turn_service.handle_openclaw_turn(
@@ -248,7 +250,7 @@ def test_inline_bytes_preferred_over_path(monkeypatch, fresh_db):
 def _iu_with_settings(monkeypatch, *, max_bytes=10_485_760):
     """给 image_understanding 注入精简 settings（不触网，仅测构图分支）。"""
     import types
-    import app.image_understanding as iu
+    import app.platform.media.image_understanding as iu
 
     fake = types.SimpleNamespace(
         dashscope_api_key="",  # 空 key：describe_image 早返回 None，聚焦测 _data_url_from_b64

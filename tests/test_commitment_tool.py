@@ -8,9 +8,10 @@ from datetime import timedelta
 from unittest.mock import MagicMock
 
 from app.time_utils import beijing_naive_now
-from app.tools.commitment_handlers import handle_create_commitment
-from app.tools.registry import get_default_tools
-from app.turn_context import TurnContext
+from app.products.zhaoxi.tools.commitment_handlers import handle_create_commitment
+from app.products.zhaoxi.tools.registry import get_default_tools
+from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def _make_ctx(account_id="acc-com-tool", session_id=1, message_id="msg-1"):
@@ -21,6 +22,8 @@ def _make_ctx(account_id="acc-com-tool", session_id=1, message_id="msg-1"):
     identity.session_key = "sk-1"
     return TurnContext(
         account_id=account_id,
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": account_id},
         session={"id": session_id},
         identity=identity,
@@ -45,7 +48,7 @@ from tests.factories import create_route as _create_route
 
 
 def _create_state(account_id: str, *, enabled: bool = True) -> None:
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     ensure_account_state(
         account_id=account_id,

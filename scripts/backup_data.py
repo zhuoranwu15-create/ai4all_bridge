@@ -248,12 +248,12 @@ def _rsync_offsite(target: str, src_dir: Path) -> None:
 
 
 def _send_failure_alert(message: str) -> None:
-    """复用 app.alerting 的飞书发送 + 脱敏，向运维通道报警；无 webhook 时静默跳过。"""
+    """复用 app.platform.observability.alerting 的飞书发送 + 脱敏，向运维通道报警；无 webhook 时静默跳过。"""
     webhook = str(getattr(settings, "feishu_alert_webhook_url", "") or "").strip()
     if not webhook:
         return
     try:
-        from app.alerting import _send_feishu_text, redact_alert_text
+        from app.platform.observability.alerting import _send_feishu_text, redact_alert_text
 
         text = redact_alert_text(f"[ai4all][backup] 备份失败：{message}")
         _send_feishu_text(webhook, text, 3.0)

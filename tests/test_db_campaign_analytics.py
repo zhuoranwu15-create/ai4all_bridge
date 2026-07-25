@@ -1,4 +1,4 @@
-"""app.db.campaign_analytics：营销活码漏斗埋点分析层
+"""app.products.zhaoxi.infrastructure.persistence.campaign_analytics：营销活码漏斗埋点分析层
 （campaign_funnel_analytics_technical_design.md §3/§7）。
 
 用 connect() 直插并控制时间戳，精确验证按天分桶、campaign 隔离、转化率与除零。

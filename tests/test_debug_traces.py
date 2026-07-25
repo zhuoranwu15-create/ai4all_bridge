@@ -117,7 +117,7 @@ def test_turn_debug_trace_uses_provider_snapshot_when_active_provider_changes(cl
             "flash_provider_id": None,
         }
 
-    with patch("app.llm._runtime_bindings", side_effect=fake_bindings):
+    with patch("app.agent_runtime.llm.service._runtime_bindings", side_effect=fake_bindings):
         with patch("app.turn_service.generate_reply_with_tools", side_effect=fake_generate):
             res = client.post(
                 "/openclaw/turn",

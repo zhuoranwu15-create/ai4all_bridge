@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from app.llm_providers import LLMProviderConfig
+from app.agent_runtime.llm.providers import LLMProviderConfig
 
 
 def _provider(protocol: str, *, base_url: str = "https://provider.test", max_retries: int = 0) -> LLMProviderConfig:
@@ -34,11 +34,11 @@ def _tool_schema():
 
 
 def test_openai_responses_adapter_converts_tools_and_function_calls():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("openai_responses")
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={
             "id": "resp_1",
             "output": [
@@ -70,7 +70,7 @@ def test_openai_responses_adapter_converts_tools_and_function_calls():
 
 
 def test_openai_responses_adapter_uses_previous_response_for_tool_results():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("openai_responses")
     messages = [
@@ -90,7 +90,7 @@ def test_openai_responses_adapter_uses_previous_response_for_tool_results():
         {"role": "tool", "tool_call_id": "call_1", "content": "{\"status\":\"ok\"}"},
     ]
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={
             "id": "resp_2",
             "output_text": "已创建",
@@ -108,11 +108,11 @@ def test_openai_responses_adapter_uses_previous_response_for_tool_results():
 
 
 def test_openai_responses_url_keeps_existing_version_path():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("openai_responses", base_url="https://proxy.example.com/openai/v2")
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={"id": "resp_1", "output_text": "ok", "output": []},
     ) as mock_post:
         chat_completion(provider, [{"role": "user", "content": "hi"}])
@@ -121,11 +121,11 @@ def test_openai_responses_url_keeps_existing_version_path():
 
 
 def test_anthropic_messages_url_keeps_existing_version_path():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("anthropic_messages", base_url="https://proxy.example.com/api/v3")
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={"id": "msg_1", "content": [{"type": "text", "text": "ok"}]},
     ) as mock_post:
         chat_completion(provider, [{"role": "user", "content": "hi"}])
@@ -134,11 +134,11 @@ def test_anthropic_messages_url_keeps_existing_version_path():
 
 
 def test_openai_responses_adapter_preserves_repeated_output_blocks():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("openai_responses")
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={
             "id": "resp_1",
             "output": [
@@ -158,7 +158,7 @@ def test_openai_responses_adapter_preserves_repeated_output_blocks():
 
 
 def test_post_json_disables_transport_connect_retries():
-    from app.llm_adapters import _post_json
+    from app.agent_runtime.llm.adapters import _post_json
 
     class FakeResponse:
         def raise_for_status(self):
@@ -178,8 +178,8 @@ def test_post_json_disables_transport_connect_retries():
             return FakeResponse()
 
     provider = _provider("openai_chat", max_retries=2)
-    with patch("app.llm_adapters.httpx.HTTPTransport") as mock_transport:
-        with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+    with patch("app.agent_runtime.llm.adapters.httpx.HTTPTransport") as mock_transport:
+        with patch("app.agent_runtime.llm.adapters.httpx.Client", return_value=FakeClient()):
             _post_json(provider=provider, url="https://provider.test", headers={}, body={})
 
     assert mock_transport.call_args.kwargs["retries"] == 0
@@ -190,7 +190,7 @@ def test_post_json_read_timeout_fails_fast_without_retry():
     import httpx
     import pytest
 
-    from app.llm_adapters import _post_json
+    from app.agent_runtime.llm.adapters import _post_json
 
     calls = {"n": 0}
 
@@ -206,7 +206,7 @@ def test_post_json_read_timeout_fails_fast_without_retry():
             raise httpx.ReadTimeout("The read operation timed out")
 
     provider = _provider("openai_chat", max_retries=3)  # 允许多次重试，验证不被消耗
-    with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+    with patch("app.agent_runtime.llm.adapters.httpx.Client", return_value=FakeClient()):
         with pytest.raises(RuntimeError) as exc_info:
             _post_json(provider=provider, url="https://provider.test", headers={}, body={})
 
@@ -219,7 +219,7 @@ def test_post_json_connect_error_retries_until_exhausted():
     import httpx
     import pytest
 
-    from app.llm_adapters import _post_json
+    from app.agent_runtime.llm.adapters import _post_json
 
     calls = {"n": 0}
 
@@ -235,8 +235,8 @@ def test_post_json_connect_error_retries_until_exhausted():
             raise httpx.ConnectError("connection refused")
 
     provider = _provider("openai_chat", max_retries=2)  # 共 3 次尝试
-    with patch("app.llm_adapters.time.sleep", return_value=None):
-        with patch("app.llm_adapters.httpx.Client", return_value=FakeClient()):
+    with patch("app.agent_runtime.llm.adapters.time.sleep", return_value=None):
+        with patch("app.agent_runtime.llm.adapters.httpx.Client", return_value=FakeClient()):
             with pytest.raises(RuntimeError) as exc_info:
                 _post_json(provider=provider, url="https://provider.test", headers={}, body={})
 
@@ -245,7 +245,7 @@ def test_post_json_connect_error_retries_until_exhausted():
 
 
 def test_anthropic_adapter_converts_system_tools_and_tool_results():
-    from app.llm_adapters import chat_completion
+    from app.agent_runtime.llm.adapters import chat_completion
 
     provider = _provider("anthropic_messages")
     messages = [
@@ -264,7 +264,7 @@ def test_anthropic_adapter_converts_system_tools_and_tool_results():
         {"role": "tool", "tool_call_id": "call_1", "content": "{\"status\":\"ok\"}"},
     ]
     with patch(
-        "app.llm_adapters._post_json",
+        "app.agent_runtime.llm.adapters._post_json",
         return_value={
             "id": "msg_1",
             "content": [
@@ -289,7 +289,7 @@ def test_anthropic_adapter_converts_system_tools_and_tool_results():
 
 def test_openai_chat_dsml_tool_call_normalized():
     """_normalize_openai_chat_payload 将 DeepSeek DSML 格式转换为标准 tool_calls。"""
-    from app.llm_adapters import _normalize_openai_chat_payload
+    from app.agent_runtime.llm.adapters import _normalize_openai_chat_payload
 
     dsml_content = (
         "<||DSML||invoke name='web_search'>"
@@ -317,7 +317,7 @@ def test_openai_chat_dsml_tool_call_normalized():
 
 def test_openai_chat_dsml_not_triggered_for_normal_stop():
     """finish_reason=stop 但内容无 DSML 标记时不修改 payload。"""
-    from app.llm_adapters import _normalize_openai_chat_payload
+    from app.agent_runtime.llm.adapters import _normalize_openai_chat_payload
 
     payload = {
         "choices": [
@@ -331,7 +331,7 @@ def test_openai_chat_dsml_not_triggered_for_normal_stop():
 
 def test_openai_chat_dsml_not_triggered_when_tool_calls_already_present():
     """已有标准 tool_calls 字段时不覆盖。"""
-    from app.llm_adapters import _normalize_openai_chat_payload
+    from app.agent_runtime.llm.adapters import _normalize_openai_chat_payload
 
     existing_tc = [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}]
     payload = {

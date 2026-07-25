@@ -144,7 +144,7 @@ def test_upsert_access_node_heartbeat_patches_only_provided(fresh_db):
 # ===== enqueue_proactive_text 的 node_id 解析 =====
 
 def _enqueue(account_id, idem, node_id=None):
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
 
     return enqueue_proactive_text(
         account_id=account_id,
@@ -162,7 +162,7 @@ def _enqueue(account_id, idem, node_id=None):
 
 
 def test_enqueue_fills_node_id_from_account_assignment(fresh_db):
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-assigned", node_id="aliyun2")
         out = _enqueue("acc-assigned", "n-assigned")
     assert out["node_id"] == "aliyun2"
@@ -170,7 +170,7 @@ def test_enqueue_fills_node_id_from_account_assignment(fresh_db):
 
 def test_enqueue_falls_back_to_default_node_id(fresh_db):
     fresh_db.default_node_id = "aliyun1"
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-default")  # 无归属
         out = _enqueue("acc-default", "n-default")
     assert out["node_id"] == "aliyun1"
@@ -178,7 +178,7 @@ def test_enqueue_falls_back_to_default_node_id(fresh_db):
 
 def test_enqueue_explicit_node_id_wins(fresh_db):
     fresh_db.default_node_id = "aliyun1"
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-explicit", node_id="aliyun2")
         out = _enqueue("acc-explicit", "n-explicit", node_id="aliyunX")
     assert out["node_id"] == "aliyunX"  # 显式 > 账号归属 > 兜底
@@ -186,7 +186,7 @@ def test_enqueue_explicit_node_id_wins(fresh_db):
 
 def test_enqueue_node_id_none_in_standalone(fresh_db):
     # conftest 默认 default_node_id="" → standalone 不写 node_id,行为不变
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-standalone")
         out = _enqueue("acc-standalone", "n-standalone")
     assert out["node_id"] is None
@@ -196,7 +196,7 @@ def test_enqueue_node_id_none_in_standalone(fresh_db):
 
 def test_node_gateway_standalone_always_local(monkeypatch):
     """standalone 下即便 node_id 是远程名,也走本机直调(零网络跳,保证零回归)。"""
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
 
     calls = {}
 
@@ -217,7 +217,7 @@ def test_node_gateway_standalone_always_local(monkeypatch):
 
 
 def test_node_gateway_local_when_node_id_matches(monkeypatch):
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
     from app.config import Settings
 
     monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="central,node", node_id="aliyun1"))
@@ -236,9 +236,9 @@ def test_node_gateway_local_when_node_id_matches(monkeypatch):
 def test_node_gateway_remote_unregistered_raises(monkeypatch, fresh_db):
     """非本机 node_id 且 access_nodes 无 base_url 登记 → 抛 OpenClawGatewayError
     (映射进 main.py 既有 except → set_binding_intent_error,行为一致)。"""
-    from app import node_gateway
+    from app.platform.gateways import node_gateway
     from app.config import Settings
-    from app.openclaw_gateway import OpenClawGatewayError
+    from app.platform.gateways.openclaw import OpenClawGatewayError
 
     monkeypatch.setattr(node_gateway, "settings", Settings(ai4all_role="central", node_id="aliyun1"))
     with patch("app.db.settings", fresh_db):
@@ -410,10 +410,10 @@ def test_inline_central_only_false(fresh_db):
 def test_dispatch_proactive_remote_account_enqueues_not_sends(fresh_db):
     """dispatch_proactive_text 对远程账号必须走 enqueue（pending + node_id=远程），
     而不是 send_proactive_text（会在本机误发）。这是本次 bug 的端到端回归守卫。"""
-    from app.proactive.delivery.outbound import dispatch_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
 
     _set_role(fresh_db, role="central,node", node_id="aliyun1", default_node_id="aliyun1", inline=True)
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-remote-dispatch", node_id="aliyun2")
         # 若误走 inline，send_proactive_text 会调用真实 send_weixin_text（openclaw）→ 必然炸；
         # 走 enqueue 则只建 pending 行，不碰 openclaw。

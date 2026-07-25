@@ -11,7 +11,7 @@ from app.db._core import (
     _migration_0042_quota_app_id_contract,
     _quota_contract_violation_counts,
 )
-from app.rate_limiter import RateLimiter, product_rpm_subject
+from app.platform.quota.rate_limiter import RateLimiter, product_rpm_subject
 
 _DATE = "2026-07-24"
 

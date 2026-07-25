@@ -86,7 +86,7 @@ def test_recent_chat_summary_is_account_isolated(fresh_db):
 
 
 def test_run_planning_check_compacts_unified_candidate(fresh_db):
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
     from scripts.diagnose_reactivation import run_planning_check
 
     _create_account("acc-react-plan")
@@ -121,8 +121,8 @@ def test_run_planning_check_compacts_unified_candidate(fresh_db):
 
 def test_dispatch_dry_run_does_not_create_outbound_rows(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.store.candidates import upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
     from scripts.diagnose_reactivation import run_dispatch_dry_run
 
     _create_account("acc-react-dispatch-diag")
@@ -151,7 +151,7 @@ def test_dispatch_dry_run_does_not_create_outbound_rows(fresh_db):
 
 
 def test_temporary_database_copy_isolates_candidate_writes(fresh_db):
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
     from scripts.diagnose_reactivation import temporary_database_copy
 
     _create_account("acc-react-temp")

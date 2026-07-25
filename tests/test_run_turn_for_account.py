@@ -9,6 +9,7 @@ from unittest.mock import patch
 import app.db as db
 import app.turn_service as turn_service
 from app.schemas import OpenClawTurnRequest
+from app.bootstrap.product_registry import build_test_product_registry
 from app.turn_service import (
     ChannelTurnInput,
     build_channel_input_from_openclaw,
@@ -48,6 +49,7 @@ def test_adapter_normalizes_openclaw_payload():
 
     assert isinstance(ctx, ChannelTurnInput)
     assert ctx.account_id == "acct-seamA"
+    assert ctx.app_id == "zhaoxi"
     assert ctx.cap is turn_service.get_channel_capability("openclaw-weixin")
     assert ctx.identity.channel == "openclaw-weixin"
     assert ctx.message_id == "seamA-1"
@@ -138,3 +140,48 @@ def test_disabled_membership_is_rejected_before_turn_side_effects(fresh_db, capl
     assert response.metadata["reason"] == "product_membership_disabled"
     assert response.metadata["app_id"] == "zhaoxi"
     assert "product membership rejected" in caplog.text
+
+
+def test_product_scope_mismatch_is_rejected_before_turn_side_effects(fresh_db, caplog):
+    """规范化入口声明的产品与账号产品不一致时，不能创建 session/binding/message。"""
+
+    registry = build_test_product_registry()
+    user = db.create_or_get_platform_user_by_phone(phone="13800037902")
+    db.ensure_product_membership(
+        platform_user_id=user["id"], app_id="test_product", registry=registry
+    )
+    account = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"],
+        display_name="测试产品账号",
+        app_id="test_product",
+        registry=registry,
+    )["account"]
+    with db.connect() as conn:
+        before = {
+            table: conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            for table in ("sessions", "channel_bindings", "messages")
+        }
+
+    with patch.object(
+        turn_service,
+        "resolve_account_id_for_inbound_channel_identity",
+        return_value=account["id"],
+    ), patch.object(
+        turn_service,
+        "_prepare_turn",
+        side_effect=AssertionError("scope mismatch must not enter turn setup"),
+    ):
+        response = turn_service.handle_openclaw_turn(_payload())
+
+    with db.connect() as conn:
+        after = {
+            table: conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
+            for table in ("sessions", "channel_bindings", "messages")
+        }
+
+    assert response.status == "disabled"
+    assert response.no_reply is True
+    assert response.metadata["reason"] == "product_scope_mismatch"
+    assert response.metadata["app_id"] == "zhaoxi"
+    assert after == before
+    assert "product scope rejected" in caplog.text

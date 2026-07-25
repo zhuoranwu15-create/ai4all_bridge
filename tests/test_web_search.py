@@ -2,7 +2,8 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def _setup_ctx(account_id: str):
@@ -23,6 +24,8 @@ def _setup_ctx(account_id: str):
     )["session"]
     return TurnContext(
         account_id=account_id,
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": account_id},
         session=session,
         identity=identity,
@@ -41,7 +44,7 @@ def _setup_ctx(account_id: str):
 
 
 def test_parse_duckduckgo_html_extracts_results():
-    from app.web_search import parse_duckduckgo_html
+    from app.platform.search.web import parse_duckduckgo_html
 
     html = """
     <div class="result">
@@ -64,7 +67,7 @@ def test_parse_duckduckgo_html_extracts_results():
 
 
 def test_parse_bing_rss_extracts_results():
-    from app.web_search import parse_bing_rss
+    from app.platform.search.web import parse_bing_rss
 
     xml = """<?xml version="1.0" encoding="utf-8" ?>
     <rss version="2.0">
@@ -92,7 +95,7 @@ def test_parse_bing_rss_extracts_results():
 
 
 def test_parse_aliyun_web_search_response_extracts_references_and_answer():
-    from app.web_search import _extract_aliyun_answer, parse_aliyun_web_search_response
+    from app.platform.search.web import _extract_aliyun_answer, parse_aliyun_web_search_response
 
     payload = {
         "choices": [
@@ -122,7 +125,7 @@ def test_parse_aliyun_web_search_response_extracts_references_and_answer():
 
 
 def test_parse_aliyun_web_search_response_extracts_iqs_page_items():
-    from app.web_search import parse_aliyun_web_search_response
+    from app.platform.search.web import parse_aliyun_web_search_response
 
     payload = {
         "pageItems": [
@@ -150,7 +153,7 @@ def test_parse_aliyun_web_search_response_extracts_iqs_page_items():
 
 
 def test_http_status_error_message_extracts_provider_json_error():
-    from app.web_search import _http_status_error_message
+    from app.platform.search.web import _http_status_error_message
 
     request = httpx.Request("POST", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
     response = httpx.Response(
@@ -173,7 +176,7 @@ def test_http_status_error_message_extracts_provider_json_error():
 
 
 def test_payload_error_extracts_structured_error():
-    from app.web_search import _payload_error
+    from app.platform.search.web import _payload_error
 
     assert _payload_error({"code": "PermissionDenied", "message": "invalid appbuilder token"}) == (
         "PermissionDenied: invalid appbuilder token"
@@ -287,7 +290,7 @@ def test_web_search_handler_supports_bing_provider(fresh_db):
 def test_web_search_handler_records_provider_failure(fresh_db):
     from app.db import list_search_provider_runs
     from app.tools.web_search_handlers import handle_web_search
-    from app.web_search import DuckDuckGoSearchError
+    from app.platform.search.web import DuckDuckGoSearchError
 
     ctx = _setup_ctx("ws-failed")
 
@@ -313,7 +316,7 @@ def test_web_search_handler_records_provider_failure(fresh_db):
 def test_web_search_handler_fails_over_to_bing(fresh_db):
     from app.db import list_search_provider_runs
     from app.tools.web_search_handlers import handle_web_search
-    from app.web_search import DuckDuckGoSearchError
+    from app.platform.search.web import DuckDuckGoSearchError
 
     ctx = _setup_ctx("ws-failover")
     provider_response = {

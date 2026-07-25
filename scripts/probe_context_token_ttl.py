@@ -41,9 +41,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 os.chdir(_PROJECT_ROOT)
 
-from app.proactive.contract.common import _select_route  # noqa: E402
-from app import openclaw_gateway as og  # noqa: E402
-from app.openclaw_gateway import OpenClawGatewayError, OpenClawRateLimited  # noqa: E402
+from app.products.zhaoxi.proactive.contract.common import _select_route  # noqa: E402
+from app.platform.gateways import openclaw as og  # noqa: E402
+from app.platform.gateways.openclaw import OpenClawGatewayError, OpenClawRateLimited  # noqa: E402
 
 TARGET_ACCOUNT_ID = "aid_544704489"
 GATEWAY_TIMEOUT_MS = 45_000
@@ -129,8 +129,8 @@ def _append_log(record: Dict[str, Any]) -> None:
 def _generate_joke() -> Dict[str, Any]:
     """调 LLM 生成一条冷笑话；失败回退内置列表。返回 {text, source}。"""
     try:
-        from app.llm_providers import get_llm_provider
-        from app.llm_adapters import chat_completion
+        from app.agent_runtime.llm.providers import get_llm_provider
+        from app.agent_runtime.llm.adapters import chat_completion
 
         provider = get_llm_provider()
         messages = [

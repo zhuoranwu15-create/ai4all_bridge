@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.auth_utils import bearer_matches
+from app.platform.auth.tokens import bearer_matches
 from app.routers import deps
 
 

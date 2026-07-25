@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from app.config import settings
 from app.db import create_search_provider_run
-from app.web_search import (
+from app.platform.search.web import (
     AliyunSearchError,
     BingSearchError,
     DuckDuckGoSearchError,
@@ -16,7 +16,7 @@ from app.web_search import (
 )
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 logger = logging.getLogger("ai4all.tools.web_search")
 _SUPPORTED_PROVIDERS = {"aliyun", "bing", "duckduckgo"}

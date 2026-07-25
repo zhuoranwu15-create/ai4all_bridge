@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.config import settings
 from app.db import SessionPrincipal
 from app.products.zhaoxi.application import CompanionWorldVisitService, VisitError
-from app.rate_limiter import RateLimiter
+from app.platform.quota.rate_limiter import RateLimiter
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,
@@ -22,7 +22,7 @@ from app.products.zhaoxi.api.companion_world import (
 )
 from app.time_utils import beijing_naive_now
 
-router = APIRouter(prefix="/v1", tags=["companion-world-visits"])
+router = APIRouter(tags=["companion-world-visits"])
 _BEIJING_TZ = timezone(timedelta(hours=8))
 _REDEEM_USER_RPM = 10
 _REDEEM_IP_RPM = 30

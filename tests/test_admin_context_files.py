@@ -5,7 +5,7 @@ from tests.factories import create_account as _create_account
 
 
 def test_context_files_returns_context_files_with_content(client):
-    from app.user_profiles import write_user_name
+    from app.products.zhaoxi.infrastructure.profiles import write_user_name
 
     account_id = "aid_ctxfiles"
     _create_account(account_id)

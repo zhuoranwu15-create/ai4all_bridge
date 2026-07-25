@@ -21,7 +21,7 @@ def _title_items():
 
 
 def _create_proactive_state(account_id: str) -> None:
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     ensure_account_state(
         account_id=account_id,
@@ -49,7 +49,7 @@ def _insert_history(account_id: str, text: str) -> None:
 
 def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
     from app.db import claim_content_invitation_for_send, create_content_invitation, mark_content_invitation_invited, get_content_invitation
-    from app.tools.content_invitation_handlers import handle_send_content_invitation_titles
+    from app.products.zhaoxi.tools.content_invitation_handlers import handle_send_content_invitation_titles
     from tests.test_tools_handlers import _make_ctx, _setup_account
 
     with patch("app.db.settings", fresh_db):
@@ -87,7 +87,7 @@ def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
 
 def test_content_invitation_feedback_writes_cooldown(fresh_db):
     from app.db import get_content_invitation_preference
-    from app.tools.content_invitation_handlers import handle_record_content_invitation_feedback
+    from app.products.zhaoxi.tools.content_invitation_handlers import handle_record_content_invitation_feedback
     from tests.test_tools_handlers import _make_ctx, _setup_account
 
     with patch("app.db.settings", fresh_db):
@@ -200,7 +200,7 @@ def test_admin_overview_lists_content_invitations_redacted(client, fresh_db):
 
 def test_account_check_content_invitation_generation_creates_candidate_with_tool(fresh_db):
     from app.db import get_content_invitation, list_tool_invocations
-    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+    from app.products.zhaoxi.proactive.recall.content_invitation import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
     fresh_db.proactive_quiet_hours_start = "00:00"
@@ -248,9 +248,9 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
     ]
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools", side_effect=responses) as mock_llm,
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools", side_effect=responses) as mock_llm,
     ):
         result = generate_content_invitation_candidate(
             account_id="acc-content-generate",
@@ -280,7 +280,7 @@ def test_account_check_content_invitation_generation_creates_candidate_with_tool
 
 def test_account_check_content_invitation_generation_avoids_pending_user_reminder(fresh_db):
     from app.db import create_reminder
-    from app.proactive.recall.content_invitation import generate_content_invitation_candidate
+    from app.products.zhaoxi.proactive.recall.content_invitation import generate_content_invitation_candidate
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-content-avoid")
@@ -298,9 +298,9 @@ def test_account_check_content_invitation_generation_avoids_pending_user_reminde
     )
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools") as mock_llm,
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools") as mock_llm,
     ):
         result = generate_content_invitation_candidate(
             account_id="acc-content-avoid",
@@ -361,9 +361,9 @@ def test_admin_run_proactive_check_once_displays_generated_content_invitation(cl
     ]
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.llm.settings", fresh_db),
-        patch("app.llm._http_chat_with_tools", side_effect=responses),
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.agent_runtime.llm.service.settings", fresh_db),
+        patch("app.agent_runtime.llm.service._http_chat_with_tools", side_effect=responses),
     ):
         res = client.post(
             "/admin/accounts/acc-content-admin-run/proactive-check/run-once",

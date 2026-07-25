@@ -30,7 +30,7 @@ def _insert_inbound(account_id: str, *, created_at: str) -> None:
 
 def test_reactivation_candidate_upsert_replace_and_clear_preserves_metadata(fresh_db):
     from app.db import get_proactive_account_state, upsert_proactive_account_state
-    from app.proactive.store.candidates import REACTIVATION_METADATA_KEY, clear_reactivation_candidate, get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import REACTIVATION_METADATA_KEY, clear_reactivation_candidate, get_reactivation_candidate, upsert_reactivation_candidate
 
     _create_account("acc-reactivation")
     upsert_proactive_account_state(
@@ -80,7 +80,7 @@ def test_reactivation_candidate_upsert_replace_and_clear_preserves_metadata(fres
 
 
 def test_content_invitation_reactivation_requires_invitation_id():
-    from app.proactive.store.candidates import normalize_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import normalize_reactivation_candidate
 
     try:
         normalize_reactivation_candidate(
@@ -97,7 +97,7 @@ def test_content_invitation_reactivation_requires_invitation_id():
 
 
 def test_reactivation_outbound_metadata_includes_dedupe_and_type():
-    from app.proactive.store.candidates import reactivation_outbound_metadata
+    from app.products.zhaoxi.proactive.store.candidates import reactivation_outbound_metadata
 
     metadata = reactivation_outbound_metadata(
         candidate={
@@ -208,9 +208,9 @@ def test_reactivation_outbound_queries_match_text_true_and_keep_account_scope(fr
 
 def test_dispatch_reactivation_dry_run_would_send_without_outbound(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-dispatch")
     _create_route("acc-react-dispatch")
@@ -247,9 +247,9 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
         list_outbound_messages,
         list_recent_reactivation_outbound_messages,
     )
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-real")
     _create_route("acc-react-real")
@@ -266,7 +266,7 @@ def test_dispatch_reactivation_real_send_uses_reactivation_category_for_quota_an
     )
 
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:react-real-1"},
     ):
         first = dispatch_reactivation_candidate(
@@ -327,9 +327,9 @@ def test_dispatch_reactivation_skips_when_touch_stale_at_send_time(fresh_db):
     不能只信任生成时的判断（见 dispatch_reactivation_candidate 里新增的复核）。"""
     from datetime import timedelta
 
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
     from app.time_utils import beijing_naive_now
 
     _create_account("acc-react-stale")
@@ -347,7 +347,7 @@ def test_dispatch_reactivation_skips_when_touch_stale_at_send_time(fresh_db):
         },
     )
 
-    with patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send:
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as mock_send:
         result = dispatch_reactivation_candidate(
             account_id="acc-react-stale",
             now=now0 + timedelta(hours=25),
@@ -366,9 +366,9 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
         get_content_invitation,
         list_outbound_messages,
     )
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-ci")
     _create_route("acc-react-ci")
@@ -393,7 +393,7 @@ def test_dispatch_reactivation_content_invitation_marks_row_invited(fresh_db):
     )
 
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:react-ci-1"},
     ):
         result = dispatch_reactivation_candidate(
@@ -424,11 +424,11 @@ def test_remote_content_invitation_finalizes_on_node_result(fresh_db, monkeypatc
         get_content_invitation,
         list_outbound_messages,
     )
-    from app.proactive.delivery import outbound as messaging
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
-    from app.routers.bridge import node_outbound_result
+    from app.products.zhaoxi.proactive.delivery import outbound as messaging
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.api.bridge import node_outbound_result
     from app.schemas import NodeOutboundResultRequest
 
     _create_account("acc-react-ci-remote")
@@ -500,9 +500,9 @@ def test_remote_content_invitation_finalizes_on_node_result(fresh_db, monkeypatc
 
 def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-ci-missing")
     _create_route("acc-react-ci-missing")
@@ -534,9 +534,9 @@ def test_dispatch_reactivation_content_invitation_missing_row_clears_candidate(f
 
 def test_dispatch_reactivation_cancels_when_inbound_since_candidate(fresh_db):
     """候选生成后用户又说过话 → 取消推送并清除候选（取代旧的改期逻辑）。"""
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-cancel")
     _create_route("acc-react-cancel")
@@ -573,9 +573,9 @@ def test_dispatch_reactivation_keeps_candidate_when_inbound_before_generation(fr
     时区一致性回归：曾用 local_to_utc_string 把 generated_at -8h，导致生成前 8 小时内
     的入站被误算为「生成后」而误清候选；`>=` 还会把同秒源消息算进去。
     """
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-before")
     _create_route("acc-react-before")
@@ -610,9 +610,9 @@ def test_dispatch_reactivation_keeps_candidate_when_inbound_before_generation(fr
 
 def test_dispatch_reactivation_cancels_on_duplicate(fresh_db):
     """规则去重命中重复 → 取消并清除候选（无 LLM、无重生成）。"""
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-dup")
     _create_route("acc-react-dup")
@@ -649,16 +649,16 @@ def test_dispatch_reactivation_cancels_on_duplicate(fresh_db):
 
 def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
     """规则去重：与近 N 天已发的相同 topic 精确匹配即判重复，无 LLM。"""
-    from app.proactive.delivery.outbound import send_proactive_text
-    from app.proactive.store.candidates import rule_reactivation_dedupe_check
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
+    from app.products.zhaoxi.proactive.store.candidates import rule_reactivation_dedupe_check
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-rule-dedupe")
     _create_route("acc-rule-dedupe")
     ensure_account_state(account_id="acc-rule-dedupe")
     now = datetime(2026, 6, 5, 12, 0)
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:rule-dedupe"},
     ):
         send_proactive_text(
@@ -693,9 +693,9 @@ def test_rule_reactivation_dedupe_check_matches_exact_topic(fresh_db):
 
 def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.delivery.dispatch import dispatch_due_reactivation_candidates
-    from app.proactive.store.candidates import upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_due_reactivation_candidates
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-sweep")
     _create_route("acc-react-sweep")
@@ -743,8 +743,8 @@ def test_dispatch_due_reactivation_sweep_sends_due_candidates_only(fresh_db):
 
 
 def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state, scan_due_proactive_account_checks
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state, scan_due_proactive_account_checks
 
     _create_account("acc-react-notdue")
     _create_route("acc-react-notdue")
@@ -774,7 +774,7 @@ def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
 
     # 猴补 planning 实际引用的生成器名（scan_due 在 orchestration.planning 里按模块全局
     # 查找并注入 plan），若规划误跑生成就会抛出——验证"有 pending 候选则跳过生成"。
-    import app.proactive.orchestration.planning as planning
+    import app.products.zhaoxi.proactive.orchestration.planning as planning
 
     original_topic = planning.generate_topic_followup_candidate
     original_content = planning.generate_content_invitation_candidate
@@ -796,7 +796,7 @@ def test_scan_due_does_not_overwrite_existing_candidate(fresh_db):
 
 
 def test_reactivation_slot_applies_send_jitter(fresh_db):
-    from app.proactive.slots import next_reactivation_slot
+    from app.products.zhaoxi.proactive.slots import next_reactivation_slot
 
     fresh_db.reactivation_send_jitter_min_seconds = 60
     fresh_db.reactivation_send_jitter_max_seconds = 120
@@ -841,9 +841,9 @@ def test_upsert_proactive_account_state_metadata_patch_preserves_sibling_keys(fr
 
 
 def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
-    from app.proactive.orchestration.planning import plan_reactivation_candidate
-    from app.proactive.store.candidates import REACTIVATION_TYPE_CONTENT_INVITATION, get_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import REACTIVATION_TYPE_CONTENT_INVITATION, get_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-content")
     ensure_account_state(account_id="acc-plan-content")
@@ -877,9 +877,9 @@ def test_plan_reactivation_persists_content_invitation_candidate(fresh_db):
 
 
 def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
-    from app.proactive.orchestration.planning import plan_reactivation_candidate
-    from app.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP, get_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import REACTIVATION_TYPE_TOPIC_FOLLOWUP, get_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-topic")
     ensure_account_state(account_id="acc-plan-topic")
@@ -919,12 +919,12 @@ def test_plan_reactivation_topic_followup_takes_priority(fresh_db):
 
 def test_plan_new_user_reactivation_after_two_idle_hours(fresh_db):
     from app.db import connect, get_proactive_account_state, set_account_onboarding_state
-    from app.proactive.orchestration.planning import (
+    from app.products.zhaoxi.proactive.orchestration.planning import (
         NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY,
         plan_new_user_reactivation_candidate,
     )
-    from app.proactive.store.account_state import ensure_account_state
-    from app.proactive.store.candidates import get_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate
 
     fresh_db.reactivation_send_jitter_min_seconds = 0
     fresh_db.reactivation_send_jitter_max_seconds = 0
@@ -975,12 +975,12 @@ def test_plan_new_user_reactivation_after_two_idle_hours(fresh_db):
 
 def test_plan_new_user_reactivation_respects_six_hour_cooldown(fresh_db):
     from app.db import connect, set_account_onboarding_state
-    from app.proactive.orchestration.planning import (
+    from app.products.zhaoxi.proactive.orchestration.planning import (
         NEW_USER_REACTIVATION_LAST_TRIGGERED_AT_KEY,
         plan_new_user_reactivation_candidate,
     )
-    from app.proactive.store.account_state import ensure_account_state
-    from app.proactive.store.candidates import get_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate
 
     _create_account("acc-new-user-cooldown")
     _create_route("acc-new-user-cooldown")
@@ -1014,9 +1014,9 @@ def test_plan_new_user_reactivation_respects_six_hour_cooldown(fresh_db):
 
 
 def test_new_user_hot_topic_dispatch_uses_independent_category(fresh_db):
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
-    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
     from app.db import list_outbound_messages
 
     fresh_db.proactive_quiet_hours_start = "00:00"
@@ -1041,7 +1041,7 @@ def test_new_user_hot_topic_dispatch_uses_independent_category(fresh_db):
     )
 
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         return_value={"messageId": "openclaw-weixin:new-user-hot"},
     ):
         result = dispatch_reactivation_candidate(
@@ -1077,9 +1077,9 @@ def test_dispatch_reactivation_reschedules_when_policy_cancels(fresh_db):
     """bug B：候选过了 reactivation 自身 60min avoidance，却被 policy 的 6h avoidance 取消时，
     不应原样留在过去的 slot 上每个 tick 空转，而应改期到下一个 slot。"""
     from app.db import list_outbound_messages
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-cancel")
     _create_route("acc-react-cancel")
@@ -1129,9 +1129,9 @@ def test_dispatch_reactivation_reschedules_when_policy_cancels(fresh_db):
 def test_dispatch_reactivation_clears_when_policy_cancels_at_final_slot(fresh_db):
     """bug B：最后一个 slot 被 policy 取消、已无下一 slot 时，应清除候选（等下次 planning 重生成），
     而不是把过期候选永远留着。"""
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-final")
     _create_route("acc-react-final")
@@ -1164,12 +1164,12 @@ def test_dispatch_reactivation_reschedules_when_send_failed_downstream(fresh_db,
     """failed 分支：下游拒收/限速（ret:-2 落 status='failed'）时，不应把过期候选原样留在
     过去的 slot 上每个 tick 重发（拉活日节流不数 failed，兜底闸拦不住 → 发送风暴），
     而应改期到下一个 slot，降为每-slot 重试。"""
-    import app.proactive.delivery.outbound as outbound_mod
+    import app.products.zhaoxi.proactive.delivery.outbound as outbound_mod
     from app.db import list_outbound_messages
-    from app.openclaw_gateway import OpenClawRateLimited
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.platform.gateways.openclaw import OpenClawRateLimited
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-failed")
     _create_route("acc-react-failed")
@@ -1190,7 +1190,7 @@ def test_dispatch_reactivation_reschedules_when_send_failed_downstream(fresh_db,
 
     now = datetime(2026, 6, 5, 12, 15)
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         side_effect=OpenClawRateLimited("rate limited", ret=-2),
     ):
         result = dispatch_reactivation_candidate(
@@ -1227,11 +1227,11 @@ def test_dispatch_reactivation_reschedules_when_send_failed_downstream(fresh_db,
 def test_dispatch_reactivation_clears_when_send_failed_at_final_slot(fresh_db, monkeypatch):
     """failed 分支：最后一个 slot 下游拒收、已无下一 slot 时，应清除候选（等下次 planning
     重生成），而不是把过期候选永远留着每 tick 重发。"""
-    import app.proactive.delivery.outbound as outbound_mod
-    from app.openclaw_gateway import OpenClawRateLimited
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    import app.products.zhaoxi.proactive.delivery.outbound as outbound_mod
+    from app.platform.gateways.openclaw import OpenClawRateLimited
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-react-failed-final")
     _create_route("acc-react-failed-final")
@@ -1250,7 +1250,7 @@ def test_dispatch_reactivation_clears_when_send_failed_at_final_slot(fresh_db, m
     monkeypatch.setattr(outbound_mod.settings, "proactive_send_rate_limit_backoff_seconds", 0.0, raising=False)
 
     with patch(
-        "app.proactive.delivery.outbound.send_weixin_text",
+        "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
         side_effect=OpenClawRateLimited("rate limited", ret=-2),
     ):
         result = dispatch_reactivation_candidate(

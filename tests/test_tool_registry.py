@@ -8,8 +8,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.tools import get_default_tools, get_spec, iter_specs
-from app.tools.registry import _META, CALL_PLAIN, CALL_INVOCATION, CALL_WEB_SEARCH
+from app.products.zhaoxi.tools.registry import (
+    ZHAOXI_TOOL_CATALOG,
+    ZHAOXI_TOOL_POLICY,
+    _META,
+    get_default_tools,
+    get_spec,
+    iter_specs,
+)
+from app.tools.registry import (
+    CALL_INVOCATION,
+    CALL_PLAIN,
+    CALL_WEB_SEARCH,
+    SHARED_TOOL_REGISTRY,
+    ToolPolicy,
+)
 from app.tools.executor import execute_tool_call
 
 
@@ -61,12 +74,50 @@ def test_generation_tools_excluded_from_default_but_dispatchable():
 
 
 def test_execute_unknown_tool_returns_error():
-    ctx = SimpleNamespace(account_id="acc-x", web_search_enabled=False)
+    ctx = SimpleNamespace(
+        account_id="acc-x",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
+        web_search_enabled=False,
+    )
     out = execute_tool_call("definitely_not_a_tool", {}, ctx)
     assert out == {"error": "未知工具: definitely_not_a_tool"}
 
 
 def test_execute_web_search_disabled_runtime_guard():
-    ctx = SimpleNamespace(account_id="acc-x", web_search_enabled=False)
+    ctx = SimpleNamespace(
+        account_id="acc-x",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
+        web_search_enabled=False,
+    )
     out = execute_tool_call("web_search", {"query": "x"}, ctx)
     assert out == {"status": "failed", "error": "web_search is disabled"}
+
+
+def test_test_product_cannot_see_or_execute_zhaoxi_tools():
+    policy = ToolPolicy(
+        app_id="test_product",
+        catalog=ZHAOXI_TOOL_CATALOG,
+        allowed_names=SHARED_TOOL_REGISTRY.names(),
+    )
+    visible = {
+        schema["function"]["name"]
+        for schema in policy.get_default_tools(
+            flags={"web_search_enabled": False, "tdai_search_enabled": False}
+        )
+    }
+    assert "create_reminder" not in visible
+    assert "mission_status" not in visible
+
+    ctx = SimpleNamespace(
+        account_id="acc-test",
+        app_id="test_product",
+        tool_policy=policy,
+        web_search_enabled=False,
+    )
+    out = execute_tool_call("create_reminder", {}, ctx)
+    assert out == {
+        "status": "failed",
+        "error": "create_reminder is not allowed for this product",
+    }

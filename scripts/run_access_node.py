@@ -19,9 +19,9 @@ if str(ROOT) not in sys.path:
 
 import uvicorn  # noqa: E402
 
-from app import openclaw_gateway  # noqa: E402
+from app.platform.gateways import openclaw as openclaw_gateway  # noqa: E402
 from app.config import settings  # noqa: E402
-from app.node_agent import (  # noqa: E402
+from app.platform.gateways.node_agent import (  # noqa: E402
     create_node_agent_app,
     run_heartbeat_loop,
     run_pull_loop,

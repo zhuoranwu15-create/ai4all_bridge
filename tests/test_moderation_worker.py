@@ -47,7 +47,7 @@ def _queued_task(
 
 def test_worker_passes_safe_queued_task(fresh_db):
     from app.db import get_content_moderation_task, list_content_moderation_results
-    from app.moderation.worker import run_once
+    from app.platform.moderation.worker import run_once
 
     task = _queued_task(text="normal text for worker")
     summary = run_once(batch_size=1)
@@ -64,7 +64,7 @@ def test_worker_passes_safe_queued_task(fresh_db):
 
 def test_worker_rule_hit_enters_review_and_updates_risk_state(fresh_db):
     from app.db import get_content_moderation_task, get_moderation_account_risk_state
-    from app.moderation.worker import run_once
+    from app.platform.moderation.worker import run_once
 
     task = _queued_task(text="needs MODERATION_TEST_REVIEW")
     run_once(batch_size=1)
@@ -81,8 +81,8 @@ def test_worker_rule_hit_enters_review_and_updates_risk_state(fresh_db):
 
 def test_worker_aggregates_llm_result(monkeypatch, fresh_db):
     from app.db import get_content_moderation_task, get_moderation_account_risk_state
-    from app.moderation.models import MachineReviewResult
-    from app.moderation import worker
+    from app.platform.moderation.models import MachineReviewResult
+    from app.platform.moderation import worker
 
     task = _queued_task(
         text="normal text selected for llm",
@@ -115,7 +115,7 @@ def test_worker_aggregates_llm_result(monkeypatch, fresh_db):
 
 def test_worker_retries_then_moves_failed_task_to_review(monkeypatch, fresh_db):
     from app.db import get_content_moderation_task, list_content_moderation_results
-    from app.moderation import worker
+    from app.platform.moderation import worker
 
     fresh_db.moderation_worker_max_attempts = 2
     task = _queued_task(

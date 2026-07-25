@@ -4,7 +4,7 @@
 渲染形态是**产品域层**的组合行为（D-06：绝不编码进 Agent Runtime）；Runtime 只负责把
 本函数产出的块喂进 prompt build。payload 是结构化事实、非逐字聊天原文（D-05）。
 
-分层不变量：本文件只 import `app.prompt_builder`（复用 ContextBlock，ADR §7.3 接缝①明示
+分层不变量：本文件只 import Runtime `context.prompt_builder`（复用 ContextBlock，ADR §7.3 明示
 「域层注入 ContextBlock」），**不** import `app.db.*` / `app.turn_service`——由
 tests/test_layer_boundaries.py 门禁执行。读 L3 facts 与 turn 输入组装均在 platform
 composition，本层只保留产品渲染规则（D-06）。
@@ -12,7 +12,7 @@ composition，本层只保留产品渲染规则（D-06）。
 import json
 from typing import Any, Dict, List, Optional
 
-from app.prompt_builder import ContextBlock
+from app.agent_runtime.context.prompt_builder import ContextBlock
 
 _L3_BLOCK_NAME = "universe_l3"
 _L3_HEADER = "【世界共享记忆（关于用户的沉淀认知，同世界居民共享）】"

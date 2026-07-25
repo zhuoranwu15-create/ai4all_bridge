@@ -4,7 +4,7 @@
 不 onboarding」的默认 cap（精确对齐现状：只有 openclaw-weixin 精确匹配才走 onboarding）。
 """
 
-from app.channels import (
+from app.platform.channels import (
     _DEFAULT_CAPABILITY,
     _APP_ACTIVE_SESSION_KEY,
     CHANNEL_APP,

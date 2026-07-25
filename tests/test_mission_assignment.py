@@ -1,7 +1,7 @@
-"""app.mission_assignment：使命分配编排（agent_mission_and_orchestration_design.md §5）。"""
-from app import profile_storage
-from app.mission_assignment import _pick_mission_id, assign_mission_if_absent
-from app.mission_registry import get_mission_template
+"""app.products.zhaoxi.application.missions.assignment：使命分配编排（agent_mission_and_orchestration_design.md §5）。"""
+from app.agent_runtime.persistence import profile_storage
+from app.products.zhaoxi.application.missions.assignment import _pick_mission_id, assign_mission_if_absent
+from app.products.zhaoxi.domain.missions.registry import get_mission_template
 
 
 from tests.factories import create_account as _create_account
@@ -12,7 +12,7 @@ def test_pick_mission_id_is_deterministic():
 
 
 def test_pick_mission_id_returns_registered_id():
-    from app.mission_registry import MISSION_TEMPLATES
+    from app.products.zhaoxi.domain.missions.registry import MISSION_TEMPLATES
 
     assert _pick_mission_id("acc-any") in MISSION_TEMPLATES
 
@@ -79,7 +79,7 @@ def test_different_accounts_can_get_different_missions(fresh_db):
 # ---------------------------------------------------------------------------
 
 def test_campaign_attribution_mission_id_takes_priority(fresh_db):
-    from app.db.campaign import write_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import write_campaign_attribution
 
     account_id = "acc-campaign-mission"
     _create_account(account_id)

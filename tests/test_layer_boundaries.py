@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from importlib import import_module
 from pathlib import Path
 
 # 仓库根：tests/ 的上一级
@@ -15,6 +16,12 @@ RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
 
 # 共享平台层不得依赖任何产品实现；产品与平台由 bootstrap composition root 接线。
 PLATFORM_LAYER = REPO_ROOT / "app" / "platform"
+
+# 共享工具框架不得反向组合产品 schema/handler；产品 catalog 由产品自身持有。
+SHARED_TOOLS_LAYER = REPO_ROOT / "app" / "tools"
+
+# 已实体化的朝夕垂直业务不得重新漂回 app/ 顶层。
+ZHAOXI_PROACTIVE_LAYER = PRODUCTS_ROOT / "zhaoxi" / "proactive"
 
 # 禁止被领域层直接依赖的 Runtime 内部模块（绝对模块名前缀）
 DOMAIN_FORBIDDEN_PREFIXES = (
@@ -41,6 +48,7 @@ PLATFORM_FORBIDDEN_PREFIXES = (
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
     "app/agent_runtime",
+    "app/agent_runtime/turns",
     "app/bootstrap",
     "app/platform",
     "app/products",
@@ -161,7 +169,7 @@ def _node_mentions_product_discriminator(node: ast.AST) -> bool:
 def _module_export_names(module_rel: str) -> tuple[str, ...]:
     """AST 静态读取某模块 __all__ 的字符串成员（不 import，沿用本文件纯 AST 纪律）。
 
-    用于把「经 `app/db/__init__.py` 的 `import *` 再导出」的符号名封进门禁：AI 路径写
+    用于把「经 `app/db/__init__.py` 懒加载再导出」的符号名封进门禁：AI 路径写
     `from app.db import insert_human_message` 会 yield `app.db.insert_human_message`，
     绕过「完整模块路径」前缀检查；逐个再导出符号名封住这条缝（见 D-11 门禁）。
     """
@@ -185,6 +193,39 @@ def test_scaffold_packages_exist():
     for pkg in SCAFFOLD_PACKAGES:
         init = REPO_ROOT / pkg / "__init__.py"
         assert init.is_file(), f"缺少脚手架包 __init__.py：{pkg}/__init__.py"
+
+
+def test_product_business_packages_are_not_top_level():
+    """朝夕主动消息已归位；旧顶层包不得以 Python 源码形式复活。"""
+
+    assert (ZHAOXI_PROACTIVE_LAYER / "__init__.py").is_file()
+    assert not list((REPO_ROOT / "app" / "proactive").rglob("*.py"))
+    assert not list((REPO_ROOT / "app" / "moderation").rglob("*.py"))
+    assert (PLATFORM_LAYER / "moderation" / "__init__.py").is_file()
+    for old_file in (
+        "app/db/mission.py",
+        "app/db/notifications.py",
+        "app/db/proactive.py",
+        "app/db/user_meta.py",
+        "app/db/campaign.py",
+        "app/db/campaign_analytics.py",
+        "app/routers/admin_dreaming.py",
+        "app/routers/admin_accounts.py",
+        "app/routers/admin_campaigns.py",
+        "app/routers/admin_moderation.py",
+        "app/routers/admin_proactive.py",
+        "app/routers/admin_security.py",
+        "app/routers/bridge.py",
+        "app/routers/debug.py",
+        "app/routers/app_api.py",
+        "app/tools/commitment_handlers.py",
+        "app/tools/content_invitation_handlers.py",
+        "app/tools/mission_handlers.py",
+        "app/tools/proactive_settings_handlers.py",
+        "app/tools/reminder_handlers.py",
+        "app/tools/session_status_handlers.py",
+    ):
+        assert not (REPO_ROOT / old_file).exists(), f"产品实现重新漂回旧路径：{old_file}"
 
 
 def test_product_domains_do_not_import_framework_or_runtime_internals():
@@ -260,6 +301,74 @@ def test_shared_platform_does_not_import_product_domains():
     )
 
 
+def test_shared_tools_do_not_import_product_implementations():
+    """共享 ToolRegistry/executor 只能认识共享工具，产品 catalog 在产品边界内组合。"""
+
+    violations: list[str] = []
+    for py_file in sorted(SHARED_TOOLS_LAYER.rglob("*.py")):
+        package = _module_package(py_file)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for module in _iter_imported_modules(tree, package):
+            if _is_forbidden(module, ("app.products",)):
+                violations.append(f"{py_file.relative_to(REPO_ROOT)} → import {module}")
+    assert not violations, "共享 tools 反向依赖产品实现：\n" + "\n".join(violations)
+
+
+def test_main_is_only_an_asgi_bootstrap_entrypoint():
+    """main 不得重新组合产品 router、scheduler、DB 或 turn 业务。"""
+
+    main_file = REPO_ROOT / "app" / "main.py"
+    tree = ast.parse(main_file.read_text(encoding="utf-8"), filename=str(main_file))
+    imported_app_modules = {
+        module
+        for module in _iter_imported_modules(tree, "app")
+        if module.startswith("app.")
+    }
+    assert imported_app_modules <= {
+        "app.bootstrap.application",
+        "app.bootstrap.application.create_app",
+        "app.config",
+        "app.config.settings",
+    }
+    assert not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
+
+
+def test_transition_facades_have_real_owners_and_no_business_definitions():
+    """根过渡模块只做兼容导出，真实实现必须留在 Runtime/朝夕 owner。"""
+
+    expected = {
+        "app/turn_service.py": "app/agent_runtime/turns/service.py",
+        "app/prompt_builder.py": "app/agent_runtime/context/prompt_builder.py",
+        "app/reminder_utils.py": (
+            "app/products/zhaoxi/proactive/obligations/reminder_schedule.py"
+        ),
+    }
+    for facade_rel, owner_rel in expected.items():
+        facade = REPO_ROOT / facade_rel
+        owner = REPO_ROOT / owner_rel
+        assert facade.is_file() and owner.is_file()
+        tree = ast.parse(facade.read_text(encoding="utf-8"), filename=str(facade))
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for node in tree.body
+        ), f"兼容 façade 重新出现业务定义：{facade_rel}"
+
+
+def test_shared_platform_does_not_import_db_compatibility_facade():
+    """Platform 只能依赖明确 persistence 模块，不能经 app.db 隐式加载产品。"""
+
+    violations: list[str] = []
+    for py_file in _platform_py_files():
+        package = _module_package(py_file)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        if "app.db" in _iter_imported_modules(tree, package):
+            violations.append(str(py_file.relative_to(REPO_ROOT)))
+    assert not violations, (
+        "共享 Platform 依赖 app.db 兼容 façade（请改为明确 persistence 模块）：\n"
+        + "\n".join(violations)
+    )
+
+
 def test_runtime_has_no_product_string_branch():
     """Runtime 不得按 app_id/product_id 字符串分支，产品差异必须经端口注入。"""
     violations: list[str] = []
@@ -270,8 +379,12 @@ def test_runtime_has_no_product_string_branch():
                 continue
             if not _node_mentions_product_discriminator(node):
                 continue
+            # 下标读取 ``access[\"app_id\"]`` 自身也包含字符串常量；这里只禁
+            # ``app_id == \"zhaoxi\"`` 这类产品字面量分支，不禁两个动态 scope 做相等校验。
             if any(
-                isinstance(child, ast.Constant) and isinstance(child.value, str)
+                isinstance(child, ast.Constant)
+                and isinstance(child.value, str)
+                and child.value not in {"app_id", "product_id"}
                 for child in ast.walk(node)
             ):
                 violations.append(
@@ -288,19 +401,41 @@ def test_runtime_adapter_has_no_companion_world_composition_methods():
     assert not hasattr(DefaultAgentRuntimeAdapter, "send_companion_world_turn")
 
 
+def test_zhaoxi_application_facade_resolves_all_declared_exports():
+    """兼容 façade 的懒加载映射必须覆盖并解析全部公开导出。"""
+
+    from app.products.zhaoxi import application
+
+    assert set(application.__all__) == set(application._EXPORTS)
+    for name in application.__all__:
+        assert getattr(application, name) is not None
+
+
+def test_db_compatibility_facade_resolves_owned_persistence_exports():
+    """移动后的 persistence 公共 API 仍可经 app.db 兼容入口解析。"""
+
+    import app.db as db
+
+    for module_name in db._COMPAT_EXPORT_MODULES:
+        module = import_module(module_name)
+        exports = getattr(module, "__all__", ())
+        assert exports, f"兼容 persistence 未声明 __all__：{module_name}"
+        for name in exports:
+            assert getattr(db, name) is getattr(module, name)
+
+
 def test_ai_paths_do_not_import_human_chat_storage():
     """D-11：真人消息不得进入 turn/prompt/dreaming/memory/proactive/Runtime。"""
     roots = [
         REPO_ROOT / "app" / "turn_service.py",
         REPO_ROOT / "app" / "prompt_builder.py",
-        REPO_ROOT / "app" / "dreaming.py",
-        REPO_ROOT / "app" / "dreaming_scheduler.py",
-        REPO_ROOT / "app" / "memory_writer.py",
+        REPO_ROOT / "app" / "products" / "zhaoxi" / "application" / "memory",
+        REPO_ROOT / "app" / "products" / "zhaoxi" / "jobs" / "dreaming",
         REPO_ROOT / "app" / "agent_runtime",
-        REPO_ROOT / "app" / "proactive",
+        ZHAOXI_PROACTIVE_LAYER,
     ]
-    # `app/db/__init__.py` 以 `from app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat import *` 再导出全部写
-    # helper；仅禁完整模块路径会漏掉 `from app.db import insert_human_message` 这条再导出缝。
+    # `app/db/__init__.py` 会按 __all__ 懒加载再导出全部 human-chat 写 helper；仅禁完整
+    # 模块路径会漏掉 `from app.db import insert_human_message` 这条兼容 façade 缝。
     # 逐个把 human-chat 的 __all__ 符号名封为 `app.db.<name>`（不封裸 `app.db`，AI 路径合法用它）。
     human_chat_module = (
         "app/products/zhaoxi/infrastructure/persistence/"

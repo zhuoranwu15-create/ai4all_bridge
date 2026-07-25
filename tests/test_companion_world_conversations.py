@@ -202,13 +202,14 @@ def test_turn_adapter_injects_only_target_universe_l3(client, fresh_db, monkeypa
     )
     captured = {}
 
-    def _fake_turn(ctx):
+    def _fake_turn(ctx, *, product_services):
         captured["ctx"] = ctx
+        captured["product_services"] = product_services
         return OpenClawTurnResponse(
             status="ok", reply="已收到", metadata={"reply_message_id": "reply-l3"}
         )
 
-    monkeypatch.setattr("app.agent_runtime.adapter.run_turn_for_account", _fake_turn)
+    monkeypatch.setattr("app.agent_runtime.adapter.run_product_turn", _fake_turn)
     response = client.post(
         f"/v1/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
@@ -216,6 +217,7 @@ def test_turn_adapter_injects_only_target_universe_l3(client, fresh_db, monkeypa
     )
     assert response.status_code == 200
     ctx = captured["ctx"]
+    assert captured["product_services"].app_id == "zhaoxi"
     assert ctx.account_id == target.runtime_account_id
     assert ctx.cap.active_session_key == db.APP_ACTIVE_SESSION_KEY
     assert len(ctx.extra_blocks) == 1

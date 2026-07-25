@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from app.config import settings
-from app.db import notifications as notification_db
+from app.products.zhaoxi.infrastructure.persistence import notifications as notification_db
 from app.products.zhaoxi.domain.companion_world import AppNotificationRecord
 from app.products.zhaoxi.domain.companion_world.proactive import (
     decide_human_proactive_delivery,

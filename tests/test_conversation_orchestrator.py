@@ -119,7 +119,7 @@ def test_account_active_session_ignores_openclaw_session_key_changes(client):
 @pytest.mark.slow
 def test_normal_chat_does_not_load_daily_notes_into_prompt(client):
     with patch(
-        "app.user_profiles.read_daily_notes",
+        "app.products.zhaoxi.infrastructure.profiles.read_daily_notes",
         side_effect=AssertionError("daily notes should not be loaded for P0 prompt"),
     ) as mock_read_daily_notes, patch(
         "app.turn_service.generate_reply",

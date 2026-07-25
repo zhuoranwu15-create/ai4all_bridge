@@ -11,7 +11,7 @@ from app.db._core import (
     _phase1_contract_violation_counts,
     migrate_db_through,
 )
-from app.rate_limiter import RateLimiter
+from app.platform.quota.rate_limiter import RateLimiter
 
 
 def _two_product_accounts(phone: str):

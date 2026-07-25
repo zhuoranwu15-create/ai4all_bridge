@@ -179,7 +179,7 @@ class TestPromptBuilderBasicBuild:
         assert "旧记忆SENTINEL" not in out
 
     def test_default_agents_context_contains_execution_bias(self):
-        from app.user_profiles import _default_system_templates
+        from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
         agents = _default_system_templates()["AGENTS.md"]
         out = self.pb.build(agent_context={"AGENTS": agents})
@@ -280,7 +280,7 @@ class TestPromptBuilderTruncation:
         assert "...[已截断]" in out
 
     def test_default_tools_context_not_truncated(self):
-        from app.user_profiles import _default_system_templates
+        from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
         tools = _default_system_templates()["TOOLS.md"]
         out = self.pb.build(agent_context={"TOOLS": tools})

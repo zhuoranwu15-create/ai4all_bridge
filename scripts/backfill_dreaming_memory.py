@@ -28,7 +28,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import settings
-from app.dreaming import reapply_sensitivity_misskips
+from app.products.zhaoxi.application.memory.dreaming import reapply_sensitivity_misskips
 
 
 def _preview(text: str, width: int = 60) -> str:

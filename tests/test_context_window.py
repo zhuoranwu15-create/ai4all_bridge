@@ -1,5 +1,5 @@
-"""app.context_window 纯函数单测：token 预算裁剪 + 单消息硬上限。"""
-from app.context_window import (
+"""app.agent_runtime.context.window 纯函数单测：token 预算裁剪 + 单消息硬上限。"""
+from app.agent_runtime.context.window import (
     cap_message_chars,
     estimate_tokens,
     trim_history_rows,

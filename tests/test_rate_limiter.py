@@ -1,4 +1,4 @@
-from app.rate_limiter import RateLimiter, _advisory_key
+from app.platform.quota.rate_limiter import RateLimiter, _advisory_key
 from app.db._core import _tx
 
 

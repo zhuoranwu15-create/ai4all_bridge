@@ -1,0 +1,353 @@
+"""OpenClaw 命令行与持久连接网关。"""
+
+import base64
+import io
+import json
+import logging
+import re
+import subprocess
+import threading
+from typing import Any, Dict, Optional, Tuple
+from uuid import uuid4
+
+import qrcode
+
+from app.config import settings
+
+
+logger = logging.getLogger("ai4all.openclaw_gateway")
+
+
+class OpenClawGatewayError(RuntimeError):
+    pass
+
+
+class OpenClawRateLimited(OpenClawGatewayError):
+    """发送被 iLink/网关限速（典型 ret=-2 / errmsg=rate limited）。
+
+    单独成类，便于调用方退避重试并与一般失败区分（一般失败立即落 failed，
+    限速则可按账号退避后重试）。``ret`` 为网关返回的业务码，未知时为 None。
+    """
+
+    def __init__(self, message: str, *, ret: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.ret = ret
+
+
+DEFAULT_WEIXIN_CHANNEL = "openclaw-weixin"
+
+# 限速文案匹配（errmsg=rate limited / rate_limited 等大小写变体）。
+_RATE_LIMIT_PATTERN = re.compile(r"rate.?limit", re.IGNORECASE)
+# iLink 限速的业务返回码。
+_RATE_LIMIT_RET = -2
+
+_gateway_ws_client: Optional[Any] = None
+_gateway_ws_client_lock = threading.Lock()
+
+
+def _setting_bool(name: str, default: bool) -> bool:
+    value = getattr(settings, name, default)
+    return value if isinstance(value, bool) else default
+
+
+def _persistent_gateway_client() -> Any:
+    """Return the process-wide persistent OpenClaw Gateway WS client."""
+    global _gateway_ws_client
+    with _gateway_ws_client_lock:
+        if _gateway_ws_client is None:
+            from app.platform.gateways.openclaw_ws import OpenClawPersistentGatewayClient
+
+            _gateway_ws_client = OpenClawPersistentGatewayClient(settings)
+        return _gateway_ws_client
+
+
+def close_persistent_gateway_client() -> None:
+    """Close the process-wide persistent OpenClaw Gateway WS client if it exists."""
+    global _gateway_ws_client
+    with _gateway_ws_client_lock:
+        client = _gateway_ws_client
+        _gateway_ws_client = None
+    if client is not None:
+        client.close()
+
+
+def warmup_persistent_gateway_client() -> None:
+    """Open the process-wide persistent OpenClaw Gateway WS client if enabled."""
+    _persistent_gateway_client().warmup()
+
+
+def _extract_send_result_error(result: Dict[str, Any]) -> Optional[Tuple[Optional[int], str]]:
+    """从 send 返回体里抽取业务错误 ``(code, message)``；无错误返回 None。
+
+    关键背景：``openclaw gateway call send`` 即使 CLI 退出码为 0，iLink 仍可能在
+    返回体里携带业务错误，最典型是限速 ``ret=-2 / errmsg=rate limited``。
+
+    业务码优先（2026-07 修正，对治"假成功"）：``messageId`` 是插件本地生成的 clientId、
+    恒为非空，**不能**作为送达证据；旧逻辑"见 messageId 即判成功"会把被下游软拒的消息
+    误标为已发送（静默丢消息）。现改为**先看业务码**：只要拿到非零 ``ret``/``errcode``
+    即判失败（即使同时带 messageId），无业务错误时才回落到成功。
+
+    业务码可能出现在两处，均兼容读取：
+    - 顶层（CLI ``gateway call send`` 直返的响应体）。
+    - ``meta``（WS/CLI 经网关 send RPC 的 ``meta`` dock 透传的 channel 专有字段，
+      openclaw-weixin 把 iLink 的 ret/errcode/errmsg 塞在这里）。
+    字段名按已知 iLink 形态做兼容匹配；均不命中则不报错，不会把正常成功误判为失败。
+    """
+    if not isinstance(result, dict):
+        return None
+
+    # 业务码/文案可能在顶层或 meta dock 里，两处都扫。
+    sources: list[Dict[str, Any]] = [result]
+    meta = result.get("meta")
+    if isinstance(meta, dict):
+        sources.append(meta)
+
+    code: Optional[int] = None
+    for src in sources:
+        for key in ("ret", "errcode", "code"):
+            value = src.get(key)
+            if isinstance(value, bool):  # bool 是 int 子类，需先排除
+                continue
+            if isinstance(value, int):
+                code = value
+                break
+            if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                code = int(value.strip())
+                break
+        if code is not None:
+            break
+
+    message = ""
+    for src in sources:
+        for key in ("errmsg", "error", "message", "msg"):
+            value = src.get(key)
+            if isinstance(value, str) and value.strip():
+                message = value.strip()
+                break
+        if message:
+            break
+
+    if code is not None and code != 0:
+        return code, message or f"gateway returned ret={code}"
+    if message and _RATE_LIMIT_PATTERN.search(message):
+        return code, message
+    return None
+
+
+def _run_gateway_call(
+    *,
+    method: str,
+    params: Dict[str, Any],
+    timeout_ms: int,
+) -> Dict[str, Any]:
+    cmd = [
+        settings.openclaw_cli_path,
+        "gateway",
+        "call",
+        method,
+        "--json",
+        "--timeout",
+        str(timeout_ms),
+        "--params",
+        json.dumps(params, ensure_ascii=False),
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_ms / 1000 + 5, 10),
+        )
+    except subprocess.TimeoutExpired as err:
+        raise OpenClawGatewayError(f"OpenClaw Gateway call timed out: {method}") from err
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise OpenClawGatewayError(detail or f"OpenClaw Gateway call failed: {method}")
+    try:
+        parsed = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as err:
+        raise OpenClawGatewayError(
+            f"OpenClaw Gateway returned non-JSON output for {method}"
+        ) from err
+    if not isinstance(parsed, dict):
+        raise OpenClawGatewayError(f"OpenClaw Gateway returned invalid result for {method}")
+    return parsed
+
+
+def _render_qr_payload_to_data_url(payload: str) -> str:
+    img = qrcode.make(payload, box_size=6, border=2)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def normalize_qr_data_url(raw_value: Optional[str]) -> Optional[str]:
+    if not raw_value:
+        return None
+    value = raw_value.strip()
+    if not value:
+        return None
+    if value.startswith("data:image/"):
+        return value
+    return _render_qr_payload_to_data_url(value)
+
+
+def start_weixin_qr_login(
+    *,
+    account_id: str,
+    gateway_timeout_ms: int,
+    start_timeout_ms: int,
+    force: bool = False,
+) -> Dict[str, Any]:
+    result = _run_gateway_call(
+        method="web.login.start",
+        params={
+            "accountId": account_id,
+            "force": force,
+            "timeoutMs": start_timeout_ms,
+            "verbose": False,
+        },
+        timeout_ms=gateway_timeout_ms,
+    )
+    raw_qr = result.get("qrDataUrl")
+    qr_data_url = normalize_qr_data_url(raw_qr if isinstance(raw_qr, str) else None)
+    return {
+        **result,
+        "rawQrDataUrl": raw_qr,
+        "qrDataUrl": qr_data_url,
+    }
+
+
+def wait_weixin_qr_login(
+    *,
+    account_id: str,
+    current_qr_data_url: Optional[str],
+    gateway_timeout_ms: int,
+    wait_timeout_ms: int,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "accountId": account_id,
+        "timeoutMs": wait_timeout_ms,
+    }
+    if current_qr_data_url:
+        params["currentQrDataUrl"] = current_qr_data_url
+    return _run_gateway_call(
+        method="web.login.wait",
+        params=params,
+        timeout_ms=max(gateway_timeout_ms, wait_timeout_ms + 5000),
+    )
+
+
+def logout_weixin_account(
+    *,
+    account_id: str,
+    channel: str = DEFAULT_WEIXIN_CHANNEL,
+    timeout_ms: int,
+) -> Dict[str, Any]:
+    resolved_account_id = account_id.strip() if account_id else ""
+    resolved_channel = channel.strip() if channel else DEFAULT_WEIXIN_CHANNEL
+    if not resolved_account_id:
+        raise ValueError("account_id is required")
+    if not resolved_channel:
+        resolved_channel = DEFAULT_WEIXIN_CHANNEL
+
+    cmd = [
+        settings.openclaw_cli_path,
+        "channels",
+        "logout",
+        "--channel",
+        resolved_channel,
+        "--account",
+        resolved_account_id,
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=max(timeout_ms / 1000 + 5, 10),
+        )
+    except subprocess.TimeoutExpired as err:
+        raise OpenClawGatewayError(
+            f"OpenClaw channel logout timed out: {resolved_channel}/{resolved_account_id}"
+        ) from err
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise OpenClawGatewayError(
+            detail or f"OpenClaw channel logout failed: {resolved_channel}/{resolved_account_id}"
+        )
+    return {
+        "channel": resolved_channel,
+        "accountId": resolved_account_id,
+        "stdout": (completed.stdout or "").strip(),
+    }
+
+
+def _run_send_gateway_call(*, params: Dict[str, Any], timeout_ms: int) -> Dict[str, Any]:
+    if _setting_bool("openclaw_gateway_ws_enabled", False):
+        try:
+            return _persistent_gateway_client().call(
+                method="send",
+                params=params,
+                timeout_ms=timeout_ms,
+            )
+        except OpenClawGatewayError as err:
+            if not _setting_bool("openclaw_gateway_ws_fallback_to_cli", True):
+                raise
+            # WARNING 级(不进飞书告警):外发降级回退慢速 CLI。保留异常详情用于排障——常见诱因是
+            # 同通道账号登录/改配置触发 OpenClaw 通道热重启,期间连接被重置导致 send 立即失败。
+            logger.warning(
+                "persistent OpenClaw Gateway send failed; falling back to CLI: %s",
+                err,
+            )
+    return _run_gateway_call(method="send", params=params, timeout_ms=timeout_ms)
+
+
+def send_weixin_text(
+    *,
+    to_user_id: str,
+    text: str,
+    gateway_timeout_ms: int,
+    account_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    session_key: Optional[str] = None,
+    channel: str = DEFAULT_WEIXIN_CHANNEL,
+) -> Dict[str, Any]:
+    """Send proactive Weixin text through OpenClaw Gateway's generic send RPC."""
+    target = to_user_id.strip()
+    message = text.strip()
+    if not target:
+        raise ValueError("to_user_id is required")
+    if not message:
+        raise ValueError("text is required")
+    resolved_channel = channel.strip() if channel else ""
+    if not resolved_channel:
+        resolved_channel = DEFAULT_WEIXIN_CHANNEL
+    resolved_idempotency_key = idempotency_key.strip() if idempotency_key else ""
+    if not resolved_idempotency_key:
+        resolved_idempotency_key = f"ai4all-send-{uuid4()}"
+
+    params: Dict[str, Any] = {
+        "channel": resolved_channel,
+        "to": target,
+        "message": message,
+        "idempotencyKey": resolved_idempotency_key,
+    }
+    if account_id and account_id.strip():
+        params["accountId"] = account_id.strip()
+    if session_key and session_key.strip():
+        params["sessionKey"] = session_key.strip()
+
+    result = _run_send_gateway_call(params=params, timeout_ms=gateway_timeout_ms)
+    # CLI 退出码为 0 不代表发送成功：iLink 可能在返回体里带业务错误（如限速 ret=-2）。
+    # 识别后抛出，避免被上层误标为已发送。限速单独抛 OpenClawRateLimited 以便退避重试。
+    send_error = _extract_send_result_error(result)
+    if send_error is not None:
+        ret_code, error_message = send_error
+        if ret_code == _RATE_LIMIT_RET or _RATE_LIMIT_PATTERN.search(error_message):
+            raise OpenClawRateLimited(error_message, ret=ret_code)
+        raise OpenClawGatewayError(error_message)
+    return result

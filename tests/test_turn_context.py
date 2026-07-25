@@ -1,9 +1,12 @@
-from app.turn_context import TurnContext
+from app.agent_runtime.context.models import TurnContext
+from app.products.zhaoxi.tools.registry import ZHAOXI_TOOL_POLICY
 
 
 def test_turn_context_fields():
     ctx = TurnContext(
         account_id="acc-1",
+        app_id="zhaoxi",
+        tool_policy=ZHAOXI_TOOL_POLICY,
         account={"id": "acc-1"},
         session={"id": 1},
         identity=None,
@@ -20,6 +23,7 @@ def test_turn_context_fields():
         background_loop=None,
     )
     assert ctx.account_id == "acc-1"
+    assert ctx.app_id == "zhaoxi"
     assert ctx.binding["chat_id"] == "chat-1"
     assert ctx.recent_messages == []
     assert ctx.web_search_enabled is False

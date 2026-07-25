@@ -54,11 +54,11 @@ def test_outbound_message_lifecycle_tracks_usage(fresh_db):
 
 def test_enqueue_proactive_text_applies_daily_limit(fresh_db):
     from app.db import get_outbound_daily_usage
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
 
     fresh_db.companion_followup_daily_limit = 3
     now = datetime(2026, 5, 22, 10, 0)
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-limit")
         rows = [
             enqueue_proactive_text(
@@ -94,10 +94,10 @@ def test_enqueue_proactive_text_applies_daily_limit(fresh_db):
 
 def test_enqueue_proactive_text_blocks_quiet_hours_without_consuming_quota(fresh_db):
     from app.db import get_outbound_daily_usage
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
 
     now = datetime(2026, 5, 22, 23, 0)
-    with patch("app.db.settings", fresh_db), patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.db.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         _create_account("acc-quiet")
         row = enqueue_proactive_text(
             account_id="acc-quiet",
@@ -122,15 +122,15 @@ def test_enqueue_proactive_text_blocks_quiet_hours_without_consuming_quota(fresh
 
 def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
     from app.db import get_outbound_daily_usage
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.companion_followup_daily_limit = 1
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             side_effect=RuntimeError("gateway down"),
         ),
     ):
@@ -175,14 +175,14 @@ def test_failed_outbound_attempts_count_toward_daily_limit(fresh_db):
 def test_failed_outbound_does_not_record_session_delivery(fresh_db):
     """发送失败不应建 session、不应把这条主动消息写入会话时间线（口径：仅 sent 才记录）。"""
     from app.db import list_sessions_for_account
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             side_effect=RuntimeError("gateway down"),
         ),
     ):
@@ -207,8 +207,8 @@ def test_failed_outbound_does_not_record_session_delivery(fresh_db):
 
 def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
     """被限速时退避重试，重试用尽后落 failed（不再静默标 sent）。"""
-    from app.openclaw_gateway import OpenClawRateLimited
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.platform.gateways.openclaw import OpenClawRateLimited
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3
     fresh_db.proactive_send_rate_limit_max_retries = 2
@@ -216,9 +216,9 @@ def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             side_effect=OpenClawRateLimited("rate limited", ret=-2),
         ) as mock_send,
     ):
@@ -243,8 +243,8 @@ def test_send_proactive_text_retries_then_fails_on_rate_limit(fresh_db):
 
 def test_send_proactive_text_recovers_after_rate_limit_retry(fresh_db):
     """首次限速、重试成功 → 最终 sent。"""
-    from app.openclaw_gateway import OpenClawRateLimited
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.platform.gateways.openclaw import OpenClawRateLimited
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3
     fresh_db.proactive_send_rate_limit_max_retries = 2
@@ -252,9 +252,9 @@ def test_send_proactive_text_recovers_after_rate_limit_retry(fresh_db):
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             side_effect=[
                 OpenClawRateLimited("rate limited", ret=-2),
                 {"messageId": "openclaw-weixin:msg-ok"},
@@ -281,16 +281,16 @@ def test_send_proactive_text_recovers_after_rate_limit_retry(fresh_db):
 
 def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
     from app.db import list_session_messages, list_sessions_for_account
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     fresh_db.proactive_outbound_daily_limit = 3
     now = datetime(2026, 5, 22, 10, 0)
     with (
         patch("app.db.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.beijing_now", return_value=now),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.beijing_now", return_value=now),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:msg-1"},
         ) as mock_send,
     ):
@@ -330,10 +330,10 @@ def test_send_proactive_text_marks_sent_after_gateway_success(fresh_db):
 
 
 def test_user_reminder_bypasses_quiet_hours(fresh_db):
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
     from unittest.mock import patch
 
-    with patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         with patch("app.db.settings", fresh_db):
             from app.db import get_or_create_session
             get_or_create_session(
@@ -363,10 +363,10 @@ def test_user_reminder_bypasses_quiet_hours(fresh_db):
 
 
 def test_companion_followup_blocked_by_quiet_hours(fresh_db):
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
     from unittest.mock import patch
 
-    with patch("app.proactive.delivery.outbound.settings", fresh_db):
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db):
         with patch("app.db.settings", fresh_db):
             from app.db import get_or_create_session
             get_or_create_session(
@@ -395,13 +395,13 @@ def test_companion_followup_blocked_by_quiet_hours(fresh_db):
 
 def test_companion_followup_avoids_pending_user_reminder(fresh_db):
     from app.db import create_reminder
-    from app.proactive.delivery.outbound import enqueue_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
 
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
     fresh_db.companion_followup_daily_limit = 3
     now = datetime(2026, 5, 30, 10, 0)
-    with patch("app.proactive.delivery.outbound.settings", fresh_db), patch("app.proactive.delivery.policy.settings", fresh_db):
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db), patch("app.products.zhaoxi.proactive.delivery.policy.settings", fresh_db):
         with patch("app.db.settings", fresh_db):
             _create_account("acc-avoid")
             create_reminder(

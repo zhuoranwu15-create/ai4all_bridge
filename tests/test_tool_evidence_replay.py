@@ -32,7 +32,7 @@ def test_no_tool_invocations_history_unchanged():
         ("assistant", "hi", None),
     ])
     with _invoke([]):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1")
     assert result == history
 
@@ -51,7 +51,7 @@ def test_single_tool_call_spliced_after_user_message():
         "status": "succeeded",
     }]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1")
 
     # user → assistant(tool_calls) → tool → assistant(text)
@@ -79,7 +79,7 @@ def test_tool_call_id_preserved_in_wire():
         "status": "succeeded",
     }]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1")
     assert result[1]["tool_calls"][0]["id"] == "tcid_xyz"
     assert result[2]["tool_call_id"] == "tcid_xyz"
@@ -99,7 +99,7 @@ def test_tool_name_preserved():
         "status": "succeeded",
     }]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1")
     assert result[1]["tool_calls"][0]["function"]["name"] == "web_search"
 
@@ -121,7 +121,7 @@ def test_result_truncated_to_max_result_chars():
         "status": "succeeded",
     }]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1", max_result_chars=200)
     tool_content = result[2]["content"]
     assert len(tool_content) <= 210  # 200 + truncation marker overhead
@@ -154,7 +154,7 @@ def test_only_recent_max_turns_spliced():
     # The mock bypasses that. Let's check that only mid-2 and mid-3 appear after injection.
     filtered_invocations = [inv for inv in invocations if inv["message_id"] in ("mid-2", "mid-3")]
     with _invoke(filtered_invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1", max_turns=2)
 
     # mid-1 should NOT have tool_calls spliced after it
@@ -174,7 +174,7 @@ def test_disabled_returns_history_unchanged():
     ])
     invocations = [{"message_id": "mid-1", "tool_call_id": "c1", "tool_name": "web_fetch", "args": {}, "result": {}, "status": "succeeded"}]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1", enabled=False)
     assert result == history
 
@@ -182,7 +182,7 @@ def test_disabled_returns_history_unchanged():
 # ---------- edge cases ----------
 
 def test_empty_history_returns_empty():
-    from app.tool_evidence_replay import inject_tool_evidence_replay
+    from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
     result = inject_tool_evidence_replay([], [], "acc-1")
     assert result == []
 
@@ -192,7 +192,7 @@ def test_no_message_ids_in_history_rows():
         ("user", "q", None),   # no message_id
         ("assistant", "a", None),
     ])
-    from app.tool_evidence_replay import inject_tool_evidence_replay
+    from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
     result = inject_tool_evidence_replay(history, rows, "acc-1")
     assert result == history
 
@@ -207,7 +207,7 @@ def test_multiple_tool_calls_same_turn_all_spliced():
         {"message_id": "mid-m", "tool_call_id": "c2", "tool_name": "web_fetch", "args": {"url": "https://rate.com"}, "result": {"text": "1USD=7.2"}, "status": "succeeded"},
     ]
     with _invoke(invocations):
-        from app.tool_evidence_replay import inject_tool_evidence_replay
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
         result = inject_tool_evidence_replay(history, rows, "acc-1")
     # user → assistant(c1) → tool(c1) → assistant(c2) → tool(c2) → assistant(text)
     assert len(result) == 6

@@ -6,9 +6,9 @@ test_account_checks 覆盖。
 """
 from datetime import datetime
 
-from app.proactive.contract.candidate import ProactiveCandidate
-from app.proactive.selection.ranker import DISCRETIONARY_RANK, rank_index, ranked_kinds
-from app.proactive.selection.selector import Proposal, SelectionResult, select_first
+from app.products.zhaoxi.proactive.contract.candidate import ProactiveCandidate
+from app.products.zhaoxi.proactive.selection.ranker import DISCRETIONARY_RANK, rank_index, ranked_kinds
+from app.products.zhaoxi.proactive.selection.selector import Proposal, SelectionResult, select_first
 
 
 def test_ranker_order_and_index():
@@ -73,7 +73,7 @@ def test_select_first_returns_none_when_all_empty():
 
 
 def test_proactive_candidate_round_trip_matches_normalize():
-    from app.proactive.store.candidates import normalize_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import normalize_reactivation_candidate
 
     topic_legacy = {
         "id": "reactivation-topic-x",
@@ -101,7 +101,7 @@ def test_proactive_candidate_round_trip_matches_normalize():
 
 
 def test_recaller_protocol_runtime_checkable():
-    from app.proactive.recall.base import RecallContext, Recaller
+    from app.products.zhaoxi.proactive.recall.base import RecallContext, Recaller
 
     class _DummyRecaller:
         kind = "topic_followup"

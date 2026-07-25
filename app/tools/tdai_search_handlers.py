@@ -11,10 +11,10 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from app.config import settings
-from app.tdai_client import search_conversations, search_memories
+from app.platform.search.tdai import search_conversations, search_memories
 
 if TYPE_CHECKING:
-    from app.turn_context import TurnContext
+    from app.agent_runtime.context.models import TurnContext
 
 logger = logging.getLogger("ai4all.tools.tdai_search")
 

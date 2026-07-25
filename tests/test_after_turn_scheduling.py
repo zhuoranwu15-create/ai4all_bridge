@@ -62,13 +62,22 @@ def _atx():
     return SimpleNamespace(account_id="acct-x")
 
 
+_PRODUCT_SERVICES = SimpleNamespace(after_turn_hooks=lambda: ())
+
+
 def test_dispatch_none_loop_warns_and_records_timing(monkeypatch):
     """无后台 loop：整体跳过（不调度任何 hook），但仍记 after_turn_enqueue_ms timing。"""
     scheduled = []
     monkeypatch.setattr(turn_service, "_schedule_on_loop", lambda loop, coro: scheduled.append(coro))
     timings = {}
 
-    _dispatch_after_turn(_atx(), background_loop=None, timings=timings, started_at=0.0)
+    _dispatch_after_turn(
+        _atx(),
+        background_loop=None,
+        timings=timings,
+        started_at=0.0,
+        product_services=_PRODUCT_SERVICES,
+    )
 
     assert scheduled == []
     assert "after_turn_enqueue_ms" in timings
@@ -93,7 +102,13 @@ def test_dispatch_isolates_hook_build_failure(monkeypatch):
     monkeypatch.setattr(turn_service, "_schedule_on_loop", lambda loop, coro: scheduled.append(coro))
     timings = {}
 
-    _dispatch_after_turn(_atx(), background_loop=MagicMock(), timings=timings, started_at=0.0)
+    _dispatch_after_turn(
+        _atx(),
+        background_loop=MagicMock(),
+        timings=timings,
+        started_at=0.0,
+        product_services=_PRODUCT_SERVICES,
+    )
 
     assert scheduled == [good_coro]  # 坏 hook 不阻断好 hook
     assert "after_turn_enqueue_ms" in timings
@@ -109,6 +124,12 @@ def test_dispatch_skips_hooks_returning_none(monkeypatch):
     scheduled = []
     monkeypatch.setattr(turn_service, "_schedule_on_loop", lambda loop, coro: scheduled.append(coro))
 
-    _dispatch_after_turn(_atx(), background_loop=MagicMock(), timings={}, started_at=0.0)
+    _dispatch_after_turn(
+        _atx(),
+        background_loop=MagicMock(),
+        timings={},
+        started_at=0.0,
+        product_services=_PRODUCT_SERVICES,
+    )
 
     assert scheduled == ["coro-run"]

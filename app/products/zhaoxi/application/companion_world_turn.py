@@ -4,16 +4,18 @@ from __future__ import annotations
 from typing import Optional
 
 from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
-from app.channels import CHANNEL_APP, CHANNELS
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.platform.channels import CHANNEL_APP, CHANNELS
 from app.config import settings
 from app.products.zhaoxi.infrastructure.persistence.companion_world import read_universe_facts
 from app.products.zhaoxi.domain.companion_world.l3_context import render_universe_l3_block
-from app.identity import ResolvedIdentity
-from app.prompt_builder import ContextBlock
+from app.platform.auth.identity import ResolvedIdentity
+from app.agent_runtime.context.prompt_builder import ContextBlock
 from app.schemas import OpenClawTurnResponse
-from app.turn_service import ChannelTurnInput
+from app.agent_runtime.turns.service import ChannelTurnInput
 
 from app.products.zhaoxi.application.companion_world_memory import build_companion_world_memory_sink
+from app.products.zhaoxi.application.turn_services import ZHAOXI_TURN_SERVICES
 
 
 def read_companion_world_context(universe_id: str) -> Optional[ContextBlock]:
@@ -45,9 +47,10 @@ def run_companion_world_turn(
         sender_id=platform_user_id,
         chat_id=None,
     )
-    return DefaultAgentRuntimeAdapter().send_turn(
+    return DefaultAgentRuntimeAdapter(ZHAOXI_TURN_SERVICES).send_turn(
         ChannelTurnInput(
             account_id=runtime_account_id,
+            app_id=ZHAOXI_APP_ID,
             cap=CHANNELS[CHANNEL_APP],
             identity=identity,
             message_id=message_id,
