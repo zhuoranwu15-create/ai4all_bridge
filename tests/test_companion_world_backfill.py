@@ -1,6 +1,27 @@
 """legacy backfill：0/N/10 binding、幂等、无历史/钱包/人设副作用。"""
+import pytest
+
 import app.db as db
+from app.bootstrap.product_registry import build_test_product_registry
+from app.db._core import _new_id
 from scripts.backfill_companion_world import run_backfill
+
+
+@pytest.fixture(autouse=True)
+def _restore_active_owner_index(fresh_db):
+    """测试 legacy 重复绑定后恢复产品唯一索引，避免污染同进程后续用例。"""
+    yield
+    with db.connect() as conn:
+        conn.execute(
+            "DELETE FROM account_owner_bindings WHERE binding_method='legacy_test'"
+        )
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_binding_active_user_app
+            ON account_owner_bindings(platform_user_id, app_id)
+            WHERE status='active'
+            """
+        )
 
 
 def _user(phone: str) -> str:
@@ -8,14 +29,43 @@ def _user(phone: str) -> str:
 
 
 def _legacy_accounts(user_id: str, count: int) -> list[str]:
-    return [
+    if count <= 0:
+        return []
+    accounts = [
         db.create_ai4all_account_for_user(
-            platform_user_id=user_id,
-            display_name=f"存量角色{index}",
-            app_id=f"legacy-app-{index}",
+            platform_user_id=user_id, display_name="存量角色0"
         )["account"]["id"]
-        for index in range(count)
     ]
+    if count == 1:
+        return accounts
+
+    # backfill 面向收敛前同一真人在朝夕拥有多账号的历史形态；测试库已启用新的
+    # (platform_user_id, app_id) 唯一约束，因此仅在该 fixture 中撤掉索引并直写 legacy 行。
+    with db.connect() as conn:
+        conn.execute("DROP INDEX IF EXISTS ux_owner_binding_active_user_app")
+        for index in range(1, count):
+            account_id = _new_id("aid_legacy")
+            conn.execute(
+                """
+                INSERT INTO accounts(id, channel, display_name, app_id)
+                VALUES (?, 'openclaw-weixin', ?, 'zhaoxi')
+                """,
+                (account_id, f"存量角色{index}"),
+            )
+            conn.execute(
+                "INSERT INTO profiles(account_id, display_name) VALUES (?, ?)",
+                (account_id, f"存量角色{index}"),
+            )
+            conn.execute(
+                """
+                INSERT INTO account_owner_bindings(
+                    platform_user_id, account_id, binding_method, status, app_id
+                ) VALUES (?, ?, 'legacy_test', 'active', 'zhaoxi')
+                """,
+                (user_id, account_id),
+            )
+            accounts.append(account_id)
+    return accounts
 
 
 def _table_counts() -> dict:
@@ -106,3 +156,29 @@ def test_ten_bindings_all_preserved_and_reported_full(fresh_db):
     residents = db.list_residents(universe_id=world["id"], statuses=("active",))
     assert len(residents) == 10
     assert {row["runtime_account_id"] for row in residents} == set(accounts)
+
+
+def test_backfill_excludes_other_product_bindings_from_counts_and_mapping(fresh_db):
+    registry = build_test_product_registry()
+    user_id = _user("19940001005")
+    zhaoxi_id = _legacy_accounts(user_id, 1)[0]
+    db.ensure_product_membership(
+        platform_user_id=user_id, app_id="test_product", registry=registry
+    )
+    other_id = db.create_ai4all_account_for_user(
+        platform_user_id=user_id,
+        display_name="其他产品角色",
+        app_id="test_product",
+        registry=registry,
+    )["account"]["id"]
+
+    preview = run_backfill(dry_run=True)
+    assert preview.mapped_bindings == 1
+    assert db.list_active_account_ids_for_user(platform_user_id=user_id) == [zhaoxi_id]
+
+    applied = run_backfill(dry_run=False)
+    assert applied.mapped_bindings == 1 and not applied.errors
+    world = db.get_universe(owner_platform_user_id=user_id)
+    residents = db.list_residents(universe_id=world["id"], statuses=("active",))
+    assert {row["runtime_account_id"] for row in residents} == {zhaoxi_id}
+    assert other_id not in {row["runtime_account_id"] for row in residents}

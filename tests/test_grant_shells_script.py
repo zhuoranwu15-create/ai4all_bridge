@@ -107,6 +107,7 @@ def test_apply_grant_writes_wallet_ledger_and_audit(fresh_db):
     )
 
     assert result["status"] == "applied"
+    assert result["app_id"] == "zhaoxi"
     assert result["amount_shells"] == "3000"
     assert result["balance_before_shells"] == "1000"
     assert result["balance_after_shells"] == "4000"
@@ -217,5 +218,101 @@ def test_wallet_owner_mismatch_aborts(fresh_db):
             amount="3000",
             reason="运营手工赠送3000贝壳",
             operation_id="ops-test-owner-mismatch",
+            dry_run=True,
+        )
+
+
+def test_grant_isolates_wallet_and_idempotency_by_account_app(fresh_db):
+    import json
+
+    import app.db as db
+    from app.bootstrap.product_registry import build_test_product_registry
+    from scripts.grant_shells import GrantShellsError, run_grant
+
+    registry = build_test_product_registry()
+    user = db.create_or_get_platform_user_by_phone(phone="13800006007")
+    zhaoxi_id = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"], display_name="朝夕赠送账号"
+    )["account"]["id"]
+    db.ensure_product_membership(
+        platform_user_id=user["id"], app_id="test_product", registry=registry
+    )
+    test_product_id = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"],
+        display_name="测试产品赠送账号",
+        app_id="test_product",
+        registry=registry,
+    )["account"]["id"]
+    db.grant_shells(
+        account_id=zhaoxi_id,
+        platform_user_id=user["id"],
+        amount_shell_micros=111_000_000,
+        source_type="manual_grant",
+        source_id="zhaoxi-balance",
+        idempotency_key="zhaoxi-balance",
+    )
+    db.grant_shells(
+        account_id=test_product_id,
+        platform_user_id=user["id"],
+        amount_shell_micros=222_000_000,
+        source_type="manual_grant",
+        source_id="test-product-balance",
+        idempotency_key="test-product-balance",
+        registry=registry,
+    )
+
+    preview = run_grant(
+        account_id=test_product_id,
+        amount="1",
+        reason="验证产品钱包隔离",
+        operation_id="test-product-preview",
+        registry=registry,
+        dry_run=True,
+    )
+    assert preview["app_id"] == "test_product"
+    assert preview["balance_before_shells"] == "1222"
+    assert preview["balance_after_shells"] == "1223"
+
+    db.grant_shells(
+        account_id=zhaoxi_id,
+        platform_user_id=user["id"],
+        amount_shell_micros=5_000_000,
+        source_type="manual_grant",
+        source_id="zhaoxi-shared-key",
+        idempotency_key="shared-product-key",
+    )
+    applied = run_grant(
+        account_id=test_product_id,
+        amount="7",
+        reason="验证产品幂等键隔离",
+        source_id="test-product-shared-key",
+        idempotency_key="shared-product-key",
+        registry=registry,
+        dry_run=False,
+    )
+    assert applied["status"] == "applied"
+    assert applied["app_id"] == "test_product"
+    assert applied["balance_before_shells"] == "1222"
+    assert applied["balance_after_shells"] == "1229"
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT app_id FROM entitlement_ledger
+            WHERE idempotency_key='shared-product-key' ORDER BY app_id
+            """
+        ).fetchall()
+        audit = conn.execute(
+            "SELECT metadata_json FROM admin_access_events WHERE resource_id=?",
+            (applied["ledger_id"],),
+        ).fetchone()
+    assert [row["app_id"] for row in rows] == ["test_product", "zhaoxi"]
+    assert json.loads(audit["metadata_json"])["app_id"] == "test_product"
+
+    with pytest.raises(GrantShellsError, match="unregistered app_id"):
+        run_grant(
+            account_id=test_product_id,
+            amount="1",
+            reason="生产注册表必须拒绝未知产品",
+            operation_id="production-registry-fail-closed",
             dry_run=True,
         )

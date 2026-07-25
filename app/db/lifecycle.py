@@ -110,24 +110,38 @@ def wipe_account_data(
     """
     from app.db.moderation import _delete_content_moderation_tasks_where
     with _tx(conn) as conn:
-        # D-14/D-09（M1）：钱包/daily 配额已上迁真人级（一真人一钱包、一套 daily，多号共享）。wipe 前
-        # 先解析本号 owner platform_user_id + 是否还有**其他 active 号**，据此决定共享的钱包/daily 是
-        # 保留还是拆除（见下方 entitlement_wallets/daily_usage 分支）。必须在删 account_owner_bindings
-        # （本函数末尾）之前解析——此刻绑定仍在。
+        # MP-02：钱包已变为 (真人, 产品) 共享资产。必须在删 owner binding 前解析当前
+        # account 的 app 与真人，并且只在同一 app 内寻找 sibling，绝不能用另一产品账号
+        # 阻止本产品清理，也不能反向删除另一产品资产。
         from app.db.accounts import resolve_owner_platform_user_id
-        # 本号归属真人：形态 A（微信）经 owner_binding、形态 B（朝夕相伴居民）经世界归属，
-        # canonical 收口（见 accounts.resolve_owner_platform_user_id）。
+        _wipe_account = conn.execute(
+            "SELECT app_id FROM accounts WHERE id=?", (account_id,)
+        ).fetchone()
+        if _wipe_account is None:
+            raise ValueError("account not found")
+        _wipe_app_id = str(_wipe_account["app_id"])
         _wipe_platform_user_id = resolve_owner_platform_user_id(conn, account_id)
-        # 是否还有**其他 active 号**共享这份真人级钱包/daily——须**同时数两形态**：
+        # 是否还有**同产品**其他 active 号共享钱包——须同时数两形态：
         #   形态 A：另一条 active owner_binding（微信接入）；
         #   形态 B：真人世界里另一个居民 runtime account（非本号、未 dismissed）。
-        # 只数 owner_binding 则居民不可见 → 误判末号、误删居民仍在用的共享钱包/配额（codex-① 同类冷路径）。
-        _person_has_other_active_accounts = False
+        _product_has_other_active_accounts = False
         if _wipe_platform_user_id is not None:
             _sib = conn.execute(
-                "SELECT 1 FROM account_owner_bindings "
-                "WHERE platform_user_id = ? AND account_id <> ? AND status = 'active' LIMIT 1",
-                (_wipe_platform_user_id, account_id),
+                """
+                SELECT 1
+                FROM account_owner_bindings b
+                JOIN accounts a ON a.id=b.account_id
+                WHERE b.platform_user_id=? AND b.account_id<>?
+                  AND b.status='active' AND b.app_id=?
+                  AND a.app_id=? AND a.status='active'
+                LIMIT 1
+                """,
+                (
+                    _wipe_platform_user_id,
+                    account_id,
+                    _wipe_app_id,
+                    _wipe_app_id,
+                ),
             ).fetchone()
             if _sib is None:
                 _sib = conn.execute(
@@ -135,15 +149,18 @@ def wipe_account_data(
                     SELECT 1
                     FROM universe_residents r
                     JOIN universes u ON u.id = r.universe_id
+                    JOIN accounts a ON a.id = r.runtime_account_id
                     WHERE u.owner_platform_user_id = ?
                       AND r.runtime_account_id IS NOT NULL
                       AND r.runtime_account_id <> ?
                       AND r.status <> 'dismissed'
+                      AND a.app_id = ?
+                      AND a.status = 'active'
                     LIMIT 1
                     """,
-                    (_wipe_platform_user_id, account_id),
+                    (_wipe_platform_user_id, account_id, _wipe_app_id),
                 ).fetchone()
-            _person_has_other_active_accounts = _sib is not None
+            _product_has_other_active_accounts = _sib is not None
         memory_events = conn.execute(
             "DELETE FROM memory_events WHERE account_id = ?",
             (account_id,),
@@ -197,42 +214,113 @@ def wipe_account_data(
             "DELETE FROM outbound_messages WHERE account_id = ?",
             (account_id,),
         ).rowcount
-        cost_events = conn.execute(
-            "DELETE FROM cost_events WHERE account_id = ?",
-            (account_id,),
-        ).rowcount
-        ledger = conn.execute(
-            "DELETE FROM entitlement_ledger WHERE account_id = ?",
-            (account_id,),
-        ).rowcount
-        # entitlement_wallets / daily_usage 是**真人级**共享资产（见事务顶部解析）。按 account_id 删
-        # 会误删同真人其他号的余额/配额（PG 无 FK→静默丢失；SQLite FK→其他号 ledger 悬挂致
-        # IntegrityError 整体回滚）。故仅当本号是该真人**最后一个** active 号（或无绑定的孤儿号）时才
-        # 真正拆除，否则原样保留给其余号继续用。cost_events/ledger 仍按 account_id 删（本号自身审计行）。
-        if _person_has_other_active_accounts:
+        # 同产品尚有 sibling 时整棵财务审计链必须保留，否则删除某 account 的 ledger 后
+        # wallet.balance 将不再等于流水合计。account 行只会停用、不物理删除，引用仍有效。
+        if _product_has_other_active_accounts:
+            cost_events = 0
+            ledger = 0
             wallets = 0
             daily_usage = 0
+            daily_quota_reservations = conn.execute(
+                """
+                DELETE FROM daily_quota_reservations
+                WHERE account_id=? AND app_id=?
+                """,
+                (account_id, _wipe_app_id),
+            ).rowcount
         else:
-            # 末号/孤儿号：拆除真人级钱包 + daily。删钱包前先按 wallet_id 清任何残余 ledger/cost_events
-            # （含未随本号 account_id 删净的历史行，如已解绑未清的旧号），保证 SQLite FK 下删钱包不悬挂。
+            # 本产品末号/孤儿号：只拆该 app 的 wallet/ledger/cost。另一产品资产不进入候选集。
             _subject = _wipe_platform_user_id or account_id
             _wallet_ids = [
                 r["id"]
                 for r in conn.execute(
-                    "SELECT id FROM entitlement_wallets WHERE platform_user_id = ? OR account_id = ?",
-                    (_subject, account_id),
+                    """
+                    SELECT id FROM entitlement_wallets
+                    WHERE app_id=? AND (platform_user_id=? OR account_id=?)
+                    """,
+                    (_wipe_app_id, _subject, account_id),
                 ).fetchall()
             ]
+            # 推荐关系永久引用发奖 ledger。只要 wallet 内有任一被引用流水，就必须保留
+            # 整个 wallet 的余额审计链（wallet + 全部 ledger + 全部 cost_events）。
+            _preserved_wallet_ids = {
+                _wid
+                for _wid in _wallet_ids
+                if conn.execute(
+                    """
+                    SELECT 1
+                    FROM entitlement_ledger l
+                    JOIN referral_relationships r ON r.reward_ledger_id=l.id
+                    WHERE l.wallet_id=?
+                    LIMIT 1
+                    """,
+                    (_wid,),
+                ).fetchone()
+                is not None
+            }
+            cost_events = 0
+            ledger = 0
             for _wid in _wallet_ids:
-                conn.execute("DELETE FROM cost_events WHERE wallet_id = ?", (_wid,))
-                conn.execute("DELETE FROM entitlement_ledger WHERE wallet_id = ?", (_wid,))
-            wallets = conn.execute(
-                "DELETE FROM entitlement_wallets WHERE platform_user_id = ? OR account_id = ?",
-                (_subject, account_id),
+                if _wid in _preserved_wallet_ids:
+                    continue
+                cost_events += conn.execute(
+                    "DELETE FROM cost_events WHERE wallet_id=? AND app_id=?",
+                    (_wid, _wipe_app_id),
+                ).rowcount
+                ledger += conn.execute(
+                    "DELETE FROM entitlement_ledger WHERE wallet_id=? AND app_id=?",
+                    (_wid, _wipe_app_id),
+                ).rowcount
+            # 覆盖没有候选 wallet 的异常历史行，但绝不能回头删除已保留审计链中的行。
+            _preserved_params = tuple(_preserved_wallet_ids)
+            if _preserved_params:
+                _placeholders = ", ".join("?" for _ in _preserved_params)
+                cost_events += conn.execute(
+                    f"""
+                    DELETE FROM cost_events
+                    WHERE account_id=? AND app_id=?
+                      AND (wallet_id IS NULL OR wallet_id NOT IN ({_placeholders}))
+                    """,
+                    (account_id, _wipe_app_id, *_preserved_params),
+                ).rowcount
+                ledger += conn.execute(
+                    f"""
+                    DELETE FROM entitlement_ledger
+                    WHERE account_id=? AND app_id=?
+                      AND (wallet_id IS NULL OR wallet_id NOT IN ({_placeholders}))
+                    """,
+                    (account_id, _wipe_app_id, *_preserved_params),
+                ).rowcount
+            else:
+                cost_events += conn.execute(
+                    "DELETE FROM cost_events WHERE account_id=? AND app_id=?",
+                    (account_id, _wipe_app_id),
+                ).rowcount
+                ledger += conn.execute(
+                    "DELETE FROM entitlement_ledger WHERE account_id=? AND app_id=?",
+                    (account_id, _wipe_app_id),
+                ).rowcount
+            wallets = 0
+            for _wid in _wallet_ids:
+                if _wid in _preserved_wallet_ids:
+                    continue
+                wallets += conn.execute(
+                    "DELETE FROM entitlement_wallets WHERE id=? AND app_id=?",
+                    (_wid, _wipe_app_id),
+                ).rowcount
+            daily_quota_reservations = conn.execute(
+                """
+                DELETE FROM daily_quota_reservations
+                WHERE app_id=? AND (platform_user_id=? OR account_id=?)
+                """,
+                (_wipe_app_id, _subject, account_id),
             ).rowcount
             daily_usage = conn.execute(
-                "DELETE FROM daily_usage WHERE platform_user_id = ? OR account_id = ?",
-                (_subject, account_id),
+                """
+                DELETE FROM daily_usage
+                WHERE app_id=? AND (platform_user_id=? OR account_id=?)
+                """,
+                (_wipe_app_id, _subject, account_id),
             ).rowcount
         debug_traces = conn.execute(
             "DELETE FROM debug_traces WHERE account_id = ?",
@@ -310,6 +398,7 @@ def wipe_account_data(
         "entitlement_wallets_deleted": wallets,
         "outbound_messages_deleted": outbound,
         "daily_usage_deleted": daily_usage,
+        "daily_quota_reservations_deleted": daily_quota_reservations,
         "debug_traces_deleted": debug_traces,
         "tool_invocations_deleted": tool_invocations,
         "search_provider_runs_deleted": search_provider_runs,

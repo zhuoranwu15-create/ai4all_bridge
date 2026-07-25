@@ -2,6 +2,7 @@
 from datetime import datetime
 
 import app.db as db
+from app.bootstrap.product_registry import build_test_product_registry
 from app.platform import human_level_proactive_allowed
 from app.platform.app_inbox import AppInboxAdapter, HumanAppInboxIntent
 from app.proactive.contract.common import _select_route
@@ -85,6 +86,64 @@ def test_app_speaker_prefers_resident_inbound_then_app_activity(fresh_db):
     assert db.get_owner_last_inbound_at(platform_user_id=user_id) == (
         "2026-07-22 11:00:00"
     )
+
+
+def test_owner_activity_aggregation_excludes_other_product_bindings(fresh_db):
+    registry = build_test_product_registry()
+    user_id, universe_id, resident_a, resident_b = _world_with_two_residents(
+        "19966001004"
+    )
+    zhaoxi_id = db.create_ai4all_account_for_user(
+        platform_user_id=user_id, display_name="朝夕渠道角色"
+    )["account"]["id"]
+    db.ensure_product_membership(
+        platform_user_id=user_id, app_id="test_product", registry=registry
+    )
+    other_id = db.create_ai4all_account_for_user(
+        platform_user_id=user_id,
+        display_name="其他产品角色",
+        app_id="test_product",
+        registry=registry,
+    )["account"]["id"]
+    _insert_app_message(
+        other_id,
+        message_id="other-product-inbound",
+        role="user",
+        at="2026-07-22 11:00:00",
+    )
+
+    assert db.list_active_account_ids_for_user(platform_user_id=user_id) == [zhaoxi_id]
+    assert set(db.list_human_proactive_account_ids_for_user(platform_user_id=user_id)) == {
+        zhaoxi_id,
+        resident_a,
+        resident_b,
+    }
+    assert db.get_owner_last_inbound_at(platform_user_id=user_id) is None
+    assert db.count_owner_inbound_after(
+        platform_user_id=user_id, after="2026-07-22 00:00:00"
+    ) == 0
+    assert db.list_ai_feed_eligible_worlds(
+        inbound_since="2026-07-15 00:00:00"
+    ) == []
+
+    _insert_app_message(
+        zhaoxi_id,
+        message_id="zhaoxi-inbound",
+        role="user",
+        at="2026-07-22 12:00:00",
+    )
+    assert db.get_owner_last_inbound_at(platform_user_id=user_id) == (
+        "2026-07-22 12:00:00"
+    )
+    assert db.count_owner_inbound_after(
+        platform_user_id=user_id, after="2026-07-22 00:00:00"
+    ) == 1
+    assert [
+        row["universe_id"]
+        for row in db.list_ai_feed_eligible_worlds(
+            inbound_since="2026-07-15 00:00:00"
+        )
+    ] == [universe_id]
 
 
 def test_app_only_human_dispatch_uses_double_flag_and_24h_bucket(fresh_db):
