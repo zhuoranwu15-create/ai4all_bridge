@@ -4,13 +4,13 @@ import json
 import pytest
 
 import app.db as db
-from app.domains.companion_world import (
+from app.products.zhaoxi.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     ResidentSelection,
     TemplateDraft,
 )
-from app.platform import SqlCompanionWorldRepository
+from app.products.zhaoxi.application import SqlCompanionWorldRepository
 
 
 def _user(phone: str) -> str:
@@ -144,7 +144,7 @@ def test_conversation_failure_rolls_back_account_profile_and_activation(
         raise RuntimeError("forced conversation failure")
 
     monkeypatch.setattr(
-        "app.platform.companion_world_repository.world_db.create_ai_conversation",
+        "app.products.zhaoxi.infrastructure.repositories.companion_world.world_db.create_ai_conversation",
         _fail_conversation,
     )
     with pytest.raises(RuntimeError, match="forced conversation failure"):

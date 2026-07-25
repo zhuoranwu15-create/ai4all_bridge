@@ -798,7 +798,9 @@ def finalize_human_app_notification(
     if target_type != "none" and not str(target_id or "").strip():
         raise ValueError("target_id is required")
 
-    from app.db import companion_world as world_db
+    from app.products.zhaoxi.infrastructure.persistence import (
+        companion_world as world_db,
+    )
 
     with _notification_write_tx(conn) as tx:
         _lock_notification_owner(tx, platform_user_id)

@@ -2,7 +2,7 @@
 from datetime import datetime
 
 import app.db as db
-from app.platform import (
+from app.products.zhaoxi.application import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
     human_level_proactive_allowed,
 )

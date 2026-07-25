@@ -21,8 +21,8 @@ from app.db import (
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import create_sync_block_task, enqueue_outbound_for_moderation
 from app.openclaw_gateway import OpenClawRateLimited, send_weixin_text
-from app.domains.companion_world.proactive import is_human_proactive_category
-from app.platform.app_inbox import (
+from app.products.zhaoxi.domain.companion_world.proactive import is_human_proactive_category
+from app.products.zhaoxi.infrastructure.app_inbox import (
     AppInboxAdapter,
     AppInboxIntent,
     HumanAppInboxIntent,

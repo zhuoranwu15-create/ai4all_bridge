@@ -7,14 +7,14 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.domains.companion_world import (
+from app.products.zhaoxi.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     ResidentSelection,
     TemplateDraft,
     user_post_fingerprint,
 )
-from app.platform import SqlCompanionWorldRepository
+from app.products.zhaoxi.application import SqlCompanionWorldRepository
 from tests.factories import make_resident_account
 
 

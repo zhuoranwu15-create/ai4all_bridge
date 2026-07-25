@@ -2,8 +2,8 @@
 import json
 
 import app.db as db
-from app.domains.companion_world import CompanionWorldService
-from app.platform import SqlCompanionWorldRepository
+from app.products.zhaoxi.domain.companion_world import CompanionWorldService
+from app.products.zhaoxi.application import SqlCompanionWorldRepository
 from app.schemas import OpenClawTurnResponse
 
 

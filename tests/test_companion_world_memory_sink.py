@@ -6,8 +6,8 @@ import pytest
 
 import app.db as db
 from app.agent_runtime.ports import MemoryEvent, MemoryProvenance
-from app.domains.companion_world.memory_sink import CompanionWorldMemorySink
-from app.platform import (
+from app.products.zhaoxi.domain.companion_world.memory_sink import CompanionWorldMemorySink
+from app.products.zhaoxi.application import (
     build_companion_world_memory_sink,
     compact_companion_world_memory_batch,
 )
@@ -94,7 +94,7 @@ def test_platform_sink_is_noop_for_form_a_and_isolates_universes(fresh_db):
 
 def test_l3_background_switch_disables_sink_and_compact(fresh_db, monkeypatch):
     monkeypatch.setattr(
-        "app.platform.companion_world_memory.settings.companion_world_l3_background_enabled",
+        "app.products.zhaoxi.application.companion_world_memory.settings.companion_world_l3_background_enabled",
         False,
     )
     assert build_companion_world_memory_sink() is None

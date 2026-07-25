@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from app.channels import CHANNEL_APP
 from app.config import settings
-from app.platform import (
+from app.products.zhaoxi.application import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
     count_human_proactive_inbound_after,
     human_level_proactive_allowed,

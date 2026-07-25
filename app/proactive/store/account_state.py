@@ -61,7 +61,7 @@ def list_due_proactive_account_checks(
     node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     # 延迟导入避免 turn_service → account_state → platform composition root 的初始化环。
-    from app.platform.companion_world_repository import (
+    from app.products.zhaoxi.infrastructure.repositories.companion_world import (
         human_level_proactive_allowed,
         resolve_human_proactive_scope,
     )

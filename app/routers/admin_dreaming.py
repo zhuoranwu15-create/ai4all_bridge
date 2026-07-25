@@ -7,7 +7,7 @@ from app.routers.deps import verify_admin_auth
 from app.db import get_account, get_dreaming_memory_item, get_dreaming_run, list_dreaming_memory_items, list_dreaming_runs, list_memory_events
 from app.dreaming import rollback_memory_item, run_dreaming, summarize_dreaming_run_for_debug, summarize_memory_item_for_debug
 from app.dreaming_scheduler import get_dreaming_scheduler, run_dreaming_scheduler_once
-from app.platform import build_companion_world_memory_sink, compact_companion_world_memory_batch
+from app.products.zhaoxi.application import build_companion_world_memory_sink, compact_companion_world_memory_batch
 from datetime import date as date_cls
 from typing import Optional
 

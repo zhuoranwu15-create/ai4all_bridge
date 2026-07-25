@@ -11,18 +11,18 @@ from datetime import datetime, timedelta
 import app.db as db
 import pytest
 from app.db._backend import is_postgres
-from app.domains.companion_world import (
+from app.products.zhaoxi.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     TemplateDraft,
 )
-from app.platform import SqlCompanionWorldRepository
-from app.platform.companion_world_mailbox import (
+from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.zhaoxi.application.companion_world_mailbox import (
     CompanionWorldMailboxService,
     MailboxError,
     build_mailbox_policy,
 )
-from app.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 from scripts.import_companion_world_mailbox_catalog import (
     import_mailbox_catalog,
     sign_manifest_payload,
@@ -111,14 +111,14 @@ def _login(client, phone: str) -> dict:
 
 def _enable_mailbox(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.routers.companion_world_mailbox.settings.companion_world_mailbox_enabled",
+        "app.products.zhaoxi.api.companion_world_mailbox.settings.companion_world_mailbox_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.routers.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.routers.companion_world_mailbox.beijing_naive_now", lambda: NOW
+        "app.products.zhaoxi.api.companion_world_mailbox.beijing_naive_now", lambda: NOW
     )
 
 
@@ -747,7 +747,7 @@ def test_accept_failure_after_runtime_insert_rolls_back_everything(
         raise RuntimeError("injected resident failure")
 
     monkeypatch.setattr(
-        "app.platform.companion_world_mailbox.create_resident",
+        "app.products.zhaoxi.application.companion_world_mailbox.create_resident",
         _fail_create_resident,
     )
     with pytest.raises(RuntimeError, match="injected resident failure"):

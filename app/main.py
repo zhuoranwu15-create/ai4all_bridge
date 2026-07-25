@@ -153,7 +153,7 @@ from app.dreaming_scheduler import (
     start_dreaming_scheduler,
     stop_dreaming_scheduler,
 )
-from app.platform import (
+from app.products.zhaoxi.application import (
     build_companion_world_memory_sink,
     compact_companion_world_memory_batch,
 )
@@ -310,51 +310,18 @@ class _ApiPrefixStripMiddleware:
 app.add_middleware(_ApiPrefixStripMiddleware)
 
 
-# 所有角色都需要：健康检查 + bridge（接收 OpenClaw/节点 turn）
-from app.routers import health as _health_router, bridge as _bridge_router  # noqa: E402
-app.include_router(_health_router.router)
-app.include_router(_bridge_router.router)
+# 所有角色都需要：健康检查 + bridge（接收 OpenClaw/节点 turn）。
+# 产品与共享路由的组合统一收口在 bootstrap composition root。
+from app.bootstrap.http import install_central_routes, install_shared_routes  # noqa: E402
+
+install_shared_routes(app)
 
 # 中心/standalone 独有：静态前端、Web 注册、管理台、审核台等控制面路由
 # 纯节点（AI4ALL_ROLE=node）不挂载，减少启动依赖与暴露面
 if settings.has_central_role:
     app.mount("/ui", StaticFiles(directory="app/static", html=True), name="ui")
     app.mount("/ops", StaticFiles(directory="app/static", html=True), name="ops")
-    from app.routers import web as _web_router  # noqa: E402
-    app.include_router(_web_router.router)
-    from app.routers import app_api as _app_api_router  # noqa: E402
-    app.include_router(_app_api_router.router)
-    from app.routers import companion_world as _companion_world_router  # noqa: E402
-    app.include_router(_companion_world_router.router)
-    _companion_world_router.install_exception_handlers(app)
-    from app.routers import companion_world_mailbox as _companion_world_mailbox_router  # noqa: E402
-    app.include_router(_companion_world_mailbox_router.router)
-    from app.routers import companion_world_visits as _companion_world_visits_router  # noqa: E402
-    app.include_router(_companion_world_visits_router.router)
-    from app.routers import companion_world_human_chat as _companion_world_human_chat_router  # noqa: E402
-    app.include_router(_companion_world_human_chat_router.router)
-    from app.routers import app_notifications as _app_notifications_router  # noqa: E402
-    app.include_router(_app_notifications_router.router)
-    from app.routers import debug as _debug_router  # noqa: E402
-    app.include_router(_debug_router.router)
-    from app.routers import admin_moderation as _admin_moderation_router  # noqa: E402
-    app.include_router(_admin_moderation_router.router)
-    from app.routers import admin_accounts as _admin_accounts_router  # noqa: E402
-    app.include_router(_admin_accounts_router.router)
-    from app.routers import admin_proactive as _admin_proactive_router  # noqa: E402
-    app.include_router(_admin_proactive_router.router)
-    from app.routers import admin_dreaming as _admin_dreaming_router  # noqa: E402
-    app.include_router(_admin_dreaming_router.router)
-    from app.routers import admin_ops as _admin_ops_router  # noqa: E402
-    app.include_router(_admin_ops_router.router)
-    from app.routers import admin_llm as _admin_llm_router  # noqa: E402
-    app.include_router(_admin_llm_router.router)
-    from app.routers import admin_security as _admin_security_router  # noqa: E402
-    app.include_router(_admin_security_router.router)
-    from app.routers import admin_campaigns as _admin_campaigns_router  # noqa: E402
-    app.include_router(_admin_campaigns_router.router)
-    from app.routers import admin_companion_world as _admin_companion_world_router  # noqa: E402
-    app.include_router(_admin_companion_world_router.router)
+    install_central_routes(app)
 
 # Local-dev convenience: production nginx serves the static frontend at "/" and
 # "/user/*" (the frontend hardcodes those absolute paths). Replicate that mapping

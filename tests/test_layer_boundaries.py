@@ -7,26 +7,14 @@ from pathlib import Path
 # 仓库根：tests/ 的上一级
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# 受管的产品领域根；新产品可落 app/products，朝夕旧域本阶段不搬目录。
-DOMAINS_ROOT = REPO_ROOT / "app" / "domains"
+# 产品根；每个产品在自己的 ``domain`` 子包中保持纯领域层。
 PRODUCTS_ROOT = REPO_ROOT / "app" / "products"
 
 # 受管的 Agent Runtime 层根（形态无关；不得反向依赖任何产品域层）
 RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
 
-# 共享平台层。Phase 1 不搬现有朝夕 adapter，明确冻结例外；除此之外的共享模块
-# 不得新增产品域依赖。未来产品实现应由 bootstrap composition root 接线。
+# 共享平台层不得依赖任何产品实现；产品与平台由 bootstrap composition root 接线。
 PLATFORM_LAYER = REPO_ROOT / "app" / "platform"
-LEGACY_PLATFORM_PRODUCT_ADAPTERS = {
-    "app_inbox.py",
-    "companion_world_human_chat.py",
-    "companion_world_lifecycle.py",
-    "companion_world_mailbox.py",
-    "companion_world_memory.py",
-    "companion_world_repository.py",
-    "companion_world_turn.py",
-    "companion_world_visits.py",
-}
 
 # 禁止被领域层直接依赖的 Runtime 内部模块（绝对模块名前缀）
 DOMAIN_FORBIDDEN_PREFIXES = (
@@ -43,23 +31,21 @@ DOMAIN_FORBIDDEN_PREFIXES = (
 
 # 禁止被 Agent Runtime 反向依赖的产品域层（D-06 形态无关：Runtime 不认识 Companion World）
 RUNTIME_FORBIDDEN_PREFIXES = (
-    "app.domains",
     "app.products",
-    "app.db.companion_world",
 )
 
 PLATFORM_FORBIDDEN_PREFIXES = (
-    "app.domains",
     "app.products",
-    "app.db.companion_world",
 )
 
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
-    "app/domains",
-    "app/domains/companion_world",
     "app/agent_runtime",
+    "app/bootstrap",
     "app/platform",
+    "app/products",
+    "app/products/zhaoxi",
+    "app/products/zhaoxi/domain",
 )
 
 
@@ -116,23 +102,28 @@ def _is_forbidden(
     )
 
 
+def _product_roots() -> list[tuple[str, Path]]:
+    """返回全部产品包，供跨产品依赖门禁扫描。"""
+
+    if not PRODUCTS_ROOT.exists():
+        return []
+    return [
+        (f"app.products.{child.name}", child)
+        for child in sorted(PRODUCTS_ROOT.iterdir())
+        if child.is_dir()
+        and child.name != "__pycache__"
+        and (child / "__init__.py").is_file()
+    ]
+
+
 def _product_domain_roots() -> list[tuple[str, Path]]:
-    """返回现存产品域包；兼容朝夕旧 app/domains 与未来 app/products 布局。"""
-    roots: list[tuple[str, Path]] = []
-    for package_root, module_root in (
-        (DOMAINS_ROOT, "app.domains"),
-        (PRODUCTS_ROOT, "app.products"),
-    ):
-        if not package_root.exists():
-            continue
-        roots.extend(
-            (f"{module_root}.{child.name}", child)
-            for child in sorted(package_root.iterdir())
-            if child.is_dir()
-            and child.name != "__pycache__"
-            and (child / "__init__.py").is_file()
-        )
-    return roots
+    """返回各产品明确声明的纯 domain 子包。"""
+
+    return [
+        (f"{module}.domain", root / "domain")
+        for module, root in _product_roots()
+        if (root / "domain" / "__init__.py").is_file()
+    ]
 
 
 def _domain_py_files() -> list[Path]:
@@ -214,7 +205,7 @@ def test_product_domains_do_not_import_framework_or_runtime_internals():
 
 def test_product_domains_do_not_import_each_other():
     """任意产品域不得 import 另一产品；composition 只允许发生在 bootstrap。"""
-    product_roots = _product_domain_roots()
+    product_roots = _product_roots()
     violations: list[str] = []
     for current_module, root in product_roots:
         forbidden = tuple(
@@ -234,9 +225,9 @@ def test_product_domains_do_not_import_each_other():
 
 
 def test_runtime_does_not_import_product_domains():
-    """D-06：Agent Runtime 形态无关，禁止反向依赖任何产品域层（app.domains.*）。
+    """D-06：Agent Runtime 形态无关，禁止反向依赖任何产品实现。
 
-    「读+渲染」的 L3 组合属产品域层（`app.domains.companion_world.l3_context`），Runtime 只留
+    「读+渲染」的 L3 组合属产品域层（`app.products.zhaoxi.domain.companion_world.l3_context`），Runtime 只留
     形态无关的读 I/O。依赖方向须为 `域层 → agent_runtime`，反向即破 D-06——本门禁堵住
     finding ④ 那类「Runtime import 域层渲染函数」的回归（旧一向门禁只扫域层→Runtime、漏此向）。
     """
@@ -255,12 +246,9 @@ def test_runtime_does_not_import_product_domains():
 
 
 def test_shared_platform_does_not_import_product_domains():
-    """共享 platform 不得认识产品；现有朝夕 adapter 在 Phase 1 明确冻结、不扩散。"""
+    """共享 platform 不得认识产品。"""
     violations: list[str] = []
     for py_file in _platform_py_files():
-        rel_to_platform = py_file.relative_to(PLATFORM_LAYER).as_posix()
-        if rel_to_platform in LEGACY_PLATFORM_PRODUCT_ADAPTERS:
-            continue
         package = _module_package(py_file)
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         for module in _iter_imported_modules(tree, package):
@@ -311,18 +299,22 @@ def test_ai_paths_do_not_import_human_chat_storage():
         REPO_ROOT / "app" / "agent_runtime",
         REPO_ROOT / "app" / "proactive",
     ]
-    # `app/db/__init__.py` 以 `from app.db.companion_world_human_chat import *` 再导出全部写
+    # `app/db/__init__.py` 以 `from app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat import *` 再导出全部写
     # helper；仅禁完整模块路径会漏掉 `from app.db import insert_human_message` 这条再导出缝。
     # 逐个把 human-chat 的 __all__ 符号名封为 `app.db.<name>`（不封裸 `app.db`，AI 路径合法用它）。
-    human_chat_exports = _module_export_names("app/db/companion_world_human_chat.py")
+    human_chat_module = (
+        "app/products/zhaoxi/infrastructure/persistence/"
+        "companion_world_human_chat.py"
+    )
+    human_chat_exports = _module_export_names(human_chat_module)
     assert human_chat_exports, (
-        "未能解析 app/db/companion_world_human_chat.py 的 __all__；"
+        f"未能解析 {human_chat_module} 的 __all__；"
         "D-11 再导出门禁将失效，请检查该模块是否仍声明 __all__。"
     )
     forbidden = (
-        "app.db.companion_world_human_chat",
-        "app.platform.companion_world_human_chat",
-        "app.domains.companion_world.human_chat",
+        "app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat",
+        "app.products.zhaoxi.application.companion_world_human_chat",
+        "app.products.zhaoxi.domain.companion_world.human_chat",
         *(f"app.db.{name}" for name in human_chat_exports),
     )
     violations: list[str] = []

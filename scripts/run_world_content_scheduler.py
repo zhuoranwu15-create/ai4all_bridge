@@ -13,7 +13,7 @@ from app.alerting import configure_error_log_alerting  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.time_utils import verify_host_timezone  # noqa: E402
-from app.world_content import FeedWindows, WorldContentScheduler  # noqa: E402
+from app.products.zhaoxi.jobs.world_content import FeedWindows, WorldContentScheduler  # noqa: E402
 
 logger = logging.getLogger("ai4all.world_content.process")
 

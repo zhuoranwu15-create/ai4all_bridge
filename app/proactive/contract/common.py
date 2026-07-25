@@ -9,8 +9,8 @@ from app.channels import get_channel_capability
 from app.channels import CHANNEL_APP
 from app.config import settings
 from app.db import list_channel_bindings_for_account
-from app.platform.app_inbox import AppInboxAdapter
-from app.platform.companion_world_repository import human_level_app_route
+from app.products.zhaoxi.infrastructure.app_inbox import AppInboxAdapter
+from app.products.zhaoxi.infrastructure.repositories.companion_world import human_level_app_route
 
 
 def format_reactivation_time(value: datetime) -> str:

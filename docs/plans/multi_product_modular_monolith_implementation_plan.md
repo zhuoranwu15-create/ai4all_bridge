@@ -2,9 +2,9 @@
 
 更新时间：2026-07-25
 
-状态：**ADR 已冻结；MP-01～MP-06 开发与双后端验收已完成、尚未发布。Fatetell 及其产品接入等待 PRD。**
+状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 模块边界实体化进行中。Fatetell 业务接入仍等待 PRD。**
 
-决策基线：[`multi_product_modular_monolith_design.md`](../tech_design/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。开工代码基线 `HEAD@3d98648`；MP-06 完成后当前最大版本为 `m0046`。
+决策基线：[`multi_product_modular_monolith_design.md`](../tech_design/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
 
 ## 1. 本版调整
 
@@ -18,6 +18,10 @@
 - 跨产品隔离测试使用可注入的 `test_product`，生产注册表暂只启用 zhaoxi。
 - 产品命名空间、Runtime 接入、MemorySink、ProactiveDeliveryAdapter 和 Fatetell 端到端测试统一移入 §5 延期范围，等 PRD 后重新拆工单。
 
+2026-07-25 生产发布完成后调整实施顺序：提前执行 **MP-07A 目录边界实体化**，只移动
+归属明确的朝夕模块、收口 composition root 和强化 AST 门禁；不创建 Fatetell 产品骨架，
+不修改 Runtime/Memory/Proactive 契约。该调整不改变上述 Phase 1 发布记录。
+
 ## 2. 共同执行纪律
 
 - 不改写 m0001–m0036；新 migration 暂从 m0037 顺延。若开工前主干新增 migration，只顺延编号。
@@ -27,7 +31,7 @@
 - 当前生产注册表只启用 zhaoxi；第二产品仅在测试中通过依赖注入出现，不产生生产入口。
 - 生产 PG 是多节点共享 writer。涉及旧唯一索引删除或旧 `ON CONFLICT` arbiter 失效的 contract 检查点，必须先 drain 全部旧 writer，再统一升级，不做混版本滚动。
 - 每张工单完成后先跑聚焦测试；涉及钱、配额、referral、唯一约束或事务时必须跑对应 PG 测试。全量 SQLite/PG 回归放在 MP-05。
-- 每单遵循最小改动，不搬迁现有 Companion World 目录，不借机重构无关模块。
+- MP-01～MP-06 遵循最小改动且不搬迁 Companion World；上线后的 MP-07A 只做行为零变更的物理归位，不借机修改业务规则。
 
 ## 3. 工单总览
 
@@ -46,7 +50,7 @@
 
 ### MP-01：身份隔离基座
 
-状态：**开发完成，待发布。** 生产只读预检结论为 PASS；其中 40 条历史 orphan account quota fallback 作为 WARN 保留，不影响 m0037–m0038，须在 MP-03 contract 前清零。SQLite 全量回归与 PostgreSQL migration/auth/并发聚焦回归已通过。
+状态：**已生产发布。** 发布前生产只读预检结论为 PASS；其中 40 条历史 orphan account quota fallback 在 MP-03 contract 前完成治理。SQLite 全量回归与 PostgreSQL migration/auth/并发聚焦回归已通过。
 
 目标：先建立可信的 `(platform_user_id, app_id)` membership、session audience 和入口账号解析，使后续计费/配额/referral 都有同一个产品归属锚。
 
@@ -57,7 +61,7 @@
 - `app/db/product_memberships.py`、`app/db/__init__.py`。
 - `app/bootstrap/product_registry.py`：生产仅注册并启用 zhaoxi；测试允许注入 `test_product`。
 - `app/db/accounts.py`、`app/db/billing.py`。
-- `app/routers/deps.py`、`app/routers/companion_world.py`、`app/routers/web.py`、`app/routers/app_api.py`。
+- `app/routers/deps.py`、`app/products/zhaoxi/api/companion_world.py`、`app/routers/web.py`、`app/routers/app_api.py`（MP-07A 后物理路径）。
 - `tests/test_precheck_multi_product_phase1.py`、`tests/test_product_memberships.py`、`tests/test_session_principal.py`、`tests/test_multi_product_account_resolution.py`（新增）。
 
 交付：
@@ -83,7 +87,7 @@
 
 ### MP-02：计费与订阅隔离
 
-状态：**开发完成，待发布。** SQLite 全量回归通过；PostgreSQL migration、Web、计费及并发聚焦回归通过。生产只读预检为 PASS，m0039 前可检查的计费存量阻断项均为 0；40 条 `quota_owner_fallback` 仍只阻断 MP-03 contract。
+状态：**已生产发布。** SQLite 全量回归通过；PostgreSQL migration、Web、计费及并发聚焦回归通过。发布前生产只读预检为 PASS，m0039 前可检查的计费存量阻断项均为 0。
 
 目标：把 subscription、wallet、ledger、cost 和账号清理完整切到 `(platform_user_id, app_id)`，同时保持 zhaoxi 存量余额、历史订阅和新客赠权不变。
 
@@ -134,7 +138,7 @@
 
 ### MP-03：配额隔离
 
-状态：**开发完成，待发布。** SQLite 全量回归与 PostgreSQL migration/quota/RPM/并发聚焦回归已通过。2026-07-24 生产 m0041 前只读预检仍为 PASS；40 条 `quota_owner_fallback` 保持 WARN，但在 m0041 expand 后会升级为 m0042 contract BLOCK，发布前必须治理为 0。
+状态：**已生产发布。** SQLite 全量回归与 PostgreSQL migration/quota/RPM/并发聚焦回归已通过。2026-07-24 生产 m0041 前只读预检为 PASS；40 条 `quota_owner_fallback` 已在 m0042 contract 前治理为 0。
 
 目标：把 daily、reservation、RPM 和运营 override 切到 `(platform_user_id, app_id)`，保持同产品多 resident 共享、跨产品互不消耗。
 
@@ -184,7 +188,7 @@
 
 ### MP-04：邀请、产品级新客与奖励隔离
 
-状态：**开发完成，待发布。** SQLite 全量回归与 PostgreSQL migration/Web/App/referral/并发聚焦回归已通过。2026-07-24 生产 m0043 前只读预检为 PASS，`referral_orphan_reference=0`、现有 referral relationship 为 0；MP-03 的 40 条 quota fallback 发布闸仍须先处理。
+状态：**已生产发布。** SQLite 全量回归与 PostgreSQL migration/Web/App/referral/并发聚焦回归已通过。2026-07-24 生产 m0043 前只读预检为 PASS，`referral_orphan_reference=0`、现有 referral relationship 为 0。
 
 目标：让 referral code、relationship、meaningful review、奖励释放和“新客”统一按 product membership 工作。
 
@@ -233,8 +237,7 @@
 
 ### MP-05：Phase 1 收紧与总验收
 
-状态：**开发与 SQLite/PostgreSQL 全量验收完成，待发布。** 生产未执行任何 Phase 1
-migration；已知 `quota_owner_fallback=40` 仍是 m0042 前置治理阻断。
+状态：**开发、SQLite/PostgreSQL 全量验收与生产发布完成。** Phase 1 migration 已按受控检查点完成上线。
 
 目标：清掉迁移期 fallback，固化依赖红线和跨产品隔离测试，并形成可执行的生产发布/回滚手册。
 
@@ -275,7 +278,7 @@ migration；已知 `quota_owner_fallback=40` 仍是 m0042 前置治理阻断。
 
 ### MP-06：Phase 1 遗留硬化
 
-状态：**开发与 SQLite/PostgreSQL 全量验收完成，待发布。**
+状态：**开发、SQLite/PostgreSQL 全量验收与生产发布完成。**
 
 目标：收掉最终 diff 审查发现的产品级幂等和运营拒绝缺口，并为现有并发路径补权威回归；不提前决定第二产品 scheduler 的业务编排。
 
@@ -317,7 +320,11 @@ PRD 冻结后再按真实调用点拆三类工单：产品 API/composition、Run
 
 ## 6. 下一步
 
-MP-06 验收后 Phase 1 不再有下一张开发工单。进入生产发布前，先治理 `quota_owner_fallback=40`，再严格按
-[`multi_product_phase1_release_runbook.md`](../guides/multi_product_phase1_release_runbook.md) drain
-全部 writer、逐闸执行 m0037～m0046 并复跑 reconcile。本次开发过程未对生产执行 migration
-或写数据。Phase 1 发布验收后冻结基座，等待 Fatetell PRD 再启动 §5 的后续拆单。
+Phase 1 已生产发布。当前执行 MP-07A，并按独立 PR 分三批推进：
+
+1. Companion World 垂直切片归入 `app/products/zhaoxi/`，路由组合收口到 `app/bootstrap/`。
+2. 对根目录中归属明确的共享能力做 platform/agent_runtime 归位。
+3. 对 onboarding、memory、mission、relationship 等朝夕模块归位并记录仍需等待真实调用点的过渡模块。
+
+MP-07A 不创建 `app/products/fatetell/`，不修改数据库或外部 API。Fatetell 的产品命名空间、
+Runtime/Memory/Proactive 接入和端到端发布仍按 §5 等待 PRD 后拆单。

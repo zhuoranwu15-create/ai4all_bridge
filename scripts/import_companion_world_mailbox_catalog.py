@@ -254,7 +254,7 @@ def import_mailbox_catalog(
         create_character_letter_catalog_entry,
         retire_character_letter_catalog_entry,
     )
-    from app.platform.companion_world_mailbox import build_mailbox_policy
+    from app.products.zhaoxi.application.companion_world_mailbox import build_mailbox_policy
     from app.time_utils import beijing_now_str
 
     with connect() as conn:
