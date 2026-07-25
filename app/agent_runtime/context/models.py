@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 @dataclass
 class TurnContext:
     account_id: str
+    app_id: str
     account: dict
     session: dict
     identity: Any                     # OpenClawIdentity

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.time_utils import beijing_naive_now
 from app.db import (
     get_account,
@@ -174,6 +175,7 @@ def generate_content_invitation_candidate(
         tools = [*get_web_search_tools(), *tools]
     ctx = TurnContext(
         account_id=account_id,
+        app_id=ZHAOXI_APP_ID,
         account=account,
         session=session,
         identity=None,

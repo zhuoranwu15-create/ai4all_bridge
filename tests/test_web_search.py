@@ -23,6 +23,7 @@ def _setup_ctx(account_id: str):
     )["session"]
     return TurnContext(
         account_id=account_id,
+        app_id="zhaoxi",
         account={"id": account_id},
         session=session,
         identity=identity,

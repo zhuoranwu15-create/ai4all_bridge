@@ -14,6 +14,7 @@ def _make_ctx(account_id="acc-tool"):
     identity.session_key = "sk-1"
     return TurnContext(
         account_id=account_id,
+        app_id="zhaoxi",
         account={"id": account_id},
         session={"id": 1},
         identity=identity,

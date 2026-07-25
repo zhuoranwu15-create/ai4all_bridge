@@ -353,6 +353,7 @@ def app_turn(
         result = run_turn_for_account(
             ChannelTurnInput(
                 account_id=account_id,
+                app_id=principal.app_id,
                 cap=CHANNELS[CHANNEL_APP],
                 identity=identity,
                 message_id=mapped_message_id,

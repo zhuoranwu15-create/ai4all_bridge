@@ -12,6 +12,7 @@ from app.time_utils import (
     beijing_weekday_str,
     format_history_timestamp,
 )
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
@@ -1542,6 +1543,7 @@ def _resolve_turn_reply(
 
             ctx = TurnContext(
                 account_id=account_id,
+                app_id=ctx.app_id,
                 account=account,
                 session=session,
                 identity=identity,
@@ -2193,6 +2195,7 @@ class ChannelTurnInput:
     读法因此保持不变。
     """
     account_id: str
+    app_id: str
     cap: ChannelCapability
     identity: ResolvedIdentity
     message_id: Optional[str]
@@ -2240,6 +2243,33 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
     )
 
     access = get_account_product_access(account_id=ctx.account_id)
+    if access is not None and access["app_id"] != ctx.app_id:
+        logger.warning(
+            "openclaw_turn product scope rejected account=%s expected_app=%s actual_app=%s",
+            ctx.account_id,
+            ctx.app_id,
+            access["app_id"],
+        )
+        response = OpenClawTurnResponse(
+            status="disabled",
+            no_reply=True,
+            metadata={
+                **identity_response_metadata(ctx.identity, ctx.account_id),
+                "app_id": ctx.app_id,
+                "reason": "product_scope_mismatch",
+            },
+        )
+        timings["reply_ready_ms"] = _elapsed_ms(started_at)
+        _log_turn_timing(
+            ctx=ctx,
+            timings=timings,
+            started_at=started_at,
+            status=response.status,
+            account_id=ctx.account_id,
+            session=ctx.identity.session_key,
+            message_id=ctx.message_id or ctx.event_id,
+        )
+        return response
     if (
         access is not None
         and access["platform_user_id"] is not None
@@ -2430,6 +2460,7 @@ def build_channel_input_from_openclaw(
 
     return ChannelTurnInput(
         account_id=resolved_account_id,
+        app_id=ZHAOXI_APP_ID,
         cap=cap,
         identity=identity,
         message_id=payload.message_id or payload.event_id,
