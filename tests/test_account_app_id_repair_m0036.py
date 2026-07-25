@@ -4,7 +4,7 @@ import pytest
 
 import app.db as db
 from app.db._backend import IntegrityError, is_postgres
-from app.db._core import _migration_0036_repair_account_app_id
+from app.db._core import _migration_0036_repair_account_app_id, migrate_db_through
 
 
 def _columns(conn, table: str) -> set[str]:
@@ -34,11 +34,18 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
             (account["id"],),
         )
         conn.execute("DROP INDEX IF EXISTS ux_owner_binding_active_user_app")
+        conn.execute("DROP INDEX IF EXISTS ix_accounts_app_status")
         conn.execute("ALTER TABLE account_owner_bindings DROP COLUMN app_id")
         conn.execute("ALTER TABLE accounts DROP COLUMN app_id")
-        conn.execute("DELETE FROM schema_migrations WHERE version = 36")
+        # m0037–m0046 已依赖修复后的身份 schema；模拟旧分支回放时一并移除
+        # 后续版本记录，让 init_db 从 m0036 按序重放，而不是制造不可能的迁移空洞。
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 36")
 
-    db.init_db()
+    if is_postgres():
+        # 常规 PG init_db 已禁止既有库跨 Phase 1 contract；迁移回放测试显式走受控 API。
+        migrate_db_through(target_version=46, expected_current_version=35)
+    else:
+        db.init_db()
 
     with db.connect() as conn:
         assert "app_id" in _columns(conn, "accounts")
@@ -56,7 +63,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         ).fetchone()["channel"] == "native"
         assert conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
-        ).fetchone()["version"] == 36
+        ).fetchone()["version"] == 46
         _migration_0036_repair_account_app_id(conn)
         _migration_0036_repair_account_app_id(conn)
 

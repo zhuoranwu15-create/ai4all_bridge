@@ -26,18 +26,20 @@ def test_admin_override_is_canonical_for_all_residents(fresh_db):
         assert limits["rpm_limit"] == 2
         assert limits["platform_user_id"] == user_id
     with db.connect() as conn:
-        user = conn.execute(
-            "SELECT daily_limit, rpm_limit FROM platform_users WHERE id = ?", (user_id,)
+        membership = conn.execute(
+            "SELECT daily_limit, rpm_limit FROM product_memberships "
+            "WHERE platform_user_id=? AND app_id='zhaoxi'",
+            (user_id,),
         ).fetchone()
         copies = conn.execute(
             "SELECT daily_limit, rpm_limit FROM accounts WHERE id IN (?, ?)",
             (primary, resident),
         ).fetchall()
-    assert (user["daily_limit"], user["rpm_limit"]) == (7, 2)
+    assert (membership["daily_limit"], membership["rpm_limit"]) == (7, 2)
     assert {(row["daily_limit"], row["rpm_limit"]) for row in copies} == {(7, 2)}
 
 
-def test_legacy_conflict_uses_strictest_effective_limit(fresh_db):
+def test_contract_ignores_legacy_account_override_drift(fresh_db):
     _user_id, primary, resident = _user_with_resident("13800024002")
     with db.connect() as conn:
         conn.execute(
@@ -51,9 +53,9 @@ def test_legacy_conflict_uses_strictest_effective_limit(fresh_db):
         limits = db.resolve_effective_quota_limits(
             account_id=account_id, default_daily=50, default_rpm=10
         )
-        assert limits["daily_limit"] == 5
-        assert limits["rpm_limit"] == 3
-        assert limits["source"] == "legacy_conflict_strict"
+        assert limits["daily_limit"] == 50
+        assert limits["rpm_limit"] == 10
+        assert limits["source"] == "product_membership"
 
 
 def test_clearing_override_restores_shared_defaults(fresh_db):

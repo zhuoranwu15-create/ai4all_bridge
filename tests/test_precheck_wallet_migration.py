@@ -66,6 +66,7 @@ def _seed_extra_active_wallet(conn, *, account_id, platform_user_id, with_grant=
     pre-D-14 的按 account 赠权流水（幂等键含 account_id），供 multi_grant_users 盘点。
     """
     conn.execute("DROP INDEX IF EXISTS ux_entitlement_wallets_user_active")
+    conn.execute("DROP INDEX IF EXISTS ux_entitlement_wallets_user_app_active")
     wallet_id = f"wallet_pre_{account_id}"
     conn.execute(
         """

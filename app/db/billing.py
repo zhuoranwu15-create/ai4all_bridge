@@ -10,6 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.bootstrap.product_registry import (
+    PRODUCTION_PRODUCT_REGISTRY,
+    ZHAOXI_APP_ID,
+    ProductRegistry,
+)
 from app.config import settings
 from app.db._core import (
     ACCOUNT_ACTIVE_SESSION_KEY,
@@ -39,8 +44,13 @@ from app.db._core import (
     _normalize_referral_code,
     _settings,
     _tx,
+    advisory_lock_key,
     connect,
     logger,
+)
+from app.db.product_memberships import (
+    _ensure_product_membership_in_conn,
+    _require_active_product_membership_in_conn,
 )
 __all__ = [
     'create_ai4all_account_for_user',
@@ -53,7 +63,7 @@ __all__ = [
     'get_active_binding_intent_for_channel_account',
     'get_binding_intent',
     'get_completed_binding_intent_for_openclaw_login_session_key',
-    'get_first_active_account_for_user',
+    'get_active_bound_account_for_user_in_app',
     'get_latest_subscription_for_user',
     'get_or_create_account_active_session',
     'get_or_create_default_ai4all_account_for_user',
@@ -87,10 +97,17 @@ __all__ = [
     'validate_referral_code',
 ]
 
-# App(产品)层默认 id。当前全部资产属唯一 App「朝夕相伴」,故建号默认落此 app_id
-# (见 docs/tech_design/app_account_convergence_and_channel_persona.md §9)。多 App 解析器
-# (get_or_create_account_for_user_in_app)与 app/apps.py 注册表属 Phase 2,本阶段仅此常量。
-DEFAULT_APP_ID = "zhaoxi"
+# App(产品)层默认 id。legacy 调用固定落「朝夕相伴」；所有显式 app_id 都必须先通过
+# 服务端 ProductRegistry，再由 active membership 门禁后才能创建账号。
+DEFAULT_APP_ID = ZHAOXI_APP_ID
+
+
+def _registered_app_id(app_id: str, registry: ProductRegistry) -> str:
+    """校验显式产品参数；省略参数可走函数默认值，空值不得回退到朝夕。"""
+    cleaned = _clean_text(app_id)
+    if not cleaned:
+        raise ValueError("app_id is required")
+    return registry.require_enabled(cleaned).app_id
 
 # ---------------------------------------------------------------------------
 # Web onboarding
@@ -122,6 +139,11 @@ def create_or_get_platform_user_by_phone(
             """,
             (normalized_phone,),
         ).fetchone()
+        _ensure_product_membership_in_conn(
+            conn,
+            platform_user_id=str(row["id"]),
+            app_id=DEFAULT_APP_ID,
+        )
     return dict(row)
 
 
@@ -206,25 +228,38 @@ def _get_usable_referral_code_in_conn(
     conn: Connection,
     *,
     code: str,
+    expected_app_id: str,
 ) -> Optional[Row]:
     return conn.execute(
         """
-        SELECT *
-        FROM referral_codes
-        WHERE code = ?
-          AND status = 'active'
-          AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
-          AND (max_uses IS NULL OR used_count < max_uses)
+        SELECT rc.*
+        FROM referral_codes rc
+        WHERE rc.code = ?
+          AND rc.app_id = ?
+          AND rc.status = 'active'
+          AND (rc.expires_at IS NULL OR rc.expires_at > datetime('now', '+8 hours'))
+          AND (rc.max_uses IS NULL OR rc.used_count < rc.max_uses)
+          AND (
+              rc.platform_user_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM product_memberships pm
+                  WHERE pm.platform_user_id=rc.platform_user_id
+                    AND pm.app_id=rc.app_id AND pm.status='active'
+              )
+          )
         """,
-        (code,),
+        (code, expected_app_id),
     ).fetchone()
 
 
 def get_or_create_personal_referral_code_for_user(
     *,
     platform_user_id: str,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
-    """Return the stable personal invite code for a platform user, creating it if needed."""
+    """返回真人在指定产品内稳定的个人邀请码，缺失时幂等创建。"""
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
         user = conn.execute(
             "SELECT id FROM platform_users WHERE id = ?",
@@ -232,16 +267,23 @@ def get_or_create_personal_referral_code_for_user(
         ).fetchone()
         if user is None:
             raise ValueError("platform_user not found")
+        _require_active_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
+        )
         existing = conn.execute(
             """
             SELECT *
             FROM referral_codes
             WHERE platform_user_id = ?
+              AND app_id = ?
               AND code_type = 'personal'
             ORDER BY created_at ASC, id ASC
             LIMIT 1
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id_clean),
         ).fetchone()
         if existing is not None:
             return _decode_referral_code_row(existing)
@@ -254,11 +296,16 @@ def get_or_create_personal_referral_code_for_user(
                     conn.execute(
                         """
                         INSERT INTO referral_codes(
-                            id, platform_user_id, code, code_type, status, updated_at
+                            id, platform_user_id, app_id, code, code_type, status, updated_at
                         )
-                        VALUES (?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        VALUES (?, ?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                         """,
-                        (_new_id("refcode"), platform_user_id, _new_referral_code()),
+                        (
+                            _new_id("refcode"),
+                            platform_user_id,
+                            app_id_clean,
+                            _new_referral_code(),
+                        ),
                     )
                 break
             except IntegrityError as err:
@@ -267,11 +314,12 @@ def get_or_create_personal_referral_code_for_user(
                     SELECT *
                     FROM referral_codes
                     WHERE platform_user_id = ?
+                      AND app_id = ?
                       AND code_type = 'personal'
                     ORDER BY created_at ASC, id ASC
                     LIMIT 1
                     """,
-                    (platform_user_id,),
+                    (platform_user_id, app_id_clean),
                 ).fetchone()
                 if existing is not None:
                     return _decode_referral_code_row(existing)
@@ -284,28 +332,39 @@ def get_or_create_personal_referral_code_for_user(
             SELECT *
             FROM referral_codes
             WHERE platform_user_id = ?
+              AND app_id = ?
               AND code_type = 'personal'
             ORDER BY created_at ASC, id ASC
             LIMIT 1
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id_clean),
         ).fetchone()
     if row is None:
         raise RuntimeError("referral_code was not created")
     return _decode_referral_code_row(row)
 
 
-def validate_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
-    """Validate an invite code for registration without consuming its use count."""
+def validate_referral_code(
+    *,
+    code: Optional[str],
+    expected_app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Dict[str, Any]:
+    """在预期产品内校验邀请码，不消费 used_count。"""
+    app_id_clean = _registered_app_id(expected_app_id, registry)
     normalized = _normalize_referral_code(code)
     if not normalized:
         return {"valid": False, "reason": "missing", "code": None}
     with connect() as conn:
         any_row = conn.execute(
-            "SELECT * FROM referral_codes WHERE code = ?",
-            (normalized,),
+            "SELECT * FROM referral_codes WHERE code = ? AND app_id = ?",
+            (normalized, app_id_clean),
         ).fetchone()
-        usable_row = _get_usable_referral_code_in_conn(conn, code=normalized)
+        usable_row = _get_usable_referral_code_in_conn(
+            conn,
+            code=normalized,
+            expected_app_id=app_id_clean,
+        )
         if usable_row is None:
             if any_row is not None and any_row["status"] != "active":
                 reason = "disabled"
@@ -333,9 +392,19 @@ def validate_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
     }
 
 
-def preview_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
-    """Return a public, redacted preview of an invite code for the web onboarding page."""
-    validation = validate_referral_code(code=code)
+def preview_referral_code(
+    *,
+    code: Optional[str],
+    expected_app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Dict[str, Any]:
+    """返回指定产品的邀请码公开脱敏预览。"""
+    app_id_clean = _registered_app_id(expected_app_id, registry)
+    validation = validate_referral_code(
+        code=code,
+        expected_app_id=app_id_clean,
+        registry=registry,
+    )
     if not validation.get("valid"):
         return validation
     code_row = validation["referral_code"]
@@ -348,19 +417,20 @@ def preview_referral_code(*, code: Optional[str]) -> Dict[str, Any]:
                     COALESCE(NULLIF(pu.display_name, ''), NULLIF(a.display_name, '')) AS display_name
                 FROM platform_users pu
                 LEFT JOIN account_owner_bindings b
-                  ON b.platform_user_id = pu.id AND b.status = 'active'
-                LEFT JOIN accounts a ON a.id = b.account_id
+                  ON b.platform_user_id = pu.id AND b.status = 'active' AND b.app_id = ?
+                LEFT JOIN accounts a ON a.id = b.account_id AND a.app_id = ?
                 WHERE pu.id = ?
                 ORDER BY b.created_at ASC, b.id ASC
                 LIMIT 1
                 """,
-                (code_row["platform_user_id"],),
+                (app_id_clean, app_id_clean, code_row["platform_user_id"]),
             ).fetchone()
             inviter_name = row["display_name"] if row else None
     return {
         "valid": True,
         "code": code_row["code"],
         "code_type": code_row["code_type"],
+        "app_id": app_id_clean,
         "inviter_display_name": inviter_name,
     }
 
@@ -371,31 +441,18 @@ def register_platform_user_with_referral(
     display_name: Optional[str] = None,
     invite_code: Optional[str] = None,
     verified_token: Optional[str] = None,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
-    """Create or update a platform user, creating a referral relationship for new users only.
+    """注册/更新真人，并仅在首次创建产品 membership 时消费本产品邀请码。
 
-    When verified_token is provided, OTP consumption, user creation, referral
-    creation, and invite-code used_count consumption share one transaction.
+    OTP 消费、真人 upsert、membership 首建、relationship 与 used_count 更新共享同一事务。
     """
     normalized_phone = _normalize_phone(phone)
     cleaned_display_name = _clean_text(display_name)
     normalized_code = _normalize_referral_code(invite_code)
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
-        existing = conn.execute(
-            """
-            SELECT id, phone, display_name, status, created_at, updated_at
-            FROM platform_users
-            WHERE phone = ?
-            """,
-            (normalized_phone,),
-        ).fetchone()
-
-        code_row = None
-        if existing is None and normalized_code:
-            code_row = _get_usable_referral_code_in_conn(conn, code=normalized_code)
-            if code_row is None:
-                raise ValueError("invalid_invite_code")
-
         if verified_token is not None:
             cursor = conn.execute(
                 """
@@ -412,7 +469,24 @@ def register_platform_user_with_referral(
             if cursor.rowcount == 0:
                 raise ValueError("invalid_otp_token")
 
-        if existing is not None:
+        candidate_user_id = _new_id("user")
+        cursor = conn.execute(
+            """
+            INSERT INTO platform_users(id, phone, display_name, updated_at)
+            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(phone) DO NOTHING
+            """,
+            (candidate_user_id, normalized_phone, cleaned_display_name),
+        )
+        is_new_user = cursor.rowcount == 1
+        user_identity = conn.execute(
+            "SELECT id FROM platform_users WHERE phone = ?",
+            (normalized_phone,),
+        ).fetchone()
+        if user_identity is None:
+            raise RuntimeError("platform_user upsert failed")
+        platform_user_id = str(user_identity["id"])
+        if not is_new_user:
             conn.execute(
                 """
                 UPDATE platform_users
@@ -420,33 +494,27 @@ def register_platform_user_with_referral(
                     updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
                 """,
-                (cleaned_display_name, existing["id"]),
+                (cleaned_display_name, platform_user_id),
             )
-            user_row = conn.execute(
-                """
-                SELECT id, phone, display_name, status, created_at, updated_at
-                FROM platform_users
-                WHERE id = ?
-                """,
-                (existing["id"],),
-            ).fetchone()
-            return {
-                "platform_user": dict(user_row),
-                "is_new_user": False,
-                "referral_relationship": None,
-            }
-
-        platform_user_id = _new_id("user")
-        conn.execute(
-            """
-            INSERT INTO platform_users(id, phone, display_name, updated_at)
-            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            """,
-            (platform_user_id, normalized_phone, cleaned_display_name),
+        membership_result = _ensure_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
         )
+        if membership_result["membership"]["status"] != "active":
+            raise ValueError("product_membership_disabled")
 
         relationship_row = None
-        if code_row is not None:
+        code_row = None
+        if membership_result["is_new_membership"] and normalized_code:
+            code_row = _get_usable_referral_code_in_conn(
+                conn,
+                code=normalized_code,
+                expected_app_id=app_id_clean,
+            )
+            if code_row is None:
+                raise ValueError("invalid_invite_code")
             if code_row["platform_user_id"]:
                 inviter_platform_user_id = code_row["platform_user_id"]
                 if inviter_platform_user_id == platform_user_id:
@@ -456,15 +524,17 @@ def register_platform_user_with_referral(
                     """
                     INSERT INTO referral_relationships(
                         id, inviter_platform_user_id, invitee_platform_user_id,
-                        referral_code_id, status, review_status, metadata_json, updated_at
+                        referral_code_id, app_id, status, review_status,
+                        metadata_json, updated_at
                     )
-                    VALUES (?, ?, ?, ?, 'registered', 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, ?, 'registered', 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                     """,
                     (
                         relationship_id,
                         inviter_platform_user_id,
                         platform_user_id,
                         code_row["id"],
+                        app_id_clean,
                         json.dumps(
                             {
                                 "invite_code": normalized_code,
@@ -478,6 +548,7 @@ def register_platform_user_with_referral(
                     conn,
                     relationship_id=relationship_id,
                     inviter_platform_user_id=inviter_platform_user_id,
+                    app_id=app_id_clean,
                 )
             cursor = conn.execute(
                 """
@@ -485,19 +556,20 @@ def register_platform_user_with_referral(
                 SET used_count = used_count + 1,
                     updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
+                  AND app_id = ?
                   AND status = 'active'
                   AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
                   AND (max_uses IS NULL OR used_count < max_uses)
                 """,
-                (code_row["id"],),
+                (code_row["id"], app_id_clean),
             )
             # rowcount 替代 SQLite 专有 changes()（两后端一致）
             if cursor.rowcount == 0:
                 raise ValueError("invalid_invite_code")
             if code_row["platform_user_id"]:
                 relationship_row = conn.execute(
-                    "SELECT * FROM referral_relationships WHERE id = ?",
-                    (relationship_id,),
+                    "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+                    (relationship_id, app_id_clean),
                 ).fetchone()
 
         user_row = conn.execute(
@@ -510,7 +582,8 @@ def register_platform_user_with_referral(
         ).fetchone()
     return {
         "platform_user": dict(user_row),
-        "is_new_user": True,
+        "is_new_user": is_new_user,
+        "is_new_membership": membership_result["is_new_membership"],
         "referral_relationship": (
             _decode_referral_relationship_row(relationship_row)
             if relationship_row is not None
@@ -524,9 +597,12 @@ def upsert_subscription_for_user(
     platform_user_id: str,
     plan: str = "free",
     status: str = "active",
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     cleaned_plan = _clean_text(plan) or "free"
     cleaned_status = _clean_text(status) or "active"
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
         user = conn.execute(
             "SELECT id FROM platform_users WHERE id = ?",
@@ -534,41 +610,80 @@ def upsert_subscription_for_user(
         ).fetchone()
         if user is None:
             raise ValueError("platform_user not found")
-        existing = conn.execute(
-            """
-            SELECT id FROM subscriptions
-            WHERE platform_user_id = ? AND status = 'active'
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (platform_user_id,),
-        ).fetchone()
-        if existing:
-            subscription_id = existing["id"]
-            conn.execute(
-                """
-                UPDATE subscriptions
-                SET plan = ?, status = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
-                WHERE id = ?
-                """,
-                (cleaned_plan, cleaned_status, subscription_id),
-            )
-        else:
+        _require_active_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
+        )
+        if cleaned_status == "active":
             subscription_id = _new_id("sub")
             conn.execute(
                 """
-                INSERT INTO subscriptions(id, platform_user_id, plan, status, updated_at)
-                VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                INSERT INTO subscriptions(
+                    id, platform_user_id, app_id, plan, status, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                ON CONFLICT(platform_user_id, app_id) WHERE status = 'active'
+                DO UPDATE SET
+                    plan = excluded.plan,
+                    updated_at = excluded.updated_at
                 """,
-                (subscription_id, platform_user_id, cleaned_plan, cleaned_status),
+                (subscription_id, platform_user_id, app_id_clean, cleaned_plan),
             )
+            active = conn.execute(
+                """
+                SELECT id FROM subscriptions
+                WHERE platform_user_id=? AND app_id=? AND status='active'
+                """,
+                (platform_user_id, app_id_clean),
+            ).fetchone()
+            subscription_id = active["id"]
+        else:
+            existing = conn.execute(
+                """
+                SELECT id FROM subscriptions
+                WHERE platform_user_id=? AND app_id=? AND status='active'
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (platform_user_id, app_id_clean),
+            ).fetchone()
+            if existing is not None:
+                subscription_id = existing["id"]
+                conn.execute(
+                    """
+                    UPDATE subscriptions
+                    SET plan=?, status=?,
+                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    WHERE id=? AND app_id=?
+                    """,
+                    (cleaned_plan, cleaned_status, subscription_id, app_id_clean),
+                )
+            else:
+                subscription_id = _new_id("sub")
+                conn.execute(
+                    """
+                    INSERT INTO subscriptions(
+                        id, platform_user_id, app_id, plan, status, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    """,
+                    (
+                        subscription_id,
+                        platform_user_id,
+                        app_id_clean,
+                        cleaned_plan,
+                        cleaned_status,
+                    ),
+                )
         row = conn.execute(
             """
-            SELECT id, platform_user_id, plan, status, created_at, updated_at
+            SELECT id, platform_user_id, app_id, plan, status, created_at, updated_at
             FROM subscriptions
-            WHERE id = ?
+            WHERE id = ? AND app_id = ?
             """,
-            (subscription_id,),
+            (subscription_id, app_id_clean),
         ).fetchone()
     return dict(row)
 
@@ -576,19 +691,68 @@ def upsert_subscription_for_user(
 def get_latest_subscription_for_user(
     *,
     platform_user_id: str,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
+        _require_active_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
+        )
         row = conn.execute(
             """
-            SELECT id, platform_user_id, plan, status, created_at, updated_at
+            SELECT id, platform_user_id, app_id, plan, status, created_at, updated_at
             FROM subscriptions
-            WHERE platform_user_id = ?
-            ORDER BY updated_at DESC, id DESC
+            WHERE platform_user_id = ? AND app_id = ?
+            ORDER BY CASE WHEN status='active' THEN 0 ELSE 1 END,
+                     updated_at DESC, id DESC
             LIMIT 1
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id_clean),
         ).fetchone()
     return dict(row) if row else None
+
+
+def _resolve_billing_scope_in_conn(
+    conn: Connection,
+    *,
+    account_id: str,
+    platform_user_id: Optional[str] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+    allow_missing_owner: bool = False,
+) -> Optional[Dict[str, str]]:
+    """从 account 推导并校验计费真人与产品；任何冗余归属不一致均 fail closed。"""
+    from app.db.accounts import resolve_owner_platform_user_id
+
+    account = conn.execute(
+        "SELECT id, app_id FROM accounts WHERE id=?", (account_id,)
+    ).fetchone()
+    if account is None:
+        if allow_missing_owner:
+            return None
+        raise ValueError("account not found")
+    app_id = registry.require_enabled(str(account["app_id"] or "")).app_id
+    resolved_user_id = resolve_owner_platform_user_id(conn, account_id)
+    if resolved_user_id is None:
+        if allow_missing_owner:
+            return None
+        raise ValueError("account owner not found")
+    if platform_user_id is not None and resolved_user_id != platform_user_id:
+        raise ValueError("billing scope mismatch")
+    _require_active_product_membership_in_conn(
+        conn,
+        platform_user_id=resolved_user_id,
+        app_id=app_id,
+        registry=registry,
+    )
+    return {
+        "account_id": str(account["id"]),
+        "platform_user_id": str(resolved_user_id),
+        "app_id": app_id,
+    }
 
 
 def _decode_wallet_row(row: Row) -> Dict[str, Any]:
@@ -636,41 +800,38 @@ def _ensure_wallet_in_conn(
     *,
     account_id: str,
     platform_user_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Row:
-    account = conn.execute(
-        "SELECT id FROM accounts WHERE id = ?",
-        (account_id,),
-    ).fetchone()
-    if account is None:
-        raise ValueError("account not found")
-    user = conn.execute(
-        "SELECT id FROM platform_users WHERE id = ?",
-        (platform_user_id,),
-    ).fetchone()
-    if user is None:
-        raise ValueError("platform_user not found")
-    # D-14：一真人一 active 钱包。按 platform_user get-or-create——同一真人第二个 account
-    # 命中局部唯一索引 ux_entitlement_wallets_user_active（partial ON platform_user_id
-    # WHERE status='active'）→ DO NOTHING，复用既有共享钱包，不插新行。account_id 列保留
-    # （创建来源），因永不为同一真人插第二行而事实上仍唯一。
+    scope = _resolve_billing_scope_in_conn(
+        conn,
+        account_id=account_id,
+        platform_user_id=platform_user_id,
+        registry=registry,
+    )
+    assert scope is not None
+    app_id = scope["app_id"]
+    # D-14 的真人级钱包现在按产品分区：同一真人在同一产品的多个账号共享一份，
+    # 但另一产品拥有独立钱包。account_id 仍只是不可变的创建来源。
     conn.execute(
         """
         INSERT INTO entitlement_wallets(
-            id, account_id, platform_user_id, balance_shell_micros, status, updated_at
+            id, account_id, platform_user_id, app_id,
+            balance_shell_micros, status, updated_at
         )
-        VALUES (?, ?, ?, 0, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-        ON CONFLICT(platform_user_id) WHERE status = 'active' DO NOTHING
+        VALUES (?, ?, ?, ?, 0, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        ON CONFLICT(platform_user_id, app_id) WHERE status = 'active' DO NOTHING
         """,
-        (_new_id("wallet"), account_id, platform_user_id),
+        (_new_id("wallet"), account_id, platform_user_id, app_id),
     )
     row = conn.execute(
         """
-        SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+        SELECT id, account_id, platform_user_id, app_id,
+               balance_shell_micros, status,
                created_at, updated_at
         FROM entitlement_wallets
-        WHERE platform_user_id = ? AND status = 'active'
+        WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
         """,
-        (platform_user_id,),
+        (platform_user_id, app_id),
     ).fetchone()
     if row is None:
         raise RuntimeError("entitlement_wallet was not created")
@@ -681,12 +842,14 @@ def ensure_wallet(
     *,
     account_id: str,
     platform_user_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     with connect() as conn:
         row = _ensure_wallet_in_conn(
             conn,
             account_id=account_id,
             platform_user_id=platform_user_id,
+            registry=registry,
         )
     return _decode_wallet_row(row)
 
@@ -702,6 +865,7 @@ def _apply_wallet_ledger_in_conn(
     source_id: Optional[str],
     idempotency_key: str,
     metadata: Optional[Dict[str, Any]] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Row:
     if amount_shell_micros == 0:
         raise ValueError("amount_shell_micros must not be zero")
@@ -715,22 +879,38 @@ def _apply_wallet_ledger_in_conn(
     if not cleaned_idempotency_key:
         raise ValueError("idempotency_key is required")
 
+    scope = _resolve_billing_scope_in_conn(
+        conn,
+        account_id=account_id,
+        platform_user_id=platform_user_id,
+        registry=registry,
+    )
+    assert scope is not None
+    app_id = scope["app_id"]
     existing = conn.execute(
         """
         SELECT *
         FROM entitlement_ledger
-        WHERE idempotency_key = ?
+        WHERE app_id = ? AND idempotency_key = ?
         """,
-        (cleaned_idempotency_key,),
+        (app_id, cleaned_idempotency_key),
     ).fetchone()
     if existing is not None:
+        if (
+            existing["platform_user_id"] != platform_user_id
+            or existing["app_id"] != app_id
+        ):
+            raise ValueError("billing idempotency scope mismatch")
         return existing
 
     wallet = _ensure_wallet_in_conn(
         conn,
         account_id=account_id,
         platform_user_id=platform_user_id,
+        registry=registry,
     )
+    if wallet["app_id"] != app_id:
+        raise ValueError("billing wallet app mismatch")
     ledger_id = _new_id("ledger")
     # Atomic increment: avoids TOCTOU race where two concurrent transactions
     # both read the same balance and overwrite each other's update.
@@ -738,29 +918,30 @@ def _apply_wallet_ledger_in_conn(
         """
         UPDATE entitlement_wallets
         SET balance_shell_micros = balance_shell_micros + ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
-        WHERE id = ?
+        WHERE id = ? AND app_id = ?
         """,
-        (int(amount_shell_micros), wallet["id"]),
+        (int(amount_shell_micros), wallet["id"], app_id),
     )
     balance_row = conn.execute(
-        "SELECT balance_shell_micros FROM entitlement_wallets WHERE id = ?",
-        (wallet["id"],),
+        "SELECT balance_shell_micros FROM entitlement_wallets WHERE id = ? AND app_id = ?",
+        (wallet["id"], app_id),
     ).fetchone()
     balance_after = int(balance_row["balance_shell_micros"])
     conn.execute(
         """
         INSERT INTO entitlement_ledger(
-            id, wallet_id, account_id, platform_user_id, entry_type,
+            id, wallet_id, account_id, platform_user_id, app_id, entry_type,
             source_type, source_id, amount_shell_micros,
             balance_after_shell_micros, idempotency_key, metadata_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             ledger_id,
             wallet["id"],
             account_id,
             platform_user_id,
+            app_id,
             cleaned_entry_type,
             cleaned_source_type,
             _clean_text(source_id),
@@ -771,8 +952,8 @@ def _apply_wallet_ledger_in_conn(
         ),
     )
     row = conn.execute(
-        "SELECT * FROM entitlement_ledger WHERE id = ?",
-        (ledger_id,),
+        "SELECT * FROM entitlement_ledger WHERE id = ? AND app_id = ?",
+        (ledger_id, app_id),
     ).fetchone()
     if row is None:
         raise RuntimeError("entitlement_ledger was not created")
@@ -788,6 +969,7 @@ def grant_shells(
     source_id: Optional[str],
     idempotency_key: str,
     metadata: Optional[Dict[str, Any]] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     if amount_shell_micros <= 0:
         raise ValueError("amount_shell_micros must be positive")
@@ -802,6 +984,7 @@ def grant_shells(
             source_id=source_id,
             idempotency_key=idempotency_key,
             metadata=metadata,
+            registry=registry,
         )
     return _decode_ledger_row(row)
 
@@ -810,17 +993,33 @@ def grant_new_user_shells(
     *,
     account_id: str,
     platform_user_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
+    with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            registry=registry,
+        )
+    assert scope is not None
+    app_id = scope["app_id"]
+    # zhaoxi 必须继续命中历史真人级键，避免 m0039 backfill 后再赠一次；新产品的键
+    # 显式带 app_id，使同一真人可以各获得一次产品级新客权益。
+    idempotency_key = (
+        f"new-user-grant-{platform_user_id}"
+        if app_id == ZHAOXI_APP_ID
+        else f"new-user-grant-{app_id}-{platform_user_id}"
+    )
     return grant_shells(
         account_id=account_id,
         platform_user_id=platform_user_id,
         amount_shell_micros=NEW_USER_GRANT_SHELL_MICROS,
         source_type="new_user_grant",
         source_id=account_id,
-        # M1-7（D-14）：幂等键按真人，钱包并份后同一真人第二个 account 的赠权命中既有键、
-        # 不二次入账（source_id 仍记触发赠权的 account 供审计）。
-        idempotency_key=f"new-user-grant-{platform_user_id}",
-        metadata={"grant_shells": NEW_USER_GRANT_SHELLS},
+        idempotency_key=idempotency_key,
+        metadata={"grant_shells": NEW_USER_GRANT_SHELLS, "app_id": app_id},
+        registry=registry,
     )
 
 
@@ -852,6 +1051,7 @@ def _mark_referral_soft_review_if_needed_in_conn(
     *,
     relationship_id: str,
     inviter_platform_user_id: str,
+    app_id: str,
 ) -> None:
     recent_count = int(
         conn.execute(
@@ -859,12 +1059,14 @@ def _mark_referral_soft_review_if_needed_in_conn(
             SELECT COUNT(*)
             FROM referral_relationships
             WHERE inviter_platform_user_id = ?
+              AND app_id = ?
               AND status IN ('registered', 'bound', 'qualified', 'rewarded')
               AND review_status != 'failed'
               AND created_at >= datetime('now', '+8 hours', ?)
             """,
             (
                 inviter_platform_user_id,
+                app_id,
                 f"-{REFERRAL_SOFT_REVIEW_WINDOW_DAYS} days",
             ),
         ).fetchone()[0]
@@ -873,8 +1075,8 @@ def _mark_referral_soft_review_if_needed_in_conn(
         return
 
     row = conn.execute(
-        "SELECT * FROM referral_relationships WHERE id = ?",
-        (relationship_id,),
+        "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+        (relationship_id, app_id),
     ).fetchone()
     if row is None:
         return
@@ -894,8 +1096,9 @@ def _mark_referral_soft_review_if_needed_in_conn(
         SET metadata_json = ?,
             updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
         WHERE id = ?
+          AND app_id = ?
         """,
-        (json.dumps(metadata, ensure_ascii=False), relationship_id),
+        (json.dumps(metadata, ensure_ascii=False), relationship_id, app_id),
     )
 
 
@@ -931,9 +1134,14 @@ def _ensure_referral_soft_review_hold_in_conn(
             metadata_json = ?,
             updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
         WHERE id = ?
+          AND app_id = ?
           AND reward_ledger_id IS NULL
         """,
-        (json.dumps(metadata, ensure_ascii=False), relationship["id"]),
+        (
+            json.dumps(metadata, ensure_ascii=False),
+            relationship["id"],
+            relationship["app_id"],
+        ),
     )
     if review_row is None:
         review_id = _new_id("review")
@@ -941,16 +1149,17 @@ def _ensure_referral_soft_review_hold_in_conn(
             """
             INSERT OR IGNORE INTO meaningful_message_reviews(
                 id, referral_relationship_id, invitee_platform_user_id,
-                account_id, message_ids_json, reviewer_type, status,
+                account_id, app_id, message_ids_json, reviewer_type, status,
                 reason, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, 'ai', 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'ai', 'pending', ?, ?)
             """,
             (
                 review_id,
                 relationship["id"],
                 invitee_platform_user_id,
                 account_id,
+                relationship["app_id"],
                 json.dumps(
                     candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT],
                     ensure_ascii=False,
@@ -967,8 +1176,8 @@ def _ensure_referral_soft_review_hold_in_conn(
             ),
         )
     return conn.execute(
-        "SELECT * FROM referral_relationships WHERE id = ?",
-        (relationship["id"],),
+        "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+        (relationship["id"], relationship["app_id"]),
     ).fetchone()
 
 
@@ -976,6 +1185,7 @@ def _release_delayed_referral_reward_in_conn(
     conn: Connection,
     *,
     relationship_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Row]:
     relationship = conn.execute(
         "SELECT * FROM referral_relationships WHERE id = ?",
@@ -1006,19 +1216,25 @@ def _release_delayed_referral_reward_in_conn(
             metadata_json = ?,
             updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
         WHERE id = ?
+          AND app_id = ?
           AND reward_ledger_id IS NULL
           AND review_status = 'pending'
         """,
-        (json.dumps(metadata, ensure_ascii=False), relationship_id),
+        (
+            json.dumps(metadata, ensure_ascii=False),
+            relationship_id,
+            relationship["app_id"],
+        ),
     )
     review_row = conn.execute(
         """
         SELECT *
         FROM meaningful_message_reviews
         WHERE referral_relationship_id = ?
+          AND app_id = ?
           AND reviewer_type = 'ai'
         """,
-        (relationship_id,),
+        (relationship_id, relationship["app_id"]),
     ).fetchone()
     review_metadata = {
         "review_method": "phase1_heuristic",
@@ -1030,22 +1246,24 @@ def _release_delayed_referral_reward_in_conn(
         review_account_id = _first_rewardable_account_for_platform_user_in_conn(
             conn,
             platform_user_id=relationship["invitee_platform_user_id"],
+            app_id=relationship["app_id"],
         )
     if review_row is None and review_account_id:
         conn.execute(
             """
             INSERT INTO meaningful_message_reviews(
                 id, referral_relationship_id, invitee_platform_user_id,
-                account_id, message_ids_json, reviewer_type, status,
+                account_id, app_id, message_ids_json, reviewer_type, status,
                 reason, metadata_json
             )
-            VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
             """,
             (
                 _new_id("review"),
                 relationship_id,
                 relationship["invitee_platform_user_id"],
                 review_account_id,
+                relationship["app_id"],
                 json.dumps(
                     metadata.get("candidate_message_ids") or [],
                     ensure_ascii=False,
@@ -1062,17 +1280,20 @@ def _release_delayed_referral_reward_in_conn(
                 reason = ?,
                 metadata_json = ?
             WHERE id = ?
+              AND app_id = ?
             """,
             (
                 "soft review delay elapsed",
                 json.dumps(review_metadata, ensure_ascii=False),
                 review_row["id"],
+                relationship["app_id"],
             ),
         )
 
     return _apply_referral_reward_in_conn(
         conn,
         relationship_id=relationship_id,
+        registry=registry,
     )
 
 
@@ -1128,13 +1349,30 @@ def _mark_referral_relationship_bound_in_conn(
     invitee_platform_user_id: str,
     account_id: str,
 ) -> Optional[Row]:
+    account = conn.execute(
+        "SELECT app_id FROM accounts WHERE id=?",
+        (account_id,),
+    ).fetchone()
+    if account is None:
+        return None
+    app_id = str(account["app_id"])
+    membership = conn.execute(
+        """
+        SELECT status FROM product_memberships
+        WHERE platform_user_id=? AND app_id=?
+        """,
+        (invitee_platform_user_id, app_id),
+    ).fetchone()
+    if membership is None or membership["status"] != "active":
+        return None
     row = conn.execute(
         """
         SELECT *
         FROM referral_relationships
         WHERE invitee_platform_user_id = ?
+          AND app_id = ?
         """,
-        (invitee_platform_user_id,),
+        (invitee_platform_user_id, app_id),
     ).fetchone()
     if row is None:
         return None
@@ -1148,13 +1386,14 @@ def _mark_referral_relationship_bound_in_conn(
                 metadata_json = ?,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
+              AND app_id = ?
               AND status IN ('pending_registration', 'registered')
             """,
-            (json.dumps(metadata, ensure_ascii=False), row["id"]),
+            (json.dumps(metadata, ensure_ascii=False), row["id"], app_id),
         )
         row = conn.execute(
-            "SELECT * FROM referral_relationships WHERE id = ?",
-            (row["id"],),
+            "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+            (row["id"], app_id),
         ).fetchone()
     return row
 
@@ -1178,6 +1417,7 @@ def _first_rewardable_account_for_platform_user_in_conn(
     conn: Connection,
     *,
     platform_user_id: str,
+    app_id: str,
 ) -> Optional[str]:
     row = conn.execute(
         """
@@ -1186,20 +1426,35 @@ def _first_rewardable_account_for_platform_user_in_conn(
         JOIN accounts a ON a.id = b.account_id
         WHERE b.platform_user_id = ?
           AND b.status = 'active'
+          AND b.app_id = ?
+          AND a.app_id = ?
           AND a.status = 'active'
         ORDER BY b.created_at ASC, b.id ASC
         LIMIT 1
         """,
-        (platform_user_id,),
+        (platform_user_id, app_id, app_id),
     ).fetchone()
     return str(row["account_id"]) if row else None
+
+
+def _lock_referral_relationship_in_conn(conn: Connection, relationship_id: str) -> None:
+    """PG 上串行化同一邀请关系的计数、审核和发奖；SQLite 依赖单 writer。"""
+    if is_postgres():
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (advisory_lock_key("referral-reward:" + relationship_id),),
+        )
 
 
 def _apply_referral_reward_in_conn(
     conn: Connection,
     *,
     relationship_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Row]:
+    # 同一 relationship 的检查、记账与回写必须跨节点串行，避免并发重试同时
+    # 通过 reward_ledger_id 空值检查后撞 ledger 幂等唯一键。
+    _lock_referral_relationship_in_conn(conn, relationship_id)
     relationship = conn.execute(
         """
         SELECT *
@@ -1214,6 +1469,7 @@ def _apply_referral_reward_in_conn(
     inviter_account_id = _first_rewardable_account_for_platform_user_in_conn(
         conn,
         platform_user_id=relationship["inviter_platform_user_id"],
+        app_id=relationship["app_id"],
     )
     if inviter_account_id is None:
         metadata = _load_referral_metadata(relationship)
@@ -1226,9 +1482,14 @@ def _apply_referral_reward_in_conn(
                 metadata_json = ?,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
             WHERE id = ?
+              AND app_id = ?
               AND reward_ledger_id IS NULL
             """,
-            (json.dumps(metadata, ensure_ascii=False), relationship_id),
+            (
+                json.dumps(metadata, ensure_ascii=False),
+                relationship_id,
+                relationship["app_id"],
+            ),
         )
         return None
 
@@ -1244,8 +1505,10 @@ def _apply_referral_reward_in_conn(
         metadata={
             "referral_relationship_id": relationship_id,
             "invitee_platform_user_id": relationship["invitee_platform_user_id"],
+            "app_id": relationship["app_id"],
             "grant_shells": REFERRAL_REWARD_SHELLS,
         },
+        registry=registry,
     )
     conn.execute(
         """
@@ -1256,9 +1519,10 @@ def _apply_referral_reward_in_conn(
             rewarded_at = COALESCE(rewarded_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
         WHERE id = ?
+          AND app_id = ?
           AND reward_ledger_id IS NULL
         """,
-        (ledger_row["id"], relationship_id),
+        (ledger_row["id"], relationship_id, relationship["app_id"]),
     )
     return ledger_row
 
@@ -1267,27 +1531,33 @@ def _retry_qualified_referral_rewards_for_inviter_in_conn(
     conn: Connection,
     *,
     inviter_platform_user_id: str,
+    app_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Row]:
     ledgers = _release_due_delayed_referral_rewards_for_inviter_in_conn(
         conn,
         inviter_platform_user_id=inviter_platform_user_id,
+        app_id=app_id,
+        registry=registry,
     )
     rows = conn.execute(
         """
         SELECT id
         FROM referral_relationships
         WHERE inviter_platform_user_id = ?
+          AND app_id = ?
           AND status = 'qualified'
           AND review_status = 'passed'
           AND reward_ledger_id IS NULL
         ORDER BY updated_at ASC, id ASC
         """,
-        (inviter_platform_user_id,),
+        (inviter_platform_user_id, app_id),
     ).fetchall()
     for row in rows:
         ledger_row = _apply_referral_reward_in_conn(
             conn,
             relationship_id=row["id"],
+            registry=registry,
         )
         if ledger_row is not None:
             ledgers.append(ledger_row)
@@ -1298,20 +1568,23 @@ def _release_due_delayed_referral_rewards_for_inviter_in_conn(
     conn: Connection,
     *,
     inviter_platform_user_id: str,
+    app_id: str,
     limit: int = 100,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Row]:
     rows = conn.execute(
         """
         SELECT id
         FROM referral_relationships
         WHERE inviter_platform_user_id = ?
+          AND app_id = ?
           AND status = 'qualified'
           AND review_status = 'pending'
           AND reward_ledger_id IS NULL
         ORDER BY updated_at ASC, id ASC
         LIMIT ?
         """,
-        (inviter_platform_user_id, max(1, min(int(limit), 500))),
+        (inviter_platform_user_id, app_id, max(1, min(int(limit), 500))),
     ).fetchall()
     ledgers: List[Row] = []
     for row in rows:
@@ -1319,6 +1592,7 @@ def _release_due_delayed_referral_rewards_for_inviter_in_conn(
             ledger_row = _release_delayed_referral_reward_in_conn(
                 conn,
                 relationship_id=row["id"],
+                registry=registry,
             )
         except Exception:
             logger.exception(
@@ -1334,12 +1608,17 @@ def _release_due_delayed_referral_rewards_for_inviter_in_conn(
 def retry_qualified_referral_rewards_for_user(
     *,
     platform_user_id: str,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """Retry already-qualified referral rewards once the inviter has an active account."""
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
         rows = _retry_qualified_referral_rewards_for_inviter_in_conn(
             conn,
             inviter_platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
         )
     return [_decode_ledger_row(row) for row in rows]
 
@@ -1348,19 +1627,30 @@ def release_due_referral_rewards_for_user(
     *,
     platform_user_id: str,
     limit: int = 100,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """Release delayed referral rewards whose soft-review hold has elapsed."""
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
         rows = _release_due_delayed_referral_rewards_for_inviter_in_conn(
             conn,
             inviter_platform_user_id=platform_user_id,
+            app_id=app_id_clean,
             limit=limit,
+            registry=registry,
         )
     return [_decode_ledger_row(row) for row in rows]
 
 
-def release_due_referral_rewards(limit: int = 200) -> List[Dict[str, Any]]:
+def release_due_referral_rewards(
+    limit: int = 200,
+    *,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> List[Dict[str, Any]]:
     """Release all delayed referral rewards that are due, for admin or scheduler runs."""
+    app_id_clean = _registered_app_id(app_id, registry)
     clean_limit = max(1, min(int(limit), 1000))
     with connect() as conn:
         rows = conn.execute(
@@ -1368,12 +1658,13 @@ def release_due_referral_rewards(limit: int = 200) -> List[Dict[str, Any]]:
             SELECT id
             FROM referral_relationships
             WHERE status = 'qualified'
+              AND app_id = ?
               AND review_status = 'pending'
               AND reward_ledger_id IS NULL
             ORDER BY updated_at ASC, id ASC
             LIMIT ?
             """,
-            (clean_limit,),
+            (app_id_clean, clean_limit),
         ).fetchall()
         ledgers: List[Row] = []
         for row in rows:
@@ -1381,6 +1672,7 @@ def release_due_referral_rewards(limit: int = 200) -> List[Dict[str, Any]]:
                 ledger_row = _release_delayed_referral_reward_in_conn(
                     conn,
                     relationship_id=row["id"],
+                    registry=registry,
                 )
             except Exception:
                 logger.exception(
@@ -1397,16 +1689,19 @@ def process_referral_message_for_account(
     *,
     account_id: str,
     message_db_id: int,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
     """Count one bound invitee message and pay the inviter when the threshold is met."""
     with connect() as conn:
         owner = conn.execute(
             """
-            SELECT platform_user_id
-            FROM account_owner_bindings
-            WHERE account_id = ?
-              AND status = 'active'
-            ORDER BY created_at ASC, id ASC
+            SELECT b.platform_user_id, a.app_id
+            FROM account_owner_bindings b
+            JOIN accounts a ON a.id=b.account_id
+            WHERE b.account_id = ?
+              AND b.status = 'active'
+              AND b.app_id = a.app_id
+            ORDER BY b.created_at ASC, b.id ASC
             LIMIT 1
             """,
             (account_id,),
@@ -1414,6 +1709,7 @@ def process_referral_message_for_account(
         if owner is None:
             return None
         invitee_platform_user_id = owner["platform_user_id"]
+        app_id = registry.require_enabled(str(owner["app_id"])).app_id
 
         relationship = _mark_referral_relationship_bound_in_conn(
             conn,
@@ -1423,14 +1719,25 @@ def process_referral_message_for_account(
         if relationship is None:
             return None
 
+        # 候选消息 metadata 是 read-modify-write；必须从读取开始持 relationship 锁，
+        # 否则多节点并发处理不同消息时会互相覆盖 candidate_message_ids。
+        _lock_referral_relationship_in_conn(conn, str(relationship["id"]))
+        relationship = conn.execute(
+            "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+            (relationship["id"], app_id),
+        ).fetchone()
+        if relationship is None:
+            return None
+
         review_row = conn.execute(
             """
             SELECT *
             FROM meaningful_message_reviews
             WHERE referral_relationship_id = ?
+              AND app_id = ?
               AND reviewer_type = 'ai'
             """,
-            (relationship["id"],),
+            (relationship["id"], app_id),
         ).fetchone()
         ledger_row = None
         if relationship["reward_ledger_id"]:
@@ -1478,6 +1785,7 @@ def process_referral_message_for_account(
                     metadata_json = ?,
                     updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
+                  AND app_id = ?
                   AND reward_ledger_id IS NULL
                 """,
                 (
@@ -1485,11 +1793,12 @@ def process_referral_message_for_account(
                     status,
                     json.dumps(metadata, ensure_ascii=False),
                     relationship["id"],
+                    app_id,
                 ),
             )
             relationship = conn.execute(
-                "SELECT * FROM referral_relationships WHERE id = ?",
-                (relationship["id"],),
+                "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+                (relationship["id"], app_id),
             ).fetchone()
 
         if int(relationship["meaningful_message_count"] or 0) >= REFERRAL_QUALIFYING_MESSAGE_COUNT:
@@ -1499,6 +1808,7 @@ def process_referral_message_for_account(
                     ledger_row = _apply_referral_reward_in_conn(
                         conn,
                         relationship_id=relationship["id"],
+                        registry=registry,
                     )
                 elif relationship["review_status"] == "pending":
                     relationship = _ensure_referral_soft_review_hold_in_conn(
@@ -1512,19 +1822,21 @@ def process_referral_message_for_account(
                     ledger_row = _release_delayed_referral_reward_in_conn(
                         conn,
                         relationship_id=relationship["id"],
+                        registry=registry,
                     )
                 relationship = conn.execute(
-                    "SELECT * FROM referral_relationships WHERE id = ?",
-                    (relationship["id"],),
+                    "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+                    (relationship["id"], app_id),
                 ).fetchone()
                 review_row = conn.execute(
                     """
                     SELECT *
                     FROM meaningful_message_reviews
                     WHERE referral_relationship_id = ?
+                      AND app_id = ?
                       AND reviewer_type = 'ai'
                     """,
-                    (relationship["id"],),
+                    (relationship["id"], app_id),
                 ).fetchone()
             else:
                 if review_row is None:
@@ -1533,16 +1845,17 @@ def process_referral_message_for_account(
                         """
                         INSERT OR IGNORE INTO meaningful_message_reviews(
                             id, referral_relationship_id, invitee_platform_user_id,
-                            account_id, message_ids_json, reviewer_type, status,
+                            account_id, app_id, message_ids_json, reviewer_type, status,
                             reason, metadata_json
                         )
-                        VALUES (?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
                         """,
                         (
                             review_id,
                             relationship["id"],
                             invitee_platform_user_id,
                             account_id,
+                            app_id,
                             json.dumps(candidate_ids[:REFERRAL_QUALIFYING_MESSAGE_COUNT], ensure_ascii=False),
                             "phase1 heuristic accepted 3 meaningful inbound messages",
                             json.dumps(
@@ -1559,9 +1872,10 @@ def process_referral_message_for_account(
                         SELECT *
                         FROM meaningful_message_reviews
                         WHERE referral_relationship_id = ?
+                          AND app_id = ?
                           AND reviewer_type = 'ai'
                         """,
-                        (relationship["id"],),
+                        (relationship["id"], app_id),
                     ).fetchone()
                 if review_row is not None and review_row["status"] == "passed":
                     conn.execute(
@@ -1571,17 +1885,19 @@ def process_referral_message_for_account(
                             review_status = 'passed',
                             updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                         WHERE id = ?
+                          AND app_id = ?
                           AND reward_ledger_id IS NULL
                         """,
-                        (relationship["id"],),
+                        (relationship["id"], app_id),
                     )
                     ledger_row = _apply_referral_reward_in_conn(
                         conn,
                         relationship_id=relationship["id"],
+                        registry=registry,
                     )
                     relationship = conn.execute(
-                        "SELECT * FROM referral_relationships WHERE id = ?",
-                        (relationship["id"],),
+                        "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
+                        (relationship["id"], app_id),
                     ).fetchone()
 
         return {
@@ -1596,11 +1912,14 @@ def list_referral_relationships(
     limit: int = 50,
     inviter_platform_user_id: Optional[str] = None,
     invitee_platform_user_id: Optional[str] = None,
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """List referral relationships for admin diagnostics without exposing phone numbers."""
     clean_limit = max(1, min(int(limit), 200))
-    clauses = []
-    params: List[Any] = []
+    app_id_clean = _registered_app_id(app_id, registry)
+    clauses = ["app_id = ?"]
+    params: List[Any] = [app_id_clean]
     if inviter_platform_user_id:
         clauses.append("inviter_platform_user_id = ?")
         params.append(inviter_platform_user_id)
@@ -1682,6 +2001,7 @@ def record_chat_usage_charge(
     output_tokens: Optional[int] = None,
     model_price_multiplier_micros: int = 1_000_000,
     metadata: Optional[Dict[str, Any]] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
     cleaned_idempotency_key = _clean_text(idempotency_key)
     if not cleaned_idempotency_key:
@@ -1706,37 +2026,51 @@ def record_chat_usage_charge(
     if computed_shell_micros <= 0:
         return None
 
-    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
-    if platform_user_id is None:
-        return None
-
     with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            registry=registry,
+            allow_missing_owner=True,
+        )
+        if scope is None:
+            return None
+        platform_user_id = scope["platform_user_id"]
+        app_id = scope["app_id"]
         existing = conn.execute(
             """
             SELECT ce.*, l.id AS ledger_exists
             FROM cost_events ce
-            LEFT JOIN entitlement_ledger l ON l.id = ce.entitlement_ledger_id
-            WHERE ce.idempotency_key = ?
+            LEFT JOIN entitlement_ledger l
+              ON l.id = ce.entitlement_ledger_id AND l.app_id = ce.app_id
+            WHERE ce.app_id = ? AND ce.idempotency_key = ?
             """,
-            (cleaned_idempotency_key,),
+            (app_id, cleaned_idempotency_key),
         ).fetchone()
         if existing is not None:
+            if (
+                existing["account_id"] != account_id
+                or existing["platform_user_id"] != platform_user_id
+                or existing["app_id"] != app_id
+            ):
+                raise ValueError("billing idempotency scope mismatch")
             event = _decode_cost_event_row(existing)
             ledger = None
             if event.get("entitlement_ledger_id"):
                 ledger_row = conn.execute(
-                    "SELECT * FROM entitlement_ledger WHERE id = ?",
-                    (event["entitlement_ledger_id"],),
+                    "SELECT * FROM entitlement_ledger WHERE id = ? AND app_id = ?",
+                    (event["entitlement_ledger_id"], app_id),
                 ).fetchone()
                 ledger = _decode_ledger_row(ledger_row) if ledger_row else None
             wallet_row = conn.execute(
                 """
-                SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                SELECT id, account_id, platform_user_id, app_id,
+                       balance_shell_micros, status,
                        created_at, updated_at
                 FROM entitlement_wallets
-                WHERE platform_user_id = ? AND status = 'active'
+                WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
                 """,
-                (platform_user_id,),
+                (platform_user_id, app_id),
             ).fetchone()
             return {
                 "cost_event": event,
@@ -1748,6 +2082,7 @@ def record_chat_usage_charge(
             conn,
             account_id=account_id,
             platform_user_id=platform_user_id,
+            registry=registry,
         )
         event_id = _new_id("cost")
         ledger_idempotency_key = f"usage-charge-{cleaned_idempotency_key}"
@@ -1769,23 +2104,25 @@ def record_chat_usage_charge(
             source_id=source_id,
             idempotency_key=ledger_idempotency_key,
             metadata=charge_metadata,
+            registry=registry,
         )
         conn.execute(
             """
             INSERT INTO cost_events(
-                id, wallet_id, account_id, platform_user_id, cost_type,
+                id, wallet_id, account_id, platform_user_id, app_id, cost_type,
                 cost_owner, billable_to_user, model, input_tokens, output_tokens,
                 billable_tokens, model_price_multiplier_micros, computed_shell_micros,
                 entitlement_ledger_id, source_type, source_id, idempotency_key,
                 metadata_json
             )
-            VALUES (?, ?, ?, ?, 'llm_tokens', 'user', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'llm_tokens', 'user', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
                 wallet["id"],
                 account_id,
                 platform_user_id,
+                app_id,
                 _clean_text(model),
                 resolved_input_tokens,
                 resolved_output_tokens,
@@ -1800,17 +2137,18 @@ def record_chat_usage_charge(
             ),
         )
         event_row = conn.execute(
-            "SELECT * FROM cost_events WHERE id = ?",
-            (event_id,),
+            "SELECT * FROM cost_events WHERE id = ? AND app_id = ?",
+            (event_id, app_id),
         ).fetchone()
         wallet_row = conn.execute(
             """
-            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+            SELECT id, account_id, platform_user_id, app_id,
+                   balance_shell_micros, status,
                    created_at, updated_at
             FROM entitlement_wallets
-            WHERE id = ?
+            WHERE id = ? AND app_id = ?
             """,
-            (wallet["id"],),
+            (wallet["id"], app_id),
         ).fetchone()
 
     if event_row is None:
@@ -1830,6 +2168,7 @@ def record_image_understanding_charge(
     model: Optional[str] = None,
     cost_shell_micros: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
     """Record one fixed-price image-understanding cost event (independent of chat tokens).
 
@@ -1851,37 +2190,51 @@ def record_image_understanding_charge(
     if charge_micros <= 0:
         return None
 
-    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
-    if platform_user_id is None:
-        return None
-
     with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            registry=registry,
+            allow_missing_owner=True,
+        )
+        if scope is None:
+            return None
+        platform_user_id = scope["platform_user_id"]
+        app_id = scope["app_id"]
         existing = conn.execute(
             """
             SELECT ce.*, l.id AS ledger_exists
             FROM cost_events ce
-            LEFT JOIN entitlement_ledger l ON l.id = ce.entitlement_ledger_id
-            WHERE ce.idempotency_key = ?
+            LEFT JOIN entitlement_ledger l
+              ON l.id = ce.entitlement_ledger_id AND l.app_id = ce.app_id
+            WHERE ce.app_id = ? AND ce.idempotency_key = ?
             """,
-            (cleaned_idempotency_key,),
+            (app_id, cleaned_idempotency_key),
         ).fetchone()
         if existing is not None:
+            if (
+                existing["account_id"] != account_id
+                or existing["platform_user_id"] != platform_user_id
+                or existing["app_id"] != app_id
+            ):
+                raise ValueError("billing idempotency scope mismatch")
             event = _decode_cost_event_row(existing)
             ledger = None
             if event.get("entitlement_ledger_id"):
                 ledger_row = conn.execute(
-                    "SELECT * FROM entitlement_ledger WHERE id = ?",
-                    (event["entitlement_ledger_id"],),
+                    "SELECT * FROM entitlement_ledger WHERE id = ? AND app_id = ?",
+                    (event["entitlement_ledger_id"], app_id),
                 ).fetchone()
                 ledger = _decode_ledger_row(ledger_row) if ledger_row else None
             wallet_row = conn.execute(
                 """
-                SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+                SELECT id, account_id, platform_user_id, app_id,
+                       balance_shell_micros, status,
                        created_at, updated_at
                 FROM entitlement_wallets
-                WHERE platform_user_id = ? AND status = 'active'
+                WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
                 """,
-                (platform_user_id,),
+                (platform_user_id, app_id),
             ).fetchone()
             return {
                 "cost_event": event,
@@ -1893,6 +2246,7 @@ def record_image_understanding_charge(
             conn,
             account_id=account_id,
             platform_user_id=platform_user_id,
+            registry=registry,
         )
         event_id = _new_id("cost")
         ledger_idempotency_key = f"usage-charge-{cleaned_idempotency_key}"
@@ -1911,23 +2265,25 @@ def record_image_understanding_charge(
             source_id=source_id,
             idempotency_key=ledger_idempotency_key,
             metadata=charge_metadata,
+            registry=registry,
         )
         conn.execute(
             """
             INSERT INTO cost_events(
-                id, wallet_id, account_id, platform_user_id, cost_type,
+                id, wallet_id, account_id, platform_user_id, app_id, cost_type,
                 cost_owner, billable_to_user, model, input_tokens, output_tokens,
                 billable_tokens, model_price_multiplier_micros, computed_shell_micros,
                 entitlement_ledger_id, source_type, source_id, idempotency_key,
                 metadata_json
             )
-            VALUES (?, ?, ?, ?, 'image_understanding', 'user', 1, ?, 0, 0, 0, 1000000, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 'image_understanding', 'user', 1, ?, 0, 0, 0, 1000000, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id,
                 wallet["id"],
                 account_id,
                 platform_user_id,
+                app_id,
                 _clean_text(model),
                 charge_micros,
                 ledger_row["id"],
@@ -1938,17 +2294,18 @@ def record_image_understanding_charge(
             ),
         )
         event_row = conn.execute(
-            "SELECT * FROM cost_events WHERE id = ?",
-            (event_id,),
+            "SELECT * FROM cost_events WHERE id = ? AND app_id = ?",
+            (event_id, app_id),
         ).fetchone()
         wallet_row = conn.execute(
             """
-            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+            SELECT id, account_id, platform_user_id, app_id,
+                   balance_shell_micros, status,
                    created_at, updated_at
             FROM entitlement_wallets
-            WHERE id = ?
+            WHERE id = ? AND app_id = ?
             """,
-            (wallet["id"],),
+            (wallet["id"], app_id),
         ).fetchone()
 
     if event_row is None:
@@ -1965,33 +2322,43 @@ def get_wallet_summary(
     account_id: str,
     ensure_grant: bool = False,
     create_if_missing: bool = True,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
-    from app.db.accounts import resolve_owner_platform_user_id
     with connect() as conn:
-        # 统一收口到 canonical 解析：形态 A（微信）经 owner_binding、形态 B（朝夕相伴居民 runtime
-        # account）经世界归属；都无归属真人则无共享钱包可查。原内联读只认 owner_binding，居民会漏解析
-        # （codex-5 同类冷路径根因：M1 上迁时热路径已迁、此摘要路径漏扫）。
-        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
-        if platform_user_id is None:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            registry=registry,
+            allow_missing_owner=True,
+        )
+        if scope is None:
             return None
+        platform_user_id = scope["platform_user_id"]
+        app_id = scope["app_id"]
 
     if ensure_grant:
         grant_new_user_shells(
             account_id=account_id,
             platform_user_id=platform_user_id,
+            registry=registry,
         )
     elif create_if_missing:
-        ensure_wallet(account_id=account_id, platform_user_id=platform_user_id)
+        ensure_wallet(
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            registry=registry,
+        )
 
     with connect() as conn:
         wallet_row = conn.execute(
             """
-            SELECT id, account_id, platform_user_id, balance_shell_micros, status,
+            SELECT id, account_id, platform_user_id, app_id,
+                   balance_shell_micros, status,
                    created_at, updated_at
             FROM entitlement_wallets
-            WHERE platform_user_id = ? AND status = 'active'
+            WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id),
         ).fetchone()
         if wallet_row is None:
             return None
@@ -1999,11 +2366,11 @@ def get_wallet_summary(
             """
             SELECT *
             FROM entitlement_ledger
-            WHERE wallet_id = ?
+            WHERE wallet_id = ? AND app_id = ?
             ORDER BY created_at DESC, id DESC
             LIMIT 1
             """,
-            (wallet_row["id"],),
+            (wallet_row["id"], app_id),
         ).fetchone()
     wallet = _decode_wallet_row(wallet_row)
     latest_ledger = _decode_ledger_row(latest_ledger_row) if latest_ledger_row else None
@@ -2017,7 +2384,11 @@ def get_wallet_summary(
     }
 
 
-def get_wallet_balance_shell_micros(*, account_id: str) -> Optional[int]:
+def get_wallet_balance_shell_micros(
+    *,
+    account_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Optional[int]:
     """只读返回账号当前贝壳余额（micros）；无绑定 / 无钱包返回 None。
 
     供 agent_need_survival_status 的资源风险判断；不创建钱包、不发放新用户额度。
@@ -2026,6 +2397,7 @@ def get_wallet_balance_shell_micros(*, account_id: str) -> Optional[int]:
         account_id=account_id,
         ensure_grant=False,
         create_if_missing=False,
+        registry=registry,
     )
     if not summary or not summary.get("wallet"):
         return None
@@ -2036,23 +2408,27 @@ def list_wallet_ledger(
     *,
     account_id: str,
     limit: int = 50,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     clean_limit = max(1, min(int(limit), 200))
-    # D-14：钱包已按真人共享，流水视图随之按 platform_user 聚合（跨该真人全部 account），
-    # 与 get_wallet_summary 的共享余额一致。无 active 绑定则空。
-    platform_user_id = get_platform_user_id_for_account(account_id=account_id)
-    if platform_user_id is None:
-        return []
     with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            registry=registry,
+            allow_missing_owner=True,
+        )
+        if scope is None:
+            return []
         rows = conn.execute(
             """
             SELECT *
             FROM entitlement_ledger
-            WHERE platform_user_id = ?
+            WHERE platform_user_id = ? AND app_id = ?
             ORDER BY created_at DESC, id DESC
             LIMIT ?
             """,
-            (platform_user_id, clean_limit),
+            (scope["platform_user_id"], scope["app_id"], clean_limit),
         ).fetchall()
     return [_decode_ledger_row(row) for row in rows]
 
@@ -2068,6 +2444,7 @@ def create_ai4all_account_for_user(
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
     app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     from app.db.accounts import get_account, get_profile_for_account
     cleaned_display_name = _clean_text(display_name)
@@ -2075,7 +2452,7 @@ def create_ai4all_account_for_user(
         raise ValueError("display_name is required")
 
     cleaned_prompt = _clean_text(system_prompt)
-    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
+    app_id_clean = _registered_app_id(app_id, registry)
     with connect() as conn:
         user = conn.execute(
             "SELECT id FROM platform_users WHERE id = ?",
@@ -2083,6 +2460,12 @@ def create_ai4all_account_for_user(
         ).fetchone()
         if user is None:
             raise ValueError("platform_user not found")
+        _require_active_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=app_id_clean,
+            registry=registry,
+        )
         # A 收敛不变量:一手机号 × 一 App = 一 active 账号(见 §9)。此软检查拦常规重复建号;
         # owner_bindings 部分唯一索引 ux_owner_binding_active_user_app 为并发竞态兜底。
         existing_count = conn.execute(
@@ -2150,12 +2533,19 @@ def create_ai4all_account_for_user(
     subscription = upsert_subscription_for_user(
         platform_user_id=platform_user_id,
         plan=plan,
+        app_id=app_id_clean,
+        registry=registry,
     )
     grant_new_user_shells(
         account_id=account_id,
         platform_user_id=platform_user_id,
+        registry=registry,
     )
-    retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
+    retry_qualified_referral_rewards_for_user(
+        platform_user_id=platform_user_id,
+        app_id=app_id_clean,
+        registry=registry,
+    )
 
     # 营销活码归因：校验 → 写快照 → 计数 → 应用强制 SOUL 人设。与 onboarding 调试建号
     # 共用 apply_campaign_code_attribution（后者 increment_usage=False），确保调试忠实复现
@@ -2177,18 +2567,21 @@ def create_ai4all_account_for_user(
 
 def insert_resident_runtime_account(
     *,
+    platform_user_id: str,
     display_name: str,
     system_prompt: str = "",
     initial_channel: str = "native",
     app_id: str = DEFAULT_APP_ID,
     soul_seed: Optional[str] = None,
     identity_seed: Optional[str] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
     conn: Connection,
 ) -> Dict[str, Any]:
     """在调用方事务内只插入居民 runtime account、profile 与可选 persona 文件。
 
-    本原语刻意不建 owner binding、钱包、subscription、grant、resident 或 conversation；后两者
-    由 Companion World repository 使用同一 ``conn`` 串联，从而任一步失败都整体回滚。
+    本原语先校验 owner 的 active membership，但刻意不建 owner binding、钱包、subscription、
+    grant、resident 或 conversation；后两者由 Companion World repository 使用同一 ``conn``
+    串联，从而任一步失败都整体回滚。
     ``soul_seed``/``identity_seed`` 只允许写固定文件名，避免模板内容控制存储路径。
     """
     from app import profile_storage
@@ -2199,7 +2592,13 @@ def insert_resident_runtime_account(
     if not cleaned_display_name:
         raise ValueError("display_name is required")
     cleaned_prompt = _clean_text(system_prompt)
-    app_id_clean = _clean_text(app_id) or DEFAULT_APP_ID
+    app_id_clean = _registered_app_id(app_id, registry)
+    _require_active_product_membership_in_conn(
+        conn,
+        platform_user_id=platform_user_id,
+        app_id=app_id_clean,
+        registry=registry,
+    )
     last_integrity_error = None
     for _ in range(_ACCOUNT_ID_GENERATION_RETRIES):
         account_id = _new_account_id()
@@ -2261,6 +2660,7 @@ def create_resident_runtime_account(
     initial_channel: str = "native",
     joined_at: Optional[str] = None,
     app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """建一个居民 runtime account（形态 B / M1-5 内部建号路径），返回 {account, profile, resident}。
 
@@ -2288,15 +2688,18 @@ def create_resident_runtime_account(
         if not is_postgres():
             conn.execute("BEGIN IMMEDIATE")
         # 世界归属解析的锚：universe 必须存在（否则居民永远解析不到真人钱包）。
-        if conn.execute(
-            "SELECT 1 FROM universes WHERE id = ?", (universe_id,)
-        ).fetchone() is None:
+        universe = conn.execute(
+            "SELECT owner_platform_user_id FROM universes WHERE id = ?", (universe_id,)
+        ).fetchone()
+        if universe is None:
             raise ValueError("universe not found")
         runtime = insert_resident_runtime_account(
+            platform_user_id=str(universe["owner_platform_user_id"]),
             display_name=display_name,
             system_prompt=system_prompt,
             initial_channel=initial_channel,
             app_id=app_id,
+            registry=registry,
             conn=conn,
         )
         account_id = runtime["account"]["id"]
@@ -2319,12 +2722,25 @@ def create_resident_runtime_account(
     }
 
 
-def get_first_active_account_for_user(
+def get_active_bound_account_for_user_in_app(
     *,
     platform_user_id: str,
+    app_id: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
+    """解析真人在指定产品中的唯一 active 入口账号，不扫描产品内居民账号。"""
     from app.db.accounts import get_account, get_profile_for_account
+    registered_app_id = registry.require_enabled(app_id).app_id
     with connect() as conn:
+        try:
+            _require_active_product_membership_in_conn(
+                conn,
+                platform_user_id=platform_user_id,
+                app_id=registered_app_id,
+                registry=registry,
+            )
+        except ValueError:
+            return None
         row = conn.execute(
             """
             SELECT b.id, b.account_id
@@ -2332,24 +2748,27 @@ def get_first_active_account_for_user(
             JOIN accounts a ON a.id = b.account_id
             WHERE b.platform_user_id = ?
               AND b.status = 'active'
+              AND b.app_id = ?
+              AND a.app_id = ?
             ORDER BY b.created_at ASC, b.id ASC
             LIMIT 1
             """,
-            (platform_user_id,),
+            (platform_user_id, registered_app_id, registered_app_id),
         ).fetchone()
         # A 收敛后每 user 恒有 <=1 个 active 账号;>1 说明存量未收敛或竞态漏网,
         # 告警以便探测,不静默用"取最早"掩盖脏数据(见 §9.3 A5)。
         active_count = conn.execute(
             """
             SELECT COUNT(*) FROM account_owner_bindings
-            WHERE platform_user_id = ? AND status = 'active'
+            WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
             """,
-            (platform_user_id,),
+            (platform_user_id, registered_app_id),
         ).fetchone()[0]
         if active_count > 1:
             logger.warning(
-                "platform_user %s has %s active accounts (expected <=1 after A convergence); returning earliest",
+                "platform_user %s app %s has %s active entry accounts; returning earliest",
                 platform_user_id,
+                registered_app_id,
                 active_count,
             )
     if row is None:
@@ -2360,14 +2779,21 @@ def get_first_active_account_for_user(
     grant_new_user_shells(
         account_id=row["account_id"],
         platform_user_id=platform_user_id,
+        registry=registry,
     )
-    retry_qualified_referral_rewards_for_user(platform_user_id=platform_user_id)
+    retry_qualified_referral_rewards_for_user(
+        platform_user_id=platform_user_id,
+        app_id=registered_app_id,
+        registry=registry,
+    )
     return {
         "account": account,
         "profile": get_profile_for_account(account_id=row["account_id"]),
         "owner_binding": get_account_owner_binding(owner_binding_id=int(row["id"])),
         "subscription": get_latest_subscription_for_user(
             platform_user_id=platform_user_id,
+            app_id=registered_app_id,
+            registry=registry,
         ),
     }
 
@@ -2380,8 +2806,14 @@ def get_or_create_default_ai4all_account_for_user(
     campaign_code: Optional[str] = None,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
+    app_id: str = DEFAULT_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
-    existing = get_first_active_account_for_user(platform_user_id=platform_user_id)
+    existing = get_active_bound_account_for_user_in_app(
+        platform_user_id=platform_user_id,
+        app_id=app_id,
+        registry=registry,
+    )
     if existing is not None:
         return existing
     return create_ai4all_account_for_user(
@@ -2393,6 +2825,8 @@ def get_or_create_default_ai4all_account_for_user(
         require_display_name=False,
         initial_channel=initial_channel,
         binding_method=binding_method,
+        app_id=app_id,
+        registry=registry,
     )
 
 

@@ -12,7 +12,10 @@ fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故�
 走内存/临时 SQLite（fresh_db）。
 """
 import app.db as db
-from app.db._core import _migration_0026_daily_usage_platform_user
+from app.db._core import (
+    _migration_0026_daily_usage_platform_user,
+    _migration_0042_quota_app_id_contract,
+)
 from tests.factories import make_resident_account
 
 _DATE = "2026-07-19"
@@ -39,6 +42,7 @@ def _seed_pre_migration_daily(conn, *, user_id, a1, a2):
       此行仅为让「同真人多行合并」路径可测）。
     """
     conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_date")
+    conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_app_date")
     for acct, pu, cnt in ((a1, None, _C1), (a2, user_id, _C2)):
         conn.execute(
             "INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at) "
@@ -55,6 +59,7 @@ def test_m0023_backfills_and_merges_multi_account_daily(fresh_db):
 
     with db.connect() as conn:
         _migration_0026_daily_usage_platform_user(conn)
+        _migration_0042_quota_app_id_contract(conn)
 
     with db.connect() as conn:
         rows = conn.execute(
@@ -124,6 +129,7 @@ def test_m0023_is_idempotent(fresh_db):
     # 再跑一次（模拟重复应用）。
     with db.connect() as conn:
         _migration_0026_daily_usage_platform_user(conn)
+        _migration_0042_quota_app_id_contract(conn)
 
     with db.connect() as conn:
         rows = conn.execute(

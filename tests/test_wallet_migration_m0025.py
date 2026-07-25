@@ -13,7 +13,10 @@ ledger/cost_events），再**直接调用**迁移函数，验证 money 路径的
 
 走内存/临时 SQLite（fresh_db）。
 """
+import pytest
+
 import app.db as db
+from app.db._backend import IntegrityError
 from app.db._core import _migration_0025_wallet_unique_platform_user
 from tests.factories import make_resident_account
 
@@ -39,6 +42,7 @@ def _seed_pre_migration_two_wallets(conn, *, user_id, a1, a2):
     )
     # 迁移前 DB 无此索引；DROP 后 raw 插第二个 active 钱包（a2）。
     conn.execute("DROP INDEX IF EXISTS ux_entitlement_wallets_user_active")
+    conn.execute("DROP INDEX IF EXISTS ux_entitlement_wallets_user_app_active")
     w2_id = "wallet_pre_a2"
     conn.execute(
         """
@@ -117,8 +121,20 @@ def test_m0022_merges_multi_wallet_user(fresh_db):
     # 被并钱包的 ledger/cost_events 归并到主钱包。
     assert ledger_wallet == w1_id
     assert cost_wallet == w1_id
-    # 索引已重建：对第二个 account get-or-create 返回同一主钱包，不再新建。
-    assert db.ensure_wallet(account_id=a2, platform_user_id=user_id)["id"] == w1_id
+    # m0025 的 legacy 真人级索引已重建，仍会阻止第二个 active 钱包。
+    with pytest.raises(IntegrityError):
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO accounts(id, app_id) VALUES ('legacy-wallet-source', 'zhaoxi')"
+            )
+            conn.execute(
+                """
+                INSERT INTO entitlement_wallets(
+                    id, account_id, platform_user_id, app_id, status
+                ) VALUES ('legacy-wallet-duplicate', 'legacy-wallet-source', ?, 'zhaoxi', 'active')
+                """,
+                (user_id,),
+            )
 
 
 def test_m0022_is_idempotent(fresh_db):

@@ -13,7 +13,15 @@ import time
 from typing import Optional
 
 from app.db._backend import is_postgres
-from app.db._core import _tx
+from app.db._core import _tx, product_quota_subject
+
+
+def product_rpm_subject(*, platform_user_id: str, app_id: str) -> str:
+    """返回产品级 RPM 存储 subject，与 daily advisory lock 使用同一编码。"""
+    return product_quota_subject(
+        platform_user_id=platform_user_id,
+        app_id=app_id,
+    )
 
 
 def _advisory_key(account_id: str) -> int:
@@ -65,6 +73,26 @@ class RateLimiter:
                 (account_id, now),
             )
             return True
+
+    def check_product_rpm(
+        self,
+        *,
+        platform_user_id: str,
+        app_id: str,
+        limit: int,
+        window_seconds: float = 60.0,
+        _now: Optional[float] = None,
+    ) -> bool:
+        """按 ``(platform_user_id, app_id)`` 检查并记录一次产品 RPM。"""
+        return self.check_rpm(
+            product_rpm_subject(
+                platform_user_id=platform_user_id,
+                app_id=app_id,
+            ),
+            limit,
+            window_seconds=window_seconds,
+            _now=_now,
+        )
 
 
 rate_limiter = RateLimiter()
