@@ -38,7 +38,7 @@ from app.products.zhaoxi.application import (
 from app.time_utils import beijing_now
 from app.routers.deps import _resolve_legacy_session_principal
 
-router = APIRouter(prefix="/v1", tags=["companion-world"])
+router = APIRouter(tags=["companion-world"])
 
 _ERROR_STATUS = {
     "not_found": 404,

@@ -22,7 +22,7 @@ from app.products.zhaoxi.api.companion_world import (
 )
 from app.time_utils import beijing_naive_now
 
-router = APIRouter(prefix="/v1", tags=["companion-world-mailbox"])
+router = APIRouter(tags=["companion-world-mailbox"])
 
 _CURSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))

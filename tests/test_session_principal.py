@@ -67,6 +67,28 @@ def test_test_product_token_cannot_resolve_for_legacy_audience(fresh_db):
     )
 
 
+def test_require_product_session_uses_fixed_server_audience(fresh_db):
+    from fastapi import HTTPException
+    from app.routers.deps import require_product_session
+
+    registry = build_test_product_registry()
+    user = db.create_or_get_platform_user_by_phone(phone="13800037206")
+    db.ensure_product_membership(
+        platform_user_id=user["id"], app_id="test_product", registry=registry
+    )
+    zhaoxi_session = db.create_platform_user_session(platform_user_id=user["id"])
+    test_session = db.create_platform_user_session(
+        platform_user_id=user["id"], app_id="test_product", registry=registry
+    )
+    dependency = require_product_session("test_product", registry=registry)
+
+    principal = dependency(authorization=f"Bearer {test_session['token']}")
+    assert principal.app_id == "test_product"
+    with pytest.raises(HTTPException) as exc:
+        dependency(authorization=f"Bearer {zhaoxi_session['token']}")
+    assert exc.value.status_code == 401
+
+
 def test_test_product_token_cannot_access_legacy_web_or_v1_routes(client):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037205")
@@ -80,6 +102,9 @@ def test_test_product_token_cannot_access_legacy_web_or_v1_routes(client):
 
     assert client.get("/web/me", headers=headers).status_code == 401
     assert client.get("/v1/me", headers=headers).status_code == 401
+    assert (
+        client.get("/api/v1/products/zhaoxi/me", headers=headers).status_code == 401
+    )
 
 
 def test_m0038_backfills_existing_sessions_without_changing_count(fresh_db):

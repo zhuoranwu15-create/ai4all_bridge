@@ -52,7 +52,7 @@ from app.agent_runtime.turns.service import ChannelTurnInput
 from app.products.zhaoxi.application.turns import run_zhaoxi_turn as run_turn_for_account
 
 
-router = APIRouter(prefix="/v1", tags=["app-v1"])
+router = APIRouter(tags=["app-v1"])
 
 # App「朝夕相伴」(app_id=zhaoxi) 的默认 AI 名字。App 首建账号且用户未起名时用它兜底,
 # 使 IDENTITY 播种为「你的名字是 朝夕」、LLM 自称与 UI 展示一致(见 §9.3 C4/L4)。

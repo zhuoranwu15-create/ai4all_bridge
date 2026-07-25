@@ -22,7 +22,7 @@ from app.products.zhaoxi.api.companion_world import (
 )
 from app.time_utils import beijing_naive_now
 
-router = APIRouter(prefix="/v1", tags=["companion-world-visits"])
+router = APIRouter(tags=["companion-world-visits"])
 _BEIJING_TZ = timezone(timedelta(hours=8))
 _REDEEM_USER_RPM = 10
 _REDEEM_IP_RPM = 30

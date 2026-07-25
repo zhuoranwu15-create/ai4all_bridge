@@ -42,6 +42,16 @@ def test_app_config_exposes_only_public_settings(client, fresh_db):
     assert "secret-not-in-response" not in response.text
 
 
+def test_product_namespace_preserves_zhaoxi_contract(client):
+    headers, legacy = _login(client, "13800138010")
+
+    namespaced = client.get("/api/v1/products/zhaoxi/me", headers=headers)
+
+    assert namespaced.status_code == 200
+    assert namespaced.json()["account"] == legacy["account"]
+    assert client.get("/api/v1/products/unknown/me", headers=headers).status_code == 404
+
+
 def test_app_session_creates_app_account_without_weixin_qr(client, fresh_db):
     with patch("app.platform.gateways.openclaw.start_weixin_qr_login") as qr_mock:
         headers, data = _login(client)
@@ -147,7 +157,7 @@ def test_app_turn_builds_app_channel_input_and_sync_response(client):
             metadata={"reply_message_id": "reply-1"},
         )
 
-    with patch("app.routers.app_api.run_turn_for_account", fake_run):
+    with patch("app.products.zhaoxi.api.app.run_turn_for_account", fake_run):
         response = client.post(
             "/v1/chat/turn",
             headers=headers,

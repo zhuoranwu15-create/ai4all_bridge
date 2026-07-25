@@ -389,13 +389,16 @@ def fresh_db(test_settings):
     """Patch settings modules to use a temp SQLite/profile workspace."""
     patches = [
         patch("app.db.settings", test_settings),
+        patch("app.bootstrap.application.settings", test_settings),
+        patch("app.bootstrap.lifecycle.settings", test_settings),
+        patch("app.products.zhaoxi.lifecycle.settings", test_settings),
         # main.py 拆出的 router 包：各模块各自绑定 settings，需在此一并路由到临时配置。
         patch("app.routers.deps.settings", test_settings),
         patch("app.routers.serializers.settings", test_settings),
         patch("app.routers.health.settings", test_settings),
         patch("app.products.zhaoxi.api.bridge.settings", test_settings),
         patch("app.routers.web.settings", test_settings),
-        patch("app.routers.app_api.settings", test_settings),
+        patch("app.products.zhaoxi.api.app.settings", test_settings),
         patch("app.products.zhaoxi.api.companion_world.settings", test_settings),
         patch("app.products.zhaoxi.api.app_notifications.settings", test_settings),
         patch("app.products.zhaoxi.infrastructure.app_inbox.settings", test_settings),
@@ -470,12 +473,15 @@ def client(fresh_db):
 
     patches = [
         patch("app.main.settings", fresh_db),
+        patch("app.bootstrap.application.settings", fresh_db),
+        patch("app.bootstrap.lifecycle.settings", fresh_db),
+        patch("app.products.zhaoxi.lifecycle.settings", fresh_db),
         patch("app.routers.deps.settings", fresh_db),
         patch("app.routers.serializers.settings", fresh_db),
         patch("app.routers.health.settings", fresh_db),
         patch("app.products.zhaoxi.api.bridge.settings", fresh_db),
         patch("app.routers.web.settings", fresh_db),
-        patch("app.routers.app_api.settings", fresh_db),
+        patch("app.products.zhaoxi.api.app.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
         patch("app.platform.media.asr.settings", fresh_db),
         patch("app.products.zhaoxi.api.debug.settings", fresh_db),

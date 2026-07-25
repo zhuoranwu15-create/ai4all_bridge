@@ -4,12 +4,16 @@
 引用；settings 在本模块绑定，测试需 patch "app.routers.deps.settings"
 （沿用项目 per-module patch 约定）。
 """
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import Depends, Header, HTTPException, status
 
 from app.platform.auth.tokens import bearer_matches
-from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.bootstrap.product_registry import (
+    PRODUCTION_PRODUCT_REGISTRY,
+    ZHAOXI_APP_ID,
+    ProductRegistry,
+)
 from app.config import settings
 from app.db import SessionPrincipal, resolve_session_principal, upsert_admin_user
 
@@ -105,16 +109,38 @@ def _resolve_legacy_session_principal(
     )
 
 
-def _require_session(
-    authorization: Optional[str] = Header(default=None),
-) -> SessionPrincipal:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="未登录")
-    principal = _resolve_legacy_session_principal(authorization)
-    if principal is None:
-        raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
-    return principal
+def require_product_session(
+    expected_app_id: str,
+    *,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Callable[..., SessionPrincipal]:
+    """创建绑定固定产品 audience 的 FastAPI session dependency。"""
+
+    registered_app_id = registry.require_enabled(expected_app_id).app_id
+
+    def _dependency(
+        authorization: Optional[str] = Header(default=None),
+    ) -> SessionPrincipal:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="未登录")
+        token = authorization.removeprefix("Bearer ").strip()
+        if not token:
+            raise HTTPException(status_code=401, detail="未登录")
+        principal = resolve_session_principal(
+            token=token,
+            expected_app_id=registered_app_id,
+            registry=registry,
+        )
+        if principal is None:
+            raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
+        return principal
+
+    _dependency.__name__ = f"require_{registered_app_id}_session"
+    return _dependency
+
+
+_require_session = require_product_session(ZHAOXI_APP_ID)
 
 
 
-__all__ = ['verify_bridge_auth', 'get_admin_user', 'verify_admin_auth', 'require_reviewer_or_admin', 'require_admin_or_staff_user', 'require_admin_user', '_require_session', '_resolve_legacy_session_principal']
+__all__ = ['verify_bridge_auth', 'get_admin_user', 'verify_admin_auth', 'require_reviewer_or_admin', 'require_admin_or_staff_user', 'require_admin_user', 'require_product_session', '_require_session', '_resolve_legacy_session_principal']
