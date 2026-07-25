@@ -38,7 +38,7 @@
 |---|---|---|
 | 隔离键 `aid_` 随机生成 | `app/db/_core.py:43` | 不从微信身份派生；微信是事后挂到 `aid_` 上的渠道 |
 | `channel` 已是一等列 | `accounts` / `channel_bindings` / `binding_intents` / `outbound_messages` / `reminders` | 多渠道表结构骨架已在 |
-| `platform_user` 主身份 + 登录鉴权 | `_require_session`（`app/routers/deps.py:91`）、`create_platform_user_session`（`web.py:892/1045`）、`get_platform_user_by_session_token` | **App/Web 用户登录体系已现成**：`Authorization: Bearer <session_token>`，7 天有效 |
+| `platform_user` 主身份 + 登录鉴权 | `_require_session`（`app/routers/deps.py`）、`create_platform_user_session`、`resolve_session_principal` | **App/Web 用户登录体系已现成**：`Authorization: Bearer <session_token>`，7 天有效；token 绑定产品 audience |
 | 账号归属 | `account_owner_bindings`（`_core.py:458`），一个 user ≤ 10 account | `platform_user` → `aid_` 归属已建模 |
 | turn 核心（prompt/LLM/记忆/session/限流/计费） | `turn_service` 除身份解析外的部分 | 渠道无关，直接复用 |
 | session 存储支持多 key | `sessions.session_key`（`_core.py:572`，`UNIQUE(account_id, session_key)`）| 已能承载 per-scope 的 active session（微信 `__account_active__` / Web `__web_active__`），**无需迁移**即可隔离短期会话（见 §7） |
