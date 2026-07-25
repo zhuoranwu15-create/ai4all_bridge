@@ -20,7 +20,7 @@ def test_plain_turn_reads_agent_context_once(client, fresh_db):
     """A completed normal turn should read agent context only during prompt build."""
     from unittest.mock import patch as _patch
     from app.db import get_or_create_session, set_account_onboarding_state
-    import app.turn_service as turn_service
+    from app.products.zhaoxi.application import turn_services
 
     account_id = "context-opt-account"
     with _patch("app.db.settings", fresh_db):
@@ -34,7 +34,10 @@ def test_plain_turn_reads_agent_context_once(client, fresh_db):
         )
         set_account_onboarding_state(account_id=account_id, state="complete")
 
-    with patch("app.turn_service.read_agent_context", wraps=turn_service.read_agent_context) as mock_read:
+    with patch(
+        "app.products.zhaoxi.application.turn_services.read_agent_context",
+        wraps=turn_services.read_agent_context,
+    ) as mock_read:
         resp = client.post(
             "/openclaw/turn",
             headers=BRIDGE_HEADERS,

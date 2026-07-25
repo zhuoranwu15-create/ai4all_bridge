@@ -12,7 +12,9 @@ from fastapi import APIRouter, Depends
 from app.config import settings
 from app.bootstrap.runtime import get_background_loop
 from app.platform.auth.identity import identity_response_metadata, resolve_openclaw_identity
-from app.turn_service import handle_openclaw_turn
+from app.products.zhaoxi.application.turns import (
+    handle_zhaoxi_openclaw_turn as handle_openclaw_turn,
+)
 from app.schemas import (
     NodeHeartbeatRequest,
     NodeOutboundClaimRequest,

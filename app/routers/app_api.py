@@ -48,7 +48,8 @@ from app.routers.web import (
     web_send_otp,
     web_verify_otp,
 )
-from app.turn_service import ChannelTurnInput, run_turn_for_account
+from app.agent_runtime.turns.service import ChannelTurnInput
+from app.products.zhaoxi.application.turns import run_zhaoxi_turn as run_turn_for_account
 
 
 router = APIRouter(prefix="/v1", tags=["app-v1"])

@@ -3,6 +3,7 @@
 只断言 ADR §7.3 四接缝 DTO/Protocol 存在且字段/方法齐——防止后续刀误删/改签名而无感知。
 """
 import dataclasses
+from types import SimpleNamespace
 
 from app.agent_runtime import ports
 
@@ -61,8 +62,62 @@ def test_default_adapter_delegates_turn(monkeypatch):
     from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
 
     expected = object()
+    services = object()
     monkeypatch.setattr(
-        "app.agent_runtime.adapter.run_turn_for_account", lambda ctx: (ctx, expected)
+        "app.agent_runtime.adapter.run_product_turn",
+        lambda ctx, *, product_services: (ctx, product_services, expected),
     )
     marker = object()
-    assert DefaultAgentRuntimeAdapter().send_turn(marker) == (marker, expected)
+    assert DefaultAgentRuntimeAdapter(services).send_turn(marker) == (
+        marker,
+        services,
+        expected,
+    )
+
+
+def test_runtime_requires_explicit_matching_product_services(monkeypatch):
+    """通用 Runtime 不得为缺失/错配的产品服务隐式回落朝夕。"""
+
+    import pytest
+
+    from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
+    from app.agent_runtime.turns.service import ChannelTurnInput, run_product_turn
+    from app.platform.auth.identity import ResolvedIdentity
+    from app.platform.channels import CHANNELS, CHANNEL_APP
+
+    with pytest.raises(TypeError):
+        DefaultAgentRuntimeAdapter()
+
+    identity = ResolvedIdentity(
+        ai4all_account_id="acc-test",
+        session_key="app:test",
+        channel=CHANNEL_APP,
+        channel_account_id="pu-test",
+        sender_id="pu-test",
+        chat_id=None,
+    )
+    ctx = ChannelTurnInput(
+        account_id="acc-test",
+        app_id="test_product",
+        cap=CHANNELS[CHANNEL_APP],
+        identity=identity,
+        message_id="msg-test",
+        event_id=None,
+        message_type="text",
+        text="hello",
+        media=None,
+        raw={},
+        sender_name=None,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.turns.service.get_account_product_access",
+        lambda **_: pytest.fail("产品服务错配必须在数据库访问前拒绝"),
+    )
+
+    result = run_product_turn(
+        ctx,
+        product_services=SimpleNamespace(app_id="zhaoxi"),
+    )
+
+    assert result.status == "disabled"
+    assert result.metadata["reason"] == "product_service_mismatch"

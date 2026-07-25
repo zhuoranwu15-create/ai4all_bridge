@@ -321,8 +321,12 @@ def test_runtime_has_no_product_string_branch():
                 continue
             if not _node_mentions_product_discriminator(node):
                 continue
+            # 下标读取 ``access[\"app_id\"]`` 自身也包含字符串常量；这里只禁
+            # ``app_id == \"zhaoxi\"`` 这类产品字面量分支，不禁两个动态 scope 做相等校验。
             if any(
-                isinstance(child, ast.Constant) and isinstance(child.value, str)
+                isinstance(child, ast.Constant)
+                and isinstance(child.value, str)
+                and child.value not in {"app_id", "product_id"}
                 for child in ast.walk(node)
             ):
                 violations.append(

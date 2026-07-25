@@ -22,7 +22,10 @@ from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
-from app.turn_service import build_turn_llm_input, handle_openclaw_turn
+from app.products.zhaoxi.application.turns import (
+    build_zhaoxi_turn_llm_input as build_turn_llm_input,
+    handle_zhaoxi_openclaw_turn as handle_openclaw_turn,
+)
 from app.products.zhaoxi.infrastructure.profiles import CONTEXT_FILE_ORDER, context_file_exists, context_file_path, ensure_user_profile, read_agent_context, read_context_file
 from datetime import date as date_cls, datetime
 from types import SimpleNamespace

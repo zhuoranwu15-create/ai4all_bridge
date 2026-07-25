@@ -165,7 +165,9 @@ def test_account_isolation(monkeypatch, fresh_db):
 def test_memory_write_receives_image_modality(monkeypatch, fresh_db):
     cap = _setup(monkeypatch, fresh_db)
     write_spy = MagicMock(return_value=None)
-    monkeypatch.setattr(turn_service, "write_memory", write_spy)
+    monkeypatch.setattr(
+        "app.products.zhaoxi.application.turn_services.write_memory", write_spy
+    )
     loop = MagicMock()
     loop.is_closed.return_value = False  # 模拟一个可用（未关闭）的后台事件循环
     turn_service.handle_openclaw_turn(

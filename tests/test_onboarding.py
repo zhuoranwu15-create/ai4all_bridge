@@ -734,7 +734,9 @@ def test_onboarding_complete_state_not_reprocessed(client, fresh_db):
     set_account_onboarding_state(account_id=session_key, state="complete")
 
     with patch("app.turn_service.generate_reply", return_value="好的！"), \
-         patch("app.turn_service.build_onboarding_prompt_context") as mock_ctx:
+         patch(
+             "app.products.zhaoxi.application.turn_services.build_onboarding_prompt_context"
+         ) as mock_ctx:
         res = client.post(
             "/openclaw/turn",
             json=_turn_payload(session_key, session_key, "帮我查天气", "msg-2"),
