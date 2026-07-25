@@ -9,11 +9,11 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.platform.companion_world_visits import (
+from app.products.zhaoxi.application.companion_world_visits import (
     CompanionWorldVisitService,
     VisitError,
 )
-from app.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 
@@ -43,14 +43,14 @@ def _confirm_world(platform_user_id: str) -> dict:
 
 def _enable(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.routers.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.routers.companion_world_visits.settings.companion_world_visits_enabled",
+        "app.products.zhaoxi.api.companion_world_visits.settings.companion_world_visits_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.routers.companion_world_visits.beijing_naive_now", lambda: NOW
+        "app.products.zhaoxi.api.companion_world_visits.beijing_naive_now", lambda: NOW
     )
 
 
@@ -237,7 +237,7 @@ def test_world_three_slots_are_hard_cap_and_revoke_releases_slot(
 def test_redeem_uses_db_backed_user_rate_limit(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
-        "app.routers.companion_world_visits._REDEEM_USER_RPM", 1
+        "app.products.zhaoxi.api.companion_world_visits._REDEEM_USER_RPM", 1
     )
     owner_headers, owner_login = _login(client, "19965103501")
     visitor_headers, _visitor_login = _login(client, "19965103502")

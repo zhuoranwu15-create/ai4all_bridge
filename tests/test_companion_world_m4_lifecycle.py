@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import app.db as db
 import pytest
 from app.db._backend import is_postgres
-from app.domains.companion_world.lifecycle import (
+from app.products.zhaoxi.domain.companion_world.lifecycle import (
     LifecycleEvidenceRef,
     LifecyclePolicy,
     inactivity_is_due,
@@ -17,14 +17,14 @@ from app.domains.companion_world.lifecycle import (
     lifecycle_event_fingerprint,
     value_misalignment_evidence,
 )
-from app.platform.companion_world_lifecycle import (
+from app.products.zhaoxi.application.companion_world_lifecycle import (
     CompanionWorldLifecycleService,
     LifecycleCommitError,
     approve_lifecycle_event,
     build_lifecycle_policy,
 )
-from app.platform.companion_world_repository import SqlCompanionWorldRepository
-from app.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.zhaoxi.infrastructure.repositories.companion_world import SqlCompanionWorldRepository
+from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 STAFF_HEADERS = {"Authorization": "Bearer test-staff"}
@@ -476,11 +476,11 @@ def test_admin_approve_atomically_offlines_and_correction_hides_farewell(
     event = _review_event(owner_id, world, target)
     fresh_db.companion_world_lifecycle_commit_enabled = True
     monkeypatch.setattr(
-        "app.routers.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
+        "app.products.zhaoxi.api.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.routers.admin_companion_world.beijing_naive_now", lambda: NOW
+        "app.products.zhaoxi.api.admin_companion_world.beijing_naive_now", lambda: NOW
     )
 
     approved = client.post(
@@ -548,11 +548,11 @@ def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
 ):
     fresh_db.companion_world_lifecycle_commit_enabled = True
     monkeypatch.setattr(
-        "app.routers.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
+        "app.products.zhaoxi.api.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.routers.admin_companion_world.beijing_naive_now", lambda: NOW
+        "app.products.zhaoxi.api.admin_companion_world.beijing_naive_now", lambda: NOW
     )
     owner_id, world = _world("19965001009")
     target = _resident(owner_id, world, "ordinary", joined_at="2026-05-01 10:00:00")

@@ -1,8 +1,8 @@
 # 技术设计：多产品模块化单体 —— 产品边界、身份隔离与分阶段迁移（架构决策记录）
 
-更新时间：2026-07-24
-状态：**决策已冻结（MP-01…MP-10 + 开放问题 O-1…O-7 全部定案，见 §11）；MP-01 身份隔离基座已完成开发与验证、尚未发布。** 本文用于在 Fatetell（命理类产品）开发前冻结「产品级模块边界 + 身份/计费隔离」的架构决策与迁移顺序。
-核查基线：`HEAD@3d98648`（本地领先 `origin/main=edc4b29` 一个架构图 commit，尚未推送）。当前 max migration = `m0036`（`app/db/_core.py`）。
+更新时间：2026-07-25
+状态：**MP-01～MP-06 已生产发布；MP-07A 正在提前实体化朝夕目录边界。开放问题 O-1～O-7 的结论不变，Fatetell 业务仍等待 PRD。** 本文用于在 Fatetell（命理类产品）开发前冻结「产品级模块边界 + 身份/计费隔离」的架构决策与迁移顺序。
+核查基线：Phase 1 merge commit `f4baa3b`。当前 max migration = `m0046`（`app/db/_core.py`）。
 
 路由口径：后端 `APIRouter` 前缀是 `/v1`（`app_api.py:52`），公网 Nginx 映射为 `/api/v1`。下文写 `/api/v1/...` 指公网口径，对应后端 `/v1/...`；实现与测试勿混用。
 
@@ -42,7 +42,7 @@
 ### 非目标
 
 - **不**拆微服务，保持模块化单体 + 中心单 writer（沿用 3.0 结论）。
-- **不**做全仓 `products/` 大搬家（见 §9.1）：朝夕代码本阶段原地不动。
+- **不**做全仓一次性大搬家；Phase 1 原地完成隔离，上线后只分批迁移归属明确的朝夕模块（见 §7）。
 - **不**为 Fatetell 复制一套 Runtime。
 - **不**在本阶段建 `runtime_ownerships` 投影表（推迟，见 §9.3）。
 
@@ -93,7 +93,7 @@ platform_user（真人，平台全局，跨产品共享手机号/登录）
 - **MP-05（入口账号解析必带 app_id）**：以 `get_active_bound_account_for_user_in_app(platform_user_id, app_id)`（或 `get_primary_entry_account`）取代裸 `get_first_active_account_for_user`；命名须明确它解析的是**绑定/入口账号**、不解析产品全部 Runtime account。「≤1 active」不变量收紧为 per-`(user, app)` 的**入口账号**（见 §2 account 数量口径）。
 - **MP-06（依赖红线由 AST 门禁强制）**：见 §4，把现有 `tests/test_layer_boundaries.py` 从硬编码 `companion_world` 泛化为通用产品边界门禁。
 - **MP-07（API 显式产品命名空间）**：新产品走 `/api/v1/products/{app}/*`；旧 `/api/v1/*` 保留为朝夕兼容别名，不做破坏性迁移。
-- **MP-08（增量迁移，新产品住新房子）**：Fatetell 作为新目录结构的第一个住户；朝夕本阶段**不物理搬迁**（见 §9.1）。
+- **MP-08（增量迁移，先实体化已知边界）**：Phase 1 不物理搬迁；生产发布后可先把归属明确的朝夕垂直切片移入 `app/products/zhaoxi/`。Fatetell 仍是第一个按新结构从零开发的产品，不提前创建空骨架或猜测契约。
 - **MP-09（所有权投影推迟）**：`runtime_ownerships` 投影表推迟到 Fatetell 所有权模型明确后再建，且建则作为**唯一**投影（朝夕回填为其中一个 writer），不维护双事实源（见 §9.3）。
 - **MP-10（product_membership 为计费规范锚点）**：计费归属以 `product_memberships` 为规范锚，对 `(platform_user_id, app_id)` 建唯一约束。所有落到子表的冗余 `app_id` 写入时**必须校验**与 `accounts.app_id` / wallet / membership 一致，不能只加列——否则仍可能写出跨产品错账。✅ 钱包锚点已澄清（修正初稿事实）：`entitlement_wallets` 早由 **D-14 / 迁移 `m0025`** 上迁为**真人级**（局部唯一 `ux_entitlement_wallets_user_active ON (platform_user_id) WHERE status='active'`，`_core.py:2048`；`account_id NOT NULL UNIQUE` 仅存"创建来源"、已非有效锚，`billing.py:652` 按 `platform_user_id` get-or-create），与 D-09 真人级聚合**本就一致、无冲突**。多产品化只需把该局部唯一扩为 `(platform_user_id, app_id)` 并加 `app_id` 列（O-5 已定）。
 
@@ -110,7 +110,7 @@ platform_user（真人，平台全局，跨产品共享手机号/登录）
 5. 只有 `bootstrap/` composition root 可同时看见产品实现与平台实现。
 6. Runtime 层源码禁止出现 `app_id == "<产品名>"` 之类的产品分支（新增一条基于 AST 的字符串/比较检查）。
 
-现状：规则 1 的「Runtime→域层」反向门禁**已通用**（`RUNTIME_FORBIDDEN_PREFIXES`）；规则 2–6 需新增。规则 4/5 在朝夕未搬家期间，先以 `app.domains.companion_world` 与 `app.platform.*` 的现有边界代持。
+现状：MP-01～MP-06 已建立通用门禁；MP-07A 移除共享 Platform 对朝夕 adapter 的冻结例外，并把产品 domain 扫描收口到 `app/products/*/domain/`。
 
 ---
 
@@ -161,7 +161,7 @@ platform_user（真人，平台全局，跨产品共享手机号/登录）
 
 ## 7. 目标目录（增量落地，非一次到位）
 
-保持模块化单体，「产品优先、产品内再分层」。下图是 **Fatetell PRD 冻结后的目标目录**；当前执行的 Phase 1（实施计划 MP-01…MP-06）只落产品隔离基座与轻量 registry，**不新建 `products/fatetell/`、不挂 Fatetell 路由，也不移动朝夕文件**。产品骨架与 composition root 的产品接线等待 PRD 后再实施（MP-08）。
+保持模块化单体，「产品优先、产品内再分层」。Phase 1 已先完成数据与鉴权隔离；生产发布后，MP-07A 在不改变行为的前提下提前实体化朝夕已知边界。**仍不新建 `products/fatetell/`、不挂 Fatetell 路由，也不猜测其 Runtime 契约。**
 
 ```text
 app/
@@ -170,20 +170,19 @@ app/
 │   ├── http.py
 │   └── schedulers.py
 ├── products/
-│   ├── zhaoxi/                     # 暂为「门面/占位」：先挂 registry，域码留原位；后续视收益再决定是否物理迁入
-│   └── fatetell/                   # 新结构第一个真实住户
-│       ├── manifest.py            # app_id、路由前缀、persona、ToolPolicy、启用 flag
-│       ├── api/                    # 产品路由（/api/v1/products/fatetell/*）
-│       ├── application/           # 用例编排，经 AgentRuntimePort 调 Runtime
-│       ├── domain/                # 命理领域（盘/命格）
-│       ├── infrastructure/        # repositories
-│       └── jobs/
+│   └── zhaoxi/
+│       ├── manifest.py            # 既有朝夕路由组合；不改变 URL
+│       ├── api/                    # Companion World 用户端/管理端 routers
+│       ├── application/           # Companion World 用例服务
+│       ├── domain/                # Companion World 纯领域层
+│       ├── infrastructure/        # persistence/repositories/adapters
+│       └── jobs/                  # world content/lifecycle jobs
 ├── agent_runtime/                 # 跨产品，保持形态无关（原位）
 ├── platform/                      # 跨产品平台能力（identity/auth/billing/quota/channels/…）
-└── (现有 domains/companion_world、world_content、world_lifecycle 原位不动)
+└── (其余历史平铺模块由 MP-07A 后续批次按明确归属渐进收敛)
 ```
 
-现有模块的**最终**归位（仅作方向记录，非本阶段动作）：`domains/companion_world/* → products/zhaoxi/domain/companion_world/*`；`platform/companion_world_* → products/zhaoxi/{application,infrastructure}/`；`world_content|world_lifecycle → products/zhaoxi/jobs/`；`routers/companion_world* → products/zhaoxi/api/`；`db/companion_world* → products/zhaoxi/infrastructure/repositories/`。何时执行取决于收益是否抵得过 import 面改动成本。
+MP-07A 第一批执行：`domains/companion_world/* → products/zhaoxi/domain/companion_world/*`；`platform/companion_world_* → products/zhaoxi/{application,infrastructure}/`；`world_content|world_lifecycle → products/zhaoxi/jobs/`；`routers/companion_world* → products/zhaoxi/api/`；`db/companion_world* → products/zhaoxi/infrastructure/persistence/`。`app.db` 暂保留兼容再导出，后续批次再评估收口。
 
 ---
 
@@ -208,10 +207,14 @@ app/
 6. **referral 闸（独立发布）**：首次 membership 才消费本产品邀请码；注册/校验/释放/后台查询全链 app-scoped，并移除 `invitee_platform_user_id` 的旧全局唯一约束（MP-02 / O-7）。
 7. AST 边界门禁泛化（MP-06，§4 规则）。
 
-**Phase 2 —— 命名空间与 composition（薄；延期至 Fatetell PRD 冻结后）**
+**Phase 2A —— 朝夕目录边界实体化（生产发布后，当前）**
+- 归位 Companion World 的 api/application/domain/infrastructure/jobs，外部 URL 与部署入口不变。
+- 由 `bootstrap/http.py` 和 `products/zhaoxi/manifest.py` 组合路由。
+- 继续按独立 PR 收敛共享能力与朝夕历史平铺模块；只做行为零变更迁移。
+
+**Phase 2B —— 新产品命名空间与接入（延期至 Fatetell PRD 冻结后）**
 - 挂 `/api/v1/products/{app}/*`；`/api/v1/*` 保留朝夕别名（MP-07）。
-- 拆 `app_api.py`：抽通用 auth/OTP/session bootstrap 到平台入口；朝夕聊天原地（最多挪 router）。
-- 引入极薄 `bootstrap/product_registry`，**不搬 companion_world 文件**（MP-08）。
+- 拆 `app_api.py`：抽通用 auth/OTP/session bootstrap 到平台入口。
 
 **Phase 3 —— Runtime 调用收口 + 主动消息契约去 Companion World 化（延期至真实产品调用点出现）**
 - 产品 turn 经 `AgentRuntimePort` / application service，不再直调 `run_turn_for_account`（面很小，仅 2 处）。

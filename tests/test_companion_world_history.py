@@ -3,11 +3,11 @@ import json
 
 import app.db as db
 from app.db import APP_ACTIVE_SESSION_KEY, WEB_ACTIVE_SESSION_KEY
-from app.domains.companion_world import (
+from app.products.zhaoxi.domain.companion_world import (
     CompanionWorldService,
     ResidentSelection,
 )
-from app.platform import SqlCompanionWorldRepository
+from app.products.zhaoxi.application import SqlCompanionWorldRepository
 
 
 def _resident_accounts() -> tuple[str, str]:

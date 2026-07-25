@@ -2680,7 +2680,7 @@ def create_resident_runtime_account(
     docs/tech_design/companion_world_account_model_reconciliation.md（冻结 = B）。
     """
     from app.db.accounts import get_account, get_profile_for_account
-    from app.db.companion_world import create_resident
+    from app.products.zhaoxi.infrastructure.persistence.companion_world import create_resident
 
     with connect() as conn:
         # SQLite 的最外层 SAVEPOINT 在 RELEASE 时会提交；先显式开启外层事务，确保后续

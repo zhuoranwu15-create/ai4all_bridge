@@ -3,8 +3,8 @@ from datetime import datetime
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.platform import human_level_proactive_allowed
-from app.platform.app_inbox import AppInboxAdapter, HumanAppInboxIntent
+from app.products.zhaoxi.application import human_level_proactive_allowed
+from app.products.zhaoxi.infrastructure.app_inbox import AppInboxAdapter, HumanAppInboxIntent
 from app.proactive.contract.common import _select_route
 from app.proactive.delivery.outbound import dispatch_proactive_text
 from app.proactive.delivery.outbound import enqueue_proactive_text

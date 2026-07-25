@@ -90,7 +90,7 @@ def run_backfill(
     resume_after: Optional[str] = None,
 ) -> BackfillReport:
     """处理一个可恢复批次；每个 platform_user 独立事务，单用户失败不影响其他人。"""
-    from app.platform import SqlCompanionWorldRepository
+    from app.products.zhaoxi.application import SqlCompanionWorldRepository
 
     user_ids = _list_user_ids(
         batch_size=batch_size,

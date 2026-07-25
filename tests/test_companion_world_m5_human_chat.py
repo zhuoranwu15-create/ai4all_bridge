@@ -9,11 +9,11 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.platform.companion_world_human_chat import (
+from app.products.zhaoxi.application.companion_world_human_chat import (
     CompanionWorldHumanChatService,
     HumanChatError,
 )
-from app.platform.companion_world_visits import CompanionWorldVisitService
+from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 
@@ -59,14 +59,14 @@ def _active(owner_id: str, visitor_id: str) -> tuple[dict, dict]:
 
 def _enable(monkeypatch, *, write: bool = True) -> None:
     monkeypatch.setattr(
-        "app.routers.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.routers.companion_world_human_chat.settings.companion_world_human_chat_enabled",
+        "app.products.zhaoxi.api.companion_world_human_chat.settings.companion_world_human_chat_enabled",
         write,
     )
     monkeypatch.setattr(
-        "app.routers.companion_world_human_chat.beijing_naive_now", lambda: NOW
+        "app.products.zhaoxi.api.companion_world_human_chat.beijing_naive_now", lambda: NOW
     )
 
 

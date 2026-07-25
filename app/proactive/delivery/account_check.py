@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from app.channels import CHANNEL_APP
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
-from app.platform import (
+from app.products.zhaoxi.application import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
     human_level_proactive_allowed,
 )

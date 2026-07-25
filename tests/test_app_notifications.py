@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 import app.db as db
-from app.platform import AppInboxAdapter, AppInboxIntent
+from app.products.zhaoxi.application import AppInboxAdapter, AppInboxIntent
 from app.time_utils import beijing_now
 from tests.factories import make_resident_account
 

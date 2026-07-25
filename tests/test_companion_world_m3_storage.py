@@ -4,7 +4,7 @@ import pytest
 import app.db as db
 from app.db._backend import is_postgres
 from app.db._core import _migration_0033_companion_world_m3_content
-from app.domains.companion_world import user_post_fingerprint
+from app.products.zhaoxi.domain.companion_world import user_post_fingerprint
 
 
 _M3_TABLES = (
