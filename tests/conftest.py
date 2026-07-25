@@ -157,7 +157,9 @@ def test_settings(tmp_path, db_dsn):
     s.rate_limit_rpm_message = "每分钟上限"
     s.conversation_session_business_day_start_hour = 4
     s.dreaming_scheduler_enabled = False
-    s.dreaming_scheduler_interval_seconds = 300.0
+    # dreaming 无 interval 配置项（天级定点扫描）；此处只登记真实 Settings 上存在的字段，
+    # 避免替身凭空多出属性、把"读了不存在配置"的 bug 掩盖成测试通过。
+    s.proactive_dreaming_scheduler_enabled = True
     s.dreaming_scheduler_batch_size = 100
     s.user_meta_scheduler_enabled = False
     s.user_meta_scheduler_hour = 3

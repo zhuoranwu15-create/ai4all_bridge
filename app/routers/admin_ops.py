@@ -50,9 +50,11 @@ def admin_ops_status(
                     "interval_seconds": settings.proactive_scheduler_interval_seconds,
                     "batch_size": settings.proactive_scheduler_batch_size,
                 },
+                # dreaming 是天级定点扫描，没有 interval 配置项；enabled 只代表 FastAPI
+                # in-process 开关，线上实际由 proactive-scheduler 单例进程承担，故两个开关都要报。
                 "dreaming": {
                     "enabled": settings.dreaming_scheduler_enabled,
-                    "interval_seconds": settings.dreaming_scheduler_interval_seconds,
+                    "proactive_process_enabled": settings.proactive_dreaming_scheduler_enabled,
                     "batch_size": settings.dreaming_scheduler_batch_size,
                 },
                 "user_meta": {
