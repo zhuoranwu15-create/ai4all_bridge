@@ -148,7 +148,7 @@ Prompt 不是把所有信息每轮全量拼进去，而是由 Backend 按账号�
 - 用户明确纠正或删除记忆时，应覆盖、删除或降权旧记忆。
 - 账号之间的 Context Files 和 Memory 严格隔离。
 
-详细机制见 [Agent Context Files 与记忆机制设计](../tech_design/agent_context_files.md)。
+详细机制见 [Agent Context Files 与记忆机制设计](../architecture/designs/agent_context_files.md)。
 
 ## 6. 功能需求
 

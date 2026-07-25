@@ -1,8 +1,8 @@
 # 后续规划 / 北极星
 
-> 本文是**稳定层**：描述产品愿景、原则和暂不做边界，变动较少。总体架构以 `docs/architecture_overview.md` 为准；详细设计、身份模型和技术分层以 `docs/system_design.md` 为准。
+> 本文是**稳定层**：描述产品愿景、原则和暂不做边界，变动较少。总体架构以 `docs/architecture/overview.md` 为准；详细设计、身份模型和技术分层以 `docs/architecture/system_design.md` 为准。
 >
-> **当前阶段、重点方向和近期队列是易变的，只在 [`STATUS.md`](STATUS.md) 维护，不在本文。** Phase 1 工作包拆分与验收标准的历史记录见 [`system_design.md` §7](system_design.md) 和 [Phase 1 收尾总结](archive/phase1/phase1_closeout_summary.md)。
+> **当前阶段、重点方向和近期队列是易变的，只在 [`STATUS.md`](STATUS.md) 维护，不在本文。** Phase 1 工作包拆分与验收标准的历史记录见 [`architecture/system_design.md` §7](architecture/system_design.md) 和 [Phase 1 收尾总结](archive/phase1/phase1_closeout_summary.md)。
 
 ## 总方向
 

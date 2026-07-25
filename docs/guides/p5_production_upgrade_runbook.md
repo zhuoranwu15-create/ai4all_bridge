@@ -2,7 +2,7 @@
 
 > 适用版本：commit `ed77c70`（P1–P4 落地后）
 > 最后更新：2026-06-21
-> 依赖文档：[`docs/tech_design/thick_node_postgres_refactor.md`](../tech_design/thick_node_postgres_refactor.md)
+> 依赖文档：[`docs/architecture/designs/thick_node_postgres_refactor.md`](../architecture/designs/thick_node_postgres_refactor.md)
 
 > **⚠️ 现状（2026-06-21 登机实测）：阶段一、阶段二均已上线完成**。aliyun1 已是 `central,node` + 本机 PG（无 SQLite 文件），aliyun2 已是 `node` 厚节点直连 aliyun1 PG、inbound 已本地化、承载 14 个账号。**本文以下步骤为历史执行记录 / 回滚与重建参考**，不是待办。两机实测差异见 [`aliyun1_aliyun2_deployment_diff.md`](aliyun1_aliyun2_deployment_diff.md)。**唯一未做的是阶段三**（aliyun1 退化为纯中心）与 PG HA 主备（§10）。
 
@@ -317,7 +317,7 @@ SQLite 数据库 `data/ai4all.sqlite3` 未被删除或修改，直接回落即�
 
 ## 10. PG 主备（参考设计文档 §8）
 
-当 aliyun1 PG 稳定运行后，参考 [`thick_node_postgres_refactor.md §8`](../tech_design/thick_node_postgres_refactor.md#8-pg-部署与切换) 配置流复制热备 + pg_dump PITR 备份，进一步降低单点风险。节点 `DATABASE_URL` 使用多主机连接串：
+当 aliyun1 PG 稳定运行后，参考 [`thick_node_postgres_refactor.md §8`](../architecture/designs/thick_node_postgres_refactor.md#8-pg-部署与切换) 配置流复制热备 + pg_dump PITR 备份，进一步降低单点风险。节点 `DATABASE_URL` 使用多主机连接串：
 
 ```
 postgresql://ai4all:pwd@aliyun1-internal:5432,standby-internal:5432/ai4all?target_session_attrs=read-write

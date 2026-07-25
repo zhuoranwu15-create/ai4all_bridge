@@ -2,7 +2,7 @@
 
 > 创建于：2026-05-18
 > 状态：Step 1/2 已落地，Step 3 待实现
-> 关联机制文档：`docs/tech_design/agent_context_files.md`
+> 关联机制文档：`docs/architecture/designs/agent_context_files.md`
 
 ## 目标
 

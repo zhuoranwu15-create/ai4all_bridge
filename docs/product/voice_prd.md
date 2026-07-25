@@ -20,7 +20,7 @@
 - 不对上游已转写语音单独收取 ASR 贝壳；后续 AI 回复仍按普通聊天扣减。
 - 无上游转写文本时，当前不承诺后端 ASR fallback，可提示用户改用文字或重发。
 
-详细证据见 [微信语音输入开发追踪](../tech_design/voice_input_asr_tracking.md)。
+详细证据见 [微信语音输入开发追踪](../architecture/designs/voice_input_asr_tracking.md)。
 
 ## 3. 用户流程
 

@@ -27,7 +27,7 @@
    - 入口：`_complete_binding_intent_from_wait_result`（`web.py:179`）、`_wait_for_binding_intent`（`web.py:278`）、`_start_openclaw_qr_for_binding`（`web.py:415`）、`app/openclaw_gateway.py`。
 2. 若绑定当下拿不到，微信侧首次收到用户任意事件（加好友通过、首条消息前的系统事件）时能否回填 wxid → 触发一次补发。
 3. 回填后 Path A 与 Path B 的幂等与竞态：两路已共用幂等键，需确认补发不会与 Path B 抢跑或重复。
-4. **微信 24h 送达窗口约束**（`app/proactive/delivery/touch_state.py`）：主动消息要求联系人 24h 内有入站；若用户从未入站，`touch_state` 判 STALE，主动消息发不出。需确认「绑定后主动问候」是否属于欢迎语的保必发豁免路径（`enqueue_onboarding_welcome` 声明保必发，不过 touch_state），还是仍受窗口限制——这决定 wxid 回填是否真能突破「零互动用户」。
+4. **微信 24h 送达窗口约束**（`app/products/zhaoxi/proactive/delivery/touch_state.py`）：主动消息要求联系人 24h 内有入站；若用户从未入站，`touch_state` 判 STALE，主动消息发不出。需确认「绑定后主动问候」是否属于欢迎语的保必发豁免路径（`enqueue_onboarding_welcome` 声明保必发，不过 touch_state），还是仍受窗口限制——这决定 wxid 回填是否真能突破「零互动用户」。
 
 ## 3. 候选方案（待评估，勿直接实现）
 
@@ -37,5 +37,5 @@
 
 ## 4. 关联
 
-- 主动出站与 touch_state 闸门总览见 `app/proactive/delivery/`。
+- 主动出站与 touch_state 闸门总览见 `app/products/zhaoxi/proactive/delivery/`。
 - 营销活码闭环（本次走查的其余部分）已通过纯配置打通，不依赖本项。

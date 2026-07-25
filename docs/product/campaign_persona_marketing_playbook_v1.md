@@ -2,7 +2,7 @@
 
 > 状态：**方案文档，尚未落系统**。本文给出方法论 + 5 套人设的完整系统设定（campaign/SOUL/IDENTITY/mission）+ 配套图文营销素材。
 > 落地由运营/研发在评审通过后按「§7 落地清单」执行，本文不改动任何代码或数据。
-> 关联：[campaign_codes_prd.md](campaign_codes_prd.md)、[agent_self_prd.md](agent_self_prd.md)、[agent_mission_and_orchestration_design](../tech_design/agent_mission_and_orchestration_design.md)
+> 关联：[campaign_codes_prd.md](campaign_codes_prd.md)、[agent_self_prd.md](agent_self_prd.md)、[agent_mission_and_orchestration_design](../architecture/designs/agent_mission_and_orchestration_design.md)
 
 第一版目标人群：**① 恋爱幻想 / 乙女游戏人群（优先）**、**② 25-35 岁宝妈**。
 尺度红线：**甜宠健康向**——保留心动/暧昧/独占的高浓度情绪，但不 PUA、不控制、不涉黄暴、不制造焦虑。
@@ -58,7 +58,7 @@
 
 ## 2. 系统落地映射（人设 → campaign 字段，代码级）
 
-一个营销活码（`campaign_codes` 表，`app/db/campaign.py`）通过四个知识旋钮把一条注册链接绑定到一套人设。注册时 `apply_campaign_code_attribution()` 写死快照到 `account_campaign_attribution`（**写入即定型**，之后改活码不影响已注册账号）。
+一个营销活码（`campaign_codes` 表，`app/products/zhaoxi/infrastructure/persistence/campaign.py`）通过四个知识旋钮把一条注册链接绑定到一套人设。注册时 `apply_campaign_code_attribution()` 写死快照到 `account_campaign_attribution`（**写入即定型**，之后改活码不影响已注册账号）。
 
 | Campaign 字段 | 作用 | 本方案取值来源 |
 |---|---|---|

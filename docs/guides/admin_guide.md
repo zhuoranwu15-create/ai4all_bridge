@@ -375,7 +375,7 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 
 本节只适用于 M2-C。发布原则是：**先以 flag=false 部署和迁移，再导入模板、按固定截点 backfill、对账，最后才允许小流量开 flag**。正式四位角色内容和客户端最低版本必须由产品/客户端团队提供，运维不得临时编造。
 
-注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../tech_design/companion_world_3_0_refactor_design.md`](../tech_design/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
+注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../architecture/designs/companion_world_3_0_refactor_design.md`](../architecture/designs/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
 
 ### 1. 发布前输入与备份
 

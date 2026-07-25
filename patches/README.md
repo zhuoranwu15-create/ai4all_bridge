@@ -3,9 +3,9 @@
 OpenClaw（`openclaw/openclaw.git`）是上游第三方仓库，我们无法把改动提交进去。本项目落地依赖的 5 处 OpenClaw 能力全部以**手术补丁**形式维护：能写成稳定 unified diff 的存为 `*.patch`；打在带内容哈希的 core bundle / 存在版本漂移的插件 dist 上、无法整文件覆盖的，改以幂等脚本按锚点重放。
 
 > **权威文档**（细节、追查过程、升级必查命令以这些为准，本 README 只做索引）：
-> - [`../docs/tech_design/openclaw_patches_maintenance.md`](../docs/tech_design/openclaw_patches_maintenance.md) — 4 补丁对比、升级必查 §3、验证 §4
-> - [`../docs/tech_design/openclaw_weixin_gateway_logout_patch.md`](../docs/tech_design/openclaw_weixin_gateway_logout_patch.md) — 解绑登出补丁专文
-> - [`../docs/tech_design/multi_node_weixin_login_investigation_20260614.md`](../docs/tech_design/multi_node_weixin_login_investigation_20260614.md) — accountId 回归的逐层追查
+> - [`../docs/architecture/designs/openclaw_patches_maintenance.md`](../docs/architecture/designs/openclaw_patches_maintenance.md) — 4 补丁对比、升级必查 §3、验证 §4
+> - [`../docs/architecture/designs/openclaw_weixin_gateway_logout_patch.md`](../docs/architecture/designs/openclaw_weixin_gateway_logout_patch.md) — 解绑登出补丁专文
+> - [`../docs/archive/investigations/multi_node_weixin_login_20260614.md`](../docs/archive/investigations/multi_node_weixin_login_20260614.md) — accountId 回归的逐层追查
 
 ---
 

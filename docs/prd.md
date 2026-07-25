@@ -138,18 +138,18 @@ Phase 1 范围由三部分组成：P0、P1 和 P1.5。P0、P1 和 P1.5 都属于
 
 对应技术文档：
 
-- [总体架构 / 框架设计](architecture_overview.md)
-- [详细技术设计 / 技术平面](system_design.md)
-- [身份模型与微信绑定](tech_design/identity_model_and_wechat_binding.md)
-- [主动消息与提醒设计](tech_design/proactive_messaging_design.md)
-- [Agent Context Files 与记忆机制](tech_design/agent_context_files.md)
-- [Conversation Orchestrator 主对话场景技术设计](tech_design/conversation_orchestrator_design.md)
-- [隐私与后台访问控制](tech_design/privacy_admin_access_control_design.md)
-- [内容审核与人工复核技术设计](tech_design/content_moderation_design.md)
-- [Web Search 同步工具调用技术设计](tech_design/search_async_tasks_design.md)
-- [语音输入技术设计](tech_design/voice_input_design.md)
-- [贝壳、增长与支付后置技术设计](tech_design/entitlement_growth_design.md)
-- [OpenClaw Bridge 设计](tech_design/openclaw_bridge_design.md)
+- [总体架构 / 框架设计](architecture/overview.md)
+- [详细技术设计 / 技术平面](architecture/system_design.md)
+- [身份模型与微信绑定](architecture/designs/identity_model_and_wechat_binding.md)
+- [主动消息与提醒设计](architecture/designs/proactive_messaging_design.md)
+- [Agent Context Files 与记忆机制](architecture/designs/agent_context_files.md)
+- [Conversation Orchestrator 主对话场景技术设计](architecture/designs/conversation_orchestrator_design.md)
+- [隐私与后台访问控制](architecture/designs/privacy_admin_access_control_design.md)
+- [内容审核与人工复核技术设计](architecture/designs/content_moderation_design.md)
+- [Web Search 同步工具调用技术设计](architecture/designs/search_async_tasks_design.md)
+- [语音输入技术设计](architecture/designs/voice_input_design.md)
+- [贝壳、增长与支付后置技术设计](architecture/designs/entitlement_growth_design.md)
+- [OpenClaw Bridge 设计](architecture/designs/openclaw_bridge_design.md)
 
 ## 6. 全局产品原则
 

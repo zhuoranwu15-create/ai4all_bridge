@@ -2,9 +2,9 @@
 
 更新时间：2026-07-25
 
-状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 三批目录迁移已完成开发与聚焦回归，待分批评审合并。Fatetell 业务接入仍等待 PRD。**
+状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 四批目录迁移已完成开发与聚焦回归，待分批评审合并。Fatetell 业务接入仍等待 PRD。**
 
-决策基线：[`multi_product_modular_monolith_design.md`](../tech_design/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
+决策基线：[`multi_product_modular_monolith_design.md`](../architecture/designs/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
 
 ## 1. 本版调整
 
@@ -95,7 +95,7 @@
 
 - `app/db/_core.py`：追加 m0039–m0040。
 - `app/db/billing.py`、`app/db/lifecycle.py`。
-- `app/routers/admin_accounts.py`、`app/routers/web.py`。
+- `app/products/zhaoxi/api/admin_accounts.py`、`app/routers/web.py`。
 - `scripts/precheck_multi_product_phase1.py` 追加计费 reconcile。
 - `tests/test_multi_product_billing.py`、`tests/test_multi_product_lifecycle.py`（新增）及现有 billing/PG concurrency tests。
 
@@ -146,7 +146,7 @@
 
 - `app/db/_core.py`：追加 m0041–m0042。
 - `app/db/accounts.py`、`app/db/lifecycle.py`、`app/rate_limiter.py`、`app/turn_service.py`。
-- `app/routers/admin_accounts.py`。
+- `app/products/zhaoxi/api/admin_accounts.py`。
 - `scripts/precheck_multi_product_phase1.py` 追加配额 reconcile。
 - `tests/test_multi_product_quota.py`（新增）及 quota/RPM/PG reservation tests。
 
@@ -320,7 +320,7 @@ PRD 冻结后再按真实调用点拆三类工单：产品 API/composition、Run
 
 ## 6. 下一步
 
-Phase 1 已生产发布。当前执行 MP-07A，并按独立 PR 分三批推进：
+Phase 1 已生产发布。MP-07A 按顺序提交分四批推进：
 
 1. Companion World 垂直切片归入 `app/products/zhaoxi/`，路由组合收口到 `app/bootstrap/`（已合入 PR #53）。
 2. 对根目录中归属明确的共享能力做 platform/agent_runtime 归位（已完成开发与聚焦回归）：
@@ -331,11 +331,33 @@ Phase 1 已生产发布。当前执行 MP-07A，并按独立 PR 分三批推进�
    - application 按 `memory/`、`missions/`、`prompts/` 归组；领域使命模板和 SOUL 模板随 owner 一并迁移；
    - dreaming 与 user-meta scheduler 归入朝夕 `jobs/`；
    - `app/products/zhaoxi/application/__init__.py` 保留兼容导出，但改为懒加载以避免 package 初始化环。
+4. 收口剩余归属明确的业务包与文档体系（已完成开发与聚焦回归）：
+   - `proactive` 整体归入朝夕产品；moderation 归入共享 Platform；
+   - proactive/notification/mission/user-meta/campaign persistence 与产品 routes/tools 随 owner
+     归位，`app.db` 通过懒加载 façade 继续兼容旧公共导入；
+   - 接入节点登记/账号路由 persistence 归入 `platform/gateways`，Platform 禁止通过
+     `app.db` façade 隐式加载产品；
+   - 文档统一为 `architecture / product / plans / ops / archive` 生命周期，已完成或被取代的
+     计划归档，重复的 Companion World 简报删除，并新增本地 Markdown 链接门禁。
 
-完成三批后，`app/` 根目录只保留 8 个 Python 文件：入口/包文件 `main.py`、`__init__.py`，
+完成四批后，`app/` 根目录只保留 8 个 Python 文件：入口/包文件 `main.py`、`__init__.py`，
 跨层稳定原语 `config.py`、`schemas.py`、`time_utils.py`，以及仍待真实第二产品调用点后再泛化的
 `turn_service.py`、`prompt_builder.py`、`reminder_utils.py`。其中前五个不是业务平铺；后三个是
 有意保留的过渡模块，不能在 Fatetell 契约未冻结时强塞入 Runtime 或朝夕目录。
 
 MP-07A 不创建 `app/products/fatetell/`，不修改数据库或外部 API。Fatetell 的产品命名空间、
 Runtime/Memory/Proactive 接入和端到端发布仍按 §5 等待 PRD 后拆单。
+
+### MP-07A 后仍有意保留的混合边界
+
+- `routers/web.py`、`routers/app_api.py` 同时承载共享身份 bootstrap 与朝夕 legacy API；等第二产品
+  路由冻结后再拆，避免仅换目录却继续混责。
+- `products/zhaoxi/api/admin_accounts.py` 已归产品所有，但内部仍组合平台账号/资产 base view 与
+  朝夕扩展字段；第二产品接入时应抽平台 base query，由各产品追加 projection。
+- `routers/admin_ops.py` 与 `serializers.py` 仍含少量朝夕 scheduler/proactive 展示逻辑；应按
+  endpoint/helper 拆分，不能把整个共享运维面搬进产品。
+- `tools/definitions.py` / `registry.py` / `executor.py` 仍组合通用工具和朝夕 tool schema；Fatetell
+  接入时由真实工具差异催生 `ToolPolicy`，不提前创建空抽象。
+- `db/__init__.py` 与 `_core.py` 仍是 schema/migration 兼容入口；产品 persistence 已物理归位，
+  但 migration registry 和共享事务边界不在本轮拆分。
+- `turn_service.py`、`prompt_builder.py`、`reminder_utils.py` 仍是显式过渡模块，处理条件同上。

@@ -13,11 +13,11 @@ AI4ALL Weixin Bot 面向普通用户提供微信里的个人 AI 陪伴与轻量�
 - [用户使用说明](docs/guides/user_guide.md)
 - [后台管理说明](docs/guides/admin_guide.md)
 - [后续规划](docs/roadmap.md)
-- [总体架构 / 框架设计](docs/architecture_overview.md)
+- [总体架构 / 框架设计](docs/architecture/overview.md)
 - [项目现状与近期方向](docs/STATUS.md)
-- [详细技术设计 / 技术平面](docs/system_design.md)
-- [OpenClaw Bridge 技术设计](docs/tech_design/openclaw_bridge_design.md)
-- [主动消息与提醒设计](docs/tech_design/proactive_messaging_design.md)
+- [详细技术设计 / 技术平面](docs/architecture/system_design.md)
+- [OpenClaw Bridge 技术设计](docs/architecture/designs/openclaw_bridge_design.md)
+- [主动消息与提醒设计](docs/architecture/designs/proactive_messaging_design.md)
 
 ## Local Backend
 
@@ -75,19 +75,23 @@ is set. If `LLM_API_KEY` is empty, it keeps the local mock fallback.
 cp .env.example .env
 # DeepSeek example:
 # LLM_BASE_URL=https://api.deepseek.com
-# LLM_MODEL=deepseek-chat
+# LLM_ACTIVE_FAMILY=deepseek
 # LLM_API_KEY=...
 ```
 
 ## Storage
 
-SQLite is used for the first version. The default database path is:
+数据库按 `DATABASE_URL` 二选一：本地开发和测试默认使用 SQLite，生产自 2026-06-21 起使用
+PostgreSQL；两条代码路径都必须保留。SQLite 默认路径是：
 
 ```text
 data/ai4all.sqlite3
 ```
 
-Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `aid_...` 账号（当前生成规则为 `aid_` + 9 位数字）。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture_overview.md)、[详细技术设计](docs/system_design.md) 和 [身份模型与微信绑定](docs/tech_design/identity_model_and_wechat_binding.md)。
+PostgreSQL 连接串只写入 `.env` 的 `DATABASE_URL`，不要提交凭证。部署和切换步骤见
+[生产运行手册](docs/ops/production_runbook.md)。
+
+Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `aid_...` 账号（当前生成规则为 `aid_` + 9 位数字）。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture/overview.md)、[详细技术设计](docs/architecture/system_design.md) 和 [身份模型与微信绑定](docs/architecture/designs/identity_model_and_wechat_binding.md)。
 
 ## OpenClaw Bridge
 

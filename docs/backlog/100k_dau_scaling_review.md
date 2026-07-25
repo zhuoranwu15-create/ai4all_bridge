@@ -4,7 +4,7 @@
 
 状态：技术评估稿。结论基于对当前代码的核对，可作为容量规划与改造排期的输入。
 
-配套阅读：[`100k_dau_scaling_discussion_draft.md`](../archive/backlog/100k_dau_scaling_discussion_draft.md)（更早的讨论稿，已归档）、[`production_stability_prd.md`](../tech_design/production_stability_prd.md)。
+配套阅读：[`100k_dau_scaling_discussion_draft.md`](../archive/backlog/100k_dau_scaling_discussion_draft.md)（更早的讨论稿，已归档）、[`production_stability_prd.md`](../architecture/designs/production_stability_prd.md)。
 
 ---
 
@@ -30,7 +30,7 @@
 | 限流 | 进程内 `threading.Lock` + `deque` | `app/rate_limiter.py` | 多实例后每台独立计数，无法做账号级全局限流 |
 | outbound | `subprocess.run` 调 `openclaw gateway call` | `app/openclaw_gateway.py:36,147` | 每次发送 fork 进程 + 解析 stdout JSON，高 QPS 开销大、难限速 |
 | 账号上下文 | 写本地 `data/user_profiles` 文件 | `app/user_profiles.py` | 多机器无法天然共享，并发 append 有冲突风险 |
-| scheduler | 单进程独立运行，无 leader election | `app/dreaming_scheduler.py`、`app/proactive/scheduler.py` | 文档明确要求不可多实例并跑 |
+| scheduler | 单进程独立运行，无 leader election | `app/dreaming_scheduler.py`、`app/products/zhaoxi/proactive/scheduler.py` | 文档明确要求不可多实例并跑 |
 
 ### 2.1 被低估的两个风险（重点）
 

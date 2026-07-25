@@ -300,7 +300,7 @@ else:
 | 复用·prose | `SOUL`、`profile_storage` 写入与注入路径 | 已有 |
 | 复用·状态 | `account_user_meta`（阶段 / 三需求）、`account_user_meta_daily` | 已有 |
 | 复用·评估 | `relationship_state.py`（turn 级）、`user_meta_scheduler`/`user_meta_relationship.py`（天级） | 已有 |
-| 复用·拉活 | `app/proactive/*` 作为求生生命周期基座 | 已有 |
+| 复用·拉活 | `app/products/zhaoxi/proactive/*` 作为求生生命周期基座 | 已有 |
 | 复用·输入 | `companion_type`、`message_intensity`、safety 计数 | 已有 |
 | **接线（核心 1 处）** | `prompt_builder` 渲染器 + `【当下的关系与心境】` block + 主导需求规则 | **新增** |
 | 新增·数据 | `MISSION` prose 存储、mission 模板（Setting A/B）、`mission_id/target_count/bar/progress`、记录的瞬间内容集合 | **新增** |
@@ -366,4 +366,4 @@ else:
 - `first_chat_onboarding_prd.md`：人格与 AI 称呼的设置入口（使命的选择入口可复用其绑定期流程）。
 - `proactive_prd.md`：主动消息与拉活（求生欲生命周期的基座）。
 - `memory_prd.md` / `agent_context_files.md`（tech_design）：Context Files 职责边界（防漂移的对照面）。
-- `../tech_design/relationship_state_implementation_plan.md`：状态层（关系阶段 + 三需求）的存储 / 更新实施方案（Phase A/B/C/D 已落地）。状态如何影响 prompt / 编排的那根注入线由本 PRD §7 渲染器承接。本 PRD 的状态层不重定义，直接引用该方案。
+- `../architecture/designs/relationship_state_design.md`：状态层（关系阶段 + 三需求）的存储 / 更新实施方案（Phase A/B/C/D 已落地）。状态如何影响 prompt / 编排的那根注入线由本 PRD §7 渲染器承接。本 PRD 的状态层不重定义，直接引用该方案。

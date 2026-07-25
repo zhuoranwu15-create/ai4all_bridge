@@ -176,7 +176,7 @@ daily notes 内容边界：
 
 ### 5.4 长期记忆 Dreaming
 
-长期记忆主要通过 Dreaming 机制维护。详细 Dreaming 规则见 [Dreaming 记忆压缩与长期记忆技术设计](../tech_design/dreaming_memory_design.md)。
+长期记忆主要通过 Dreaming 机制维护。详细 Dreaming 规则见 [Dreaming 记忆压缩与长期记忆技术设计](../architecture/designs/dreaming_memory_design.md)。
 
 基本产品原则：
 

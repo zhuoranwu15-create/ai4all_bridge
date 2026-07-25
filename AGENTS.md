@@ -92,8 +92,10 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 | `app/products/zhaoxi/application/memory/session_lifecycle.py` | 朝夕对话 session 轮转 |
 | `app/products/zhaoxi/application/onboarding.py` | 朝夕新用户 onboarding 流程 |
 | `app/products/zhaoxi/application/memory/dreaming.py` 和 `app/products/zhaoxi/jobs/dreaming/scheduler.py` | Dreaming 记忆压缩与调度 |
-| `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、reactivation 拉活、账号主动检查 |
+| `app/products/zhaoxi/proactive/*` | 朝夕主动消息：提醒、commitment、内容邀请、reactivation 拉活、账号主动检查 |
+| `app/products/zhaoxi/tools/*` | 朝夕专属 LLM 工具 handler：使命、提醒、承诺、内容邀请、主动偏好 |
 | `app/products/zhaoxi/application/memory/writer.py` | 朝夕 turn 后记忆更新 |
+| `app/platform/moderation/*` | 跨产品内容审核规则、provider、worker 与持久化 |
 | `app/platform/quota/rate_limiter.py` | 产品级 RPM 配额控制 |
 | `app/platform/gateways/openclaw.py` | 回调 OpenClaw 的 outbound 能力 |
 
@@ -111,4 +113,5 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 ## Spec Kit
 
-如需了解要使用的技术、项目结构、shell 命令和其他重要信息，阅读当前 plan。
+如需了解要使用的技术、项目结构、shell 命令和其他重要信息，先看
+[`docs/README.md`](docs/README.md) 与 [`docs/plans/README.md`](docs/plans/README.md)，再阅读对应当前 plan。
