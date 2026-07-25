@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Protocol
 
 if TYPE_CHECKING:  # 仅供类型检查，运行时不导入（避免导入环）
     from app.db._backend import Connection
-    from app.prompt_builder import ContextBlock  # noqa: F401  接缝① 复用类型
+    from app.agent_runtime.context.prompt_builder import ContextBlock
     from app.agent_runtime.turns.service import ChannelTurnInput
     from app.schemas import OpenClawTurnResponse
 

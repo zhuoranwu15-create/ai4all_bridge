@@ -17,6 +17,9 @@ RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
 # 共享平台层不得依赖任何产品实现；产品与平台由 bootstrap composition root 接线。
 PLATFORM_LAYER = REPO_ROOT / "app" / "platform"
 
+# 共享工具框架不得反向组合产品 schema/handler；产品 catalog 由产品自身持有。
+SHARED_TOOLS_LAYER = REPO_ROOT / "app" / "tools"
+
 # 已实体化的朝夕垂直业务不得重新漂回 app/ 顶层。
 ZHAOXI_PROACTIVE_LAYER = PRODUCTS_ROOT / "zhaoxi" / "proactive"
 
@@ -45,6 +48,7 @@ PLATFORM_FORBIDDEN_PREFIXES = (
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
     "app/agent_runtime",
+    "app/agent_runtime/turns",
     "app/bootstrap",
     "app/platform",
     "app/products",
@@ -213,6 +217,7 @@ def test_product_business_packages_are_not_top_level():
         "app/routers/admin_security.py",
         "app/routers/bridge.py",
         "app/routers/debug.py",
+        "app/routers/app_api.py",
         "app/tools/commitment_handlers.py",
         "app/tools/content_invitation_handlers.py",
         "app/tools/mission_handlers.py",
@@ -294,6 +299,59 @@ def test_shared_platform_does_not_import_product_domains():
         "共享 Platform 依赖具体产品（产品实现只能由 bootstrap 组合）：\n"
         + "\n".join(violations)
     )
+
+
+def test_shared_tools_do_not_import_product_implementations():
+    """共享 ToolRegistry/executor 只能认识共享工具，产品 catalog 在产品边界内组合。"""
+
+    violations: list[str] = []
+    for py_file in sorted(SHARED_TOOLS_LAYER.rglob("*.py")):
+        package = _module_package(py_file)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for module in _iter_imported_modules(tree, package):
+            if _is_forbidden(module, ("app.products",)):
+                violations.append(f"{py_file.relative_to(REPO_ROOT)} → import {module}")
+    assert not violations, "共享 tools 反向依赖产品实现：\n" + "\n".join(violations)
+
+
+def test_main_is_only_an_asgi_bootstrap_entrypoint():
+    """main 不得重新组合产品 router、scheduler、DB 或 turn 业务。"""
+
+    main_file = REPO_ROOT / "app" / "main.py"
+    tree = ast.parse(main_file.read_text(encoding="utf-8"), filename=str(main_file))
+    imported_app_modules = {
+        module
+        for module in _iter_imported_modules(tree, "app")
+        if module.startswith("app.")
+    }
+    assert imported_app_modules <= {
+        "app.bootstrap.application",
+        "app.bootstrap.application.create_app",
+        "app.config",
+        "app.config.settings",
+    }
+    assert not any(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) for node in tree.body)
+
+
+def test_transition_facades_have_real_owners_and_no_business_definitions():
+    """根过渡模块只做兼容导出，真实实现必须留在 Runtime/朝夕 owner。"""
+
+    expected = {
+        "app/turn_service.py": "app/agent_runtime/turns/service.py",
+        "app/prompt_builder.py": "app/agent_runtime/context/prompt_builder.py",
+        "app/reminder_utils.py": (
+            "app/products/zhaoxi/proactive/obligations/reminder_schedule.py"
+        ),
+    }
+    for facade_rel, owner_rel in expected.items():
+        facade = REPO_ROOT / facade_rel
+        owner = REPO_ROOT / owner_rel
+        assert facade.is_file() and owner.is_file()
+        tree = ast.parse(facade.read_text(encoding="utf-8"), filename=str(facade))
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            for node in tree.body
+        ), f"兼容 façade 重新出现业务定义：{facade_rel}"
 
 
 def test_shared_platform_does_not_import_db_compatibility_facade():

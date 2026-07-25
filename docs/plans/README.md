@@ -4,7 +4,7 @@
 
 | 计划 | 当前未完成范围 |
 | --- | --- |
-| [多产品模块化单体](shared/multi_product_modular_monolith_implementation_plan.md) | 模块边界实体化；Fatetell PRD 冻结后的第二产品接入 |
+| [多产品模块化单体](shared/multi_product_modular_monolith_implementation_plan.md) | MP-07A～F 已完成本地开发、待分批评审；真实第二产品等待 PRD |
 | [Agent Runtime 对齐](agent-runtime/agent_runtime对齐.md) | 当前消息 typed envelope 等剩余核查 |
 | [主动消息送达窗口](products/zhaoxi/主动消息送达窗口对齐.md) | 过期告知机制与 OpenClaw 补丁固化 |
 | [Analytics 工程实施](shared/analytics_foundation_implementation_plan.md) | Nearline facts/marts 与 ETL 建设 |

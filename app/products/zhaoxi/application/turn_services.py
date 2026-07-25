@@ -20,7 +20,7 @@ from app.db import (
     get_active_content_invitation,
     set_account_onboarding_state,
 )
-from app.prompt_builder import extract_section
+from app.agent_runtime.context.prompt_builder import extract_section
 from app.products.zhaoxi.application.memory.session_lifecycle import (
     business_day_for,
     get_or_create_account_active_session_with_dreaming,

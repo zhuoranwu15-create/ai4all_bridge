@@ -23,7 +23,9 @@ from app.db import (
 from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
 from app.products.zhaoxi.proactive.delivery.touch_state import STALE, get_account_touch_state
 from app.products.zhaoxi.proactive.fulfillment import fulfill_dynamic_reminder
-from app.reminder_utils import compute_next_due_at
+from app.products.zhaoxi.proactive.obligations.reminder_schedule import (
+    compute_next_due_at,
+)
 from app.time_utils import beijing_naive_now
 
 logger = logging.getLogger("ai4all.proactive.reminders")

@@ -16,6 +16,7 @@
 | [总体架构](architecture/overview.md) | 系统分层、依赖方向、核心链路与部署形态 |
 | [技术总平面](architecture/system_design.md) | 状态所有权、数据模型与技术平面 |
 | [多产品模块化单体 ADR](architecture/shared/data/multi_product_modular_monolith_design.md) | 产品边界、身份/资产隔离与第二产品接入原则 |
+| [新增产品开发清单](guides/adding-product.md) | 真实新产品开工时必须落实的代码、隔离与验收步骤 |
 | [路线图](roadmap.md) | 稳定愿景、原则和暂不做边界 |
 
 ## 目录职责
@@ -27,6 +28,7 @@
 | [`plans/`](plans/README.md) | 按 shared / agent-runtime / product 划分的未完成计划 | 完成后归档 |
 | [`ops/`](ops/README.md) | 平台与产品运行、部署、备份、排障与调试 | 随生产更新 |
 | [`backlog/`](backlog/BACKLOG.md) | 按 shared / product 划分的未立项工程改进 | 立项后移入 plans |
+| [`guides/`](guides/adding-product.md) | 跨 owner 的开发操作清单 | 随架构契约更新 |
 | [`archive/`](archive/README.md) | 已完成交付、被取代方案和历史快照 | 冻结，只修失效链接 |
 
 ## 维护规则

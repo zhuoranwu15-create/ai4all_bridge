@@ -10,10 +10,15 @@
 | 状态 | 生产注册表已启用 |
 | 代码命名空间 | `app/products/zhaoxi/` |
 | 当前渠道 | 微信、Web/H5、朝夕 Native App |
-| 兼容入口 | 既有 `/web/*`、`/v1/*` 与朝夕产品 API 保持可用；产品 namespace API 在第二产品接入时按真实契约建立 |
+| 规范产品入口 | `/api/v1/products/zhaoxi/*`；反代剥离兼容 `/v1/products/zhaoxi/*` |
+| 兼容入口 | 既有 `/web/*`、`/v1/*` 保持可用并固定为朝夕 audience |
 | 共享依赖 | [平台架构](../../architecture/shared/README.md)、[Agent Runtime](../../architecture/agent-runtime/README.md) |
 
 [总 PRD](prd.md) 定义朝夕的产品定位、Phase 1 历史范围、优先级和总体验收；能力文档用于展开用户流程、策略规则、话术边界和专题验收。历史“Phase 1”是朝夕已完成里程碑，不是未来产品的默认范围。
+
+代码由 `app/products/zhaoxi/manifest.py` 组合产品 API 与 lifecycle；turn 产品实现位于
+`app/products/zhaoxi/application/turn_services.py`，专属工具策略位于
+`app/products/zhaoxi/tools/registry.py`。共享 Runtime 与 Platform 不反向依赖这些实现。
 
 ## 能力专题
 

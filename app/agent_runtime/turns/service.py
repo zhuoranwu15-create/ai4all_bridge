@@ -57,7 +57,7 @@ from app.platform.moderation.service import (
     screen_inbound_message_sync,
 )
 from app.agent_runtime.context.window import compute_floor_count, trim_history_rows
-from app.prompt_builder import ContextBlock, PromptBuilder
+from app.agent_runtime.context.prompt_builder import ContextBlock, PromptBuilder
 from app.platform.quota.rate_limiter import rate_limiter
 from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools.registry import DEFAULT_NEVER, ToolPolicy

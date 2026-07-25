@@ -8,8 +8,9 @@
 | --- | --- | --- | --- |
 | 朝夕相伴 | `zhaoxi` | 已启用 | [产品 manifest](zhaoxi/README.md) |
 
-Fatetell 尚未冻结 PRD，因此不建立空目录或占位能力文档。PRD 冻结时，先新增其产品 manifest
-和总 PRD，再根据真实需求添加能力、架构设计与实施计划。
+Fatetell、Nooki 等候选产品尚未冻结可开发的核心 PRD，因此不建立空目录或占位能力文档。
+哪个产品先具备真实需求，哪个先按[新增产品开发清单](../guides/adding-product.md)建立产品
+manifest 和总 PRD，再根据实际范围添加能力、架构设计与实施计划。
 
 跨产品的身份、钱包、配额、审核、接入节点和 API 边界不写在这里；它们属于
 [`../architecture/shared/`](../architecture/shared/README.md)。形态无关的 LLM、上下文与记忆运行机制属于

@@ -2,7 +2,7 @@
 
 更新时间：2026-07-25
 
-状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 四批目录迁移已完成开发与聚焦回归，待分批评审合并。Fatetell 业务接入仍等待 PRD。**
+状态：**MP-01～MP-06 已生产发布；MP-07A～MP-07F 已完成本地开发与聚焦回归，待分批评审合并。生产注册表仍只启用 zhaoxi，真实第二产品接入等待其 PRD。**
 
 决策基线：[`multi_product_modular_monolith_design.md`](../../architecture/shared/data/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
 
@@ -16,11 +16,9 @@
 - expand/contract 仍作为工单内不可省略的发布检查点；**工单数量减少不代表可以把多次生产发布合成一次**。
 - 不创建 `app/products/fatetell/`，不挂 Fatetell 路由，不修改 Runtime/主动消息契约来猜测 Fatetell 需求。
 - 跨产品隔离测试使用可注入的 `test_product`，生产注册表暂只启用 zhaoxi。
-- 产品命名空间、Runtime 接入、MemorySink、ProactiveDeliveryAdapter 和 Fatetell 端到端测试统一移入 §5 延期范围，等 PRD 后重新拆工单。
+- 固定产品命名空间、显式 ProductTurnServices 与 ToolPolicy 已在 MP-07B～MP-07F 建成；真实产品的领域 API、MemorySink、ProactiveDeliveryAdapter 和端到端发布仍移入 §5，等对应 PRD 后拆单。
 
-2026-07-25 生产发布完成后调整实施顺序：提前执行 **MP-07A 目录边界实体化**，只移动
-归属明确的朝夕模块、收口 composition root 和强化 AST 门禁；不创建 Fatetell 产品骨架，
-不修改 Runtime/Memory/Proactive 契约。该调整不改变上述 Phase 1 发布记录。
+2026-07-25 生产发布后执行 **MP-07A～MP-07F 多产品公共基座收口**：先完成目录边界实体化，再把 turn 产品作用域、ProductTurnServices、ToolPolicy、固定产品 API namespace 与 composition root 变成真实代码契约。全过程不创建 Fatetell/Nooki 占位目录，不实现任何未冻结产品业务。
 
 ## 2. 共同执行纪律
 
@@ -61,7 +59,7 @@
 - `app/db/product_memberships.py`、`app/db/__init__.py`。
 - `app/bootstrap/product_registry.py`：生产仅注册并启用 zhaoxi；测试允许注入 `test_product`。
 - `app/db/accounts.py`、`app/db/billing.py`。
-- `app/routers/deps.py`、`app/products/zhaoxi/api/companion_world.py`、`app/routers/web.py`、`app/routers/app_api.py`（MP-07A 后物理路径）。
+- `app/routers/deps.py`、`app/products/zhaoxi/api/companion_world.py`、`app/routers/web.py`、`app/products/zhaoxi/api/app.py`。
 - `tests/test_precheck_multi_product_phase1.py`、`tests/test_product_memberships.py`、`tests/test_session_principal.py`、`tests/test_multi_product_account_resolution.py`（新增）。
 
 交付：
@@ -295,69 +293,90 @@
 
 明确延期：全局 referral release job 在第二产品接入时按真实部署选择“每产品独立 job”或“遍历启用产品”；当前入口已支持显式 `app_id`，生产仅有 zhaoxi，本轮不改变默认行为。
 
-## 5. 延期范围：等待 Fatetell PRD 后重新拆工单
+## 5. 延期范围：等待真实第二产品 PRD 后拆单
 
-以下内容不属于 MP-01…MP-06，本轮不开发：
+以下内容不属于公共基座，不在 MP-07A～MP-07F 中猜测实现：
 
-- `app/products/fatetell/` 目录、manifest、领域模型、repository 和 jobs。
-- `/v1/products/fatetell/*` 路由、Fatetell OTP/session/account bootstrap 与客户端契约。
-- Fatetell persona、context blocks、ToolPolicy、命盘/命格等领域数据。
-- 为 Fatetell 修改 `AgentRuntimePort` 或新增候选端口。
-- `ProactiveIntent` 去 Companion World 化、Fatetell MemorySink、ProactiveDeliveryAdapter、通知存储和 scheduler。
-- Fatetell 端到端、开量、监控与运营后台。
-- 第二产品的 referral 定时释放编排；接入时必须显式指定或遍历产品，不能无意识依赖默认 zhaoxi。
+- Fatetell、Nooki 或其他候选产品的目录、manifest、领域模型、repository、jobs 和运营后台。
+- 产品专属 OTP/session bootstrap 响应、客户端页面、onboarding、persona、context blocks 与领域工具。
+- Nooki 的 task/step/timer/action-card 状态机、恢复与并发规则。
+- Fatetell 的命盘/命格等领域模型、隐私规则和业务工具。
+- 第二产品的 MemorySink、主动消息触发、通知存储、scheduler 与发布开量。
+- `runtime_ownerships`；只有真实产品所有权模型确定后才建立唯一投影。
+- referral release job 的产品遍历/独立部署策略；接入时必须显式指定产品。
 
-重新开工前，Fatetell PRD 至少需要明确：
+真实产品开工前至少要明确：
 
-1. 用户入口、渠道与 API/客户端边界。
-2. 一个 membership 下的入口 account 与 Runtime account 数量/所有权模型。
-3. onboarding、persona、context、工具与记忆层级需求。
-4. 订阅/钱包/配额/邀请规则及新客权益。
-5. 主动消息的触发、投递渠道、频控、通知存储与退订策略。
-6. 命理领域实体、隐私/合规、数据保留与删除要求。
+1. `app_id`、入口渠道、客户端与固定 API namespace。
+2. membership 下入口 account、Runtime account 的数量和所有权模型。
+3. onboarding、persona、上下文、工具、记忆与数据删除规则。
+4. 钱包、订阅、配额、邀请、新客权益和运营口径。
+5. 主动消息、通知、退订、频控和 scheduler 真值。
+6. 产品领域状态机、幂等、并发、恢复、隐私与合规规则。
 
-PRD 冻结后再按真实调用点拆三类工单：产品 API/composition、Runtime/Memory/Proactive 接入、双产品端到端发布。届时允许对通用端口做一次有真实调用方支撑的泛化，不提前造抽象。
+开工时按真实调用点拆三类工单：产品 API/composition、Runtime/Memory/Proactive 接线、双产品端到端与发布。执行清单见 [新增产品开发清单](../../guides/adding-product.md)。
 
-## 6. 下一步
+## 6. MP-07 公共基座收口
 
-Phase 1 已生产发布。MP-07A 按顺序提交分四批推进：
+### MP-07A：目录与所有权实体化
 
-1. Companion World 垂直切片归入 `app/products/zhaoxi/`，路由组合收口到 `app/bootstrap/`（已合入 PR #53）。
-2. 对根目录中归属明确的共享能力做 platform/agent_runtime 归位（已完成开发与聚焦回归）：
-   - 平台层按 `auth`、`quota`、`media`、`search`、`gateways`、`observability` 归组；
-   - Runtime 按 `llm`、`context`、`persistence` 归组；
-   - `app.main:app`、`scripts/run_*.py` 入口保持不变。
-3. 对 onboarding、memory、mission、relationship 等朝夕模块归位（已完成开发与聚焦回归）：
-   - application 按 `memory/`、`missions/`、`prompts/` 归组；领域使命模板和 SOUL 模板随 owner 一并迁移；
-   - dreaming 与 user-meta scheduler 归入朝夕 `jobs/`；
-   - `app/products/zhaoxi/application/__init__.py` 保留兼容导出，但改为懒加载以避免 package 初始化环。
-4. 收口剩余归属明确的业务包与文档体系（已完成开发与聚焦回归）：
-   - `proactive` 整体归入朝夕产品；moderation 归入共享 Platform；
-   - proactive/notification/mission/user-meta/campaign persistence 与产品 routes/tools 随 owner
-     归位，`app.db` 通过懒加载 façade 继续兼容旧公共导入；
-   - 接入节点登记/账号路由 persistence 归入 `platform/gateways`，Platform 禁止通过
-     `app.db` façade 隐式加载产品；
-   - 文档统一为 `architecture / product / plans / ops / archive` 生命周期，已完成或被取代的
-     计划归档，重复的 Companion World 简报删除，并新增本地 Markdown 链接门禁。
+状态：**已完成本地开发与聚焦回归。**
 
-完成四批后，`app/` 根目录只保留 8 个 Python 文件：入口/包文件 `main.py`、`__init__.py`，
-跨层稳定原语 `config.py`、`schemas.py`、`time_utils.py`，以及仍待真实第二产品调用点后再泛化的
-`turn_service.py`、`prompt_builder.py`、`reminder_utils.py`。其中前五个不是业务平铺；后三个是
-有意保留的过渡模块，不能在 Fatetell 契约未冻结时强塞入 Runtime 或朝夕目录。
+- Companion World、朝夕 application/jobs/proactive/routes/tools/persistence 归入 `app/products/zhaoxi/`。
+- Platform 与 Agent Runtime 能力分别归入 `app/platform/`、`app/agent_runtime/`。
+- 文档按 shared / agent-runtime / products / plans / ops / archive 生命周期整理。
 
-MP-07A 不创建 `app/products/fatetell/`，不修改数据库或外部 API。Fatetell 的产品命名空间、
-Runtime/Memory/Proactive 接入和端到端发布仍按 §5 等待 PRD 后拆单。
+### MP-07B：Turn 产品作用域显式化
 
-### MP-07A 后仍有意保留的混合边界
+状态：**已完成本地开发与聚焦回归。**
 
-- `routers/web.py`、`routers/app_api.py` 同时承载共享身份 bootstrap 与朝夕 legacy API；等第二产品
-  路由冻结后再拆，避免仅换目录却继续混责。
-- `products/zhaoxi/api/admin_accounts.py` 已归产品所有，但内部仍组合平台账号/资产 base view 与
-  朝夕扩展字段；第二产品接入时应抽平台 base query，由各产品追加 projection。
-- `routers/admin_ops.py` 与 `serializers.py` 仍含少量朝夕 scheduler/proactive 展示逻辑；应按
-  endpoint/helper 拆分，不能把整个共享运维面搬进产品。
-- `tools/definitions.py` / `registry.py` / `executor.py` 仍组合通用工具和朝夕 tool schema；Fatetell
-  接入时由真实工具差异催生 `ToolPolicy`，不提前创建空抽象。
-- `db/__init__.py` 与 `_core.py` 仍是 schema/migration 兼容入口；产品 persistence 已物理归位，
-  但 migration registry 和共享事务边界不在本轮拆分。
-- `turn_service.py`、`prompt_builder.py`、`reminder_utils.py` 仍是显式过渡模块，处理条件同上。
+- `ChannelTurnInput` 与工具执行 `TurnContext` 必填 `app_id`。
+- 朝夕 OpenClaw、Web/App、Companion World 与主动任务入口全部显式传 `zhaoxi`。
+- account 与输入 app scope 错配时，在 session、binding、message、profile、quota 等副作用前拒绝。
+
+### MP-07C：真实 Agent Runtime 去朝夕化
+
+状态：**已完成本地开发与聚焦回归。**
+
+- turn engine 位于 `app/agent_runtime/turns/service.py`。
+- `ProductTurnServices` 显式注入产品 session、profile/context、onboarding 与 after-turn hooks。
+- 朝夕实现位于 `app/products/zhaoxi/application/turn_services.py`；通用 Runtime 不 import 产品，也不按产品字符串分支。
+- 根 `app/turn_service.py` 仅为朝夕旧 Python import 的兼容 façade。
+
+### MP-07D：产品级 ToolPolicy
+
+状态：**已完成本地开发与聚焦回归。**
+
+- `app/tools/` 只保留共享 schema、registry/policy 框架与 executor。
+- 朝夕 schema、handler metadata、默认 gating 和首轮工具选择归入 `app/products/zhaoxi/tools/`。
+- executor 同时验证工具是否存在、当前产品是否允许以及 policy scope 是否匹配。
+- 中性 `test_product` 只能看到共享工具，无法执行朝夕提醒、使命或主动消息工具。
+
+### MP-07E：固定产品鉴权与 composition root
+
+状态：**已完成本地开发与聚焦回归。**
+
+- `require_product_session(expected_app_id)` 固定校验 session audience；不接受任意 Header 决定产品。
+- 旧 `/web/*`、`/v1/*` 继续固定朝夕；规范入口为 `/api/v1/products/zhaoxi/*`。
+- 朝夕用户 API 位于 `app/products/zhaoxi/api/`，router 与 scheduler/lifecycle 由 manifest 暴露。
+- `app/main.py` 只创建 bootstrap application；共享与产品生命周期分别组合。
+
+### MP-07F：门禁、过渡文件与文档闭环
+
+状态：**已完成本地开发与聚焦回归。**
+
+- PromptBuilder 与 safety 资产归 Runtime context；提醒周期算法归朝夕 proactive owner，根路径只兼容导出。
+- AST 门禁覆盖真实 turn engine、共享 tools、main 和根兼容 façade。
+- 中性 `test_product` 通过最小真实 turn contract，证明不需要朝夕默认实现。
+- ADR、实施计划、产品 manifest 与新增产品清单按当前代码事实更新。
+- 验证：MP-07F 直接覆盖集 `140 passed`；MP-07B～MP-07F 组合聚焦回归
+  `335 passed`。仅保留既有 Pydantic/FastAPI 弃用和异步 mock 资源 warning。
+
+## 7. 仍有意延期的边界
+
+- `routers/web.py` 仍是朝夕 legacy Web 入口；第二产品不得复制它，应从固定产品 namespace 建新入口。
+- `products/zhaoxi/api/admin_accounts.py` 仍组合平台 base view 与朝夕扩展字段；真实第二产品出现时再按 projection 需求拆。
+- `routers/admin_ops.py` 与 serializers 仍有少量朝夕运营展示，按真实 endpoint/helper 逐项下沉。
+- `db/__init__.py` 与 `_core.py` 继续作为 migration/事务兼容入口；SQLite 与 PostgreSQL 两条路径都必须保留。
+- `ProactiveIntent` 仍含 Companion World 字段；只有第二产品确需主动消息时才按真实载荷泛化。
+- 不创建空产品目录，不做动态插件发现，不提前实现产品 MemorySink、scheduler 或所有权投影。

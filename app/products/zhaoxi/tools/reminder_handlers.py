@@ -11,7 +11,11 @@ from app.db import (
     update_reminder,
 )
 from app.products.zhaoxi.proactive.fulfillment import is_dynamic_reminder_allowed
-from app.reminder_utils import compute_first_due_at, validate_due_at, validate_recur_rule
+from app.products.zhaoxi.proactive.obligations.reminder_schedule import (
+    compute_first_due_at,
+    validate_due_at,
+    validate_recur_rule,
+)
 from app.time_utils import beijing_naive_now
 
 if TYPE_CHECKING:

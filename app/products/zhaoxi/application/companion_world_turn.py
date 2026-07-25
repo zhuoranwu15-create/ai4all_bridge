@@ -10,7 +10,7 @@ from app.config import settings
 from app.products.zhaoxi.infrastructure.persistence.companion_world import read_universe_facts
 from app.products.zhaoxi.domain.companion_world.l3_context import render_universe_l3_block
 from app.platform.auth.identity import ResolvedIdentity
-from app.prompt_builder import ContextBlock
+from app.agent_runtime.context.prompt_builder import ContextBlock
 from app.schemas import OpenClawTurnResponse
 from app.agent_runtime.turns.service import ChannelTurnInput
 
