@@ -1,7 +1,7 @@
-"""app.mission_state — 已分配使命的解析：DB 行 + 已注册模板的单一事实源。
+"""朝夕已分配使命的解析：DB 行 + 已注册模板的单一事实源。
 
 「有效使命」的判定必须在所有消费方（tooling 门控、agent_self_state 渲染、mission 工具、
-Admin 视图）保持一致：**account_mission 行存在，且 mission_id 能解析到 app.mission_registry
+Admin 视图）保持一致：**account_mission 行存在，且 mission_id 能解析到 app.products.zhaoxi.domain.missions.registry
 已注册的模板，才算 has_mission=True**。仅查 DB 行存在（不校验模板可解析）会导致脏数据或
 未来模板下线后，模型仍会看到 mission_status/record_mission_moment 工具，但一调用就报错——
 这里把判定收敛成一处，其余模块一律调用本模块，不再各自重复"查 DB 再 try/except 模板"。
@@ -10,7 +10,7 @@ import logging
 from typing import List, NamedTuple, Optional
 
 from app.db import count_mission_moments, get_account_mission, list_mission_moments
-from app.mission_registry import MissionTemplate, get_mission_template
+from app.products.zhaoxi.domain.missions.registry import MissionTemplate, get_mission_template
 
 logger = logging.getLogger("ai4all.mission_state")
 

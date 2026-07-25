@@ -31,8 +31,8 @@ def _make_settings(tmp_path: Path) -> MagicMock:
 class TestMemoryFilePath:
     def test_memory_file_path(self, tmp_path):
         s = _make_settings(tmp_path)
-        with patch("app.memory_writer.settings", s):
-            from app.memory_writer import memory_file_path
+        with patch("app.products.zhaoxi.application.memory.writer.settings", s):
+            from app.products.zhaoxi.application.memory.writer import memory_file_path
             p = memory_file_path("test@user", TODAY)
         # safe dir name replaces @ with _
         assert "memory" in str(p)
@@ -51,10 +51,10 @@ class TestWriteMemoryRawArchive:
         s = _make_settings(tmp_path)
         s.llm_api_key = ""
         with (
-            patch("app.memory_writer.settings", s),
+            patch("app.products.zhaoxi.application.memory.writer.settings", s),
             patch("app.agent_runtime.llm.service.generate_completion") as mock_generate_completion,
         ):
-            from app.memory_writer import write_memory
+            from app.products.zhaoxi.application.memory.writer import write_memory
             asyncio.run(
                 write_memory(
                     "user1",
@@ -88,8 +88,8 @@ class TestWriteMemoryRawArchive:
 class TestWriteMemoryHeader:
     def test_new_file_has_date_header(self, fresh_db, tmp_path):
         s = _make_settings(tmp_path)
-        with patch("app.memory_writer.settings", s):
-            from app.memory_writer import write_memory
+        with patch("app.products.zhaoxi.application.memory.writer.settings", s):
+            from app.products.zhaoxi.application.memory.writer import write_memory
             asyncio.run(
                 write_memory(
                     "user2",
@@ -113,8 +113,8 @@ class TestWriteMemoryAppend:
         existing_content = f"# {TODAY}\n\n- 旧条目\n"
         profile_storage.write_file("user3", f"memory/{TODAY}.md", existing_content)
 
-        with patch("app.memory_writer.settings", s):
-            from app.memory_writer import write_memory
+        with patch("app.products.zhaoxi.application.memory.writer.settings", s):
+            from app.products.zhaoxi.application.memory.writer import write_memory
             asyncio.run(
                 write_memory(
                     "user3",
@@ -140,16 +140,16 @@ class TestWriteMemoryAppend:
 class TestWriteMemoryEmptyTurns:
     def test_empty_turns_no_write(self, fresh_db, tmp_path):
         s = _make_settings(tmp_path)
-        with patch("app.memory_writer.settings", s):
-            from app.memory_writer import write_memory
+        with patch("app.products.zhaoxi.application.memory.writer.settings", s):
+            from app.products.zhaoxi.application.memory.writer import write_memory
             asyncio.run(write_memory("user4", [], TODAY))
 
         assert not profile_storage.exists("user4", f"memory/{TODAY}.md")
 
     def test_blank_visible_turns_no_write(self, fresh_db, tmp_path):
         s = _make_settings(tmp_path)
-        with patch("app.memory_writer.settings", s):
-            from app.memory_writer import write_memory
+        with patch("app.products.zhaoxi.application.memory.writer.settings", s):
+            from app.products.zhaoxi.application.memory.writer import write_memory
             asyncio.run(
                 write_memory(
                     "user4",
@@ -172,13 +172,13 @@ class TestWriteMemoryWriteError:
     def test_write_error_does_not_crash(self, tmp_path):
         s = _make_settings(tmp_path)
         with (
-            patch("app.memory_writer.settings", s),
+            patch("app.products.zhaoxi.application.memory.writer.settings", s),
             patch(
-                "app.memory_writer._append_to_memory",
+                "app.products.zhaoxi.application.memory.writer._append_to_memory",
                 side_effect=RuntimeError("disk full"),
             ),
         ):
-            from app.memory_writer import write_memory
+            from app.products.zhaoxi.application.memory.writer import write_memory
             # Should NOT raise
             asyncio.run(write_memory("user5", TURNS, TODAY))
 
@@ -198,8 +198,8 @@ class TestReadDailyNotes:
         yesterday = "2026-05-16"
         self._setup_memory_file("userA", yesterday, f"# {yesterday}\n\n- 昨天的备注")
 
-        with patch("app.user_profiles.settings", s):
-            from app.user_profiles import read_daily_notes
+        with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+            from app.products.zhaoxi.infrastructure.profiles import read_daily_notes
             result = read_daily_notes("userA", TODAY)
 
         assert "今天的备注" in result
@@ -207,8 +207,8 @@ class TestReadDailyNotes:
 
     def test_read_daily_notes_missing_files(self, fresh_db, tmp_path):
         s = _make_settings(tmp_path)
-        with patch("app.user_profiles.settings", s):
-            from app.user_profiles import read_daily_notes
+        with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+            from app.products.zhaoxi.infrastructure.profiles import read_daily_notes
             result = read_daily_notes("userB", TODAY)
         assert result == ""
 
@@ -216,8 +216,8 @@ class TestReadDailyNotes:
         s = _make_settings(tmp_path)
         self._setup_memory_file("userC", TODAY, f"# {TODAY}\n\n- 只有今天")
 
-        with patch("app.user_profiles.settings", s):
-            from app.user_profiles import read_daily_notes
+        with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+            from app.products.zhaoxi.infrastructure.profiles import read_daily_notes
             result = read_daily_notes("userC", TODAY)
 
         assert "只有今天" in result
@@ -227,8 +227,8 @@ class TestReadDailyNotes:
         yesterday = "2026-05-16"
         self._setup_memory_file("userD", yesterday, f"# {yesterday}\n\n- 只有昨天")
 
-        with patch("app.user_profiles.settings", s):
-            from app.user_profiles import read_daily_notes
+        with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
+            from app.products.zhaoxi.infrastructure.profiles import read_daily_notes
             result = read_daily_notes("userD", TODAY)
 
         assert "只有昨天" in result

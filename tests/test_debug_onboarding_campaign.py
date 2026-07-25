@@ -6,7 +6,7 @@
 """
 from app.db import get_account_onboarding_state, get_campaign_attribution
 from app.db.campaign import create_campaign_code, get_campaign_code
-from app.user_profiles import read_context_file
+from app.products.zhaoxi.infrastructure.profiles import read_context_file
 
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 

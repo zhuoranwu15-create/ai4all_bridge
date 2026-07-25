@@ -1,9 +1,9 @@
-"""app.mission_state：使命解析单一事实源（codex review 2026-07-04 修复）。
+"""app.products.zhaoxi.application.missions.state：使命解析单一事实源（codex review 2026-07-04 修复）。
 
 覆盖"DB 行存在但 mission_id 未注册"这一脏数据/模板下线场景在所有消费方
 （tooling 门控 / agent_self_state / mission 工具 / Admin 视图）必须一致降级。
 """
-from app.mission_state import build_admin_mission_view, has_resolved_mission, resolve_account_mission
+from app.products.zhaoxi.application.missions.state import build_admin_mission_view, has_resolved_mission, resolve_account_mission
 
 
 from tests.factories import create_account as _create_account

@@ -30,7 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.agent_runtime.persistence import profile_storage
 from app.config import settings
 from app.db import init_db, list_accounts
-from app.user_profiles import _safe_account_dir_name
+from app.products.zhaoxi.infrastructure.profiles import _safe_account_dir_name
 
 # 状态枚举：新增 / 已存在跳过 / 已存在覆盖。
 STATUS_NEW = "new"

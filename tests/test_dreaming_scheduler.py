@@ -3,7 +3,7 @@ from datetime import datetime
 
 
 def test_dreaming_scheduler_refreshes_idle_heartbeat_during_long_wait(monkeypatch):
-    from app import dreaming_scheduler as module
+    from app.products.zhaoxi.jobs.dreaming import scheduler as module
 
     scheduler = module.DreamingScheduler(batch_size=1, start_hour=4)
     now_values = iter(
@@ -35,7 +35,7 @@ def test_dreaming_scheduler_refreshes_idle_heartbeat_during_long_wait(monkeypatc
 
 
 def test_dreaming_scheduler_keeps_error_status_during_wait(monkeypatch):
-    from app import dreaming_scheduler as module
+    from app.products.zhaoxi.jobs.dreaming import scheduler as module
 
     scheduler = module.DreamingScheduler(batch_size=1, start_hour=4)
     now_values = iter(
@@ -69,7 +69,7 @@ def test_dreaming_scheduler_keeps_error_status_during_wait(monkeypatch):
 
 
 def test_dreaming_scheduler_injects_sink_and_runs_compact_batch(monkeypatch):
-    from app import dreaming_scheduler as module
+    from app.products.zhaoxi.jobs.dreaming import scheduler as module
 
     marker_sink = object()
     scan_calls = []

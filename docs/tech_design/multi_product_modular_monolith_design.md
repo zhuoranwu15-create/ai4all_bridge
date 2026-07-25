@@ -1,7 +1,7 @@
 # 技术设计：多产品模块化单体 —— 产品边界、身份隔离与分阶段迁移（架构决策记录）
 
 更新时间：2026-07-25
-状态：**MP-01～MP-06 已生产发布；MP-07A 正在提前实体化朝夕目录边界。开放问题 O-1～O-7 的结论不变，Fatetell 业务仍等待 PRD。** 本文用于在 Fatetell（命理类产品）开发前冻结「产品级模块边界 + 身份/计费隔离」的架构决策与迁移顺序。
+状态：**MP-01～MP-06 已生产发布；MP-07A 三批目录迁移已完成开发与聚焦回归，待分批评审合并。开放问题 O-1～O-7 的结论不变，Fatetell 业务仍等待 PRD。** 本文用于在 Fatetell（命理类产品）开发前冻结「产品级模块边界 + 身份/计费隔离」的架构决策与迁移顺序。
 核查基线：Phase 1 merge commit `f4baa3b`。当前 max migration = `m0046`（`app/db/_core.py`）。
 
 路由口径：后端 `APIRouter` 前缀是 `/v1`（`app_api.py:52`），公网 Nginx 映射为 `/api/v1`。下文写 `/api/v1/...` 指公网口径，对应后端 `/v1/...`；实现与测试勿混用。
@@ -173,10 +173,10 @@ app/
 │   └── zhaoxi/
 │       ├── manifest.py            # 既有朝夕路由组合；不改变 URL
 │       ├── api/                    # Companion World 用户端/管理端 routers
-│       ├── application/           # Companion World 用例服务
-│       ├── domain/                # Companion World 纯领域层
-│       ├── infrastructure/        # persistence/repositories/adapters
-│       └── jobs/                  # world content/lifecycle jobs
+│       ├── application/           # World + onboarding/memory/mission/relationship 用例
+│       ├── domain/                # Companion World 与 mission 纯领域层/模板
+│       ├── infrastructure/        # persistence/repositories/adapters + profile/SOUL
+│       └── jobs/                  # world content/lifecycle + dreaming/user-meta jobs
 ├── agent_runtime/                 # 跨产品，保持形态无关（原位）
 │   ├── context/                   # turn context、窗口裁剪、摘要与证据回灌
 │   ├── llm/                       # 模型调用、provider 选择与协议适配
@@ -188,7 +188,8 @@ app/
 │   ├── observability/             # 告警与脱敏
 │   ├── quota/                     # 产品级 RPM 限流
 │   └── search/                    # Web Search、TDAI adapters
-└── (其余历史平铺模块由 MP-07A 后续批次按明确归属渐进收敛)
+└── turn_service.py / prompt_builder.py / reminder_utils.py
+                                 # 等 Fatetell 真实调用点后再泛化的过渡模块
 ```
 
 MP-07A 第一批执行：`domains/companion_world/* → products/zhaoxi/domain/companion_world/*`；`platform/companion_world_* → products/zhaoxi/{application,infrastructure}/`；`world_content|world_lifecycle → products/zhaoxi/jobs/`；`routers/companion_world* → products/zhaoxi/api/`；`db/companion_world* → products/zhaoxi/infrastructure/persistence/`。`app.db` 暂保留兼容再导出，后续批次再评估收口。

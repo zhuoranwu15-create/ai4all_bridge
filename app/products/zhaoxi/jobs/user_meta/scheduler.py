@@ -1,3 +1,5 @@
+"""朝夕用户画像与关系状态刷新调度任务。"""
+
 import asyncio
 import json
 import logging
@@ -18,11 +20,11 @@ from app.db import (
 )
 from app.agent_runtime.llm.service import generate_completion
 from app.agent_runtime.llm.providers import TASK_USER_META, tier_for_task
-from app.prompts.user_meta_companion_type import (
+from app.products.zhaoxi.application.prompts.companion_type import (
     COMPANION_TYPE_ENUM,
     build_companion_classify_prompt,
 )
-from app.relationship_state import (
+from app.products.zhaoxi.application.relationship import (
     apply_daily_deterministic_relationship,
     apply_daily_llm_relationship,
 )

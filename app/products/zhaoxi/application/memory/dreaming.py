@@ -1,3 +1,5 @@
+"""朝夕长期记忆 Dreaming 编排。"""
+
 import difflib
 import hashlib
 import json
@@ -23,7 +25,7 @@ from app.db import (
     update_session_summary,
 )
 from app.agent_runtime.persistence import profile_storage
-from app.user_profiles import (
+from app.products.zhaoxi.infrastructure.profiles import (
     account_profile_dir,
     context_file_path,
     ensure_agent_context_files,

@@ -1,3 +1,5 @@
+"""朝夕账号级 SOUL、IDENTITY、USER 与记忆上下文服务。"""
+
 import logging
 import re
 from dataclasses import dataclass
@@ -48,7 +50,7 @@ _SOUL_TEMPLATES = _load_soul_templates()
 
 SYSTEM_CONTEXT_FILES = ("AGENTS.md", "TOOLS.md")
 # MISSION.md：内核层 prose，装载路径与 SOUL/IDENTITY 完全一致（agent_self_prd.md §6.2.5）。
-# 默认模板只是占位符（"- 暂无"）；真正的使命 prose 由 app.mission_assignment 在分配时
+# 默认模板只是占位符（"- 暂无"）；真正的使命 prose 由 app.products.zhaoxi.application.missions.assignment 在分配时
 # 原地覆盖写入，与 apply_soul_preset()/write_ai_name_to_identity() 是同一种分层模式。
 USER_CONTEXT_FILE_ORDER = ("SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "MISSION.md")
 CONTEXT_FILE_ORDER = SYSTEM_CONTEXT_FILES + USER_CONTEXT_FILE_ORDER

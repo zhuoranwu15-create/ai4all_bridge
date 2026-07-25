@@ -8,11 +8,11 @@ from app.routers.deps import get_admin_user, require_admin_user, verify_admin_au
 from app.routers.serializers import _binding_intent_for_view, _can_bypass_redaction_for_account, _debug_redaction_payload, _normalize_ts, _platform_user_for_view, _profile_for_view, _trace_for_view
 from app.routers.models import ProfileUpdateRequest
 from app.db import get_account, get_account_user_meta, get_daily_usage, get_platform_user, get_profile_for_account, get_usage_last_7_days, get_wallet_summary, list_account_owner_bindings_for_account, list_account_user_meta_current, list_accounts, list_binding_intents_for_account, list_channel_bindings_for_account, list_debug_traces, list_referral_relationships, list_sessions_for_account, list_wallet_ledger, release_due_referral_rewards, set_account_status, set_companion_type_manual, update_account, update_profile_for_account
-from app.mission_state import build_admin_mission_view
-from app.prompts.user_meta_companion_type import COMPANION_TYPE_ENUM
-from app.relationship_state import render_relationship_view
+from app.products.zhaoxi.application.missions.state import build_admin_mission_view
+from app.products.zhaoxi.application.prompts.companion_type import COMPANION_TYPE_ENUM
+from app.products.zhaoxi.application.relationship import render_relationship_view
 from app.time_utils import beijing_now, beijing_now_str
-from app.user_profiles import ensure_user_profile, read_agent_context, read_user_profile
+from app.products.zhaoxi.infrastructure.profiles import ensure_user_profile, read_agent_context, read_user_profile
 from datetime import datetime
 from typing import Optional
 

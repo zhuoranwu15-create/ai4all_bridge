@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 if TYPE_CHECKING:
     from app.agent_runtime.ports import MemorySink
 
-from app.agent_self_state import build_agent_self_state_block
+from app.products.zhaoxi.application.missions.self_state import build_agent_self_state_block
 from app.platform.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.config import settings
 from app.db import (
@@ -54,11 +54,11 @@ from app.platform.media.image_understanding import describe_image
 from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
 from app.db.campaign import get_campaign_attribution
-from app.mission_assignment import assign_mission_if_absent
-from app.mission_state import resolve_account_mission
+from app.products.zhaoxi.application.missions.assignment import assign_mission_if_absent
+from app.products.zhaoxi.application.missions.state import resolve_account_mission
 from app.agent_runtime.llm.providers import LLMProviderConfig
-from app.memory_writer import write_memory
-from app.relationship_state import maybe_update_relationship_state_after_turn
+from app.products.zhaoxi.application.memory.writer import write_memory
+from app.products.zhaoxi.application.relationship import maybe_update_relationship_state_after_turn
 from app.moderation.sensitive_words import check_sync_guard
 from app.moderation.service import (
     create_sync_block_task,
@@ -72,8 +72,8 @@ from app.platform.quota.rate_limiter import rate_limiter
 from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools, iter_specs
 from app.agent_runtime.context.models import TurnContext
-from app.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
-from app.onboarding import (
+from app.products.zhaoxi.application.memory.session_lifecycle import business_day_for, get_or_create_account_active_session_with_dreaming
+from app.products.zhaoxi.application.onboarding import (
     apply_extracted_onboarding_info,
     build_onboarding_prompt_context,
     extract_onboarding_info_async,
@@ -87,7 +87,7 @@ from app.onboarding import (
     ONBOARDING_WELCOME_TEXT,
 )
 from app.platform.gateways import node_gateway
-from app.user_profiles import (
+from app.products.zhaoxi.infrastructure.profiles import (
     ensure_agent_context_files,
     ensure_user_profile,
     read_agent_context,
@@ -610,7 +610,7 @@ def build_turn_llm_input(
         )
     # has_mission 门控 mission_status/record_mission_moment 两个工具（未分配使命的存量
     # 账号、onboarding 中、或 mission_id 不可解析（脏数据/模板下线）都不出现，不暴露
-    # "调了也只会失败"的工具，见 §6.3 与 app.mission_state.resolve_account_mission）。
+    # "调了也只会失败"的工具，见 §6.3 与 app.products.zhaoxi.application.missions.state.resolve_account_mission）。
     resolved_mission = None if onboarding_active else resolve_account_mission(account_id=account_id)
     has_mission = resolved_mission is not None
     metadata["has_mission"] = has_mission

@@ -9,7 +9,7 @@ invitation_candidate 不重新校验标题质量是同一立场）。
 from typing import Optional, TYPE_CHECKING
 
 from app.db import count_mission_moments, record_mission_moment
-from app.mission_state import resolve_account_mission, snapshot_account_mission
+from app.products.zhaoxi.application.missions.state import resolve_account_mission, snapshot_account_mission
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 def handle_mission_status(args: dict, ctx: "TurnContext") -> dict:
     """查询当前账号的使命状态；无副作用。未分配使命、或 mission_id 不可解析（脏数据/
     模板下线）都统一返回 has_mission=False，而不是报错——两者对调用方而言是同一种
-    "当前无有效使命"状态（见 app.mission_state.resolve_account_mission）。
+    "当前无有效使命"状态（见 app.products.zhaoxi.application.missions.state.resolve_account_mission）。
     """
     snapshot = snapshot_account_mission(account_id=ctx.account_id)
     if snapshot is None:

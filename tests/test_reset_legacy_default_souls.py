@@ -19,7 +19,7 @@ def test_plan_account_reset_matches_legacy_default_soul(fresh_db, tmp_path):
     )
 
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
         profile_storage.write_file("acc-legacy", "SOUL.md", f"# SOUL\n\n{OLD_DEFAULT_SOUL_BODY}\n")
 
         candidate = plan_account_reset(account_id="acc-legacy")
@@ -36,7 +36,7 @@ def test_plan_account_reset_matches_empty_soul(fresh_db, tmp_path):
     from scripts.reset_legacy_default_souls import plan_account_reset
 
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
         profile_storage.write_file("acc-empty", "SOUL.md", "# SOUL\n\n")
 
         candidate = plan_account_reset(account_id="acc-empty")
@@ -50,7 +50,7 @@ def test_plan_account_reset_skips_custom_soul(fresh_db, tmp_path):
     from scripts.reset_legacy_default_souls import plan_account_reset
 
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
         profile_storage.write_file("acc-custom", "SOUL.md", "# SOUL\n\n用户明确设定你是安静可靠的朋友。\n")
 
         candidate = plan_account_reset(account_id="acc-custom")
@@ -62,7 +62,7 @@ def test_plan_account_reset_missing_requires_flag(fresh_db, tmp_path):
     from scripts.reset_legacy_default_souls import plan_account_reset
 
     s = fresh_db
-    with patch("app.user_profiles.settings", s):
+    with patch("app.products.zhaoxi.infrastructure.profiles.settings", s):
         assert plan_account_reset(account_id="acc-missing") is None
         candidate = plan_account_reset(account_id="acc-missing", include_missing=True)
 

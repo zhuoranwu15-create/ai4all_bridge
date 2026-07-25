@@ -1,3 +1,5 @@
+"""朝夕账号会话轮转与 Dreaming 衔接。"""
+
 import logging
 from datetime import datetime, timedelta
 
@@ -64,7 +66,7 @@ def _fallback_close_summary(
     source_business_day: Optional[str],
     memory_sink: Optional["MemorySink"],
 ) -> Dict[str, Any]:
-    from app.dreaming import DREAMING_PROMPT_VERSION, run_dreaming
+    from app.products.zhaoxi.application.memory.dreaming import DREAMING_PROMPT_VERSION, run_dreaming
 
     result = run_dreaming(
         account_id=account_id,

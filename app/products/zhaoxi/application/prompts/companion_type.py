@@ -1,4 +1,4 @@
-"""Prompt helpers for account companion type classification."""
+"""朝夕账号陪伴类型分类 prompt helpers。"""
 from typing import Any, Dict, List
 
 COMPANION_TYPE_ENUM = [

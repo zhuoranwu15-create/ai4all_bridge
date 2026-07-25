@@ -140,14 +140,14 @@ from app.db import (
 )
 from app.platform.auth.identity import identity_response_metadata, resolve_openclaw_identity
 from app.agent_runtime.llm.service import generate_completion
-from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
+from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT, is_onboarding_active
 from app.platform.gateways.openclaw import (
     close_persistent_gateway_client,
     send_weixin_text,
     warmup_persistent_gateway_client,
 )
 from app.proactive.delivery.outbound import enqueue_onboarding_welcome
-from app.dreaming_scheduler import (
+from app.products.zhaoxi.jobs.dreaming.scheduler import (
     get_dreaming_scheduler,
     run_dreaming_scheduler_once,
     start_dreaming_scheduler,
@@ -157,7 +157,7 @@ from app.products.zhaoxi.application import (
     build_companion_world_memory_sink,
     compact_companion_world_memory_batch,
 )
-from app.user_meta_scheduler import (
+from app.products.zhaoxi.jobs.user_meta.scheduler import (
     start_user_meta_scheduler,
     stop_user_meta_scheduler,
 )
@@ -210,13 +210,13 @@ from app.db import (
     should_inline_dispatch_for_account,
     upsert_access_node,
 )
-from app.dreaming import (
+from app.products.zhaoxi.application.memory.dreaming import (
     rollback_memory_item,
     run_dreaming,
     summarize_dreaming_run_for_debug,
     summarize_memory_item_for_debug,
 )
-from app.session_lifecycle import configure_memory_sink, run_daily_dreaming_scan
+from app.products.zhaoxi.application.memory.session_lifecycle import configure_memory_sink, run_daily_dreaming_scan
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
 from app.moderation import export as moderation_export
 from app.tools import get_web_search_tools
@@ -226,7 +226,7 @@ import shutil
 
 import httpx
 
-from app.user_profiles import (
+from app.products.zhaoxi.infrastructure.profiles import (
     CONTEXT_FILE_ORDER,
     account_profile_dir,
     context_file_path,

@@ -7,7 +7,7 @@ from app.routers.deps import get_admin_user, require_admin_or_staff_user, requir
 from app.routers.serializers import _audit_plaintext_access, _clean_scope_list, _normalize_optional_state_datetime, _now_db_time, _require_plaintext_access
 from app.db import create_admin_plaintext_grant, get_account, get_admin_plaintext_grant, get_debug_trace, get_message_raw, insert_admin_access_event, list_admin_access_events, list_admin_plaintext_grants, list_admin_users, update_admin_plaintext_grant_status
 from app.time_utils import beijing_now
-from app.user_profiles import ensure_user_profile, read_agent_context, read_user_profile
+from app.products.zhaoxi.infrastructure.profiles import ensure_user_profile, read_agent_context, read_user_profile
 from datetime import timedelta
 from typing import Optional
 

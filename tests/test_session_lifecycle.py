@@ -2,7 +2,7 @@ from datetime import datetime
 
 
 def test_business_day_boundary_at_4am():
-    from app.session_lifecycle import business_day_for
+    from app.products.zhaoxi.application.memory.session_lifecycle import business_day_for
 
     assert business_day_for(datetime(2026, 5, 25, 3, 59)) == "2026-05-24"
     assert business_day_for(datetime(2026, 5, 25, 4, 0)) == "2026-05-25"
@@ -61,7 +61,7 @@ def test_rotation_seeds_new_session_rolling_summary_from_carryover(fresh_db):
 
     LLM 未配置 → run_dreaming 走确定性兜底，carryover 由旧 session 消息生成，非空。
     """
-    from app.session_lifecycle import get_or_create_account_active_session_with_dreaming
+    from app.products.zhaoxi.application.memory.session_lifecycle import get_or_create_account_active_session_with_dreaming
     from app.db import insert_message, get_session
 
     account_id = "acc-seed-rolling"
@@ -108,7 +108,7 @@ def test_rotation_seeds_new_session_rolling_summary_from_carryover(fresh_db):
 
 def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch):
     from app.db import insert_message
-    from app.session_lifecycle import (
+    from app.products.zhaoxi.application.memory.session_lifecycle import (
         configure_memory_sink,
         get_or_create_account_active_session_with_dreaming,
     )
@@ -142,7 +142,7 @@ def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch
             "reason": None,
         }
 
-    monkeypatch.setattr("app.dreaming.run_dreaming", fake_run_dreaming)
+    monkeypatch.setattr("app.products.zhaoxi.application.memory.dreaming.run_dreaming", fake_run_dreaming)
     configure_memory_sink(marker_sink)
     try:
         get_or_create_account_active_session_with_dreaming(
@@ -162,7 +162,7 @@ def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch
 def test_scheduler_close_then_next_message_seeds_from_last_closed(fresh_db):
     """P1#1：4 点 scheduler 只关闭旧 session（不即时 seed），下一条消息懒创建的新 active
     应从最近已关闭 session 的 carryover 补种 rolling_summary——否则 scheduler 路径丢失前一天延续。"""
-    from app.session_lifecycle import (
+    from app.products.zhaoxi.application.memory.session_lifecycle import (
         get_or_create_account_active_session_with_dreaming,
         run_daily_dreaming_scan,
     )
@@ -199,7 +199,7 @@ def test_scheduler_close_then_next_message_seeds_from_last_closed(fresh_db):
 
 def test_daily_scan_rotates_weixin_web_and_app_scopes(fresh_db):
     """§7.1：每日轮转同扫微信、Web、App，按各自 active key 归档且摘要不串线。"""
-    from app.session_lifecycle import (
+    from app.products.zhaoxi.application.memory.session_lifecycle import (
         get_or_create_account_active_session_with_dreaming,
         run_daily_dreaming_scan,
     )

@@ -313,7 +313,7 @@ class PromptBuilder:
         输出逐字不变。extra_blocks 在内置 block 之后追加（动态来源注入钩子）。
 
         ``agent_self_state`` 是调用方（turn_service）预先渲染好的「当下的关系与心境」正文
-        （见 app.agent_self_state.build_agent_self_state_block），本函数不做任何状态计算或
+        （见 app.products.zhaoxi.application.missions.self_state.build_agent_self_state_block），本函数不做任何状态计算或
         DB 读取，只负责拼接/截断/裁剪，保持与其余 block 相同的纯组装职责。
         """
         blocks: List[ContextBlock] = []

@@ -483,7 +483,7 @@ def test_register_and_binding_intent_creates_default_account_and_qr(client):
 
 
 def test_default_account_context_has_no_ai4all_name(client):
-    from app.user_profiles import read_agent_context
+    from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 
     session_headers, login_data = _get_login_data("13800000109", client)
 

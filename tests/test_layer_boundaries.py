@@ -288,14 +288,23 @@ def test_runtime_adapter_has_no_companion_world_composition_methods():
     assert not hasattr(DefaultAgentRuntimeAdapter, "send_companion_world_turn")
 
 
+def test_zhaoxi_application_facade_resolves_all_declared_exports():
+    """兼容 façade 的懒加载映射必须覆盖并解析全部公开导出。"""
+
+    from app.products.zhaoxi import application
+
+    assert set(application.__all__) == set(application._EXPORTS)
+    for name in application.__all__:
+        assert getattr(application, name) is not None
+
+
 def test_ai_paths_do_not_import_human_chat_storage():
     """D-11：真人消息不得进入 turn/prompt/dreaming/memory/proactive/Runtime。"""
     roots = [
         REPO_ROOT / "app" / "turn_service.py",
         REPO_ROOT / "app" / "prompt_builder.py",
-        REPO_ROOT / "app" / "dreaming.py",
-        REPO_ROOT / "app" / "dreaming_scheduler.py",
-        REPO_ROOT / "app" / "memory_writer.py",
+        REPO_ROOT / "app" / "products" / "zhaoxi" / "application" / "memory",
+        REPO_ROOT / "app" / "products" / "zhaoxi" / "jobs" / "dreaming",
         REPO_ROOT / "app" / "agent_runtime",
         REPO_ROOT / "app" / "proactive",
     ]

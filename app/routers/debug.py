@@ -17,13 +17,13 @@ from app.routers.models import ProfileUpdateRequest
 from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
 from app.agent_runtime.llm.service import generate_completion, get_active_llm_model, resolve_active_llm_provider
 from app.agent_runtime.llm.providers import get_llm_provider
-from app.onboarding import is_onboarding_active
+from app.products.zhaoxi.application.onboarding import is_onboarding_active
 from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
-from app.user_profiles import CONTEXT_FILE_ORDER, context_file_exists, context_file_path, ensure_user_profile, read_agent_context, read_context_file
+from app.products.zhaoxi.infrastructure.profiles import CONTEXT_FILE_ORDER, context_file_exists, context_file_path, ensure_user_profile, read_agent_context, read_context_file
 from datetime import date as date_cls, datetime
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -601,8 +601,8 @@ def debug_get_profile(session_id: int, _: None = Depends(verify_admin_auth)) -> 
 @router.get("/debug/accounts/{account_id}/onboarding")
 def debug_get_onboarding(account_id: str, _: None = Depends(verify_admin_auth)) -> dict:
     """Return onboarding state and collected context file contents for an account."""
-    from app.onboarding import build_onboarding_prompt_context, is_onboarding_active
-    from app.user_profiles import read_agent_context, context_file_exists, CONTEXT_FILE_ORDER
+    from app.products.zhaoxi.application.onboarding import build_onboarding_prompt_context, is_onboarding_active
+    from app.products.zhaoxi.infrastructure.profiles import read_agent_context, context_file_exists, CONTEXT_FILE_ORDER
     import re
 
     account = get_account(account_id=account_id)
@@ -674,7 +674,7 @@ def debug_set_onboarding_state(
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     """Manually set onboarding state — useful for testing specific steps."""
-    from app.onboarding import ONBOARDING_COMPLETE, ONBOARDING_TIMED_OUT
+    from app.products.zhaoxi.application.onboarding import ONBOARDING_COMPLETE, ONBOARDING_TIMED_OUT
     valid_states = {"pending", "step1_sent", "step2_sent", "step3_sent", "complete", "timed_out"}
     if payload.state not in valid_states:
         raise HTTPException(status_code=400, detail=f"invalid state, must be one of: {sorted(valid_states)}")
@@ -703,7 +703,7 @@ def debug_create_account(
     onboarding 的分支行为；不带则和之前一样走默认 onboarding 流程。increment_usage=False：
     调试流量不进活码转化统计。
     """
-    from app.user_profiles import ensure_user_profile, ensure_agent_context_files
+    from app.products.zhaoxi.infrastructure.profiles import ensure_user_profile, ensure_agent_context_files
     account_id = (payload.account_id or "").strip() or f"debug-{int(time.time())}"
     get_or_create_session(
         account_id=account_id,
@@ -752,7 +752,7 @@ def debug_reset_onboarding(
     without needing to re-bind a WeChat account.
     """
     from app.agent_runtime.persistence import profile_storage
-    from app.user_profiles import delete_context_file, ensure_agent_context_files
+    from app.products.zhaoxi.infrastructure.profiles import delete_context_file, ensure_agent_context_files
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -786,10 +786,10 @@ def debug_reset_onboarding(
         restored_ai_name = _reset_attribution.get("ai_name_preset")
         restored_soul_preset = _reset_attribution.get("soul_preset_key")
         if restored_ai_name:
-            from app.user_profiles import write_ai_name_to_identity
+            from app.products.zhaoxi.infrastructure.profiles import write_ai_name_to_identity
             write_ai_name_to_identity(account_id=account_id, name=restored_ai_name)
         if restored_soul_preset:
-            from app.user_profiles import apply_soul_preset
+            from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset
             apply_soul_preset(account_id=account_id, preset_name=restored_soul_preset)
 
     return {

@@ -1,4 +1,4 @@
-"""First-chat onboarding state machine, prompt context builder, and info extractor."""
+"""朝夕首次聊天 onboarding 状态机、prompt context 与信息提取。"""
 import asyncio
 import json
 import logging
@@ -383,7 +383,7 @@ def apply_extracted_onboarding_info(
     （或选了带名字的预设需回填默认名），也不再写 IDENTITY.md——避免覆盖建号时已写入的强制名字
     （§4.4）。
     """
-    from app.user_profiles import (  # noqa: PLC0415
+    from app.products.zhaoxi.infrastructure.profiles import (  # noqa: PLC0415
         apply_soul_preset,
         read_context_file,
         write_ai_name_to_identity,

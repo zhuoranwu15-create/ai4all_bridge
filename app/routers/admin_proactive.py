@@ -18,7 +18,7 @@ from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
 from app.proactive.orchestration.planning import plan_reactivation_candidate
 from app.proactive.orchestration.scheduler import get_proactive_scheduler, run_proactive_scheduler_once
 from app.proactive.preferences import get_effective_proactive_message_settings
-from app.session_lifecycle import run_daily_dreaming_scan
+from app.products.zhaoxi.application.memory.session_lifecycle import run_daily_dreaming_scan
 from app.time_utils import beijing_now
 from datetime import timedelta
 from typing import Any, Optional

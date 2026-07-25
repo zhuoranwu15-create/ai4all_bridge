@@ -1,4 +1,4 @@
-"""账号关系状态天级 LLM 评估的 prompt 与解析。
+"""朝夕账号关系状态天级 LLM 评估的 prompt 与解析。
 
 镜像 app/prompts/user_meta_companion_type.py。只评估三个字段：
 relationship_stage(仅 acquainted→deep_bond 的升级判断)、agent_need_trust_status、

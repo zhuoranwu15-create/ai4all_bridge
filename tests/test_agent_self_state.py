@@ -2,7 +2,7 @@
 
 见 docs/tech_design/agent_mission_and_orchestration_design.md §4 / §8.3-8.4。
 """
-from app.agent_self_state import build_agent_self_state_block, compute_dominant_need
+from app.products.zhaoxi.application.missions.self_state import build_agent_self_state_block, compute_dominant_need
 
 
 from tests.factories import create_account as _create_account

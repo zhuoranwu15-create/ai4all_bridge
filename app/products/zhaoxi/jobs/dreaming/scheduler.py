@@ -1,3 +1,5 @@
+"""朝夕 Dreaming 定时调度任务。"""
+
 import asyncio
 import logging
 from datetime import datetime, timedelta
@@ -6,7 +8,7 @@ from app.time_utils import beijing_now
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from app.db import record_scheduler_heartbeat
-from app.session_lifecycle import run_daily_dreaming_scan
+from app.products.zhaoxi.application.memory.session_lifecycle import run_daily_dreaming_scan
 
 if TYPE_CHECKING:
     from app.agent_runtime.ports import MemorySink

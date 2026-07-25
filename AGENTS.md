@@ -86,16 +86,16 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 | 模块 | 职责 |
 |---|---|
-| `turn_service.py` | 每条入站消息的入口 |
-| `prompt_builder.py` | 从所有来源组装 LLM 上下文 |
-| `user_profiles.py` | 账号级上下文文件：SOUL、IDENTITY、USER |
-| `session_lifecycle.py` | 对话 session 轮转 |
-| `onboarding.py` | 新用户 onboarding 流程 |
-| `dreaming.py` 和 `dreaming_scheduler.py` | Dreaming 记忆压缩与调度 |
+| `app/turn_service.py` | 每条入站消息的过渡编排入口 |
+| `app/prompt_builder.py` | 从所有来源组装 LLM 上下文的过渡入口 |
+| `app/products/zhaoxi/infrastructure/profiles.py` | 朝夕账号级上下文文件：SOUL、IDENTITY、USER |
+| `app/products/zhaoxi/application/memory/session_lifecycle.py` | 朝夕对话 session 轮转 |
+| `app/products/zhaoxi/application/onboarding.py` | 朝夕新用户 onboarding 流程 |
+| `app/products/zhaoxi/application/memory/dreaming.py` 和 `app/products/zhaoxi/jobs/dreaming/scheduler.py` | Dreaming 记忆压缩与调度 |
 | `app/proactive/*` | 主动消息：提醒、commitment、内容邀请、reactivation 拉活、账号主动检查 |
-| `memory_writer.py` | turn 后记忆更新 |
-| `rate_limiter.py` | 每日和 RPM 配额控制 |
-| `openclaw_gateway.py` | 回调 OpenClaw 的 outbound 能力 |
+| `app/products/zhaoxi/application/memory/writer.py` | 朝夕 turn 后记忆更新 |
+| `app/platform/quota/rate_limiter.py` | 产品级 RPM 配额控制 |
+| `app/platform/gateways/openclaw.py` | 回调 OpenClaw 的 outbound 能力 |
 
 ## 开发约定
 

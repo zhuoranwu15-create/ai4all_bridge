@@ -30,7 +30,7 @@ from app.db import (
 )
 from app.agent_runtime.llm.service import generate_completion, is_llm_configured
 from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
-from app.user_profiles import read_agent_context
+from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 from app.tools.web_search_handlers import run_headless_web_search
 from app.proactive.contract.common import _clean_text, _extract_json_object, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state

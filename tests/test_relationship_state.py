@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.relationship_state import (
+from app.products.zhaoxi.application.relationship import (
     RESOURCE_RISK_THRESHOLD_MICROS,
     apply_daily_deterministic_relationship,
     apply_daily_llm_relationship,
@@ -398,7 +398,7 @@ def test_apply_daily_llm_writes_and_keeps_survival(fresh_db):
     )
     det = get_account_user_meta(account_id="acc-llm-ok")
 
-    with patch("app.relationship_state.generate_completion", return_value=_rel_json()):
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_json()):
         merged = apply_daily_llm_relationship(
             account_id="acc-llm-ok", deterministic=det, messages=[{"content": "hi"}]
         )
@@ -423,7 +423,7 @@ def test_apply_daily_llm_invalid_output_keeps_current(fresh_db):
 
     # 非法枚举 -> parse 归一为 None -> merge 保留当前
     bad = json.dumps({"relationship_stage": "bogus", "agent_need_trust_status": "???"})
-    with patch("app.relationship_state.generate_completion", return_value=bad):
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=bad):
         merged = apply_daily_llm_relationship(
             account_id="acc-llm-bad", deterministic=det, messages=[{"content": "hi"}]
         )
@@ -441,7 +441,7 @@ def test_apply_daily_llm_failure_propagates(fresh_db):
     )
     det = get_account_user_meta(account_id="acc-llm-raise")
 
-    with patch("app.relationship_state.generate_completion", return_value="not json"):
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", return_value="not json"):
         with pytest.raises(ValueError):
             apply_daily_llm_relationship(
                 account_id="acc-llm-raise", deterministic=det, messages=[{"content": "hi"}]
@@ -472,7 +472,7 @@ def _seed_companion_recent(account_id: str) -> None:
 
 
 def _run_once(now=datetime(2026, 6, 22, 3, 0, 0)):
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     return asyncio.run(
         UserMetaScheduler(page_size=10, inter_account_sleep=0.0).run_once(now=now)
@@ -498,7 +498,7 @@ def test_run_once_relationship_llm_success(fresh_db):
     _seed_inbound(account_id="acc-run-llm-ok", session_id=session_id, count=31, date="2026-06-10")
     _seed_companion_recent("acc-run-llm-ok")
 
-    with patch("app.relationship_state.generate_completion", return_value=_rel_json()):
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_json()):
         result = _run_once()
 
     meta = get_account_user_meta(account_id="acc-run-llm-ok")
@@ -523,7 +523,7 @@ def test_run_once_relationship_llm_failure_keeps_deterministic(fresh_db):
     _seed_inbound(account_id="acc-run-llm-fail", session_id=session_id, count=31, date="2026-06-10")
     _seed_companion_recent("acc-run-llm-fail")
 
-    with patch("app.relationship_state.generate_completion", side_effect=RuntimeError("down")):
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", side_effect=RuntimeError("down")):
         result = _run_once()
 
     meta = get_account_user_meta(account_id="acc-run-llm-fail")
@@ -540,7 +540,7 @@ def test_run_once_relationship_llm_skipped_low_signal(fresh_db):
     session_id = _create_account("acc-run-llm-skip")
     _seed_inbound(account_id="acc-run-llm-skip", session_id=session_id, count=1, date="2026-06-10")
 
-    with patch("app.relationship_state.generate_completion", return_value=_rel_json()) as mock_llm:
+    with patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_json()) as mock_llm:
         result = _run_once()
 
     assert result["relationship_evaluated"] == 0

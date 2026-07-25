@@ -96,7 +96,7 @@ def _default_expires_at(created_at: str) -> str:
 def _validate_mission_id(mission_id: Optional[str]) -> None:
     if mission_id is None:
         return
-    from app.mission_registry import MISSION_TEMPLATES
+    from app.products.zhaoxi.domain.missions.registry import MISSION_TEMPLATES
 
     if mission_id not in MISSION_TEMPLATES:
         raise ValueError(f"unknown mission_id: {mission_id}")
@@ -105,7 +105,7 @@ def _validate_mission_id(mission_id: Optional[str]) -> None:
 def _validate_soul_preset_key(soul_preset_key: Optional[str]) -> None:
     if soul_preset_key is None:
         return
-    from app.user_profiles import _SOUL_TEMPLATES
+    from app.products.zhaoxi.infrastructure.profiles import _SOUL_TEMPLATES
 
     if soul_preset_key not in _SOUL_TEMPLATES:
         raise ValueError(f"unknown soul_preset_key: {soul_preset_key}")
@@ -396,10 +396,10 @@ def apply_campaign_code_attribution(
         # 先写 AI 名字进 IDENTITY.md，再渲染 SOUL——render_soul_preset 会从 IDENTITY 读取
         # AI 名字拼进人设自称，顺序反了则强制人设首轮自称仍是"我"。
         if ai_name_preset:
-            from app.user_profiles import write_ai_name_to_identity  # noqa: PLC0415 (lazy, avoid circular)
+            from app.products.zhaoxi.infrastructure.profiles import write_ai_name_to_identity  # noqa: PLC0415 (lazy, avoid circular)
             write_ai_name_to_identity(account_id=account_id, name=ai_name_preset)
         if soul_preset_key:
-            from app.user_profiles import apply_soul_preset  # noqa: PLC0415 (lazy, avoid circular)
+            from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset  # noqa: PLC0415 (lazy, avoid circular)
             apply_soul_preset(account_id=account_id, preset_name=soul_preset_key)
         return {
             "applied": True,

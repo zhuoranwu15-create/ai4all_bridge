@@ -1,7 +1,7 @@
-"""app.mission_registry：使命模板注册表（agent_mission_and_orchestration_design.md §2.2/§3.1）。"""
+"""app.products.zhaoxi.domain.missions.registry：使命模板注册表（agent_mission_and_orchestration_design.md §2.2/§3.1）。"""
 import pytest
 
-from app.mission_registry import get_mission_template, list_mission_templates
+from app.products.zhaoxi.domain.missions.registry import get_mission_template, list_mission_templates
 
 
 def test_list_returns_templates_in_order():

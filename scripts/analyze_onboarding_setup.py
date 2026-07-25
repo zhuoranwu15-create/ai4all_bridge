@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.agent_runtime.persistence import profile_storage
     from app.config import settings
-    from app.user_profiles import _safe_account_dir_name
+    from app.products.zhaoxi.infrastructure.profiles import _safe_account_dir_name
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)
     print(

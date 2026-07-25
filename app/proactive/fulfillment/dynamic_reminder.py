@@ -132,7 +132,7 @@ def _build_prompt(reminder: Dict[str, Any], now: datetime) -> str:
 def _build_synthetic_ctx(reminder: Dict[str, Any], now: datetime):
     """构造无用户输入的合成 TurnContext：account 隔离 + 放行 web_search。"""
     from app.db import get_account
-    from app.session_lifecycle import business_day_for
+    from app.products.zhaoxi.application.memory.session_lifecycle import business_day_for
     from app.agent_runtime.context.models import TurnContext
 
     account_id = reminder["account_id"]

@@ -23,7 +23,7 @@ __all__ = [
 def assign_mission(*, account_id: str, mission_id: str) -> None:
     """仅当账号尚无使命分配时插入一行；已存在则不做任何写入。
 
-    调用方（app.mission_assignment.assign_mission_if_absent）应先落 MISSION.md
+    调用方（app.products.zhaoxi.application.missions.assignment.assign_mission_if_absent）应先落 MISSION.md
     prose 再调用本函数——两步都可安全重复调用，顺序保证进程中途崩溃后重试
     不会留下"DB 已分配但 MISSION.md 仍是占位符"的不一致状态。
     """

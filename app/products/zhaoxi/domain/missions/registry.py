@@ -1,19 +1,19 @@
-"""app.mission_registry — 使命模板注册表（agent_mission_and_orchestration_design.md §2.2/§3.1）。
+"""朝夕使命模板注册表（agent_mission_and_orchestration_design.md §2.2/§3.1）。
 
 模板是内核层（宪法层）的一部分：一经指派不可更改（见 app/db/mission.py 的不可变性
-保证）。新增模板只在此追加一条 + 落一份 prose 文件到 app/mission_templates/，不改动
+保证）。新增模板只在此追加一条 + 落一份 prose 文件到本包 `templates/`，不改动
 已发布模板的 id/slug——编号三位数、零填充、永不复用、不因下线而回收（与 _MIGRATIONS
 版本号同一套纪律）。
 
-模板 prose 文件与本模块分开存放（app/mission_templates/*.md，纯资源目录，无 __init__）
-——与 app/soul_templates/*.md 是纯资源目录、加载代码另在 user_profiles.py 的思路一致。
+模板 prose 文件与本模块分开存放（`templates/*.md`，纯资源目录，无 __init__）——与
+`app/products/zhaoxi/infrastructure/soul_templates/*.md` 由 `profiles.py` 加载的思路一致。
 """
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 from typing import Dict, List
 
-_MISSION_TEMPLATES_DIR = Path(__file__).parent / "mission_templates"
+_MISSION_TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
 @dataclass(frozen=True)

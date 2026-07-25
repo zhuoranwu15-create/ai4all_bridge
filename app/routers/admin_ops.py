@@ -22,7 +22,7 @@ from app.db import (
     list_session_messages,
     list_sessions,
 )
-from app.user_meta_scheduler import get_user_meta_scheduler, run_user_meta_scheduler_once
+from app.products.zhaoxi.jobs.user_meta.scheduler import get_user_meta_scheduler, run_user_meta_scheduler_once
 from datetime import datetime
 from typing import Optional
 

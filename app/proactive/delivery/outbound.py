@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from app.platform.channels import CHANNEL_APP, get_channel_capability
 from app.config import settings
 from app.time_utils import beijing_naive_now, beijing_now
-from app.session_lifecycle import business_day_for
+from app.products.zhaoxi.application.memory.session_lifecycle import business_day_for
 from app.db import (
     claim_pending_outbound_message,
     create_outbound_message,

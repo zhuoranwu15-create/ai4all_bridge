@@ -20,7 +20,7 @@ from app.platform.gateways import node_gateway
 from app.platform.auth.captcha import verify_captcha
 from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
 from app.agent_runtime.llm.service import generate_completion
-from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
+from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.platform.quota.rate_limiter import RateLimiter
 from app.platform.auth.sms import generate_otp, send_otp
 from typing import Any, Optional

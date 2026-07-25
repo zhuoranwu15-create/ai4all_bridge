@@ -1,3 +1,5 @@
+"""朝夕 turn 后 daily memory 写入用例。"""
+
 import asyncio
 import logging
 from datetime import datetime
@@ -8,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.agent_runtime.persistence import profile_storage
 from app.config import settings
-from app.user_profiles import _safe_account_dir_name
+from app.products.zhaoxi.infrastructure.profiles import _safe_account_dir_name
 
 logger = logging.getLogger("ai4all.memory_writer")
 

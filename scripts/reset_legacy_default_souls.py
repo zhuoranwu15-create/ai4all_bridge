@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import settings
 from app.db import list_accounts
-from app.user_profiles import apply_soul_preset, context_file_path, read_context_file, render_soul_preset
+from app.products.zhaoxi.infrastructure.profiles import apply_soul_preset, context_file_path, read_context_file, render_soul_preset
 
 
 OLD_DEFAULT_SOUL_BODY = (

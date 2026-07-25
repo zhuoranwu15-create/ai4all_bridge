@@ -1,7 +1,7 @@
-"""app.agent_self_state — 编排注入层：渲染「当下的关系与心境」prompt block。
+"""朝夕使命编排注入层：渲染「当下的关系与心境」prompt block。
 
-只做状态**渲染消费**，不做状态**计算**（关系阶段/需求计算见 app/relationship_state.py，
-使命分配见 app/mission_assignment.py，使命解析见 app/mission_state.py；本模块只读，不写）。
+只做状态**渲染消费**，不做状态**计算**（关系阶段/需求计算见 application/relationship.py，
+使命分配见 missions/assignment.py，使命解析见 missions/state.py；本模块只读，不写）。
 
 设计见 docs/tech_design/agent_mission_and_orchestration_design.md §4。
 
@@ -13,7 +13,7 @@
 from typing import Literal, Optional
 
 from app.db import count_mission_moments, get_account_user_meta
-from app.mission_state import ResolvedMission, resolve_account_mission
+from app.products.zhaoxi.application.missions.state import ResolvedMission, resolve_account_mission
 
 DominantNeed = Literal["survival", "trust", "growth"]
 

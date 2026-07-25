@@ -29,7 +29,7 @@ def _unbound_payload(session_key: str, text: str = "你好") -> dict:
 def test_unbound_inbound_no_reply_and_no_account_created(client, fresh_db):
     """严格模式：无绑定入站直接 ignored/no_reply，且不创建账号、不落盘 profile。"""
     from app.db import get_account
-    from app.user_profiles import account_profile_dir
+    from app.products.zhaoxi.infrastructure.profiles import account_profile_dir
 
     fresh_db.openclaw_inbound_require_binding = True
     session_key = "agent:main:openclaw-weixin:bot-unbound:direct:peer-x@im.wechat"

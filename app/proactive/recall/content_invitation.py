@@ -19,7 +19,7 @@ from app.agent_runtime.llm.service import generate_reply_with_tools, is_llm_conf
 from app.agent_runtime.llm.providers import TASK_PROACTIVE_RECALL, tier_for_task
 from app.proactive.contract.common import _clean_text, _select_route, _truncate_text
 from app.proactive.delivery.touch_state import STALE, get_account_touch_state
-from app.user_profiles import read_agent_context
+from app.products.zhaoxi.infrastructure.profiles import read_agent_context
 from app.tools import get_content_invitation_generation_tools, get_web_search_tools
 from app.agent_runtime.context.models import TurnContext
 from app.proactive.contract.prompts import CONTENT_INVITATION_SYSTEM_PROMPT

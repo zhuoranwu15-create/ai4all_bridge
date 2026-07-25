@@ -309,7 +309,7 @@ def test_update_ai_name_preset(fresh_db):
 
 def test_apply_attribution_writes_forced_ai_name_to_identity(fresh_db):
     from app.db.campaign import apply_campaign_code_attribution, get_campaign_attribution
-    from app.user_profiles import read_context_file
+    from app.products.zhaoxi.infrastructure.profiles import read_context_file
 
     create_campaign_code(
         code="AINAMEATT", campaign_key="a", soul_preset_key="xiaotaiyang", ai_name_preset="小满"

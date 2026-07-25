@@ -355,7 +355,7 @@ def test_fetch_recent_inbound_excludes_moderation_blocked(fresh_db):
 
 def test_run_once_skips_debug_accounts(fresh_db):
     from app.db import get_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     _create_account("acc-debug", is_debug=True)
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
@@ -368,7 +368,7 @@ def test_run_once_skips_debug_accounts(fresh_db):
 
 def test_run_once_skips_low_signal_companion(fresh_db):
     from app.db import get_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-low-signal")
     _insert_message_at(
@@ -378,7 +378,7 @@ def test_run_once_skips_low_signal_companion(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm:
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion") as mock_llm:
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["processed"] == 1
@@ -392,7 +392,7 @@ def test_run_once_skips_low_signal_companion(fresh_db):
 
 def test_run_once_low_signal_account_classifies_when_signal_reaches_threshold(fresh_db):
     from app.db import get_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-low-then-ready")
     _insert_message_at(
@@ -403,7 +403,7 @@ def test_run_once_low_signal_account_classifies_when_signal_reaches_threshold(fr
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm:
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion") as mock_llm:
         asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
     mock_llm.assert_not_called()
     assert get_account_user_meta(account_id="acc-low-then-ready")["companion_primary_type"] is None
@@ -416,8 +416,8 @@ def test_run_once_low_signal_account_classifies_when_signal_reaches_threshold(fr
             content=f"ready {index}",
         )
 
-    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
-         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
+         patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 19, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 1
@@ -429,7 +429,7 @@ def test_run_once_low_signal_account_classifies_when_signal_reaches_threshold(fr
 
 def test_run_once_companion_reval_after_7d(fresh_db):
     from app.db import get_account_user_meta, upsert_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-reval")
     _seed_inbound_messages(account_id="acc-reval", session_id=session_id, count=7)
@@ -449,8 +449,8 @@ def test_run_once_companion_reval_after_7d(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
-         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion", return_value=_llm_response()) as mock_llm, \
+         patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 1
@@ -462,7 +462,7 @@ def test_run_once_companion_reval_after_7d(fresh_db):
 
 def test_run_once_companion_no_reval_within_7d(fresh_db):
     from app.db import get_account_user_meta, upsert_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-no-reval")
     _seed_inbound_messages(account_id="acc-no-reval", session_id=session_id, count=7)
@@ -482,8 +482,8 @@ def test_run_once_companion_no_reval_within_7d(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm, \
-         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion") as mock_llm, \
+         patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_evaluated"] == 0
@@ -493,7 +493,7 @@ def test_run_once_companion_no_reval_within_7d(fresh_db):
 
 def test_run_once_manual_override_not_overwritten(fresh_db):
     from app.db import get_account_user_meta, upsert_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-manual-keep")
     _seed_inbound_messages(account_id="acc-manual-keep", session_id=session_id, count=7)
@@ -513,8 +513,8 @@ def test_run_once_manual_override_not_overwritten(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion") as mock_llm, \
-         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion") as mock_llm, \
+         patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_llm_response()):
         asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     mock_llm.assert_not_called()
@@ -522,7 +522,7 @@ def test_run_once_manual_override_not_overwritten(fresh_db):
 
 
 def test_run_once_idempotent_same_day(fresh_db):
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-idem")
     _seed_inbound_messages(account_id="acc-idem", session_id=session_id, count=1)
@@ -536,7 +536,7 @@ def test_run_once_idempotent_same_day(fresh_db):
 
 def test_run_once_lm_failure_keeps_existing(fresh_db):
     from app.db import get_account_user_meta, upsert_account_user_meta
-    from app.user_meta_scheduler import UserMetaScheduler
+    from app.products.zhaoxi.jobs.user_meta.scheduler import UserMetaScheduler
 
     session_id = _create_account("acc-llm-fail")
     _seed_inbound_messages(account_id="acc-llm-fail", session_id=session_id, count=7)
@@ -556,8 +556,8 @@ def test_run_once_lm_failure_keeps_existing(fresh_db):
     )
     scheduler = UserMetaScheduler(page_size=10, inter_account_sleep=0.0)
 
-    with patch("app.user_meta_scheduler.generate_completion", side_effect=RuntimeError("llm down")), \
-         patch("app.relationship_state.generate_completion", return_value=_rel_llm_response()):
+    with patch("app.products.zhaoxi.jobs.user_meta.scheduler.generate_completion", side_effect=RuntimeError("llm down")), \
+         patch("app.products.zhaoxi.application.relationship.generate_completion", return_value=_rel_llm_response()):
         result = asyncio.run(scheduler.run_once(now=datetime(2026, 6, 18, 3, 0, 0)))
 
     assert result["companion_failed"] == 1

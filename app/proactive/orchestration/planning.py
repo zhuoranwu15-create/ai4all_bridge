@@ -15,7 +15,7 @@ from app.db import (
     get_account_onboarding_state,
     upsert_proactive_account_state,
 )
-from app.onboarding import is_onboarding_done
+from app.products.zhaoxi.application.onboarding import is_onboarding_done
 from app.products.zhaoxi.application import (
     HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
     get_human_proactive_last_inbound_at,

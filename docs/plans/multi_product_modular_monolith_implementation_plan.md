@@ -2,7 +2,7 @@
 
 更新时间：2026-07-25
 
-状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 模块边界实体化进行中。Fatetell 业务接入仍等待 PRD。**
+状态：**MP-01～MP-06 已完成开发、双后端验收与生产发布；MP-07A 三批目录迁移已完成开发与聚焦回归，待分批评审合并。Fatetell 业务接入仍等待 PRD。**
 
 决策基线：[`multi_product_modular_monolith_design.md`](../tech_design/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
 
@@ -327,7 +327,15 @@ Phase 1 已生产发布。当前执行 MP-07A，并按独立 PR 分三批推进�
    - 平台层按 `auth`、`quota`、`media`、`search`、`gateways`、`observability` 归组；
    - Runtime 按 `llm`、`context`、`persistence` 归组；
    - `app.main:app`、`scripts/run_*.py` 入口保持不变。
-3. 对 onboarding、memory、mission、relationship 等朝夕模块归位并记录仍需等待真实调用点的过渡模块。
+3. 对 onboarding、memory、mission、relationship 等朝夕模块归位（已完成开发与聚焦回归）：
+   - application 按 `memory/`、`missions/`、`prompts/` 归组；领域使命模板和 SOUL 模板随 owner 一并迁移；
+   - dreaming 与 user-meta scheduler 归入朝夕 `jobs/`；
+   - `app/products/zhaoxi/application/__init__.py` 保留兼容导出，但改为懒加载以避免 package 初始化环。
+
+完成三批后，`app/` 根目录只保留 8 个 Python 文件：入口/包文件 `main.py`、`__init__.py`，
+跨层稳定原语 `config.py`、`schemas.py`、`time_utils.py`，以及仍待真实第二产品调用点后再泛化的
+`turn_service.py`、`prompt_builder.py`、`reminder_utils.py`。其中前五个不是业务平铺；后三个是
+有意保留的过渡模块，不能在 Fatetell 契约未冻结时强塞入 Runtime 或朝夕目录。
 
 MP-07A 不创建 `app/products/fatetell/`，不修改数据库或外部 API。Fatetell 的产品命名空间、
 Runtime/Memory/Proactive 接入和端到端发布仍按 §5 等待 PRD 后拆单。

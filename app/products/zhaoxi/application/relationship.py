@@ -1,4 +1,4 @@
-"""关系状态确定性更新：turn 级与天级共用的纯函数 + 编排入口。
+"""朝夕关系状态确定性更新：turn 级与天级共用的纯函数 + 编排入口。
 
 见 docs/tech_design/relationship_state_implementation_plan_tmp.md §7/§8.1。
 本模块只做**确定性**更新（消息阈值、连续天数、资源风险）；relationship_stage 的
@@ -19,7 +19,7 @@ from app.db import (
 )
 from app.agent_runtime.llm.service import generate_completion
 from app.agent_runtime.llm.providers import TASK_RELATIONSHIP_STATE, tier_for_task
-from app.prompts.user_meta_relationship import (
+from app.products.zhaoxi.application.prompts.relationship import (
     build_relationship_eval_prompt,
     parse_relationship_payload,
 )

@@ -314,7 +314,7 @@ def test_generate_account_check_candidate_draft_writes_draft_without_enabling_se
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.user_profiles.settings", fresh_db),
+        patch("app.products.zhaoxi.infrastructure.profiles.settings", fresh_db),
         patch(
             "app.proactive.recall.manual_companion.generate_completion",
             return_value=(
@@ -363,7 +363,7 @@ def test_generate_account_check_candidate_draft_rejects_low_confidence(fresh_db)
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.user_profiles.settings", fresh_db),
+        patch("app.products.zhaoxi.infrastructure.profiles.settings", fresh_db),
         patch(
             "app.proactive.recall.manual_companion.generate_completion",
             return_value=(
@@ -395,7 +395,7 @@ def test_generate_topic_followup_candidate_creates_reactivation_candidate(fresh_
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.user_profiles.settings", fresh_db),
+        patch("app.products.zhaoxi.infrastructure.profiles.settings", fresh_db),
         patch(
             "app.proactive.recall.topic_followup.generate_completion",
             return_value=(
@@ -434,7 +434,7 @@ def test_generate_topic_followup_candidate_skips_content_topics(fresh_db):
 
     with (
         patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.user_profiles.settings", fresh_db),
+        patch("app.products.zhaoxi.infrastructure.profiles.settings", fresh_db),
         patch(
             "app.proactive.recall.topic_followup.generate_completion",
             return_value=(
