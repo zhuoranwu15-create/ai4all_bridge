@@ -2,7 +2,7 @@
 
 > 状态：**定稿并实现 2026-07-22，default-off**（M2-C C0–C5 已交付；生产启用仍受 §2.9 发布闸约束）。
 > 性质：实现级规范（buildable spec），非决策记录。冻结决策口径以 ADR 为准，本文只把已冻结口径落成可编码的表/DTO/错误码。
-> 上位 ADR：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/designs/companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
+> 上位 ADR：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)（§7.3 端口契约、§8 R2、§6 L3、D-05/D-06/D-07/D-08/D-09/D-14）
 > 客户端输入（只作参考，不替代本规范）：[`private_world_backend_gap_analysis.md`](../../../../../ai4all-companion-app-rn/docs/tech_design/private_world_backend_gap_analysis.md) §4/§5
 > 历史交付基线：PR #45 已合并；其后 M3 追加 m0033、M4 追加 m0034、M5 追加 m0035，m0036 修复历史编号碰撞；均不改变本文 P1 已实现范围。当前整体交付状态以总 ADR 为准。
 
@@ -406,4 +406,4 @@ HTTP 语义约定：400 请求契约违反 / 401 未鉴权 / 403 资源被禁 / 
 - 当前开发分支全量门禁：SQLite 1445 passed / 12 skipped；PostgreSQL 1452 passed / 5 skipped。
 - 已有运营工具：`scripts/import_companion_world_presets.py`（manifest 校验、dry-run、immutable/version 闸）与 `scripts/backfill_companion_world.py`（dry-run、cutoff、resume、逐用户事务）。
 - 代码完成不等于生产完成：正式四模板、客户端最低版本、客户端共享/legacy 豁免口径同步、生产模板导入/backfill/对账、D-09 override 冲突预检仍缺现场证据，故不得提前开 flag。
-- 发布和回滚步骤以 [`../../../guides/admin_guide.md`](../../../guides/admin_guide.md#companion-world-p1-发布运行手册) 为准。
+- 发布和回滚步骤以 [`../../../guides/admin_guide.md`](../../../ops/products/zhaoxi/admin_guide.md#companion-world-p1-发布运行手册) 为准。

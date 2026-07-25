@@ -1,6 +1,6 @@
 # Runbook · 新机 aliyun2（接入 node）
 
-> 配套设计：[`../architecture/designs/multi_node_access_refactor.md`](../architecture/designs/multi_node_access_refactor.md)
+> 配套设计：[`../architecture/shared/access/multi_node_access_refactor.md`](../architecture/shared/access/multi_node_access_refactor.md)
 > 角色：aliyun2 = 纯接入 node（OpenClaw + 微信会话 + 轻 agent），**不跑 backend / SQLite / 调度器 / web**。
 > 最后更新：2026-06-12
 
@@ -68,7 +68,7 @@
 - 在 aliyun2 的 OpenClaw bridge 插件配置里设置：
   - `AI4ALL_BACKEND_URL = http://aliyun1`（插件会 POST 到 `http://aliyun1/openclaw/turn`）
   - 鉴权头 `Authorization: Bearer <BRIDGE_SECRET>`（值取自 aliyun1 的 `.env` 的 `AI4ALL_BRIDGE_SECRET`，必须与 aliyun1 一致；不写进本文档）
-- 具体配置项位置依 OpenClaw 插件实现而定（见 [`../architecture/designs/openclaw_bridge_design.md`](../architecture/designs/openclaw_bridge_design.md) §6）。
+- 具体配置项位置依 OpenClaw 插件实现而定（见 [`../architecture/shared/access/openclaw_bridge_design.md`](../architecture/shared/access/openclaw_bridge_design.md) §6）。
 
 **3. 登一个一次性测试微信号**（aliyun2 本机 openclaw 扫码）
 
@@ -130,7 +130,7 @@ curl -sS --noproxy aliyun1 -X POST http://aliyun1/openclaw/turn \
 > |---|---|---|
 > | `openclaw-weixin-gateway-methods-runtime` | 暴露 `web.login.start/wait` 为 gateway 方法 | **是** —— 中心 push 扫码登录（附录 A.2）直接依赖,不打则登录 exec 失败 |
 > | `openclaw-weixin-logout-account-runtime` | 单账号 `logoutAccount` runtime | 多账号登出/再均衡前需要 |
-> | `openclaw-before-agent-reply-media` | 入站图片本地路径透出给 before_agent_reply | 图片理解前需要;纯文本回环不依赖。**多机配套**:已选「bridge 传字节/内联 base64」(见 [补丁维护 §2.5](../architecture/designs/openclaw_patches_maintenance.md)),node 还须部署字节改造后的 bridge + aliyun1 nginx 调 `client_max_body_size 12m`,否则中心读不到 node 本地图、base64 大图会 413 |
+> | `openclaw-before-agent-reply-media` | 入站图片本地路径透出给 before_agent_reply | 图片理解前需要;纯文本回环不依赖。**多机配套**:已选「bridge 传字节/内联 base64」(见 [补丁维护 §2.5](../architecture/shared/access/openclaw_patches_maintenance.md)),node 还须部署字节改造后的 bridge + aliyun1 nginx 调 `client_max_body_size 12m`,否则中心读不到 node 本地图、base64 大图会 413 |
 >
 > 起 node agent 前先把 patch 应用到 aliyun2 的安装包（weixin 在 `~/.openclaw/npm/projects/.../@tencent-weixin/openclaw-weixin`，openclaw core 在 `~/.npm-global/lib/node_modules/openclaw`）。**别等扫码登录失败才回头查。**
 >

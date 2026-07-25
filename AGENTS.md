@@ -80,7 +80,7 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 主要测试账号：`aid_806382741`。旧 `im-bot` 形态账号逐步淘汰，不再作为默认示例。
 
-完整调试参考：[`docs/guides/debugging.md`](docs/guides/debugging.md)。
+完整调试参考：[`docs/ops/products/zhaoxi/debugging.md`](docs/ops/products/zhaoxi/debugging.md)。
 
 ## 模块地图
 

@@ -1,6 +1,6 @@
 # Runbook · 线上 aliyun1（central + node）无损升级
 
-> 配套设计：[`../architecture/designs/multi_node_access_refactor.md`](../architecture/designs/multi_node_access_refactor.md)
+> 配套设计：[`../architecture/shared/access/multi_node_access_refactor.md`](../architecture/shared/access/multi_node_access_refactor.md)
 > 角色：aliyun1 从「单机 monolith」原地升级为 **central + node 同机共存**——继续持有现有微信会话（**不重扫码**），同时承担中心大脑。
 > 最后更新：2026-06-12
 
@@ -77,7 +77,7 @@ scripts/restart_runtime.sh        # 不要 --restart-openclaw
 
 ## Part 3 · 中心切换 aliyun1↔aliyun2（可选，二期一键化）
 
-详见设计 [§8](../architecture/designs/multi_node_access_refactor.md)。要点：
+详见设计 [§8](../architecture/shared/access/multi_node_access_refactor.md)。要点：
 - 切换 = 搬「中心状态包」（DB + 画像 + system，= `backup_data.py` 产物）到目标机 + **翻转 `CENTRAL_URL` 指纹地址**，节点零改配。
 - **不导致任何会话重登**：aliyun1 切换后仍是 node，会话留在 aliyun1，只是大脑+DB 搬到 aliyun2。
 - MVP 为计划内手动切换（分钟级停写窗口）；近实时热备（Litestream）+ 一键脚本 `scripts/promote_central.py` 留二期。

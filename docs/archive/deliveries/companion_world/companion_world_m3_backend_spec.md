@@ -2,7 +2,7 @@
 
 > 状态：**M3-0…M3-6 全部完成（2026-07-22）；Feed、AI world-content scheduler、App 通知收件箱与真人级 proactive 均已 default-off 闭环。**
 >
-> 性质：实现级规范（buildable spec），冻结 M3 migration、状态机、API、幂等、锁与 rollout 边界。上位产品决策以 [`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/designs/companion_world_3_0_refactor_design.md) D-10/D-13/D-15 为准。
+> 性质：实现级规范（buildable spec），冻结 M3 migration、状态机、API、幂等、锁与 rollout 边界。上位产品决策以 [`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) D-10/D-13/D-15 为准。
 >
 > 实施计划：[`companion_world_m3_implementation_plan.md`](companion_world_m3_implementation_plan.md)。
 >

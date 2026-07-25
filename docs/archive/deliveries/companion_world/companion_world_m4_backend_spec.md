@@ -4,7 +4,7 @@
 >
 > 历史交付基线：PR #46 已合并为当时的 `origin/main@e230844`，M4-0 文档提交为 `4ff932b`。M4 PR #47 后续已合并，M5 再追加 m0035，m0036 修复历史编号碰撞；当前整体交付状态以总 ADR 为准。
 >
-> 权威上位决策：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/designs/companion_world_3_0_refactor_design.md) D-02/D-06/D-08/D-12、§9、§10.3/.4/.8、§12 M4。
+> 权威上位决策：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) D-02/D-06/D-08/D-12、§9、§10.3/.4/.8、§12 M4。
 
 ## 0. 目标与边界
 

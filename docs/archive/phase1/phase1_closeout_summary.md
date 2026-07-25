@@ -12,7 +12,7 @@
 2. 哪些能力超出原计划提前交付了。
 3. 进入下一阶段前，还剩哪些大功能和收口项。
 
-权威设计仍以 [PRD](../../prd.md)、[总体架构](../../architecture/overview.md)、[Phase 1 详细技术设计](../../architecture/system_design.md) 和各专题技术设计为准；逐项需求-代码映射见 [Phase 1 需求追踪矩阵](phase1_traceability_matrix.md)。本文不重复字段级设计。
+权威设计仍以 [PRD](../../products/zhaoxi/prd.md)、[总体架构](../../architecture/overview.md)、[Phase 1 详细技术设计](../../architecture/system_design.md) 和各专题技术设计为准；逐项需求-代码映射见 [Phase 1 需求追踪矩阵](phase1_traceability_matrix.md)。本文不重复字段级设计。
 
 测试基线：截至本次收尾，`.venv/bin/pytest tests/` 全量 **424 passed**。
 
@@ -34,7 +34,7 @@
 
 ## 2. 超出原 Phase 1 范围的已交付能力
 
-原 [PRD §4.4](../../prd.md) 和 [roadmap 暂不做](../../roadmap.md) 把"图片/多模态"列为暂不做。Phase 1 收尾期实际提前交付了以下能力：
+原 [PRD §4.4](../../products/zhaoxi/prd.md) 和 [roadmap 暂不做](../../roadmap.md) 把"图片/多模态"列为暂不做。Phase 1 收尾期实际提前交付了以下能力：
 
 ### 2.1 微信图片理解（VL 多维描述 → 文本对话链路）
 
@@ -45,8 +45,8 @@
   - 配置：`app/config.py` + `.env.example` 新增 `image_understanding_*` 全套（默认 `enabled=false`）。
   - bridge：`openclaw-bridge/index.js` 解析 `[media attached: ...]` 标记，转发 `message_type=image` + `media{path,format}`。
   - 自测：`scripts/send_mock_turn.py` 加 `--image-path/--image-url`；`tests/test_image_turn.py` 9 用例（A/B/C 场景、失败兜底、开关、账号隔离、modality、计费幂等）全过。
-- 设计与运维文档：[图片理解技术设计](../../architecture/designs/image_understanding_design.md)、[OpenClaw 补丁与部署机制](../../architecture/designs/openclaw_patches_maintenance.md)。
-- **运维待跟进（关键）**：端到端需要 OpenClaw 核心 patch `patches/openclaw-before-agent-reply-media.patch` 生效。当前生产用 `scripts/deploy_image_understanding.sh` 手术式改哈希 dist；**OpenClaw 升级会静默退回成空文本**，且部署脚本写死了哈希文件名 `get-reply-9dLyvuw9.js`。升级后必查项见 [OpenClaw 补丁与部署机制 §3](../../architecture/designs/openclaw_patches_maintenance.md)。
+- 设计与运维文档：[图片理解技术设计](../../architecture/shared/platform/image_understanding_design.md)、[OpenClaw 补丁与部署机制](../../architecture/shared/access/openclaw_patches_maintenance.md)。
+- **运维待跟进（关键）**：端到端需要 OpenClaw 核心 patch `patches/openclaw-before-agent-reply-media.patch` 生效。当前生产用 `scripts/deploy_image_understanding.sh` 手术式改哈希 dist；**OpenClaw 升级会静默退回成空文本**，且部署脚本写死了哈希文件名 `get-reply-9dLyvuw9.js`。升级后必查项见 [OpenClaw 补丁与部署机制 §3](../../architecture/shared/access/openclaw_patches_maintenance.md)。
 - 两份文档当前标注为"草稿/待联调""临时草稿"，待生产 patch 部署 + 真图质量回归后转正。
 
 ### 2.2 自动化数据备份 + 备份陈旧告警
@@ -56,7 +56,7 @@
 
 ## 3. 剩余的大功能：拉新送贝壳（未实现）
 
-[权益 PRD §5](../../product/entitlement_growth_prd.md) 定义的拉新激励是 Phase 1 P1.5 范围内**尚未动工**的最大块功能。当前代码现状：
+[权益 PRD §5](../../products/zhaoxi/capabilities/entitlement_growth_prd.md) 定义的拉新激励是 Phase 1 P1.5 范围内**尚未动工**的最大块功能。当前代码现状：
 
 已就绪（拉新的底座）：
 

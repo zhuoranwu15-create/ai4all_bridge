@@ -6,6 +6,10 @@
 >
 > 状态图例:🔴 待排期 · 🟡 进行中 · ✅ 已完成(完成后保留一行存档,定期清理)
 > 最后更新:2026-06-30(SEC-1/2/4、BUG-1 已修并移入 §4 存档)
+>
+> 范围约定：跨产品和平台事项放在本文；朝夕专属事项放在
+> [`products/zhaoxi/`](products/zhaoxi/)，共享分析和规模化评估放在
+> [`shared/`](shared/)。
 
 ---
 
@@ -13,17 +17,17 @@
 
 | ID | 优先级 | 状态 | 条目 | 来源 |
 |---|---|---|---|---|
-| INFRA-1 | P2 | 🔴 | aliyun2 出站直连 PG 认领,去掉绕中心 HTTP `/node/outbound/claim`(降耦合/延迟) | `guides/aliyun1_aliyun2_deployment_diff.md` O4 |
-| INFRA-2 | P2 | 🔴 | PG 单点无 HA;配流复制热备 + `pg_dump` PITR | `guides/p5_production_upgrade_runbook.md` §10 / `architecture/designs/thick_node_postgres_refactor.md` §8 |
+| INFRA-1 | P2 | 🔴 | aliyun2 出站直连 PG 认领,去掉绕中心 HTTP `/node/outbound/claim`(降耦合/延迟) | `ops/platform/aliyun1_aliyun2_deployment_diff.md` O4 |
+| INFRA-2 | P2 | 🔴 | PG 单点无 HA;配流复制热备 + `pg_dump` PITR | `ops/platform/p5_production_upgrade_runbook.md` §10 / `architecture/shared/data/thick_node_postgres_refactor.md` §8 |
 | INFRA-3 | P3 | 🔴 | `max_connections=100` 余量核对:账号扩容前复核 Σ(各节点 `db_pool_max`)+中心+timer | deployment_diff O7 |
-| INFRA-4 | P3 | 🔴 | OpenClaw 版本漂移:aliyun1 v5.28 升 6.x 时随 `patch_openclaw_accountid.sh` 补齐 4 补丁 | deployment_diff O8 / `architecture/designs/openclaw_patches_maintenance.md` |
+| INFRA-4 | P3 | 🔴 | OpenClaw 版本漂移:aliyun1 v5.28 升 6.x 时随 `patch_openclaw_accountid.sh` 补齐 4 补丁 | deployment_diff O8 / `architecture/shared/access/openclaw_patches_maintenance.md` |
 | INFRA-5 | P3 | 🔴 | 厚节点改造阶段三:aliyun1 退化为纯 `central`(停跑 turn) | p5_runbook §8 |
 
 ## 2. 架构基线 / 可拓展性(2026-06-21 厚节点后架构审查)
 
 | ID | 优先级 | 状态 | 条目 | 来源 |
 |---|---|---|---|---|
-| ARCH-1 | P1 | 🔴 | 主动消息建 category registry(仿 tools `_META` 单一事实源+启动校验),消除 category 跨 6 处手工同步 | `architecture/designs/baseline_optimization_alignment.md` |
+| ARCH-1 | P1 | 🔴 | 主动消息建 category registry(仿 tools `_META` 单一事实源+启动校验),消除 category 跨 6 处手工同步 | `plans/products/zhaoxi/baseline_optimization_alignment.md` |
 | ARCH-2 | P1 | 🔴 | provider 怪癖(DSML 解析、强制 tool_choice 正则)从编排/通用 LLM 层下沉到 `llm_adapters` | 同上 |
 | ARCH-3 | P2 | 🔴 | 巨型文件按职责拆分:`turn_service.py`(1848 行)`_finalize_turn`、`account_checks.py`(985)、`reactivation.py`(880) | 同上 |
 | ARCH-4 | P2 | 🔴 | 工具 handler 统一签名 `handler(args, ctx)`,删除三种 `call_style` 泄漏抽象 | 同上 |

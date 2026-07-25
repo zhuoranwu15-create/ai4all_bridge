@@ -17,7 +17,7 @@
 
 ## 规模化运维红线（必读）
 
-> 背景：当前形态是「N 个登录态个人微信号挂在单台机器的单个 OpenClaw daemon、单一出口 IP 上」。账号数越多，以下三条违规的代价越大——可能直接触发微信侧风控（同 IP 账号聚集异常、集中上线）。详见 [`docs/architecture/designs/single-host-multi-openclaw-scale.md`](../architecture/designs/single-host-multi-openclaw-scale.md)。
+> 背景：当前形态是「N 个登录态个人微信号挂在单台机器的单个 OpenClaw daemon、单一出口 IP 上」。账号数越多，以下三条违规的代价越大——可能直接触发微信侧风控（同 IP 账号聚集异常、集中上线）。详见 [`docs/architecture/shared/access/single-host-multi-openclaw-scale.md`](../architecture/shared/access/single-host-multi-openclaw-scale.md)。
 
 1. **禁止把全局 `openclaw gateway restart` 当日常操作。**
    - 一次全局重启 = 该 daemon 上**全部**微信账号在同一秒、从同一 IP 重新拉起 iLink 长轮询，是教科书级风控触发点。
@@ -227,7 +227,7 @@ node --check $PLUGIN/dist/src/channel.js && systemctl --user restart openclaw-ga
 ```
 
 > ⚠️ **切勿用 workspace `openclaw-weixin`（v2.4.3）build 覆盖线上 dist**：腾讯只发布 2.4.4 npm 产物、未推源码，dist 比 v2.4.3 源码多 20 个模块，覆盖会大规模回退。
-> 完整原理与回滚：[解绑登出补丁](../architecture/designs/openclaw_weixin_gateway_logout_patch.md)、[补丁维护总表](../architecture/designs/openclaw_patches_maintenance.md)。
+> 完整原理与回滚：[解绑登出补丁](../architecture/shared/access/openclaw_weixin_gateway_logout_patch.md)、[补丁维护总表](../architecture/shared/access/openclaw_patches_maintenance.md)。
 
 ## 回滚最近版本
 

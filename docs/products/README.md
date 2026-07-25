@@ -1,0 +1,16 @@
+# 产品文档
+
+这里按产品命名空间维护当前有效的需求、用户/API 交接和产品能力说明。
+目录名就是产品所有权；每个产品目录的 `README.md` 是该产品的文档 manifest，必须说明
+`app_id`、产品状态、入口渠道、代码命名空间和当前兼容 API。
+
+| 产品 | `app_id` | 状态 | 文档入口 |
+| --- | --- | --- | --- |
+| 朝夕相伴 | `zhaoxi` | 已启用 | [产品 manifest](zhaoxi/README.md) |
+
+Fatetell 尚未冻结 PRD，因此不建立空目录或占位能力文档。PRD 冻结时，先新增其产品 manifest
+和总 PRD，再根据真实需求添加能力、架构设计与实施计划。
+
+跨产品的身份、钱包、配额、审核、接入节点和 API 边界不写在这里；它们属于
+[`../architecture/shared/`](../architecture/shared/README.md)。形态无关的 LLM、上下文与记忆运行机制属于
+[`../architecture/agent-runtime/`](../architecture/agent-runtime/README.md)。

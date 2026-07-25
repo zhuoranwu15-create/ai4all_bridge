@@ -3,8 +3,8 @@
 OpenClaw（`openclaw/openclaw.git`）是上游第三方仓库，我们无法把改动提交进去。本项目落地依赖的 5 处 OpenClaw 能力全部以**手术补丁**形式维护：能写成稳定 unified diff 的存为 `*.patch`；打在带内容哈希的 core bundle / 存在版本漂移的插件 dist 上、无法整文件覆盖的，改以幂等脚本按锚点重放。
 
 > **权威文档**（细节、追查过程、升级必查命令以这些为准，本 README 只做索引）：
-> - [`../docs/architecture/designs/openclaw_patches_maintenance.md`](../docs/architecture/designs/openclaw_patches_maintenance.md) — 4 补丁对比、升级必查 §3、验证 §4
-> - [`../docs/architecture/designs/openclaw_weixin_gateway_logout_patch.md`](../docs/architecture/designs/openclaw_weixin_gateway_logout_patch.md) — 解绑登出补丁专文
+> - [`../docs/architecture/shared/access/openclaw_patches_maintenance.md`](../docs/architecture/shared/access/openclaw_patches_maintenance.md) — 4 补丁对比、升级必查 §3、验证 §4
+> - [`../docs/architecture/shared/access/openclaw_weixin_gateway_logout_patch.md`](../docs/architecture/shared/access/openclaw_weixin_gateway_logout_patch.md) — 解绑登出补丁专文
 > - [`../docs/archive/investigations/multi_node_weixin_login_20260614.md`](../docs/archive/investigations/multi_node_weixin_login_20260614.md) — accountId 回归的逐层追查
 
 ---
@@ -17,7 +17,7 @@ OpenClaw（`openclaw/openclaw.git`）是上游第三方仓库，我们无法把�
 | `openclaw-before-agent-reply-media.patch` | core `src/auto-reply/reply/get-reply.ts` | `before_agent_reply` 钩子前把入站媒体绝对路径以 `[media attached: <path> (<type>)]` 注入钩子的 `cleanedBody` 副本，使 bridge 能识别图片 | **仅 src hunk**（core dist 是哈希 bundle）→ 生产用 `scripts/deploy_image_understanding.sh` 手术改当前哈希 dist |
 | `openclaw-weixin-logout-account-runtime.patch` | weixin **渠道插件** `dist/src/channel.js` | 给 gateway 加 `logoutAccount`，解绑时删 weixin 账号文件 + 索引除名，闭合解绑裂脑 | 含 dist hunk → `patch -p1` 到运行 dist + `node --check` + 重启 gateway |
 | **（无 .patch 文件）** accountId hook ctx | core `get-reply-*.js`（与图片补丁同文件） | 把 bot `AccountId` 注入 `before_agent_reply` hook ctx，使多机入站能转发正确 `channel_account_id`；**修复 v2026.6.5 core 回归**（否则多机入站全部 `no_binding` 静默不回复） | 哈希 bundle、无稳定 diff → `scripts/patch_openclaw_accountid.sh`（host-agnostic、幂等、自动发现；已折进 deploy 脚本 `[1b/4]`） |
-| `openclaw-core.send-meta.src.patch` + `openclaw-weixin.ret-meta.src.patch` | core `gateway/server-methods/send.ts` + weixin 插件 `api.ts`/`types.ts`/`send.ts`/`channel.ts` | 把 iLink `sendMessage` 的 `ret`/`errcode`/`errmsg` 经 `meta` dock 打通到 ai4all，治沉默用户主动消息的"假成功"（详见 [`../docs/troubleshooting/weixin_context_token_send_semantics.md`](../docs/troubleshooting/weixin_context_token_send_semantics.md) 第五节） | core 哈希 bundle + 插件 dist 版本漂移，均无法整文件覆盖 → **`.src.patch` 仅存档源码 diff（未来 fork 后走正式分支的蓝本）；线上生效靠 `scripts/apply_openclaw_ret_meta_patch.py`（host-agnostic、幂等、自动发现、锚点缺失即安全中止）** |
+| `openclaw-core.send-meta.src.patch` + `openclaw-weixin.ret-meta.src.patch` | core `gateway/server-methods/send.ts` + weixin 插件 `api.ts`/`types.ts`/`send.ts`/`channel.ts` | 把 iLink `sendMessage` 的 `ret`/`errcode`/`errmsg` 经 `meta` dock 打通到 ai4all，治沉默用户主动消息的"假成功"（详见 [`../docs/ops/platform/troubleshooting/weixin_context_token_send_semantics.md`](../docs/ops/platform/troubleshooting/weixin_context_token_send_semantics.md) 第五节） | core 哈希 bundle + 插件 dist 版本漂移，均无法整文件覆盖 → **`.src.patch` 仅存档源码 diff（未来 fork 后走正式分支的蓝本）；线上生效靠 `scripts/apply_openclaw_ret_meta_patch.py`（host-agnostic、幂等、自动发现、锚点缺失即安全中止）** |
 
 > 第 4、5 个补丁刻意不存 dist `.patch`：core dist 文件名随版本变哈希（`send-Czbq6yKa.js` 等），写死路径的 diff 每次升级都会失效。锚点字符串稳定，脚本按内容 grep / glob 自动发现。第 5 个的源码 diff 另存 `*.src.patch` 备档（**fork 与否待议**；在那之前 `.src.patch` + 打补丁脚本即唯一事实源）。
 

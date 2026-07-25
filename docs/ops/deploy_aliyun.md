@@ -39,7 +39,7 @@ python3 --version
 
 - `AI4ALL_BRIDGE_SECRET`
 - `ADMIN_TOKEN`
-- `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_ACTIVE_FAMILY`（模型由 family×tier 内置矩阵解析，不再单配 `LLM_MODEL`；详见 [LLM family×tier 设计](../architecture/designs/llm_family_tier_design.md)）
+- `LLM_API_KEY`、`LLM_BASE_URL`、`LLM_ACTIVE_FAMILY`（模型由 family×tier 内置矩阵解析，不再单配 `LLM_MODEL`；详见 [LLM family×tier 设计](../architecture/agent-runtime/llm_family_tier_design.md)）
 - `ALIYUN_ACCESS_KEY_ID`、`ALIYUN_ACCESS_KEY_SECRET`
 - `ALIYUN_SMS_SIGN_NAME`、`ALIYUN_SMS_TEMPLATE_CODE`
 - `ALIYUN_CAPTCHA_SCENE_ID`、`ALIYUN_CAPTCHA_PREFIX`
@@ -475,7 +475,7 @@ openclaw channels status --probe
 当前仓库已经跟踪以下补丁和说明文件：
 
 - `patches/openclaw-weixin-gateway-methods-runtime.patch`
-- `docs/architecture/designs/openclaw_weixin_gateway_qr_patch.md`
+- `docs/architecture/shared/access/openclaw_weixin_gateway_qr_patch.md`
 
 补丁作用：给已安装的 `@tencent-weixin/openclaw-weixin` 增加 `gatewayMethods = ["web.login.start", "web.login.wait"]` 元数据，使 OpenClaw host 能发现二维码登录 provider。补丁不修改微信登录协议、不修改二维码生成、不修改账号保存逻辑。
 
@@ -519,7 +519,7 @@ openclaw gateway call web.login.start \
 当前仓库已跟踪：
 
 - `patches/openclaw-weixin-logout-account-runtime.patch`
-- `docs/architecture/designs/openclaw_weixin_gateway_logout_patch.md`（完整原理、稳健部署流程、回滚、对账法）
+- `docs/architecture/shared/access/openclaw_weixin_gateway_logout_patch.md`（完整原理、稳健部署流程、回滚、对账法）
 
 **部署/重放（插件升级后必做）：**
 

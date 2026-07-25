@@ -1,10 +1,10 @@
-# AI4ALL 微信个人 AI 陪伴服务总体架构
+# AI4ALL 多产品服务总体架构
 
 更新时间：2026-07-23
 
 ## 一句话理解
 
-AI4ALL = **多渠道接入** + **Companion World 产品领域层** + **形态无关 Agent Runtime** + **真人级平台服务与中心调度**。
+AI4ALL = **多渠道接入** + **产品领域层** + **形态无关 Agent Runtime** + **真人级平台服务与中心调度**。当前已启用产品是朝夕相伴；Companion World 是其产品领域，而不是所有未来产品的共享模型。
 
 它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 只负责微信连接、消息收发和 hook runtime；AI4ALL Backend 同时服务微信 1:1 Agent、Web 和「朝夕相伴」Native App，持有产品用户、世界/居民、关系运行时、记忆、权益、主动触达和运营状态。
 
@@ -16,15 +16,15 @@ AI4ALL = **多渠道接入** + **Companion World 产品领域层** + **形态无
 
 | 文档 | 作用 |
 | --- | --- |
-| `docs/prd.md` | Phase 1 产品范围、需求和验收标准 |
-| `docs/product/README.md` | 产品专题 PRD 索引，对齐单项能力的详细产品需求 |
+| `docs/products/README.md` | 产品目录、`app_id` 与产品文档 manifest |
+| `docs/products/zhaoxi/prd.md` | 朝夕产品范围、需求和验收标准 |
 | `docs/STATUS.md` | 项目现状、重点方向、在途工作和已知大缺口（持续更新） |
 | `docs/architecture/system_design.md` | 详细技术设计、数据模型和工作包摘要（§7 工作包为 Phase 1 历史快照） |
-| `docs/architecture/designs/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
-| `docs/architecture/designs/proactive_messaging_design.md` | 主动消息、提醒、commitment 和 scheduler 专题 |
-| `docs/architecture/designs/agent_context_files.md` | Agent Context Files、daily notes、长期记忆和 Dreaming |
-| `docs/architecture/designs/conversation_orchestrator_design.md` | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和主动消息衔接 |
-| `docs/architecture/designs/entitlement_growth_design.md` | 贝壳 wallet/ledger、成本事件、邀请奖励和支付后置 |
+| `docs/architecture/shared/access/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
+| `docs/architecture/products/zhaoxi/proactive_messaging_design.md` | 朝夕主动消息、提醒、commitment 和 scheduler 专题 |
+| `docs/architecture/agent-runtime/agent_context_files.md` | Agent Context Files、daily notes、长期记忆和 Dreaming |
+| `docs/architecture/agent-runtime/conversation_orchestrator_design.md` | 主对话 turn、Session/Messages、Intent/Tool Use、Prompt、同步回复和主动消息衔接 |
+| `docs/architecture/shared/platform/entitlement_growth_design.md` | 贝壳 wallet/ledger、成本事件、邀请奖励和支付后置 |
 
 ## 1. 顶层架构
 
@@ -298,7 +298,7 @@ aliyun1 Central FastAPI + central schedulers
 └────────────────┘  ④ 结果回报            └─────────────────────┘
 ```
 
-> **中心存储后端**：2026-06-21 起 aliyun1 中心库由 SQLite 切换为本机 **PostgreSQL**（厚节点改造 P1，见 [`architecture/designs/thick_node_postgres_refactor.md`](designs/thick_node_postgres_refactor.md) 与切换记忆 [[pg-migration-cutover-state]]）。**这对节点与拓扑完全透明**：节点本就永不直连 DB，无论中心是 SQLite 还是 PG，节点只经 HTTP `/openclaw/turn`、`/node/*` 与中心通信，路由/归属/账号隔离逻辑一字未改。
+> **中心存储后端**：2026-06-21 起 aliyun1 中心库由 SQLite 切换为本机 **PostgreSQL**（厚节点改造 P1，见 [`shared/data/thick_node_postgres_refactor.md`](shared/data/thick_node_postgres_refactor.md) 与切换记忆 [[pg-migration-cutover-state]]）。**这对节点与拓扑完全透明**：节点本就永不直连 DB，无论中心是 SQLite 还是 PG，节点只经 HTTP `/openclaw/turn`、`/node/*` 与中心通信，路由/归属/账号隔离逻辑一字未改。
 
 - **不变量**：只有 central 进程读写中心库（现为 aliyun1 本机 PostgreSQL，仅监听 localhost）；节点永不直连 DB。`node_id` 只是路由属性，不参与账号隔离判定。
 - **核心业务在哪台机器处理（重要）**：**openclaw 通道层固定**——账号注册/登录时定在 aliyun1 或 aliyun2 的 openclaw 上，此后不迁移、不切换。但通道之后的**全部核心业务（turn 处理：prompt 组装、LLM、记忆、计费、DB 读写）一律在 aliyun1 中心进程执行**。因此**归属 aliyun2 的微信用户，其每条消息都会被转发到 aliyun1 后端处理**（见下「入站」）。这一集中式形态自 2026-06-14 多机上线即如此，**PG 切换没有改变它**——PG 只是把 aliyun1 中心进程的存储从 SQLite 换成了 PG。aliyun2 上没有 turn 处理后端（node-agent 仅暴露 `exec/*`+`outbound/claim`+`heartbeat`+`health`，无 `/openclaw/turn`）。
@@ -307,7 +307,7 @@ aliyun1 Central FastAPI + central schedulers
 - **节点 → 中心**走「稳定指纹地址」`CENTRAL_URL`（MVP=内网 hosts 别名），切换中心只改该指向，节点零改配。
 - **中心可切换 aliyun1↔aliyun2**：中心状态 = 中心库（现为 PostgreSQL，含 `account_profile_files` 画像表，P2 起画像已入库）+ system 目录；切换需迁移 PG 数据（`scripts/migrate_sqlite_to_pg.py` 同类思路）+ rsync system 目录；切换后原中心机降为 node，**微信会话不重扫码**。一键化/热备留二期。
 
-`standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/architecture/designs/multi_node_access_refactor.md`](designs/multi_node_access_refactor.md)。
+`standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/architecture/shared/access/multi_node_access_refactor.md`](shared/access/multi_node_access_refactor.md)。
 
 ## 8. 当前架构状态与下一阶段边界
 
@@ -318,4 +318,4 @@ aliyun1 Central FastAPI + central schedulers
 5. Companion World P1/M3/M4/M5 flag 仍默认关闭。代码就绪不代表生产已迁移或开量；客户端口径、模板/backfill、钱包与 override 对账、evidence retention 和只读发布核验仍是开旗门槛。
 6. 当前模块化单体与 central single-writer 拓扑是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
 
-详细数据模型和历史工作包摘要见 `docs/architecture/system_design.md`；3.0 冻结决策与代码地图见 `docs/architecture/designs/companion_world_3_0_refactor_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。
+详细数据模型和历史工作包摘要见 `docs/architecture/system_design.md`；3.0 冻结决策与代码地图见 `docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。
