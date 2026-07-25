@@ -157,7 +157,9 @@ def test_settings(tmp_path, db_dsn):
     s.rate_limit_rpm_message = "每分钟上限"
     s.conversation_session_business_day_start_hour = 4
     s.dreaming_scheduler_enabled = False
-    s.dreaming_scheduler_interval_seconds = 300.0
+    # dreaming 无 interval 配置项（天级定点扫描）；此处只登记真实 Settings 上存在的字段，
+    # 避免替身凭空多出属性、把"读了不存在配置"的 bug 掩盖成测试通过。
+    s.proactive_dreaming_scheduler_enabled = True
     s.dreaming_scheduler_batch_size = 100
     s.user_meta_scheduler_enabled = False
     s.user_meta_scheduler_hour = 3
@@ -400,6 +402,10 @@ def fresh_db(test_settings):
         patch("app.routers.web.settings", test_settings),
         patch("app.products.zhaoxi.api.app.settings", test_settings),
         patch("app.products.zhaoxi.api.companion_world.settings", test_settings),
+        # admin 侧 world 路由此前漏登记：它 from app.config import settings，未 patch 时读真实
+        # settings，开发/生产机 .env 的 COMPANION_WORLD_LIFECYCLE_COMMIT_ENABLED=true 会泄漏进来，
+        # 绕过 503 commit 门控使 approve 走到真实提交路径（本机 409、CI 无 .env 则 503 通过）。
+        patch("app.products.zhaoxi.api.admin_companion_world.settings", test_settings),
         patch("app.products.zhaoxi.api.app_notifications.settings", test_settings),
         patch("app.products.zhaoxi.infrastructure.app_inbox.settings", test_settings),
         patch("app.products.zhaoxi.infrastructure.repositories.companion_world.settings", test_settings),
@@ -483,6 +489,7 @@ def client(fresh_db):
         patch("app.routers.web.settings", fresh_db),
         patch("app.products.zhaoxi.api.app.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
+        patch("app.products.zhaoxi.api.admin_companion_world.settings", fresh_db),
         patch("app.platform.media.asr.settings", fresh_db),
         patch("app.products.zhaoxi.api.debug.settings", fresh_db),
         patch("app.products.zhaoxi.api.admin_moderation.settings", fresh_db),

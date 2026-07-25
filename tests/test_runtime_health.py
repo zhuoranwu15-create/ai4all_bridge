@@ -365,6 +365,17 @@ def test_admin_ops_status_endpoint(client):
     assert "metrics" in body
     assert body["metrics"]["window_minutes"] == 60
 
+    # 三个调度器的 configured 块必须完整可序列化：曾出现 handler 读取真实 Settings 上
+    # 不存在的字段（dreaming interval），而 MagicMock 替身凭空补齐、掩盖成 200 的回归。
+    configured = body["schedulers"]["configured"]
+    assert configured["dreaming"] == {
+        "enabled": False,
+        "proactive_process_enabled": True,
+        "batch_size": 100,
+    }
+    assert configured["proactive"]["interval_seconds"] == 30.0
+    assert configured["user_meta"]["hour"] == 3
+
 
 def test_monitor_alert_state_threshold_and_recovery(tmp_path):
     from scripts.monitor_health import (
