@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
+from app.db import SessionPrincipal
 from app.domains.companion_world import CompanionWorldNotificationService
 from app.platform import SqlAppNotificationRepository
 from app.routers.companion_world import (
@@ -37,7 +38,7 @@ class EmptyPayload(BaseModel):
 
 def _require_notification_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_app_inbox_enabled", False)):
         raise CompanionWorldApiError("not_found", 404)
     return _require_world_session(authorization)
@@ -128,13 +129,13 @@ def list_notifications(
     status: str = Query(default="all", pattern="^(all|unread)$"),
     cursor: Optional[str] = Query(default=None, max_length=1024),
     limit: int = Query(default=20, ge=1, le=50),
-    platform_user: dict = Depends(_require_notification_session),
+    principal: SessionPrincipal = Depends(_require_notification_session),
 ) -> dict:
     cursor_delivered_at, cursor_notification_id = _decode_cursor(cursor)
     now = _db_time(beijing_now())
     rows = _run_domain(
         lambda: _service().list_notifications(
-            platform_user["id"],
+            principal.platform_user_id,
             now=now,
             status=status,
             cursor_delivered_at=cursor_delivered_at,
@@ -143,7 +144,7 @@ def list_notifications(
         )
     )
     page = rows[:limit]
-    unread_count = _service().count_unread(platform_user["id"], now=now)
+    unread_count = _service().count_unread(principal.platform_user_id, now=now)
     _no_store(response)
     return _envelope(
         request,
@@ -162,10 +163,10 @@ def list_notifications(
 def unread_count(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_notification_session),
+    principal: SessionPrincipal = Depends(_require_notification_session),
 ) -> dict:
     count = _service().count_unread(
-        platform_user["id"], now=_db_time(beijing_now())
+        principal.platform_user_id, now=_db_time(beijing_now())
     )
     _no_store(response)
     return _envelope(request, code="ok", data={"unread_count": count})
@@ -177,13 +178,13 @@ def mark_read(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_notification_session),
+    principal: SessionPrincipal = Depends(_require_notification_session),
 ) -> dict:
     current = beijing_now().astimezone(_BEIJING_TZ).replace(tzinfo=None, microsecond=0)
     now = current.strftime("%Y-%m-%d %H:%M:%S")
     item = _run_domain(
         lambda: _service().mark_read(
-            platform_user["id"],
+            principal.platform_user_id,
             notification_id=notification_id,
             now=now,
             read_expires_at=(current + timedelta(days=7)).strftime(
@@ -200,13 +201,13 @@ def mark_all_read(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_notification_session),
+    principal: SessionPrincipal = Depends(_require_notification_session),
 ) -> dict:
     current = beijing_now().astimezone(_BEIJING_TZ).replace(tzinfo=None, microsecond=0)
     now = current.strftime("%Y-%m-%d %H:%M:%S")
     marked_count, read_at = _run_domain(
         lambda: _service().mark_all_read(
-            platform_user["id"],
+            principal.platform_user_id,
             now=now,
             read_expires_at=(current + timedelta(days=7)).strftime(
                 "%Y-%m-%d %H:%M:%S"

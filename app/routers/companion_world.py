@@ -17,8 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import settings
 from app.db import (
+    SessionPrincipal,
     get_duplicate_reply,
-    get_platform_user_by_session_token,
+    get_platform_user,
     try_conversation_turn_lock,
 )
 from app.domains.companion_world import (
@@ -35,6 +36,7 @@ from app.platform import (
     run_companion_world_turn,
 )
 from app.time_utils import beijing_now
+from app.routers.deps import _resolve_legacy_session_principal
 
 router = APIRouter(prefix="/v1", tags=["companion-world"])
 
@@ -187,23 +189,20 @@ def _no_store(response: Response) -> None:
 
 def _require_world_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_p1_enabled", False)):
         raise CompanionWorldApiError("not_found", 404)
     if not authorization or not authorization.startswith("Bearer "):
         raise CompanionWorldApiError("unauthorized", 401)
-    token = authorization.removeprefix("Bearer ").strip()
-    platform_user = (
-        get_platform_user_by_session_token(token=token) if token else None
-    )
-    if platform_user is None:
+    principal = _resolve_legacy_session_principal(authorization)
+    if principal is None:
         raise CompanionWorldApiError("unauthorized", 401)
-    return platform_user
+    return principal
 
 
 def _require_feed_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_feed_enabled", False)):
         raise CompanionWorldApiError("not_found", 404)
     return _require_world_session(authorization)
@@ -330,9 +329,9 @@ def _decode_feed_cursor(cursor: Optional[str]) -> tuple[Optional[str], Optional[
 def bootstrap_home(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
-    result = _run_domain(lambda: _service().bootstrap_home(platform_user["id"]))
+    result = _run_domain(lambda: _service().bootstrap_home(principal.platform_user_id))
     _no_store(response)
     return _envelope(
         request,
@@ -352,9 +351,11 @@ def bootstrap_home(
 def list_candidates(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
-    candidates = _run_domain(lambda: _service().list_candidates(platform_user["id"]))
+    candidates = _run_domain(
+        lambda: _service().list_candidates(principal.platform_user_id)
+    )
     _no_store(response)
     return _envelope(
         request,
@@ -368,11 +369,11 @@ def confirm_residents(
     payload: ConfirmResidentsPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     residents = _run_domain(
         lambda: _service().confirm_residents(
-            platform_user["id"],
+            principal.platform_user_id,
             [
                 ResidentSelection(
                     template_id=item.template_id,
@@ -394,9 +395,11 @@ def confirm_residents(
 def list_residents(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
-    residents = _run_domain(lambda: _service().list_residents(platform_user["id"]))
+    residents = _run_domain(
+        lambda: _service().list_residents(principal.platform_user_id)
+    )
     _no_store(response)
     return _envelope(
         request,
@@ -410,7 +413,7 @@ def create_resident(
     payload: CreateResidentPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     custom = None
     if payload.name:
@@ -432,7 +435,7 @@ def create_resident(
         )
     result = _run_domain(
         lambda: _service().create_resident(
-            platform_user["id"],
+            principal.platform_user_id,
             template_id=payload.template_id,
             custom_template=custom,
         )
@@ -451,12 +454,12 @@ def list_home_feed(
     response: Response,
     cursor: Optional[str] = Query(default=None, max_length=1024),
     limit: int = Query(default=20, ge=1, le=50),
-    platform_user: dict = Depends(_require_feed_session),
+    principal: SessionPrincipal = Depends(_require_feed_session),
 ) -> dict:
     cursor_published_at, cursor_post_id = _decode_feed_cursor(cursor)
     rows = _run_domain(
         lambda: _feed_service().list_published_posts(
-            platform_user["id"],
+            principal.platform_user_id,
             cursor_published_at=cursor_published_at,
             cursor_post_id=cursor_post_id,
             limit=limit + 1,
@@ -481,11 +484,11 @@ def publish_home_feed_post(
     payload: FeedPostPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_feed_session),
+    principal: SessionPrincipal = Depends(_require_feed_session),
 ) -> dict:
     post, created = _run_domain(
         lambda: _feed_service().publish_user_post(
-            platform_user["id"],
+            principal.platform_user_id,
             client_request_id=payload.client_request_id,
             text=payload.text,
             published_at=beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -506,11 +509,11 @@ def list_conversations(
     response: Response,
     cursor: Optional[str] = Query(default=None, max_length=128),
     limit: int = Query(default=50, ge=1, le=100),
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     items = _run_domain(
         lambda: _service().list_conversations(
-            platform_user["id"],
+            principal.platform_user_id,
             cursor_conversation_id=cursor,
             limit=limit,
         )
@@ -533,11 +536,11 @@ def list_conversation_messages(
     response: Response,
     cursor: Optional[int] = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=100),
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     target, messages = _run_domain(
         lambda: _service().list_conversation_messages(
-            platform_user["id"],
+            principal.platform_user_id,
             conversation_id,
             before_id=cursor,
             limit=limit,
@@ -571,11 +574,13 @@ def conversation_turn(
     payload: ConversationTurnPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_world_session),
+    principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     service = _service()
     target = _run_domain(
-        lambda: service.resolve_conversation(platform_user["id"], conversation_id)
+        lambda: service.resolve_conversation(
+            principal.platform_user_id, conversation_id
+        )
     )
     # 用客户端已知的 conversation 锚定幂等键，避免内部 runtime account 出现在历史响应。
     mapped_message_id = f"app:{target.conversation_id}:{payload.client_message_id}"
@@ -601,7 +606,7 @@ def conversation_turn(
         # L2 锁内重读 state，确保未来 offline(M4) 与 turn 以同一 conversation 锁串行。
         target = _run_domain(
             lambda: service.resolve_conversation(
-                platform_user["id"], conversation_id
+                principal.platform_user_id, conversation_id
             )
         )
         if target.state != "active":
@@ -613,12 +618,15 @@ def conversation_turn(
         if duplicate is not None:
             result = None
         else:
+            platform_user = get_platform_user(
+                platform_user_id=principal.platform_user_id
+            ) or {}
             result = run_companion_world_turn(
                 conversation_id=target.conversation_id,
                 universe_id=target.universe_id,
                 resident_id=target.resident_id,
                 runtime_account_id=target.runtime_account_id,
-                platform_user_id=platform_user["id"],
+                platform_user_id=principal.platform_user_id,
                 sender_name=platform_user.get("display_name"),
                 message_id=mapped_message_id,
                 text=payload.text,

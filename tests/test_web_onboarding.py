@@ -1508,7 +1508,7 @@ def test_create_account_enforces_one_active_per_user_app(client):
     from app.db import create_platform_user_session
     from app.db.billing import (
         create_ai4all_account_for_user,
-        get_first_active_account_for_user,
+        get_active_bound_account_for_user_in_app,
     )
 
     user = client.post(
@@ -1529,7 +1529,9 @@ def test_create_account_enforces_one_active_per_user_app(client):
         )
 
     # 解析器仍稳定返回那唯一账号。
-    resolved = get_first_active_account_for_user(platform_user_id=user["id"])
+    resolved = get_active_bound_account_for_user_in_app(
+        platform_user_id=user["id"], app_id="zhaoxi"
+    )
     assert resolved["account"]["id"] == first["account"]["id"]
 
 

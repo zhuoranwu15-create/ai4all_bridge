@@ -98,7 +98,6 @@ from app.db import (
     list_sessions,
     list_sessions_for_account,
     create_platform_user_session,
-    get_platform_user_by_session_token,
     normalize_phone,
     resolve_account_id_for_inbound_channel_identity,
     set_account_onboarding_state,

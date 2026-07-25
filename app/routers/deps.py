@@ -9,8 +9,9 @@ from typing import Optional
 from fastapi import Depends, Header, HTTPException, status
 
 from app.auth_utils import bearer_matches
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.config import settings
-from app.db import get_platform_user_by_session_token, upsert_admin_user
+from app.db import SessionPrincipal, resolve_session_principal, upsert_admin_user
 
 
 def verify_bridge_auth(authorization: Optional[str] = Header(default=None)) -> None:
@@ -88,15 +89,32 @@ def require_admin_user(admin_user: dict = Depends(get_admin_user)) -> dict:
     return admin_user
 
 
-def _require_session(authorization: Optional[str] = Header(default=None)):
+def _resolve_legacy_session_principal(
+    authorization: Optional[str],
+) -> Optional[SessionPrincipal]:
+    """解析固定 zhaoxi audience 的 legacy Bearer token。"""
+
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        return None
+    return resolve_session_principal(
+        token=token,
+        expected_app_id=ZHAOXI_APP_ID,
+    )
+
+
+def _require_session(
+    authorization: Optional[str] = Header(default=None),
+) -> SessionPrincipal:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="未登录")
-    token = authorization.removeprefix("Bearer ").strip()
-    platform_user = get_platform_user_by_session_token(token=token)
-    if platform_user is None:
+    principal = _resolve_legacy_session_principal(authorization)
+    if principal is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
-    return platform_user
+    return principal
 
 
 
-__all__ = ['verify_bridge_auth', 'get_admin_user', 'verify_admin_auth', 'require_reviewer_or_admin', 'require_admin_or_staff_user', 'require_admin_user', '_require_session']
+__all__ = ['verify_bridge_auth', 'get_admin_user', 'verify_admin_auth', 'require_reviewer_or_admin', 'require_admin_or_staff_user', 'require_admin_user', '_require_session', '_resolve_legacy_session_principal']

@@ -410,6 +410,7 @@ class CompanionWorldMailboxService:
                 except ValueError as err:
                     raise MailboxError("letter_template_unavailable") from err
                 runtime = insert_resident_runtime_account(
+                    platform_user_id=platform_user_id,
                     display_name=str(letter["character_name"]),
                     system_prompt=system_prompt,
                     soul_seed=soul,
