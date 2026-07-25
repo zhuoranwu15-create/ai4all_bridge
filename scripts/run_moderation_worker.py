@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
 
 from app.config import settings  # noqa: E402
 from app.db import init_db  # noqa: E402
-from app.moderation.worker import run_once  # noqa: E402
+from app.platform.moderation.worker import run_once  # noqa: E402
 
 
 def main() -> None:

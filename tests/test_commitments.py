@@ -11,7 +11,7 @@ from tests.factories import create_route as _create_route
 
 
 def _create_state(account_id: str) -> None:
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     ensure_account_state(
         account_id=account_id,
@@ -22,7 +22,7 @@ def _create_state(account_id: str) -> None:
 
 def test_extract_commitment_from_turn_writes_pending_commitment(fresh_db):
     from app.db import list_proactive_commitments_for_account
-    from app.proactive.obligations.commitments import extract_commitment_from_turn
+    from app.products.zhaoxi.proactive.obligations.commitments import extract_commitment_from_turn
 
     fresh_db.llm_api_key = "fake-key"
     session_id = _create_account("acc-com-extract")
@@ -30,9 +30,9 @@ def test_extract_commitment_from_turn_writes_pending_commitment(fresh_db):
     _create_state("acc-com-extract")
 
     with (
-        patch("app.proactive.obligations.commitments.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.obligations.commitments.settings", fresh_db),
         patch(
-            "app.proactive.obligations.commitments.generate_completion",
+            "app.products.zhaoxi.proactive.obligations.commitments.generate_completion",
             return_value=(
                 '{"should_create": true, '
                 '"text": "明天记得看一下事情 A 的后续 B。", '
@@ -70,7 +70,7 @@ def test_extract_commitment_from_turn_writes_pending_commitment(fresh_db):
 
 def test_extract_commitment_rejects_low_confidence(fresh_db):
     from app.db import list_proactive_commitments_for_account
-    from app.proactive.obligations.commitments import extract_commitment_from_turn
+    from app.products.zhaoxi.proactive.obligations.commitments import extract_commitment_from_turn
 
     fresh_db.llm_api_key = "fake-key"
     session_id = _create_account("acc-com-low")
@@ -78,9 +78,9 @@ def test_extract_commitment_rejects_low_confidence(fresh_db):
     _create_state("acc-com-low")
 
     with (
-        patch("app.proactive.obligations.commitments.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.obligations.commitments.settings", fresh_db),
         patch(
-            "app.proactive.obligations.commitments.generate_completion",
+            "app.products.zhaoxi.proactive.obligations.commitments.generate_completion",
             return_value=(
                 '{"should_create": true, "text": "低置信事项", '
                 '"due_at": "2026-05-23 09:30:00", '
@@ -110,8 +110,8 @@ def test_dispatch_due_commitment_sends_once(fresh_db):
         get_proactive_commitment,
         list_outbound_messages,
     )
-    from app.proactive.obligations.commitments import dispatch_due_commitments
-    from app.proactive.store.account_state import get_account_state
+    from app.products.zhaoxi.proactive.obligations.commitments import dispatch_due_commitments
+    from app.products.zhaoxi.proactive.store.account_state import get_account_state
 
     fresh_db.companion_followup_daily_limit = 3
     session_id = _create_account("acc-com-dispatch")
@@ -130,9 +130,9 @@ def test_dispatch_due_commitment_sends_once(fresh_db):
     )
 
     with (
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
         patch(
-            "app.proactive.delivery.outbound.send_weixin_text",
+            "app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text",
             return_value={"messageId": "openclaw-weixin:commitment-1"},
         ) as mock_send,
     ):
@@ -188,7 +188,7 @@ def test_due_commitment_requires_enabled_proactive_state(fresh_db):
 def test_dispatch_due_commitment_skips_when_touch_stale(fresh_db):
     """账号超过 24 小时送达窗口时，承诺也不再触发，直接终态 cancelled，不调用网关。"""
     from app.db import create_proactive_commitment, get_proactive_commitment
-    from app.proactive.obligations.commitments import dispatch_due_commitments
+    from app.products.zhaoxi.proactive.obligations.commitments import dispatch_due_commitments
 
     now0 = beijing_naive_now()
     due_at = now0.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
@@ -204,8 +204,8 @@ def test_dispatch_due_commitment_skips_when_touch_stale(fresh_db):
     )
 
     with (
-        patch("app.proactive.delivery.outbound.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+        patch("app.products.zhaoxi.proactive.delivery.outbound.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as mock_send,
     ):
         result = dispatch_due_commitments(
             now=now0 + timedelta(hours=25),

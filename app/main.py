@@ -146,7 +146,7 @@ from app.platform.gateways.openclaw import (
     send_weixin_text,
     warmup_persistent_gateway_client,
 )
-from app.proactive.delivery.outbound import enqueue_onboarding_welcome
+from app.products.zhaoxi.proactive.delivery.outbound import enqueue_onboarding_welcome
 from app.products.zhaoxi.jobs.dreaming.scheduler import (
     get_dreaming_scheduler,
     run_dreaming_scheduler_once,
@@ -162,31 +162,31 @@ from app.products.zhaoxi.jobs.user_meta.scheduler import (
     stop_user_meta_scheduler,
 )
 from app.prompt_builder import PromptBuilder, extract_section
-from app.proactive.orchestration.scheduler import (
+from app.products.zhaoxi.proactive.orchestration.scheduler import (
     get_proactive_scheduler,
     run_proactive_scheduler_once,
     start_proactive_scheduler,
     stop_proactive_scheduler,
 )
-from app.proactive.recall.manual_companion import (
+from app.products.zhaoxi.proactive.recall.manual_companion import (
     clear_account_check_candidate_draft,
     generate_account_check_candidate_draft,
     promote_account_check_candidate_draft,
 )
-from app.proactive.recall.content_invitation import generate_content_invitation_candidate
-from app.proactive.recall.topic_followup import generate_topic_followup_candidate
-from app.proactive.delivery.account_check import (
+from app.products.zhaoxi.proactive.recall.content_invitation import generate_content_invitation_candidate
+from app.products.zhaoxi.proactive.recall.topic_followup import generate_topic_followup_candidate
+from app.products.zhaoxi.proactive.delivery.account_check import (
     decide_account_check_action,
     execute_account_check_decision,
 )
-from app.proactive.store.candidates import (
+from app.products.zhaoxi.proactive.store.candidates import (
     REACTIVATION_TYPES,
     get_reactivation_candidate_from_metadata,
 )
-from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-from app.proactive.orchestration.planning import plan_reactivation_candidate
-from app.proactive.store.account_state import format_state_time
-from app.proactive.preferences import (
+from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+from app.products.zhaoxi.proactive.orchestration.planning import plan_reactivation_candidate
+from app.products.zhaoxi.proactive.store.account_state import format_state_time
+from app.products.zhaoxi.proactive.preferences import (
     PROACTIVE_FREQUENCY_BUCKETS,
     apply_proactive_message_settings_patch,
     get_effective_proactive_message_settings,
@@ -218,7 +218,7 @@ from app.products.zhaoxi.application.memory.dreaming import (
 )
 from app.products.zhaoxi.application.memory.session_lifecycle import configure_memory_sink, run_daily_dreaming_scan
 from app.turn_service import build_turn_llm_input, handle_openclaw_turn
-from app.moderation import export as moderation_export
+from app.platform.moderation import export as moderation_export
 from app.tools import get_web_search_tools
 from app.tools.web_search_handlers import handle_web_search, override_provider_order
 from app.platform.quota.rate_limiter import RateLimiter
@@ -408,7 +408,7 @@ def _is_debug_trace_account(account_id: str) -> bool:
 def startup() -> None:
     # 主动消息分类 registry 一致性校验（enum/registry 对齐、source 唯一、豁免不变量）。
     # 放在最前：配置性错误应在启动即暴露，而非运行期静默错配配额/开关。
-    from app.proactive.contract.categories import validate_category_registry
+    from app.products.zhaoxi.proactive.contract.categories import validate_category_registry
 
     validate_category_registry()
     if settings.has_central_role:

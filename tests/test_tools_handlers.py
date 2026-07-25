@@ -44,7 +44,7 @@ def _setup_account(account_id: str) -> None:
 
 
 def test_handle_create_reminder_one_shot(fresh_db):
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-tool")
     ctx = _make_ctx()
@@ -60,14 +60,14 @@ def test_handle_create_reminder_one_shot(fresh_db):
 
 def test_handle_create_reminder_dynamic_blocked_when_disabled(fresh_db):
     """总开关关闭 → 拒绝创建 dynamic 提醒（唯一的启停闸）。"""
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-dyn0")
     fresh_db.dynamic_reminder_enabled = False
     ctx = _make_ctx("acc-dyn0")
     with patch("app.db.settings", fresh_db), \
-         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
+         patch("app.products.zhaoxi.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
         result = handle_create_reminder(
             {"text": "AI 热点", "due_at": "2026-07-15 08:00:00",
              "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic"},
@@ -78,15 +78,15 @@ def test_handle_create_reminder_dynamic_blocked_when_disabled(fresh_db):
 
 def test_handle_create_reminder_dynamic_allowed_when_enabled(fresh_db):
     """默认全量：总开关开 → 对任意账号放开（不再有账号 allowlist 门控）。"""
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-dyn1")
     fresh_db.dynamic_reminder_enabled = True
     ctx = _make_ctx("acc-dyn1")
     with patch("app.db.settings", fresh_db), \
-         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
-         patch("app.tools.reminder_handlers.settings", fresh_db):
+         patch("app.products.zhaoxi.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
+         patch("app.products.zhaoxi.tools.reminder_handlers.settings", fresh_db):
         result = handle_create_reminder(
             {"text": "AI 热点", "due_at": "2026-07-15 08:00:00",
              "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic"},
@@ -97,7 +97,7 @@ def test_handle_create_reminder_dynamic_allowed_when_enabled(fresh_db):
 
 
 def test_handle_create_reminder_dynamic_backend_recomputes_due_at(fresh_db):
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-1")
@@ -106,9 +106,9 @@ def test_handle_create_reminder_dynamic_backend_recomputes_due_at(fresh_db):
     # 模型给了个"错误"的过去日期，但只有时刻(08:00)应被采用，日期由后端按 recur 重算。
     fake_now = datetime(2026, 7, 15, 9, 30, 0)  # 周三，已过 08:00
     with patch("app.db.settings", fresh_db), \
-         patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
-         patch("app.tools.reminder_handlers.settings", fresh_db), \
-         patch("app.tools.reminder_handlers.beijing_naive_now", return_value=fake_now):
+         patch("app.products.zhaoxi.proactive.fulfillment.dynamic_reminder.settings", fresh_db), \
+         patch("app.products.zhaoxi.tools.reminder_handlers.settings", fresh_db), \
+         patch("app.products.zhaoxi.tools.reminder_handlers.beijing_naive_now", return_value=fake_now):
         result = handle_create_reminder(
             {"text": "AI 热点", "due_at": "2020-01-01 08:00:00",
              "recur_rule": "weekly:0,2,4", "fulfillment": "dynamic", "max_items": 5},
@@ -131,7 +131,7 @@ def test_execute_tool_call_blocks_web_search_when_disabled():
 
 
 def test_handle_create_reminder_recurring(fresh_db):
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-tool2")
     ctx = _make_ctx("acc-tool2")
@@ -145,14 +145,14 @@ def test_handle_create_reminder_recurring(fresh_db):
 
 
 def test_handle_create_reminder_invalid_due_at(fresh_db):
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     ctx = _make_ctx()
     result = handle_create_reminder({"text": "test", "due_at": "not-a-date"}, ctx)
     assert "error" in result
 
 
 def test_handle_list_reminders_empty(fresh_db):
-    from app.tools.reminder_handlers import handle_list_reminders
+    from app.products.zhaoxi.tools.reminder_handlers import handle_list_reminders
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-list")
     ctx = _make_ctx("acc-list")
@@ -163,7 +163,7 @@ def test_handle_list_reminders_empty(fresh_db):
 
 def test_handle_cancel_reminder(fresh_db):
     from app.db import create_reminder
-    from app.tools.reminder_handlers import handle_cancel_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_cancel_reminder
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-cancel")
         r = create_reminder(
@@ -183,7 +183,7 @@ def test_handle_cancel_reminder(fresh_db):
 
 def test_handle_cancel_reminder_wrong_account(fresh_db):
     from app.db import create_reminder
-    from app.tools.reminder_handlers import handle_cancel_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_cancel_reminder
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-owner")
         r = create_reminder(
@@ -203,7 +203,7 @@ def test_handle_cancel_reminder_wrong_account(fresh_db):
 
 def test_handle_update_reminder(fresh_db):
     from app.db import create_reminder
-    from app.tools.reminder_handlers import handle_update_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_update_reminder
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-upd")
         r = create_reminder(

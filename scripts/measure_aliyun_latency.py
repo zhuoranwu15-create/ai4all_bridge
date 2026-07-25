@@ -12,7 +12,7 @@ import statistics
 import time
 
 from app.config import settings
-from app.moderation import aliyun_review
+from app.platform.moderation import aliyun_review
 
 # 一条明显安全的文本和一条疑似命中的文本，观察命中与否对 RT 是否有差异。
 SAMPLES = [

@@ -3,13 +3,14 @@
 镜像 app/prompts/user_meta_companion_type.py。只评估三个字段：
 relationship_stage(仅 acquainted→deep_bond 的升级判断)、agent_need_trust_status、
 agent_need_growth_status；不评估 agent_need_survival_status（确定性维护）。
-枚举合法值复用 app/db/user_meta.py 的 *_VALUES，避免口径漂移。
+枚举合法值复用 products/zhaoxi/infrastructure/persistence/user_meta.py 的 *_VALUES，
+避免口径漂移。
 """
 import json
 import re
 from typing import Any, Dict, List, Optional
 
-from app.db.user_meta import (
+from app.products.zhaoxi.infrastructure.persistence.user_meta import (
     GROWTH_STATUS_VALUES,
     RELATIONSHIP_STAGE_VALUES,
     TRUST_STATUS_VALUES,

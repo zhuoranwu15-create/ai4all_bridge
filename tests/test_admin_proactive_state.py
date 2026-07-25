@@ -30,7 +30,7 @@ def _insert_history(account_id: str, text: str) -> None:
 
 def test_admin_proactive_state_create_get_and_scan_no_op(client, fresh_db):
     from app.db import list_outbound_messages
-    from app.proactive.store.account_state import get_account_state
+    from app.products.zhaoxi.proactive.store.account_state import get_account_state
 
     fresh_db.proactive_quiet_hours_start = "00:00"
     fresh_db.proactive_quiet_hours_end = "00:00"
@@ -67,8 +67,8 @@ def test_admin_proactive_state_create_get_and_scan_no_op(client, fresh_db):
     assert fetched.json()["proactive_state"]["next_scan_at"] == "2000-01-01 00:00:00"
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
-        patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send,
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as mock_send,
     ):
         run = client.post(
             "/admin/proactive/scheduler/run-once?limit=5",
@@ -146,7 +146,7 @@ def test_admin_proactive_state_requires_account(client):
 
 
 def test_admin_generates_account_check_candidate_draft(client, fresh_db):
-    from app.proactive.store.account_state import get_account_state
+    from app.products.zhaoxi.proactive.store.account_state import get_account_state
 
     fresh_db.llm_api_key = "fake-key"
     _create_account("acc-admin-check-draft")
@@ -159,9 +159,9 @@ def test_admin_generates_account_check_candidate_draft(client, fresh_db):
     )
 
     with (
-        patch("app.proactive.recall.manual_companion.settings", fresh_db),
+        patch("app.products.zhaoxi.proactive.recall.manual_companion.settings", fresh_db),
         patch(
-            "app.proactive.recall.manual_companion.generate_completion",
+            "app.products.zhaoxi.proactive.recall.manual_companion.generate_completion",
             return_value=(
                 '{"should_send": true, "text": "记得看一下后续 B。", '
                 '"reason": "用户明确提到后续 B", "confidence": 0.91}'
@@ -183,7 +183,7 @@ def test_admin_generates_account_check_candidate_draft(client, fresh_db):
 
 
 def test_admin_promotes_and_clears_account_check_candidate_draft(client):
-    from app.proactive.store.account_state import get_account_state
+    from app.products.zhaoxi.proactive.store.account_state import get_account_state
 
     _create_account("acc-admin-check-promote")
     _create_route("acc-admin-check-promote")
@@ -350,8 +350,8 @@ def test_admin_proactive_overview_redacts_task_text(client):
 
 def test_admin_lists_reactivation_candidates(fresh_db):
     from app.db import create_content_invitation, upsert_proactive_account_state
-    from app.routers.admin_proactive import admin_proactive_reactivation_candidates
-    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.api.admin_proactive import admin_proactive_reactivation_candidates
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
 
     _create_account("acc-admin-react-topic")
     _create_account("acc-admin-react-content")
@@ -423,8 +423,8 @@ def test_admin_lists_reactivation_candidates(fresh_db):
 def test_admin_reactivation_candidates_render_beijing_timestamps(fresh_db):
     from app.db import create_content_invitation
     from app.routers.serializers import _beijing_display
-    from app.routers.admin_proactive import admin_proactive_reactivation_candidates
-    from app.proactive.store.candidates import upsert_reactivation_candidate
+    from app.products.zhaoxi.api.admin_proactive import admin_proactive_reactivation_candidates
+    from app.products.zhaoxi.proactive.store.candidates import upsert_reactivation_candidate
 
     # All DB timestamps are now stored as naive Beijing-local strings; _beijing_display
     # just attaches the +08:00 offset without any UTC shift.

@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from app.time_utils import beijing_now, beijing_daypart_str, beijing_weekday_str
-from app.tools.session_status_handlers import compute_streak, handle_session_status
+from app.products.zhaoxi.tools.session_status_handlers import compute_streak, handle_session_status
 
 _TZ = timezone(timedelta(hours=8))
 

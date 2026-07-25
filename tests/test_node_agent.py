@@ -188,7 +188,7 @@ def _create_account(account_id, node_id=None):
 
 
 def test_dispatch_proactive_central_enqueues_without_send(fresh_db, monkeypatch):
-    from app.proactive.delivery import outbound as messaging
+    from app.products.zhaoxi.proactive.delivery import outbound as messaging
 
     _create_account("acc-central")
     # local_node_inline_dispatch 必须显式钉 False：Settings(...) 仍会从开发机 .env 继承该字段，
@@ -218,7 +218,7 @@ def test_dispatch_proactive_central_enqueues_without_send(fresh_db, monkeypatch)
 
 
 def test_dispatch_proactive_inline_sends(fresh_db, monkeypatch):
-    from app.proactive.delivery import outbound as messaging
+    from app.products.zhaoxi.proactive.delivery import outbound as messaging
 
     _create_account("acc-inline")
     monkeypatch.setattr(messaging, "settings", Settings(ai4all_role="standalone"))
@@ -247,7 +247,7 @@ def test_dispatch_proactive_inline_sends(fresh_db, monkeypatch):
 
 def test_enqueue_onboarding_welcome_routes_to_assigned_node(fresh_db):
     from app.db import get_outbound_message
-    from app.proactive.delivery import outbound as messaging
+    from app.products.zhaoxi.proactive.delivery import outbound as messaging
 
     _create_account("acc-welcome", node_id="aliyun2")
     out = messaging.enqueue_onboarding_welcome(

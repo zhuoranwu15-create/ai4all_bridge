@@ -108,7 +108,7 @@ def wipe_account_data(
 
     传入 conn 时复用调用方事务（供 unbind_and_wipe_account 单事务编排）。
     """
-    from app.db.moderation import _delete_content_moderation_tasks_where
+    from app.platform.moderation.persistence import _delete_content_moderation_tasks_where
     with _tx(conn) as conn:
         # MP-02：钱包已变为 (真人, 产品) 共享资产。必须在删 owner binding 前解析当前
         # account 的 app 与真人，并且只在同一 app 内寻找 sibling，绝不能用另一产品账号

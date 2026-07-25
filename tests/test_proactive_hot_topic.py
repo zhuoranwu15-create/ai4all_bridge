@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-HT = "app.proactive.recall.hot_topic"
+HT = "app.products.zhaoxi.proactive.recall.hot_topic"
 
 
 # --------------------------------------------------------------------------- helpers
@@ -15,12 +15,12 @@ from tests.factories import create_route as _create_route
 
 
 def _seed_pool(*, topic: str, text: str, generated_date: str, now: datetime, ttl_hours: int = 24) -> None:
-    from app.proactive.store.global_candidates import add_global_candidate
+    from app.products.zhaoxi.proactive.store.global_candidates import add_global_candidate
 
     # 直接落一条全局候选（generated_date 由入参控制，用于区分"今天/历史"）。
     from app.db import insert_global_candidate
-    from app.proactive.store.candidates import _normalize_dedupe_key
-    from app.proactive.contract.common import format_reactivation_time
+    from app.products.zhaoxi.proactive.store.candidates import _normalize_dedupe_key
+    from app.products.zhaoxi.proactive.contract.common import format_reactivation_time
     from datetime import timedelta
 
     insert_global_candidate(
@@ -57,7 +57,7 @@ def _settings(**overrides):
 
 # --------------------------------------------------------------------------- diversity (纯函数)
 def test_rank_and_diversify_trims_topk_and_downweights_recent():
-    from app.proactive.selection.diversity import rank_and_diversify
+    from app.products.zhaoxi.proactive.selection.diversity import rank_and_diversify
 
     items = [
         {"id": 1, "topic": "露营", "score": 0.9},
@@ -72,7 +72,7 @@ def test_rank_and_diversify_trims_topk_and_downweights_recent():
 
 
 def test_rank_and_diversify_no_recent_keeps_relevance_order():
-    from app.proactive.selection.diversity import rank_and_diversify
+    from app.products.zhaoxi.proactive.selection.diversity import rank_and_diversify
 
     items = [
         {"id": 1, "topic": "a", "score": 0.5},
@@ -84,7 +84,7 @@ def test_rank_and_diversify_no_recent_keeps_relevance_order():
 
 # --------------------------------------------------------------------------- 全局召回
 def test_refresh_hot_topic_pool_disabled_noop(fresh_db):
-    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+    from app.products.zhaoxi.proactive.recall.hot_topic import refresh_hot_topic_pool
 
     with patch(f"{HT}.settings", _settings(hot_topic_recall_enabled=False)):
         result = refresh_hot_topic_pool(now=datetime(2026, 7, 1, 9, 0))
@@ -93,8 +93,8 @@ def test_refresh_hot_topic_pool_disabled_noop(fresh_db):
 
 
 def test_refresh_hot_topic_pool_inserts_with_history_dedup_and_idempotent(fresh_db):
-    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
-    from app.proactive.store.global_candidates import active_global_pool
+    from app.products.zhaoxi.proactive.recall.hot_topic import refresh_hot_topic_pool
+    from app.products.zhaoxi.proactive.store.global_candidates import active_global_pool
 
     now = datetime(2026, 7, 1, 10, 0)
     # 历史池：昨天已入过“露营”，本次应被历史去重滤除。
@@ -133,7 +133,7 @@ def test_refresh_hot_topic_pool_inserts_with_history_dedup_and_idempotent(fresh_
 
 
 def test_refresh_hot_topic_pool_search_failed_noop(fresh_db):
-    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+    from app.products.zhaoxi.proactive.recall.hot_topic import refresh_hot_topic_pool
 
     with patch(f"{HT}.settings", _settings()), \
          patch(f"{HT}.is_llm_configured", return_value=True), \
@@ -149,11 +149,11 @@ def _memory_ctx(text: str):
 
 
 def test_select_hot_topic_empty_pool_noop(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
 
     _create_account("acc-ht-empty")
     _create_route("acc-ht-empty")
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
     ensure_account_state(account_id="acc-ht-empty")
 
     with patch(f"{HT}.settings", _settings()), \
@@ -164,9 +164,9 @@ def test_select_hot_topic_empty_pool_noop(fresh_db):
 
 
 def test_select_hot_topic_picks_top1(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
-    from app.proactive.store.global_candidates import active_global_pool
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.store.global_candidates import active_global_pool
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     now = datetime(2026, 7, 1, 12, 0)
     _create_account("acc-ht-pick")
@@ -205,9 +205,9 @@ def test_select_hot_topic_picks_top1(fresh_db):
 
 
 def test_select_hot_topic_personalize_failure_falls_back_to_hook(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
-    from app.proactive.store.global_candidates import active_global_pool
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.store.global_candidates import active_global_pool
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     now = datetime(2026, 7, 1, 12, 0)
     _create_account("acc-ht-fb")
@@ -231,9 +231,9 @@ def test_select_hot_topic_personalize_failure_falls_back_to_hook(fresh_db):
 
 
 def test_select_hot_topic_below_min_score_noop(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
-    from app.proactive.store.global_candidates import active_global_pool
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.store.global_candidates import active_global_pool
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     now = datetime(2026, 7, 1, 12, 0)
     _create_account("acc-ht-low")
@@ -255,7 +255,7 @@ def test_select_hot_topic_below_min_score_noop(fresh_db):
 
 
 def test_refresh_hot_topic_pool_not_due_before_slot(fresh_db):
-    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+    from app.products.zhaoxi.proactive.recall.hot_topic import refresh_hot_topic_pool
 
     # 09:59 早于配置的 10:00/17:00 档位 → 不消耗任何数据/LLM 调用，直接 no_op。
     with patch(f"{HT}.settings", _settings()), \
@@ -268,7 +268,7 @@ def test_refresh_hot_topic_pool_not_due_before_slot(fresh_db):
 
 
 def test_refresh_hot_topic_pool_backfills_next_slot_after_restart(fresh_db):
-    from app.proactive.recall.hot_topic import refresh_hot_topic_pool
+    from app.products.zhaoxi.proactive.recall.hot_topic import refresh_hot_topic_pool
 
     search_ret = {"status": "succeeded", "results": [{"title": "考研新政", "snippet": "考研相关"}]}
     themes_json = json.dumps({"themes": [{"topic": "考研", "text": "考研准备咋样"}]}, ensure_ascii=False)
@@ -289,7 +289,7 @@ def test_refresh_hot_topic_pool_backfills_next_slot_after_restart(fresh_db):
 
 def _seed_ranked_pool(now: datetime):
     """种入 3 个热点主题并返回 {topic: global_candidate_id} 映射，供储备缓存类测试复用。"""
-    from app.proactive.store.global_candidates import active_global_pool
+    from app.products.zhaoxi.proactive.store.global_candidates import active_global_pool
 
     _seed_pool(topic="摄影", text="最近拍照了吗", generated_date="2026-07-01", now=now)
     _seed_pool(topic="露营", text="想去露营吗", generated_date="2026-07-01", now=now)
@@ -299,8 +299,8 @@ def _seed_ranked_pool(now: datetime):
 
 
 def test_select_hot_topic_cache_hit_uses_reserve_without_llm(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     now = datetime(2026, 7, 1, 12, 0)
     _create_account("acc-ht-cache")
@@ -336,8 +336,8 @@ def test_select_hot_topic_cache_hit_uses_reserve_without_llm(fresh_db):
 
 
 def test_select_hot_topic_reserve_exhausted_regenerates(fresh_db):
-    from app.proactive.recall.hot_topic import select_hot_topic_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.recall.hot_topic import select_hot_topic_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     now = datetime(2026, 7, 1, 12, 0)
     _create_account("acc-ht-exhaust")
@@ -376,9 +376,9 @@ def test_select_hot_topic_reserve_exhausted_regenerates(fresh_db):
 
 # --------------------------------------------------------------------------- planning 接入
 def test_plan_hot_topic_fallback_when_topic_and_content_empty(fresh_db):
-    from app.proactive.orchestration.planning import plan_reactivation_candidate
-    from app.proactive.store.candidates import get_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-ht")
     _create_route("acc-plan-ht")
@@ -418,8 +418,8 @@ def test_plan_hot_topic_fallback_when_topic_and_content_empty(fresh_db):
 
 
 def test_plan_hot_topic_not_run_when_topic_wins(fresh_db):
-    from app.proactive.orchestration.planning import plan_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.orchestration.planning import plan_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _create_account("acc-plan-ht2")
     _create_route("acc-plan-ht2")

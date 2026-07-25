@@ -79,7 +79,7 @@ def test_different_accounts_can_get_different_missions(fresh_db):
 # ---------------------------------------------------------------------------
 
 def test_campaign_attribution_mission_id_takes_priority(fresh_db):
-    from app.db.campaign import write_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import write_campaign_attribution
 
     account_id = "acc-campaign-mission"
     _create_account(account_id)

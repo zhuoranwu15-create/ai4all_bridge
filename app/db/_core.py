@@ -1858,7 +1858,8 @@ def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
 
     刻意**无 account_id**：存的是"所有账号只读共享的无主候选池"（如近 24h 热点主题），
     不是任何账号的数据，因此不受"按 account_id 隔离"这条核心不变量约束——这是该不变量
-    唯一的、显式的例外（详见 app/proactive/store/global_candidates.py 模块说明）。池→账号
+    唯一的、显式的例外（详见
+    app/products/zhaoxi/proactive/store/global_candidates.py 模块说明）。池→账号
     的绑定发生在**选择层**：每账号 LLM 打分选中 top1 时才盖上 account_id，写进该账号自己的
     reactivation 候选（proactive_account_state.metadata）。本表本身绝不写任何账号维度数据。
 
@@ -1891,7 +1892,8 @@ def _migration_0012_agent_mission(conn: Connection) -> None:
     """使命子系统：账号级使命分配 + 记录的瞬间（agent_mission_and_orchestration_design.md §3）。
 
     account_mission 一账号一行，mission_id 只写一次——不可更改性由 app 层"没有 update
-    函数"保证（见 app/db/mission.py），DB 层只用 INSERT ... ON CONFLICT(account_id)
+    函数"保证（见 products/zhaoxi/infrastructure/persistence/mission.py），DB 层只用
+    INSERT ... ON CONFLICT(account_id)
     DO NOTHING 兜底防覆盖，不是唯一防线。
 
     mission_moments 是追加型内容集合，进度 = COUNT(*)（派生量，不另建计数字段，避免

@@ -41,7 +41,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 os.chdir(_PROJECT_ROOT)
 
-from app.proactive.contract.common import _select_route  # noqa: E402
+from app.products.zhaoxi.proactive.contract.common import _select_route  # noqa: E402
 from app.platform.gateways import openclaw as og  # noqa: E402
 from app.platform.gateways.openclaw import OpenClawGatewayError, OpenClawRateLimited  # noqa: E402
 

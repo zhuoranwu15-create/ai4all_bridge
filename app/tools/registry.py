@@ -9,7 +9,7 @@
   "静默漂移"变成启动期可见的崩溃）。
 
 handler 用"模块路径 + 函数名"惰性引用，按需 import，避免 handler 模块（依赖 app.db /
-app.proactive 等）在工具包加载时引入循环导入——这也是 executor 历史上惰性 import 的原因。
+app.products.zhaoxi.proactive 等）在工具包加载时引入循环导入——这也是 executor 历史上惰性 import 的原因。
 """
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -64,26 +64,26 @@ _META: Dict[str, tuple] = {
         "app.tools.read_handlers", "handle_read",
         CALL_PLAIN, None, _DEFAULT_ALWAYS,
     ),
-    "create_reminder": ("app.tools.reminder_handlers", "handle_create_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
-    "create_commitment": ("app.tools.commitment_handlers", "handle_create_commitment", CALL_PLAIN, None, _DEFAULT_ALWAYS),
-    "list_reminders": ("app.tools.reminder_handlers", "handle_list_reminders", CALL_PLAIN, None, _DEFAULT_ALWAYS),
-    "cancel_reminder": ("app.tools.reminder_handlers", "handle_cancel_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
-    "update_reminder": ("app.tools.reminder_handlers", "handle_update_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
-    "session_status": ("app.tools.session_status_handlers", "handle_session_status", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "create_reminder": ("app.products.zhaoxi.tools.reminder_handlers", "handle_create_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "create_commitment": ("app.products.zhaoxi.tools.commitment_handlers", "handle_create_commitment", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "list_reminders": ("app.products.zhaoxi.tools.reminder_handlers", "handle_list_reminders", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "cancel_reminder": ("app.products.zhaoxi.tools.reminder_handlers", "handle_cancel_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "update_reminder": ("app.products.zhaoxi.tools.reminder_handlers", "handle_update_reminder", CALL_PLAIN, None, _DEFAULT_ALWAYS),
+    "session_status": ("app.products.zhaoxi.tools.session_status_handlers", "handle_session_status", CALL_PLAIN, None, _DEFAULT_ALWAYS),
     "mission_status": (
-        "app.tools.mission_handlers", "handle_mission_status",
+        "app.products.zhaoxi.tools.mission_handlers", "handle_mission_status",
         CALL_PLAIN, None, "has_mission",
     ),
     "record_mission_moment": (
-        "app.tools.mission_handlers", "handle_record_mission_moment",
+        "app.products.zhaoxi.tools.mission_handlers", "handle_record_mission_moment",
         CALL_INVOCATION, None, "has_mission",
     ),
     "get_proactive_message_settings": (
-        "app.tools.proactive_settings_handlers", "handle_get_proactive_message_settings",
+        "app.products.zhaoxi.tools.proactive_settings_handlers", "handle_get_proactive_message_settings",
         CALL_PLAIN, None, _DEFAULT_ALWAYS,
     ),
     "update_proactive_message_settings": (
-        "app.tools.proactive_settings_handlers", "handle_update_proactive_message_settings",
+        "app.products.zhaoxi.tools.proactive_settings_handlers", "handle_update_proactive_message_settings",
         CALL_INVOCATION, None, _DEFAULT_ALWAYS,
     ),
     "web_search": (
@@ -99,19 +99,19 @@ _META: Dict[str, tuple] = {
         CALL_PLAIN, "tdai_search_enabled", "tdai_search_enabled",
     ),
     "send_content_invitation_titles": (
-        "app.tools.content_invitation_handlers", "handle_send_content_invitation_titles",
+        "app.products.zhaoxi.tools.content_invitation_handlers", "handle_send_content_invitation_titles",
         CALL_INVOCATION, None, "content_invitation_response_enabled",
     ),
     "record_content_invitation_feedback": (
-        "app.tools.content_invitation_handlers", "handle_record_content_invitation_feedback",
+        "app.products.zhaoxi.tools.content_invitation_handlers", "handle_record_content_invitation_feedback",
         CALL_INVOCATION, None, "content_invitation_response_enabled",
     ),
     "create_content_invitation_candidate": (
-        "app.tools.content_invitation_handlers", "handle_create_content_invitation_candidate",
+        "app.products.zhaoxi.tools.content_invitation_handlers", "handle_create_content_invitation_candidate",
         CALL_PLAIN, None, _DEFAULT_NEVER,
     ),
     "skip_content_invitation": (
-        "app.tools.content_invitation_handlers", "handle_skip_content_invitation",
+        "app.products.zhaoxi.tools.content_invitation_handlers", "handle_skip_content_invitation",
         CALL_PLAIN, None, _DEFAULT_NEVER,
     ),
 }

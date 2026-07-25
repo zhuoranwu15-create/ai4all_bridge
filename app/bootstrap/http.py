@@ -5,9 +5,10 @@ from fastapi import FastAPI
 
 
 def install_shared_routes(app: FastAPI) -> None:
-    """挂载所有部署角色都需要的共享路由。"""
+    """挂载所有部署角色都需要的健康检查与朝夕接入路由。"""
 
-    from app.routers import bridge, health
+    from app.products.zhaoxi.api import bridge
+    from app.routers import health
 
     app.include_router(health.router)
     app.include_router(bridge.router)
@@ -20,17 +21,17 @@ def install_central_routes(app: FastAPI) -> None:
         install_admin_routes,
         install_public_routes,
     )
-    from app.routers import admin_accounts
-    from app.routers import admin_campaigns
-    from app.routers import admin_dreaming
     from app.routers import admin_llm
-    from app.routers import admin_moderation
     from app.routers import admin_ops
-    from app.routers import admin_proactive
-    from app.routers import admin_security
     from app.routers import app_api
-    from app.routers import debug
     from app.routers import web
+    from app.products.zhaoxi.api import admin_accounts
+    from app.products.zhaoxi.api import admin_campaigns
+    from app.products.zhaoxi.api import admin_dreaming
+    from app.products.zhaoxi.api import admin_moderation
+    from app.products.zhaoxi.api import admin_proactive
+    from app.products.zhaoxi.api import admin_security
+    from app.products.zhaoxi.api import debug
 
     app.include_router(web.router)
     app.include_router(app_api.router)

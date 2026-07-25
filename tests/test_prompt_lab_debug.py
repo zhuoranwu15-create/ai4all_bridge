@@ -76,7 +76,7 @@ def test_prompt_lab_build_and_replay_are_side_effect_free(client, fresh_db):
     after_build_messages = list_session_messages(session_id=session["id"], limit=100)
     assert after_build_messages == before_messages
 
-    with patch("app.routers.debug.generate_completion", return_value="edited prompt reply") as mocked_completion:
+    with patch("app.products.zhaoxi.api.debug.generate_completion", return_value="edited prompt reply") as mocked_completion:
         res = client.post(
             f"/debug/prompt-lab/accounts/{account_id}/replay",
             json={

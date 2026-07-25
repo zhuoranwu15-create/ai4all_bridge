@@ -2550,7 +2550,7 @@ def create_ai4all_account_for_user(
     # 营销活码归因：校验 → 写快照 → 计数 → 应用强制 SOUL 人设。与 onboarding 调试建号
     # 共用 apply_campaign_code_attribution（后者 increment_usage=False），确保调试忠实复现
     # 真实注册效果。校验失败/异常 fail-open，不阻断注册（campaign_codes_technical_design.md §3）。
-    from app.db.campaign import apply_campaign_code_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import apply_campaign_code_attribution
     apply_campaign_code_attribution(
         account_id=account_id,
         campaign_code=campaign_code,
@@ -2876,7 +2876,11 @@ def create_binding_intent(
     channel: str = "openclaw-weixin",
     node_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    from app.db.proactive import pick_node, resolve_node_for_account, set_account_assigned_node
+    from app.platform.gateways.persistence import (
+        pick_node,
+        resolve_node_for_account,
+        set_account_assigned_node,
+    )
     cleaned_channel = _clean_text(channel) or "openclaw-weixin"
     binding_intent_id = _new_id("bind")
     openclaw_login_session_key = binding_intent_id

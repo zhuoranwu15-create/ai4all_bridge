@@ -563,7 +563,7 @@ def list_recent_reactivation_outbound_messages(
     拉活分类已合并入 companion_followup / content_invitation；拉活来源统一由
     metadata_json.reactivation=true 标识（与 category 解耦），dedupe 据此识别。
     """
-    from app.db.proactive import _decode_outbound_message
+    from app.products.zhaoxi.infrastructure.persistence.proactive import _decode_outbound_message
     with connect() as conn:
         rows = conn.execute(
             """
@@ -620,7 +620,7 @@ def list_reactivation_outbound_messages_admin(
     Joins with accounts to include display_name. Newest first.
     拉活来源统一以 metadata_json.reactivation=true 标识（分类已合并）。
     """
-    from app.db.proactive import _decode_outbound_message
+    from app.products.zhaoxi.infrastructure.persistence.proactive import _decode_outbound_message
     params: List[Any] = []
     account_clause = ""
     if account_id:
@@ -841,7 +841,7 @@ def update_session_rolling_summary(
 
 
 def clear_session_messages(*, session_id: int) -> int:
-    from app.db.moderation import _delete_content_moderation_tasks_where
+    from app.platform.moderation.persistence import _delete_content_moderation_tasks_where
     with connect() as conn:
         _delete_content_moderation_tasks_where(
             conn,
@@ -853,7 +853,7 @@ def clear_session_messages(*, session_id: int) -> int:
 
 
 def clear_all_messages_for_account(*, account_id: str) -> int:
-    from app.db.moderation import _delete_content_moderation_tasks_where
+    from app.platform.moderation.persistence import _delete_content_moderation_tasks_where
     with connect() as conn:
         _delete_content_moderation_tasks_where(
             conn,

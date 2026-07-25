@@ -3,14 +3,14 @@ from datetime import datetime
 
 import pytest
 
-from app.proactive.preferences import WEEKDAYS
+from app.products.zhaoxi.proactive.preferences import WEEKDAYS
 
 
 from tests.factories import create_account as _create_account
 
 
 def _evaluate(account_id, category, now):
-    from app.proactive.delivery.policy import OutboundCategory, evaluate_outbound_policy
+    from app.products.zhaoxi.proactive.delivery.policy import OutboundCategory, evaluate_outbound_policy
 
     return evaluate_outbound_policy(
         account_id=account_id,
@@ -29,7 +29,7 @@ SATURDAY_LABEL = WEEKDAYS[(FRIDAY_10.weekday() + 1) % 7]
 
 
 def test_inside_window_allows(fresh_db):
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-win1")
     apply_proactive_message_settings_patch(
@@ -42,7 +42,7 @@ def test_inside_window_allows(fresh_db):
 
 
 def test_outside_window_time_blocks(fresh_db):
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-win2")
     apply_proactive_message_settings_patch(
@@ -56,7 +56,7 @@ def test_outside_window_time_blocks(fresh_db):
 
 
 def test_outside_window_day_blocks(fresh_db):
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-win3")
     apply_proactive_message_settings_patch(
@@ -76,7 +76,7 @@ def test_empty_windows_no_constraint(fresh_db):
 
 
 def test_cross_midnight_window_rejected(fresh_db):
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-win5")
     with pytest.raises(ValueError):
@@ -88,7 +88,7 @@ def test_cross_midnight_window_rejected(fresh_db):
 
 
 def test_invalid_weekday_rejected(fresh_db):
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-win6")
     with pytest.raises(ValueError):
@@ -101,7 +101,7 @@ def test_invalid_weekday_rejected(fresh_db):
 
 def test_scheduler_snaps_to_window_start(fresh_db):
     """固定 slots(12:15/18:15/21:05)都不在 13:00-14:00 内 → snap 到窗口起点。"""
-    from app.proactive.slots import next_reactivation_slot
+    from app.products.zhaoxi.proactive.slots import next_reactivation_slot
 
     windows = [{"days": [FRIDAY_LABEL], "start": "13:00", "end": "14:00"}]
     result = next_reactivation_slot(now=FRIDAY_10, allowed_windows=windows)
@@ -111,7 +111,7 @@ def test_scheduler_snaps_to_window_start(fresh_db):
 
 def test_scheduler_picks_slot_inside_window(fresh_db):
     """窗口 12:00-13:00 含固定 slot 12:15 → 直接用该 slot。"""
-    from app.proactive.slots import next_reactivation_slot
+    from app.products.zhaoxi.proactive.slots import next_reactivation_slot
 
     windows = [{"days": [FRIDAY_LABEL], "start": "12:00", "end": "13:00"}]
     result = next_reactivation_slot(now=FRIDAY_10, allowed_windows=windows)
@@ -120,7 +120,7 @@ def test_scheduler_picks_slot_inside_window(fresh_db):
 
 def test_scheduler_no_windows_unchanged(fresh_db):
     """无窗口时行为不变：取当天首个 >=now 的 slot。"""
-    from app.proactive.slots import next_reactivation_slot
+    from app.products.zhaoxi.proactive.slots import next_reactivation_slot
 
     result = next_reactivation_slot(now=FRIDAY_10, allowed_windows=[])
     assert result["scheduled_at"].endswith("12:15:00")

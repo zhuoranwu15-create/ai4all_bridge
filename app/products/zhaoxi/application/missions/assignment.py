@@ -2,13 +2,13 @@
 
 分配时机只有两处：① onboarding 完成时（新账号，见 app/turn_service.py）；② 存量账号
 一次性回填（scripts/backfill_account_missions.py）。两处都只应调用
-assign_mission_if_absent，不直接操作 app.db.mission / app.products.zhaoxi.infrastructure.profiles 的底层写入。
+assign_mission_if_absent，不直接操作 app.products.zhaoxi.infrastructure.persistence.mission / app.products.zhaoxi.infrastructure.profiles 的底层写入。
 """
 import hashlib
 import logging
 
-from app.db.campaign import get_campaign_attribution
-from app.db.mission import assign_mission, get_account_mission
+from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
+from app.products.zhaoxi.infrastructure.persistence.mission import assign_mission, get_account_mission
 from app.products.zhaoxi.domain.missions.registry import get_mission_template, list_mission_templates
 from app.products.zhaoxi.infrastructure.profiles import write_context_file
 

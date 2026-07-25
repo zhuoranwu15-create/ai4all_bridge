@@ -15,7 +15,7 @@ import httpx
 
 from app.platform.gateways import openclaw as openclaw_gateway
 from app.config import settings
-from app.db import get_access_node
+from app.platform.gateways.persistence import get_access_node
 from app.platform.gateways.openclaw import DEFAULT_WEIXIN_CHANNEL, OpenClawGatewayError
 
 logger = logging.getLogger("ai4all.node_gateway")

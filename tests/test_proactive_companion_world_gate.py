@@ -60,14 +60,14 @@ def test_real_weixin_primary_wins_even_when_app_only_flags_are_on(fresh_db):
 
     assert human_level_proactive_allowed(primary) is True
     assert human_level_proactive_allowed(secondary) is False
-    from app.proactive.contract.common import _select_route
+    from app.products.zhaoxi.proactive.contract.common import _select_route
 
     route = _select_route(primary)
     assert route is not None and route["channel"] == "openclaw-weixin"
 
 
 def test_planning_blocks_before_human_level_generators(fresh_db):
-    from app.proactive.orchestration.planning import (
+    from app.products.zhaoxi.proactive.orchestration.planning import (
         plan_new_user_reactivation_candidate,
         plan_reactivation_candidate,
     )
@@ -101,9 +101,9 @@ def test_planning_blocks_before_human_level_generators(fresh_db):
 
 
 def test_reactivation_delivery_blocks_old_candidate_and_clears_it(fresh_db):
-    from app.proactive.delivery.dispatch import dispatch_reactivation_candidate
-    from app.proactive.store.account_state import ensure_account_state
-    from app.proactive.store.candidates import (
+    from app.products.zhaoxi.proactive.delivery.dispatch import dispatch_reactivation_candidate
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.candidates import (
         get_reactivation_candidate,
         upsert_reactivation_candidate,
     )
@@ -134,11 +134,11 @@ def test_reactivation_delivery_blocks_old_candidate_and_clears_it(fresh_db):
 
 
 def test_account_check_has_planning_and_delivery_defense(fresh_db, monkeypatch):
-    from app.proactive.delivery.account_check import (
+    from app.products.zhaoxi.proactive.delivery.account_check import (
         decide_account_check_action,
         execute_account_check_decision,
     )
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _, _primary, secondary = _resident_pair(
         "19950004005", legacy_primary=True
@@ -163,7 +163,7 @@ def test_account_check_has_planning_and_delivery_defense(fresh_db, monkeypatch):
     assert decision["reason"] == HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON
 
     monkeypatch.setattr(
-        "app.proactive.delivery.account_check.dispatch_proactive_text",
+        "app.products.zhaoxi.proactive.delivery.account_check.dispatch_proactive_text",
         lambda **kwargs: (_ for _ in ()).throw(
             AssertionError("delivery defense must run before outbound")
         ),
@@ -188,9 +188,9 @@ def test_account_check_has_planning_and_delivery_defense(fresh_db, monkeypatch):
 
 
 def test_per_resident_reminder_and_commitment_are_not_gated(fresh_db, monkeypatch):
-    from app.proactive.obligations.commitments import dispatch_commitment
-    from app.proactive.obligations.reminders import dispatch_reminder
-    from app.proactive.store.account_state import ensure_account_state
+    from app.products.zhaoxi.proactive.obligations.commitments import dispatch_commitment
+    from app.products.zhaoxi.proactive.obligations.reminders import dispatch_reminder
+    from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 
     _, _primary, secondary = _resident_pair(
         "19950004006", legacy_primary=True
@@ -219,11 +219,11 @@ def test_per_resident_reminder_and_commitment_are_not_gated(fresh_db, monkeypatc
     reminder_calls = []
     commitment_calls = []
     monkeypatch.setattr(
-        "app.proactive.obligations.reminders.dispatch_proactive_text",
+        "app.products.zhaoxi.proactive.obligations.reminders.dispatch_proactive_text",
         lambda **kwargs: reminder_calls.append(kwargs) or {"status": "sent"},
     )
     monkeypatch.setattr(
-        "app.proactive.obligations.commitments.dispatch_proactive_text",
+        "app.products.zhaoxi.proactive.obligations.commitments.dispatch_proactive_text",
         lambda **kwargs: commitment_calls.append(kwargs) or {"status": "sent"},
     )
 

@@ -31,7 +31,7 @@ def _seed_outbound(account_id, category, *, created_at, quota_date, i, metadata=
 
 
 def _evaluate(account_id, category, now):
-    from app.proactive.delivery.policy import OutboundCategory, evaluate_outbound_policy
+    from app.products.zhaoxi.proactive.delivery.policy import OutboundCategory, evaluate_outbound_policy
 
     return evaluate_outbound_policy(
         account_id=account_id,
@@ -58,7 +58,7 @@ def test_daily_limit_blocks_without_override(fresh_db):
 
 def test_user_daily_override_widens(fresh_db):
     """用户把 companion 每日上限放宽到 3：已发 2 条仍放行。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-d1")
     for i in range(2):
@@ -74,7 +74,7 @@ def test_user_daily_override_widens(fresh_db):
 
 def test_user_daily_override_tightens(fresh_db):
     """用户把 content_invitation 每日上限收紧到 1：已发 1 条 → 拦，reason=用户频次。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-d2")
     _seed_outbound("acc-d2", "content_invitation", created_at=f"{TODAY} 09:00:00", quota_date=TODAY, i=1)
@@ -90,7 +90,7 @@ def test_user_daily_override_tightens(fresh_db):
 
 def test_daily_override_clamped_to_hard_cap(fresh_db):
     """用户设 99/天 → 封顶到系统硬上限 3：已发 3 条即拦。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-d3")
     for i in range(3):
@@ -109,7 +109,7 @@ def test_daily_override_clamped_to_hard_cap(fresh_db):
 
 def test_weekly_limit_blocks(fresh_db):
     """用户 companion 每周上限=2：近 7 天已发 2 条 → 拦。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-w1")
     # quota_date 用过去日期，避免触发当日日上限；created_at 落在 7 天窗口内
@@ -128,7 +128,7 @@ def test_weekly_limit_blocks(fresh_db):
 
 def test_weekly_limit_content_invitation(fresh_db):
     """content_invitation 每周计数（拉活内容唤回已并入本分类）：近 7 天 2 条 → 第 3 条被周上限拦。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-w2")
     _seed_outbound("acc-w2", "content_invitation", created_at=WITHIN_WEEK, quota_date="2026-05-29", i=1)
@@ -145,7 +145,7 @@ def test_weekly_limit_content_invitation(fresh_db):
 
 def test_no_weekly_limit_when_unset(fresh_db):
     """未设每周上限 → 不做周判断（已发多条仍只受日上限约束）。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-w3")
     for i in range(5):
@@ -163,7 +163,7 @@ def test_no_weekly_limit_when_unset(fresh_db):
 def test_total_per_day_blocks_across_categories(fresh_db):
     """total_per_day=2：companion 1条 + reactivation 1条 → 第3条被总量拦，提醒不计入。
     分类上限放宽到3，确保是总量拦截而非分类上限先触发。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-t1")
     _seed_outbound("acc-t1", "companion_followup", created_at=f"{TODAY} 08:00:00", quota_date=TODAY, i=1)
@@ -191,7 +191,7 @@ def test_total_per_day_blocks_across_categories(fresh_db):
 
 def test_total_per_day_allows_when_under_limit(fresh_db):
     """total_per_day=3：今日只有1条主动消息 → 放行。"""
-    from app.proactive.preferences import apply_proactive_message_settings_patch
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     _create_account("acc-t2")
     _seed_outbound("acc-t2", "companion_followup", created_at=f"{TODAY} 08:00:00", quota_date=TODAY, i=1)

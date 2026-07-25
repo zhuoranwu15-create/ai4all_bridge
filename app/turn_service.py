@@ -53,21 +53,21 @@ from app.platform.auth.identity import ResolvedIdentity, identity_response_metad
 from app.platform.media.image_understanding import describe_image
 from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
-from app.db.campaign import get_campaign_attribution
+from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 from app.products.zhaoxi.application.missions.assignment import assign_mission_if_absent
 from app.products.zhaoxi.application.missions.state import resolve_account_mission
 from app.agent_runtime.llm.providers import LLMProviderConfig
 from app.products.zhaoxi.application.memory.writer import write_memory
 from app.products.zhaoxi.application.relationship import maybe_update_relationship_state_after_turn
-from app.moderation.sensitive_words import check_sync_guard
-from app.moderation.service import (
+from app.platform.moderation.sensitive_words import check_sync_guard
+from app.platform.moderation.service import (
     create_sync_block_task,
     enqueue_message_for_moderation,
     screen_inbound_message_sync,
 )
 from app.agent_runtime.context.window import compute_floor_count, trim_history_rows
 from app.prompt_builder import ContextBlock, PromptBuilder, extract_section
-from app.proactive.store.account_state import ensure_account_state
+from app.products.zhaoxi.proactive.store.account_state import ensure_account_state
 from app.platform.quota.rate_limiter import rate_limiter
 from app.schemas import MediaPayload, OpenClawTurnRequest, OpenClawTurnResponse
 from app.tools import get_default_tools, iter_specs
@@ -2079,7 +2079,8 @@ def _finalize_turn(
         and text
         and text not in _SPECIAL_COMMANDS
     )
-    # commitment 抽取已改为工具调用（create_commitment，见 app/tools/commitment_handlers.py），
+    # commitment 抽取已改为工具调用（create_commitment，见
+    # app/products/zhaoxi/tools/commitment_handlers.py），
     # 不再无条件跑隐藏分类器；extract_commitment_from_turn 保留供参考/单测，不在此处调度。
     # after-turn 后台工作统一由 _dispatch_after_turn（+_AFTER_TURN_HOOKS 注册表）派发，
     # _schedule_on_loop 是唯一挂载口（含 shutdown 竞态防护）。

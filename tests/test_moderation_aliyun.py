@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app.moderation.models import MachineReviewResult
+from app.platform.moderation.models import MachineReviewResult
 
 
 def _session(account_id: str):
@@ -49,11 +49,11 @@ def _fake_response(data, *, status_code=200, code=200, message="OK"):
 def test_aliyun_review_parses_hit_and_maps_category(fresh_db):
     fresh_db.aliyun_access_key_id = "ak"
     fresh_db.aliyun_access_key_secret = "sk"
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     data = {"riskLevel": "high", "result": [{"label": "pornographic_adult", "riskWords": "敏感片段"}]}
     client = SimpleNamespace(text_moderation_plus=lambda req: _fake_response(data))
-    with patch("app.moderation.aliyun_review._build_client", return_value=client):
+    with patch("app.platform.moderation.aliyun_review._build_client", return_value=client):
         result = aliyun_review.review_text_with_aliyun(account_id="a", text="x", data_id="d")
 
     assert result.reviewer_type == "cloud"
@@ -66,11 +66,11 @@ def test_aliyun_review_parses_hit_and_maps_category(fresh_db):
 def test_aliyun_review_pass_when_none(fresh_db):
     fresh_db.aliyun_access_key_id = "ak"
     fresh_db.aliyun_access_key_secret = "sk"
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     data = {"riskLevel": "none", "result": []}
     client = SimpleNamespace(text_moderation_plus=lambda req: _fake_response(data))
-    with patch("app.moderation.aliyun_review._build_client", return_value=client):
+    with patch("app.platform.moderation.aliyun_review._build_client", return_value=client):
         result = aliyun_review.review_text_with_aliyun(account_id="a", text="x", data_id="d")
 
     assert result.level == "pass"
@@ -83,14 +83,14 @@ def test_aliyun_review_treats_nonlabel_as_pass(fresh_db):
 
     fresh_db.aliyun_access_key_id = "ak"
     fresh_db.aliyun_access_key_secret = "sk"
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     data = {
         "riskLevel": "none",
         "result": [{"label": "nonLabel", "description": "未检测出风险"}],
     }
     client = SimpleNamespace(text_moderation_plus=lambda req: _fake_response(data))
-    with patch("app.moderation.aliyun_review._build_client", return_value=client):
+    with patch("app.platform.moderation.aliyun_review._build_client", return_value=client):
         result = aliyun_review.review_text_with_aliyun(account_id="a", text="今天天气不错", data_id="d")
 
     assert result.level == "pass"
@@ -101,11 +101,11 @@ def test_aliyun_review_treats_nonlabel_as_pass(fresh_db):
 def test_aliyun_review_redacts_account_id_in_raw(fresh_db):
     fresh_db.aliyun_access_key_id = "ak"
     fresh_db.aliyun_access_key_secret = "sk"
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     data = {"riskLevel": "low", "accountId": "secret-account", "result": [{"label": "inappropriate_profanity"}]}
     client = SimpleNamespace(text_moderation_plus=lambda req: _fake_response(data))
-    with patch("app.moderation.aliyun_review._build_client", return_value=client):
+    with patch("app.platform.moderation.aliyun_review._build_client", return_value=client):
         result = aliyun_review.review_text_with_aliyun(account_id="a", text="x", data_id="d")
 
     assert result.raw_result["data"]["accountId"] == "<redacted>"
@@ -115,7 +115,7 @@ def test_aliyun_review_redacts_account_id_in_raw(fresh_db):
 def test_aliyun_review_not_configured_returns_error(fresh_db):
     fresh_db.aliyun_access_key_id = ""
     fresh_db.aliyun_access_key_secret = ""
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     result = aliyun_review.review_text_with_aliyun(account_id="a", text="x", data_id="d")
     assert result.level == "error"
@@ -125,13 +125,13 @@ def test_aliyun_review_not_configured_returns_error(fresh_db):
 def test_aliyun_review_request_exception_returns_error(fresh_db):
     fresh_db.aliyun_access_key_id = "ak"
     fresh_db.aliyun_access_key_secret = "sk"
-    from app.moderation import aliyun_review
+    from app.platform.moderation import aliyun_review
 
     def _boom(req):
         raise TimeoutError("read timeout")
 
     client = SimpleNamespace(text_moderation_plus=_boom)
-    with patch("app.moderation.aliyun_review._build_client", return_value=client):
+    with patch("app.platform.moderation.aliyun_review._build_client", return_value=client):
         result = aliyun_review.review_text_with_aliyun(account_id="a", text="x", data_id="d")
 
     assert result.level == "error"
@@ -154,10 +154,10 @@ def _cloud(level="pass", categories=None, error=None):
 def test_screen_pass_creates_machine_passed_task(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
     from app.db import list_content_moderation_results
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-pass", content="今天天气真不错呀")
-    with patch("app.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
+    with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-pass",
@@ -176,11 +176,11 @@ def test_screen_pass_creates_machine_passed_task(fresh_db):
 def test_screen_cloud_block_stops_reply_and_enters_review(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
     from app.db import get_content_moderation_task
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-block", content="一些命中云审核的内容")
     with patch(
-        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         return_value=_cloud("block", ["cloud:pornographic_adult", "cat:sexual_content"]),
     ):
         decision = screen_inbound_message_sync(
@@ -200,11 +200,11 @@ def test_screen_cloud_block_stops_reply_and_enters_review(fresh_db):
 
 def test_screen_cloud_error_degrades_to_local_pass(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-degrade", content="普通的一句闲聊内容")
     with patch(
-        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         return_value=_cloud("error", error="moderation_aliyun_request_failed"),
     ):
         decision = screen_inbound_message_sync(
@@ -222,11 +222,11 @@ def test_screen_cloud_error_degrades_to_local_pass(fresh_db):
 
 def test_screen_cloud_error_degrades_to_local_rule_hit(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-degrade-hit", content="请检查 MODERATION_TEST_REVIEW 这条")
     with patch(
-        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         return_value=_cloud("error", error="moderation_aliyun_request_failed"),
     ):
         decision = screen_inbound_message_sync(
@@ -244,10 +244,10 @@ def test_screen_cloud_error_degrades_to_local_rule_hit(fresh_db):
 
 def test_screen_is_idempotent(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-idem", content="同一条消息重复筛查")
-    with patch("app.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
+    with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
         first = screen_inbound_message_sync(
             message_db_id=mid, account_id="acc-idem", session_id=session["id"],
             content_kind="text", text="同一条消息重复筛查",
@@ -263,11 +263,11 @@ def test_screen_is_idempotent(fresh_db):
 def test_screen_disabled_falls_back_to_async_enqueue(fresh_db):
     fresh_db.moderation_aliyun_enabled = False
     from app.db import get_content_moderation_task_by_idempotency_key
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-async", content="阿里云关闭时应走异步路径")
     # 阿里云函数不应被调用
-    with patch("app.moderation.service.aliyun_review.review_text_with_aliyun", side_effect=AssertionError("should not call aliyun")):
+    with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", side_effect=AssertionError("should not call aliyun")):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-async",
@@ -286,11 +286,11 @@ def test_screen_disabled_falls_back_to_async_enqueue(fresh_db):
 
 def test_screen_account_isolation(fresh_db):
     fresh_db.moderation_aliyun_enabled = True
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     s1, m1 = _message(account_id="acc-x", content="账号X内容")
     s2, m2 = _message(account_id="acc-y", content="账号Y内容")
-    with patch("app.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
+    with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
         d1 = screen_inbound_message_sync(
             message_db_id=m1, account_id="acc-x", session_id=s1["id"], content_kind="text", text="账号X内容",
         )
@@ -312,11 +312,11 @@ def test_screen_image_skips_moderation_entirely(fresh_db):
 
     fresh_db.moderation_aliyun_enabled = True
     from app.db import get_content_moderation_task_by_idempotency_key, list_content_moderation_tasks
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-img", content="[图片]", message_type="image")
     with patch(
-        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         side_effect=AssertionError("image must not hit sync cloud text review"),
     ):
         decision = screen_inbound_message_sync(
@@ -341,7 +341,7 @@ def test_screen_image_skips_even_when_aliyun_disabled(fresh_db):
 
     fresh_db.moderation_aliyun_enabled = False
     from app.db import list_content_moderation_tasks
-    from app.moderation.service import screen_inbound_message_sync
+    from app.platform.moderation.service import screen_inbound_message_sync
 
     session, mid = _message(account_id="acc-img2", content="[图片]", message_type="image")
     decision = screen_inbound_message_sync(
@@ -369,7 +369,7 @@ _THRESHOLDS = dict(
 
 
 def test_monitor_consecutive_failures_triggers():
-    from app.moderation.aliyun_alerting import AliyunFailureMonitor
+    from app.platform.moderation.aliyun_alerting import AliyunFailureMonitor
 
     m = AliyunFailureMonitor()
     kw = {**_THRESHOLDS, "min_samples": 999}  # 排除失败率路径，仅看连续失败
@@ -380,7 +380,7 @@ def test_monitor_consecutive_failures_triggers():
 
 
 def test_monitor_success_resets_consecutive():
-    from app.moderation.aliyun_alerting import AliyunFailureMonitor
+    from app.platform.moderation.aliyun_alerting import AliyunFailureMonitor
 
     m = AliyunFailureMonitor()
     kw = {**_THRESHOLDS, "min_samples": 999}
@@ -393,7 +393,7 @@ def test_monitor_success_resets_consecutive():
 
 
 def test_monitor_failure_rate_triggers():
-    from app.moderation.aliyun_alerting import AliyunFailureMonitor
+    from app.platform.moderation.aliyun_alerting import AliyunFailureMonitor
 
     m = AliyunFailureMonitor()
     kw = {**_THRESHOLDS, "consecutive_threshold": 999}  # 排除连续失败路径
@@ -407,7 +407,7 @@ def test_monitor_failure_rate_triggers():
 
 
 def test_monitor_cooldown_suppresses_repeat():
-    from app.moderation.aliyun_alerting import AliyunFailureMonitor
+    from app.platform.moderation.aliyun_alerting import AliyunFailureMonitor
 
     m = AliyunFailureMonitor()
     kw = {**_THRESHOLDS, "min_samples": 999}
@@ -421,7 +421,7 @@ def test_monitor_cooldown_suppresses_repeat():
 
 
 def test_monitor_window_prunes_old_failures():
-    from app.moderation.aliyun_alerting import AliyunFailureMonitor
+    from app.platform.moderation.aliyun_alerting import AliyunFailureMonitor
 
     m = AliyunFailureMonitor()
     kw = {**_THRESHOLDS, "consecutive_threshold": 999, "window_seconds": 100}
@@ -434,7 +434,7 @@ def test_monitor_window_prunes_old_failures():
 
 
 def test_record_outcome_dispatches_when_webhook_set(fresh_db):
-    from app.moderation import aliyun_alerting
+    from app.platform.moderation import aliyun_alerting
 
     fresh_db.feishu_alert_webhook_url = "https://example.com/open-apis/bot/v2/hook/abc"
     fresh_db.moderation_aliyun_alert_min_samples = 999  # 仅连续失败路径
@@ -451,7 +451,7 @@ def test_record_outcome_dispatches_when_webhook_set(fresh_db):
 
 
 def test_record_outcome_no_dispatch_without_webhook(fresh_db):
-    from app.moderation import aliyun_alerting
+    from app.platform.moderation import aliyun_alerting
 
     fresh_db.feishu_alert_webhook_url = ""
     fresh_db.moderation_aliyun_alert_min_samples = 999
@@ -466,7 +466,7 @@ def test_record_outcome_no_dispatch_without_webhook(fresh_db):
 
 
 def test_record_outcome_disabled_skips(fresh_db):
-    from app.moderation import aliyun_alerting
+    from app.platform.moderation import aliyun_alerting
 
     fresh_db.feishu_alert_webhook_url = "https://example.com/open-apis/bot/v2/hook/abc"
     fresh_db.moderation_aliyun_alert_enabled = False

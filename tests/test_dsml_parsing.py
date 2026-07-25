@@ -75,7 +75,7 @@ def _make_ctx(account_id="dsml-acct-1"):
 
 def test_create_reminder_accepts_title_alias(client, fresh_db):
     _setup_account("dsml-acct-1")
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     ctx = _make_ctx()
     result = handle_create_reminder(
         {"title": "给父母打电话", "time": "2026-06-06 20:00:00", "repeat": "weekly:5"},
@@ -87,7 +87,7 @@ def test_create_reminder_accepts_title_alias(client, fresh_db):
 
 def test_create_reminder_canonical_names_still_work(client, fresh_db):
     _setup_account("dsml-acct-2")
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     ctx = _make_ctx("dsml-acct-2")
     result = handle_create_reminder(
         {"text": "喝水", "due_at": "2026-06-06 10:00:00"},
@@ -98,7 +98,7 @@ def test_create_reminder_canonical_names_still_work(client, fresh_db):
 
 def test_create_reminder_missing_text_returns_error(client, fresh_db):
     _setup_account("dsml-acct-3")
-    from app.tools.reminder_handlers import handle_create_reminder
+    from app.products.zhaoxi.tools.reminder_handlers import handle_create_reminder
     ctx = _make_ctx("dsml-acct-3")
     result = handle_create_reminder({"due_at": "2026-06-06 10:00:00"}, ctx)
     assert "error" in result

@@ -1,7 +1,7 @@
-"""app.db.mission：使命分配 + 记录的瞬间（agent_mission_and_orchestration_design.md §3/§8.1）。"""
+"""app.products.zhaoxi.infrastructure.persistence.mission：使命分配 + 记录的瞬间（agent_mission_and_orchestration_design.md §3/§8.1）。"""
 import pytest
 
-from app.db.mission import (
+from app.products.zhaoxi.infrastructure.persistence.mission import (
     assign_mission,
     count_mission_moments,
     get_account_mission,

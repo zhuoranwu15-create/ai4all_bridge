@@ -11,9 +11,9 @@ import pytest
 
 from tests.factories import create_account
 
-from app.proactive.fulfillment import FulfillmentResult
+from app.products.zhaoxi.proactive.fulfillment import FulfillmentResult
 
-_OBLIG = "app.proactive.obligations.reminders"
+_OBLIG = "app.products.zhaoxi.proactive.obligations.reminders"
 
 
 def _mk_dynamic_reminder(reminder_id, account_id, *, due_at, recur_rule="weekly:0,2,4"):
@@ -41,11 +41,11 @@ def _mk_dynamic_reminder(reminder_id, account_id, *, due_at, recur_rule="weekly:
 def test_forced_first_tool_choice_defaults_to_auto(fresh_db):
     """thinking 模型（deepseek-v4-pro）只接受 tool_choice='auto'，指定函数/required 会 400。
     默认 force_first 为空 → 履约首轮必须下发 'auto'，强制搜索改由提示词 + search_ok 校验保证。"""
-    from app.proactive.fulfillment.dynamic_reminder import _forced_first_tool_choice
+    from app.products.zhaoxi.proactive.fulfillment.dynamic_reminder import _forced_first_tool_choice
 
     tools = [{"function": {"name": "web_search"}}]
     fresh_db.dynamic_reminder_force_first_tool = ""
-    with patch("app.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
+    with patch("app.products.zhaoxi.proactive.fulfillment.dynamic_reminder.settings", fresh_db):
         assert _forced_first_tool_choice(tools) == "auto"
         # 显式配置某工具时才下发指定函数（供未来非 thinking provider）。
         fresh_db.dynamic_reminder_force_first_tool = "web_search"
@@ -156,7 +156,7 @@ def _dyn_settings(fresh_db):
 
 def _dispatch(reminder_id, *, now="2026-07-17 08:00:00"):
     from datetime import datetime
-    from app.proactive.obligations.reminders import dispatch_dynamic_reminder
+    from app.products.zhaoxi.proactive.obligations.reminders import dispatch_dynamic_reminder
 
     return dispatch_dynamic_reminder(
         reminder_id=reminder_id, now=datetime.strptime(now, "%Y-%m-%d %H:%M:%S")
@@ -194,7 +194,7 @@ def test_dispatch_remote_enqueued_then_reconcile(_dyn_settings, fresh_db):
         mark_outbound_message_sent,
         create_outbound_message,
     )
-    from app.proactive.obligations.reminders import reconcile_enqueued_reminder_content_runs
+    from app.products.zhaoxi.proactive.obligations.reminders import reconcile_enqueued_reminder_content_runs
 
     with patch("app.db.settings", fresh_db):
         create_account("acc-1")
@@ -274,7 +274,7 @@ def test_dispatch_fulfillment_failure_retries_then_advances(_dyn_settings, fresh
 
 
 def test_dispatch_disabled_scan_returns_empty(_dyn_settings, fresh_db):
-    from app.proactive.obligations.reminders import dispatch_due_dynamic_reminders
+    from app.products.zhaoxi.proactive.obligations.reminders import dispatch_due_dynamic_reminders
 
     fresh_db.dynamic_reminder_enabled = False
     with patch("app.db.settings", fresh_db):

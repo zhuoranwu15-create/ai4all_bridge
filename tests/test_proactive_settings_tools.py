@@ -14,7 +14,7 @@ def test_tools_registered_in_default_set():
 
 
 def test_get_handler_returns_defaults(fresh_db):
-    from app.tools.proactive_settings_handlers import handle_get_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_get_proactive_message_settings
 
     _create_account("acc-get")
     out = handle_get_proactive_message_settings({}, SimpleNamespace(account_id="acc-get"))
@@ -24,7 +24,7 @@ def test_get_handler_returns_defaults(fresh_db):
 
 
 def test_update_handler_disables_master(fresh_db):
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-upd")
     out = handle_update_proactive_message_settings(
@@ -40,7 +40,7 @@ def test_update_handler_disables_master(fresh_db):
 def test_update_handler_ignores_forged_account_id(fresh_db):
     """patch/args 里伪造 account_id 必须被忽略，只用 ctx.account_id。"""
     from app.db import get_proactive_message_settings_row
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-real")
     _create_account("acc-victim")
@@ -56,7 +56,7 @@ def test_update_handler_ignores_forged_account_id(fresh_db):
 
 def test_update_handler_rejects_unknown_fields(fresh_db):
     from app.db import get_proactive_message_settings_row
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-unknown")
     out = handle_update_proactive_message_settings(
@@ -69,7 +69,7 @@ def test_update_handler_rejects_unknown_fields(fresh_db):
 
 
 def test_update_handler_validation_error_returns_dict(fresh_db):
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-inval")
     out = handle_update_proactive_message_settings(
@@ -80,7 +80,7 @@ def test_update_handler_validation_error_returns_dict(fresh_db):
 
 
 def test_update_handler_rejects_zero_total_per_day(fresh_db):
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-zero")
     out = handle_update_proactive_message_settings(
@@ -91,7 +91,7 @@ def test_update_handler_rejects_zero_total_per_day(fresh_db):
 
 
 def test_update_handler_empty_patch(fresh_db):
-    from app.tools.proactive_settings_handlers import handle_update_proactive_message_settings
+    from app.products.zhaoxi.tools.proactive_settings_handlers import handle_update_proactive_message_settings
 
     _create_account("acc-empty")
     out = handle_update_proactive_message_settings(

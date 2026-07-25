@@ -14,8 +14,8 @@ from app.db import (
     set_universe_onboarding_state,
     upsert_channel_binding,
 )
-from app.proactive.contract.common import _select_route
-from app.proactive.delivery.outbound import dispatch_proactive_text
+from app.products.zhaoxi.proactive.contract.common import _select_route
+from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
 from tests.factories import make_resident_account
 
 
@@ -76,8 +76,8 @@ def test_select_route_pure_weixin_unchanged(fresh_db):
 
 def test_dispatch_proactive_text_fail_fast_for_web_never_sends(fresh_db):
     # web 渠道被拦在网关之前：send_weixin_text 零调用、不建 outbound 行。
-    with patch("app.proactive.delivery.outbound.send_weixin_text") as send_mock, patch(
-        "app.proactive.delivery.outbound.should_inline_dispatch_for_account",
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as send_mock, patch(
+        "app.products.zhaoxi.proactive.delivery.outbound.should_inline_dispatch_for_account",
         return_value=True,
     ):
         result = dispatch_proactive_text(
@@ -117,7 +117,7 @@ def test_native_world_route_delivers_to_inbox_without_weixin(fresh_db):
     fresh_db.companion_world_app_inbox_enabled = True
     route = _select_route(account_id)
     assert route is not None and route["channel"] == "native"
-    with patch("app.proactive.delivery.outbound.send_weixin_text") as send_mock:
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as send_mock:
         result = dispatch_proactive_text(
             account_id=account_id,
             channel=route["channel"],
@@ -172,8 +172,8 @@ def test_native_world_route_delivers_to_inbox_without_weixin(fresh_db):
 def test_dispatch_proactive_text_weixin_still_reaches_gateway(fresh_db):
     # 微信渠道不受护栏影响：仍走 send_proactive_text → send_weixin_text（行为等价现状）。
     _ensure_account("acc-guard-wx-dispatch")
-    with patch("app.proactive.delivery.outbound.send_weixin_text") as send_mock, patch(
-        "app.proactive.delivery.outbound.should_inline_dispatch_for_account",
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as send_mock, patch(
+        "app.products.zhaoxi.proactive.delivery.outbound.should_inline_dispatch_for_account",
         return_value=True,
     ):
         send_mock.return_value = {"messageId": "m-1"}

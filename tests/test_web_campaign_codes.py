@@ -1,7 +1,7 @@
 """Web 注册入口的营销活码归因集成测试（campaign_codes_technical_design.md §3/§6）。"""
 from unittest.mock import patch
 
-from app.db.campaign import create_campaign_code, get_campaign_code
+from app.products.zhaoxi.infrastructure.persistence.campaign import create_campaign_code, get_campaign_code
 
 
 def _get_verified_token(phone: str) -> str:
@@ -28,7 +28,7 @@ def _login(client, phone: str, campaign_code=None):
 
 
 def test_valid_campaign_code_creates_attribution(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     create_campaign_code(
         code="VALIDC",
@@ -64,7 +64,7 @@ def test_valid_campaign_code_immediately_applies_soul_preset(client, fresh_db):
 
 
 def test_expired_campaign_code_registration_still_succeeds_without_attribution(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     create_campaign_code(code="EXPC", campaign_key="a", expires_at="2000-01-01 00:00:00")
 
@@ -76,7 +76,7 @@ def test_expired_campaign_code_registration_still_succeeds_without_attribution(c
 
 
 def test_disabled_campaign_code_registration_still_succeeds_without_attribution(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     create_campaign_code(code="DISC", campaign_key="a", status="disabled")
 
@@ -88,7 +88,7 @@ def test_disabled_campaign_code_registration_still_succeeds_without_attribution(
 
 
 def test_unknown_campaign_code_registration_still_succeeds_without_attribution(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     res = _login(client, "13900000005", campaign_code="NOSUCH")
 
@@ -98,7 +98,7 @@ def test_unknown_campaign_code_registration_still_succeeds_without_attribution(c
 
 
 def test_no_campaign_code_registration_succeeds(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     res = _login(client, "13900000006")
 
@@ -114,7 +114,7 @@ def test_web_config_exposes_campaign_code_param(client, fresh_db):
 
 
 def test_register_and_binding_intent_applies_campaign_attribution(client, fresh_db):
-    from app.db.campaign import get_campaign_attribution
+    from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 
     create_campaign_code(code="RBIC", campaign_key="a", mission_id="mission_002")
     phone = "13900000007"

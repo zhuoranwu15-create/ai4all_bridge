@@ -5,7 +5,7 @@
 带无效/不存在活码时不阻断账号创建（fail-open，与生产 create_ai4all_account_for_user 一致）。
 """
 from app.db import get_account_onboarding_state, get_campaign_attribution
-from app.db.campaign import create_campaign_code, get_campaign_code
+from app.products.zhaoxi.infrastructure.persistence.campaign import create_campaign_code, get_campaign_code
 from app.products.zhaoxi.infrastructure.profiles import read_context_file
 
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}

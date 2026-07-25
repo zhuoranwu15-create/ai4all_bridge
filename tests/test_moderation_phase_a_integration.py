@@ -58,7 +58,7 @@ def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
     """入站云审核命中：不调用主模型，返回固定安全话术，入站任务进 needs_review。"""
 
     from app.db import list_content_moderation_tasks, list_recent_messages_for_account
-    from app.moderation.models import MachineReviewResult
+    from app.platform.moderation.models import MachineReviewResult
     from app.platform.quota.rate_limiter import RateLimiter
 
     fresh_db.moderation_aliyun_enabled = True
@@ -78,7 +78,7 @@ def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
         categories=["cloud:pornographic_adult", "cat:sexual_content"],
     )
     monkeypatch.setattr(
-        "app.moderation.service.aliyun_review.review_text_with_aliyun",
+        "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         lambda **_: cloud_block,
     )
 
@@ -103,10 +103,10 @@ def test_turn_inbound_aliyun_block_stops_reply(monkeypatch, fresh_db):
 
 def test_proactive_sync_guard_cancels_without_gateway_send(fresh_db):
     from app.db import list_content_moderation_tasks
-    from app.proactive.delivery.outbound import send_proactive_text
+    from app.products.zhaoxi.proactive.delivery.outbound import send_proactive_text
 
     _create_account("acc-proactive-mod")
-    with patch("app.proactive.delivery.outbound.send_weixin_text") as mock_send:
+    with patch("app.products.zhaoxi.proactive.delivery.outbound.send_weixin_text") as mock_send:
         row = send_proactive_text(
             account_id="acc-proactive-mod",
             channel="openclaw-weixin",

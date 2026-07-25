@@ -1,6 +1,7 @@
 """朝夕使命模板注册表（agent_mission_and_orchestration_design.md §2.2/§3.1）。
 
-模板是内核层（宪法层）的一部分：一经指派不可更改（见 app/db/mission.py 的不可变性
+模板是内核层（宪法层）的一部分：一经指派不可更改（见
+app/products/zhaoxi/infrastructure/persistence/mission.py 的不可变性
 保证）。新增模板只在此追加一条 + 落一份 prose 文件到本包 `templates/`，不改动
 已发布模板的 id/slug——编号三位数、零填充、永不复用、不因下线而回收（与 _MIGRATIONS
 版本号同一套纪律）。
