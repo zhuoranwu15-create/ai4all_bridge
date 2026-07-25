@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.db._backend import Connection, is_postgres
 from app.db._core import (
     APP_ACTIVE_SESSION_KEY,
@@ -796,15 +797,18 @@ def try_conversation_turn_lock(conversation_id: str) -> Iterator[bool]:
 def list_active_account_ids_for_user(
     *, platform_user_id: str, conn: Optional[Connection] = None
 ) -> List[str]:
-    """按既有最早 binding 顺序列出一个真人的全部 active legacy account。"""
+    """按既有最早 binding 顺序列出真人在朝夕的 active legacy account。"""
     with _tx(conn) as tx:
         rows = tx.execute(
             """
-            SELECT account_id FROM account_owner_bindings
-            WHERE platform_user_id = ? AND status = 'active'
-            ORDER BY created_at ASC, id ASC
+            SELECT b.account_id
+            FROM account_owner_bindings b
+            JOIN accounts a ON a.id = b.account_id
+            WHERE b.platform_user_id = ? AND b.status = 'active'
+              AND b.app_id = ? AND a.app_id = ? AND a.status = 'active'
+            ORDER BY b.created_at ASC, b.id ASC
             """,
-            (platform_user_id,),
+            (platform_user_id, ZHAOXI_APP_ID, ZHAOXI_APP_ID),
         ).fetchall()
     return [str(row["account_id"]) for row in rows]
 
@@ -846,7 +850,7 @@ def resolve_resident_proactive_scope(
 def list_human_proactive_account_ids_for_user(
     *, platform_user_id: str, conn: Optional[Connection] = None
 ) -> List[str]:
-    """列出真人级聚合范围：active owner bindings + 全部 resident runtime accounts。"""
+    """列出朝夕真人级聚合范围：active owner bindings + resident runtime accounts。"""
 
     with _tx(conn) as tx:
         rows = tx.execute(
@@ -854,7 +858,9 @@ def list_human_proactive_account_ids_for_user(
             SELECT account_id FROM (
                 SELECT b.account_id AS account_id
                 FROM account_owner_bindings b
+                JOIN accounts a ON a.id = b.account_id
                 WHERE b.platform_user_id = ? AND b.status = 'active'
+                  AND b.app_id = ? AND a.app_id = ? AND a.status = 'active'
                 UNION
                 SELECT r.runtime_account_id AS account_id
                 FROM universes u
@@ -864,7 +870,12 @@ def list_human_proactive_account_ids_for_user(
             ) owned
             ORDER BY account_id ASC
             """,
-            (platform_user_id, platform_user_id),
+            (
+                platform_user_id,
+                ZHAOXI_APP_ID,
+                ZHAOXI_APP_ID,
+                platform_user_id,
+            ),
         ).fetchall()
     return [str(row["account_id"]) for row in rows]
 
@@ -895,7 +906,7 @@ def get_human_proactive_owner_scope(
 def get_owner_last_inbound_at(
     *, platform_user_id: str, conn: Optional[Connection] = None
 ) -> Optional[str]:
-    """聚合 owner bindings 与全部 resident account 的最近真人入站时间。"""
+    """聚合朝夕 owner bindings 与 resident account 的最近真人入站时间。"""
 
     with _tx(conn) as tx:
         row = tx.execute(
@@ -904,8 +915,11 @@ def get_owner_last_inbound_at(
             FROM messages m
             WHERE m.direction = 'inbound' AND m.role = 'user'
               AND m.account_id IN (
-                  SELECT b.account_id FROM account_owner_bindings b
+                  SELECT b.account_id
+                  FROM account_owner_bindings b
+                  JOIN accounts a ON a.id = b.account_id
                   WHERE b.platform_user_id = ? AND b.status = 'active'
+                    AND b.app_id = ? AND a.app_id = ? AND a.status = 'active'
                   UNION
                   SELECT r.runtime_account_id
                   FROM universes u
@@ -914,7 +928,12 @@ def get_owner_last_inbound_at(
                     AND r.runtime_account_id IS NOT NULL
               )
             """,
-            (platform_user_id, platform_user_id),
+            (
+                platform_user_id,
+                ZHAOXI_APP_ID,
+                ZHAOXI_APP_ID,
+                platform_user_id,
+            ),
         ).fetchone()
     return str(row["last_inbound_at"]) if row and row["last_inbound_at"] else None
 
@@ -922,7 +941,7 @@ def get_owner_last_inbound_at(
 def count_owner_inbound_after(
     *, platform_user_id: str, after: str, conn: Optional[Connection] = None
 ) -> int:
-    """统计真人级聚合范围在给定时刻后的全部真实入站。"""
+    """统计朝夕真人级聚合范围在给定时刻后的全部真实入站。"""
 
     with _tx(conn) as tx:
         row = tx.execute(
@@ -931,8 +950,11 @@ def count_owner_inbound_after(
             WHERE m.direction = 'inbound' AND m.role = 'user'
               AND m.created_at > ?
               AND m.account_id IN (
-                  SELECT b.account_id FROM account_owner_bindings b
+                  SELECT b.account_id
+                  FROM account_owner_bindings b
+                  JOIN accounts a ON a.id = b.account_id
                   WHERE b.platform_user_id = ? AND b.status = 'active'
+                    AND b.app_id = ? AND a.app_id = ? AND a.status = 'active'
                   UNION
                   SELECT r.runtime_account_id
                   FROM universes u
@@ -941,7 +963,13 @@ def count_owner_inbound_after(
                     AND r.runtime_account_id IS NOT NULL
               )
             """,
-            (after, platform_user_id, platform_user_id),
+            (
+                after,
+                platform_user_id,
+                ZHAOXI_APP_ID,
+                ZHAOXI_APP_ID,
+                platform_user_id,
+            ),
         ).fetchone()
     return int(row["c"] if row else 0)
 
@@ -1933,7 +1961,7 @@ def list_ai_feed_eligible_worlds(
     """列出近 7 日有任一渠道真人入站的 confirmed worlds，按 universe id 稳定分页。"""
     clean_limit = max(1, min(int(limit), 200))
     cursor_clause = ""
-    params: List[Any] = [inbound_since]
+    params: List[Any] = [inbound_since, ZHAOXI_APP_ID, ZHAOXI_APP_ID]
     if after_universe_id:
         cursor_clause = "AND u.id > ?"
         params.append(after_universe_id)
@@ -1951,8 +1979,12 @@ def list_ai_feed_eligible_worlds(
                              AND m.account_id IN (
                                  SELECT b.account_id
                                  FROM account_owner_bindings b
+                                 JOIN accounts a ON a.id = b.account_id
                                  WHERE b.platform_user_id = u.owner_platform_user_id
                                    AND b.status = 'active'
+                                   AND b.app_id = ?
+                                   AND a.app_id = ?
+                                   AND a.status = 'active'
                                  UNION
                                  SELECT owned.runtime_account_id
                                  FROM universe_residents owned

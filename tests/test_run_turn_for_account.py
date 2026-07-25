@@ -6,6 +6,7 @@
 """
 from unittest.mock import patch
 
+import app.db as db
 import app.turn_service as turn_service
 from app.schemas import OpenClawTurnRequest
 from app.turn_service import (
@@ -110,3 +111,30 @@ def test_non_private_ignored_at_adapter():
     res = turn_service.handle_openclaw_turn(_payload(chat_type="group"))
     assert res.status == "ignored"
     assert res.no_reply is True
+
+
+def test_disabled_membership_is_rejected_before_turn_side_effects(fresh_db, caplog):
+    user = db.create_or_get_platform_user_by_phone(phone="13800037901")
+    account = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"], display_name="停服账号"
+    )["account"]
+    db.update_product_membership_status(
+        platform_user_id=user["id"], app_id="zhaoxi", status="disabled"
+    )
+
+    with patch.object(
+        turn_service,
+        "resolve_account_id_for_inbound_channel_identity",
+        return_value=account["id"],
+    ), patch.object(
+        turn_service,
+        "_prepare_turn",
+        side_effect=AssertionError("disabled membership must not enter turn setup"),
+    ):
+        response = turn_service.handle_openclaw_turn(_payload())
+
+    assert response.status == "disabled"
+    assert response.no_reply is True
+    assert response.metadata["reason"] == "product_membership_disabled"
+    assert response.metadata["app_id"] == "zhaoxi"
+    assert "product membership rejected" in caplog.text

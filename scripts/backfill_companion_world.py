@@ -49,14 +49,21 @@ def _list_user_ids(
 
 
 def _inspect_user(platform_user_id: str) -> tuple:
+    """统计真人在朝夕产品内的 active legacy bindings 与世界初始化状态。"""
+    from app.bootstrap.product_registry import ZHAOXI_APP_ID
     from app.db import connect
 
     with connect() as conn:
         binding_count = int(
             conn.execute(
-                "SELECT COUNT(*) c FROM account_owner_bindings "
-                "WHERE platform_user_id=? AND status='active'",
-                (platform_user_id,),
+                """
+                SELECT COUNT(*) c
+                FROM account_owner_bindings b
+                JOIN accounts a ON a.id=b.account_id
+                WHERE b.platform_user_id=? AND b.status='active'
+                  AND b.app_id=? AND a.app_id=? AND a.status='active'
+                """,
+                (platform_user_id, ZHAOXI_APP_ID, ZHAOXI_APP_ID),
             ).fetchone()["c"]
         )
         world = conn.execute(

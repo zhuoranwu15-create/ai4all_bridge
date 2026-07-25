@@ -372,6 +372,7 @@ class SqlCompanionWorldRepository(WorldRepository):
             candidate.template.persona_seed_json
         )
         runtime = insert_resident_runtime_account(
+            platform_user_id=owner_platform_user_id,
             display_name=display_name,
             system_prompt=system_prompt,
             soul_seed=soul,

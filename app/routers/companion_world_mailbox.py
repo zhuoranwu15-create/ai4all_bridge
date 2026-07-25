@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict
 
 from app.config import settings
+from app.db import SessionPrincipal
 from app.platform import CompanionWorldMailboxService, MailboxError
 from app.routers.companion_world import (
     CompanionWorldApiError,
@@ -35,7 +36,7 @@ class EmptyPayload(BaseModel):
 
 def _require_mailbox_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_mailbox_enabled", False)):
         raise CompanionWorldApiError("not_found", 404)
     return _require_world_session(authorization)
@@ -139,7 +140,7 @@ def list_mailbox_letters(
     status_filter: Optional[str] = Query(default=None, alias="status"),
     cursor: Optional[str] = Query(default=None, max_length=1024),
     limit: int = Query(default=20, ge=1, le=50),
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     cursor_delivered_at, cursor_letter_id = _decode_cursor(cursor)
     statuses = (
@@ -149,7 +150,7 @@ def list_mailbox_letters(
     )
     rows = _mailbox_call(
         lambda: _service().list_letters(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             now=_db_now(),
             statuses=statuses,
             cursor_delivered_at=cursor_delivered_at,
@@ -175,9 +176,9 @@ def list_mailbox_letters(
 def mailbox_unread_count(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
-    count = _service().count_unread(str(platform_user["id"]), now=_db_now())
+    count = _service().count_unread(platform_user.platform_user_id, now=_db_now())
     _no_store(response)
     return _envelope(request, code="ok", data={"unread_count": count})
 
@@ -187,11 +188,11 @@ def mailbox_letter_detail(
     letter_id: str,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     item = _mailbox_call(
         lambda: _service().get_letter(
-            str(platform_user["id"]), letter_id=letter_id, now=_db_now()
+            platform_user.platform_user_id, letter_id=letter_id, now=_db_now()
         )
     )
     _no_store(response)
@@ -204,11 +205,11 @@ def _transition_response(
     letter_id: str,
     request: Request,
     response: Response,
-    platform_user: dict,
+    platform_user: SessionPrincipal,
 ) -> dict:
     item = _mailbox_call(
         lambda: _service().transition(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             letter_id=letter_id,
             target_status=target_status,
             now=_db_now(),
@@ -224,7 +225,7 @@ def read_mailbox_letter(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     return _transition_response(
         target_status="read",
@@ -241,7 +242,7 @@ def defer_mailbox_letter(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     return _transition_response(
         target_status="deferred",
@@ -258,7 +259,7 @@ def decline_mailbox_letter(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     return _transition_response(
         target_status="declined",
@@ -275,11 +276,11 @@ def accept_mailbox_letter(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_mailbox_session),
+    platform_user: SessionPrincipal = Depends(_require_mailbox_session),
 ) -> dict:
     result = _mailbox_call(
         lambda: _service().accept_letter(
-            str(platform_user["id"]), letter_id=letter_id, now=_db_now()
+            platform_user.platform_user_id, letter_id=letter_id, now=_db_now()
         )
     )
     _no_store(response)

@@ -14,10 +14,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.config import settings
 from app.app_runtime import get_background_loop
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.routers.deps import _require_session
 from app import node_gateway
 from app.captcha import verify_captcha
-from app.db import count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user_by_phone, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding, validate_referral_code
+from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
 from app.llm import generate_completion
 from app.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
 from app.rate_limiter import RateLimiter
@@ -657,7 +658,7 @@ def web_referral_code_preview(code: str, request: Request) -> dict:
         window_seconds=60.0,
     ):
         raise HTTPException(status_code=429, detail="rate_limited")
-    preview = preview_referral_code(code=code)
+    preview = preview_referral_code(code=code, expected_app_id=ZHAOXI_APP_ID)
     if not preview.get("valid"):
         return {
             "valid": False,
@@ -800,13 +801,14 @@ def web_verify_otp(payload: VerifyOtpRequest) -> dict:
     return {"status": "ok", "verified_token": result["verified_token"]}
 
 
-def _register_platform_user_with_otp(
+def _register_platform_user_with_otp_result(
     *,
     phone: str,
     display_name: Optional[str],
     otp_token: str,
     invite_code: Optional[str] = None,
     invalid_otp_detail: str = "注册凭证无效或已过期",
+    app_id: str = ZHAOXI_APP_ID,
 ) -> dict:
     try:
         normalized_phone = normalize_phone(phone)
@@ -815,25 +817,42 @@ def _register_platform_user_with_otp(
 
     cleaned_invite_code = invite_code.strip() if invite_code else None
     cleaned_invite_code = cleaned_invite_code or None
-    existing_user = get_platform_user_by_phone(phone=normalized_phone)
-    if existing_user is None and cleaned_invite_code:
-        validation = validate_referral_code(code=cleaned_invite_code)
-        if not validation.get("valid"):
-            raise HTTPException(status_code=400, detail="invalid_invite_code")
-
     try:
         result = register_platform_user_with_referral(
             phone=normalized_phone,
             display_name=display_name,
-            invite_code=cleaned_invite_code if existing_user is None else None,
+            invite_code=cleaned_invite_code,
             verified_token=otp_token,
+            app_id=app_id,
         )
-        return result["platform_user"]
+        return result
     except ValueError as err:
         detail = str(err)
         if detail == "invalid_otp_token":
             raise HTTPException(status_code=400, detail=invalid_otp_detail)
+        if detail == "product_membership_disabled":
+            raise HTTPException(status_code=403, detail=detail)
         raise HTTPException(status_code=400, detail=detail)
+
+
+def _register_platform_user_with_otp(
+    *,
+    phone: str,
+    display_name: Optional[str],
+    otp_token: str,
+    invite_code: Optional[str] = None,
+    invalid_otp_detail: str = "注册凭证无效或已过期",
+    app_id: str = ZHAOXI_APP_ID,
+) -> dict:
+    """兼容既有 Web 调用，仅返回注册结果中的真人身份。"""
+    return _register_platform_user_with_otp_result(
+        phone=phone,
+        display_name=display_name,
+        otp_token=otp_token,
+        invite_code=invite_code,
+        invalid_otp_detail=invalid_otp_detail,
+        app_id=app_id,
+    )["platform_user"]
 
 
 @router.post("/web/register")
@@ -882,7 +901,9 @@ def web_register_and_binding_intent(
         binding_intent = _start_openclaw_qr_for_binding(binding_intent)
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err))
-    session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
+    session = create_platform_user_session(
+        platform_user_id=platform_user["id"], app_id=ZHAOXI_APP_ID, days=7
+    )
     return {
         "status": "ok",
         "session_token": session["token"],
@@ -941,16 +962,17 @@ def web_campaign_visit(payload: WebCampaignVisitRequest, request: Request) -> di
 @router.post("/web/binding-intents")
 def web_create_binding_intent(
     payload: WebCreateBindingIntentRequest,
-    platform_user=Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     try:
         binding_intent = create_binding_intent(
-            platform_user_id=platform_user["id"],
+            platform_user_id=principal.platform_user_id,
             account_id=account_result["account"]["id"],
             channel=payload.channel or "openclaw-weixin",
         )
@@ -968,13 +990,16 @@ def web_create_binding_intent(
 @router.get("/web/binding-intents/{binding_intent_id}")
 def web_get_binding_intent(
     binding_intent_id: str,
-    platform_user=Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
     binding_intent = get_binding_intent(binding_intent_id=binding_intent_id)
     # 鉴权 + 属主校验：binding_intent 含 qr_data_url / manual_login_command，泄露即可劫持
     # 微信绑定。非属主统一按 404 处理，避免泄露 intent 是否存在。属主访问自己的 QR/登录命令
     # 属正常流程（onboarding 扫码 + home 重绑都依赖），故不脱敏原样返回。
-    if binding_intent is None or binding_intent.get("platform_user_id") != platform_user["id"]:
+    if (
+        binding_intent is None
+        or binding_intent.get("platform_user_id") != principal.platform_user_id
+    ):
         raise HTTPException(status_code=404, detail="binding_intent not found")
     return {"binding_intent": binding_intent}
 
@@ -1013,7 +1038,9 @@ def web_login(payload: WebLoginRequest) -> dict:
         account_id=account_result["account"]["id"],
         ensure_grant=True,
     )
-    session = create_platform_user_session(platform_user_id=platform_user["id"], days=7)
+    session = create_platform_user_session(
+        platform_user_id=platform_user["id"], app_id=ZHAOXI_APP_ID, days=7
+    )
     bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])
     has_active_binding = len(bindings) > 0
 
@@ -1044,16 +1071,18 @@ def web_login(payload: WebLoginRequest) -> dict:
 
 
 @router.get("/web/me")
-def web_me(platform_user=Depends(_require_session)) -> dict:
+def web_me(principal: SessionPrincipal = Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     wallet = get_wallet_summary(
         account_id=account_result["account"]["id"],
         ensure_grant=True,
     )
+    platform_user = get_platform_user(platform_user_id=principal.platform_user_id)
     return {
         "status": "ok",
         "platform_user": platform_user,
@@ -1064,18 +1093,20 @@ def web_me(platform_user=Depends(_require_session)) -> dict:
 
 
 @router.get("/web/me/referral-code")
-def web_me_referral_code(platform_user=Depends(_require_session)) -> dict:
+def web_me_referral_code(principal: SessionPrincipal = Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     get_wallet_summary(
         account_id=account_result["account"]["id"],
         ensure_grant=True,
     )
     code = get_or_create_personal_referral_code_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
+        app_id=principal.app_id,
     )
     return {
         "status": "ok",
@@ -1090,11 +1121,12 @@ def web_me_referral_code(platform_user=Depends(_require_session)) -> dict:
 
 
 @router.get("/web/me/wallet")
-def web_me_wallet(platform_user=Depends(_require_session)) -> dict:
+def web_me_wallet(principal: SessionPrincipal = Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     wallet = get_wallet_summary(
         account_id=account_result["account"]["id"],
@@ -1111,11 +1143,12 @@ def web_me_wallet(platform_user=Depends(_require_session)) -> dict:
 
 
 @router.get("/web/me/bindings")
-def web_me_bindings(platform_user=Depends(_require_session)) -> dict:
+def web_me_bindings(principal: SessionPrincipal = Depends(_require_session)) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     bindings = list_channel_bindings_for_account(account_id=account_result["account"]["id"])
     return {
@@ -1128,12 +1161,13 @@ def web_me_bindings(platform_user=Depends(_require_session)) -> dict:
 @router.post("/web/me/unbind")
 def web_me_unbind(
     payload: WebUnbindRequest,
-    platform_user=Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
     account_result = get_or_create_default_ai4all_account_for_user(
-        platform_user_id=platform_user["id"],
+        platform_user_id=principal.platform_user_id,
         display_name=None,
         plan="free",
+        app_id=principal.app_id,
     )
     account_id = account_result["account"]["id"]
 

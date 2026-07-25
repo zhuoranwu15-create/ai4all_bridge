@@ -28,21 +28,23 @@ from app.asr import (
 from app.channels import CHANNEL_APP, CHANNELS
 from app.config import settings
 from app.db import (
+    SessionPrincipal,
     create_platform_user_session,
+    get_active_bound_account_for_user_in_app,
     get_duplicate_reply,
-    get_first_active_account_for_user,
     get_or_create_default_ai4all_account_for_user,
-    get_platform_user_by_phone,
+    get_platform_user,
     get_session_for_account_and_key,
     list_session_messages_before,
     revoke_platform_user_session,
 )
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.identity import ResolvedIdentity
 from app.routers.deps import _require_session
 from app.routers.web import (
     SendOtpRequest,
     VerifyOtpRequest,
-    _register_platform_user_with_otp,
+    _register_platform_user_with_otp_result,
     web_send_otp,
     web_verify_otp,
 )
@@ -115,8 +117,11 @@ def _public_account(result: dict) -> dict:
     }
 
 
-def _account_for_user(platform_user: dict) -> dict:
-    result = get_first_active_account_for_user(platform_user_id=platform_user["id"])
+def _account_for_user(principal: SessionPrincipal) -> dict:
+    result = get_active_bound_account_for_user_in_app(
+        platform_user_id=principal.platform_user_id,
+        app_id=principal.app_id,
+    )
     if result is None:
         raise HTTPException(status_code=409, detail="account_not_ready")
     if result["account"].get("status") == "disabled":
@@ -176,19 +181,20 @@ def app_verify_otp(payload: VerifyOtpRequest) -> dict:
 
 @router.post("/auth/session")
 def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
-    existing_user = get_platform_user_by_phone(phone=payload.phone)
-    platform_user = _register_platform_user_with_otp(
+    registration = _register_platform_user_with_otp_result(
         phone=payload.phone,
         display_name=None,
         otp_token=payload.verified_token,
         invite_code=payload.invite_code,
         invalid_otp_detail="验证凭证无效或已过期",
     )
+    platform_user = registration["platform_user"]
     if bool(getattr(settings, "companion_world_p1_enabled", False)):
         # P1 新流程：只复用既有 legacy account；零 binding（含真正新用户）不预建默认
         # runtime/binding，客户端收到 account:null 后进入 world bootstrap。
-        account_result = get_first_active_account_for_user(
-            platform_user_id=platform_user["id"]
+        account_result = get_active_bound_account_for_user_in_app(
+            platform_user_id=platform_user["id"],
+            app_id=ZHAOXI_APP_ID,
         )
     else:
         # flag 关闭保持旧 auth 行为：建/复用默认账号、赠权与 campaign 归因均逐字不变。
@@ -200,13 +206,16 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
             initial_channel=CHANNEL_APP,
             binding_method="app_otp",
         )
-    session = create_platform_user_session(platform_user_id=platform_user["id"], days=30)
+    session = create_platform_user_session(
+        platform_user_id=platform_user["id"], app_id=ZHAOXI_APP_ID, days=30
+    )
     _no_store(response)
     return {
         "status": "ok",
         "access_token": session["token"],
         "expires_at": session["expires_at"],
-        "is_new_user": existing_user is None,
+        # 保留旧响应字段名，但语义按冻结设计切为当前产品首次 membership。
+        "is_new_user": bool(registration["is_new_membership"]),
         "platform_user": {
             "id": platform_user["id"],
             "phone_masked": f"{platform_user['phone'][:3]}****{platform_user['phone'][-4:]}",
@@ -224,7 +233,7 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
 def app_logout(
     response: Response,
     authorization: Optional[str] = Header(default=None),
-    _platform_user: dict = Depends(_require_session),
+    _principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
     token = _bearer_token(authorization)
     revoke_platform_user_session(token=token)
@@ -235,9 +244,12 @@ def app_logout(
 @router.get("/me")
 def app_me(
     response: Response,
-    platform_user: dict = Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
-    account_result = _account_for_user(platform_user)
+    account_result = _account_for_user(principal)
+    platform_user = get_platform_user(platform_user_id=principal.platform_user_id)
+    if platform_user is None:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
     _no_store(response)
     phone = str(platform_user.get("phone") or "")
     return {
@@ -255,9 +267,9 @@ def app_messages(
     response: Response,
     limit: int = Query(default=50, ge=1, le=100),
     before_id: Optional[int] = Query(default=None, ge=1),
-    platform_user: dict = Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
-    account_result = _account_for_user(platform_user)
+    account_result = _account_for_user(principal)
     account_id = account_result["account"]["id"]
     active_key = CHANNELS[CHANNEL_APP].active_session_key
     session = get_session_for_account_and_key(
@@ -293,10 +305,11 @@ def app_messages(
 def app_turn(
     payload: AppTurnRequest,
     response: Response,
-    platform_user: dict = Depends(_require_session),
+    principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
-    account_result = _account_for_user(platform_user)
+    account_result = _account_for_user(principal)
     account_id = account_result["account"]["id"]
+    platform_user = get_platform_user(platform_user_id=principal.platform_user_id) or {}
     mapped_message_id = f"app:{account_id}:{payload.client_message_id}"
 
     duplicate_reply = get_duplicate_reply(
@@ -331,10 +344,10 @@ def app_turn(
 
         identity = ResolvedIdentity(
             ai4all_account_id=account_id,
-            session_key=f"app:{platform_user['id']}",
+            session_key=f"app:{principal.platform_user_id}",
             channel=CHANNEL_APP,
-            channel_account_id=platform_user["id"],
-            sender_id=platform_user["id"],
+            channel_account_id=principal.platform_user_id,
+            sender_id=principal.platform_user_id,
             chat_id=None,
         )
         result = run_turn_for_account(
@@ -377,7 +390,7 @@ async def app_transcription(
     audio: UploadFile = File(...),
     duration_ms: int = Form(..., ge=1),
     language: str = Form(default="zh"),
-    _platform_user: dict = Depends(_require_session),
+    _principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
     if duration_ms > int(settings.asr_max_duration_ms):
         raise HTTPException(status_code=413, detail="audio_too_long")

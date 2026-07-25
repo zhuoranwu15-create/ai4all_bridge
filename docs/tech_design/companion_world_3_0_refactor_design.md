@@ -70,7 +70,7 @@
 
 底稿 §3 逐条核查的**重构前问题与当前状态**（代码依据见后文落地说明）：
 
-- 旧 App API 建立在 `get_first_active_account_for_user()`“第一个 account”假设上；M2-C 新 World API 已改用 session user + conversation/resident ID，legacy API 保持兼容。
+- 旧 App API 曾建立在“第一个 account”假设上；多产品 Phase 1 后已改为固定 zhaoxi audience + 产品级入口账号 resolver，M2-C World API 使用 session user + conversation/resident ID。
 - 默认建号会重复赠权、拆散余额；M1 钱包已上迁真人，M2 resident runtime 使用 no-binding/no-grant 原语。
 - binding 容量与 resident 容量混杂；M2 已以 world row lock + `universe_residents.status='active'` 作为容量真相。
 - 旧 App turn single-flight 仍是进程内锁；M2-C World turn 已使用 PG advisory single-flight，legacy 端点未强制迁移。

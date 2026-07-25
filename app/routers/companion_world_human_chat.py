@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
+from app.db import SessionPrincipal
 from app.platform import CompanionWorldHumanChatService, HumanChatError
 from app.routers.companion_world import (
     CompanionWorldApiError,
@@ -70,7 +71,7 @@ class HumanReportPayload(BaseModel):
 
 def _require_human_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     return _require_world_session(authorization)
 
 
@@ -160,9 +161,9 @@ def _call(action):
 def list_human_conversations(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
-    rows = _service().list_conversations(str(platform_user["id"]), now=_now())
+    rows = _service().list_conversations(platform_user.platform_user_id, now=_now())
     _no_store(response)
     return _envelope(
         request,
@@ -178,12 +179,12 @@ def list_human_messages(
     response: Response,
     cursor: Optional[str] = Query(default=None, max_length=1024),
     limit: int = Query(default=20, ge=1, le=50),
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     cursor_sequence_no, cursor_message_id = _decode_cursor(cursor)
     rows = _call(
         lambda: _service().list_messages(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             conversation_id=conversation_id,
             now=_now(),
             cursor_sequence_no=cursor_sequence_no,
@@ -198,7 +199,7 @@ def list_human_messages(
         code="ok",
         data={
             "items": [
-                _message_data(row, str(platform_user["id"])) for row in page
+                _message_data(row, platform_user.platform_user_id) for row in page
             ],
             "next_cursor": (
                 _encode_cursor(page[-1]) if len(rows) > limit and page else None
@@ -213,11 +214,11 @@ def send_human_message(
     payload: SendHumanMessagePayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     result = _call(
         lambda: _service().send(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             conversation_id=conversation_id,
             client_message_id=payload.client_message_id,
             body_text=payload.text,
@@ -233,7 +234,7 @@ def send_human_message(
         code="ok",
         data={
             "message": _message_data(
-                result["message"], str(platform_user["id"])
+                result["message"], platform_user.platform_user_id
             ),
             "created": bool(result["created"]),
         },
@@ -246,15 +247,15 @@ def read_human_conversation(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     row = _call(
         lambda: _service().mark_read(
-            str(platform_user["id"]), conversation_id=conversation_id, now=_now()
+            platform_user.platform_user_id, conversation_id=conversation_id, now=_now()
         )
     )
     _no_store(response)
-    is_owner = row["owner_platform_user_id"] == str(platform_user["id"])
+    is_owner = row["owner_platform_user_id"] == platform_user.platform_user_id
     read_at = row["owner_last_read_at" if is_owner else "visitor_last_read_at"]
     return _envelope(request, code="ok", data={"read_at": _public_time(read_at)})
 
@@ -264,11 +265,11 @@ def hide_human_conversation(
     conversation_id: str,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     _call(
         lambda: _service().hide(
-            str(platform_user["id"]), conversation_id=conversation_id, now=_now()
+            platform_user.platform_user_id, conversation_id=conversation_id, now=_now()
         )
     )
     _no_store(response)
@@ -281,11 +282,11 @@ def report_human_conversation(
     payload: HumanReportPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     result = _call(
         lambda: _service().report(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             conversation_id=conversation_id,
             message_id=payload.message_id,
             reason_code=payload.reason_code,
@@ -313,11 +314,11 @@ def block_human_counterpart(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_human_session),
+    platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     result = _call(
         lambda: _service().block(
-            str(platform_user["id"]), conversation_id=conversation_id, now=_now()
+            platform_user.platform_user_id, conversation_id=conversation_id, now=_now()
         )
     )
     _no_store(response)

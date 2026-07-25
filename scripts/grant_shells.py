@@ -32,6 +32,10 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 try:
+    from app.bootstrap.product_registry import (
+        PRODUCTION_PRODUCT_REGISTRY,
+        ProductRegistry,
+    )
     from app.db import (
         SHELL_MICROS_PER_SHELL,
         connect,
@@ -62,6 +66,7 @@ class GrantOperation:
     """Validated shell grant operation ready for preview or application."""
 
     account_id: str
+    app_id: str
     platform_user_id: str
     amount_shell_micros: int
     reason: str
@@ -158,18 +163,21 @@ def build_operation_ids(
     }
 
 
-def _fetch_active_owner_bindings(account_id: str) -> List[Dict[str, Any]]:
+def _fetch_active_owner_bindings(
+    account_id: str, app_id: str
+) -> List[Dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, platform_user_id, account_id, binding_method, status,
+            SELECT id, platform_user_id, account_id, app_id, binding_method, status,
                    verified_at, created_at, updated_at
             FROM account_owner_bindings
             WHERE account_id = ?
+              AND app_id = ?
               AND status = 'active'
             ORDER BY created_at ASC, id ASC
             """,
-            (account_id,),
+            (account_id, app_id),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -187,7 +195,7 @@ def _fetch_platform_user(platform_user_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
-def _fetch_wallet(account_id: str) -> Optional[Dict[str, Any]]:
+def _fetch_wallet(account_id: str, app_id: str) -> Optional[Dict[str, Any]]:
     """按 account_id 取钱包行（仅用于孤儿号 owner 解析的兜底：无绑定号的钱包 account_id==自身）。
 
     D-14 钱包已上迁真人级，故权威钱包按 owner platform_user_id 解析（见
@@ -197,18 +205,20 @@ def _fetch_wallet(account_id: str) -> Optional[Dict[str, Any]]:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, account_id, platform_user_id, balance_shell_micros,
+            SELECT id, account_id, platform_user_id, app_id, balance_shell_micros,
                    status, created_at, updated_at
             FROM entitlement_wallets
-            WHERE account_id = ?
+            WHERE account_id = ? AND app_id = ?
             """,
-            (account_id,),
+            (account_id, app_id),
         ).fetchone()
     return dict(row) if row else None
 
 
-def _fetch_wallet_by_platform_user(platform_user_id: str) -> Optional[Dict[str, Any]]:
-    """按 owner platform_user_id 取权威 active 钱包（D-14 真人级；镜像 get_wallet_summary）。
+def _fetch_wallet_by_platform_user(
+    platform_user_id: str, app_id: str
+) -> Optional[Dict[str, Any]]:
+    """按 owner 与 app_id 取权威 active 钱包（MP-02 产品级；镜像 get_wallet_summary）。
 
     同真人多个 account 共享一钱包、其 account_id 恒指向首号——故第 2 个号必须按 platform_user_id
     解析，否则按 account_id 查漏空、dry-run 预览余额错记 0。
@@ -216,25 +226,27 @@ def _fetch_wallet_by_platform_user(platform_user_id: str) -> Optional[Dict[str, 
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, account_id, platform_user_id, balance_shell_micros,
+            SELECT id, account_id, platform_user_id, app_id, balance_shell_micros,
                    status, created_at, updated_at
             FROM entitlement_wallets
-            WHERE platform_user_id = ? AND status = 'active'
+            WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
             """,
-            (platform_user_id,),
+            (platform_user_id, app_id),
         ).fetchone()
     return dict(row) if row else None
 
 
-def _fetch_ledger_by_idempotency_key(idempotency_key: str) -> Optional[Dict[str, Any]]:
+def _fetch_ledger_by_idempotency_key(
+    idempotency_key: str, app_id: str
+) -> Optional[Dict[str, Any]]:
     with connect() as conn:
         row = conn.execute(
             """
             SELECT *
             FROM entitlement_ledger
-            WHERE idempotency_key = ?
+            WHERE app_id = ? AND idempotency_key = ?
             """,
-            (idempotency_key,),
+            (app_id, idempotency_key),
         ).fetchone()
     return dict(row) if row else None
 
@@ -259,12 +271,13 @@ def _fetch_audit_event(*, action: str, ledger_id: str) -> Optional[Dict[str, Any
 def resolve_platform_user_id(
     *,
     account_id: str,
+    app_id: str,
     requested_platform_user_id: Optional[str] = None,
     wallet_platform_user_id: Optional[str] = None,
 ) -> str:
     """Resolve the active owner platform_user_id for an account."""
 
-    active_bindings = _fetch_active_owner_bindings(account_id)
+    active_bindings = _fetch_active_owner_bindings(account_id, app_id)
     requested = (requested_platform_user_id or "").strip()
     if requested:
         user = _fetch_platform_user(requested)
@@ -307,6 +320,7 @@ def prepare_operation(
     source_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     allow_inactive_account: bool = False,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> GrantOperation:
     """Validate account ownership and return a grant operation."""
 
@@ -326,6 +340,12 @@ def prepare_operation(
     account = get_account(account_id=cleaned_account_id)
     if account is None:
         raise GrantShellsError(f"account not found: {cleaned_account_id}")
+    try:
+        resolved_app_id = registry.require_enabled(
+            str(account.get("app_id") or "")
+        ).app_id
+    except ValueError as exc:
+        raise GrantShellsError(str(exc)) from exc
     if account.get("status") != "active" and not allow_inactive_account:
         raise GrantShellsError(
             f"account status is {account.get('status')}; pass --allow-inactive-account to override"
@@ -334,17 +354,23 @@ def prepare_operation(
     # 先按 account_id 取钱包，仅为给 resolve_platform_user_id 提供孤儿号兜底（无绑定号钱包
     # account_id==自身）。owner 解析后再按 platform_user_id 取**权威** active 钱包作预览余额来源
     # ——D-14 钱包已上迁真人级，同真人第 2 个号按 account_id 查会漏空、dry-run 预览余额错记 0。
-    account_wallet = _fetch_wallet(cleaned_account_id)
+    account_wallet = _fetch_wallet(cleaned_account_id, resolved_app_id)
     resolved_platform_user_id = resolve_platform_user_id(
         account_id=cleaned_account_id,
+        app_id=resolved_app_id,
         requested_platform_user_id=platform_user_id,
         wallet_platform_user_id=account_wallet["platform_user_id"] if account_wallet else None,
     )
-    wallet = _fetch_wallet_by_platform_user(resolved_platform_user_id) or account_wallet
+    wallet = (
+        _fetch_wallet_by_platform_user(resolved_platform_user_id, resolved_app_id)
+        or account_wallet
+    )
     if wallet and wallet["platform_user_id"] != resolved_platform_user_id:
         raise GrantShellsError(
             "wallet platform_user_id does not match resolved account owner; aborting"
         )
+    if wallet and wallet["app_id"] != resolved_app_id:
+        raise GrantShellsError("wallet app_id does not match account app; aborting")
 
     ids = build_operation_ids(
         account_id=cleaned_account_id,
@@ -357,6 +383,7 @@ def prepare_operation(
     )
     return GrantOperation(
         account_id=cleaned_account_id,
+        app_id=resolved_app_id,
         platform_user_id=resolved_platform_user_id,
         amount_shell_micros=amount_shell_micros,
         reason=cleaned_reason,
@@ -370,6 +397,8 @@ def prepare_operation(
 
 
 def _validate_existing_ledger(operation: GrantOperation, ledger: Dict[str, Any]) -> None:
+    if ledger["app_id"] != operation.app_id:
+        raise GrantShellsError("idempotency_key already belongs to another app")
     if ledger["account_id"] != operation.account_id:
         raise GrantShellsError("idempotency_key already belongs to another account")
     if ledger["platform_user_id"] != operation.platform_user_id:
@@ -391,6 +420,7 @@ def _audit_metadata(operation: GrantOperation, ledger: Dict[str, Any]) -> Dict[s
     return {
         "script": "scripts/grant_shells.py",
         "account_id": operation.account_id,
+        "app_id": operation.app_id,
         "platform_user_id": operation.platform_user_id,
         "source_type": operation.source_type,
         "source_id": operation.source_id,
@@ -433,10 +463,21 @@ def ensure_audit_event(operation: GrantOperation, ledger: Dict[str, Any]) -> Dic
     }
 
 
-def grant_operation(operation: GrantOperation, *, dry_run: bool) -> Dict[str, Any]:
+def grant_operation(
+    operation: GrantOperation,
+    *,
+    dry_run: bool,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Dict[str, Any]:
     """Preview or apply a validated grant operation."""
 
-    existing = _fetch_ledger_by_idempotency_key(operation.idempotency_key)
+    try:
+        registry.require_enabled(operation.app_id)
+    except ValueError as exc:
+        raise GrantShellsError(str(exc)) from exc
+    existing = _fetch_ledger_by_idempotency_key(
+        operation.idempotency_key, operation.app_id
+    )
     if existing is not None:
         _validate_existing_ledger(operation, existing)
         audit = None if dry_run else ensure_audit_event(operation, existing)
@@ -444,6 +485,7 @@ def grant_operation(operation: GrantOperation, *, dry_run: bool) -> Dict[str, An
             "status": "already_applied",
             "dry_run": dry_run,
             "account_id": operation.account_id,
+            "app_id": operation.app_id,
             "platform_user_id": operation.platform_user_id,
             "source_type": operation.source_type,
             "source_id": operation.source_id,
@@ -467,6 +509,7 @@ def grant_operation(operation: GrantOperation, *, dry_run: bool) -> Dict[str, An
             "status": "would_apply",
             "dry_run": True,
             "account_id": operation.account_id,
+            "app_id": operation.app_id,
             "platform_user_id": operation.platform_user_id,
             "source_type": operation.source_type,
             "source_id": operation.source_id,
@@ -490,17 +533,20 @@ def grant_operation(operation: GrantOperation, *, dry_run: bool) -> Dict[str, An
         idempotency_key=operation.idempotency_key,
         metadata={
             "reason": operation.reason,
+            "app_id": operation.app_id,
             "amount_shells": format_shell_micros(operation.amount_shell_micros),
             "amount_shell_micros": operation.amount_shell_micros,
             "operator": operation.admin_user_id,
             "script": "scripts/grant_shells.py",
         },
+        registry=registry,
     )
     audit = ensure_audit_event(operation, ledger)
     return {
         "status": "applied",
         "dry_run": False,
         "account_id": operation.account_id,
+        "app_id": operation.app_id,
         "platform_user_id": operation.platform_user_id,
         "source_type": operation.source_type,
         "source_id": operation.source_id,
@@ -528,6 +574,7 @@ def run_grant(
     source_id: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     allow_inactive_account: bool = False,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
     dry_run: bool,
 ) -> Dict[str, Any]:
     """Validate CLI-style inputs and preview or apply the grant."""
@@ -544,8 +591,9 @@ def run_grant(
         source_id=source_id,
         idempotency_key=idempotency_key,
         allow_inactive_account=allow_inactive_account,
+        registry=registry,
     )
-    return grant_operation(operation, dry_run=dry_run)
+    return grant_operation(operation, dry_run=dry_run, registry=registry)
 
 
 def build_parser() -> argparse.ArgumentParser:

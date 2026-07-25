@@ -5,6 +5,7 @@ from app.db.analytics import *  # noqa: F401,F403
 from app.db.moderation import *  # noqa: F401,F403
 from app.db.admin import *  # noqa: F401,F403
 from app.db.billing import *  # noqa: F401,F403
+from app.db.product_memberships import *  # noqa: F401,F403
 from app.db.accounts import *  # noqa: F401,F403
 from app.db.companion_world import *  # noqa: F401,F403
 from app.db.companion_world_lifecycle import *  # noqa: F401,F403

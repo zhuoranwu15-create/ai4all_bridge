@@ -2,8 +2,9 @@ from unittest.mock import patch
 
 from app.channels import CHANNEL_APP
 from app.db import (
+    connect,
     create_phone_verification,
-    get_first_active_account_for_user,
+    get_active_bound_account_for_user_in_app,
     get_or_create_session,
     insert_message,
     set_verification_verified,
@@ -52,11 +53,27 @@ def test_app_session_creates_app_account_without_weixin_qr(client, fresh_db):
 
     me = client.get("/v1/me", headers=headers)
     assert me.status_code == 200
-    account_result = get_first_active_account_for_user(
-        platform_user_id=data["platform_user"]["id"]
+    account_result = get_active_bound_account_for_user_in_app(
+        platform_user_id=data["platform_user"]["id"], app_id="zhaoxi"
     )
     assert account_result["account"]["channel"] == CHANNEL_APP
     assert account_result["owner_binding"]["binding_method"] == "app_otp"
+
+
+def test_app_session_reports_product_membership_newness(client):
+    phone = "13800138009"
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO platform_users(id, phone) VALUES (?, ?)",
+            ("user_existing_other_product", phone),
+        )
+
+    _headers, first = _login(client, phone)
+    assert first["platform_user"]["id"] == "user_existing_other_product"
+    assert first["is_new_user"] is True
+
+    _headers, repeated = _login(client, phone)
+    assert repeated["is_new_user"] is False
 
 
 def test_existing_phone_reuses_primary_account(client):

@@ -265,7 +265,7 @@ def backfill_user(platform_user_id):
     # 2) 取该用户全部 active binding（不再只取第一个 —— D-08 多 account）
     bindings = SELECT account_id FROM account_owner_bindings
                WHERE platform_user_id=? AND status='active'
-               ORDER BY created_at ASC, id ASC              # 与 get_first_active_account_for_user 同序
+               ORDER BY created_at ASC, id ASC              # 与产品级入口账号 resolver 同序
 
     if not bindings:                                        # 无活跃 account（已解绑/异常老用户）
         set universe.onboarding_state = 'preparing'         # 不建 legacy resident；后续 bootstrap

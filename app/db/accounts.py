@@ -6,10 +6,16 @@ import re
 from app.db._backend import Connection, IntegrityError, Row, is_postgres
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.bootstrap.product_registry import (
+    PRODUCTION_PRODUCT_REGISTRY,
+    ZHAOXI_APP_ID,
+    ProductRegistry,
+)
 from app.config import settings
 from app.db._core import (
     ACCOUNT_ACTIVE_SESSION_KEY,
@@ -26,8 +32,11 @@ from app.db._core import (
     advisory_lock_key,
     connect,
     logger,
+    product_quota_subject,
 )
+from app.db.product_memberships import _require_active_product_membership_in_conn
 __all__ = [
+    'SessionPrincipal',
     'resolve_owner_platform_user_id',
     'clear_all_messages_for_account',
     'clear_session_messages',
@@ -43,6 +52,7 @@ __all__ = [
     'create_phone_verification',
     'create_platform_user_session',
     'get_account',
+    'get_account_product_access',
     'get_account_id_for_session_key',
     'get_account_last_inbound_at',
     'get_account_onboarding_state',
@@ -53,7 +63,7 @@ __all__ = [
     'get_latest_closed_carryover_for_account',
     'get_latest_message_id_for_account',
     'get_message_raw',
-    'get_platform_user_by_session_token',
+    'resolve_session_principal',
     'get_profile_for_account',
     'get_profile_for_session',
     'get_session',
@@ -1174,6 +1184,7 @@ def list_accounts() -> List[Dict[str, Any]]:
             """
             SELECT
                 a.id,
+                a.app_id,
                 a.channel,
                 a.display_name,
                 a.status,
@@ -1201,6 +1212,7 @@ def get_account(*, account_id: str) -> Optional[Dict[str, Any]]:
             """
             SELECT
                 a.id,
+                a.app_id,
                 a.channel,
                 a.display_name,
                 a.status,
@@ -1224,6 +1236,34 @@ def get_account(*, account_id: str) -> Optional[Dict[str, Any]]:
     return dict(row) if row else None
 
 
+def get_account_product_access(*, account_id: str) -> Optional[Dict[str, Any]]:
+    """返回账号、真人 owner 与同产品 membership 状态，供入口无副作用鉴权。"""
+    with connect() as conn:
+        account = conn.execute(
+            "SELECT id, app_id FROM accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+        if account is None:
+            return None
+        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        membership = None
+        if platform_user_id is not None:
+            membership = conn.execute(
+                """
+                SELECT status
+                FROM product_memberships
+                WHERE platform_user_id = ? AND app_id = ?
+                """,
+                (platform_user_id, account["app_id"]),
+            ).fetchone()
+    return {
+        "account_id": str(account["id"]),
+        "app_id": str(account["app_id"]),
+        "platform_user_id": platform_user_id,
+        "membership_status": str(membership["status"]) if membership else None,
+    }
+
+
 def update_account(
     *,
     account_id: str,
@@ -1237,6 +1277,7 @@ def update_account(
         return None
     with connect() as conn:
         platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        app_id = str(current["app_id"])
         next_daily = current.get("daily_limit") if daily_limit is _UNSET else daily_limit
         next_rpm = current.get("rpm_limit") if rpm_limit is _UNSET else rpm_limit
         conn.execute(
@@ -1260,22 +1301,31 @@ def update_account(
         if platform_user_id is not None and (
             daily_limit is not _UNSET or rpm_limit is not _UNSET
         ):
-            user_sets = []
-            user_params = []
+            membership_sets = []
+            membership_params = []
             if daily_limit is not _UNSET:
-                user_sets.append("daily_limit = ?")
-                user_params.append(daily_limit)
+                membership_sets.append("daily_limit = ?")
+                membership_params.append(daily_limit)
             if rpm_limit is not _UNSET:
-                user_sets.append("rpm_limit = ?")
-                user_params.append(rpm_limit)
-            user_sets.append(
+                membership_sets.append("rpm_limit = ?")
+                membership_params.append(rpm_limit)
+            membership_sets.append(
                 "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
             )
-            conn.execute(
-                f"UPDATE platform_users SET {', '.join(user_sets)} WHERE id = ?",
-                (*user_params, platform_user_id),
+            updated_membership = conn.execute(
+                f"UPDATE product_memberships SET {', '.join(membership_sets)} "
+                "WHERE platform_user_id = ? AND app_id = ? AND status = 'active'",
+                (*membership_params, platform_user_id, app_id),
             )
-            owned_ids = _account_ids_for_platform_user(conn, platform_user_id)
+            if getattr(updated_membership, "rowcount", 0) != 1:
+                raise ValueError("active product membership required")
+
+            # account 列只保留兼容投影；产品级 canonical 值只写 membership。
+            owned_ids = _account_ids_for_platform_user(
+                conn,
+                platform_user_id,
+                app_id=app_id,
+            )
             if owned_ids:
                 placeholders = ", ".join("?" for _ in owned_ids)
                 account_sets = []
@@ -1305,7 +1355,12 @@ def set_account_debug_flag(*, account_id: str, is_debug: bool) -> None:
         )
 
 
-def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, Any]]:
+def set_account_status(
+    *,
+    account_id: str,
+    status: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Optional[Dict[str, Any]]:
     from app.db.billing import get_platform_user_id_for_account, retry_qualified_referral_rewards_for_user
     current = get_account(account_id=account_id)
     if current is None:
@@ -1320,6 +1375,8 @@ def set_account_status(*, account_id: str, status: str) -> Optional[Dict[str, An
         if platform_user_id:
             retry_qualified_referral_rewards_for_user(
                 platform_user_id=platform_user_id,
+                app_id=str(current["app_id"]),
+                registry=registry,
             )
     return get_account(account_id=account_id)
 
@@ -1466,42 +1523,37 @@ def resolve_owner_platform_user_id(cursor, account_id: str) -> Optional[str]:
     return None
 
 
-def _account_ids_for_platform_user(cursor, platform_user_id: str) -> List[str]:
-    """返回真人当前归属的形态 A accounts 与全部 World resident runtime accounts。"""
+def _account_ids_for_platform_user(
+    cursor, platform_user_id: str, *, app_id: str
+) -> List[str]:
+    """返回真人在指定产品归属的入口账号与 World resident runtime accounts。"""
     rows = cursor.execute(
         """
-        SELECT account_id
-        FROM account_owner_bindings
-        WHERE platform_user_id = ? AND status = 'active'
+        SELECT b.account_id
+        FROM account_owner_bindings b
+        JOIN accounts a ON a.id=b.account_id
+        WHERE b.platform_user_id = ? AND b.status = 'active'
+          AND b.app_id = ? AND a.app_id = ?
         UNION
         SELECT r.runtime_account_id AS account_id
         FROM universe_residents r
         JOIN universes u ON u.id = r.universe_id
+        JOIN accounts a ON a.id=r.runtime_account_id
         WHERE u.owner_platform_user_id = ? AND r.runtime_account_id IS NOT NULL
+          AND a.app_id = ?
         """,
-        (platform_user_id, platform_user_id),
+        (platform_user_id, app_id, app_id, platform_user_id, app_id),
     ).fetchall()
     return [str(row["account_id"]) for row in rows]
-
-
-def _strictest_effective_limit(values: List[Optional[int]], default: int) -> int:
-    """把遗留 account override 收敛为不可绕过的最严格有效上限。"""
-    effective = [int(default if value is None else value) for value in values]
-    finite = [value for value in effective if value > 0]
-    return min(finite) if finite else 0
 
 
 def resolve_effective_quota_limits(
     *, account_id: str, default_daily: int, default_rpm: int
 ) -> Dict[str, Any]:
-    """解析真人级 daily/RPM 上限；孤儿号保留 per-account 兼容。
-
-    canonical 来源为 ``platform_users``。m0031 前遗留冲突未被静默迁移时，临时读取该
-    真人全部 account 副本并取最严格有效值，保证切换 resident 不会获得更宽配额。
-    """
+    """从产品 membership 解析 daily/RPM 上限；孤儿号保留 per-account 兼容。"""
     with connect() as conn:
         account = conn.execute(
-            "SELECT daily_limit, rpm_limit FROM accounts WHERE id = ?",
+            "SELECT app_id, daily_limit, rpm_limit FROM accounts WHERE id = ?",
             (account_id,),
         ).fetchone()
         if account is None:
@@ -1510,7 +1562,10 @@ def resolve_effective_quota_limits(
                 "rpm_limit": int(default_rpm),
                 "source": "default",
             }
-        platform_user_id = resolve_owner_platform_user_id(conn, account_id)
+        app_id = str(account["app_id"])
+        scope = _resolve_quota_scope(conn, account_id)
+        assert scope is not None
+        platform_user_id = scope["platform_user_id"]
         if platform_user_id is None:
             return {
                 "daily_limit": int(
@@ -1522,76 +1577,136 @@ def resolve_effective_quota_limits(
                     default_rpm if account["rpm_limit"] is None else account["rpm_limit"]
                 ),
                 "source": "orphan_account",
+                "app_id": app_id,
+                "quota_subject": scope["subject"],
             }
-        user = conn.execute(
-            "SELECT daily_limit, rpm_limit FROM platform_users WHERE id = ?",
-            (platform_user_id,),
+        membership = conn.execute(
+            """
+            SELECT daily_limit, rpm_limit
+            FROM product_memberships
+            WHERE platform_user_id=? AND app_id=? AND status='active'
+            """,
+            (platform_user_id, app_id),
         ).fetchone()
-        owned_ids = _account_ids_for_platform_user(conn, platform_user_id)
-        placeholders = ", ".join("?" for _ in owned_ids)
-        legacy_rows = (
-            conn.execute(
-                f"SELECT daily_limit, rpm_limit FROM accounts WHERE id IN ({placeholders})",
-                owned_ids,
-            ).fetchall()
-            if owned_ids
-            else [account]
+        if membership is None:
+            raise ValueError("active product membership required")
+        daily = int(
+            default_daily
+            if membership["daily_limit"] is None
+            else membership["daily_limit"]
         )
-        daily_values = [row["daily_limit"] for row in legacy_rows]
-        rpm_values = [row["rpm_limit"] for row in legacy_rows]
-        canonical_daily = user["daily_limit"] if user is not None else None
-        canonical_rpm = user["rpm_limit"] if user is not None else None
-        daily = (
-            int(canonical_daily)
-            if canonical_daily is not None
-            else _strictest_effective_limit(daily_values, int(default_daily))
+        rpm = int(
+            default_rpm
+            if membership["rpm_limit"] is None
+            else membership["rpm_limit"]
         )
-        rpm = (
-            int(canonical_rpm)
-            if canonical_rpm is not None
-            else _strictest_effective_limit(rpm_values, int(default_rpm))
-        )
-        conflict = (
-            len({int(default_daily if value is None else value) for value in daily_values}) > 1
-            or len({int(default_rpm if value is None else value) for value in rpm_values}) > 1
-        )
-        if conflict and (canonical_daily is None or canonical_rpm is None):
-            logger.warning(
-                "legacy quota override conflict resolved strictly platform_user=%s account=%s "
-                "daily=%s rpm=%s",
-                platform_user_id,
-                account_id,
-                daily,
-                rpm,
-            )
         return {
             "daily_limit": daily,
             "rpm_limit": rpm,
-            "source": "platform_user" if not conflict else "legacy_conflict_strict",
+            "source": "product_membership",
             "platform_user_id": platform_user_id,
+            "app_id": app_id,
+            "quota_subject": scope["subject"],
         }
 
 
-def _resolve_quota_subject(cursor, account_id: str) -> str:
-    """在给定连接/事务上把 account_id 解析成配额聚合键 platform_user_id（D-09 M1-3）。
-
-    统一收口到 resolve_owner_platform_user_id（形态 A owner_binding → 形态 B 世界归属）。
-    无归属真人的孤儿号回退为 account_id 本身，保证配额仍按号强制（daily_usage.platform_user_id
-    无 FK，容此回退值）。冻结解析规则与 get_platform_user_id_for_account、D-14 预检、迁移
-    m0025/m0026 一致（迁移期回填只认 owner_binding，居民为运行时增量）。
-    """
-    return resolve_owner_platform_user_id(cursor, account_id) or account_id
+def _resolve_quota_scope(
+    cursor, account_id: str, *, allow_missing: bool = False
+) -> Optional[Dict[str, Optional[str]]]:
+    """从 account 推导产品配额锚；真人账号必须有同产品 active membership。"""
+    account = cursor.execute(
+        "SELECT id, app_id FROM accounts WHERE id=?",
+        (account_id,),
+    ).fetchone()
+    if account is None:
+        if allow_missing:
+            return None
+        raise ValueError("account not found")
+    app_id = str(account["app_id"])
+    platform_user_id = resolve_owner_platform_user_id(cursor, account_id)
+    if platform_user_id is None:
+        return {
+            "platform_user_id": None,
+            "subject": account_id,
+            "app_id": app_id,
+        }
+    owner_in_app = cursor.execute(
+        """
+        SELECT 1
+        FROM account_owner_bindings b
+        WHERE b.account_id=? AND b.platform_user_id=? AND b.status='active'
+          AND b.app_id=?
+        UNION ALL
+        SELECT 1
+        FROM universe_residents r
+        JOIN universes u ON u.id=r.universe_id
+        WHERE r.runtime_account_id=? AND u.owner_platform_user_id=?
+        LIMIT 1
+        """,
+        (account_id, platform_user_id, app_id, account_id, platform_user_id),
+    ).fetchone()
+    membership = cursor.execute(
+        """
+        SELECT status FROM product_memberships
+        WHERE platform_user_id=? AND app_id=?
+        """,
+        (platform_user_id, app_id),
+    ).fetchone()
+    if owner_in_app is None:
+        raise ValueError("quota scope mismatch")
+    if membership is None or membership["status"] != "active":
+        raise ValueError("active product membership required")
+    return {
+        "platform_user_id": platform_user_id,
+        "subject": platform_user_id,
+        "app_id": app_id,
+    }
 
 
 def get_daily_usage(*, account_id: str, date: str) -> int:
-    # D-09：daily 按真人聚合。对外仍收 account_id，内部解析成 platform_user 后按真人查。
     with connect() as conn:
-        subject = _resolve_quota_subject(conn, account_id)
+        scope = _resolve_quota_scope(conn, account_id, allow_missing=True)
+        if scope is None:
+            return 0
         row = conn.execute(
-            "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
-            (subject, date),
+            """
+            SELECT message_count FROM daily_usage
+            WHERE platform_user_id=? AND app_id=? AND date=?
+            """,
+            (scope["subject"], scope["app_id"], date),
         ).fetchone()
     return int(row["message_count"]) if row else 0
+
+
+def _increment_daily_usage_in_scope(
+    tx: Connection,
+    *,
+    account_id: str,
+    platform_user_id: str,
+    app_id: str,
+    date: str,
+) -> int:
+    """在已校验产品作用域内原子累加 daily usage。"""
+    tx.execute(
+        """
+        INSERT INTO daily_usage(
+            account_id, platform_user_id, app_id, date, message_count, updated_at
+        )
+        VALUES (?, ?, ?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        ON CONFLICT(platform_user_id, app_id, date) DO UPDATE SET
+            message_count = daily_usage.message_count + 1,
+            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        """,
+        (account_id, platform_user_id, app_id, date),
+    )
+    row = tx.execute(
+        """
+        SELECT message_count FROM daily_usage
+        WHERE platform_user_id=? AND app_id=? AND date=?
+        """,
+        (platform_user_id, app_id, date),
+    ).fetchone()
+    return int(row["message_count"]) if row else 1
 
 
 def increment_daily_usage(
@@ -1601,39 +1716,31 @@ def increment_daily_usage(
     conn: Optional[Connection] = None,
 ) -> int:
     with _tx(conn) as tx:
-        # D-09：解析真人聚合键（同事务查，避免嵌套连接）；account_id 列继续写入作创建来源
-        # + 满足保留的 UNIQUE(account_id,date)/FK。ON CONFLICT arbiter 迁到 (platform_user_id,date)。
-        subject = _resolve_quota_subject(tx, account_id)
-        tx.execute(
-            """
-            INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at)
-            VALUES (?, ?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            ON CONFLICT(platform_user_id, date) DO UPDATE SET
-                -- 限定表名：PG 的 DO UPDATE 里 excluded 也在作用域，裸 message_count 会歧义
-                message_count = daily_usage.message_count + 1,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
-            """,
-            (account_id, subject, date),
+        scope = _resolve_quota_scope(tx, account_id)
+        assert scope is not None
+        return _increment_daily_usage_in_scope(
+            tx,
+            account_id=account_id,
+            platform_user_id=str(scope["subject"]),
+            app_id=str(scope["app_id"]),
+            date=date,
         )
-        row = tx.execute(
-            "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
-            (subject, date),
-        ).fetchone()
-    return int(row["message_count"]) if row else 1
 
 
 def get_usage_last_7_days(*, account_id: str) -> List[Dict[str, Any]]:
     # D-09：展示与强制一致，按真人聚合的近 7 日用量。
     with connect() as conn:
-        subject = _resolve_quota_subject(conn, account_id)
+        scope = _resolve_quota_scope(conn, account_id, allow_missing=True)
+        if scope is None:
+            return []
         rows = conn.execute(
             """
             SELECT date, message_count FROM daily_usage
-            WHERE platform_user_id = ?
+            WHERE platform_user_id=? AND app_id=?
             ORDER BY date DESC
             LIMIT 7
             """,
-            (subject,),
+            (scope["subject"], scope["app_id"]),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1667,29 +1774,41 @@ def reserve_daily_quota(
     （ADR「去重先于预占同事务」，重试不吃配额）。
     """
     with _tx(conn) as tx:
-        subject = _resolve_quota_subject(tx, account_id)
+        scope = _resolve_quota_scope(tx, account_id)
+        assert scope is not None
+        subject = str(scope["subject"])
+        app_id = str(scope["app_id"])
         if is_postgres():
-            # 事务级 advisory 锁：同真人的检查-预占串行化，锁随事务提交/回滚自动释放。
             tx.execute(
                 "SELECT pg_advisory_xact_lock(?)",
-                (advisory_lock_key("quota:" + subject),),
+                (
+                    advisory_lock_key(
+                        "quota:"
+                        + product_quota_subject(
+                            platform_user_id=subject,
+                            app_id=app_id,
+                        )
+                    ),
+                ),
             )
-        # prune-on-touch：先清本真人已过期的悬挂预占（同 rpm_hits），再计数。
         tx.execute(
-            "DELETE FROM daily_quota_reservations WHERE platform_user_id = ? "
+            "DELETE FROM daily_quota_reservations WHERE platform_user_id=? AND app_id=? "
             "AND expires_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))",
-            (subject,),
+            (subject, app_id),
         )
         if limit > 0:
             used_row = tx.execute(
-                "SELECT message_count FROM daily_usage WHERE platform_user_id = ? AND date = ?",
-                (subject, date),
+                """
+                SELECT message_count FROM daily_usage
+                WHERE platform_user_id=? AND app_id=? AND date=?
+                """,
+                (subject, app_id, date),
             ).fetchone()
             used = int(used_row["message_count"]) if used_row else 0
             reserved_row = tx.execute(
                 "SELECT COUNT(*) AS cnt FROM daily_quota_reservations "
-                "WHERE platform_user_id = ? AND date = ?",
-                (subject, date),
+                "WHERE platform_user_id=? AND app_id=? AND date=?",
+                (subject, app_id, date),
             ).fetchone()
             reserved = int(reserved_row["cnt"]) if reserved_row else 0
             if used + reserved >= limit:
@@ -1697,10 +1816,19 @@ def reserve_daily_quota(
         reservation_id = _new_id("qres")
         tx.execute(
             """
-            INSERT INTO daily_quota_reservations(id, platform_user_id, date, account_id, expires_at)
-            VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?)))
+            INSERT INTO daily_quota_reservations(
+                id, platform_user_id, app_id, date, account_id, expires_at
+            )
+            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?)))
             """,
-            (reservation_id, subject, date, account_id, f"+{int(ttl_minutes)} minutes"),
+            (
+                reservation_id,
+                subject,
+                app_id,
+                date,
+                account_id,
+                f"+{int(ttl_minutes)} minutes",
+            ),
         )
     return reservation_id
 
@@ -1715,15 +1843,31 @@ def confirm_daily_quota(*, reservation_id: Optional[str], conn: Optional[Connect
         return
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT account_id, date FROM daily_quota_reservations WHERE id = ?",
+            """
+            SELECT account_id, platform_user_id, app_id, date
+            FROM daily_quota_reservations WHERE id=?
+            """,
             (reservation_id,),
         ).fetchone()
         if row is None:
             return
+        scope = _resolve_quota_scope(tx, str(row["account_id"]))
+        assert scope is not None
+        if (
+            scope["subject"] != row["platform_user_id"]
+            or scope["app_id"] != row["app_id"]
+        ):
+            raise ValueError("quota reservation scope mismatch")
         cur = tx.execute("DELETE FROM daily_quota_reservations WHERE id = ?", (reservation_id,))
         if getattr(cur, "rowcount", 0) != 1:
             return  # 并发下已被他方删除 → 不重复计数
-        increment_daily_usage(account_id=str(row["account_id"]), date=str(row["date"]), conn=tx)
+        _increment_daily_usage_in_scope(
+            tx,
+            account_id=str(row["account_id"]),
+            platform_user_id=str(row["platform_user_id"]),
+            app_id=str(row["app_id"]),
+            date=str(row["date"]),
+        )
 
 
 def rollback_daily_quota(*, reservation_id: Optional[str], conn: Optional[Connection] = None) -> None:
@@ -2042,21 +2186,43 @@ def get_valid_verification_by_token(
 # Platform user sessions
 # ---------------------------------------------------------------------------
 
+
+@dataclass(frozen=True)
+class SessionPrincipal:
+    """服务端验证后的 session 身份与产品 audience。"""
+
+    session_id: str
+    platform_user_id: str
+    app_id: str
+    expires_at: str
+
+
 def create_platform_user_session(
     *,
     platform_user_id: str,
     days: int = 7,
+    app_id: str = ZHAOXI_APP_ID,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     import secrets
+    registered_app_id = registry.require_enabled(app_id).app_id
     token = secrets.token_urlsafe(32)
     session_id = f"sess_{uuid.uuid4().hex}"
     with connect() as conn:
+        _require_active_product_membership_in_conn(
+            conn,
+            platform_user_id=platform_user_id,
+            app_id=registered_app_id,
+            registry=registry,
+        )
         conn.execute(
             """
-            INSERT INTO platform_user_sessions(id, platform_user_id, token, expires_at)
-            VALUES (?, ?, ?, datetime('now', '+8 hours', ? || ' days'))
+            INSERT INTO platform_user_sessions(
+                id, platform_user_id, app_id, token, expires_at
+            )
+            VALUES (?, ?, ?, ?, datetime('now', '+8 hours', ? || ' days'))
             """,
-            (session_id, platform_user_id, token, f"+{days}"),
+            (session_id, platform_user_id, registered_app_id, token, f"+{days}"),
         )
         row = conn.execute(
             "SELECT * FROM platform_user_sessions WHERE id = ?",
@@ -2065,20 +2231,51 @@ def create_platform_user_session(
     return dict(row)
 
 
-def get_platform_user_by_session_token(*, token: str) -> Optional[Dict[str, Any]]:
-    """Return platform_user row if session token is valid and not expired."""
+def resolve_session_principal(
+    *,
+    token: str,
+    expected_app_id: Optional[str] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Optional[SessionPrincipal]:
+    """验证 token、产品注册、audience 与 active membership 后返回 principal。"""
+
+    cleaned_token = str(token or "").strip()
+    if not cleaned_token:
+        return None
+    registered_expected = None
+    if expected_app_id is not None:
+        try:
+            registered_expected = registry.require_enabled(expected_app_id).app_id
+        except ValueError:
+            return None
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT pu.*
-            FROM platform_users pu
-            JOIN platform_user_sessions s ON s.platform_user_id = pu.id
-            WHERE s.token = ?
+            SELECT s.id AS session_id, s.platform_user_id, s.app_id, s.expires_at
+            FROM platform_user_sessions s
+            JOIN platform_users pu ON pu.id=s.platform_user_id
+            JOIN product_memberships pm
+              ON pm.platform_user_id=s.platform_user_id AND pm.app_id=s.app_id
+            WHERE s.token=?
               AND s.expires_at > datetime('now', '+8 hours')
+              AND pm.status='active'
             """,
-            (token,),
+            (cleaned_token,),
         ).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    try:
+        registered_session_app = registry.require_enabled(str(row["app_id"])).app_id
+    except ValueError:
+        return None
+    if registered_expected is not None and registered_session_app != registered_expected:
+        return None
+    return SessionPrincipal(
+        session_id=str(row["session_id"]),
+        platform_user_id=str(row["platform_user_id"]),
+        app_id=registered_session_app,
+        expires_at=str(row["expires_at"]),
+    )
 
 
 def revoke_platform_user_session(*, token: str) -> bool:

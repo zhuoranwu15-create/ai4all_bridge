@@ -58,7 +58,7 @@ def _seed_inbound(*, account_id: str, session_id: int, count: int, date: str) ->
 
 def _set_balance(*, account_id: str, micros: int) -> None:
     """为账号建立 platform_user + 绑定 + 钱包并把余额设为 micros。"""
-    from app.db import connect, ensure_wallet
+    from app.db import connect, ensure_product_membership, ensure_wallet
 
     pu_id = f"pu-{account_id}"
     phone = f"1{next(_phone_seq):010d}"
@@ -71,6 +71,7 @@ def _set_balance(*, account_id: str, micros: int) -> None:
             "VALUES (?, ?, 'manual', 'active')",
             (pu_id, account_id),
         )
+    ensure_product_membership(platform_user_id=pu_id, app_id="zhaoxi")
     ensure_wallet(account_id=account_id, platform_user_id=pu_id)
     with connect() as conn:
         conn.execute(

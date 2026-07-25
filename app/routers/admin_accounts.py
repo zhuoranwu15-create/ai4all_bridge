@@ -3,6 +3,7 @@ settings 在本模块绑定，测试需 patch "app.routers.admin_accounts.settin
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.routers.deps import get_admin_user, require_admin_user, verify_admin_auth
 from app.routers.serializers import _binding_intent_for_view, _can_bypass_redaction_for_account, _debug_redaction_payload, _normalize_ts, _platform_user_for_view, _profile_for_view, _trace_for_view
 from app.routers.models import ProfileUpdateRequest
@@ -316,7 +317,8 @@ def admin_account_wallet(
     limit: int = 20,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
-    if get_account(account_id=account_id) is None:
+    account = get_account(account_id=account_id)
+    if account is None:
         raise HTTPException(status_code=404, detail="account not found")
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
@@ -327,6 +329,7 @@ def admin_account_wallet(
     )
     return {
         "account_id": account_id,
+        "app_id": account["app_id"],
         "wallet": wallet,
         "ledger": list_wallet_ledger(account_id=account_id, limit=limit) if wallet else [],
         "redacted": True,
@@ -338,17 +341,23 @@ def admin_referrals(
     limit: int = 50,
     inviter_platform_user_id: Optional[str] = None,
     invitee_platform_user_id: Optional[str] = None,
+    app_id: str = ZHAOXI_APP_ID,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     if limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 200")
-    return {
-        "status": "ok",
-        "referrals": list_referral_relationships(
+    try:
+        referrals = list_referral_relationships(
             limit=limit,
             inviter_platform_user_id=inviter_platform_user_id,
             invitee_platform_user_id=invitee_platform_user_id,
-        ),
+            app_id=app_id,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
+    return {
+        "status": "ok",
+        "referrals": referrals,
         "redacted": True,
     }
 
@@ -356,11 +365,15 @@ def admin_referrals(
 @router.post("/admin/referrals/release-due-rewards")
 def admin_release_due_referral_rewards(
     limit: int = 200,
+    app_id: str = ZHAOXI_APP_ID,
     _: None = Depends(verify_admin_auth),
 ) -> dict:
     if limit < 1 or limit > 1000:
         raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
-    ledgers = release_due_referral_rewards(limit=limit)
+    try:
+        ledgers = release_due_referral_rewards(limit=limit, app_id=app_id)
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=str(err))
     return {
         "status": "ok",
         "released_count": len(ledgers),

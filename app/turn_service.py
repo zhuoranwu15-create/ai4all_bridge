@@ -26,11 +26,11 @@ from app.db import (
     connect as db_connect,
     count_inbound_messages_for_account,
     get_account_id_for_session_key,
+    get_account_product_access,
     get_account_onboarding_state,
     get_active_content_invitation,
     get_daily_usage,
     get_duplicate_reply,
-    get_platform_user_id_for_account,
     increment_session_turn_count,
     reserve_daily_quota,
     confirm_daily_quota,
@@ -1065,12 +1065,12 @@ def _prepare_turn(
         0.001,
     )
 
-    # D-09：RPM 按真人聚合，多居民共享一套滑窗。check_rpm 是与 web IP-keyed 调用共享的通用限流器，
-    # 不能内部解析，故在此把 account_id 解析成 platform_user subject（孤儿号回退 account_id）后传入。
-    quota_subject = get_platform_user_id_for_account(account_id=account_id) or account_id
-    if effective_rpm > 0 and not rate_limiter.check_rpm(
-        quota_subject,
-        effective_rpm,
+    # 产品内按真人聚合，跨产品使用不同 RPM subject 与 advisory lock；IP/campaign 等通用
+    # RateLimiter 调用仍继续走 check_rpm，不被产品配额规则影响。
+    if effective_rpm > 0 and not rate_limiter.check_product_rpm(
+        platform_user_id=str(quota_limits["quota_subject"]),
+        app_id=str(quota_limits["app_id"]),
+        limit=effective_rpm,
         window_seconds=effective_rpm_window_seconds,
     ):
         logger.info(
@@ -2237,6 +2237,47 @@ def run_turn_for_account(ctx: ChannelTurnInput) -> OpenClawTurnResponse:
         id_diagnostics.get("ctx_session_id"),
         id_diagnostics.get("raw_keys"),
     )
+
+    access = get_account_product_access(account_id=ctx.account_id)
+    if (
+        access is not None
+        and access["platform_user_id"] is not None
+        and access["membership_status"] != "active"
+    ):
+        reason = (
+            "product_membership_disabled"
+            if access["membership_status"] == "disabled"
+            else "product_membership_required"
+        )
+        logger.warning(
+            "openclaw_turn product membership rejected account=%s app=%s "
+            "platform_user=%s membership_status=%s reason=%s",
+            ctx.account_id,
+            access["app_id"],
+            access["platform_user_id"],
+            access["membership_status"] or "missing",
+            reason,
+        )
+        timings["reply_ready_ms"] = _elapsed_ms(started_at)
+        response = OpenClawTurnResponse(
+            status="disabled",
+            no_reply=True,
+            metadata={
+                **identity_response_metadata(ctx.identity, ctx.account_id),
+                "app_id": access["app_id"],
+                "reason": reason,
+            },
+        )
+        _log_turn_timing(
+            ctx=ctx,
+            timings=timings,
+            started_at=started_at,
+            status=response.status,
+            account_id=ctx.account_id,
+            session=ctx.identity.session_key,
+            message_id=ctx.message_id or ctx.event_id,
+        )
+        return response
 
     prepare_started = time.monotonic()
     setup = _prepare_turn(ctx, started_at=started_at)

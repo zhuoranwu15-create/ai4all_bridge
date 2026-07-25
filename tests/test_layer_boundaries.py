@@ -1,10 +1,4 @@
-"""分层边界门禁（M0-2，D-12）：领域层不得打穿分层直连 Runtime 内部。
-
-用 stdlib `ast` 静态扫描，不引入 import-linter 等新依赖（CLAUDE.md 禁擅自加依赖）。
-规则：`app.domains.companion_world.*` 禁止 import `app.db.*` 与 `app.turn_service`
-（含相对 import 与 `from app import db` 形式的规避）。当前领域层为 M0 空骨架，
-测试应全绿；一旦有人加入越界 import 即 CI 阻塞。
-"""
+"""通用分层边界门禁：产品、Runtime 与平台依赖方向由 AST 强制。"""
 from __future__ import annotations
 
 import ast
@@ -13,17 +7,52 @@ from pathlib import Path
 # 仓库根：tests/ 的上一级
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# 受管的领域层根（相对仓库根的包路径）
-DOMAIN_LAYER = REPO_ROOT / "app" / "domains" / "companion_world"
+# 受管的产品领域根；新产品可落 app/products，朝夕旧域本阶段不搬目录。
+DOMAINS_ROOT = REPO_ROOT / "app" / "domains"
+PRODUCTS_ROOT = REPO_ROOT / "app" / "products"
 
 # 受管的 Agent Runtime 层根（形态无关；不得反向依赖任何产品域层）
 RUNTIME_LAYER = REPO_ROOT / "app" / "agent_runtime"
 
+# 共享平台层。Phase 1 不搬现有朝夕 adapter，明确冻结例外；除此之外的共享模块
+# 不得新增产品域依赖。未来产品实现应由 bootstrap composition root 接线。
+PLATFORM_LAYER = REPO_ROOT / "app" / "platform"
+LEGACY_PLATFORM_PRODUCT_ADAPTERS = {
+    "app_inbox.py",
+    "companion_world_human_chat.py",
+    "companion_world_lifecycle.py",
+    "companion_world_mailbox.py",
+    "companion_world_memory.py",
+    "companion_world_repository.py",
+    "companion_world_turn.py",
+    "companion_world_visits.py",
+}
+
 # 禁止被领域层直接依赖的 Runtime 内部模块（绝对模块名前缀）
-FORBIDDEN_PREFIXES = ("app.db", "app.turn_service")
+DOMAIN_FORBIDDEN_PREFIXES = (
+    "app.db",
+    "app.platform",
+    "app.routers",
+    "app.turn_service",
+    "fastapi",
+    "psycopg",
+    "sqlalchemy",
+    "sqlite3",
+    "starlette",
+)
 
 # 禁止被 Agent Runtime 反向依赖的产品域层（D-06 形态无关：Runtime 不认识 Companion World）
-RUNTIME_FORBIDDEN_PREFIXES = ("app.domains", "app.db.companion_world")
+RUNTIME_FORBIDDEN_PREFIXES = (
+    "app.domains",
+    "app.products",
+    "app.db.companion_world",
+)
+
+PLATFORM_FORBIDDEN_PREFIXES = (
+    "app.domains",
+    "app.products",
+    "app.db.companion_world",
+)
 
 # M0 脚手架应就位的空骨架包（含各自 __init__.py）
 SCAFFOLD_PACKAGES = (
@@ -78,23 +107,64 @@ def _iter_imported_modules(tree: ast.AST, package: str):
                     yield f"{base}.{alias.name}"
 
 
-def _is_forbidden(module: str, prefixes: tuple[str, ...] = FORBIDDEN_PREFIXES) -> bool:
+def _is_forbidden(
+    module: str, prefixes: tuple[str, ...] = DOMAIN_FORBIDDEN_PREFIXES
+) -> bool:
     return any(
         module == prefix or module.startswith(prefix + ".")
         for prefix in prefixes
     )
 
 
+def _product_domain_roots() -> list[tuple[str, Path]]:
+    """返回现存产品域包；兼容朝夕旧 app/domains 与未来 app/products 布局。"""
+    roots: list[tuple[str, Path]] = []
+    for package_root, module_root in (
+        (DOMAINS_ROOT, "app.domains"),
+        (PRODUCTS_ROOT, "app.products"),
+    ):
+        if not package_root.exists():
+            continue
+        roots.extend(
+            (f"{module_root}.{child.name}", child)
+            for child in sorted(package_root.iterdir())
+            if child.is_dir()
+            and child.name != "__pycache__"
+            and (child / "__init__.py").is_file()
+        )
+    return roots
+
+
 def _domain_py_files() -> list[Path]:
-    if not DOMAIN_LAYER.exists():
-        return []
-    return sorted(DOMAIN_LAYER.rglob("*.py"))
+    return sorted(
+        py_file
+        for _module, root in _product_domain_roots()
+        for py_file in root.rglob("*.py")
+    )
 
 
 def _runtime_py_files() -> list[Path]:
     if not RUNTIME_LAYER.exists():
         return []
     return sorted(RUNTIME_LAYER.rglob("*.py"))
+
+
+def _platform_py_files() -> list[Path]:
+    if not PLATFORM_LAYER.exists():
+        return []
+    return sorted(PLATFORM_LAYER.rglob("*.py"))
+
+
+def _node_mentions_product_discriminator(node: ast.AST) -> bool:
+    """判断表达式是否引用 app_id/product_id，供禁止 Runtime 产品字符串分支。"""
+    return any(
+        (isinstance(child, ast.Name) and child.id in {"app_id", "product_id"})
+        or (
+            isinstance(child, ast.Attribute)
+            and child.attr in {"app_id", "product_id"}
+        )
+        for child in ast.walk(node)
+    )
 
 
 def _module_export_names(module_rel: str) -> tuple[str, ...]:
@@ -126,19 +196,40 @@ def test_scaffold_packages_exist():
         assert init.is_file(), f"缺少脚手架包 __init__.py：{pkg}/__init__.py"
 
 
-def test_companion_world_does_not_import_runtime_internals():
-    """M0-2：领域层不得直连 app.db.* / app.turn_service（D-12，CI 阻塞门）。"""
+def test_product_domains_do_not_import_framework_or_runtime_internals():
+    """产品 domain 不得直连 FastAPI、SQL repository、router 或 turn_service。"""
     violations: list[str] = []
     for py_file in _domain_py_files():
         package = _module_package(py_file)
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
         for module in _iter_imported_modules(tree, package):
-            if _is_forbidden(module):
+            if _is_forbidden(module, DOMAIN_FORBIDDEN_PREFIXES):
                 rel = py_file.relative_to(REPO_ROOT)
                 violations.append(f"{rel} → import {module}")
     assert not violations, (
-        "领域层越界依赖 Runtime 内部（应经 agent_runtime 端口，见 ADR §7.3）：\n"
+        "产品 domain 越界依赖框架/SQL/Runtime 内部（应经端口或 application service）：\n"
         + "\n".join(violations)
+    )
+
+
+def test_product_domains_do_not_import_each_other():
+    """任意产品域不得 import 另一产品；composition 只允许发生在 bootstrap。"""
+    product_roots = _product_domain_roots()
+    violations: list[str] = []
+    for current_module, root in product_roots:
+        forbidden = tuple(
+            module for module, _other_root in product_roots if module != current_module
+        )
+        for py_file in sorted(root.rglob("*.py")):
+            tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+            package = _module_package(py_file)
+            for module in _iter_imported_modules(tree, package):
+                if forbidden and _is_forbidden(module, forbidden):
+                    violations.append(
+                        f"{py_file.relative_to(REPO_ROOT)} → import {module}"
+                    )
+    assert not violations, "产品域互相依赖（应只在 bootstrap 组合）：\n" + "\n".join(
+        violations
     )
 
 
@@ -161,6 +252,44 @@ def test_runtime_does_not_import_product_domains():
         "Agent Runtime 反向依赖产品域层（破 D-06 形态无关；组合应下沉域层）：\n"
         + "\n".join(violations)
     )
+
+
+def test_shared_platform_does_not_import_product_domains():
+    """共享 platform 不得认识产品；现有朝夕 adapter 在 Phase 1 明确冻结、不扩散。"""
+    violations: list[str] = []
+    for py_file in _platform_py_files():
+        rel_to_platform = py_file.relative_to(PLATFORM_LAYER).as_posix()
+        if rel_to_platform in LEGACY_PLATFORM_PRODUCT_ADAPTERS:
+            continue
+        package = _module_package(py_file)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for module in _iter_imported_modules(tree, package):
+            if _is_forbidden(module, PLATFORM_FORBIDDEN_PREFIXES):
+                violations.append(f"{py_file.relative_to(REPO_ROOT)} → import {module}")
+    assert not violations, (
+        "共享 Platform 依赖具体产品（产品实现只能由 bootstrap 组合）：\n"
+        + "\n".join(violations)
+    )
+
+
+def test_runtime_has_no_product_string_branch():
+    """Runtime 不得按 app_id/product_id 字符串分支，产品差异必须经端口注入。"""
+    violations: list[str] = []
+    for py_file in _runtime_py_files():
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            if not _node_mentions_product_discriminator(node):
+                continue
+            if any(
+                isinstance(child, ast.Constant) and isinstance(child.value, str)
+                for child in ast.walk(node)
+            ):
+                violations.append(
+                    f"{py_file.relative_to(REPO_ROOT)}:{node.lineno} → product string compare"
+                )
+    assert not violations, "Runtime 出现产品字符串分支：\n" + "\n".join(violations)
 
 
 def test_runtime_adapter_has_no_companion_world_composition_methods():

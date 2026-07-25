@@ -201,6 +201,33 @@ def test_pg_init_db_idempotent(pg_settings):
         assert count == len(_MIGRATIONS)
 
 
+def test_pg_init_db_blocks_automatic_phase1_contract_migrations(pg_settings):
+    """既有 PG 库不得由常规启动越过需 drain/reconcile 的 contract。"""
+    from app.db._core import connect, init_db
+
+    init_db()
+    with connect() as conn:
+        conn.execute("DELETE FROM schema_migrations WHERE version >= 40")
+
+    with pytest.raises(
+        RuntimeError, match="automatic Phase 1 contract migration blocked"
+    ):
+        init_db()
+
+    with connect() as conn:
+        version = conn.execute(
+            "SELECT MAX(version) AS version FROM schema_migrations"
+        ).fetchone()["version"]
+    assert int(version) == 39
+
+    with connect() as conn:
+        conn.execute("DELETE FROM schema_migrations")
+    with pytest.raises(
+        RuntimeError, match="automatic Phase 1 contract migration blocked"
+    ):
+        init_db()
+
+
 def test_pg_identity_default_and_now_default(pg_settings):
     """AUTOINCREMENT→IDENTITY、strftime→to_char 默认值在真 PG 生效。"""
     from app.db._core import connect, init_db

@@ -25,7 +25,7 @@
 - 微信绑定流(web 端扫码):`app/routers/web.py` 的 `web_login` / `web_create_binding_intent` / `web_register_and_binding_intent`:
   phone OTP → `_register_platform_user_with_otp` → **`get_or_create_default_ai4all_account_for_user`** → `create_binding_intent(channel="openclaw-weixin")` → 扫码 → completed intent。
   微信入站解析:`resolve_account_id_for_inbound_channel_identity`(`app/db/billing.py:2576`)按 completed binding intent 命中 `account_id`。
-- App 流:`app/routers/app_api.py` `app_create_session`(`:172`)→ 同 phone → 同 `platform_user` → **同一个 `get_or_create_default_...`** → `get_first_active_account_for_user`(取最早 active owner_binding)。
+- App 流:`app/routers/app_api.py` `app_create_session`(`:172`)→ 同 phone → 同 `platform_user` → **同一个 `get_or_create_default_...`** → `get_active_bound_account_for_user_in_app(..., app_id='zhaoxi')`（取该产品唯一 active owner_binding）。
 - `get_or_create_default_ai4all_account_for_user`(`billing.py:2196`):有账号返回最早那个,**仅当一个都没有时才新建**。
 - ⇒ **同手机号下,App 与微信落到同一个 `account_id`,长期记忆与人设「今天就已经打通」**。这是现状,不是待建功能。
 
@@ -123,7 +123,7 @@ ON account_owner_bindings(platform_user_id) WHERE status='active';
 - 语义(≤10)与 A(≤1)冲突,且由 S3 索引接管。
 - 改为:create 前若该 user 已有 active 账号则拒绝直接建号(get_or_create 无害,只在无账号时进 create);或移除软检查,交唯一索引兜底并把 `IntegrityError` 翻译成清晰报错。
 
-**S6. 解析器显式化(`get_first_active_account_for_user`,`billing.py:2158`)**
+**S6. 解析器显式化（现为 `get_active_bound_account_for_user_in_app`）**
 - 逻辑不变(earliest);返回前 `COUNT`,`>1` 打 `warning` 日志,探测未收敛用户,避免"取最早"静默掩盖脏数据。
 
 **冲突/不一致对照表**
@@ -174,7 +174,7 @@ ON account_owner_bindings(platform_user_id) WHERE status='active';
 - [x] **A3** 建账号/绑定写 `app_id='zhaoxi'`(`billing.DEFAULT_APP_ID`)
 - [x] **A6**(原 S4)**直接删** `web_create_agent` + `WebCreateAgentRequest`(Q1)
 - [x] **A4**(原 S5)收敛 `billing.py` ≤10 → ≤1,IntegrityError 跨后端翻译兜底
-- [x] **A5**(原 S6)`get_first_active_account_for_user` 加 >1 告警
+- [x] **A5**(原 S6) 产品级入口账号解析器加 >1 告警
 - [x] **A7** debug 建号:`debug_create_account` 不建 owner_binding,天然不碰唯一索引,无需改(Q3)
 - [x] **B**(Q5)channel `app`→`native`:m0024 单行 `UPDATE` + `channels.py` 常量值(变量名保留)
 - [x] 测试:同 `(user,app)` 二次建号被拒;索引 DB 层兜底 + archived 不占名额;解析器告警;m0022–m0024 SQLite 幂等
@@ -241,7 +241,7 @@ Phase 2(按需,Q2 已决定本次提前落 app_id 列):
 - **A2 迁移 m0023 `_migration_0023_owner_binding_active_unique`**:`CREATE UNIQUE INDEX ux_owner_binding_active_user_app ON account_owner_bindings(platform_user_id, app_id) WHERE status='active';`(SQLite/PG 均支持部分索引;S1 已验证无冲突)。
 - **A3 写入 app_id**:`create_ai4all_account_for_user`(`billing.py`)建账号/建 owner_binding 时写 `app_id='zhaoxi'`。
 - **A4 收敛 ≤10(S5,`billing.py:2090`)**:移除 `if existing_count >= 10` 软检查,create 前若该 `(user, 'zhaoxi')` 已有 active 账号则直接拒绝;唯一索引兜底,`IntegrityError` 翻译成清晰报错。`get_or_create_default` 无害(仅无账号时进 create)。
-- **A5 解析器告警(S6,`billing.py:2158` `get_first_active_account_for_user`)**:返回前 `COUNT`,`>1` 打 `warning`(收敛后恒为 1,用于探测异常)。
+- **A5 解析器告警(S6,`get_active_bound_account_for_user_in_app`)**:返回前按 `(user, app)` `COUNT`,`>1` 打 `warning`(收敛后恒为 1,用于探测异常)。
 - **A6 删 web_create_agent(S4,`web.py:949`)**:删 handler + `WebCreateAgentRequest` 模型 + 路由注册;保留 `create_ai4all_account_for_user` 本体。
 - **A7 debug 建号(Q3,`debug.py:695`)**:保留能力;命中唯一索引时返回清晰 409(而非 500)。
 

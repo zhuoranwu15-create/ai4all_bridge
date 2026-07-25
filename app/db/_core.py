@@ -64,6 +64,15 @@ def advisory_lock_key(subject: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
+def product_quota_subject(*, platform_user_id: str, app_id: str) -> str:
+    """构造不会与旧真人级 key 混淆的产品配额/RPM subject。"""
+    cleaned_user_id = str(platform_user_id or "").strip()
+    cleaned_app_id = str(app_id or "").strip()
+    if not cleaned_user_id or not cleaned_app_id:
+        raise ValueError("platform_user_id and app_id are required")
+    return f"product:{len(cleaned_app_id)}:{cleaned_app_id}:{cleaned_user_id}"
+
+
 def _new_account_id() -> str:
     return f"aid_{_ACCOUNT_ID_RANDOM_MIN + uuid.uuid4().int % _ACCOUNT_ID_RANDOM_SPACE}"
 
@@ -239,20 +248,79 @@ def _ensure_column(conn: Connection, table: str, column: str, definition: str) -
 
 # 应用级事务 advisory lock ID，用于串行化多节点并发启动时的 PG 迁移
 _PG_MIGRATION_LOCK_ID = 7_483_920
+_PHASE1_CONTRACT_MIGRATION_VERSIONS = (40, 42, 44, 45, 46)
+
+
+def _guard_automatic_phase1_contract_migrations(conn: Connection) -> None:
+    """拒绝既有 PG 库由常规应用启动跨越 Phase 1 contract 检查点。"""
+    _ensure_schema_migrations_table(conn)
+    current = _applied_schema_version(conn)
+    # 只有版本 0 且核心业务表尚不存在才是真空库；版本表丢失不能绕过 interlock。
+    if current == 0 and not _table_exists(conn, "accounts"):
+        return
+    pending_contracts = [
+        version
+        for version in _PHASE1_CONTRACT_MIGRATION_VERSIONS
+        if current < version
+    ]
+    if pending_contracts:
+        pending = ",".join(str(version) for version in pending_contracts)
+        raise RuntimeError(
+            "automatic Phase 1 contract migration blocked: "
+            f"current={current}, pending={pending}; drain all writers and use "
+            "scripts/migrate_multi_product_phase1.py --through <version>"
+        )
 
 
 def init_db() -> None:
     """应用所有待执行的 schema 迁移（版本由 schema_migrations 表跟踪）。
 
     PG 后端：用事务级 advisory lock 防止多节点同时 DDL。持锁节点完成迁移后提交释放，
-    后续节点持锁时迁移已全部应用，幂等跳过。SQLite 路径不受影响。
+    后续节点持锁时迁移已全部应用，幂等跳过。既有 PG 库不得由应用启动跨越
+    Phase 1 contract，必须使用受控逐闸 runner；空库与 SQLite 路径不受影响。
     """
     with connect() as conn:
         if is_postgres():
             conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
+            _guard_automatic_phase1_contract_migrations(conn)
         _run_migrations(conn)
         if is_postgres():
             _ensure_pg_functions(conn)
+
+
+def migrate_db_through(
+    *, target_version: int, expected_current_version: int
+) -> Dict[str, int]:
+    """在全局迁移锁内把数据库推进到指定版本，并拒绝意外起始版本。
+
+    仅供需要 expand/reconcile/contract 检查点的受控发布脚本使用；正常应用启动仍调用
+    ``init_db`` 追到最新版本。
+    """
+    known_versions = {version for version, _apply in _MIGRATIONS}
+    if target_version not in known_versions:
+        raise ValueError(f"unknown migration target: {target_version}")
+    with connect() as conn:
+        if is_postgres():
+            conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
+        _ensure_schema_migrations_table(conn)
+        current = _applied_schema_version(conn)
+        if current == target_version:
+            return {"before": current, "after": current}
+        if current != expected_current_version:
+            raise RuntimeError(
+                "migration start version mismatch: "
+                f"expected={expected_current_version}, actual={current}, "
+                f"target={target_version}"
+            )
+        _run_migrations(conn, target_version=target_version)
+        if is_postgres():
+            _ensure_pg_functions(conn)
+        after = _applied_schema_version(conn)
+        if after != target_version:
+            raise RuntimeError(
+                f"migration target not reached: target={target_version}, actual={after}"
+            )
+        return {"before": current, "after": after}
 
 
 # SQLite 内置 json_patch（RFC 7396 JSON Merge Patch）；PG 无内置实现。这里建一个同名
@@ -356,12 +424,14 @@ def _applied_schema_version(conn: Connection) -> int:
     return int(current)
 
 
-def _run_migrations(conn: Connection) -> None:
+def _run_migrations(
+    conn: Connection, *, target_version: Optional[int] = None
+) -> None:
     """按版本顺序应用未执行迁移；在调用方事务内运行，整体提交/回滚。"""
     _ensure_schema_migrations_table(conn)
     current = _applied_schema_version(conn)
     for version, apply in _MIGRATIONS:
-        if version > current:
+        if version > current and (target_version is None or version <= target_version):
             logger.info("db migration applying version=%s", version)
             apply(conn)
             conn.execute(
@@ -2876,6 +2946,1123 @@ def _migration_0036_repair_account_app_id(conn: Connection) -> None:
     _migration_0024_rename_channel_app_to_native(conn)
 
 
+def _migration_0037_product_memberships(conn: Connection) -> None:
+    """建立产品 membership 规范锚，并把存量真人回填为 active zhaoxi 成员。"""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS product_memberships (
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active', 'disabled')),
+            daily_limit INTEGER,
+            rpm_limit INTEGER,
+            settings_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            UNIQUE(platform_user_id, app_id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_product_memberships_app_status
+        ON product_memberships(app_id, status);
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO product_memberships(
+            platform_user_id, app_id, status, daily_limit, rpm_limit, updated_at
+        )
+        SELECT pu.id, 'zhaoxi', 'active', pu.daily_limit, pu.rpm_limit,
+               strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        FROM platform_users pu
+        WHERE NOT EXISTS (
+            SELECT 1 FROM product_memberships pm
+            WHERE pm.platform_user_id=pu.id AND pm.app_id='zhaoxi'
+        )
+        """
+    )
+
+
+def _migration_0038_session_app_id(conn: Connection) -> None:
+    """把 opaque platform session 固定到服务端签发的产品 audience。"""
+    _ensure_column(
+        conn,
+        "platform_user_sessions",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    conn.execute(
+        "UPDATE platform_user_sessions SET app_id='zhaoxi' "
+        "WHERE app_id IS NULL OR app_id=''"
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS ix_platform_user_sessions_app_user
+        ON platform_user_sessions(app_id, platform_user_id)
+        """
+    )
+
+
+def _migration_0039_billing_app_id_expand(conn: Connection) -> None:
+    """为计费子树补产品归属，并收敛存量重复 active subscription。
+
+    这是 MP-02 expand 阶段：默认值保证尚未下线的旧 writer 仍只会写入 zhaoxi；
+    ledger/cost 的冗余列再从其权威 wallet/account 对齐，供 contract 前 reconcile。
+    """
+    for table in (
+        "subscriptions",
+        "entitlement_wallets",
+        "entitlement_ledger",
+        "cost_events",
+    ):
+        _ensure_column(conn, table, "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
+
+    # 钱包的创建来源账号是产品归属锚；流水必须与钱包一致；cost 优先跟钱包，
+    # 无 wallet 的平台成本记录则跟 account。所有存量当前均应收敛到 zhaoxi。
+    conn.execute(
+        """
+        UPDATE entitlement_wallets
+        SET app_id = (
+            SELECT a.app_id FROM accounts a
+            WHERE a.id = entitlement_wallets.account_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM accounts a
+            WHERE a.id = entitlement_wallets.account_id
+              AND a.app_id IS NOT NULL
+              AND a.app_id <> ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE entitlement_ledger
+        SET app_id = (
+            SELECT w.app_id FROM entitlement_wallets w
+            WHERE w.id = entitlement_ledger.wallet_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM entitlement_wallets w
+            WHERE w.id = entitlement_ledger.wallet_id
+              AND w.app_id IS NOT NULL
+              AND w.app_id <> ''
+        )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE cost_events
+        SET app_id = COALESCE(
+            (SELECT w.app_id FROM entitlement_wallets w WHERE w.id = cost_events.wallet_id),
+            (SELECT a.app_id FROM accounts a WHERE a.id = cost_events.account_id),
+            app_id
+        )
+        """
+    )
+
+    # 状态历史模型：正常 cancelled/expired 历史原样保留；每个产品只把重复 active
+    # 中较旧的行标成 superseded，稳定排序规则与 ADR 一致。
+    duplicate_groups = conn.execute(
+        """
+        SELECT platform_user_id, app_id
+        FROM subscriptions
+        WHERE status = 'active'
+        GROUP BY platform_user_id, app_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for group in duplicate_groups:
+        active_rows = conn.execute(
+            """
+            SELECT id
+            FROM subscriptions
+            WHERE platform_user_id = ? AND app_id = ? AND status = 'active'
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (group["platform_user_id"], group["app_id"]),
+        ).fetchall()
+        for stale in active_rows[1:]:
+            conn.execute(
+                """
+                UPDATE subscriptions
+                SET status = 'superseded',
+                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ? AND status = 'active'
+                """,
+                (stale["id"],),
+            )
+
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_subscriptions_user_app_updated
+        ON subscriptions(platform_user_id, app_id, updated_at);
+        CREATE INDEX IF NOT EXISTS ix_entitlement_wallets_user_app_status
+        ON entitlement_wallets(platform_user_id, app_id, status);
+        CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_user_app_created
+        ON entitlement_ledger(platform_user_id, app_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_cost_events_account_app_created
+        ON cost_events(account_id, app_id, created_at);
+        """
+    )
+
+
+def _billing_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 m0040 contract 的聚合阻断计数，不读取或输出业务明细。"""
+    checks = {
+        "null_app_id": """
+            SELECT id FROM subscriptions WHERE app_id IS NULL OR app_id=''
+            UNION ALL SELECT id FROM entitlement_wallets WHERE app_id IS NULL OR app_id=''
+            UNION ALL SELECT id FROM entitlement_ledger WHERE app_id IS NULL OR app_id=''
+            UNION ALL SELECT id FROM cost_events WHERE app_id IS NULL OR app_id=''
+        """,
+        "duplicate_active_subscription": """
+            SELECT platform_user_id, app_id
+            FROM subscriptions WHERE status='active'
+            GROUP BY platform_user_id, app_id HAVING COUNT(*) > 1
+        """,
+        "duplicate_active_wallet": """
+            SELECT platform_user_id, app_id
+            FROM entitlement_wallets WHERE status='active'
+            GROUP BY platform_user_id, app_id HAVING COUNT(*) > 1
+        """,
+        "subscription_membership_drift": """
+            SELECT s.id
+            FROM subscriptions s
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=s.platform_user_id AND pm.app_id=s.app_id
+            WHERE pm.platform_user_id IS NULL
+        """,
+        "wallet_scope_drift": """
+            SELECT w.id
+            FROM entitlement_wallets w
+            LEFT JOIN accounts a ON a.id=w.account_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=w.platform_user_id AND pm.app_id=w.app_id
+            WHERE a.id IS NULL OR a.app_id<>w.app_id OR pm.platform_user_id IS NULL
+        """,
+        "ledger_scope_drift": """
+            SELECT l.id
+            FROM entitlement_ledger l
+            LEFT JOIN entitlement_wallets w ON w.id=l.wallet_id
+            LEFT JOIN accounts a ON a.id=l.account_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=l.platform_user_id AND pm.app_id=l.app_id
+            WHERE w.id IS NULL OR a.id IS NULL OR pm.platform_user_id IS NULL
+               OR l.app_id<>w.app_id OR l.app_id<>a.app_id
+               OR l.platform_user_id<>w.platform_user_id
+        """,
+        "cost_scope_drift": """
+            SELECT ce.id
+            FROM cost_events ce
+            LEFT JOIN accounts a ON a.id=ce.account_id
+            LEFT JOIN entitlement_wallets w ON w.id=ce.wallet_id
+            LEFT JOIN entitlement_ledger l ON l.id=ce.entitlement_ledger_id
+            WHERE a.id IS NULL OR ce.app_id<>a.app_id
+               OR (ce.wallet_id IS NOT NULL AND (w.id IS NULL OR ce.app_id<>w.app_id))
+               OR (ce.entitlement_ledger_id IS NOT NULL AND (l.id IS NULL OR ce.app_id<>l.app_id))
+        """,
+        "wallet_ledger_balance_mismatch": """
+            SELECT w.id
+            FROM entitlement_wallets w
+            LEFT JOIN entitlement_ledger l
+              ON l.wallet_id=w.id AND l.app_id=w.app_id
+            GROUP BY w.id, w.balance_shell_micros
+            HAVING w.balance_shell_micros<>COALESCE(SUM(l.amount_shell_micros), 0)
+        """,
+    }
+    counts: Dict[str, int] = {}
+    for name, sql in checks.items():
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({sql}) billing_contract_rows"
+        ).fetchone()
+        counts[name] = int(row["n"])
+    return counts
+
+
+def _migration_0040_billing_app_id_contract(conn: Connection) -> None:
+    """切换计费唯一约束到产品维度；执行前必须排空全部旧 writer。"""
+    violations = _billing_contract_violation_counts(conn)
+    blocking = {name: total for name, total in violations.items() if total > 0}
+    if blocking:
+        summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
+        raise RuntimeError(f"m0040 billing reconcile failed: {summary}")
+
+    # 旧代码仍使用 ON CONFLICT(platform_user_id)；删除该 arbiter 前生产必须已 drain
+    # 所有旧 API/scheduler writer。新代码只使用下面的产品级 partial unique index。
+    conn.execute("DROP INDEX IF EXISTS ux_entitlement_wallets_user_active")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_wallets_user_app_active
+        ON entitlement_wallets(platform_user_id, app_id)
+        WHERE status = 'active';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_subscriptions_user_app_active
+        ON subscriptions(platform_user_id, app_id)
+        WHERE status = 'active';
+        """
+    )
+
+
+def _migration_0041_quota_app_id_expand(conn: Connection) -> None:
+    """为 daily/reservation 补产品归属，同时保留旧真人级唯一 arbiter。"""
+    _ensure_column(
+        conn,
+        "daily_usage",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    _ensure_column(
+        conn,
+        "daily_quota_reservations",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    for table in ("daily_usage", "daily_quota_reservations"):
+        conn.execute(
+            f"""
+            UPDATE {table}
+            SET app_id = (
+                SELECT a.app_id FROM accounts a WHERE a.id = {table}.account_id
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM accounts a
+                WHERE a.id = {table}.account_id
+                  AND a.app_id IS NOT NULL
+                  AND a.app_id <> ''
+            )
+            """
+        )
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_daily_usage_user_app_date
+        ON daily_usage(platform_user_id, app_id, date);
+        CREATE INDEX IF NOT EXISTS ix_qres_user_app_date
+        ON daily_quota_reservations(platform_user_id, app_id, date);
+        CREATE INDEX IF NOT EXISTS ix_qres_app_expires
+        ON daily_quota_reservations(app_id, expires_at);
+        """
+    )
+
+
+def _quota_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 m0042 contract 的聚合阻断计数，不读取或输出业务明细。"""
+    owner_matches = """
+        EXISTS (
+            SELECT 1 FROM account_owner_bindings b
+            WHERE b.account_id={alias}.account_id
+              AND b.platform_user_id={alias}.platform_user_id
+              AND b.app_id={alias}.app_id
+        )
+        OR EXISTS (
+            SELECT 1
+            FROM universe_residents r
+            JOIN universes u ON u.id=r.universe_id
+            JOIN accounts resident_account ON resident_account.id=r.runtime_account_id
+            WHERE r.runtime_account_id={alias}.account_id
+              AND u.owner_platform_user_id={alias}.platform_user_id
+              AND resident_account.app_id={alias}.app_id
+        )
+    """
+    checks = {
+        "quota_null_app_id": """
+            SELECT CAST(id AS TEXT) AS id
+            FROM daily_usage WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT id FROM daily_quota_reservations WHERE app_id IS NULL OR app_id=''
+        """,
+        "quota_owner_fallback": """
+            SELECT CAST(d.id AS TEXT) AS id
+            FROM daily_usage d
+            LEFT JOIN platform_users pu ON pu.id=d.platform_user_id
+            WHERE pu.id IS NULL
+            UNION ALL
+            SELECT q.id
+            FROM daily_quota_reservations q
+            LEFT JOIN platform_users pu ON pu.id=q.platform_user_id
+            WHERE pu.id IS NULL
+        """,
+        "daily_scope_drift": f"""
+            SELECT CAST(d.id AS TEXT) AS id
+            FROM daily_usage d
+            LEFT JOIN accounts a ON a.id=d.account_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=d.platform_user_id AND pm.app_id=d.app_id
+            WHERE a.id IS NULL OR a.app_id<>d.app_id OR pm.platform_user_id IS NULL
+               OR NOT ({owner_matches.format(alias='d')})
+        """,
+        "reservation_scope_drift": f"""
+            SELECT q.id
+            FROM daily_quota_reservations q
+            LEFT JOIN accounts a ON a.id=q.account_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=q.platform_user_id AND pm.app_id=q.app_id
+            WHERE a.id IS NULL OR a.app_id<>q.app_id OR pm.platform_user_id IS NULL
+               OR NOT ({owner_matches.format(alias='q')})
+        """,
+        "duplicate_daily_usage": """
+            SELECT platform_user_id, app_id, date
+            FROM daily_usage
+            GROUP BY platform_user_id, app_id, date
+            HAVING COUNT(*) > 1
+        """,
+    }
+    counts: Dict[str, int] = {}
+    for name, sql in checks.items():
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({sql}) quota_contract_rows"
+        ).fetchone()
+        counts[name] = int(row["n"])
+    return counts
+
+
+def _migration_0042_quota_app_id_contract(conn: Connection) -> None:
+    """切换 daily/RPM 到产品维度；执行前必须排空全部旧 writer。"""
+    violations = _quota_contract_violation_counts(conn)
+    blocking = {name: total for name, total in violations.items() if total > 0}
+    if blocking:
+        summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
+        raise RuntimeError(f"m0042 quota reconcile failed: {summary}")
+
+    # contract 后新代码使用产品化 RPM subject。旧 writer 已停写，此处把尚在窗口内的
+    # zhaoxi 真人级命中原位改键，确保切换瞬间不会因换 key 放宽限额。
+    zhaoxi_users = conn.execute(
+        """
+        SELECT DISTINCT h.account_id AS platform_user_id
+        FROM rpm_hits h
+        JOIN product_memberships pm
+          ON pm.platform_user_id=h.account_id AND pm.app_id='zhaoxi'
+        """
+    ).fetchall()
+    for row in zhaoxi_users:
+        platform_user_id = str(row["platform_user_id"])
+        conn.execute(
+            "UPDATE rpm_hits SET account_id=? WHERE account_id=?",
+            (
+                product_quota_subject(
+                    platform_user_id=platform_user_id,
+                    app_id="zhaoxi",
+                ),
+                platform_user_id,
+            ),
+        )
+    legacy_account_subjects = conn.execute(
+        """
+        SELECT DISTINCT h.account_id
+        FROM rpm_hits h
+        JOIN accounts a ON a.id=h.account_id
+        WHERE a.app_id='zhaoxi'
+        """
+    ).fetchall()
+    for row in legacy_account_subjects:
+        account_id = str(row["account_id"])
+        owner = conn.execute(
+            """
+            SELECT platform_user_id
+            FROM account_owner_bindings
+            WHERE account_id=? AND status='active' AND app_id='zhaoxi'
+            ORDER BY created_at ASC, id ASC
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
+        if owner is None:
+            owner = conn.execute(
+                """
+                SELECT u.owner_platform_user_id AS platform_user_id
+                FROM universe_residents r
+                JOIN universes u ON u.id=r.universe_id
+                WHERE r.runtime_account_id=?
+                LIMIT 1
+                """,
+                (account_id,),
+            ).fetchone()
+        subject = str(owner["platform_user_id"]) if owner is not None else account_id
+        conn.execute(
+            "UPDATE rpm_hits SET account_id=? WHERE account_id=?",
+            (
+                product_quota_subject(
+                    platform_user_id=subject,
+                    app_id="zhaoxi",
+                ),
+                account_id,
+            ),
+        )
+
+    # 删除旧 ON CONFLICT(platform_user_id,date) arbiter 前必须 drain 旧 writer。
+    conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_date")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_usage_user_app_date
+        ON daily_usage(platform_user_id, app_id, date);
+        """
+    )
+
+
+def _migration_0043_referral_app_id_expand(conn: Connection) -> None:
+    """为邀请、关系和有效消息审核补产品归属，保留旧 invitee 全局唯一约束。"""
+    for table in (
+        "referral_codes",
+        "referral_relationships",
+        "meaningful_message_reviews",
+    ):
+        _ensure_column(conn, table, "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
+
+    conn.execute(
+        """
+        UPDATE referral_relationships
+        SET app_id = (
+            SELECT rc.app_id FROM referral_codes rc
+            WHERE rc.id=referral_relationships.referral_code_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM referral_codes rc
+            WHERE rc.id=referral_relationships.referral_code_id
+              AND rc.app_id IS NOT NULL AND rc.app_id<>''
+        )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE meaningful_message_reviews
+        SET app_id = (
+            SELECT rr.app_id FROM referral_relationships rr
+            WHERE rr.id=meaningful_message_reviews.referral_relationship_id
+        )
+        WHERE EXISTS (
+            SELECT 1 FROM referral_relationships rr
+            WHERE rr.id=meaningful_message_reviews.referral_relationship_id
+              AND rr.app_id IS NOT NULL AND rr.app_id<>''
+        )
+        """
+    )
+
+    # 新旧 writer 均可命中产品级 personal 唯一约束；code 字符串的表级全局 UNIQUE 保留。
+    conn.execute("DROP INDEX IF EXISTS ux_referral_codes_personal_user")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_personal_user_app
+        ON referral_codes(platform_user_id, app_id, code_type)
+        WHERE code_type='personal' AND platform_user_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_referral_codes_app_status
+        ON referral_codes(app_id, status);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_app_created
+        ON referral_relationships(inviter_platform_user_id, app_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_app_status
+        ON referral_relationships(app_id, status, review_status);
+        CREATE INDEX IF NOT EXISTS ix_meaningful_reviews_app_relationship
+        ON meaningful_message_reviews(app_id, referral_relationship_id);
+        """
+    )
+
+
+def _referral_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 m0044 contract 的聚合阻断计数，不读取或输出业务明细。"""
+    checks = {
+        "referral_null_app_id": """
+            SELECT id FROM referral_codes WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT id FROM referral_relationships WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT id FROM meaningful_message_reviews WHERE app_id IS NULL OR app_id=''
+        """,
+        "duplicate_personal_code": """
+            SELECT platform_user_id, app_id, code_type
+            FROM referral_codes
+            WHERE code_type='personal' AND platform_user_id IS NOT NULL
+            GROUP BY platform_user_id, app_id, code_type
+            HAVING COUNT(*) > 1
+        """,
+        "duplicate_invitee_membership": """
+            SELECT invitee_platform_user_id, app_id
+            FROM referral_relationships
+            GROUP BY invitee_platform_user_id, app_id
+            HAVING COUNT(*) > 1
+        """,
+        "referral_code_scope_drift": """
+            SELECT rc.id
+            FROM referral_codes rc
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=rc.platform_user_id AND pm.app_id=rc.app_id
+            WHERE rc.platform_user_id IS NOT NULL AND pm.platform_user_id IS NULL
+        """,
+        "referral_relationship_scope_drift": """
+            SELECT rr.id
+            FROM referral_relationships rr
+            LEFT JOIN referral_codes rc ON rc.id=rr.referral_code_id
+            LEFT JOIN product_memberships inviter
+              ON inviter.platform_user_id=rr.inviter_platform_user_id
+             AND inviter.app_id=rr.app_id
+            LEFT JOIN product_memberships invitee
+              ON invitee.platform_user_id=rr.invitee_platform_user_id
+             AND invitee.app_id=rr.app_id
+            LEFT JOIN entitlement_ledger reward ON reward.id=rr.reward_ledger_id
+            WHERE rc.id IS NULL OR rc.app_id<>rr.app_id
+               OR inviter.platform_user_id IS NULL
+               OR invitee.platform_user_id IS NULL
+               OR rr.inviter_platform_user_id=rr.invitee_platform_user_id
+               OR (rr.reward_ledger_id IS NOT NULL
+                   AND (reward.id IS NULL OR reward.app_id<>rr.app_id))
+        """,
+        "meaningful_review_scope_drift": """
+            SELECT mr.id
+            FROM meaningful_message_reviews mr
+            LEFT JOIN referral_relationships rr ON rr.id=mr.referral_relationship_id
+            LEFT JOIN accounts a ON a.id=mr.account_id
+            WHERE rr.id IS NULL OR a.id IS NULL
+               OR mr.app_id<>rr.app_id OR mr.app_id<>a.app_id
+               OR mr.invitee_platform_user_id<>rr.invitee_platform_user_id
+        """,
+    }
+    counts: Dict[str, int] = {}
+    for name, sql in checks.items():
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({sql}) referral_contract_rows"
+        ).fetchone()
+        counts[name] = int(row["n"])
+    return counts
+
+
+def _rebuild_referral_relationships_sqlite(conn: Connection) -> None:
+    """SQLite 同步重建 relationship 及其 review 子表，移除 invitee 全局 UNIQUE。"""
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS referral_relationships_mp04;
+        DROP TABLE IF EXISTS meaningful_message_reviews_mp04_backup;
+        CREATE TABLE meaningful_message_reviews_mp04_backup AS
+        SELECT id, referral_relationship_id, invitee_platform_user_id,
+               account_id, message_ids_json, reviewer_type, status, reason,
+               metadata_json, created_at, app_id
+        FROM meaningful_message_reviews;
+        DROP TABLE meaningful_message_reviews;
+        CREATE TABLE referral_relationships_mp04 (
+            id TEXT PRIMARY KEY,
+            inviter_platform_user_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL,
+            referral_code_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'registered',
+            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            reward_ledger_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            rewarded_at TEXT,
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
+            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
+        );
+        INSERT INTO referral_relationships_mp04(
+            id, inviter_platform_user_id, invitee_platform_user_id,
+            referral_code_id, status, meaningful_message_count, review_status,
+            reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at, app_id
+        )
+        SELECT id, inviter_platform_user_id, invitee_platform_user_id,
+               referral_code_id, status, meaningful_message_count, review_status,
+               reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at, app_id
+        FROM referral_relationships;
+        DROP TABLE referral_relationships;
+        ALTER TABLE referral_relationships_mp04 RENAME TO referral_relationships;
+
+        CREATE TABLE meaningful_message_reviews (
+            id TEXT PRIMARY KEY,
+            referral_relationship_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            message_ids_json TEXT NOT NULL DEFAULT '[]',
+            reviewer_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        INSERT INTO meaningful_message_reviews(
+            id, referral_relationship_id, invitee_platform_user_id,
+            account_id, message_ids_json, reviewer_type, status, reason,
+            metadata_json, created_at, app_id
+        )
+        SELECT id, referral_relationship_id, invitee_platform_user_id,
+               account_id, message_ids_json, reviewer_type, status, reason,
+               metadata_json, created_at, app_id
+        FROM meaningful_message_reviews_mp04_backup;
+        DROP TABLE meaningful_message_reviews_mp04_backup;
+        CREATE UNIQUE INDEX ux_meaningful_reviews_relationship_reviewer
+        ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
+        CREATE INDEX ix_meaningful_reviews_app_relationship
+        ON meaningful_message_reviews(app_id, referral_relationship_id);
+        """
+    )
+
+
+def _migration_0044_referral_app_id_contract(conn: Connection) -> None:
+    """切换 invitee 唯一性到产品维度；执行前必须排空全部旧 writer。"""
+    violations = _referral_contract_violation_counts(conn)
+    blocking = {name: total for name, total in violations.items() if total > 0}
+    if blocking:
+        summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
+        raise RuntimeError(f"m0044 referral reconcile failed: {summary}")
+
+    if is_postgres():
+        constraints = conn.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid='referral_relationships'::regclass
+              AND contype='u'
+            """
+        ).fetchall()
+        for constraint in constraints:
+            name = str(constraint["conname"])
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise RuntimeError("unexpected referral unique constraint name")
+            conn.execute(f'ALTER TABLE referral_relationships DROP CONSTRAINT "{name}"')
+    else:
+        _rebuild_referral_relationships_sqlite(conn)
+
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_relationships_invitee_app
+        ON referral_relationships(invitee_platform_user_id, app_id);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_created
+        ON referral_relationships(inviter_platform_user_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_status
+        ON referral_relationships(status, review_status);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_app_created
+        ON referral_relationships(inviter_platform_user_id, app_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_referral_relationships_app_status
+        ON referral_relationships(app_id, status, review_status);
+        """
+    )
+
+
+def _identity_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 Phase 1 身份/session/runtime 锚点的最终聚合阻断计数。"""
+    checks = {
+        "identity_null_app_id": """
+            SELECT CAST(id AS TEXT) AS id
+            FROM accounts WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT CAST(id AS TEXT) FROM account_owner_bindings
+            WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT CAST(id AS TEXT) FROM platform_user_sessions
+            WHERE app_id IS NULL OR app_id=''
+            UNION ALL
+            SELECT CAST(platform_user_id AS TEXT) FROM product_memberships
+            WHERE app_id IS NULL OR app_id=''
+        """,
+        "binding_app_drift": """
+            SELECT CAST(b.id AS TEXT) AS id
+            FROM account_owner_bindings b
+            LEFT JOIN accounts a ON a.id=b.account_id
+            LEFT JOIN platform_users pu ON pu.id=b.platform_user_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=b.platform_user_id AND pm.app_id=b.app_id
+            WHERE a.id IS NULL OR pu.id IS NULL OR pm.platform_user_id IS NULL
+               OR b.app_id<>a.app_id
+        """,
+        "session_scope_drift": """
+            SELECT CAST(s.id AS TEXT) AS id
+            FROM platform_user_sessions s
+            LEFT JOIN platform_users pu ON pu.id=s.platform_user_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=s.platform_user_id AND pm.app_id=s.app_id
+            WHERE pu.id IS NULL OR pm.platform_user_id IS NULL
+        """,
+        "resident_scope_drift": """
+            SELECT CAST(r.id AS TEXT) AS id
+            FROM universe_residents r
+            JOIN universes u ON u.id=r.universe_id
+            LEFT JOIN accounts a ON a.id=r.runtime_account_id
+            LEFT JOIN product_memberships pm
+              ON pm.platform_user_id=u.owner_platform_user_id AND pm.app_id=a.app_id
+            WHERE r.runtime_account_id IS NOT NULL
+              AND (a.id IS NULL OR pm.platform_user_id IS NULL)
+        """,
+        "message_account_drift": """
+            SELECT CAST(m.id AS TEXT) AS id
+            FROM messages m
+            LEFT JOIN sessions s ON s.id=m.session_id
+            LEFT JOIN accounts a ON a.id=m.account_id
+            WHERE s.id IS NULL OR a.id IS NULL OR s.account_id<>m.account_id
+        """,
+        "duplicate_active_entry_account": """
+            SELECT platform_user_id, app_id
+            FROM account_owner_bindings
+            WHERE status='active'
+            GROUP BY platform_user_id, app_id
+            HAVING COUNT(*) > 1
+        """,
+        "duplicate_active_account_owner": """
+            SELECT account_id
+            FROM account_owner_bindings
+            WHERE status='active'
+            GROUP BY account_id
+            HAVING COUNT(*) > 1
+        """,
+    }
+    counts: Dict[str, int] = {}
+    for name, sql in checks.items():
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({sql}) identity_contract_rows"
+        ).fetchone()
+        counts[name] = int(row["n"])
+    return counts
+
+
+def _phase1_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 MP-05 最终 contract 的完整隔离 reconcile 计数。"""
+    counts = _identity_contract_violation_counts(conn)
+    counts.update(_billing_contract_violation_counts(conn))
+    counts.update(_billing_idempotency_contract_violation_counts(conn))
+    counts.update(_quota_contract_violation_counts(conn))
+    counts.update(_referral_contract_violation_counts(conn))
+    return counts
+
+
+def _migration_0045_multi_product_phase1_contract(conn: Connection) -> None:
+    """Phase 1 最终 contract：只校验终态并固化索引，不重写业务数据。"""
+    violations = _phase1_contract_violation_counts(conn)
+    blocking = {name: total for name, total in violations.items() if total > 0}
+    if blocking:
+        summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
+        raise RuntimeError(f"m0045 phase1 reconcile failed: {summary}")
+
+    app_id_tables = (
+        "accounts",
+        "account_owner_bindings",
+        "platform_user_sessions",
+        "product_memberships",
+        "subscriptions",
+        "entitlement_wallets",
+        "entitlement_ledger",
+        "cost_events",
+        "daily_usage",
+        "daily_quota_reservations",
+        "referral_codes",
+        "referral_relationships",
+        "meaningful_message_reviews",
+    )
+    if is_postgres():
+        # PG 的 SET NOT NULL 是最终 schema contract；前置聚合校验已保证不会因 NULL 失败。
+        for table in app_id_tables:
+            conn.execute(f"ALTER TABLE {table} ALTER COLUMN app_id SET NOT NULL")
+    else:
+        # SQLite expand 时列已直接以 NOT NULL 添加。若历史分支留下 nullable schema，拒绝
+        # 在最终 contract 偷偷重建业务大表，要求先显式修复该异常迁移路径。
+        nullable_tables = []
+        for table in app_id_tables:
+            columns = {
+                str(row["name"]): int(row["notnull"])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if columns.get("app_id") != 1:
+                nullable_tables.append(table)
+        if nullable_tables:
+            raise RuntimeError(
+                "m0045 nullable app_id schema: " + ", ".join(nullable_tables)
+            )
+
+    # 幂等确认终态查询/唯一 arbiter，避免 contract 阶段重写业务数据或 SQLite 重建。
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_accounts_app_status
+        ON accounts(app_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_owner_binding_active_user_app
+        ON account_owner_bindings(platform_user_id, app_id)
+        WHERE status='active';
+        CREATE INDEX IF NOT EXISTS ix_platform_user_sessions_app_user
+        ON platform_user_sessions(app_id, platform_user_id);
+        CREATE INDEX IF NOT EXISTS ix_product_memberships_app_status
+        ON product_memberships(app_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_wallets_user_app_active
+        ON entitlement_wallets(platform_user_id, app_id)
+        WHERE status='active';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_subscriptions_user_app_active
+        ON subscriptions(platform_user_id, app_id)
+        WHERE status='active';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_daily_usage_user_app_date
+        ON daily_usage(platform_user_id, app_id, date);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_personal_user_app
+        ON referral_codes(platform_user_id, app_id, code_type)
+        WHERE code_type='personal' AND platform_user_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_relationships_invitee_app
+        ON referral_relationships(invitee_platform_user_id, app_id);
+        """
+    )
+
+
+def _billing_idempotency_contract_violation_counts(conn: Connection) -> Dict[str, int]:
+    """返回 MP-06 billing 幂等键切换前的重复组合键计数。"""
+    checks = {
+        "duplicate_ledger_app_idempotency": """
+            SELECT app_id, idempotency_key
+            FROM entitlement_ledger
+            GROUP BY app_id, idempotency_key
+            HAVING COUNT(*) > 1
+        """,
+        "duplicate_cost_app_idempotency": """
+            SELECT app_id, idempotency_key
+            FROM cost_events
+            GROUP BY app_id, idempotency_key
+            HAVING COUNT(*) > 1
+        """,
+    }
+    counts: Dict[str, int] = {}
+    for name, sql in checks.items():
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM ({sql}) billing_idempotency_rows"
+        ).fetchone()
+        counts[name] = int(row["n"])
+    return counts
+
+
+def _rebuild_billing_idempotency_sqlite(conn: Connection) -> None:
+    """SQLite 重建 billing 及引用子表，移除列级全局幂等 UNIQUE。"""
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS meaningful_message_reviews_mp06_backup;
+        DROP TABLE IF EXISTS referral_relationships_mp06_backup;
+        DROP TABLE IF EXISTS cost_events_mp06_backup;
+        DROP TABLE IF EXISTS entitlement_ledger_mp06_backup;
+
+        CREATE TABLE meaningful_message_reviews_mp06_backup AS
+        SELECT * FROM meaningful_message_reviews;
+        DROP TABLE meaningful_message_reviews;
+        CREATE TABLE referral_relationships_mp06_backup AS
+        SELECT * FROM referral_relationships;
+        DROP TABLE referral_relationships;
+        CREATE TABLE cost_events_mp06_backup AS
+        SELECT * FROM cost_events;
+        DROP TABLE cost_events;
+        CREATE TABLE entitlement_ledger_mp06_backup AS
+        SELECT * FROM entitlement_ledger;
+        DROP TABLE entitlement_ledger;
+
+        CREATE TABLE entitlement_ledger (
+            id TEXT PRIMARY KEY,
+            wallet_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            platform_user_id TEXT NOT NULL,
+            entry_type TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            source_id TEXT,
+            amount_shell_micros INTEGER NOT NULL,
+            balance_after_shell_micros INTEGER NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        INSERT INTO entitlement_ledger(
+            id, wallet_id, account_id, platform_user_id, entry_type,
+            source_type, source_id, amount_shell_micros,
+            balance_after_shell_micros, idempotency_key, metadata_json,
+            created_at, app_id
+        )
+        SELECT id, wallet_id, account_id, platform_user_id, entry_type,
+               source_type, source_id, amount_shell_micros,
+               balance_after_shell_micros, idempotency_key, metadata_json,
+               created_at, app_id
+        FROM entitlement_ledger_mp06_backup;
+        DROP TABLE entitlement_ledger_mp06_backup;
+
+        CREATE TABLE cost_events (
+            id TEXT PRIMARY KEY,
+            wallet_id TEXT,
+            account_id TEXT NOT NULL,
+            platform_user_id TEXT,
+            cost_type TEXT NOT NULL,
+            cost_owner TEXT NOT NULL DEFAULT 'user',
+            billable_to_user INTEGER NOT NULL DEFAULT 1,
+            model TEXT,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            billable_tokens INTEGER,
+            model_price_multiplier_micros INTEGER NOT NULL DEFAULT 1000000,
+            computed_shell_micros INTEGER NOT NULL DEFAULT 0,
+            entitlement_ledger_id TEXT,
+            source_type TEXT,
+            source_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(entitlement_ledger_id) REFERENCES entitlement_ledger(id)
+        );
+        INSERT INTO cost_events(
+            id, wallet_id, account_id, platform_user_id, cost_type,
+            cost_owner, billable_to_user, model, input_tokens, output_tokens,
+            billable_tokens, model_price_multiplier_micros,
+            computed_shell_micros, entitlement_ledger_id, source_type,
+            source_id, idempotency_key, metadata_json, created_at, app_id
+        )
+        SELECT id, wallet_id, account_id, platform_user_id, cost_type,
+               cost_owner, billable_to_user, model, input_tokens, output_tokens,
+               billable_tokens, model_price_multiplier_micros,
+               computed_shell_micros, entitlement_ledger_id, source_type,
+               source_id, idempotency_key, metadata_json, created_at, app_id
+        FROM cost_events_mp06_backup;
+        DROP TABLE cost_events_mp06_backup;
+
+        CREATE TABLE referral_relationships (
+            id TEXT PRIMARY KEY,
+            inviter_platform_user_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL,
+            referral_code_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'registered',
+            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
+            review_status TEXT NOT NULL DEFAULT 'pending',
+            reward_ledger_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            rewarded_at TEXT,
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
+            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
+        );
+        INSERT INTO referral_relationships(
+            id, inviter_platform_user_id, invitee_platform_user_id,
+            referral_code_id, status, meaningful_message_count, review_status,
+            reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at,
+            app_id
+        )
+        SELECT id, inviter_platform_user_id, invitee_platform_user_id,
+               referral_code_id, status, meaningful_message_count, review_status,
+               reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at,
+               app_id
+        FROM referral_relationships_mp06_backup;
+        DROP TABLE referral_relationships_mp06_backup;
+
+        CREATE TABLE meaningful_message_reviews (
+            id TEXT PRIMARY KEY,
+            referral_relationship_id TEXT NOT NULL,
+            invitee_platform_user_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            message_ids_json TEXT NOT NULL DEFAULT '[]',
+            reviewer_type TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            reason TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
+            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(account_id) REFERENCES accounts(id)
+        );
+        INSERT INTO meaningful_message_reviews(
+            id, referral_relationship_id, invitee_platform_user_id,
+            account_id, message_ids_json, reviewer_type, status, reason,
+            metadata_json, created_at, app_id
+        )
+        SELECT id, referral_relationship_id, invitee_platform_user_id,
+               account_id, message_ids_json, reviewer_type, status, reason,
+               metadata_json, created_at, app_id
+        FROM meaningful_message_reviews_mp06_backup;
+        DROP TABLE meaningful_message_reviews_mp06_backup;
+
+        CREATE INDEX ix_entitlement_ledger_wallet_created
+        ON entitlement_ledger(wallet_id, created_at);
+        CREATE INDEX ix_entitlement_ledger_account_created
+        ON entitlement_ledger(account_id, created_at);
+        CREATE INDEX ix_entitlement_ledger_user_app_created
+        ON entitlement_ledger(platform_user_id, app_id, created_at);
+        CREATE UNIQUE INDEX ux_entitlement_ledger_app_idempotency
+        ON entitlement_ledger(app_id, idempotency_key);
+        CREATE INDEX ix_cost_events_account_created
+        ON cost_events(account_id, created_at);
+        CREATE INDEX ix_cost_events_wallet_created
+        ON cost_events(wallet_id, created_at);
+        CREATE INDEX ix_cost_events_account_app_created
+        ON cost_events(account_id, app_id, created_at);
+        CREATE UNIQUE INDEX ux_cost_events_app_idempotency
+        ON cost_events(app_id, idempotency_key);
+        CREATE UNIQUE INDEX ux_referral_relationships_invitee_app
+        ON referral_relationships(invitee_platform_user_id, app_id);
+        CREATE INDEX ix_referral_relationships_inviter_created
+        ON referral_relationships(inviter_platform_user_id, created_at);
+        CREATE INDEX ix_referral_relationships_status
+        ON referral_relationships(status, review_status);
+        CREATE INDEX ix_referral_relationships_inviter_app_created
+        ON referral_relationships(inviter_platform_user_id, app_id, created_at);
+        CREATE INDEX ix_referral_relationships_app_status
+        ON referral_relationships(app_id, status, review_status);
+        CREATE UNIQUE INDEX ux_meaningful_reviews_relationship_reviewer
+        ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
+        CREATE INDEX ix_meaningful_reviews_app_relationship
+        ON meaningful_message_reviews(app_id, referral_relationship_id);
+        """
+    )
+    fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
+    if fk_errors:
+        raise RuntimeError("m0046 SQLite billing rebuild produced foreign key drift")
+
+
+def _drop_pg_global_billing_idempotency_constraints(conn: Connection) -> None:
+    """删除两张 billing 表只覆盖 idempotency_key 的旧列级唯一约束。"""
+    rows = conn.execute(
+        """
+        SELECT tc.table_name, tc.constraint_name,
+               COUNT(*) AS column_count,
+               MAX(kcu.column_name) AS column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema=tc.constraint_schema
+         AND kcu.constraint_name=tc.constraint_name
+         AND kcu.table_name=tc.table_name
+        WHERE tc.constraint_schema=current_schema()
+          AND tc.constraint_type='UNIQUE'
+          AND tc.table_name IN ('entitlement_ledger', 'cost_events')
+        GROUP BY tc.table_name, tc.constraint_name
+        """
+    ).fetchall()
+    for row in rows:
+        if int(row["column_count"]) != 1 or row["column_name"] != "idempotency_key":
+            continue
+        table = str(row["table_name"])
+        constraint = str(row["constraint_name"])
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+            raise RuntimeError("unexpected billing table name")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", constraint):
+            raise RuntimeError("unexpected billing unique constraint name")
+        conn.execute(f'ALTER TABLE "{table}" DROP CONSTRAINT "{constraint}"')
+
+
+def _migration_0046_billing_idempotency_contract(conn: Connection) -> None:
+    """把 ledger/cost 幂等唯一性从全局键切换为产品组合键。"""
+    violations = _billing_idempotency_contract_violation_counts(conn)
+    blocking = {name: total for name, total in violations.items() if total > 0}
+    if blocking:
+        summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
+        raise RuntimeError(f"m0046 billing idempotency reconcile failed: {summary}")
+
+    if is_postgres():
+        _drop_pg_global_billing_idempotency_constraints(conn)
+    else:
+        _rebuild_billing_idempotency_sqlite(conn)
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_ledger_app_idempotency
+        ON entitlement_ledger(app_id, idempotency_key);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_cost_events_app_idempotency
+        ON cost_events(app_id, idempotency_key);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -2908,6 +4095,16 @@ _MIGRATIONS = [
     (34, _migration_0034_companion_world_lifecycle_mailbox),
     (35, _migration_0035_companion_world_visit_human_chat),
     (36, _migration_0036_repair_account_app_id),
+    (37, _migration_0037_product_memberships),
+    (38, _migration_0038_session_app_id),
+    (39, _migration_0039_billing_app_id_expand),
+    (40, _migration_0040_billing_app_id_contract),
+    (41, _migration_0041_quota_app_id_expand),
+    (42, _migration_0042_quota_app_id_contract),
+    (43, _migration_0043_referral_app_id_expand),
+    (44, _migration_0044_referral_app_id_contract),
+    (45, _migration_0045_multi_product_phase1_contract),
+    (46, _migration_0046_billing_idempotency_contract),
 ]
 
 

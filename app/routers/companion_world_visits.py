@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
+from app.db import SessionPrincipal
 from app.platform import CompanionWorldVisitService, VisitError
 from app.rate_limiter import RateLimiter
 from app.routers.companion_world import (
@@ -52,7 +53,7 @@ class RedeemVisitPayload(BaseModel):
 
 def _require_visit_session(
     authorization: Optional[str] = Header(default=None),
-) -> dict:
+) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_visits_enabled", False)):
         raise CompanionWorldApiError("not_found", 404)
     return _require_world_session(authorization)
@@ -154,10 +155,10 @@ def create_world_invite(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     result = _call(
-        lambda: _service().create_invite(str(platform_user["id"]), now=_now())
+        lambda: _service().create_invite(platform_user.platform_user_id, now=_now())
     )
     _no_store(response)
     return _envelope(
@@ -171,10 +172,10 @@ def create_world_invite(
 def list_world_invites(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     rows = _service().list_invites_current(
-        str(platform_user["id"]), now=_now()
+        platform_user.platform_user_id, now=_now()
     )
     _no_store(response)
     return _envelope(
@@ -187,11 +188,11 @@ def revoke_world_invite(
     invite_id: str,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     row = _call(
         lambda: _service().revoke_invite(
-            str(platform_user["id"]), invite_id=invite_id, now=_now()
+            platform_user.platform_user_id, invite_id=invite_id, now=_now()
         )
     )
     _no_store(response)
@@ -203,9 +204,9 @@ def redeem_world_invite(
     payload: RedeemVisitPayload,
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
-    platform_user_id = str(platform_user["id"])
+    platform_user_id = platform_user.platform_user_id
     client_host = request.client.host if request.client else "unknown"
     if not _redeem_rate_limiter.check_rpm(
         f"world-invite-redeem:user:{platform_user_id}",
@@ -234,10 +235,10 @@ def redeem_world_invite(
 def list_world_visits(
     request: Request,
     response: Response,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     rows = _service().list_visits_current(
-        str(platform_user["id"]), now=_now()
+        platform_user.platform_user_id, now=_now()
     )
     _no_store(response)
     return _envelope(
@@ -245,18 +246,22 @@ def list_world_visits(
         code="ok",
         data={
             "items": [
-                _visit_data(row, str(platform_user["id"])) for row in rows
+                _visit_data(row, platform_user.platform_user_id) for row in rows
             ]
         },
     )
 
 
 def _accept_response(
-    *, visit_id: str, request: Request, response: Response, platform_user: dict
+    *,
+    visit_id: str,
+    request: Request,
+    response: Response,
+    platform_user: SessionPrincipal,
 ) -> dict:
     result = _call(
         lambda: _service().accept(
-            str(platform_user["id"]), visit_id=visit_id, now=_now()
+            platform_user.platform_user_id, visit_id=visit_id, now=_now()
         )
     )
     _no_store(response)
@@ -264,7 +269,7 @@ def _accept_response(
         request,
         code="ok",
         data={
-            "visit": _visit_data(result["visit"], str(platform_user["id"])),
+            "visit": _visit_data(result["visit"], platform_user.platform_user_id),
             "human_conversation_id": result["conversation"]["id"],
             "replayed": bool(result["replayed"]),
         },
@@ -277,7 +282,7 @@ def accept_world_visit(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     return _accept_response(
         visit_id=visit_id,
@@ -293,11 +298,11 @@ def _terminate_response(
     visit_id: str,
     request: Request,
     response: Response,
-    platform_user: dict,
+    platform_user: SessionPrincipal,
 ) -> dict:
     row = _call(
         lambda: _service().terminate(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             visit_id=visit_id,
             action=action,
             now=_now(),
@@ -307,7 +312,7 @@ def _terminate_response(
     return _envelope(
         request,
         code="ok",
-        data={"visit": _visit_data(row, str(platform_user["id"]))},
+        data={"visit": _visit_data(row, platform_user.platform_user_id)},
     )
 
 
@@ -317,7 +322,7 @@ def reject_world_visit(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     return _terminate_response(
         action="reject",
@@ -334,7 +339,7 @@ def cancel_world_visit(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     return _terminate_response(
         action="cancel",
@@ -351,7 +356,7 @@ def leave_world_visit(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     return _terminate_response(
         action="leave",
@@ -368,7 +373,7 @@ def revoke_world_visit(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     return _terminate_response(
         action="revoke",
@@ -386,12 +391,12 @@ def list_visited_world_feed(
     response: Response,
     cursor: Optional[str] = Query(default=None, max_length=1024),
     limit: int = Query(default=20, ge=1, le=50),
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     cursor_published_at, cursor_post_id = _decode_feed_cursor(cursor)
     rows = _call(
         lambda: _service().list_feed(
-            str(platform_user["id"]),
+            platform_user.platform_user_id,
             visit_id=visit_id,
             now=_now(),
             cursor_published_at=cursor_published_at,
@@ -419,11 +424,11 @@ def block_visit_counterpart(
     request: Request,
     response: Response,
     payload: Optional[EmptyPayload] = None,
-    platform_user: dict = Depends(_require_visit_session),
+    platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     result = _call(
         lambda: _service().block(
-            str(platform_user["id"]), visit_id=visit_id, now=_now()
+            platform_user.platform_user_id, visit_id=visit_id, now=_now()
         )
     )
     _no_store(response)
