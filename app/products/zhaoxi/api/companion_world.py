@@ -23,6 +23,16 @@ from app.db import (
     get_platform_user,
     try_conversation_turn_lock,
 )
+from app.products.zhaoxi.api.contracts import (
+    WORLD_ERROR_RESPONSES,
+    BootstrapResponse,
+    CandidateListResponse,
+    ConversationListResponse,
+    ConversationMessagesResponse,
+    ConversationReadResponse,
+    ResidentListResponse,
+    TurnResponse,
+)
 from app.platform.moderation.text_sanitizer import (
     FIELD_DISPLAY_NAME,
     FIELD_RELATIONSHIP_LABEL,
@@ -478,7 +488,11 @@ def _decode_feed_cursor(cursor: Optional[str]) -> tuple[Optional[str], Optional[
     return published_at, post_id
 
 
-@router.post("/worlds/home/bootstrap")
+@router.post(
+    "/worlds/home/bootstrap",
+    response_model=BootstrapResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def bootstrap_home(
     request: Request,
     response: Response,
@@ -503,7 +517,11 @@ def bootstrap_home(
     )
 
 
-@router.get("/worlds/home/resident-candidates")
+@router.get(
+    "/worlds/home/resident-candidates",
+    response_model=CandidateListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_candidates(
     request: Request,
     response: Response,
@@ -520,7 +538,11 @@ def list_candidates(
     )
 
 
-@router.post("/worlds/home/residents/confirm")
+@router.post(
+    "/worlds/home/residents/confirm",
+    response_model=ResidentListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def confirm_residents(
     payload: ConfirmResidentsPayload,
     request: Request,
@@ -547,7 +569,11 @@ def confirm_residents(
     )
 
 
-@router.get("/worlds/home/residents")
+@router.get(
+    "/worlds/home/residents",
+    response_model=ResidentListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_residents(
     request: Request,
     response: Response,
@@ -758,7 +784,11 @@ def publish_home_feed_post(
     )
 
 
-@router.get("/conversations")
+@router.get(
+    "/conversations",
+    response_model=ConversationListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_conversations(
     request: Request,
     response: Response,
@@ -784,7 +814,11 @@ def list_conversations(
     )
 
 
-@router.get("/ai-conversations/{conversation_id}/messages")
+@router.get(
+    "/ai-conversations/{conversation_id}/messages",
+    response_model=ConversationMessagesResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_conversation_messages(
     conversation_id: str,
     request: Request,
@@ -823,7 +857,11 @@ def list_conversation_messages(
     )
 
 
-@router.post("/ai-conversations/{conversation_id}/read")
+@router.post(
+    "/ai-conversations/{conversation_id}/read",
+    response_model=ConversationReadResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def mark_conversation_read(
     conversation_id: str,
     payload: ConversationReadPayload,
@@ -851,7 +889,11 @@ def mark_conversation_read(
     )
 
 
-@router.post("/ai-conversations/{conversation_id}/turn")
+@router.post(
+    "/ai-conversations/{conversation_id}/turn",
+    response_model=TurnResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def conversation_turn(
     conversation_id: str,
     payload: ConversationTurnPayload,

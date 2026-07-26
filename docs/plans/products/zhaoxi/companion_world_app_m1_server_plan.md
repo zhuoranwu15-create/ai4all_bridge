@@ -1,7 +1,7 @@
 # Companion World App M1 服务端需求评审与开发计划
 
 更新时间：2026-07-26
-状态：**执行中** —— S1、S2、S3、S4 已交付（2026-07-26），S5 待开工，每批独立 PR
+状态：**S1–S5 全部已交付（2026-07-26）**，待合入 `main`（受保护，需 PR + 双档 CI）
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World M1 服务端需求积压 V0.2》与《AI 陪伴 App 私人平行世界 PRD V1.1》
@@ -530,12 +530,29 @@ PG 1684 passed / 9 skipped。
 `message_id` ✅。两档全量：SQLite 1661 passed（2 例为本机 sqlite 3.26 缺 `DROP COLUMN` 的
 既有失败）、PG 1698 passed / 9 skipped。
 
-### S5 — 契约门禁（M1 联调前，约 2–3 人日）
+### S5 — 契约门禁 — ✅ 已交付（2026-07-26）
 
-| 项 | 改动 |
+| 项 | 实际改动 |
 | --- | --- |
-| CONTRACT-001 | 主链路 8 端点补 `response_model`；`scripts/export_openapi.py`；提交 `docs/products/zhaoxi/openapi/app_v1.json`；CI snapshot 一致性测试 |
-| 文档 | 更新 `app_api_handoff.md`（新字段、新端点、错误码冻结表）与 `app_client_brief.md` |
+| 响应模型 | 新增 `api/contracts.py` 作为冻结契约的单一来源：A 类扁平（`AppConfigResponse`、`MeResponse`）+ B 类泛型信封 `WorldEnvelope[T]` 与各 `data` 模型 + `WorldErrorEnvelope`。**10 条**主链路路由补 `response_model`：计划原列的 8 项（`/app/config`、`/me`、bootstrap、resident-candidates、residents、residents/confirm、conversations、`ai-conversations/{id}/{messages,turn}`）+ S4 冻结的 `/ai-conversations/{id}/read`——漏掉它会在 snapshot 上留个洞。世界类端点另经 `WORLD_ERROR_RESPONSES` 声明 401/403/404/409/422/429 的错误信封 |
+| 导出脚本 | `scripts/export_openapi.py`：只留客户端直连的 `/v1/*`，排除 `/v1/products/*` 与 `/api/v1/products/*`（同批路由的另外两个挂载点，否则条目翻倍）；按引用传递闭包裁剪 `components.schemas`，admin/bridge 模型不混入；确定性序列化（`sort_keys` + 2 空格 + 结尾换行），否则字典顺序抖动会让 snapshot 比对随机红。支持 `--check` / `--stdout` |
+| snapshot | 提交 `docs/products/zhaoxi/openapi/app_v1.json`：49 条路径、52 个 schema |
+| CI 门禁 | `tests/test_app_openapi_contract.py` 15 例，三条门禁：① 提交的 snapshot 与实时导出逐字节一致；② 10 条主链路的 200 响应 schema 必须非空（防退回裸 `dict`）；③ **真实响应体与声明 schema 逐层键集比对**——`response_model` 会静默过滤未声明字段，模型漏写一个就悄悄少返回，这条把它变成测试红 |
+| 文档 | `app_api_handoff.md` 增 §2.3 契约 snapshot 段与 §7 错误信封声明说明；`app_client_brief.md` 增 snapshot 使用说明 |
+
+**生产安全**：导出脚本只 `create_app()` + `app.openapi()`，不触发 FastAPI startup，因此不会像
+其它脚本那样触发 `init_db()` 去动 `.env` 指向的生产库；脚本 docstring 已写明。
+
+门禁有效性已实测：临时从模型里删掉 `ConversationItem.can_send`，门禁 ③ 报
+「契约多出 `['can_send']`」、门禁 ① 同时报 snapshot 过期，二者都咬住。
+
+**已知边界**：只有这 10 条端点有真实响应 schema；信箱/访问/通知/真人会话等其余端点当前只
+冻结路径与请求体，属计划 §2.15 的既定分步，不是遗漏。
+
+回归：本批只跑聚焦测试——契约门禁 15 passed；受影响文件（`test_app_api.py`、
+`test_companion_world_api.py`、`test_companion_world_conversation_contract.py`、
+`test_companion_world_service.py`、`test_multi_product_isolation.py` 等）81 passed；
+相邻世界/分层用例 50 passed / 14 skipped。**S1–S5 的双档全量回归留到合入前一次性跑**。
 
 ### P2 批次（不进 M1）
 

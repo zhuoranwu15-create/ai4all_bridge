@@ -22,7 +22,7 @@
    （central/node）已上线，继续硬化部署与观测。
 2. **新功能补充** — 拉新送贝壳闭环已落地，继续补运营复核体验；权益扣减收口、图片理解转正等（见 §3）。
 3. **效果调优** — 主动消息/内容邀请/陪伴跟进在真实数据上调 prompt、阈值与风控；陪伴质量回归集；默认 prompt 与人设。
-4. **朝夕相伴 App 客户端 M1 服务端支持** — Companion World 3.0 后端已全量上线，客户端正式版正在做 M0→M1。产品口径见 [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)；服务端需求评审与 S1–S5 批次见 [M1 服务端计划](plans/products/zhaoxi/companion_world_app_m1_server_plan.md)。**S1（发布门底座 + D-A 老用户带入）、S2（结构化自建角色 + D-B 自由文本安全收口）、S3（NAME-001 运营名池确定性选名快照 + CAND-001 候选稳定身份）与 S4（会话 DTO 时间/可发送性 + read cursor 未读 + turn 响应形状与幂等 message_id 冻结）已于 2026-07-26 交付**；剩余 S5 契约门禁（OpenAPI snapshot）。
+4. **朝夕相伴 App 客户端 M1 服务端支持** — Companion World 3.0 后端已全量上线，客户端正式版正在做 M0→M1。产品口径见 [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)；服务端需求评审与 S1–S5 批次见 [M1 服务端计划](plans/products/zhaoxi/companion_world_app_m1_server_plan.md)。**S1（发布门底座 + D-A 老用户带入）、S2（结构化自建角色 + D-B 自由文本安全收口）、S3（NAME-001 运营名池确定性选名快照 + CAND-001 候选稳定身份）、S4（会话 DTO 时间/可发送性 + read cursor 未读 + turn 响应形状与幂等 message_id 冻结）与 S5（CONTRACT-001 OpenAPI snapshot 契约门禁）已于 2026-07-26 全部交付**，M1 服务端支持开发完成，待合入 main（受保护分支，需 PR + 双档 CI）。客户端机器可读契约为仓库提交的 [`openapi/app_v1.json`](products/zhaoxi/openapi/app_v1.json)。
 
 ## 3. 已知大缺口（按建议起点排序）
 

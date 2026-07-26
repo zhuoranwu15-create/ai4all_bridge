@@ -20,7 +20,7 @@
 | 项 | 值 |
 |---|---|
 | 公网 Base URL | `https://ai4company.top/api/v1/` |
-| 交互式 API 文档（Swagger） | **未对外暴露**（2026-07-26 实测 `/api/docs` 返回官网 SPA）；请本地起服务访问 `/docs`，或找后端导出 `openapi.json` |
+| 交互式 API 文档（Swagger） | **未对外暴露**（2026-07-26 实测 `/api/docs` 返回官网 SPA）；契约以仓库提交的 [`openapi/app_v1.json`](openapi/app_v1.json) 为准（见 §2.3），或本地起服务访问 `/docs` |
 | 鉴权方式 | 手机号 OTP 登录 → 30 天 session token（`Authorization: Bearer <access_token>`） |
 | 内容长度上限 | 文本 4000 字符；音频 10 MB / 60s（见 `/app/config` `limits`） |
 | 时区 | 服务端统一 Asia/Shanghai（+08:00），所有时间字段带 `+08:00` 偏移 |
@@ -51,6 +51,15 @@
 ```
 
 失败时（B 类）：`code` 为错误码（见 §7），无 `data`，`message` 为 `null`。HTTP 状态码同时反映语义（401/404/409/429 等）。
+
+### 2.3 OpenAPI 契约 snapshot
+
+仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（49 条 `/v1` 路径）。
+
+- 服务端 CI 断言「实时导出 == 提交的 snapshot」，所以**改响应字段必须同步更新 snapshot**，否则后端 CI 直接红。客户端可以拿它做 breaking-change 检查或生成 DTO。
+- 后端重新导出：`.venv/bin/python scripts/export_openapi.py`（`--check` 只校验）。
+- **当前只有主链路 10 个端点有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
+- 生成的 DTO 不替代客户端领域模型；本文档仍是落地口径与流程约定。
 
 ---
 
@@ -477,6 +486,9 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 > 完整表见 `app/products/zhaoxi/api/companion_world.py` 的 `_ERROR_STATUS`。App 应基于 `code`（而非文案）做分支，未知 `code` 按对应 HTTP 状态兜底。
 
+主链路 10 个端点的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
+（`WorldErrorEnvelope`），可直接据此生成错误分支；具体 `code` 取值仍以上表为准。
+
 ---
 
 ## 8. `/v1` 全量端点清单（52 条）
@@ -554,5 +566,5 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 3. 新号验证 `account == null` → bootstrap → confirm → 用返回的 `conversation_id` 发 turn。
 4. 所有写操作（turn、发帖等）带客户端幂等键，验证断网重试不产生重复。
 5. 遇到 4xx，按 §7 的 `code` 做分支，不要依赖文案。
-6. 交互式契约以后端本地 `/docs` 或导出的 `openapi.json` 为准（线上未开放 Swagger）；本文档为落地口径与流程约定。
+6. 机器可读契约用仓库里的 [`openapi/app_v1.json`](openapi/app_v1.json)（见 §2.3，线上未开放 Swagger）；本文档为落地口径与流程约定。
 7. 正式版客户端开发的精简入口见 [`app_client_brief.md`](app_client_brief.md)。

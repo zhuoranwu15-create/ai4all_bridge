@@ -18,8 +18,11 @@
 `/api/v1/products/zhaoxi` 是多产品重构后的规范命名空间（2026-07-25 上线）。
 正式版建议只用规范前缀，并且 **base URL 必须做成配置项**，不要散落在各处硬编码。
 
-> Swagger/OpenAPI **未对外暴露**（`/api/docs` 返回的是官网 SPA）。需要机器可读的
-> 契约请找后端导出 `openapi.json`，不要指望线上自助访问。
+> Swagger/OpenAPI **未对外暴露**（`/api/docs` 返回的是官网 SPA）。机器可读契约用后端仓库
+> 提交的 [`openapi/app_v1.json`](openapi/app_v1.json)：服务端 CI 断言它与实现一致，可以拿来
+> 生成 DTO 或做 breaking-change 检查。注意目前只有**主链路 10 个端点**有真实响应 schema
+> （`/app/config`、`/me`、bootstrap、候选、居民、confirm、会话列表、messages/turn/read），
+> 其余端点只冻结了路径与请求体，响应形状仍以 [`app_api_handoff.md`](app_api_handoff.md) 为准。
 
 ## 2. 登录链路
 

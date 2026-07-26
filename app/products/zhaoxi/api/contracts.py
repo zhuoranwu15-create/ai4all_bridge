@@ -1,0 +1,273 @@
+"""朝夕 App 主链路的**冻结响应契约**（CONTRACT-001）。
+
+这里的模型是客户端 OpenAPI snapshot 的唯一来源：`scripts/export_openapi.py` 导出的
+`docs/products/zhaoxi/openapi/app_v1.json` 完全由它们决定，CI 断言导出结果与提交的
+snapshot 一致。**改响应字段必须同时改这里并重新导出 snapshot**，否则 CI 红。
+
+两条硬约定：
+
+1. FastAPI 的 ``response_model`` 会按模型**过滤**未声明字段——模型漏写一个字段就会静默
+   丢数据。`tests/test_app_openapi_contract.py` 拿真实响应体逐层比对声明 schema 的键集，
+   多一个少一个都失败，把「静默丢字段」变成「测试红」。
+2. 模型只描述**已经在返回的**形状，不在这里顺手改契约。契约变更走产品批次。
+"""
+from __future__ import annotations
+
+from typing import Generic, List, Optional, TypeVar
+
+from pydantic import BaseModel, Field
+
+# --- B 类统一信封 ---------------------------------------------------------
+
+DataT = TypeVar("DataT")
+
+
+class WorldEnvelope(BaseModel, Generic[DataT]):
+    """世界类端点的成功信封（见交接文档 §2.2 B 类）。"""
+
+    code: str = Field(examples=["ok"])
+    request_id: str
+    server_time: str
+    data: DataT
+
+
+class WorldErrorEnvelope(BaseModel):
+    """世界类端点的失败信封：无 ``data``，``message`` 恒为 null，分支只看 ``code``。"""
+
+    code: str
+    request_id: str
+    server_time: str
+    message: Optional[str] = None
+
+
+# --- A 类：/app/config ----------------------------------------------------
+
+
+class AppConfigCaptcha(BaseModel):
+    provider: str
+    scene_id: str
+    prefix: str
+    configured: bool
+
+
+class AppConfigFeatures(BaseModel):
+    """公开能力位。新增 capability 必须在此登记，否则响应里会被过滤掉。"""
+
+    voice_input: bool
+    resident_world: bool
+    world_feed: bool
+    app_notifications: bool
+    resident_lifecycle: bool
+    mailbox: bool
+    world_visits: bool
+    human_chat_send: bool
+
+
+class AppConfigLimits(BaseModel):
+    message_chars: int
+    audio_bytes: int
+    audio_duration_ms: int
+
+
+class AppConfigMinimumVersionByPlatform(BaseModel):
+    ios: str
+    android: str
+
+
+class AppConfigResponse(BaseModel):
+    captcha: AppConfigCaptcha
+    features: AppConfigFeatures
+    limits: AppConfigLimits
+    client_contract_version: str
+    server_time: str
+    minimum_supported_version: str
+    minimum_supported_version_by_platform: AppConfigMinimumVersionByPlatform
+
+
+# --- A 类：/me ------------------------------------------------------------
+
+
+class PublicAccount(BaseModel):
+    id: str
+    status: Optional[str] = None
+    ai_display_name: str
+    ai_subtitle: str
+
+
+class MePlatformUser(BaseModel):
+    id: str
+    phone_masked: str
+
+
+class MeWorld(BaseModel):
+    id: str
+    status: str
+    onboarding_state: str
+
+
+class MeResponse(BaseModel):
+    """``account`` 与 ``world`` 都可为 null：P1 新用户确认居民前**恒无** account。"""
+
+    status: str
+    platform_user: MePlatformUser
+    account: Optional[PublicAccount] = None
+    world: Optional[MeWorld] = None
+    server_time: str
+
+
+# --- B 类 data：世界引导 ---------------------------------------------------
+
+
+class WorldSummary(BaseModel):
+    id: str
+    status: str
+    onboarding_state: str
+
+
+class CandidateData(BaseModel):
+    """候选居民公开字段；刻意不含 persona_seed_json 与内部 resident id。"""
+
+    template_id: str
+    template_version: str
+    name: str
+    avatar_ref: Optional[str] = None
+    summary: Optional[str] = None
+    long_summary: Optional[str] = None
+    tags: List[str]
+    origin: str
+    status: str
+    persona_key: Optional[str] = None
+    suggested_display_name: Optional[str] = None
+    naming_version: Optional[str] = None
+    naming_status: str
+
+
+class ResidentData(BaseModel):
+    """owner 可见的居民字段；不暴露 runtime account id。"""
+
+    resident_id: str
+    name: str
+    avatar_ref: Optional[str] = None
+    status: str
+    origin: str
+    conversation_id: Optional[str] = None
+    conversation_state: Optional[str] = None
+
+
+class BootstrapData(BaseModel):
+    world: WorldSummary
+    candidates: List[CandidateData]
+    existing_residents: List[ResidentData]
+
+
+class CandidateListData(BaseModel):
+    candidates: List[CandidateData]
+
+
+class ResidentListData(BaseModel):
+    residents: List[ResidentData]
+
+
+# --- B 类 data：会话 -------------------------------------------------------
+
+
+class ConversationResident(BaseModel):
+    id: str
+    name: str
+    avatar_ref: Optional[str] = None
+    status: str
+
+
+class ConversationItem(BaseModel):
+    """``sort_time`` 是排序与分页锚，``last_message_at`` 是最近一条消息时间。
+
+    没聊过的居民 ``last_message_at``/``last_preview`` 为 null 但 ``sort_time`` 有值——
+    两者刻意分开，服务端不伪造消息时间（CONV-001）。
+    """
+
+    conversation_id: str
+    resident: ConversationResident
+    state: str
+    last_preview: Optional[str] = None
+    unread: int
+    last_message_at: Optional[str] = None
+    sort_time: Optional[str] = None
+    can_send: bool
+    read_only_reason: Optional[str] = None
+
+
+class ConversationListData(BaseModel):
+    items: List[ConversationItem]
+    next_cursor: Optional[str] = None
+
+
+class ConversationMessageItem(BaseModel):
+    id: int
+    message_id: Optional[str] = None
+    role: str
+    message_type: str
+    text: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class ConversationMessagesData(BaseModel):
+    state: str
+    messages: List[ConversationMessageItem]
+    next_cursor: Optional[int] = None
+
+
+class ConversationReadData(BaseModel):
+    conversation_id: str
+    last_read_message_id: Optional[int] = None
+    unread: int
+
+
+class TurnReply(BaseModel):
+    """``reply`` 非 null 时 ``text`` 必非空；重放回放原持久化 ``message_id``。"""
+
+    text: str
+    message_id: Optional[str] = None
+
+
+class TurnData(BaseModel):
+    """``no_reply=true`` 时 ``reply`` 整体为 null，不存在「有对象但 text 为 null」。"""
+
+    reply: Optional[TurnReply] = None
+    no_reply: bool
+    deduplicated: bool
+
+
+# --- 各端点最终响应模型 ----------------------------------------------------
+
+BootstrapResponse = WorldEnvelope[BootstrapData]
+CandidateListResponse = WorldEnvelope[CandidateListData]
+ResidentListResponse = WorldEnvelope[ResidentListData]
+ConversationListResponse = WorldEnvelope[ConversationListData]
+ConversationMessagesResponse = WorldEnvelope[ConversationMessagesData]
+ConversationReadResponse = WorldEnvelope[ConversationReadData]
+TurnResponse = WorldEnvelope[TurnData]
+
+# 世界类端点的失败响应统一是错误信封。逐码含义见交接文档 §7；客户端按 code 分支。
+WORLD_ERROR_RESPONSES = {
+    401: {"model": WorldErrorEnvelope, "description": "未登录或 token 失效"},
+    403: {"model": WorldErrorEnvelope, "description": "账号或世界被停用"},
+    404: {"model": WorldErrorEnvelope, "description": "资源不存在或能力被关闭"},
+    409: {"model": WorldErrorEnvelope, "description": "状态冲突（只读、并发、容量）"},
+    422: {"model": WorldErrorEnvelope, "description": "参数校验失败"},
+    429: {"model": WorldErrorEnvelope, "description": "触发限流"},
+}
+
+__all__ = [
+    "AppConfigResponse",
+    "BootstrapResponse",
+    "CandidateListResponse",
+    "ConversationListResponse",
+    "ConversationMessagesResponse",
+    "ConversationReadResponse",
+    "MeResponse",
+    "ResidentListResponse",
+    "TurnResponse",
+    "WORLD_ERROR_RESPONSES",
+    "WorldEnvelope",
+    "WorldErrorEnvelope",
+]

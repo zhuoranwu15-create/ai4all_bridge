@@ -40,6 +40,7 @@ from app.db import (
     revoke_platform_user_session,
 )
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.products.zhaoxi.api.contracts import AppConfigResponse, MeResponse
 from app.platform.auth.identity import ResolvedIdentity
 from app.routers.deps import _require_session
 from app.routers.web import (
@@ -229,7 +230,7 @@ def _companion_world_capabilities() -> dict:
     }
 
 
-@router.get("/app/config")
+@router.get("/app/config", response_model=AppConfigResponse)
 def app_config(response: Response) -> dict:
     scene_id = str(settings.aliyun_captcha_scene_id or "").strip()
     prefix = str(settings.aliyun_captcha_prefix or "").strip()
@@ -332,7 +333,7 @@ def app_logout(
     return {"status": "ok"}
 
 
-@router.get("/me")
+@router.get("/me", response_model=MeResponse)
 def app_me(
     response: Response,
     principal: SessionPrincipal = Depends(_require_session),
