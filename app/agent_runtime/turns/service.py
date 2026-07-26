@@ -501,12 +501,16 @@ def build_product_turn_llm_input(
     )
 
     # Onboarding 期间尚未分配使命/关系状态未成形，跳过注入（agent_self_prd.md §4.4）。
-    from app.skills import list_skill_catalog
-
+    # Skill catalog 由产品 ProductPromptContext.skill_catalog 注入（阶段2 产品隔离），
+    # Runtime 不再自行调用全局 list_skill_catalog()——Nooki 由此与朝夕的 Skills 完全隔离。
     builder = PromptBuilder()
     _tool_surface_enabled = getattr(settings, "llm_tool_surface_prompt_enabled", True)
     _skills_enabled = getattr(settings, "llm_skills_prompt_enabled", True)
-    skill_catalog = list_skill_catalog() if _skills_enabled and not onboarding_active else None
+    skill_catalog = (
+        tuple(product_context.skill_catalog)
+        if _skills_enabled and not onboarding_active
+        else None
+    )
     build_result = builder.assemble(
         display_name=account.get("display_name"),
         soul=product_context.soul,

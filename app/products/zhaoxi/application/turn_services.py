@@ -21,6 +21,7 @@ from app.db import (
     set_account_onboarding_state,
 )
 from app.agent_runtime.context.prompt_builder import extract_section
+from app.skills import list_skill_catalog
 from app.products.zhaoxi.application.memory.session_lifecycle import (
     business_day_for,
     get_or_create_account_active_session_with_dreaming,
@@ -280,6 +281,9 @@ class ZhaoxiTurnServices:
             tool_instructions=tool_instructions,
             agent_self_state=self_state,
             onboarding_context=onboarding_context,
+            # 朝夕继续注入全局 Skill catalog（阶段2 产品隔离：Runtime 不再自行调用
+            # list_skill_catalog，由产品显式提供；Nooki 走默认空 tuple 不暴露任何 skill）。
+            skill_catalog=tuple(list_skill_catalog()),
         )
 
     def advance_onboarding(

@@ -37,6 +37,9 @@ class ProductPromptContext:
     tool_instructions: Optional[str]
     agent_self_state: Optional[str]
     onboarding_context: str
+    # 产品决定的 Skill catalog 投影；空 tuple 表示该产品不暴露任何 skill。
+    # Runtime 不再自行调用全局 list_skill_catalog()，统一由产品注入（阶段2 隔离）。
+    skill_catalog: Tuple[Dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
