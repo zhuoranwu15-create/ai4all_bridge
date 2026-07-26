@@ -4065,6 +4065,98 @@ def _migration_0046_billing_idempotency_contract(conn: Connection) -> None:
     )
 
 
+def _migration_0047_nooki_core(conn: Connection) -> None:
+    """Nooki P0+P1 核心六表：微信身份绑定 + 任务/方案/步骤/事件/显式偏好。
+
+    见 docs/products/nooki/prd.md。id 全部 app 侧生成 TEXT UUID（对齐 universes 系列表的
+    既有约定，不用 AUTOINCREMENT）。``nooki_tasks.selected_plan_id``/``current_step_id`` 与
+    ``nooki_task_plans``/``nooki_steps`` 互相指向存在建表顺序上的循环依赖，不声明 FK 约束
+    （对齐 universes.legacy_primary_account_id 等既有「指针列不加 FK」先例）。
+    幂等（IF NOT EXISTS）、空表迁移、无回填。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS nooki_wx_identities (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            openid TEXT NOT NULL,
+            unionid TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_wx_identities_app_openid
+            ON nooki_wx_identities(app_id, openid);
+        CREATE INDEX IF NOT EXISTS ix_nooki_wx_identities_platform_user
+            ON nooki_wx_identities(platform_user_id);
+
+        CREATE TABLE IF NOT EXISTS nooki_tasks (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            raw_goal TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'draft',
+            selected_plan_id TEXT,
+            current_step_id TEXT,
+            source_message_id TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_nooki_tasks_user_status ON nooki_tasks(platform_user_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_tasks_source_message
+            ON nooki_tasks(source_message_id) WHERE source_message_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS nooki_task_plans (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            title TEXT NOT NULL,
+            description TEXT,
+            estimated_minutes INTEGER,
+            is_selected INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES nooki_tasks(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_nooki_task_plans_task ON nooki_task_plans(task_id);
+
+        CREATE TABLE IF NOT EXISTS nooki_steps (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            plan_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES nooki_tasks(id),
+            FOREIGN KEY(plan_id) REFERENCES nooki_task_plans(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_nooki_steps_task_status ON nooki_steps(task_id, status);
+
+        CREATE TABLE IF NOT EXISTS nooki_task_events (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            platform_user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            payload TEXT,
+            source_message_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(task_id) REFERENCES nooki_tasks(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_nooki_task_events_task ON nooki_task_events(task_id, created_at);
+
+        CREATE TABLE IF NOT EXISTS nooki_user_profile (
+            platform_user_id TEXT PRIMARY KEY,
+            explicit_preferences TEXT NOT NULL DEFAULT '{}',
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4107,6 +4199,7 @@ _MIGRATIONS = [
     (44, _migration_0044_referral_app_id_contract),
     (45, _migration_0045_multi_product_phase1_contract),
     (46, _migration_0046_billing_idempotency_contract),
+    (47, _migration_0047_nooki_core),
 ]
 
 

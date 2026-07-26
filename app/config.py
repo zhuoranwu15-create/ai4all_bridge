@@ -436,6 +436,10 @@ class Settings(BaseSettings):
     # 若将来换用非 thinking 的 provider 需要 API 层硬强制，再把此项设为 web_search。
     dynamic_reminder_force_first_tool: str = ""
 
+    # Nooki 微信小程序静默登录（jscode2session + 手机号一键组件解密）
+    nooki_wx_appid: str = ""
+    nooki_wx_app_secret: str = ""
+
     class Config:
         env_file = ".env"
         extra = "ignore"

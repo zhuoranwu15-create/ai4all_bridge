@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Iterable, Mapping
 
 ZHAOXI_APP_ID = "zhaoxi"
+NOOKI_APP_ID = "nooki"
 _APP_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 
 
@@ -58,7 +59,10 @@ class ProductRegistry:
 
 
 PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
-    [ProductRegistration(app_id=ZHAOXI_APP_ID)]
+    [
+        ProductRegistration(app_id=ZHAOXI_APP_ID),
+        ProductRegistration(app_id=NOOKI_APP_ID),
+    ]
 )
 
 
