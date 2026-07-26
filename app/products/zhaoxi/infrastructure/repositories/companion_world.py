@@ -13,6 +13,7 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     CandidateRecord,
     CompanionWorldError,
     ConversationMessage,
+    ConversationReadState,
     ConversationSummary,
     ConversationTarget,
     ResidentDraftRecord,
@@ -575,8 +576,30 @@ class SqlCompanionWorldRepository(WorldRepository):
                 state=str(row["state"]),
                 last_preview=row.get("last_preview"),
                 unread=int(row.get("unread") or 0),
+                last_message_at=row.get("last_message_at"),
+                sort_time=row.get("updated_at"),
             )
             for row in rows
+        )
+
+    def advance_conversation_read_cursor(
+        self,
+        conversation_id: str,
+        platform_user_id: str,
+        last_message_id: int,
+    ) -> Optional[ConversationReadState]:
+        row = world_db.advance_conversation_read_cursor(
+            conversation_id=conversation_id,
+            owner_platform_user_id=platform_user_id,
+            last_message_id=last_message_id,
+            conn=self._conn,
+        )
+        if row is None:
+            return None
+        cursor = row.get("last_read_message_id")
+        return ConversationReadState(
+            last_read_message_id=int(cursor) if cursor else None,
+            unread=int(row.get("unread") or 0),
         )
 
     def list_conversation_messages(

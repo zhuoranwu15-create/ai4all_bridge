@@ -72,14 +72,22 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 1. **幂等键必传**：`client_message_id` 由客户端生成、会话内唯一，
    格式 `^[A-Za-z0-9_-]{8,64}$`（建议 UUID 去掉短横线）。网络重试用同一个 key，
    服务端会返回同一条回复并标 `deduplicated=true`，不会重复扣量或重复回复。
+   重放返回的 `reply.message_id` 与首次**完全一致**，据此认出是同一条消息，不要新建气泡。
 2. **409 `turn_in_progress`**：同一账号/会话上一轮未完成时并发发送会被拒。
    UI 应在等待回复期间禁用发送，收到 409 按「上一条还在处理」提示，不要自动重试。
 3. **429 `rate_limited`**：服务端账号级滑动窗口限流（当前生产 10 次 / 30 秒）。
    收到后按退避重试，并把服务端返回的提示文案展示给用户。
 4. **`no_reply=true` 是正常业务态**：这一轮 AI 选择不回复，不是错误，不要报错弹窗。
+   此时 `reply` **整体为 `null`**；只要 `reply` 非 null，`reply.text` 就一定非空，
+   不存在「有对象但 text 为 null」的中间态。
 
 其他常见状态：`403 account_disabled`（账号停用，应登出并提示）、
 `401`（token 失效，走重新登录）。
+
+会话列表（`GET {base}/conversations`）按服务端返回顺序展示即可：`sort_time` 是排序锚，
+`last_message_at` 是最近一条消息时间（没聊过为 `null`，不要拿 `sort_time` 顶替显示）。
+`can_send=false` 时禁用输入框、按 `read_only_reason` 出文案。未读用 `unread`，读完调
+`POST {base}/ai-conversations/{id}/read` 上报 `last_message_id`（幂等，只前进）。
 
 ## 6. 其余能力
 

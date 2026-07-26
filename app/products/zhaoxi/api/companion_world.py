@@ -8,7 +8,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.config import settings
 from app.db import (
     SessionPrincipal,
-    get_duplicate_reply,
+    get_duplicate_reply_record,
     get_platform_user,
     try_conversation_turn_lock,
 )
@@ -246,6 +246,13 @@ class ConversationTurnPayload(BaseModel):
         return self
 
 
+class ConversationReadPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # 客户端把「已读到的最后一条」消息 id 报上来；服务端只前进不回退，也不会越过真实最新一条。
+    last_message_id: int = Field(ge=1)
+
+
 class FeedPostPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -374,6 +381,35 @@ def _conversation_data(item) -> dict:
         "state": item.state,
         "last_preview": item.last_preview,
         "unread": item.unread,
+        # 排序键与最近消息时间分开：没聊过的居民 last_message_at 为 null，但仍有稳定 sort_time。
+        "last_message_at": _feed_time(item.last_message_at),
+        "sort_time": _feed_time(item.sort_time),
+        "can_send": item.can_send,
+        "read_only_reason": item.read_only_reason,
+    }
+
+
+def _turn_data(
+    reply_row: Optional[Dict[str, Any]],
+    *,
+    deduplicated: bool = True,
+    no_reply: bool = False,
+) -> dict:
+    """冻结 turn 响应形状（TURN-001）。
+
+    ``reply`` 要么是 ``{text, message_id}`` 且 ``text`` 非空，要么整体为 ``null``——不再出现
+    「有 reply 对象但 text 为 null」这种要客户端二次判断的中间态。幂等重放回放**原持久化**的
+    ``message_id``，客户端据此认出是同一条消息，不新建气泡。
+    """
+    if reply_row is None or not reply_row.get("content"):
+        return {"reply": None, "no_reply": no_reply, "deduplicated": deduplicated}
+    return {
+        "reply": {
+            "text": str(reply_row["content"]),
+            "message_id": reply_row.get("message_id"),
+        },
+        "no_reply": no_reply,
+        "deduplicated": deduplicated,
     }
 
 
@@ -778,11 +814,39 @@ def list_conversation_messages(
                     "role": item.role,
                     "message_type": item.message_type,
                     "text": item.content,
-                    "created_at": item.created_at,
+                    "created_at": _feed_time(item.created_at),
                 }
                 for item in messages
             ],
             "next_cursor": messages[0].id if len(messages) == limit else None,
+        },
+    )
+
+
+@router.post("/ai-conversations/{conversation_id}/read")
+def mark_conversation_read(
+    conversation_id: str,
+    payload: ConversationReadPayload,
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_world_session),
+) -> dict:
+    """把会话标记为已读到某条消息（CONV-002）。幂等：重放同一 id 结果不变。"""
+    state = _run_domain(
+        lambda: _service().mark_conversation_read(
+            principal.platform_user_id,
+            conversation_id,
+            last_message_id=payload.last_message_id,
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "conversation_id": conversation_id,
+            "last_read_message_id": state.last_read_message_id,
+            "unread": state.unread,
         },
     )
 
@@ -803,21 +867,13 @@ def conversation_turn(
     )
     # 用客户端已知的 conversation 锚定幂等键，避免内部 runtime account 出现在历史响应。
     mapped_message_id = f"app:{target.conversation_id}:{payload.client_message_id}"
-    duplicate = get_duplicate_reply(
+    duplicate = get_duplicate_reply_record(
         account_id=target.runtime_account_id,
         reply_to_message_id=mapped_message_id,
     )
     if duplicate is not None:
         _no_store(response)
-        return _envelope(
-            request,
-            code="ok",
-            data={
-                "reply": {"text": duplicate, "message_id": None},
-                "no_reply": False,
-                "deduplicated": True,
-            },
-        )
+        return _envelope(request, code="ok", data=_turn_data(duplicate))
 
     with try_conversation_turn_lock(conversation_id) as acquired:
         if not acquired:
@@ -830,7 +886,7 @@ def conversation_turn(
         )
         if target.state != "active":
             raise CompanionWorldApiError("conversation_read_only")
-        duplicate = get_duplicate_reply(
+        duplicate = get_duplicate_reply_record(
             account_id=target.runtime_account_id,
             reply_to_message_id=mapped_message_id,
         )
@@ -852,26 +908,24 @@ def conversation_turn(
             )
 
     if result is None:
-        reply, reply_message_id, deduplicated, no_reply = duplicate, None, True, False
+        data = _turn_data(duplicate)
     else:
         if result.status == "rate_limited":
             raise CompanionWorldApiError("rate_limited")
         if result.status == "disabled":
             raise CompanionWorldApiError("account_disabled")
-        reply = result.reply
-        reply_message_id = result.metadata.get("reply_message_id")
-        deduplicated = result.status == "duplicate"
-        no_reply = result.no_reply
+        data = _turn_data(
+            None
+            if result.no_reply
+            else {
+                "content": result.reply,
+                "message_id": result.metadata.get("reply_message_id"),
+            },
+            deduplicated=result.status == "duplicate",
+            no_reply=result.no_reply,
+        )
     _no_store(response)
-    return _envelope(
-        request,
-        code="ok",
-        data={
-            "reply": {"text": reply, "message_id": reply_message_id},
-            "no_reply": no_reply,
-            "deduplicated": deduplicated,
-        },
-    )
+    return _envelope(request, code="ok", data=data)
 
 
 def _is_companion_world_path(path: str) -> bool:

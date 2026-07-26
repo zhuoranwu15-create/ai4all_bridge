@@ -146,7 +146,12 @@ class ConversationTarget:
 
 @dataclass(frozen=True)
 class ConversationSummary:
-    """conversation 列表公开模型；P1 unread 恒为 0。"""
+    """conversation 列表公开模型。
+
+    ``sort_time`` 是服务端排序与分页 cursor 的锚（= 会话 ``updated_at``），``last_message_at``
+    是最近一条可见消息的时间、没聊过为 ``None``——两者刻意分开：未聊过的居民必须稳定排在
+    末尾且不伪造消息时间（CONV-001 / PRD CONV-05、CONV-06）。
+    """
 
     conversation_id: str
     resident_id: str
@@ -155,6 +160,26 @@ class ConversationSummary:
     resident_status: str
     state: str
     last_preview: Optional[str]
+    unread: int
+    last_message_at: Optional[str] = None
+    sort_time: Optional[str] = None
+
+    @property
+    def can_send(self) -> bool:
+        """能否发消息；只读会话由 resident offline 触发，与容量/限流无关。"""
+        return self.state == "active"
+
+    @property
+    def read_only_reason(self) -> Optional[str]:
+        """只读原因码；可发送时为 ``None``，客户端按码而非文案分支。"""
+        return None if self.can_send else "resident_offline"
+
+
+@dataclass(frozen=True)
+class ConversationReadState:
+    """标记已读后的会话状态（CONV-002）。"""
+
+    last_read_message_id: Optional[int]
     unread: int
 
 
@@ -486,6 +511,13 @@ class WorldRepository(Protocol):
         before_id: Optional[int],
         limit: int,
     ) -> Sequence[ConversationMessage]: ...
+
+    def advance_conversation_read_cursor(
+        self,
+        conversation_id: str,
+        platform_user_id: str,
+        last_message_id: int,
+    ) -> Optional[ConversationReadState]: ...
 
     # C2 backfill 使用的原语；仍遵循同一 transaction()/L1 锁序。
     def list_active_legacy_account_ids(self, platform_user_id: str) -> Sequence[str]: ...

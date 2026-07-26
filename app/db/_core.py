@@ -4146,6 +4146,17 @@ def _migration_0049_companion_world_naming(conn: Connection) -> None:
     _ensure_column(conn, "universe_residents", "naming_version", "TEXT")
 
 
+def _migration_0050_ai_conversation_read_cursor(conn: Connection) -> None:
+    """AI 会话最小 read cursor（CONV-002 方案 B）。
+
+    ``last_read_message_id`` 存该会话已读到的 ``messages.id``；未读数 = App scope 内
+    ``id > 游标`` 的 assistant 消息数。不建新表、不改 turn 链路。
+
+    纯加列无回填：既有会话为 NULL，等价于「一条都没读过」，未读数即全部 AI 消息数。
+    """
+    _ensure_column(conn, "ai_conversations", "last_read_message_id", "INTEGER")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4191,6 +4202,7 @@ _MIGRATIONS = [
     (47, _migration_0047_legacy_template_display_name),
     (48, _migration_0048_companion_world_resident_drafts),
     (49, _migration_0049_companion_world_naming),
+    (50, _migration_0050_ai_conversation_read_cursor),
 ]
 
 

@@ -268,9 +268,9 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | --- | --- | --- | --- |
 | CONV-01 | 展示全部在场居民入口与获授权真人会话 | P0 | 已实现 `GET /conversations`、`GET /human-conversations` |
 | CONV-02 | 无主角色、无永久置顶，按最近互动组织 | P0 | 已实现（`updated_at DESC, id DESC`）|
-| CONV-03 | 会话项展示头像、名称、身份类型、摘要、时间、未读 | P0 | **缺口**：DTO 无时间；`unread` 恒 0（CONV-001/002）|
+| CONV-03 | 会话项展示头像、名称、身份类型、摘要、时间、未读 | P0 | 已实现（S4：DTO 增 `last_message_at`；`unread` 由 `last_read_message_id` 游标算真实值）|
 | CONV-04 | 点击进入对应会话页 | P0 | 已实现 |
-| CONV-05 | 按最近消息时间倒序；未聊过的居民稳定排在末尾 | P0 | **缺口**：无 `last_message_at` |
+| CONV-05 | 按最近消息时间倒序；未聊过的居民稳定排在末尾 | P0 | 已实现（S4：`sort_time` 为排序锚，`last_message_at` 单独给最近消息时间）|
 | CONV-06 | 未聊过的居民不伪造消息、未读或在线状态 | P0 | 已实现（`last_preview=null`）|
 | CONV-07 | 首阶段不允许隐藏/删除 active AI 会话入口 | P1 | 已实现（无该入口）|
 | CONV-08 | capability 关闭时只展示 legacy 真实可用会话 | P0 过渡 | 已实现（`/app/config` features + `feature_disabled`）|
@@ -401,7 +401,7 @@ capability 只表达「当前公网 App API 可用性」，不泄露内部 sched
 | 阶段 | 客户端范围 | 后端状态与发布门 |
 | --- | --- | --- |
 | M0 | 三 Tab 导航底座、设计 token、API/query/session 分层，现有单 Agent 主链路不回归 | legacy 基线可用；原型不得伪造服务端数据 |
-| M1 | 4 位候选（≥1）、可自建 1 个、无主角色多会话列表、按 `conversation_id` 私聊、legacy 兼容 | 发布门 CAP-001 / BOOT-001 / BOOT-003 / ERR-002 **已交付（S1）**、CUSTOM-001 / SEC-001 / IDEM-001 **已交付（S2）**、NAME-001 / CAND-001 **已交付（S3）**；剩余 CONV-001/002、TURN-001、TIME-001、CONTRACT-001 联调前收口 |
+| M1 | 4 位候选（≥1）、可自建 1 个、无主角色多会话列表、按 `conversation_id` 私聊、legacy 兼容 | 发布门 CAP-001 / BOOT-001 / BOOT-003 / ERR-002 **已交付（S1）**、CUSTOM-001 / SEC-001 / IDEM-001 **已交付（S2）**、NAME-001 / CAND-001 **已交付（S3）**、CONV-001/002 / TURN-001 / TIME-001 **已交付（S4）**；剩余 CONTRACT-001 联调前收口 |
 | P2 | 世界动态闭环：发布、时间流、删除/隐藏、从动态进私聊 | **发布门：FEED-201**（删除/隐藏正式路由）；媒体 MEDIA-201 单独评审 |
 | P3 | 关系生命周期：不可逆离开、唯一离别动态、只读历史、信箱 | 后端已实现；客户端需处理 legacy 豁免、只读态与信箱状态 |
 | P4 | 限时来访闭环 | 后端已实现；客户端缓存清理、no-store 与终态竞态测试是发布门 |
@@ -490,7 +490,9 @@ initial_residents_confirmed → tabs_entered → first_ai_chat_started → first
 ### 11.1 M1 前必须冻结
 
 1. 自建角色的关系枚举、头像资产标识与性格选项的**受控取值表**（不得退化为自由文本直通）。
+   —— 已冻结并交付（S2，`GET /worlds/home/resident-options` 下发）。
 2. AI 会话未读语义：M1 是否提供服务端 read cursor，或明确声明不展示 AI 未读（见计划 CONV-002）。
+   —— 已拍板做最小 read cursor 并交付（S4，`POST /ai-conversations/{id}/read`）。
 
 ### 11.2 不阻塞 M1
 

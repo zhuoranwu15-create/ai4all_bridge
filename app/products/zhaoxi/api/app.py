@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import (
@@ -31,7 +32,7 @@ from app.db import (
     SessionPrincipal,
     create_platform_user_session,
     get_active_bound_account_for_user_in_app,
-    get_duplicate_reply,
+    get_duplicate_reply_record,
     get_or_create_default_ai4all_account_for_user,
     get_platform_user,
     get_session_for_account_and_key,
@@ -64,6 +65,23 @@ _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 CLIENT_CONTRACT_VERSION = "2026-07-26"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def _public_time(value: Optional[str]) -> Optional[str]:
+    """把 DB 北京 naive 时间转成带 +08:00 的公开 ISO 时间（TIME-001）。
+
+    与世界端点同口径：公开时间一律显式带时区，客户端不按设备时区猜。
+    """
+    if not value:
+        return None
+    return (
+        datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
+        .replace(tzinfo=_BEIJING_TZ)
+        .isoformat()
+    )
+
+
 _ALLOWED_AUDIO_TYPES = {
     "audio/aac",
     "audio/m4a",
@@ -368,11 +386,24 @@ def app_messages(
                 "message_id": item.get("message_id"),
                 "role": item["role"],
                 "text": item["content"],
-                "created_at": item["created_at"],
+                "created_at": _public_time(item["created_at"]),
             }
             for item in messages
         ],
         "next_cursor": messages[0]["id"] if len(messages) == limit else None,
+    }
+
+
+def _duplicate_turn_response(reply_row: dict) -> dict:
+    """legacy `/chat/turn` 的幂等重放响应，与世界端 turn 同口径回放原 message_id（TURN-001）。"""
+    return {
+        "status": "ok",
+        "reply": reply_row.get("content"),
+        "no_reply": False,
+        "metadata": {
+            "deduplicated": True,
+            "message_id": reply_row.get("message_id"),
+        },
     }
 
 
@@ -387,35 +418,25 @@ def app_turn(
     platform_user = get_platform_user(platform_user_id=principal.platform_user_id) or {}
     mapped_message_id = f"app:{account_id}:{payload.client_message_id}"
 
-    duplicate_reply = get_duplicate_reply(
+    duplicate = get_duplicate_reply_record(
         account_id=account_id,
         reply_to_message_id=mapped_message_id,
     )
-    if duplicate_reply is not None:
+    if duplicate is not None:
         _no_store(response)
-        return {
-            "status": "ok",
-            "reply": duplicate_reply,
-            "no_reply": False,
-            "metadata": {"deduplicated": True},
-        }
+        return _duplicate_turn_response(duplicate)
 
     lock = _turn_lock(account_id)
     if not lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="turn_in_progress")
     try:
-        duplicate_reply = get_duplicate_reply(
+        duplicate = get_duplicate_reply_record(
             account_id=account_id,
             reply_to_message_id=mapped_message_id,
         )
-        if duplicate_reply is not None:
+        if duplicate is not None:
             _no_store(response)
-            return {
-                "status": "ok",
-                "reply": duplicate_reply,
-                "no_reply": False,
-                "metadata": {"deduplicated": True},
-            }
+            return _duplicate_turn_response(duplicate)
 
         identity = ResolvedIdentity(
             ai4all_account_id=account_id,

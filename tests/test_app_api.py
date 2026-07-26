@@ -174,6 +174,52 @@ def test_app_turn_builds_app_channel_input_and_sync_response(client):
     assert ctx.text == "今天有点累"
 
 
+def test_legacy_chat_history_time_carries_offset(client):
+    """TIME-001（Q10）：legacy `/chat/messages` 与世界端点同口径，公开时间显式带 +08:00。"""
+    headers, login = _login(client, "13800138011")
+    state = get_or_create_session(
+        account_id=login["account"]["id"],
+        channel="app",
+        sender_id=login["platform_user"]["id"],
+        sender_name=None,
+        chat_id=None,
+        session_key="__app_active__",
+        update_account_channel=False,
+    )
+    insert_message(
+        account_id=login["account"]["id"],
+        session_id=state["session"]["id"],
+        message_id="legacy-time-1",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="几点了",
+    )
+
+    response = client.get("/v1/chat/messages", headers=headers)
+
+    assert response.status_code == 200
+    times = [item["created_at"] for item in response.json()["messages"]]
+    assert times and all(value.endswith("+08:00") for value in times)
+
+
+def test_legacy_turn_replay_returns_the_same_message_id(client):
+    """TURN-001：legacy `/chat/turn` 与世界端 turn 同步——重放回放原持久化 message_id。"""
+    headers, _ = _login(client, "13800138012")
+    body = {"text": "在吗", "client_message_id": "client_replay_01"}
+
+    first = client.post("/v1/chat/turn", headers=headers, json=body)
+    replay = client.post("/v1/chat/turn", headers=headers, json=body)
+
+    assert first.status_code == replay.status_code == 200
+    assert first.json()["metadata"]["deduplicated"] is False
+    assert replay.json()["metadata"]["deduplicated"] is True
+    assert replay.json()["reply"] == first.json()["reply"]
+    assert replay.json()["metadata"]["message_id"] == first.json()["metadata"]["message_id"]
+    assert replay.json()["metadata"]["message_id"]
+
+
 def test_app_asr_mock_transcript_never_persists_audio(client, fresh_db):
     headers, _ = _login(client, "13800138004")
     fresh_db.asr_mock_transcript = "这是语音转写结果"

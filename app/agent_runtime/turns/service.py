@@ -1888,6 +1888,9 @@ def _finalize_turn(
 
     response_metadata = {
         **identity_response_metadata(identity, account_id),
+        # 本轮回复的持久化 message_id。App 链路用它对齐首次响应与幂等重放（TURN-001）；
+        # 以前只有重放路径能从 messages 表读回，首次响应恒为 null，两次结果对不上。
+        "reply_message_id": reply_message_id,
         "channel_binding_id": binding["id"],
         "account_active_session_key": ACCOUNT_ACTIVE_SESSION_KEY,
         "message_type": ctx.message_type,

@@ -893,7 +893,7 @@ def list_conversations_for_owner(
     conn: Optional[Connection] = None,
 ) -> List[Dict[str, Any]]:
     """owner-scoped 列出 AI conversations；cursor 必须同 owner，否则返回空页。"""
-    from app.db.accounts import list_app_conversation_messages_before
+    from app.db.accounts import summarize_app_conversations
 
     clean_limit = max(1, min(int(limit), 100))
     cursor_clause = ""
@@ -920,6 +920,7 @@ def list_conversations_for_owner(
             f"""
             SELECT c.id AS conversation_id, c.universe_id, c.resident_id,
                    c.runtime_account_id, c.state, c.updated_at,
+                   c.last_read_message_id,
                    COALESCE(p.display_name, t.name) AS resident_name,
                    t.avatar_ref, r.status AS resident_status, r.origin
             FROM ai_conversations c
@@ -933,18 +934,79 @@ def list_conversations_for_owner(
             """,
             tuple(params),
         ).fetchall()
-        result = []
-        for row in rows:
-            item = dict(row)
-            latest = list_app_conversation_messages_before(
-                runtime_account_id=str(row["runtime_account_id"]),
-                limit=1,
-                conn=tx,
+        items = [dict(row) for row in rows]
+        # 预览与未读一次批量取回；早期版本在这里逐行查最近消息，是明确的 N+1（CONV-001）。
+        summary = summarize_app_conversations(
+            read_cursors={
+                str(item["runtime_account_id"]): item["last_read_message_id"]
+                for item in items
+            },
+            conn=tx,
+        )
+        for item in items:
+            stats = summary.get(str(item["runtime_account_id"])) or {}
+            item["last_preview"] = stats.get("last_preview")
+            item["last_message_at"] = stats.get("last_message_at")
+            item["unread"] = int(stats.get("unread") or 0)
+    return items
+
+
+def advance_conversation_read_cursor(
+    *,
+    conversation_id: str,
+    owner_platform_user_id: str,
+    last_message_id: int,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """owner-scoped 推进已读游标，返回推进后的 ``{last_read_message_id, unread}``。
+
+    游标**只前进不回退**，并向该会话 App scope 内的最大消息 id 收敛——客户端传一个很大的数
+    不会把未来的消息也标成已读。不存在或越权返回 ``None``（由调用方统一成 not_found）。
+
+    刻意不改 ``updated_at``：它是列表的排序键与 cursor 锚，标记已读不应该让会话跳到最前面。
+    """
+    from app.db.accounts import summarize_app_conversations
+
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT id, runtime_account_id, last_read_message_id
+            FROM ai_conversations
+            WHERE id = ? AND owner_platform_user_id = ?
+            """,
+            (conversation_id, owner_platform_user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        runtime_account_id = str(row["runtime_account_id"])
+        current = int(row["last_read_message_id"] or 0)
+        stats = summarize_app_conversations(
+            read_cursors={runtime_account_id: current}, conn=tx
+        ).get(runtime_account_id) or {}
+        latest = int(stats.get("last_message_id") or 0)
+        target = max(current, min(int(last_message_id), latest))
+        if target > current:
+            tx.execute(
+                """
+                UPDATE ai_conversations
+                SET last_read_message_id = ?
+                WHERE id = ? AND owner_platform_user_id = ?
+                  AND (last_read_message_id IS NULL OR last_read_message_id < ?)
+                """,
+                (target, conversation_id, owner_platform_user_id, target),
             )
-            item["last_preview"] = latest[-1]["content"] if latest else None
-            item["unread"] = 0
-            result.append(item)
-    return result
+            unread = int(
+                (
+                    summarize_app_conversations(
+                        read_cursors={runtime_account_id: target}, conn=tx
+                    ).get(runtime_account_id)
+                    or {}
+                ).get("unread")
+                or 0
+            )
+        else:
+            unread = int(stats.get("unread") or 0)
+    return {"last_read_message_id": target or None, "unread": unread}
 
 
 @contextmanager

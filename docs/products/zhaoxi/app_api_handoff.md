@@ -370,7 +370,42 @@ POST /v1/worlds/home/residents                   → 用 draft_token 落地
 GET  /v1/conversations                              → 会话列表
 GET  /v1/ai-conversations/{conversation_id}/messages → 历史消息
 POST /v1/ai-conversations/{conversation_id}/turn     → 发一条消息，拿 AI 回复
+POST /v1/ai-conversations/{conversation_id}/read     → 标记已读到某条消息
 ```
+
+**会话列表项**（`data.items[]`，2026-07-26 起字段冻结）：
+
+```json
+{
+  "conversation_id": "conv_...",
+  "resident_id": "res_...",
+  "resident_name": "小满",
+  "resident_avatar_ref": "https://.../avatar.png",
+  "resident_status": "active",
+  "state": "active",
+  "last_preview": "我在的",
+  "last_message_at": "2026-07-26T14:05:00+08:00",
+  "sort_time": "2026-07-26T14:05:00+08:00",
+  "unread": 2,
+  "can_send": true,
+  "read_only_reason": null
+}
+```
+
+- **`sort_time` 是排序与分页的锚，`last_message_at` 是最近一条可见消息的时间**，两者不同：还没聊过的居民 `last_message_at` 与 `last_preview` 均为 `null`（服务端不伪造消息时间），但 `sort_time` 始终有值。列表按 `sort_time` 倒序，客户端请直接沿用服务端顺序。
+- `can_send=false` 时不要发起 turn，用 `read_only_reason`（目前仅 `resident_offline`）决定 UI 文案；硬发会拿到 `conversation_read_only`（409）。请按**错误码**而非文案分支。
+- `unread` = 该会话中 id 大于已读游标的 **AI 消息**条数；用户自己发的不计。
+- 预览与未读只统计 App 内的会话消息，微信渠道的历史不会串进来。
+
+**`POST .../read`** 请求体 `{ "last_message_id": 123 }`（`last_message_id` 取 `/messages` 返回项的数值 `id`，必须 ≥ 1）。`data`：
+
+```json
+{ "conversation_id": "conv_...", "last_read_message_id": 123, "unread": 0 }
+```
+
+- 幂等：重复上报同一个 id 结果不变。游标**只前进不回退**，且会向该会话真实最新一条消息收敛——传一个很大的数不会把之后到达的消息也标成已读。
+- 标记已读**不改变** `sort_time`，列表不会因此跳序。
+- 越权与不存在同样返回 `conversation_not_found`（404）。
 
 `POST .../turn` 请求体：
 
@@ -378,7 +413,7 @@ POST /v1/ai-conversations/{conversation_id}/turn     → 发一条消息，拿 A
 { "client_message_id": "<客户端幂等键>", "text": "你好" }
 ```
 
-`data`：
+`data`（2026-07-26 起形状冻结）：
 
 ```json
 {
@@ -389,8 +424,9 @@ POST /v1/ai-conversations/{conversation_id}/turn     → 发一条消息，拿 A
 ```
 
 - **`client_message_id` 必须由客户端生成且在会话内唯一**，用于幂等去重（网络重试不会产生重复回复，`deduplicated=true` 表示命中去重）。
+- **重放返回的 `reply.message_id` 与首次完全一致**，客户端据此判定是同一条消息，不要新建气泡。
+- `no_reply=true` 表示这一轮 AI 选择不回复（正常业务态，非错误），此时 **`reply` 整体为 `null`**；不会出现「有 `reply` 对象但 `text` 为 `null`」的中间态。只要 `reply` 非 `null`，`text` 就一定非空。
 - 并发保护：同一会话若上一条 turn 未完成，返回 `turn_in_progress`（409）。
-- `no_reply=true` 表示这一轮 AI 选择不回复（正常业务态，非错误）。
 
 ### 6.2 家园 Feed
 
@@ -443,7 +479,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 ---
 
-## 8. `/v1` 全量端点清单（51 条）
+## 8. `/v1` 全量端点清单（52 条）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
@@ -455,6 +491,10 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 - `GET /v1/chat/messages`、`POST /v1/chat/turn`
 - `POST /v1/audio/transcriptions`（语音转写，功能开关当前关闭）
 
+> 2026-07-26 起这两个 legacy 端点与世界端对齐：`/chat/messages` 的 `created_at` 显式带
+> `+08:00`（此前是无时区的裸时间串，客户端如按本地时区解析过需回归一次）；`/chat/turn` 的
+> `metadata` 增 `message_id`，且**重放返回与首次相同的 `message_id`**。请求体与其余字段不变。
+
 **世界 / 家园**
 - `POST /v1/worlds/home/bootstrap`
 - `GET /v1/worlds/home/resident-candidates`、`GET /v1/worlds/home/resident-options`
@@ -465,6 +505,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 **世界内会话**
 - `GET /v1/conversations`
 - `GET /v1/ai-conversations/{id}/messages`、`POST /v1/ai-conversations/{id}/turn`
+- `POST /v1/ai-conversations/{id}/read`
 
 **信箱**
 - `GET /v1/mailbox/letters`、`GET /v1/mailbox/letters/{id}`、`GET /v1/mailbox/unread-count`

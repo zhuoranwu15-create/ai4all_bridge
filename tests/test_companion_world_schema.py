@@ -21,6 +21,7 @@ from app.db._core import (
     _migration_0047_legacy_template_display_name,
     _migration_0048_companion_world_resident_drafts,
     _migration_0049_companion_world_naming,
+    _migration_0050_ai_conversation_read_cursor,
 )
 
 _P1_TABLES = (
@@ -74,14 +75,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        49,
-        _migration_0049_companion_world_naming,
+        50,
+        _migration_0050_ai_conversation_read_cursor,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 49
+        assert int(version) == 50
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -452,6 +453,19 @@ def test_m0049_naming_columns_and_idempotency(fresh_db):
         _migration_0049_companion_world_naming(conn)
         conn.execute(
             "SELECT name_pool_json, name_pool_version FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_m0050_read_cursor_column_and_idempotency(fresh_db):
+    """m0050：read cursor 列已加、既有会话默认 NULL（= 一条都没读过），且重复执行不重复加列。"""
+    with db.connect() as conn:
+        conn.execute(
+            "SELECT last_read_message_id FROM ai_conversations WHERE 1 = 0"
+        ).fetchall()
+        _migration_0050_ai_conversation_read_cursor(conn)
+        _migration_0050_ai_conversation_read_cursor(conn)
+        conn.execute(
+            "SELECT last_read_message_id FROM ai_conversations WHERE 1 = 0"
         ).fetchall()
 
 

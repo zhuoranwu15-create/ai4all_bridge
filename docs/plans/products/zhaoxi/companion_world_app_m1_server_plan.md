@@ -1,7 +1,7 @@
 # Companion World App M1 服务端需求评审与开发计划
 
 更新时间：2026-07-26
-状态：**执行中** —— S1、S2、S3 已交付（2026-07-26），S4–S5 待开工，每批独立 PR
+状态：**执行中** —— S1、S2、S3、S4 已交付（2026-07-26），S5 待开工，每批独立 PR
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World M1 服务端需求积压 V0.2》与《AI 陪伴 App 私人平行世界 PRD V1.1》
@@ -503,17 +503,32 @@ mailbox（`companion_world_mailbox.py:53-57`）**都已**转成 `+08:00`。
 两档全量：SQLite 1652 passed（2 例为本机 sqlite 3.26 缺 `DROP COLUMN` 的既有失败）、
 PG 1684 passed / 9 skipped。
 
-### S4 — 会话与 turn 契约冻结（M1 联调前，约 3 人日）
+### S4 — 会话与 turn 契约冻结 — ✅ 已交付（2026-07-26）
 
-| 项 | 改动 |
+| 项 | 实际改动 |
 | --- | --- |
-| CONV-001 | 会话 DTO 增 `last_message_at`、`sort_time`、`can_send`、`read_only_reason`；顺带消除 N+1 |
-| CONV-002 | （若产品选 B）迁移 `m0050` 加 `ai_conversations.last_read_message_id` + `POST /ai-conversations/{id}/read` + `unread_count` |
-| TURN-001 | `no_reply=true → reply: null`；`get_duplicate_reply` 返回 `message_id`；同步 legacy `/chat/turn` |
-| TIME-001 | AI 消息 `created_at` 统一 `+08:00`；legacy `/chat/messages` 待客户端确认后同批改 |
+| CONV-001 DTO | `ConversationSummary` 增 `last_message_at`、`sort_time`，并把 `can_send` / `read_only_reason` 做成派生属性（`state == 'active'` 才可发；只读原因码恒为 `resident_offline`）。`sort_time` 与 `last_message_at` **刻意分开**：没聊过的居民 `last_message_at=null`，但仍有稳定排序键（会话 `updated_at`，也是分页 cursor 锚），不伪造消息时间 |
+| CONV-001 N+1 | 新增 `db/accounts.py::summarize_app_conversations`：两条 SQL 批量取回整页的「最近一条 + 未读数」，取代逐会话查询。session scope 与 `list_app_conversation_messages_before` 同源（只认 `__app_active__` 与 `__app_active__:<id>`，微信/Web 会话不进预览与未读），message 与 session 双向约束 `account_id` |
+| CONV-002（Q9 选 B） | 迁移 `m0050` 给 `ai_conversations` 加 `last_read_message_id`（纯加列无回填，既有会话 NULL = 一条都没读过）；新增 `POST /ai-conversations/{id}/read` 与真实 `unread`。游标**只前进不回退**，且向该会话 App scope 内真实最新一条收敛——客户端传超大 id 不会把未来消息预标已读。**刻意不动 `updated_at`**：它同时是列表排序键与 cursor 锚，标记已读不应让会话跳序 |
+| TURN-001 | `_turn_data` 冻结响应形状：`reply` 要么是 `{text, message_id}` 且 `text` 非空，要么整体 `null`，不再有「有 reply 对象但 text 为 null」的中间态。`get_duplicate_reply` 拆出 `get_duplicate_reply_record`（返回 `content` + `message_id`），重放回放**原持久化** `message_id`，客户端据此认出同一条消息不新建气泡；legacy `/chat/turn` 同步 |
+| TURN-001 根因修复 | `agent_runtime/turns/service.py` 的 `response_metadata` 从未包含 `reply_message_id`，而世界端与 legacy 两处都在读它 —— **首次 turn 的 `message_id` 一直是 null**（不只是重放路径不一致）。补上该键后两条路径才真正对齐 |
+| TIME-001（Q10 选「同批改」） | 世界端 `/ai-conversations/{id}/messages` 与 legacy `/chat/messages` 的公开时间统一显式带 `+08:00`（`api/app.py::_public_time`），客户端不再按设备时区猜 |
 
-验收：列表排序/分页无重复遗漏；只读会话 `can_send=false` 且发送被拒；
-同一 `client_message_id` 重放返回同一 `message_id`。
+**迁移 `m0050`**（单列 `INTEGER`，无回填、无锁表风险）。四处硬编码 schema head 断言随之
+从 49 上调到 50：`test_companion_world_schema.py`、`test_companion_world_m3_storage.py`、
+`test_companion_world_m5_storage.py`、`test_multi_product_isolation.py`。
+
+新增回归：`test_companion_world_conversation_contract.py` 11 例（DTO 时间/排序/可发送性、
+只读会话拒发、**列表查询次数恒定**（monkeypatch 计数，退回逐行查询即失败）、预览与未读不跨
+居民、未读只计 assistant、游标只进且收敛、标记已读不改排序、`/read` 越权与不存在同为
+`conversation_not_found` + 参数 422 + 匿名 401、重放同 `message_id`、`no_reply` 回 `null`、
+世界端时间带偏移）；`test_app_api.py` 新增 2 例（legacy 时间偏移、legacy 重放同
+`message_id`）；`test_companion_world_schema.py` 新增 1 例（m0050 幂等）。
+
+验收结论：列表排序/分页无重复遗漏（标记已读不改 `sort_time`）✅；只读会话 `can_send=false`
+且发送被拒 409 `conversation_read_only` ✅；同一 `client_message_id` 重放返回同一
+`message_id` ✅。两档全量：SQLite 1661 passed（2 例为本机 sqlite 3.26 缺 `DROP COLUMN` 的
+既有失败）、PG 1698 passed / 9 skipped。
 
 ### S5 — 契约门禁（M1 联调前，约 2–3 人日）
 

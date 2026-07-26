@@ -10,6 +10,7 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     CandidateRecord,
     CompanionWorldError,
     ConversationMessage,
+    ConversationReadState,
     ConversationSummary,
     ConversationTarget,
     ResidentDraftRecord,
@@ -485,3 +486,14 @@ class CompanionWorldService:
             )
         )
         return target, messages
+
+    def mark_conversation_read(
+        self, platform_user_id: str, conversation_id: str, *, last_message_id: int
+    ) -> ConversationReadState:
+        """推进已读游标；越权与不存在同样是 conversation_not_found，不泄漏他人会话存在性。"""
+        state = self._repository.advance_conversation_read_cursor(
+            conversation_id, platform_user_id, last_message_id
+        )
+        if state is None:
+            raise CompanionWorldError("conversation_not_found")
+        return state
