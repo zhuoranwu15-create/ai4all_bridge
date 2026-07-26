@@ -1,9 +1,11 @@
 name: tests
 
 # 上线门禁：push / PR 到 main 时，双后端各跑一遍全量测试（两 job 并行）。
-# - sqlite-tests：SQLite 档，含 PG 会跳过的 SQLite 专有基础设施测试（WAL/文件拷贝/PRAGMA），
-#   守住本地默认档与回滚通道；无 PG 启动开销，通常更早出信号。
-# - pg-tests：PostgreSQL 档，与生产后端对齐，是「合并/上线前强制」那一层。
+# - sqlite-tests：SQLite 档，含 PG 会跳过的 SQLite 专有基础设施测试（WAL/文件拷贝/PRAGMA）。
+#   守的是**本地 dev/test 默认档**（每个人 `pytest` 走的就是它），无 PG 启动开销、出信号更早。
+#   **不在 branch protection 的必需检查里**：SQLite 自 2026-07-26 起不再是生产退路，它红了
+#   说明本地开发体验坏了，该修，但不阻塞合入。
+# - pg-tests：PostgreSQL 档，与生产后端对齐，是 branch protection 里**唯一强制**的那一层。
 # 本地日常仍可用 make test-unit / make test-fast 更快迭代。
 on:
   push:

@@ -38,9 +38,11 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 代码同时支持 SQLite 与 PostgreSQL，由 `.env` 的 `DATABASE_URL` 决定：
 
 - **留空（默认）→ SQLite**：本地开发用 `data/ai4all.sqlite3`，测试用内存 SQLite。本文档下文提到的「标准数据库 `data/ai4all.sqlite3`」均指此本地/测试默认。
-- **非空（`postgresql://…`）→ PostgreSQL**：**生产（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG，这是线上真实后端**。aliyun1 本地 PG，aliyun2 直连中心 PG。回滚只需重新注释 `DATABASE_URL` 并重启服务即回 SQLite。
+- **非空（`postgresql://…`）→ PostgreSQL**：**生产（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG，这是线上真实后端**。aliyun1 本地 PG，aliyun2 直连中心 PG。
 
-因此 SQLite 代码路径是刻意保留的（dev/test 默认 + 回滚通道），并非生产形态。下文 `app/db/*` 等描述同时覆盖两后端。
+**「注释掉 `DATABASE_URL` 回落 SQLite」自 2026-07-26 起不再是生产退路**：切 PG 后一个多月的新数据不会同步回 `data/ai4all.sqlite3`，回落等于回到切换当天的快照。生产遇险走 PG 自身的备份/主备，不走后端回落。
+
+因此 SQLite 代码路径的存在理由只剩一条：**dev/test 默认档**。它仍必须能跑（每个人本地 `pytest` 走的就是它），但不再承担生产职责。下文 `app/db/*` 等描述同时覆盖两后端。
 
 ## 鉴权
 

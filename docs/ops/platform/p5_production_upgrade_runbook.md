@@ -302,7 +302,11 @@ AI4ALL_ROLE=node   # 或一期的配置值
 sudo systemctl restart ai4all
 ```
 
-### 回滚 aliyun1 → SQLite
+### 回滚 aliyun1 → SQLite（⚠️ 2026-07-26 起已作废，仅存档）
+
+**不要再执行这一节。** PG 已承载一个多月的真实数据，回落只会拿到切换当天的 SQLite 快照，
+等于静默丢掉这期间的全部消息与记忆。生产遇险请走 PG 备份/主备（§10），不要走后端回落。
+以下命令保留仅为记录当时的操作形态。
 
 ```bash
 # aliyun1 .env：注释掉 DATABASE_URL
