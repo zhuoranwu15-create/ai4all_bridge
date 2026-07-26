@@ -48,6 +48,7 @@ from app.products.zhaoxi.api.contracts import (
     ProfileOptionsResponse,
     ProfileUpdateResponse,
 )
+from app.products.zhaoxi.application.account_deletion import delete_account_now
 from app.products.zhaoxi.domain.user_profile import (
     MAX_NICKNAME_CHARS,
     UserProfileError,
@@ -56,7 +57,6 @@ from app.products.zhaoxi.domain.user_profile import (
     resolve_user_avatar_ref,
     validate_nickname,
 )
-from app.products.zhaoxi.infrastructure.persistence import me_settings
 from app.platform.moderation.text_sanitizer import (
     FIELD_USER_NICKNAME,
     TextRejected,
@@ -136,10 +136,15 @@ class UpdateProfileRequest(BaseModel):
 
 
 class AccountDeletionRequest(BaseModel):
-    """ME-06/07 注销申请入参；原因是受控取值，不接受自由文本。"""
+    """ME-06/07 注销入参；原因是受控取值，不接受自由文本。
+
+    ``confirm`` 必须显式传 true：注销**立即且不可撤销**地删除聊天记录与记忆，空 body
+    就能触发这种操作太危险——误调一次没有任何补救手段。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
+    confirm: bool
     reason_code: Optional[str] = Field(default=None, max_length=32)
 
 
@@ -180,16 +185,13 @@ def _public_platform_user(platform_user: dict) -> dict:
     }
 
 
-def _public_deletion_request(request: Optional[dict]) -> Optional[dict]:
-    """注销申请公开 DTO；不返回 executed_by 等运营内部字段。"""
-    if request is None:
-        return None
+def _public_deletion_request(record: dict) -> dict:
+    """注销流水公开 DTO；不返回 purge_stats_json 等运营内部字段。"""
     return {
-        "request_id": str(request["id"]),
-        "status": str(request["status"]),
-        "reason_code": request.get("reason_code"),
-        "effective_at": _public_time(request.get("effective_at")),
-        "created_at": _public_time(request.get("created_at")),
+        "request_id": str(record["id"]),
+        "status": str(record["status"]),
+        "reason_code": record.get("reason_code"),
+        "executed_at": _public_time(record.get("executed_at")),
     }
 
 
@@ -480,37 +482,23 @@ def app_update_profile(
     return {"status": "ok", "platform_user": _public_platform_user(updated)}
 
 
-@router.get("/me/account/deletion", response_model=AccountDeletionResponse)
-def app_get_account_deletion(
-    response: Response,
-    principal: SessionPrincipal = Depends(_require_session),
-) -> dict:
-    """查询当前注销申请状态（ME-06/07）；没有申请时 ``request`` 为 null。"""
-    _no_store(response)
-    return {
-        "status": "ok",
-        "cooling_days": me_settings.DELETION_COOLING_DAYS,
-        "request": _public_deletion_request(
-            me_settings.get_open_deletion_request(
-                platform_user_id=principal.platform_user_id, app_id=principal.app_id
-            )
-        ),
-    }
-
-
 @router.post("/me/account/deletion", response_model=AccountDeletionResponse)
-def app_request_account_deletion(
+def app_delete_account(
     payload: AccountDeletionRequest,
     response: Response,
     principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
-    """提交注销申请（ME-06/07）：进入冷静期，期间可自助撤销，账号照常可用。
+    """注销账号（ME-06/07）：**立即**删除聊天记录与相关记忆，不可撤销。
 
-    **服务端不在此处清除任何数据**：冷静期结束后申请转 ``due``，由运营按法务口径执行
-    清除。重复提交幂等回放原申请，不刷新 ``effective_at``。
+    清除范围与保留项见 :mod:`app.products.zhaoxi.application.account_deletion`。返回后
+    该真人的全部登录态已失效，客户端应直接回到登录页——继续用旧 token 会拿到 401。
+
+    没有查询/撤销接口：不存在待执行状态，查了也永远是「已完成」。
     """
+    if not payload.confirm:
+        raise HTTPException(status_code=422, detail="deletion_not_confirmed")
     try:
-        request = me_settings.open_deletion_request(
+        result = delete_account_now(
             platform_user_id=principal.platform_user_id,
             app_id=principal.app_id,
             reason_code=payload.reason_code,
@@ -519,32 +507,7 @@ def app_request_account_deletion(
     except ValueError as err:
         raise HTTPException(status_code=422, detail="reason_code_invalid") from err
     _no_store(response)
-    return {
-        "status": "ok",
-        "cooling_days": me_settings.DELETION_COOLING_DAYS,
-        "request": _public_deletion_request(request),
-    }
-
-
-@router.delete("/me/account/deletion", response_model=AccountDeletionResponse)
-def app_cancel_account_deletion(
-    response: Response,
-    principal: SessionPrincipal = Depends(_require_session),
-) -> dict:
-    """撤销注销申请（ME-06/07）；``due`` 但尚未执行的申请同样可撤销。"""
-    cancelled = me_settings.cancel_deletion_request(
-        platform_user_id=principal.platform_user_id,
-        app_id=principal.app_id,
-        now=beijing_now().replace(tzinfo=None, microsecond=0),
-    )
-    if cancelled is None:
-        raise HTTPException(status_code=404, detail="deletion_request_not_found")
-    _no_store(response)
-    return {
-        "status": "ok",
-        "cooling_days": me_settings.DELETION_COOLING_DAYS,
-        "request": _public_deletion_request(cancelled),
-    }
+    return {"status": "ok", "request": _public_deletion_request(result["record"])}
 
 
 @router.get("/chat/messages")

@@ -287,7 +287,7 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | CHAT-01 | 聊天页绑定明确 `conversation_id` | P0 | 已实现 |
 | CHAT-02 | 顶部展示权威关系状态与角色详情入口，不伪造「在线」 | P0 | 已实现（`state`/`resident_status`）|
 | CHAT-03 | 文字发送、历史加载、等待、失败与幂等重试 | P0 | 已实现（S4 冻结 turn 响应形状与幂等 `message_id`；S5 进 OpenAPI snapshot）|
-| CHAT-04 | 保留语音转文字，转写结果可编辑且不自动发送 | P0 | 端点已实现；是否在 M1 打开 `voice_input` 是纯配置开关（`/app/config.features.voice_input`），客户端按位渲染，服务端无代码缺口 |
+| CHAT-04 | 保留语音转文字，转写结果可编辑且不自动发送 | P0 | 已实现；M1 口径为**打开** `voice_input`。该位由生产 ASR 配置驱动（配 `ASR_API_KEY` 后 `/app/config.features.voice_input` 自动翻 `true`），客户端按位渲染，服务端无代码缺口 |
 | CHAT-05 | 可从聊天页查看角色资料 | P1 | 客户端 + CAND-001 |
 | CHAT-06 | 从居民动态进入私聊可携带该动态作为一次性上下文 | P1 | 客户端 |
 | CHAT-07 | 不同居民的短期上下文隔离 | P0 | 已实现（per-runtime session）|
@@ -333,7 +333,7 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | ME-02 | 居民管理，展示 `n/10`、当前居民与已离开历史 | P0 | 已实现 `GET /worlds/home/residents` |
 | ME-03/04 | 生成邀请码；展示码、绝对到期、剩余时间、复制分享与作废 | P0 | 已实现 `POST/GET/DELETE /world/invites` |
 | ME-05 | 「穿越到好朋友的平行世界」兑换入口 | P0 | 已实现 `POST /visits/redeem` |
-| ME-06/07 | 通知、隐私、协议、账号安全、退出；正式版提供注销与数据删除 | P0 | 已实现（S6）：`GET/POST/DELETE /me/account/deletion`，7 天冷静期内可自助撤销。**服务端只记录意图不自动删数据**，到期转 `due` 由运营按法务口径执行（见 §11.2-10）|
+| ME-06/07 | 通知、隐私、协议、账号安全、退出；正式版提供注销与数据删除 | P0 | 已实现（S6）：`POST /me/account/deletion`（body 必带 `confirm:true`）。**注销立即删除聊天记录与相关记忆**、不设冷静期、不可撤销，返回即吊销全部登录态；二次确认弹窗由客户端负责。第三方相关的真人会话/来访记录与财务审计流水刻意保留（见 §11.2-9）|
 | ME-08 | capability 未开或版本不兼容时默认隐藏入口，不产生本地假成功 | P0 发布门 | 依赖 CAP-001 |
 | ME-09 | 分开展示 pending / active / 只读历史及各自到期时间 | P0 | 已实现 `GET /visits` |
 | ME-10 | 通知默认克制，可选择世界的安静程度 | P1 | 已实现（S6）：`GET/PATCH /notifications/preferences`；`quiet` 压制**将来**的全部 AI 主动通知，已入箱的不回收 |
@@ -505,4 +505,4 @@ initial_residents_confirmed → tabs_entered → first_ai_chat_started → first
 7. 主人是否保留对居民动态的私下回应/收藏。
 8. 主人是否需要一次性提前结束全部 active visit。
 9. 真人会话服务端副本的用户侧删除权与举报证据保留策略。
-10. 账号注销**到期后**的实际数据清除范围、执行方与留存期的法务口径（App 端路由已在 S6 交付；服务端刻意停在 `due` 状态不自动清除）。
+10. 注销时**第三方相关数据**的处置：真人会话服务端副本、来访与邀请记录当前刻意保留（删我方副本等于删对方的聊天记录），与第 9 条同一议题，需法务与产品一并给口径。

@@ -560,25 +560,36 @@ M1 范围内仍是缺口的服务端小项（不阻塞联调，正式版必需�
 
 | 项 | 实际改动 |
 | --- | --- |
-| 迁移 m0051 | `platform_users.avatar_key` 加列；新表 `account_deletion_requests`（含 `(platform_user_id, app_id) WHERE status IN ('pending','due')` 的**部分唯一索引**，同一真人同一产品同时只允许一条未终态申请）与 `app_notification_preferences`。纯加列 + 新表，无回填、无锁表；两后端幂等 |
+| 迁移 m0051 | `platform_users.avatar_key` 加列；新表 `account_deletion_requests`（注销执行流水：`status='executed'` + `executed_at` + `purge_stats_json` 删除行数快照；**不加唯一约束**，同一真人注销后可重新注册再注销，每次独立一行）与 `app_notification_preferences`。纯加列 + 新表，无回填、无锁表；两后端幂等 |
 | ME-01 Profile | `GET /me/profile-options` 下发受控头像表与昵称限额（客户端不硬编码枚举）；`PATCH /me/profile` 支持单独改昵称或头像（`null` = 本次不改，不是清空）。头像走受控 key（`user_01..user_08`），**未知 key 直接 422 不回落默认**；昵称先过字符白名单再过 D-B `text_sanitizer`（`FIELD_USER_NICKNAME`），清洗器不可用时 fail closed 503。`/me` 与更新响应统一返回 `display_name`/`avatar_key`/`avatar_ref` |
-| ME-06/07 注销 | `GET/POST/DELETE /me/account/deletion`，7 天冷静期。重复提交**幂等回放原申请**而不刷新 `effective_at`（否则用户反复点击可无限延后，运营看到抖动到期时间）；`pending` 与 `due` 均可撤销（运营还没执行，用户仍有权反悔）。刻意建表而非给 `platform_users` 加三列：合规要保留「申请—撤销—再申请」完整历史 |
+| ME-06/07 注销 | 只保留 `POST /me/account/deletion`：按 Q14 口径**立即清除**聊天记录与相关记忆，无冷静期故无查询/撤销接口。body 必带 `confirm:true`（不可撤销的破坏性操作不接受空 body），`reason_code` 受控取值。**参数校验一定跑在清除之前**——否则会出现「数据删完了才报 422」。执行完吊销该真人全部 session，客户端就地登出 |
 | ME-10 通知偏好 | `GET/PATCH /notifications/preferences`（B 类信封），取值 `standard` / `quiet`，缺行等价默认值故无需回填。`quiet` 压制**全部** AI 主动通知——App inbox 里没有一条属于 PRD §3.3 说的「必须提示的安全/邀请/账号事件」，不做分类豁免 |
 | 门控落点 | 安静模式在 `dispatch_proactive_text` 建 outbound 行**之前**拦截，落 `cancelled` + `app_inbox_quiet_hours_preference`；`AppInboxAdapter.can_deliver` 同步收口（`_select_route` 因此不再选 App 路由）。刻意不在 `deliver()` 里抛错：那会被上游 `except` 记成 `failed`，让运营看到的失败率被用户偏好污染 |
-| CHAT-04 | 无服务端缺口。端点与 `voice_input` capability 位都在，是否在 M1 打开是纯配置（见 §4.3-Q15） |
-| 契约 | `api/contracts.py` 增 `ProfileOptionsResponse`、`ProfileUpdateResponse`、`AccountDeletionResponse`、`NotificationPreferencesResponse`，`MePlatformUser` 补 3 个字段；snapshot 重新导出；`MAIN_CHAIN_OPERATIONS` 从 10 条扩到 **17 条**，并新增一条门禁 ③ 用例覆盖「我的」Tab 真实响应体 |
+| CHAT-04 | 无服务端缺口。M1 口径为**打开**：`voice_input` 由 `ASR_API_KEY` 是否配置驱动，属运营配置项（见 §4.3-Q15） |
+| 契约 | `api/contracts.py` 增 `ProfileOptionsResponse`、`ProfileUpdateResponse`、`AccountDeletionResponse`、`NotificationPreferencesResponse`，`MePlatformUser` 补 3 个字段；snapshot 重新导出（53 路径 / 57 操作）；`MAIN_CHAIN_OPERATIONS` 从 10 条扩到 **15 条**，并新增一条门禁 ③ 用例覆盖「我的」Tab 真实响应体 |
 
-**服务端刻意不做的事**：注销到期后**不自动清除任何数据**。`mark_due_deletion_requests`
-只把 `pending` 推到 `due` 作为运营待办信号，`me_settings` 模块里不存在任何删数据的函数。
-清除范围、执行方与留存期属法务口径，见 §11.2-10 / §4.3-Q14。
+**注销清除范围**（`app/products/zhaoxi/application/account_deletion.py`，删数据只有这一个
+入口便于审计）：该真人在本产品下每个 runtime account 走 `unbind_and_wipe_account`（聊天原文、
+session、L1/L2 与 dreaming 记忆、账号 profile 文件、提醒/承诺），**外加**逐账号 wipe 抓不到的
+`universe_memory_facts`（L3 挂在 universe 上，漏删就成了「删了聊天记录但 AI 还记得你」）、
+`ai_conversations`、`app_notifications`；居民置 `dismissed`、世界回 `preparing`（世界行受
+`UNIQUE(owner_platform_user_id)` 约束不能删）。**刻意保留**：涉及第三方的真人会话/来访/邀请
+（见 §11.2-9）、财务审计流水（`wipe_account_data` 既定规则）、`platform_users` 行本身（手机号
+可重新注册成全新用户，而不是被永久占用）。
 
 **运营交付物**：`user_01..user_08` 头像 PNG 需按 `COMPANION_WORLD_ASSET_BASE_URL`
 前缀落到资产站，与既有居民头像同一条路径。key 列表已在代码中声明，缺图不影响接口可用。
 
-回归：聚焦测试——新增 `tests/test_app_me_settings.py` 16 例（含 Profile / 注销 / 通知偏好
-三组各自的**跨用户越权**用例）；契约门禁 23 passed；schema 用例补 m0051 幂等；
-`AI4ALL_TEST_DB=postgres` 档 63 passed（迁移触及持久化，部分唯一索引两后端均验证）。
-**全量双档回归仍留到合入前一次性跑。**
+回归：聚焦测试——`tests/test_app_me_settings.py` 16 例（Profile / 注销 / 通知偏好三组各自
+的**跨用户越权**用例；注销组直接断言聊天原文、L3 事实、`ai_conversations` 真的清空且另一
+真人分毫未动）；SQLite 档 110 passed / 3 skipped，`AI4ALL_TEST_DB=postgres` 档 48 passed
+（迁移触及持久化，两后端均验证）。**全量双档回归留给 PR CI 一次性跑。**
+
+> Q14 拍板后的返工记录：冷静期实现（`GET`/`DELETE` 路由、`cooling_days`、
+> `mark_due_deletion_requests`、`(platform_user_id, app_id)` 部分唯一索引）已整体删除，
+> m0051 建表语句就地改写而非追加 m0052——该迁移尚未合入 main，线上无任何库停在 v51。
+> 返工中测试抓到一个真实缺陷：非法 `reason_code` 原先会先清完数据再报 422，已把入参校验
+> 提到清除之前。
 
 ### P2 批次（不进 M1）
 
@@ -660,8 +671,8 @@ S1 是所有后续批次的前置（capability 与错误信封）。S2/S3/S4 相
 
 | # | 问题 | 服务端已按什么假设交付 | 谁来拍 |
 | --- | --- | --- | --- |
-| Q14 | 注销生效后**实际清除**哪些数据、由谁执行、留存多久 | 7 天冷静期 → 到期转 `due` → **由运营执行清除**；服务端不自动删任何数据，也不提供删数据的函数。改口径只需在 `due` 之后接一段执行逻辑，不影响已交付的 App 端路由与客户端契约 | 法务 + 产品 |
-| Q15 | `voice_input` 是否在 M1 打开 | 端点在、capability 位在，当前**开关关**。纯配置，无代码缺口；客户端按 `/app/config.features.voice_input` 渲染即可 | 产品 |
+| Q14 | 注销生效后**实际清除**哪些数据、由谁执行、留存多久 | ✅ 已拍板（2026-07-26）：**注销立即删聊天记录和相关记忆**，无冷静期、不可撤销。S6 原先交付的冷静期设计已按此重做（删掉 `GET`/`DELETE` 路由与 `cooling_days` 字段，m0051 建表语句同步改写）。第三方相关数据的处置仍未决，转 §11.2-9 | 法务 + 产品 |
+| Q15 | `voice_input` 是否在 M1 打开 | ✅ 已拍板（2026-07-26）：**打开**。无代码缺口——该位取自 `is_asr_available()`，运营在生产 `.env` 配置 `ASR_API_KEY` 并重启即翻 `true`，客户端不用发版。**这是本批次唯一未完成的落地动作** | 产品 |
 
 ---
 

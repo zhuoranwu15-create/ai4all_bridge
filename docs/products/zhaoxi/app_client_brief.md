@@ -37,8 +37,8 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 ```
 
 - `app/config.minimum_supported_version` 低于该值应做强制升级提示。
-- `app/config.features.voice_input` 当前为 **false**：语音输入端点存在但产品开关未开，
-  UI 应按开关隐藏入口，不要写死可用。
+- `app/config.features.voice_input`：M1 口径是**打开**，但生效时点取决于服务端 ASR 配置。
+  UI 一律按开关渲染、不要写死——服务端配好后它自己翻 `true`，客户端无需发版。
 - 认证类接口响应带 `Cache-Control: no-store`，客户端不要缓存。
 
 ## 3. 关键分叉：`account == null`
@@ -104,8 +104,10 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 - Profile：`GET /me/profile-options` 拿受控头像表与昵称限额（**不要硬编码枚举**），
   `PATCH /me/profile` 改昵称/头像。省略字段 = 本次不改，不是清空；全省略 → 422。
   昵称过内容审查，可能返回 `content_rejected`(422) 或 `content_review_unavailable`(503，可重试)。
-- 注销：`GET/POST/DELETE /me/account/deletion`，7 天冷静期内可自助撤销，期间账号照常可用。
-  重复 POST 幂等回放原申请且不刷新到期时间，客户端可放心重试。
+- 注销：只有 `POST /me/account/deletion`，body 必带 `{"confirm": true}`。**立即删除聊天记录
+  与相关记忆、不可撤销**，没有冷静期也没有撤销接口，所以**二次确认弹窗必须由客户端做**。
+  返回后全部设备登录态失效：就地清 token 回登录页，旧 token 会拿 401。同一手机号可以重新
+  注册，登录后得到的是全新空世界。
 - 通知偏好：`GET/PATCH /notifications/preferences`，`standard` / `quiet`。`quiet` 只压制
   将来的 AI 主动通知，**已在箱内的不回收**，切回来即恢复。
 - 字段与错误码全表见 [`app_api_handoff.md`](app_api_handoff.md) §3.6。
@@ -124,5 +126,6 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 3. 用**新手机号**验证 `account == null` → bootstrap → confirm → turn 全流程。
 4. 用**已有微信账号的手机号**验证 `account != null` → `/chat/turn` 全流程。
 5. 断网重发验证幂等；并发发送验证 409；连发验证 429。
-6. 「我的」Tab：改昵称/头像 → `/me` 回读一致；提交注销 → 重复提交幂等 → 撤销 → 404；
-   开 `quiet` 后确认新通知不再进箱、老通知仍在。
+6. 「我的」Tab：改昵称/头像 → `/me` 回读一致；开 `quiet` 后确认新通知不再进箱、老通知仍在。
+7. **注销放在最后一步做**（会清空该测试号的全部数据）：`confirm:true` → 确认返回后旧
+   token 立即 401 → 同一手机号重新登录 → 拿到 `account == null` 的全新空世界。

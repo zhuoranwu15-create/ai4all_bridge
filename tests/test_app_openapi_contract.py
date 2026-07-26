@@ -31,9 +31,7 @@ MAIN_CHAIN_OPERATIONS = [
     # S6「我的」Tab：Profile / 注销 / 通知偏好同样是客户端要按 schema 渲染的主链路。
     ("/v1/me/profile-options", "get"),
     ("/v1/me/profile", "patch"),
-    ("/v1/me/account/deletion", "get"),
     ("/v1/me/account/deletion", "post"),
-    ("/v1/me/account/deletion", "delete"),
     ("/v1/notifications/preferences", "get"),
     ("/v1/notifications/preferences", "patch"),
 ]
@@ -303,25 +301,6 @@ def test_me_tab_responses_match_declared_contract(client, fresh_db):
             },
         ),
     )
-    # 先查空态（request 为 null），再建申请，覆盖 AccountDeletionRequestData 分支。
-    _check(
-        "/v1/me/account/deletion",
-        "get",
-        client.get("/v1/me/account/deletion", headers=headers),
-    )
-    created = _check(
-        "/v1/me/account/deletion",
-        "post",
-        client.post(
-            "/v1/me/account/deletion", headers=headers, json={"reason_code": "other"}
-        ),
-    )
-    assert created["request"] is not None, "request 为 null 则申请子模型没被校验到"
-    _check(
-        "/v1/me/account/deletion",
-        "delete",
-        client.delete("/v1/me/account/deletion", headers=headers),
-    )
     _check(
         "/v1/notifications/preferences",
         "get",
@@ -334,6 +313,16 @@ def test_me_tab_responses_match_declared_contract(client, fresh_db):
             "/v1/notifications/preferences",
             headers=headers,
             json={"quiet_level": "quiet"},
+        ),
+    )
+    # 注销放最后：它会就地吊销本次会话，之后这批 headers 全部 401。
+    _check(
+        "/v1/me/account/deletion",
+        "post",
+        client.post(
+            "/v1/me/account/deletion",
+            headers=headers,
+            json={"confirm": True, "reason_code": "other"},
         ),
     )
 

@@ -475,9 +475,8 @@ def test_m0051_me_tab_schema_and_idempotency(fresh_db):
     with db.connect() as conn:
         for statement in (
             "SELECT avatar_key FROM platform_users WHERE 1 = 0",
-            "SELECT id, platform_user_id, app_id, status, reason_code, effective_at,"
-            " cancelled_at, executed_at, executed_by FROM account_deletion_requests"
-            " WHERE 1 = 0",
+            "SELECT id, platform_user_id, app_id, status, reason_code, executed_at,"
+            " purge_stats_json FROM account_deletion_requests WHERE 1 = 0",
             "SELECT platform_user_id, quiet_level FROM app_notification_preferences"
             " WHERE 1 = 0",
         ):

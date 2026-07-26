@@ -3,8 +3,12 @@
     "schemas": {
       "AccountDeletionRequest": {
         "additionalProperties": false,
-        "description": "ME-06/07 注销申请入参；原因是受控取值，不接受自由文本。",
+        "description": "ME-06/07 注销入参；原因是受控取值，不接受自由文本。\n\n``confirm`` 必须显式传 true：注销**立即且不可撤销**地删除聊天记录与记忆，空 body\n就能触发这种操作太危险——误调一次没有任何补救手段。",
         "properties": {
+          "confirm": {
+            "title": "Confirm",
+            "type": "boolean"
+          },
           "reason_code": {
             "anyOf": [
               {
@@ -18,13 +22,16 @@
             "title": "Reason Code"
           }
         },
+        "required": [
+          "confirm"
+        ],
         "title": "AccountDeletionRequest",
         "type": "object"
       },
       "AccountDeletionRequestData": {
-        "description": "注销申请公开视图；``executed_by`` 等运营字段刻意不出现在客户端契约里。",
+        "description": "注销流水公开视图；``purge_stats_json`` 等运营字段刻意不出现在客户端契约里。",
         "properties": {
-          "created_at": {
+          "executed_at": {
             "anyOf": [
               {
                 "type": "string"
@@ -33,18 +40,7 @@
                 "type": "null"
               }
             ],
-            "title": "Created At"
-          },
-          "effective_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Effective At"
+            "title": "Executed At"
           },
           "reason_code": {
             "anyOf": [
@@ -74,21 +70,10 @@
         "type": "object"
       },
       "AccountDeletionResponse": {
-        "description": "``request`` 为 null 表示当前没有未终态的注销申请。",
+        "description": "注销已**立即完成**。客户端收到后必须就地登出——本次 token 已在服务端失效。",
         "properties": {
-          "cooling_days": {
-            "title": "Cooling Days",
-            "type": "integer"
-          },
           "request": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/AccountDeletionRequestData"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/AccountDeletionRequestData"
           },
           "status": {
             "title": "Status",
@@ -97,7 +82,7 @@
         },
         "required": [
           "status",
-          "cooling_days"
+          "request"
         ],
         "title": "AccountDeletionResponse",
         "type": "object"
@@ -3880,105 +3865,9 @@
       }
     },
     "/v1/me/account/deletion": {
-      "delete": {
-        "description": "撤销注销申请（ME-06/07）；``due`` 但尚未执行的申请同样可撤销。",
-        "operationId": "app_cancel_account_deletion_v1_me_account_deletion_delete",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountDeletionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "App Cancel Account Deletion",
-        "tags": [
-          "app-v1"
-        ]
-      },
-      "get": {
-        "description": "查询当前注销申请状态（ME-06/07）；没有申请时 ``request`` 为 null。",
-        "operationId": "app_get_account_deletion_v1_me_account_deletion_get",
-        "parameters": [
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountDeletionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "App Get Account Deletion",
-        "tags": [
-          "app-v1"
-        ]
-      },
       "post": {
-        "description": "提交注销申请（ME-06/07）：进入冷静期，期间可自助撤销，账号照常可用。\n\n**服务端不在此处清除任何数据**：冷静期结束后申请转 ``due``，由运营按法务口径执行\n清除。重复提交幂等回放原申请，不刷新 ``effective_at``。",
-        "operationId": "app_request_account_deletion_v1_me_account_deletion_post",
+        "description": "注销账号（ME-06/07）：**立即**删除聊天记录与相关记忆，不可撤销。\n\n清除范围与保留项见 :mod:`app.products.zhaoxi.application.account_deletion`。返回后\n该真人的全部登录态已失效，客户端应直接回到登录页——继续用旧 token 会拿到 401。\n\n没有查询/撤销接口：不存在待执行状态，查了也永远是「已完成」。",
+        "operationId": "app_delete_account_v1_me_account_deletion_post",
         "parameters": [
           {
             "in": "header",
@@ -4029,7 +3918,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "App Request Account Deletion",
+        "summary": "App Delete Account",
         "tags": [
           "app-v1"
         ]

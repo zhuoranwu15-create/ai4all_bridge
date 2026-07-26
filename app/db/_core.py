@@ -4164,10 +4164,11 @@ def _migration_0051_app_me_tab(conn: Connection) -> None:
     ``COMPANION_WORLD_ASSET_BASE_URL`` 决定，换 CDN 不用改数据）；昵称沿用既有
     ``display_name`` 列，不新建。
 
-    ``account_deletion_requests`` 承载可撤销的注销申请。刻意建表而不是给
-    ``platform_users`` 加三个列：合规场景要保留「申请—撤销—再申请」的完整历史，
-    加列会被下一次申请覆盖掉。**本表只记录意图与状态，真正的数据清除不由它触发**，
-    到期后停在 ``due`` 等运营执行（见 App PRD ME-07）。
+    ``account_deletion_requests`` 是注销的**执行流水**。产品口径为「注销立即删聊天记录
+    和相关记忆」（Q14，2026-07-26 拍板），没有冷静期、没有待办状态，所以本表记的是
+    「谁在什么时候删了什么」而不是「谁申请了删除」。刻意建表而不是给 ``platform_users``
+    加列：注销后手机号可重新注册，加列会被下一次注销覆盖掉，合规追溯要的是完整历史。
+    ``purge_stats_json`` 存本次实际删除的行数快照，供运营核对清除范围。
 
     ``app_notification_preferences`` 一行一个真人；缺行等价于默认值 ``standard``，
     因此无需回填。
@@ -4181,24 +4182,17 @@ def _migration_0051_app_me_tab(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             platform_user_id TEXT NOT NULL,
             app_id TEXT NOT NULL,                    -- 发起注销的产品，便于运营分流
-            status TEXT NOT NULL DEFAULT 'pending',  -- pending | due | cancelled | executed
+            status TEXT NOT NULL DEFAULT 'executed', -- 当前只有 executed：注销即时生效
             reason_code TEXT,                        -- 受控取值，非自由文本
-            effective_at TEXT NOT NULL,              -- 冷静期结束时刻；此前可自助撤销
-            cancelled_at TEXT,
-            executed_at TEXT,
-            executed_by TEXT,                        -- 运营执行者标识，自助流程恒为 NULL
+            executed_at TEXT NOT NULL,               -- 实际完成清除的时刻
+            purge_stats_json TEXT,                   -- 本次删除行数快照，供运营核对
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
         );
+        -- 同一真人可多次注销（注销后手机号仍可重新注册），因此**不**加唯一约束。
         CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_owner
-            ON account_deletion_requests(platform_user_id, status);
-        -- 同一真人同一产品同时只能有一条未终态申请；重复提交走幂等回放而不是插第二行。
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_account_deletion_requests_open
-            ON account_deletion_requests(platform_user_id, app_id)
-            WHERE status IN ('pending', 'due');
-        CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_due
-            ON account_deletion_requests(status, effective_at);
+            ON account_deletion_requests(platform_user_id, executed_at);
 
         CREATE TABLE IF NOT EXISTS app_notification_preferences (
             platform_user_id TEXT PRIMARY KEY,

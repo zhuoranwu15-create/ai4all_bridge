@@ -144,21 +144,19 @@ class ProfileUpdateResponse(BaseModel):
 
 
 class AccountDeletionRequestData(BaseModel):
-    """注销申请公开视图；``executed_by`` 等运营字段刻意不出现在客户端契约里。"""
+    """注销流水公开视图；``purge_stats_json`` 等运营字段刻意不出现在客户端契约里。"""
 
     request_id: str
     status: str
     reason_code: Optional[str] = None
-    effective_at: Optional[str] = None
-    created_at: Optional[str] = None
+    executed_at: Optional[str] = None
 
 
 class AccountDeletionResponse(BaseModel):
-    """``request`` 为 null 表示当前没有未终态的注销申请。"""
+    """注销已**立即完成**。客户端收到后必须就地登出——本次 token 已在服务端失效。"""
 
     status: str
-    cooling_days: int
-    request: Optional[AccountDeletionRequestData] = None
+    request: AccountDeletionRequestData
 
 
 # --- B 类 data：世界引导 ---------------------------------------------------

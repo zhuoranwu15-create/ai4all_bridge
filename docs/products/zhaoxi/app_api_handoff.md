@@ -54,11 +54,11 @@
 
 ### 2.3 OpenAPI 契约 snapshot
 
-仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（49 条 `/v1` 路径）。
+仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（53 条 `/v1` 路径 / 57 个操作）。
 
 - 服务端 CI 断言「实时导出 == 提交的 snapshot」，所以**改响应字段必须同步更新 snapshot**，否则后端 CI 直接红。客户端可以拿它做 breaking-change 检查或生成 DTO。
 - 后端重新导出：`.venv/bin/python scripts/export_openapi.py`（`--check` 只校验）。
-- **当前只有主链路 10 个端点有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
+- **当前有主链路 15 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，以及「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
 - 生成的 DTO 不替代客户端领域模型；本文档仍是落地口径与流程约定。
 
 ---
@@ -105,6 +105,9 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   - `resident_world=false` 时其余世界能力恒为 `false`。
   - `human_chat_send` 只表示**能不能发**真人消息；真人聊天的**读**随 `resident_world`。开读关写时不要整块隐藏历史。
   - `resident_lifecycle` 对应居民真正会下线的开关，不是只跑评估不落地的那个。
+  - `voice_input`（CHAT-04）：M1 产品口径是**打开**，但该位由生产 ASR 配置驱动，上面这份
+    实测响应是配置生效前抓的。客户端按位渲染即可，不要硬编码——服务端配好 key 后它会翻成
+    `true`，无需客户端发版。
 - `client_contract_version`：服务端 App 契约版本，改契约时上调。
 - `minimum_supported_version` / `minimum_supported_version_by_platform`：低于此版本应提示强制升级；分平台字段先按 `0.0.0`（不拦）上线。
 - 响应带 `Cache-Control: no-store`。
@@ -198,14 +201,20 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 
 **账号注销（A 类扁平）**
 
-- `GET /v1/me/account/deletion` → `{"status":"ok","cooling_days":7,"request":null}`；
-  `request` 为 `null` 表示当前没有未终态申请。
-- `POST /v1/me/account/deletion`，body `{"reason_code"?}`（受控取值，非自由文本；不在表内 →
-  `422`）。返回 `request` 含 `request_id` / `status`(`pending`) / `effective_at`（带 `+08:00`）。
-  **重复提交幂等回放原申请，不刷新 `effective_at`** ——客户端可以放心重试。
-- `DELETE /v1/me/account/deletion` 撤销；没有可撤销的申请 → `404 deletion_request_not_found`。
-  `status` 已推进到 `due` 的申请**同样可撤销**。
-- 冷静期内账号照常可用，服务端不会因为存在申请而降级任何能力。
+- 只有一个端点：`POST /v1/me/account/deletion`，body `{"confirm": true, "reason_code"?}`。
+  **注销立即生效、不可撤销**（Q14 已拍板），没有冷静期，因此也没有查询/撤销接口。
+- `confirm` 必传且必须为 `true`，否则 `422 deletion_not_confirmed`；`reason_code` 是受控
+  取值（`not_useful` / `privacy_concern` / `too_expensive` / `switching` / `other`），不在表
+  内 → `422 reason_code_invalid`。**参数校验一定发生在清除之前**，422 时数据完好无损。
+- 成功返回 `{"status":"ok","request":{"request_id","status":"executed","reason_code",
+  "executed_at"}}`，`executed_at` 带 `+08:00`。
+- 返回后该真人**全部设备的登录态已失效**：客户端必须就地清 token 回登录页，继续用旧
+  token 会拿到 `401`。
+- 清除范围：聊天原文与会话、账号级记忆（L1/L2、dreaming）、世界级共享记忆（L3）、
+  账号 profile 文件、提醒/承诺、站内通知；居民全部遣散、世界回到引导前状态。
+  **手机号不被占用**——用同一手机号重新登录即得到一个全新的空世界。
+- 刻意保留：与第三方的真人会话/来访/邀请记录（删我方副本等于删对方的聊天记录）与
+  财务审计流水。二次确认弹窗由客户端负责，服务端只认 `confirm`。
 
 **通知偏好（B 类信封）**
 
@@ -533,12 +542,12 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 > 完整表见 `app/products/zhaoxi/api/companion_world.py` 的 `_ERROR_STATUS`。App 应基于 `code`（而非文案）做分支，未知 `code` 按对应 HTTP 状态兜底。
 
-主链路 10 个端点的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
+主链路 15 个操作的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
 （`WorldErrorEnvelope`），可直接据此生成错误分支；具体 `code` 取值仍以上表为准。
 
 ---
 
-## 8. `/v1` 全量端点清单（59 条）
+## 8. `/v1` 全量端点清单（57 条）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
@@ -546,7 +555,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 - `POST /v1/auth/session`、`DELETE /v1/auth/session/current`
 - `GET /v1/me`
 - `GET /v1/me/profile-options`、`PATCH /v1/me/profile`
-- `GET /v1/me/account/deletion`、`POST /v1/me/account/deletion`、`DELETE /v1/me/account/deletion`
+- `POST /v1/me/account/deletion`（立即注销，不可撤销）
 
 **主聊天（默认账号，非世界）**
 - `GET /v1/chat/messages`、`POST /v1/chat/turn`

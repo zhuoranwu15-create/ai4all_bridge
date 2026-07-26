@@ -171,46 +171,188 @@ def test_profile_update_is_scoped_to_the_calling_user(client):
     )
 
 
-# --- ME-06/07 注销申请 -----------------------------------------------------
+# --- ME-06/07 注销：立即清除 -----------------------------------------------
 
 
-def test_deletion_request_is_idempotent_and_never_refreshes_cooling_period(client):
-    headers, _ = _login(client, "13800139007")
+def test_deletion_executes_immediately_and_revokes_session(client):
+    headers, login = _login(client, "13800139007")
+    user_id = login["platform_user"]["id"]
 
-    first = client.post(
-        "/v1/me/account/deletion", headers=headers, json={"reason_code": "not_useful"}
+    response = client.post(
+        "/v1/me/account/deletion",
+        headers=headers,
+        json={"confirm": True, "reason_code": "not_useful"},
     )
-    assert first.status_code == 200, first.text
-    created = first.json()
-    assert created["cooling_days"] == me_settings.DELETION_COOLING_DAYS
-    assert created["request"]["status"] == "pending"
-    assert created["request"]["effective_at"].endswith("+08:00")
+
+    assert response.status_code == 200, response.text
+    request = response.json()["request"]
+    assert request["status"] == "executed"
+    assert request["reason_code"] == "not_useful"
+    assert request["executed_at"].endswith("+08:00")
     # 运营字段不进客户端契约。
-    assert "executed_by" not in created["request"]
-
-    repeat = client.post(
-        "/v1/me/account/deletion", headers=headers, json={"reason_code": "other"}
-    ).json()
-    assert repeat["request"]["request_id"] == created["request"]["request_id"]
-    assert repeat["request"]["effective_at"] == created["request"]["effective_at"]
-    assert repeat["request"]["reason_code"] == "not_useful"
+    assert "purge_stats_json" not in request
+    # 注销后旧 token 立即失效，客户端必须回登录页。
+    assert client.get("/v1/me", headers=headers).status_code == 401
+    # 手机号不被永久占用：platform_users 行保留，可重新注册成全新用户。
+    assert db.get_platform_user(platform_user_id=user_id) is not None
 
 
-def test_deletion_request_cancel_then_reapply_keeps_full_history(client):
-    headers, _ = _login(client, "13800139008")
-    first_id = client.post(
-        "/v1/me/account/deletion", headers=headers, json={}
+def test_deletion_purges_chat_records_and_memories(client, fresh_db):
+    """核心口径（Q14）：注销后聊天原文、账号级记忆与世界级共享记忆都必须消失。"""
+    fresh_db.companion_world_p1_enabled = True
+    headers, account_id, user_id = _ready_user(client, "13800139008", "小满")
+    scope = db.resolve_resident_memory_scope(runtime_account_id=account_id)
+    session = db.get_or_create_session(
+        account_id=account_id,
+        channel=CHANNEL_APP,
+        sender_id=user_id,
+        sender_name=None,
+        chat_id=None,
+        session_key="__app_active__",
+    )["session"]
+    db.insert_message(
+        account_id=account_id,
+        session_id=int(session["id"]),
+        message_id="msg-delete-me",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="我怕黑",
+    )
+    db.append_universe_fact(
+        universe_id=scope["universe_id"],
+        fact_type="user_preference",
+        payload_json='{"memory_text":"用户怕黑","operation":"add"}',
+        source_account_id=account_id,
+        source_resident_id=scope["resident_id"],
+        source_message_id="msg-delete-me",
+        occurred_at="2026-07-26T09:00:00+08:00",
+    )
+    assert db.list_recent_messages_for_account(account_id=account_id, limit=10)
+    assert db.read_universe_facts(universe_id=scope["universe_id"])
+
+    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+
+    assert db.list_recent_messages_for_account(account_id=account_id, limit=10) == []
+    assert db.read_universe_facts(universe_id=scope["universe_id"], status=None) == []
+    with db.connect() as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) c FROM ai_conversations WHERE universe_id = ?",
+                (scope["universe_id"],),
+            ).fetchone()["c"]
+            == 0
+        )
+        # 世界行本身受 UNIQUE(owner_platform_user_id) 约束保留，但回到引导前状态。
+        assert (
+            conn.execute(
+                "SELECT onboarding_state FROM universes WHERE id = ?",
+                (scope["universe_id"],),
+            ).fetchone()["onboarding_state"]
+            == "preparing"
+        )
+    # 居民全部遣散：重新登录拿到的是干净的新世界。
+    assert db.list_residents(
+        universe_id=scope["universe_id"], statuses=("active", "offline", "candidate")
+    ) == []
+
+
+def test_deletion_requires_explicit_confirmation(client):
+    """不可撤销的破坏性操作不接受空 body：漏传 confirm 必须失败且不动数据。"""
+    headers, login = _login(client, "13800139009")
+
+    assert client.post("/v1/me/account/deletion", headers=headers, json={}).status_code == 422
+    not_confirmed = client.post(
+        "/v1/me/account/deletion", headers=headers, json={"confirm": False}
+    )
+    assert not_confirmed.status_code == 422
+    assert not_confirmed.json()["detail"] == "deletion_not_confirmed"
+    # 未确认时会话仍然有效。
+    assert client.get("/v1/me", headers=headers).status_code == 200
+    assert (
+        me_settings.get_last_deletion_record(
+            platform_user_id=login["platform_user"]["id"], app_id="zhaoxi"
+        )
+        is None
+    )
+
+
+def test_deletion_rejects_free_text_reason(client):
+    headers, _ = _login(client, "13800139010")
+
+    response = client.post(
+        "/v1/me/account/deletion",
+        headers=headers,
+        json={"confirm": True, "reason_code": "我就是不想用了"},
+    )
+
+    assert response.status_code == 422
+    # 校验失败不得留下任何清除痕迹。
+    assert client.get("/v1/me", headers=headers).status_code == 200
+
+
+def test_deletion_is_isolated_across_users(client, fresh_db):
+    """账号隔离：注销自己不得动到另一个真人的数据与登录态。"""
+    fresh_db.companion_world_p1_enabled = True
+    headers_a, account_a, _ = _ready_user(client, "13800139011", "甲居民")
+    headers_b, account_b, _ = _ready_user(client, "13800139012", "乙居民")
+    scope_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)
+    session_b = db.get_or_create_session(
+        account_id=account_b,
+        channel=CHANNEL_APP,
+        sender_id="sender-b",
+        sender_name=None,
+        chat_id=None,
+        session_key="__app_active__",
+    )["session"]
+    db.insert_message(
+        account_id=account_b,
+        session_id=int(session_b["id"]),
+        message_id="msg-keep-me",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="乙的消息",
+    )
+    db.append_universe_fact(
+        universe_id=scope_b["universe_id"],
+        fact_type="user_preference",
+        payload_json='{"memory_text":"乙的记忆","operation":"add"}',
+        source_account_id=account_b,
+        source_resident_id=scope_b["resident_id"],
+        source_message_id="msg-keep-me",
+        occurred_at="2026-07-26T09:00:00+08:00",
+    )
+
+    client.post("/v1/me/account/deletion", headers=headers_a, json={"confirm": True})
+
+    assert client.get("/v1/me", headers=headers_b).status_code == 200
+    assert [
+        row["content"]
+        for row in db.list_recent_messages_for_account(account_id=account_b, limit=10)
+    ] == ["乙的消息"]
+    assert db.read_universe_facts(universe_id=scope_b["universe_id"])
+    residents_b = db.list_residents(universe_id=scope_b["universe_id"], statuses=("active",))
+    assert [row["runtime_account_id"] for row in residents_b] == [account_b]
+    assert account_a != account_b
+
+
+def test_repeated_deletion_after_reregistration_keeps_full_history(client):
+    """注销后可用同一手机号重新注册；第二次注销另起一条流水，不覆盖第一条。"""
+    phone = "13800139013"
+    headers, _ = _login(client, phone)
+    first = client.post(
+        "/v1/me/account/deletion", headers=headers, json={"confirm": True}
     ).json()["request"]["request_id"]
 
-    cancelled = client.delete("/v1/me/account/deletion", headers=headers)
-    assert cancelled.status_code == 200
-    assert cancelled.json()["request"]["status"] == "cancelled"
-    assert client.get("/v1/me/account/deletion", headers=headers).json()["request"] is None
-
-    second_id = client.post(
-        "/v1/me/account/deletion", headers=headers, json={}
+    headers_again, _ = _login(client, phone)
+    second = client.post(
+        "/v1/me/account/deletion", headers=headers_again, json={"confirm": True}
     ).json()["request"]["request_id"]
-    assert second_id != first_id
+
+    assert second != first
     with db.connect() as conn:
         assert (
             conn.execute(
@@ -218,65 +360,6 @@ def test_deletion_request_cancel_then_reapply_keeps_full_history(client):
             ).fetchone()["c"]
             == 2
         )
-
-
-def test_cancel_without_open_request_is_not_found(client):
-    headers, _ = _login(client, "13800139009")
-
-    response = client.delete("/v1/me/account/deletion", headers=headers)
-
-    assert response.status_code == 404
-    assert response.json()["detail"] == "deletion_request_not_found"
-
-
-def test_deletion_request_rejects_free_text_reason(client):
-    headers, _ = _login(client, "13800139010")
-
-    response = client.post(
-        "/v1/me/account/deletion",
-        headers=headers,
-        json={"reason_code": "我就是不想用了"},
-    )
-
-    assert response.status_code == 422
-
-
-def test_deletion_request_is_isolated_across_users(client):
-    """账号隔离：别人的注销申请不得出现在我的查询里，也不能被我撤销。"""
-    headers_a, _ = _login(client, "13800139011")
-    headers_b, _ = _login(client, "13800139012")
-    client.post("/v1/me/account/deletion", headers=headers_a, json={})
-
-    assert client.get("/v1/me/account/deletion", headers=headers_b).json()["request"] is None
-    assert client.delete("/v1/me/account/deletion", headers=headers_b).status_code == 404
-    assert (
-        client.get("/v1/me/account/deletion", headers=headers_a).json()["request"][
-            "status"
-        ]
-        == "pending"
-    )
-
-
-def test_mark_due_advances_status_without_touching_user_data(client):
-    """冷静期到期只推状态到 due，服务端不自动清任何数据（清除由运营执行）。"""
-    headers, login = _login(client, "13800139013")
-    client.post("/v1/me/account/deletion", headers=headers, json={})
-    user_id = login["platform_user"]["id"]
-
-    now = beijing_now().replace(tzinfo=None, microsecond=0)
-    from datetime import timedelta
-
-    moved = me_settings.mark_due_deletion_requests(
-        now=now + timedelta(days=me_settings.DELETION_COOLING_DAYS + 1)
-    )
-
-    assert moved == 1
-    assert client.get("/v1/me/account/deletion", headers=headers).json()["request"][
-        "status"
-    ] == "due"
-    assert db.get_platform_user(platform_user_id=user_id) is not None
-    # due 之后仍可撤销：运营还没执行，用户仍有权反悔。
-    assert client.delete("/v1/me/account/deletion", headers=headers).status_code == 200
 
 
 # --- ME-10 通知偏好 --------------------------------------------------------
