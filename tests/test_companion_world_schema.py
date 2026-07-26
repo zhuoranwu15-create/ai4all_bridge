@@ -22,6 +22,7 @@ from app.db._core import (
     _migration_0048_companion_world_resident_drafts,
     _migration_0049_companion_world_naming,
     _migration_0050_ai_conversation_read_cursor,
+    _migration_0051_app_me_tab,
 )
 
 _P1_TABLES = (
@@ -75,14 +76,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        50,
-        _migration_0050_ai_conversation_read_cursor,
+        51,
+        _migration_0051_app_me_tab,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 50
+        assert int(version) == 51
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -467,6 +468,28 @@ def test_m0050_read_cursor_column_and_idempotency(fresh_db):
         conn.execute(
             "SELECT last_read_message_id FROM ai_conversations WHERE 1 = 0"
         ).fetchall()
+
+
+def test_m0051_me_tab_schema_and_idempotency(fresh_db):
+    """m0051：Profile 列与两张「我的」表可查询，且重复执行不重复加列/建表。"""
+    with db.connect() as conn:
+        for statement in (
+            "SELECT avatar_key FROM platform_users WHERE 1 = 0",
+            "SELECT id, platform_user_id, app_id, status, reason_code, effective_at,"
+            " cancelled_at, executed_at, executed_by FROM account_deletion_requests"
+            " WHERE 1 = 0",
+            "SELECT platform_user_id, quiet_level FROM app_notification_preferences"
+            " WHERE 1 = 0",
+        ):
+            conn.execute(statement).fetchall()
+        _migration_0051_app_me_tab(conn)
+        _migration_0051_app_me_tab(conn)
+        for statement in (
+            "SELECT avatar_key FROM platform_users WHERE 1 = 0",
+            "SELECT id FROM account_deletion_requests WHERE 1 = 0",
+            "SELECT platform_user_id FROM app_notification_preferences WHERE 1 = 0",
+        ):
+            conn.execute(statement).fetchall()
 
 
 def test_candidate_naming_snapshot_is_written_once(fresh_db):

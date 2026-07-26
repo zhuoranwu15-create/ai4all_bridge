@@ -44,12 +44,15 @@ FIELD_DISPLAY_NAME = "display_name"
 FIELD_RELATIONSHIP_LABEL = "relationship_label"
 FIELD_STYLE_NOTE = "style_note"
 FIELD_PERSONA_SUMMARY = "persona_summary"
+FIELD_USER_NICKNAME = "user_nickname"
 
 _FIELD_HINTS: Dict[str, str] = {
     FIELD_DISPLAY_NAME: "an AI companion's display name",
     FIELD_RELATIONSHIP_LABEL: "a user-defined relationship label for an AI companion",
     FIELD_STYLE_NOTE: "a free-text note describing how an AI companion should talk",
     FIELD_PERSONA_SUMMARY: "a free-text persona description for an AI companion",
+    # 真人自己的昵称：会展示给来访的真实好友，因此同样按对外可见自由文本处理。
+    FIELD_USER_NICKNAME: "a human user's own nickname shown to their invited friends",
 }
 
 _SYSTEM_PROMPT = """You are the input safety filter for AI4ALL's companion product.

@@ -95,8 +95,13 @@ class PublicAccount(BaseModel):
 
 
 class MePlatformUser(BaseModel):
+    """真人公开身份。``display_name``/``avatar_key`` 未设置时为 null，客户端自行兜底展示。"""
+
     id: str
     phone_masked: str
+    display_name: Optional[str] = None
+    avatar_key: Optional[str] = None
+    avatar_ref: Optional[str] = None
 
 
 class MeWorld(BaseModel):
@@ -113,6 +118,47 @@ class MeResponse(BaseModel):
     account: Optional[PublicAccount] = None
     world: Optional[MeWorld] = None
     server_time: str
+
+
+class ProfileAvatarOption(BaseModel):
+    key: str
+    avatar_ref: str
+
+
+class ProfileLimits(BaseModel):
+    nickname_chars: int
+    nickname_min_chars: int
+
+
+class ProfileOptionsResponse(BaseModel):
+    """ME-01 受控取值表；头像库为空时 ``avatars`` 是空数组，客户端应隐藏头像选择器。"""
+
+    status: str
+    avatars: List[ProfileAvatarOption]
+    limits: ProfileLimits
+
+
+class ProfileUpdateResponse(BaseModel):
+    status: str
+    platform_user: MePlatformUser
+
+
+class AccountDeletionRequestData(BaseModel):
+    """注销申请公开视图；``executed_by`` 等运营字段刻意不出现在客户端契约里。"""
+
+    request_id: str
+    status: str
+    reason_code: Optional[str] = None
+    effective_at: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AccountDeletionResponse(BaseModel):
+    """``request`` 为 null 表示当前没有未终态的注销申请。"""
+
+    status: str
+    cooling_days: int
+    request: Optional[AccountDeletionRequestData] = None
 
 
 # --- B 类 data：世界引导 ---------------------------------------------------
@@ -237,6 +283,16 @@ class TurnData(BaseModel):
     deduplicated: bool
 
 
+# --- B 类 data：通知偏好 ---------------------------------------------------
+
+
+class NotificationPreferencesData(BaseModel):
+    """ME-10 通知偏好；``available_levels`` 由服务端下发，客户端不硬编码枚举。"""
+
+    quiet_level: str
+    available_levels: List[str]
+
+
 # --- 各端点最终响应模型 ----------------------------------------------------
 
 BootstrapResponse = WorldEnvelope[BootstrapData]
@@ -246,6 +302,7 @@ ConversationListResponse = WorldEnvelope[ConversationListData]
 ConversationMessagesResponse = WorldEnvelope[ConversationMessagesData]
 ConversationReadResponse = WorldEnvelope[ConversationReadData]
 TurnResponse = WorldEnvelope[TurnData]
+NotificationPreferencesResponse = WorldEnvelope[NotificationPreferencesData]
 
 # 世界类端点的失败响应统一是错误信封。逐码含义见交接文档 §7；客户端按 code 分支。
 WORLD_ERROR_RESPONSES = {
@@ -258,6 +315,7 @@ WORLD_ERROR_RESPONSES = {
 }
 
 __all__ = [
+    "AccountDeletionResponse",
     "AppConfigResponse",
     "BootstrapResponse",
     "CandidateListResponse",
@@ -265,6 +323,9 @@ __all__ = [
     "ConversationMessagesResponse",
     "ConversationReadResponse",
     "MeResponse",
+    "NotificationPreferencesResponse",
+    "ProfileOptionsResponse",
+    "ProfileUpdateResponse",
     "ResidentListResponse",
     "TurnResponse",
     "WORLD_ERROR_RESPONSES",

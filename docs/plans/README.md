@@ -10,6 +10,6 @@
 | [Analytics 工程实施](shared/analytics_foundation_implementation_plan.md) | Nearline facts/marts 与 ETL 建设 |
 | [基线优化](products/zhaoxi/baseline_optimization_alignment.md) | 尚未排期的 P1/P2 项 |
 | [App 账号收敛与渠道人设](products/zhaoxi/app_account_convergence_and_channel_persona.md) | 以文首状态与验收表为准 |
-| [Companion World App M1 服务端](products/zhaoxi/companion_world_app_m1_server_plan.md) | 客户端 M1 服务端需求评审结论与 S1–S5 批次；S1–S5 已全部交付（2026-07-26），待合入 main |
+| [Companion World App M1 服务端](products/zhaoxi/companion_world_app_m1_server_plan.md) | 客户端 M1 服务端需求评审结论与 S1–S6 批次；S1–S6 已全部交付（2026-07-26），联调 ready，待合入 main |
 
 计划完成时应把稳定结论回写 `../architecture/` 或 `../products/<app_id>/`，再归档计划本身。

@@ -142,7 +142,13 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   "access_token": "<Bearer token，30 天有效>",
   "expires_at": "2026-08-22T14:05:00+08:00",
   "is_new_user": true,
-  "platform_user": { "id": "...", "phone_masked": "138****0000" },
+  "platform_user": {
+    "id": "...",
+    "phone_masked": "138****0000",
+    "display_name": "小满",
+    "avatar_key": "user_03",
+    "avatar_ref": "https://.../companion_world/avatars/user/user_03.png"
+  },
   "account": null,
   "welcome_message": null
 }
@@ -170,6 +176,47 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   `POST /worlds/home/bootstrap` 负责。
 - `account.status == "disabled"` 仍返回 403。
 - 响应带 `Cache-Control: no-store`。
+- `platform_user.display_name` / `avatar_key` / `avatar_ref` 未设置时为 `null`，客户端自行
+  兜底展示（见 §3.6）。
+
+### 3.6 「我的」Tab：Profile / 注销 / 通知偏好
+
+三组端点都是**真人级**设置（锚在 platform_user），与居民/account 无关。
+
+**Profile（A 类扁平）**
+
+- `GET /v1/me/profile-options` → `{"status":"ok","avatars":[{"key":"user_01","avatar_ref":"…"}],
+  "limits":{"nickname_chars":20,"nickname_min_chars":1}}`。头像库由服务端下发，**客户端不要
+  硬编码枚举**；数组为空时隐藏头像选择器。
+- `PATCH /v1/me/profile`，body `{"display_name"?, "avatar_key"?}`。两个字段都可单独提交，
+  省略/`null` 表示「本次不改」（不是清空）；两个都不传 → `422 profile_update_empty`。
+  成功返回 `{"status":"ok","platform_user":{…}}`，形状与 `/me` 的 `platform_user` 一致。
+- 昵称错误码：`nickname_length_invalid`、`nickname_charset_invalid`、`content_rejected`(422)、
+  `content_review_unavailable`(503，可重试)。头像 key 不在表内 → `avatar_key_invalid`(422)，
+  **不会回落默认头像**。
+- 昵称会展示给来访的真实好友，因此和自建角色名走同一条内容审查链路；改写后的结果即最终值。
+
+**账号注销（A 类扁平）**
+
+- `GET /v1/me/account/deletion` → `{"status":"ok","cooling_days":7,"request":null}`；
+  `request` 为 `null` 表示当前没有未终态申请。
+- `POST /v1/me/account/deletion`，body `{"reason_code"?}`（受控取值，非自由文本；不在表内 →
+  `422`）。返回 `request` 含 `request_id` / `status`(`pending`) / `effective_at`（带 `+08:00`）。
+  **重复提交幂等回放原申请，不刷新 `effective_at`** ——客户端可以放心重试。
+- `DELETE /v1/me/account/deletion` 撤销；没有可撤销的申请 → `404 deletion_request_not_found`。
+  `status` 已推进到 `due` 的申请**同样可撤销**。
+- 冷静期内账号照常可用，服务端不会因为存在申请而降级任何能力。
+
+**通知偏好（B 类信封）**
+
+- `GET /v1/notifications/preferences` → `data: {"quiet_level":"standard","available_levels":["standard","quiet"]}`。
+  从未设置过时返回默认值，读不写库。
+- `PATCH /v1/notifications/preferences`，body `{"quiet_level":"quiet"}`，幂等。取值不在
+  `available_levels` 内 → `422 quiet_level_invalid`。
+- `quiet` 只压制**将来**的 AI 主动通知；**已在箱内的通知不回收**，`unread_count` 不会因为
+  改偏好而变化。切回 `standard` 后立即恢复投递。
+- 与 `/v1/notifications` 一样需要 `COMPANION_WORLD_APP_INBOX_ENABLED`，否则 `404 feature_disabled`。
+
 
 ---
 
@@ -491,13 +538,15 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 ---
 
-## 8. `/v1` 全量端点清单（52 条）
+## 8. `/v1` 全量端点清单（59 条）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
 - `POST /v1/auth/otp/send`、`POST /v1/auth/otp/verify`
 - `POST /v1/auth/session`、`DELETE /v1/auth/session/current`
 - `GET /v1/me`
+- `GET /v1/me/profile-options`、`PATCH /v1/me/profile`
+- `GET /v1/me/account/deletion`、`POST /v1/me/account/deletion`、`DELETE /v1/me/account/deletion`
 
 **主聊天（默认账号，非世界）**
 - `GET /v1/chat/messages`、`POST /v1/chat/turn`
@@ -532,6 +581,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 **通知**
 - `GET /v1/notifications`、`GET /v1/notifications/unread-count`
 - `POST /v1/notifications/{id}/read`、`POST /v1/notifications/read-all`
+- `GET /v1/notifications/preferences`、`PATCH /v1/notifications/preferences`
 
 **真人会话**
 - `GET /v1/human-conversations`

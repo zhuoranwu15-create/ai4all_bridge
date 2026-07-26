@@ -1,6 +1,107 @@
 {
   "components": {
     "schemas": {
+      "AccountDeletionRequest": {
+        "additionalProperties": false,
+        "description": "ME-06/07 注销申请入参；原因是受控取值，不接受自由文本。",
+        "properties": {
+          "reason_code": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          }
+        },
+        "title": "AccountDeletionRequest",
+        "type": "object"
+      },
+      "AccountDeletionRequestData": {
+        "description": "注销申请公开视图；``executed_by`` 等运营字段刻意不出现在客户端契约里。",
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "effective_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Effective At"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "title": "AccountDeletionRequestData",
+        "type": "object"
+      },
+      "AccountDeletionResponse": {
+        "description": "``request`` 为 null 表示当前没有未终态的注销申请。",
+        "properties": {
+          "cooling_days": {
+            "title": "Cooling Days",
+            "type": "integer"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AccountDeletionRequestData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "cooling_days"
+        ],
+        "title": "AccountDeletionResponse",
+        "type": "object"
+      },
       "AppConfigCaptcha": {
         "properties": {
           "configured": {
@@ -846,7 +947,41 @@
         "type": "object"
       },
       "MePlatformUser": {
+        "description": "真人公开身份。``display_name``/``avatar_key`` 未设置时为 null，客户端自行兜底展示。",
         "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -927,6 +1062,123 @@
           "onboarding_state"
         ],
         "title": "MeWorld",
+        "type": "object"
+      },
+      "NotificationPreferencesData": {
+        "description": "ME-10 通知偏好；``available_levels`` 由服务端下发，客户端不硬编码枚举。",
+        "properties": {
+          "available_levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Levels",
+            "type": "array"
+          },
+          "quiet_level": {
+            "title": "Quiet Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quiet_level",
+          "available_levels"
+        ],
+        "title": "NotificationPreferencesData",
+        "type": "object"
+      },
+      "NotificationPreferencesPayload": {
+        "additionalProperties": false,
+        "description": "ME-10 通知偏好入参；取值表由 GET 下发，客户端不硬编码。",
+        "properties": {
+          "quiet_level": {
+            "maxLength": 32,
+            "title": "Quiet Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quiet_level"
+        ],
+        "title": "NotificationPreferencesPayload",
+        "type": "object"
+      },
+      "ProfileAvatarOption": {
+        "properties": {
+          "avatar_ref": {
+            "title": "Avatar Ref",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "avatar_ref"
+        ],
+        "title": "ProfileAvatarOption",
+        "type": "object"
+      },
+      "ProfileLimits": {
+        "properties": {
+          "nickname_chars": {
+            "title": "Nickname Chars",
+            "type": "integer"
+          },
+          "nickname_min_chars": {
+            "title": "Nickname Min Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nickname_chars",
+          "nickname_min_chars"
+        ],
+        "title": "ProfileLimits",
+        "type": "object"
+      },
+      "ProfileOptionsResponse": {
+        "description": "ME-01 受控取值表；头像库为空时 ``avatars`` 是空数组，客户端应隐藏头像选择器。",
+        "properties": {
+          "avatars": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileAvatarOption"
+            },
+            "title": "Avatars",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ProfileLimits"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "avatars",
+          "limits"
+        ],
+        "title": "ProfileOptionsResponse",
+        "type": "object"
+      },
+      "ProfileUpdateResponse": {
+        "properties": {
+          "platform_user": {
+            "$ref": "#/components/schemas/MePlatformUser"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "platform_user"
+        ],
+        "title": "ProfileUpdateResponse",
         "type": "object"
       },
       "PublicAccount": {
@@ -1248,6 +1500,38 @@
         "title": "TurnReply",
         "type": "object"
       },
+      "UpdateProfileRequest": {
+        "additionalProperties": false,
+        "description": "ME-01 Profile 更新入参；两字段均可选，但不能同时为空。",
+        "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "title": "UpdateProfileRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -1447,6 +1731,36 @@
           "data"
         ],
         "title": "WorldEnvelope[ConversationReadData]",
+        "type": "object"
+      },
+      "WorldEnvelope_NotificationPreferencesData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/NotificationPreferencesData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[NotificationPreferencesData]",
         "type": "object"
       },
       "WorldEnvelope_ResidentListData_": {
@@ -3565,6 +3879,272 @@
         ]
       }
     },
+    "/v1/me/account/deletion": {
+      "delete": {
+        "description": "撤销注销申请（ME-06/07）；``due`` 但尚未执行的申请同样可撤销。",
+        "operationId": "app_cancel_account_deletion_v1_me_account_deletion_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Cancel Account Deletion",
+        "tags": [
+          "app-v1"
+        ]
+      },
+      "get": {
+        "description": "查询当前注销申请状态（ME-06/07）；没有申请时 ``request`` 为 null。",
+        "operationId": "app_get_account_deletion_v1_me_account_deletion_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Get Account Deletion",
+        "tags": [
+          "app-v1"
+        ]
+      },
+      "post": {
+        "description": "提交注销申请（ME-06/07）：进入冷静期，期间可自助撤销，账号照常可用。\n\n**服务端不在此处清除任何数据**：冷静期结束后申请转 ``due``，由运营按法务口径执行\n清除。重复提交幂等回放原申请，不刷新 ``effective_at``。",
+        "operationId": "app_request_account_deletion_v1_me_account_deletion_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Request Account Deletion",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/me/profile": {
+      "patch": {
+        "description": "更新真人昵称/头像（ME-01）。\n\n两个字段都可单独提交；``None`` 表示本次不改。昵称除字符白名单外还要过 D-B 清洗器\n—— 它会展示给来访的真实好友，风险面与自建角色名一致；清洗器不可用时 fail closed。",
+        "operationId": "app_update_profile_v1_me_profile_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Update Profile",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/me/profile-options": {
+      "get": {
+        "description": "下发昵称限额与受控头像表（ME-01）；客户端不硬编码头像枚举。",
+        "operationId": "app_profile_options_v1_me_profile_options_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Profile Options",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "operationId": "list_notifications_v1_notifications_get",
@@ -3651,6 +4231,114 @@
           }
         },
         "summary": "List Notifications",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/notifications/preferences": {
+      "get": {
+        "description": "读取通知安静程度（ME-10）；从未设置过时返回默认 ``standard``，读不写库。",
+        "operationId": "get_preferences_v1_notifications_preferences_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_NotificationPreferencesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preferences",
+        "tags": [
+          "app-notifications"
+        ]
+      },
+      "patch": {
+        "description": "设置通知安静程度（ME-10），幂等。\n\n``quiet`` 只压制**将来**的投递；已在箱内的通知不回收——用户已经看到的东西不该\n因为改了偏好而消失。",
+        "operationId": "update_preferences_v1_notifications_preferences_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_NotificationPreferencesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Preferences",
         "tags": [
           "app-notifications"
         ]

@@ -4157,6 +4157,60 @@ def _migration_0050_ai_conversation_read_cursor(conn: Connection) -> None:
     _ensure_column(conn, "ai_conversations", "last_read_message_id", "INTEGER")
 
 
+def _migration_0051_app_me_tab(conn: Connection) -> None:
+    """「我的」Tab 收尾：用户 Profile（ME-01）、注销申请（ME-06/07）、通知偏好（ME-10）。
+
+    ``platform_users.avatar_key`` 存受控头像 key（不存 URL——资产前缀由
+    ``COMPANION_WORLD_ASSET_BASE_URL`` 决定，换 CDN 不用改数据）；昵称沿用既有
+    ``display_name`` 列，不新建。
+
+    ``account_deletion_requests`` 承载可撤销的注销申请。刻意建表而不是给
+    ``platform_users`` 加三个列：合规场景要保留「申请—撤销—再申请」的完整历史，
+    加列会被下一次申请覆盖掉。**本表只记录意图与状态，真正的数据清除不由它触发**，
+    到期后停在 ``due`` 等运营执行（见 App PRD ME-07）。
+
+    ``app_notification_preferences`` 一行一个真人；缺行等价于默认值 ``standard``，
+    因此无需回填。
+
+    纯加列 + 两张新表，无回填、无锁表风险；两后端均幂等。
+    """
+    _ensure_column(conn, "platform_users", "avatar_key", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS account_deletion_requests (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,                    -- 发起注销的产品，便于运营分流
+            status TEXT NOT NULL DEFAULT 'pending',  -- pending | due | cancelled | executed
+            reason_code TEXT,                        -- 受控取值，非自由文本
+            effective_at TEXT NOT NULL,              -- 冷静期结束时刻；此前可自助撤销
+            cancelled_at TEXT,
+            executed_at TEXT,
+            executed_by TEXT,                        -- 运营执行者标识，自助流程恒为 NULL
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_owner
+            ON account_deletion_requests(platform_user_id, status);
+        -- 同一真人同一产品同时只能有一条未终态申请；重复提交走幂等回放而不是插第二行。
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_account_deletion_requests_open
+            ON account_deletion_requests(platform_user_id, app_id)
+            WHERE status IN ('pending', 'due');
+        CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_due
+            ON account_deletion_requests(status, effective_at);
+
+        CREATE TABLE IF NOT EXISTS app_notification_preferences (
+            platform_user_id TEXT PRIMARY KEY,
+            quiet_level TEXT NOT NULL DEFAULT 'standard',  -- standard | quiet
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4203,6 +4257,7 @@ _MIGRATIONS = [
     (48, _migration_0048_companion_world_resident_drafts),
     (49, _migration_0049_companion_world_naming),
     (50, _migration_0050_ai_conversation_read_cursor),
+    (51, _migration_0051_app_me_tab),
 ]
 
 

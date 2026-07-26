@@ -18,7 +18,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.platform.media.asr import (
     ASRNotConfiguredError,
@@ -38,9 +38,31 @@ from app.db import (
     get_session_for_account_and_key,
     list_session_messages_before,
     revoke_platform_user_session,
+    update_platform_user_profile,
 )
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
-from app.products.zhaoxi.api.contracts import AppConfigResponse, MeResponse
+from app.products.zhaoxi.api.contracts import (
+    AccountDeletionResponse,
+    AppConfigResponse,
+    MeResponse,
+    ProfileOptionsResponse,
+    ProfileUpdateResponse,
+)
+from app.products.zhaoxi.domain.user_profile import (
+    MAX_NICKNAME_CHARS,
+    UserProfileError,
+    optional_user_avatar_ref,
+    profile_options_catalog,
+    resolve_user_avatar_ref,
+    validate_nickname,
+)
+from app.products.zhaoxi.infrastructure.persistence import me_settings
+from app.platform.moderation.text_sanitizer import (
+    FIELD_USER_NICKNAME,
+    TextRejected,
+    TextSanitizerUnavailable,
+    sanitize_text,
+)
 from app.platform.auth.identity import ResolvedIdentity
 from app.routers.deps import _require_session
 from app.routers.web import (
@@ -104,6 +126,23 @@ class AppSessionRequest(BaseModel):
     campaign_code: Optional[str] = Field(default=None, max_length=64)
 
 
+class UpdateProfileRequest(BaseModel):
+    """ME-01 Profile 更新入参；两字段均可选，但不能同时为空。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Optional[str] = Field(default=None, max_length=MAX_NICKNAME_CHARS)
+    avatar_key: Optional[str] = Field(default=None, max_length=64)
+
+
+class AccountDeletionRequest(BaseModel):
+    """ME-06/07 注销申请入参；原因是受控取值，不接受自由文本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason_code: Optional[str] = Field(default=None, max_length=32)
+
+
 class AppTurnRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     client_message_id: str = Field(min_length=8, max_length=64)
@@ -126,6 +165,32 @@ class AppTurnRequest(BaseModel):
 
 def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
+
+
+def _public_platform_user(platform_user: dict) -> dict:
+    """真人公开 DTO。手机号只出脱敏值，任何情况下不返回明文或完整尾号以外的片段。"""
+    phone = str(platform_user.get("phone") or "")
+    avatar_key = platform_user.get("avatar_key")
+    return {
+        "id": platform_user["id"],
+        "phone_masked": f"{phone[:3]}****{phone[-4:]}" if len(phone) >= 7 else "***",
+        "display_name": platform_user.get("display_name"),
+        "avatar_key": avatar_key,
+        "avatar_ref": optional_user_avatar_ref(avatar_key),
+    }
+
+
+def _public_deletion_request(request: Optional[dict]) -> Optional[dict]:
+    """注销申请公开 DTO；不返回 executed_by 等运营内部字段。"""
+    if request is None:
+        return None
+    return {
+        "request_id": str(request["id"]),
+        "status": str(request["status"]),
+        "reason_code": request.get("reason_code"),
+        "effective_at": _public_time(request.get("effective_at")),
+        "created_at": _public_time(request.get("created_at")),
+    }
 
 
 def _public_account(result: dict) -> dict:
@@ -343,16 +408,142 @@ def app_me(
     if platform_user is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
     _no_store(response)
-    phone = str(platform_user.get("phone") or "")
     return {
         "status": "ok",
-        "platform_user": {
-            "id": platform_user["id"],
-            "phone_masked": f"{phone[:3]}****{phone[-4:]}" if len(phone) >= 7 else "***",
-        },
+        "platform_user": _public_platform_user(platform_user),
         "account": _public_account(account_result) if account_result else None,
         "world": _world_summary(principal.platform_user_id),
         "server_time": beijing_now().isoformat(timespec="seconds"),
+    }
+
+
+@router.get("/me/profile-options", response_model=ProfileOptionsResponse)
+def app_profile_options(
+    response: Response,
+    _principal: SessionPrincipal = Depends(_require_session),
+) -> dict:
+    """下发昵称限额与受控头像表（ME-01）；客户端不硬编码头像枚举。"""
+    _no_store(response)
+    return {"status": "ok", **profile_options_catalog()}
+
+
+@router.patch("/me/profile", response_model=ProfileUpdateResponse)
+def app_update_profile(
+    payload: UpdateProfileRequest,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_session),
+) -> dict:
+    """更新真人昵称/头像（ME-01）。
+
+    两个字段都可单独提交；``None`` 表示本次不改。昵称除字符白名单外还要过 D-B 清洗器
+    —— 它会展示给来访的真实好友，风险面与自建角色名一致；清洗器不可用时 fail closed。
+    """
+    if payload.display_name is None and payload.avatar_key is None:
+        raise HTTPException(status_code=422, detail="profile_update_empty")
+    display_name: Optional[str] = None
+    avatar_key: Optional[str] = None
+    try:
+        if payload.display_name is not None:
+            display_name = validate_nickname(payload.display_name)
+        if payload.avatar_key is not None:
+            # 只为校验 key 合法性；ref 由响应侧统一重新解析。
+            resolve_user_avatar_ref(payload.avatar_key)
+            avatar_key = payload.avatar_key.strip()
+    except UserProfileError as err:
+        raise HTTPException(status_code=422, detail=err.code) from err
+    if display_name is not None:
+        try:
+            display_name = sanitize_text(
+                text=display_name,
+                field_kind=FIELD_USER_NICKNAME,
+                max_chars=MAX_NICKNAME_CHARS,
+            ).text
+        except TextRejected as err:
+            raise HTTPException(status_code=422, detail="content_rejected") from err
+        except TextSanitizerUnavailable as err:
+            raise HTTPException(
+                status_code=503, detail="content_review_unavailable"
+            ) from err
+        # 清洗器可能改写出空串或超长；再过一次结构校验，避免写进不合法的展示名。
+        try:
+            display_name = validate_nickname(display_name)
+        except UserProfileError as err:
+            raise HTTPException(status_code=422, detail=err.code) from err
+    updated = update_platform_user_profile(
+        platform_user_id=principal.platform_user_id,
+        display_name=display_name,
+        avatar_key=avatar_key,
+    )
+    if updated is None:
+        raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
+    _no_store(response)
+    return {"status": "ok", "platform_user": _public_platform_user(updated)}
+
+
+@router.get("/me/account/deletion", response_model=AccountDeletionResponse)
+def app_get_account_deletion(
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_session),
+) -> dict:
+    """查询当前注销申请状态（ME-06/07）；没有申请时 ``request`` 为 null。"""
+    _no_store(response)
+    return {
+        "status": "ok",
+        "cooling_days": me_settings.DELETION_COOLING_DAYS,
+        "request": _public_deletion_request(
+            me_settings.get_open_deletion_request(
+                platform_user_id=principal.platform_user_id, app_id=principal.app_id
+            )
+        ),
+    }
+
+
+@router.post("/me/account/deletion", response_model=AccountDeletionResponse)
+def app_request_account_deletion(
+    payload: AccountDeletionRequest,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_session),
+) -> dict:
+    """提交注销申请（ME-06/07）：进入冷静期，期间可自助撤销，账号照常可用。
+
+    **服务端不在此处清除任何数据**：冷静期结束后申请转 ``due``，由运营按法务口径执行
+    清除。重复提交幂等回放原申请，不刷新 ``effective_at``。
+    """
+    try:
+        request = me_settings.open_deletion_request(
+            platform_user_id=principal.platform_user_id,
+            app_id=principal.app_id,
+            reason_code=payload.reason_code,
+            now=beijing_now().replace(tzinfo=None, microsecond=0),
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=422, detail="reason_code_invalid") from err
+    _no_store(response)
+    return {
+        "status": "ok",
+        "cooling_days": me_settings.DELETION_COOLING_DAYS,
+        "request": _public_deletion_request(request),
+    }
+
+
+@router.delete("/me/account/deletion", response_model=AccountDeletionResponse)
+def app_cancel_account_deletion(
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_session),
+) -> dict:
+    """撤销注销申请（ME-06/07）；``due`` 但尚未执行的申请同样可撤销。"""
+    cancelled = me_settings.cancel_deletion_request(
+        platform_user_id=principal.platform_user_id,
+        app_id=principal.app_id,
+        now=beijing_now().replace(tzinfo=None, microsecond=0),
+    )
+    if cancelled is None:
+        raise HTTPException(status_code=404, detail="deletion_request_not_found")
+    _no_store(response)
+    return {
+        "status": "ok",
+        "cooling_days": me_settings.DELETION_COOLING_DAYS,
+        "request": _public_deletion_request(cancelled),
     }
 
 

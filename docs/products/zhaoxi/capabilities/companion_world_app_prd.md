@@ -287,7 +287,7 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | CHAT-01 | 聊天页绑定明确 `conversation_id` | P0 | 已实现 |
 | CHAT-02 | 顶部展示权威关系状态与角色详情入口，不伪造「在线」 | P0 | 已实现（`state`/`resident_status`）|
 | CHAT-03 | 文字发送、历史加载、等待、失败与幂等重试 | P0 | 已实现（S4 冻结 turn 响应形状与幂等 `message_id`；S5 进 OpenAPI snapshot）|
-| CHAT-04 | 保留语音转文字，转写结果可编辑且不自动发送 | P0 | 端点已实现，`voice_input` 开关当前关闭 |
+| CHAT-04 | 保留语音转文字，转写结果可编辑且不自动发送 | P0 | 端点已实现；是否在 M1 打开 `voice_input` 是纯配置开关（`/app/config.features.voice_input`），客户端按位渲染，服务端无代码缺口 |
 | CHAT-05 | 可从聊天页查看角色资料 | P1 | 客户端 + CAND-001 |
 | CHAT-06 | 从居民动态进入私聊可携带该动态作为一次性上下文 | P1 | 客户端 |
 | CHAT-07 | 不同居民的短期上下文隔离 | P0 | 已实现（per-runtime session）|
@@ -329,14 +329,14 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 
 | ID | 需求 | 优先级 | 服务端 |
 | --- | --- | --- | --- |
-| ME-01 | 用户头像、昵称、可编辑 Profile | P0 | 部分：`/me` 只返回脱敏手机号与 account |
+| ME-01 | 用户头像、昵称、可编辑 Profile | P0 | 已实现（S6）：`GET /me/profile-options` 下发受控头像与限额，`PATCH /me/profile` 改昵称/头像；昵称过 D-B 清洗器 |
 | ME-02 | 居民管理，展示 `n/10`、当前居民与已离开历史 | P0 | 已实现 `GET /worlds/home/residents` |
 | ME-03/04 | 生成邀请码；展示码、绝对到期、剩余时间、复制分享与作废 | P0 | 已实现 `POST/GET/DELETE /world/invites` |
 | ME-05 | 「穿越到好朋友的平行世界」兑换入口 | P0 | 已实现 `POST /visits/redeem` |
-| ME-06/07 | 通知、隐私、协议、账号安全、退出；正式版提供注销与数据删除 | P0 | 注销/数据删除**未提供 App 端路由** |
+| ME-06/07 | 通知、隐私、协议、账号安全、退出；正式版提供注销与数据删除 | P0 | 已实现（S6）：`GET/POST/DELETE /me/account/deletion`，7 天冷静期内可自助撤销。**服务端只记录意图不自动删数据**，到期转 `due` 由运营按法务口径执行（见 §11.2-10）|
 | ME-08 | capability 未开或版本不兼容时默认隐藏入口，不产生本地假成功 | P0 发布门 | 依赖 CAP-001 |
 | ME-09 | 分开展示 pending / active / 只读历史及各自到期时间 | P0 | 已实现 `GET /visits` |
-| ME-10 | 通知默认克制，可选择世界的安静程度 | P1 | 通知已实现；偏好开关未做 |
+| ME-10 | 通知默认克制，可选择世界的安静程度 | P1 | 已实现（S6）：`GET/PATCH /notifications/preferences`；`quiet` 压制**将来**的全部 AI 主动通知，已入箱的不回收 |
 | ME-11 | 主人可提前结束来访，访客可提前离开 | P0 | 已实现 `/revoke`、`/leave` |
 | ME-12 | 只能由已登录用户兑换，禁止自邀与重复兑换 | P0 | 已实现 |
 | ME-13/14 | 信箱入口；仅在有未处理来信时克制提示 | P0/P1 | 已实现 `/mailbox/*` |
@@ -505,4 +505,4 @@ initial_residents_confirmed → tabs_entered → first_ai_chat_started → first
 7. 主人是否保留对居民动态的私下回应/收藏。
 8. 主人是否需要一次性提前结束全部 active visit。
 9. 真人会话服务端副本的用户侧删除权与举报证据保留策略。
-10. 账号注销与数据删除的 App 端路由与法务口径（ME-07 正式发布版必需）。
+10. 账号注销**到期后**的实际数据清除范围、执行方与留存期的法务口径（App 端路由已在 S6 交付；服务端刻意停在 `due` 状态不自动清除）。

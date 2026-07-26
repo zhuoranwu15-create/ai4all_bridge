@@ -28,6 +28,7 @@ from app.products.zhaoxi.infrastructure.app_inbox import (
     AppInboxAdapter,
     AppInboxIntent,
     HumanAppInboxIntent,
+    app_inbox_quiet_for_account,
 )
 from app.products.zhaoxi.proactive.delivery.policy import (
     POLICY_VERSION,
@@ -379,6 +380,16 @@ def dispatch_proactive_text(
     if channel == CHANNEL_APP and bool(
         getattr(settings, "companion_world_app_inbox_enabled", False)
     ):
+        # 安静模式（ME-10）在建 outbound 行**之前**拦截：这是用户的显式选择，属正常
+        # 业务终态，必须落 cancelled 而不是走 deliver 抛错后的 failed，否则运营看到的
+        # 失败率会被用户偏好污染。
+        if app_inbox_quiet_for_account(account_id):
+            return {
+                "status": "cancelled",
+                "error": "app_inbox_quiet_hours_preference",
+                "account_id": account_id,
+                "channel": channel,
+            }
         category = normalize_outbound_category(
             source=source, product_category=product_category
         )

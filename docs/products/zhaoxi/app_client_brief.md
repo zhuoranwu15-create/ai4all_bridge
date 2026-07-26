@@ -99,6 +99,17 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 [`app_api_handoff.md`](app_api_handoff.md) §6–§8。家园 Feed 的 AI 内容只在
 早 07:00–11:00、晚 18:00–23:00 窗口生成，窗口外无新内容属正常。
 
+## 6.1 「我的」Tab（2026-07-26 新增）
+
+- Profile：`GET /me/profile-options` 拿受控头像表与昵称限额（**不要硬编码枚举**），
+  `PATCH /me/profile` 改昵称/头像。省略字段 = 本次不改，不是清空；全省略 → 422。
+  昵称过内容审查，可能返回 `content_rejected`(422) 或 `content_review_unavailable`(503，可重试)。
+- 注销：`GET/POST/DELETE /me/account/deletion`，7 天冷静期内可自助撤销，期间账号照常可用。
+  重复 POST 幂等回放原申请且不刷新到期时间，客户端可放心重试。
+- 通知偏好：`GET/PATCH /notifications/preferences`，`standard` / `quiet`。`quiet` 只压制
+  将来的 AI 主动通知，**已在箱内的不回收**，切回来即恢复。
+- 字段与错误码全表见 [`app_api_handoff.md`](app_api_handoff.md) §3.6。
+
 ## 7. 已知约束
 
 - `/v1` 客户端 API 只由中心节点 aliyun1 提供；aliyun2 只处理微信入站。
@@ -113,3 +124,5 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 3. 用**新手机号**验证 `account == null` → bootstrap → confirm → turn 全流程。
 4. 用**已有微信账号的手机号**验证 `account != null` → `/chat/turn` 全流程。
 5. 断网重发验证幂等；并发发送验证 409；连发验证 429。
+6. 「我的」Tab：改昵称/头像 → `/me` 回读一致；提交注销 → 重复提交幂等 → 撤销 → 404；
+   开 `quiet` 后确认新通知不再进箱、老通知仍在。
