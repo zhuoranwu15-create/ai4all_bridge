@@ -70,6 +70,7 @@ __all__ = [
     'get_or_create_personal_referral_code_for_user',
     'get_or_create_session',
     'get_platform_user',
+    'update_platform_user_profile',
     'get_platform_user_by_phone',
     'get_platform_user_id_for_account',
     'get_wallet_balance_shell_micros',
@@ -151,7 +152,48 @@ def get_platform_user(*, platform_user_id: str) -> Optional[Dict[str, Any]]:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, phone, display_name, status, created_at, updated_at
+            SELECT id, phone, display_name, avatar_key, status, created_at, updated_at
+            FROM platform_users
+            WHERE id = ?
+            """,
+            (platform_user_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def update_platform_user_profile(
+    *,
+    platform_user_id: str,
+    display_name: Optional[str] = None,
+    avatar_key: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """按需更新真人昵称/头像（ME-01），返回更新后的行；用户不存在返回 None。
+
+    只写显式传入的字段：``None`` 表示「本次不改」，而不是「清空」。清空语义 App 侧
+    不提供——昵称与头像都可以为空字符串以外的合法值或维持原值。调用方必须已完成
+    受控取值校验与文本清洗，本函数不做业务校验。
+    """
+    assignments: List[str] = []
+    params: List[Any] = []
+    if display_name is not None:
+        assignments.append("display_name = ?")
+        params.append(display_name)
+    if avatar_key is not None:
+        assignments.append("avatar_key = ?")
+        params.append(avatar_key)
+    with _tx(None) as tx:
+        if assignments:
+            assignments.append(
+                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+            )
+            params.append(platform_user_id)
+            tx.execute(
+                f"UPDATE platform_users SET {', '.join(assignments)} WHERE id = ?",
+                tuple(params),
+            )
+        row = tx.execute(
+            """
+            SELECT id, phone, display_name, avatar_key, status, created_at, updated_at
             FROM platform_users
             WHERE id = ?
             """,

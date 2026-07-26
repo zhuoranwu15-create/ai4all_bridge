@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""把存量 active owner bindings 加性映射为 legacy residents（可断点、可 dry-run）。"""
+"""把存量 active owner bindings 加性映射为 legacy residents（可断点、可 dry-run）。
+
+**已不再用于常规上线（2026-07-26，产品决策 D-A）**：微信老用户现在由
+``CompanionWorldService.bootstrap_home`` 在运行时幂等带入既有角色，并照常进入选择角色页。
+本脚本会把世界直接标成 ``confirmed``，等于替用户跳过选择页 —— 与 D-A 冲突。
+保留它只为批量盘点与 ``--dry-run`` 对账；对未初始化的用户执行写入前必须先确认产品口径。
+"""
 import argparse
 import json
 import sys

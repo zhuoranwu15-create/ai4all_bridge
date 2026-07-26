@@ -18,7 +18,11 @@ from app.db._core import (
     _migration_0033_companion_world_m3_content,
     _migration_0034_companion_world_lifecycle_mailbox,
     _migration_0035_companion_world_visit_human_chat,
-    _migration_0046_billing_idempotency_contract,
+    _migration_0047_legacy_template_display_name,
+    _migration_0048_companion_world_resident_drafts,
+    _migration_0049_companion_world_naming,
+    _migration_0050_ai_conversation_read_cursor,
+    _migration_0051_app_me_tab,
 )
 
 _P1_TABLES = (
@@ -72,14 +76,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        46,
-        _migration_0046_billing_idempotency_contract,
+        51,
+        _migration_0051_app_me_tab,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 46
+        assert int(version) == 51
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -384,3 +388,136 @@ def test_concurrent_l3_append_no_overwrite(fresh_db):
     a = sum(1 for r in rows if r["source_account_id"] == "acc-A")
     b = sum(1 for r in rows if r["source_account_id"] == "acc-B")
     assert a == per and b == per
+
+
+def test_m0048_resident_drafts_schema_and_idempotency(fresh_db):
+    """m0048：草稿表可用、结构化列已加，且重复执行不重复建表/加列。"""
+    with db.connect() as conn:
+        conn.execute("SELECT 1 FROM resident_drafts WHERE 1 = 0").fetchall()
+        conn.execute(
+            "SELECT persona_key, long_summary, relationship_type, personality_traits_json "
+            "FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+        _migration_0048_companion_world_resident_drafts(conn)
+        _migration_0048_companion_world_resident_drafts(conn)
+        conn.execute("SELECT 1 FROM resident_drafts WHERE 1 = 0").fetchall()
+
+
+def test_resident_draft_token_is_unique_and_owner_scoped(fresh_db):
+    """draft_token 全局唯一；同一真人的 client_request_id 唯一以承载幂等。"""
+    pu = _pu("19911110048")
+    other = _pu("19911110049")
+    db.insert_resident_draft(
+        platform_user_id=pu,
+        draft_token="tok-a",
+        name="草稿甲",
+        avatar_key="linxiaoman",
+        relationship_type="friend",
+        relationship_label=None,
+        personality_traits_json='["steady"]',
+        style_note=None,
+        normalized_summary="摘要",
+        persona_seed_json='{"SOUL.md": "x", "IDENTITY.md": "y"}',
+        safety_json=None,
+        expires_at="2099-01-01 00:00:00",
+    )
+    with pytest.raises(IntegrityError):
+        db.insert_resident_draft(
+            platform_user_id=other,
+            draft_token="tok-a",
+            name="草稿乙",
+            avatar_key="linxiaoman",
+            relationship_type="friend",
+            relationship_label=None,
+            personality_traits_json='["steady"]',
+            style_note=None,
+            normalized_summary="摘要",
+            persona_seed_json='{"SOUL.md": "x", "IDENTITY.md": "y"}',
+            safety_json=None,
+            expires_at="2099-01-01 00:00:00",
+        )
+    # 跨真人读取一律 not found：草稿按 owner 隔离。
+    assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=other) is None
+    assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=pu) is not None
+
+
+def test_m0049_naming_columns_and_idempotency(fresh_db):
+    """m0049：名池与候选选名列已加，且重复执行不重复加列。"""
+    with db.connect() as conn:
+        conn.execute(
+            "SELECT name_pool_json, name_pool_version FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT suggested_display_name, naming_version FROM universe_residents WHERE 1 = 0"
+        ).fetchall()
+        _migration_0049_companion_world_naming(conn)
+        _migration_0049_companion_world_naming(conn)
+        conn.execute(
+            "SELECT name_pool_json, name_pool_version FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_m0050_read_cursor_column_and_idempotency(fresh_db):
+    """m0050：read cursor 列已加、既有会话默认 NULL（= 一条都没读过），且重复执行不重复加列。"""
+    with db.connect() as conn:
+        conn.execute(
+            "SELECT last_read_message_id FROM ai_conversations WHERE 1 = 0"
+        ).fetchall()
+        _migration_0050_ai_conversation_read_cursor(conn)
+        _migration_0050_ai_conversation_read_cursor(conn)
+        conn.execute(
+            "SELECT last_read_message_id FROM ai_conversations WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_m0051_me_tab_schema_and_idempotency(fresh_db):
+    """m0051：Profile 列与两张「我的」表可查询，且重复执行不重复加列/建表。"""
+    with db.connect() as conn:
+        for statement in (
+            "SELECT avatar_key FROM platform_users WHERE 1 = 0",
+            "SELECT id, platform_user_id, app_id, status, reason_code, executed_at,"
+            " purge_stats_json FROM account_deletion_requests WHERE 1 = 0",
+            "SELECT platform_user_id, quiet_level FROM app_notification_preferences"
+            " WHERE 1 = 0",
+        ):
+            conn.execute(statement).fetchall()
+        _migration_0051_app_me_tab(conn)
+        _migration_0051_app_me_tab(conn)
+        for statement in (
+            "SELECT avatar_key FROM platform_users WHERE 1 = 0",
+            "SELECT id FROM account_deletion_requests WHERE 1 = 0",
+            "SELECT platform_user_id FROM app_notification_preferences WHERE 1 = 0",
+        ):
+            conn.execute(statement).fetchall()
+
+
+def test_candidate_naming_snapshot_is_written_once(fresh_db):
+    """选名只随 INSERT 落一次；同一候选再次 ensure 不会被新名字覆盖（NAME-001）。"""
+    pu = _pu("19911110050")
+    universe = db.get_or_create_home_universe(platform_user_id=pu)
+    template = db.create_character_template(
+        source_type="operations",
+        name="运营工作名",
+        persona_version="v1",
+        name_pool_json='["甲","乙","丙"]',
+        name_pool_version="np_v1",
+    )
+    first = db.get_or_create_candidate_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        suggested_display_name="甲",
+        naming_version="np_v1",
+    )
+    second = db.get_or_create_candidate_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        suggested_display_name="丙",
+        naming_version="np_v2",
+    )
+    assert first["id"] == second["id"]
+    assert second["suggested_display_name"] == "甲"
+    assert second["naming_version"] == "np_v1"

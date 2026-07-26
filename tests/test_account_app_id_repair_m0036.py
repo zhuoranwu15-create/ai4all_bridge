@@ -4,7 +4,15 @@ import pytest
 
 import app.db as db
 from app.db._backend import IntegrityError, is_postgres
-from app.db._core import _migration_0036_repair_account_app_id, migrate_db_through
+from app.db._core import (
+    _MIGRATIONS,
+    _migration_0036_repair_account_app_id,
+    migrate_db_through,
+)
+
+# 回放终点取当前 head，而不是写死版本号：SQLite 分支走 init_db()（必然重放到 head），
+# 写死的话每加一条迁移就假红一次。
+_HEAD_VERSION = _MIGRATIONS[-1][0]
 
 
 def _columns(conn, table: str) -> set[str]:
@@ -43,7 +51,9 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
 
     if is_postgres():
         # 常规 PG init_db 已禁止既有库跨 Phase 1 contract；迁移回放测试显式走受控 API。
-        migrate_db_through(target_version=46, expected_current_version=35)
+        migrate_db_through(
+            target_version=_HEAD_VERSION, expected_current_version=35
+        )
     else:
         db.init_db()
 
@@ -63,7 +73,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         ).fetchone()["channel"] == "native"
         assert conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
-        ).fetchone()["version"] == 46
+        ).fetchone()["version"] == _HEAD_VERSION
         _migration_0036_repair_account_app_id(conn)
         _migration_0036_repair_account_app_id(conn)
 

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 from app.bootstrap.product_registry import (
     PRODUCTION_PRODUCT_REGISTRY,
@@ -58,6 +58,7 @@ __all__ = [
     'get_account_onboarding_state',
     'get_daily_usage',
     'get_duplicate_reply',
+    'get_duplicate_reply_record',
     'get_first_user_message_at',
     'get_latest_active_verification',
     'get_latest_closed_carryover_for_account',
@@ -95,6 +96,7 @@ __all__ = [
     'list_session_messages',
     'list_session_messages_before',
     'list_app_conversation_messages_before',
+    'summarize_app_conversations',
     'list_sessions',
     'list_sessions_for_account',
     'list_user_active_dates',
@@ -343,13 +345,20 @@ def insert_outbound_delivery_message(
     )
 
 
-def get_duplicate_reply(*, account_id: str, reply_to_message_id: Optional[str]) -> Optional[str]:
+def get_duplicate_reply_record(
+    *, account_id: str, reply_to_message_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """幂等命中时返回原持久化回复行（``content`` + ``message_id``）。
+
+    App 链路重放必须回放**同一条** ``message_id``，否则客户端会为同一次发送渲染出第二个气泡
+    （TURN-001）。``message_id`` 就是这行 outbound 消息落库时的 ``reply_message_id``。
+    """
     if not reply_to_message_id:
         return None
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT content FROM messages
+            SELECT content, message_id FROM messages
             WHERE account_id = ?
               AND reply_to_message_id = ?
               AND direction = 'outbound'
@@ -358,7 +367,15 @@ def get_duplicate_reply(*, account_id: str, reply_to_message_id: Optional[str]) 
             """,
             (account_id, reply_to_message_id),
         ).fetchone()
-        return str(row["content"]) if row else None
+        return dict(row) if row else None
+
+
+def get_duplicate_reply(*, account_id: str, reply_to_message_id: Optional[str]) -> Optional[str]:
+    """幂等命中的回复正文；只要正文的调用方（微信 turn 链路）继续用这个薄封装。"""
+    record = get_duplicate_reply_record(
+        account_id=account_id, reply_to_message_id=reply_to_message_id
+    )
+    return str(record["content"]) if record else None
 
 
 def list_recent_messages(*, session_id: int, limit: int) -> List[Dict[str, str]]:
@@ -985,6 +1002,81 @@ def list_app_conversation_messages_before(
             tuple(params),
         ).fetchall()
     return [dict(row) for row in reversed(rows)]
+
+
+def summarize_app_conversations(
+    *,
+    read_cursors: Mapping[str, Optional[int]],
+    conn: Optional[Connection] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """批量汇总一页会话的「最近一条 + 未读数」，用两条 SQL 取代逐会话查询（CONV-001）。
+
+    ``read_cursors`` 是 ``runtime_account_id -> last_read_message_id``（``None`` = 一条都没读过）。
+    返回 ``{runtime_account_id: {last_message_id, last_preview, last_message_at, unread}}``；
+    该 account 在 App scope 下没有任何消息时不出现在结果里，由调用方按「未聊过」处理。
+
+    session scope 与 :func:`list_app_conversation_messages_before` 完全一致：只认
+    ``__app_active__`` 当前段与 ``__app_active__:<session_id>`` 归档段，微信/Web 的 session
+    不参与预览与未读；message 与 session 的 account_id 同时约束，杜绝跨账号读取。
+    """
+    account_ids = [str(account_id) for account_id in read_cursors]
+    if not account_ids:
+        return {}
+    prefix = f"{APP_ACTIVE_SESSION_KEY}:"
+    scope_clause = """
+        JOIN sessions s ON s.id = m.session_id
+        WHERE s.account_id = m.account_id
+          AND (s.session_key = ? OR substr(s.session_key, 1, ?) = ?)
+          AND m.content IS NOT NULL AND m.content != ''
+    """
+    scope_params: List[Any] = [APP_ACTIVE_SESSION_KEY, len(prefix), prefix]
+    placeholders = ",".join("?" for _ in account_ids)
+    summary: Dict[str, Dict[str, Any]] = {}
+    with _tx(conn) as tx:
+        latest_rows = tx.execute(
+            f"""
+            SELECT m.account_id, m.id, m.content, m.created_at
+            FROM messages m
+            JOIN (
+                SELECT m.account_id AS account_id, MAX(m.id) AS id
+                FROM messages m
+                {scope_clause}
+                  AND m.role IN ('user', 'assistant')
+                  AND m.account_id IN ({placeholders})
+                GROUP BY m.account_id
+            ) latest ON latest.id = m.id
+            """,
+            tuple([*scope_params, *account_ids]),
+        ).fetchall()
+        for row in latest_rows:
+            summary[str(row["account_id"])] = {
+                "last_message_id": int(row["id"]),
+                "last_preview": row["content"],
+                "last_message_at": row["created_at"],
+                "unread": 0,
+            }
+        # 每个会话的未读起点不同，用 (account_id, cursor) 成对条件一次问完；一页最多 100 组。
+        cursor_clauses: List[str] = []
+        cursor_params: List[Any] = []
+        for account_id in account_ids:
+            cursor_clauses.append("(m.account_id = ? AND m.id > ?)")
+            cursor_params.extend([account_id, int(read_cursors[account_id] or 0)])
+        unread_rows = tx.execute(
+            f"""
+            SELECT m.account_id AS account_id, COUNT(*) AS unread
+            FROM messages m
+            {scope_clause}
+              AND m.role = 'assistant'
+              AND ({' OR '.join(cursor_clauses)})
+            GROUP BY m.account_id
+            """,
+            tuple([*scope_params, *cursor_params]),
+        ).fetchall()
+    for row in unread_rows:
+        entry = summary.get(str(row["account_id"]))
+        if entry is not None:
+            entry["unread"] = int(row["unread"])
+    return summary
 
 
 def list_recent_message_raw(*, limit: int = 20) -> List[Dict[str, Any]]:

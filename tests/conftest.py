@@ -1,4 +1,5 @@
 import os
+import shutil
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -28,10 +29,25 @@ _PG_MODE = os.environ.get("AI4ALL_TEST_DB", "").strip().lower() in (
     "pg", "postgres", "postgresql",
 )
 
+def _resolve_pg_ctl() -> "str | None":
+    """定位 ``pg_ctl``；返回 None 表示交回 pytest-postgresql 的默认查找逻辑。
+
+    pytest-postgresql 默认只认 Debian 布局 ``/usr/lib/postgresql/<ver>/bin/pg_ctl``，
+    路径不存在时退回 ``pg_config --bindir``。RPM 系（阿里云 Linux/RHEL）把 ``pg_ctl``
+    直接装进 ``/usr/bin``，而 ``pg_config`` 属于 ``*-devel`` 包，服务器上通常没装，
+    于是整档在 fixture setup 阶段全量 error。这里优先用 PATH 上真实存在的 pg_ctl，
+    并允许 ``AI4ALL_TEST_PG_CTL`` 显式指定（多版本共存时用）。
+    """
+    explicit = os.environ.get("AI4ALL_TEST_PG_CTL", "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("pg_ctl")
+
+
 if _PG_MODE:  # 仅 PG 档注册，SQLite 档完全不引入 pytest-postgresql
     from pytest_postgresql import factories as _pg_factories
 
-    postgresql_proc = _pg_factories.postgresql_proc()
+    postgresql_proc = _pg_factories.postgresql_proc(executable=_resolve_pg_ctl())
     postgresql_db = _pg_factories.postgresql("postgresql_proc")
 
 
@@ -83,6 +99,27 @@ def _dsn_from_conn(conn) -> str:
         # 本地 unix socket：host 放进 query，URL 主体留空 host
         return f"postgresql://{info.user}@/{info.dbname}?host={info.host}&port={info.port}"
     return f"postgresql://{info.user}@{info.host}:{info.port}/{info.dbname}"
+
+
+@pytest.fixture(autouse=True)
+def _stub_text_sanitizer_llm(monkeypatch):
+    """默认把自由文本清洗器（D-B）的 LLM 调用短路为「原样放行」。
+
+    清洗器按产品决策 fail closed：LLM 不可用即拒绝放行。测试环境没有 provider，若不桩住，
+    每个碰到自建角色/称呼的用例都会退化成 503，掩盖真正要断言的行为。
+    需要验证改写/硬拒绝/fail-closed 的用例自行 monkeypatch 覆盖本桩。
+    """
+    def _pass_through(messages, **_kwargs):
+        import json as _json
+
+        payload = _json.loads(messages[-1]["content"])
+        return _json.dumps(
+            {"verdict": "pass", "sanitized_text": payload["text"], "categories": []}
+        )
+
+    monkeypatch.setattr(
+        "app.platform.moderation.text_sanitizer.generate_completion", _pass_through
+    )
 
 
 @pytest.fixture

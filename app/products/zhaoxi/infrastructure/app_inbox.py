@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from app.config import settings
+from app.products.zhaoxi.infrastructure.persistence import me_settings
 from app.products.zhaoxi.infrastructure.persistence import notifications as notification_db
 from app.products.zhaoxi.domain.companion_world import AppNotificationRecord
 from app.products.zhaoxi.domain.companion_world.proactive import (
@@ -209,11 +210,38 @@ class SqlAppNotificationRepository:
         return (_notification(row) if row else None), cancelled
 
 
+def _resident_notifications_allowed(platform_user_id: str) -> bool:
+    """安静模式（ME-10）下不投递任何 AI 主动通知。
+
+    App inbox 里的通知**全部**是 AI 侧主动发起的（居民义务 + 真人级拉活），没有一条属于
+    PRD §3.3 说的「必须提示的安全/邀请/账号事件」，因此安静模式统一压制，不做分类豁免。
+    """
+    prefs = me_settings.get_notification_preferences(platform_user_id=platform_user_id)
+    return str(prefs.get("quiet_level")) != "quiet"
+
+
+def app_inbox_quiet_for_account(runtime_account_id: str) -> bool:
+    """按 runtime account 反查主人是否选了安静模式。
+
+    解析不到 owner 时返回 False（不安静）——「这个账号根本不该入箱」是 ``deliver`` 的
+    职责，本函数只回答偏好问题，不替它做越权判断。
+    """
+    scope = world_db.resolve_resident_memory_scope(
+        runtime_account_id=runtime_account_id
+    )
+    if scope is None:
+        return False
+    world = world_db.get_universe(universe_id=str(scope["universe_id"]))
+    if world is None:
+        return False
+    return not _resident_notifications_allowed(str(world["owner_platform_user_id"]))
+
+
 class AppInboxAdapter:
     """把 post-policy per-resident intent 解析到 owner world 后写 visible inbox。"""
 
     def can_deliver(self, runtime_account_id: str) -> bool:
-        """仅 default-off flag 开启且账号映射 active confirmed world 时可入箱。"""
+        """仅 flag 开启、账号映射 active confirmed world、且主人未选安静模式时可入箱。"""
         if not bool(getattr(settings, "companion_world_app_inbox_enabled", False)):
             return False
         scope = world_db.resolve_resident_memory_scope(
@@ -222,11 +250,13 @@ class AppInboxAdapter:
         if scope is None or scope.get("status") != "active":
             return False
         world = world_db.get_universe(universe_id=str(scope["universe_id"]))
-        return bool(
+        if not (
             world
             and world.get("status") == "active"
             and world.get("onboarding_state") == "confirmed"
-        )
+        ):
+            return False
+        return _resident_notifications_allowed(str(world["owner_platform_user_id"]))
 
     def deliver(
         self, intent: AppInboxIntent, *, now: datetime

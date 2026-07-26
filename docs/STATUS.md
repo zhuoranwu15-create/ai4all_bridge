@@ -1,6 +1,6 @@
 # 项目现状与近期方向
 
-更新时间：2026-07-25
+更新时间：2026-07-26
 
 > 本文是**持续更新**的项目状态入口，回答"我们现在在哪、当前重点是什么、还剩哪些大块"。它取代了原 `phase1/next_dev_steps.md`，并承载原 Phase 1 收尾总结里"还剩什么"的活的部分。
 >
@@ -22,6 +22,7 @@
    （central/node）已上线，继续硬化部署与观测。
 2. **新功能补充** — 拉新送贝壳闭环已落地，继续补运营复核体验；权益扣减收口、图片理解转正等（见 §3）。
 3. **效果调优** — 主动消息/内容邀请/陪伴跟进在真实数据上调 prompt、阈值与风控；陪伴质量回归集；默认 prompt 与人设。
+4. **朝夕相伴 App 客户端 M1 服务端支持** — Companion World 3.0 后端已全量上线，客户端正式版正在做 M0→M1。产品口径见 [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)；服务端需求评审与 S1–S6 批次见 [M1 服务端计划](plans/products/zhaoxi/companion_world_app_m1_server_plan.md)。**S1（发布门底座 + D-A 老用户带入）、S2（结构化自建角色 + D-B 自由文本安全收口）、S3（NAME-001 运营名池确定性选名快照 + CAND-001 候选稳定身份）、S4（会话 DTO 时间/可发送性 + read cursor 未读 + turn 响应形状与幂等 message_id 冻结）、S5（CONTRACT-001 OpenAPI snapshot 契约门禁）与 S6（「我的」Tab 收尾：ME-01 可编辑 Profile、ME-06/07 账号注销、ME-10 通知安静模式）已于 2026-07-26 全部交付**，M1 服务端支持开发完成、进入客户端联调 ready 状态，待合入 main（受保护分支，需 PR + 双档 CI）。S6 的两项待拍板已于 2026-07-26 落定（见计划 §4.3）：注销改为**立即清除聊天记录与相关记忆**（冷静期设计已同批重做，只保留 `POST /me/account/deletion`），`voice_input` **打开**——后者无代码缺口，需运营在生产 `.env` 配 `ASR_API_KEY` 后重启，是本批次唯一未完成的落地动作。客户端机器可读契约为仓库提交的 [`openapi/app_v1.json`](products/zhaoxi/openapi/app_v1.json)。
 
 ## 3. 已知大缺口（按建议起点排序）
 

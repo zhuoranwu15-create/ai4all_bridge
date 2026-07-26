@@ -61,7 +61,7 @@ flowchart TB
 
     subgraph state["状态与外部依赖"]
         pg["PostgreSQL<br/>生产中心 source of truth / 并发权威"]
-        sqlite["SQLite<br/>开发、测试默认 + 回滚通道"]
+        sqlite["SQLite<br/>开发、测试默认（非生产退路）"]
         systemFiles["data/system<br/>系统级 context / 配置视图"]
         channelState["接入节点本地状态<br/>微信凭据 / context token"]
         providers["LLM · Search · SMS/Captcha · WeChat iLink"]

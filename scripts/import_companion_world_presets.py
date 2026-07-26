@@ -3,16 +3,26 @@
 
 manifest 不包含代码内置人设，必须显式提供四条 rank 1..4。已存在 template_id 的已发布
 字段必须逐项相同；内容变更须换新 template_id，脚本会在同一事务退休旧目录并插入新版本。
+
+**运营元数据是可原地更新的例外**（m0049 / NAME-001、CAND-001）：``name_pool``、
+``name_pool_version``、``long_summary`` 不参与人设内容的不可变判定，可以对已发布模板
+补配和调整——生产四模板早已上线、id 不能换，否则名池永远配不上去。``persona_key``
+介于两者之间：允许从空补上，但一旦非空就不许改值（改了会破坏跨模板版本的身份连续性）。
 """
 import argparse
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.products.zhaoxi.domain.companion_world.naming import (  # noqa: E402
+    NamePoolError,
+    normalize_name_pool,
+)
 
 _TEMPLATE_ID_RE = re.compile(r"^tmpl_[A-Za-z0-9_-]{1,120}$")
 
@@ -29,6 +39,11 @@ class PresetRecord:
     tags: Tuple[str, str, str]
     persona_seed_json: str
     persona_version: str
+    # 以下为可选运营元数据；未提供时保持既有值不变（不会把已配好的名池清空）。
+    persona_key: Optional[str] = None
+    long_summary: Optional[str] = None
+    name_pool: Tuple[str, ...] = ()
+    name_pool_version: Optional[str] = None
 
 
 @dataclass
@@ -41,6 +56,8 @@ class ImportReport:
     retire_ids: List[str]
     errors: List[str]
     catalog_ready: bool = False
+    # 已发布模板上被原地更新的运营元数据（名池/长介绍/首次补 persona_key）。
+    update_ids: List[str] = field(default_factory=list)
 
 
 def _persona_json(value: Any) -> str:
@@ -58,6 +75,19 @@ def _persona_json(value: Any) -> str:
     if not all(isinstance(item, str) and item.strip() for item in (soul, identity)):
         raise ValueError("persona_seed_json requires non-empty SOUL.md and IDENTITY.md")
     return json.dumps(parsed, ensure_ascii=False, sort_keys=True)
+
+
+def _name_pool(template_id: str, item: Dict[str, Any]) -> Tuple[str, ...]:
+    """读取并校验可选名池；校验规则单点落在领域层 ``normalize_name_pool``。"""
+    raw = item.get("name_pool")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"template {template_id}: name_pool must be a list")
+    try:
+        return normalize_name_pool(raw)
+    except NamePoolError as err:
+        raise ValueError(f"template {template_id}: {err}") from err
 
 
 def validate_manifest(payload: Any) -> Tuple[PresetRecord, ...]:
@@ -83,6 +113,14 @@ def validate_manifest(payload: Any) -> Tuple[PresetRecord, ...]:
         tags = tuple(str(tag).strip() for tag in tags_raw)
         if not name or not avatar_ref or not summary or not persona_version or not all(tags):
             raise ValueError(f"template {template_id} has incomplete metadata")
+        name_pool = _name_pool(template_id, item)
+        name_pool_version = str(item.get("name_pool_version") or "").strip() or None
+        # 名池与版本必须成对：只给名池会让「换名池必须换版本」失去着力点，
+        # 只给版本则是空引用。两者都不给 = 该模板暂不参与实例命名（naming_status=unavailable）。
+        if bool(name_pool) != bool(name_pool_version):
+            raise ValueError(
+                f"template {template_id}: name_pool and name_pool_version must be set together"
+            )
         records.append(
             PresetRecord(
                 template_id=template_id,
@@ -93,6 +131,10 @@ def validate_manifest(payload: Any) -> Tuple[PresetRecord, ...]:
                 tags=(tags[0], tags[1], tags[2]),
                 persona_seed_json=_persona_json(item.get("persona_seed_json")),
                 persona_version=persona_version,
+                persona_key=str(item.get("persona_key") or "").strip() or None,
+                long_summary=str(item.get("long_summary") or "").strip() or None,
+                name_pool=name_pool,
+                name_pool_version=name_pool_version,
             )
         )
     records.sort(key=lambda record: record.rank)
@@ -132,8 +174,27 @@ def _immutable_matches(row: dict, record: PresetRecord) -> bool:
     )
 
 
+def _operational_updates(row: dict, record: PresetRecord) -> Dict[str, Any]:
+    """算出已发布模板上需要原地更新的运营元数据；无差异返回空 dict。
+
+    manifest 未提供的字段一律不动——重放一份不含名池的老 manifest 不应把已配好的名池抹掉。
+    """
+    updates: Dict[str, Any] = {}
+    if record.persona_key and row.get("persona_key") != record.persona_key:
+        updates["persona_key"] = record.persona_key
+    if record.long_summary and row.get("long_summary") != record.long_summary:
+        updates["long_summary"] = record.long_summary
+    if record.name_pool:
+        desired_pool = json.dumps(list(record.name_pool), ensure_ascii=False)
+        if _canonical_json(row.get("name_pool_json"), None) != list(record.name_pool):
+            updates["name_pool_json"] = desired_pool
+        if row.get("name_pool_version") != record.name_pool_version:
+            updates["name_pool_version"] = record.name_pool_version
+    return updates
+
+
 def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> ImportReport:
-    """只读计算 create/keep/retire 与 immutable 冲突。"""
+    """只读计算 create/keep/update/retire 与 immutable 冲突。"""
     desired = {record.template_id: record for record in records}
     rows = conn.execute(
         "SELECT * FROM character_templates WHERE id IN (?,?,?,?)",
@@ -142,6 +203,7 @@ def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> I
     existing = {str(row["id"]): dict(row) for row in rows}
     create_ids: List[str] = []
     keep_ids: List[str] = []
+    update_ids: List[str] = []
     errors: List[str] = []
     for template_id, record in desired.items():
         row = existing.get(template_id)
@@ -151,8 +213,16 @@ def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> I
             errors.append(f"{template_id}: retired template_id cannot be reactivated")
         elif not _immutable_matches(row, record):
             errors.append(f"{template_id}: published template is immutable; use a new template_id")
+        elif (
+            record.persona_key
+            and row.get("persona_key")
+            and row["persona_key"] != record.persona_key
+        ):
+            errors.append(f"{template_id}: persona_key is immutable once assigned")
         else:
             keep_ids.append(template_id)
+            if _operational_updates(row, record):
+                update_ids.append(template_id)
     active_rows = conn.execute(
         """
         SELECT id FROM character_templates
@@ -167,6 +237,7 @@ def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> I
         keep_ids=keep_ids,
         retire_ids=retire_ids,
         errors=errors,
+        update_ids=update_ids,
     )
 
 
@@ -234,7 +305,32 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
                 persona_seed_json=record.persona_seed_json,
                 persona_version=record.persona_version,
                 initial_candidate_rank=record.rank,
+                persona_key=record.persona_key,
+                long_summary=record.long_summary,
+                name_pool_json=(
+                    json.dumps(list(record.name_pool), ensure_ascii=False)
+                    if record.name_pool
+                    else None
+                ),
+                name_pool_version=record.name_pool_version,
                 conn=conn,
+            )
+        for template_id in report.update_ids:
+            row = dict(
+                conn.execute(
+                    "SELECT * FROM character_templates WHERE id = ?", (template_id,)
+                ).fetchone()
+            )
+            updates = _operational_updates(row, by_id[template_id])
+            assignments = ", ".join(f"{column} = ?" for column in updates)
+            conn.execute(
+                f"""
+                UPDATE character_templates
+                SET {assignments},
+                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                WHERE id = ?
+                """,
+                (*updates.values(), template_id),
             )
         report.catalog_ready = _catalog_ready(conn)
         if not report.catalog_ready:

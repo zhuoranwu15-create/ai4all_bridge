@@ -76,7 +76,7 @@ def test_m0035_tables_idempotency_and_flags_default_off(fresh_db):
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-    assert int(version) == 46
+    assert int(version) == 51
     assert fresh_db.companion_world_visits_enabled is False
     assert fresh_db.companion_world_human_chat_enabled is False
 

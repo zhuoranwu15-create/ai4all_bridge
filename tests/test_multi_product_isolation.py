@@ -281,7 +281,7 @@ def test_m0045_final_contract_is_clean_idempotent_and_has_final_indexes(fresh_db
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
 
-    assert int(version) == 46
+    assert int(version) == 51
     assert nullable_app_columns == []
     assert {
         "ix_accounts_app_status",

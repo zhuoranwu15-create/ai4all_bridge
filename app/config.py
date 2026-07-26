@@ -329,6 +329,8 @@ class Settings(BaseSettings):
     # ===== 朝夕相伴 Companion World P1 =====
     # 默认关闭；只有四模板预检、存量 backfill 与支持 account:null 的客户端均就绪后才可开启。
     companion_world_p1_enabled: bool = False
+    # 自建角色受控头像的公网前缀；留空则下发相对路径（本地/测试）。生产填站点根域。
+    companion_world_asset_base_url: str = ""
     # 后台安全开关与 API/auth flag 正交：默认保持已交付行为，事故时可独立停 L3 或恢复旧 proactive。
     companion_world_l3_background_enabled: bool = True
     companion_world_proactive_safety_enabled: bool = True

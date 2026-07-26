@@ -43,6 +43,12 @@ class TemplateRecord:
     persona_version: str
     status: str
     initial_candidate_rank: Optional[int] = None
+    # m0048/m0049 运营元数据：``persona_key`` 跨模板版本稳定的人设身份（CAND-001），
+    # ``long_summary`` 角色预览页长介绍，``name_pool``/``name_pool_version`` 实例名池（NAME-001）。
+    persona_key: Optional[str] = None
+    long_summary: Optional[str] = None
+    name_pool: Tuple[str, ...] = ()
+    name_pool_version: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,9 @@ class CandidateRecord:
     status: str
     runtime_account_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    # 首次快照候选时定下的实例名与所用名池版本（NAME-001）；之后只读回，不重算。
+    suggested_display_name: Optional[str] = None
+    naming_version: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +103,33 @@ class TemplateDraft:
     summary: Optional[str] = None
     tags: Tuple[str, ...] = ()
     persona_version: str = "v1"
+    relationship_type: Optional[str] = None
+    personality_traits: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ResidentDraftRecord:
+    """一条已清洗、已渲染的自建角色草稿。
+
+    ``persona_seed_json`` 在 preview 阶段就已定稿，消费时原样落模板 —— 这是「所见即所存」
+    的落点：预览与最终人设不可能不一致。
+    """
+
+    id: str
+    platform_user_id: str
+    draft_token: str
+    name: str
+    avatar_key: str
+    relationship_type: str
+    relationship_label: Optional[str]
+    personality_traits: Tuple[str, ...]
+    style_note: Optional[str]
+    normalized_summary: str
+    persona_seed_json: str
+    status: str
+    client_request_id: Optional[str]
+    resident_id: Optional[str]
+    expires_at: str
 
 
 @dataclass(frozen=True)
@@ -110,7 +146,12 @@ class ConversationTarget:
 
 @dataclass(frozen=True)
 class ConversationSummary:
-    """conversation 列表公开模型；P1 unread 恒为 0。"""
+    """conversation 列表公开模型。
+
+    ``sort_time`` 是服务端排序与分页 cursor 的锚（= 会话 ``updated_at``），``last_message_at``
+    是最近一条可见消息的时间、没聊过为 ``None``——两者刻意分开：未聊过的居民必须稳定排在
+    末尾且不伪造消息时间（CONV-001 / PRD CONV-05、CONV-06）。
+    """
 
     conversation_id: str
     resident_id: str
@@ -119,6 +160,26 @@ class ConversationSummary:
     resident_status: str
     state: str
     last_preview: Optional[str]
+    unread: int
+    last_message_at: Optional[str] = None
+    sort_time: Optional[str] = None
+
+    @property
+    def can_send(self) -> bool:
+        """能否发消息；只读会话由 resident offline 触发，与容量/限流无关。"""
+        return self.state == "active"
+
+    @property
+    def read_only_reason(self) -> Optional[str]:
+        """只读原因码；可发送时为 ``None``，客户端按码而非文案分支。"""
+        return None if self.can_send else "resident_offline"
+
+
+@dataclass(frozen=True)
+class ConversationReadState:
+    """标记已读后的会话状态（CONV-002）。"""
+
+    last_read_message_id: Optional[int]
     unread: int
 
 
@@ -136,10 +197,16 @@ class ConversationMessage:
 
 @dataclass(frozen=True)
 class BootstrapResult:
-    """幂等 bootstrap 的领域返回。"""
+    """幂等 bootstrap 的领域返回。
+
+    ``residents`` 是本世界已 active 的居民。selecting 阶段它通常只在微信老用户身上非空
+    （带入的 legacy 居民），用于让客户端在选择角色页同时展示"已经在你世界里"的角色；
+    legacy 居民被 ``list_candidates`` 按 ``origin <> 'legacy'`` 过滤掉，不会出现在候选里。
+    """
 
     world: WorldRecord
     candidates: Tuple[CandidateRecord, ...]
+    residents: Tuple[ResidentRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -363,8 +430,47 @@ class WorldRepository(Protocol):
         self, owner_platform_user_id: str, draft: TemplateDraft
     ) -> TemplateRecord: ...
 
+    def create_resident_draft(
+        self,
+        platform_user_id: str,
+        *,
+        draft_token: str,
+        name: str,
+        avatar_key: str,
+        relationship_type: str,
+        relationship_label: Optional[str],
+        personality_traits: Sequence[str],
+        style_note: Optional[str],
+        normalized_summary: str,
+        persona_seed_json: str,
+        safety_json: Optional[str],
+        expires_at: str,
+    ) -> ResidentDraftRecord: ...
+
+    def get_resident_draft(
+        self, draft_token: str, platform_user_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def get_resident_draft_by_request(
+        self, platform_user_id: str, client_request_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def consume_resident_draft(
+        self,
+        draft_id: str,
+        platform_user_id: str,
+        client_request_id: str,
+        resident_id: str,
+    ) -> bool: ...
+
     def ensure_candidate(
-        self, universe_id: str, template: TemplateRecord, origin: str
+        self,
+        universe_id: str,
+        template: TemplateRecord,
+        origin: str,
+        *,
+        suggested_display_name: Optional[str] = None,
+        naming_version: Optional[str] = None,
     ) -> CandidateRecord: ...
 
     def list_candidates(
@@ -406,6 +512,13 @@ class WorldRepository(Protocol):
         limit: int,
     ) -> Sequence[ConversationMessage]: ...
 
+    def advance_conversation_read_cursor(
+        self,
+        conversation_id: str,
+        platform_user_id: str,
+        last_message_id: int,
+    ) -> Optional[ConversationReadState]: ...
+
     # C2 backfill 使用的原语；仍遵循同一 transaction()/L1 锁序。
     def list_active_legacy_account_ids(self, platform_user_id: str) -> Sequence[str]: ...
 
@@ -414,5 +527,10 @@ class WorldRepository(Protocol):
     ) -> ResidentRecord: ...
 
     def mark_legacy_world(
+        self, universe_id: str, legacy_primary_account_id: str
+    ) -> WorldRecord: ...
+
+    # D-A：只落 legacy primary 锚，不动 onboarding_state（老用户照走选择角色页）。
+    def mark_legacy_primary(
         self, universe_id: str, legacy_primary_account_id: str
     ) -> WorldRecord: ...

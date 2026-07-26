@@ -4065,6 +4065,146 @@ def _migration_0046_billing_idempotency_contract(conn: Connection) -> None:
     )
 
 
+def _migration_0047_legacy_template_display_name(conn: Connection) -> None:
+    """把 legacy 哨兵模板的占位名换成面向用户的默认展示名。
+
+    legacy 居民的展示名走 ``COALESCE(profiles.display_name, character_templates.name)``。
+    微信侧从未起过名的账号会回落到哨兵串 ``'legacy'`` 并直接暴露到 App 界面。这里只在
+    模板名仍是原始哨兵值时改写，运营手工改过的名字不覆盖。
+    """
+    conn.execute(
+        """
+        UPDATE character_templates
+        SET name = ?
+        WHERE id = 'tmpl_legacy' AND name = 'legacy'
+        """,
+        ("来自微信的Bot",),
+    )
+
+
+def _migration_0048_companion_world_resident_drafts(conn: Connection) -> None:
+    """结构化自建角色（CUSTOM-001）+ 两步式草稿（SEC-001/D-B）+ 幂等键（IDEM-001）。
+
+    ``character_templates`` 加 4 个可空列（``persona_key`` 跨模板版本稳定的人设身份、
+    ``long_summary`` 运营长介绍、``relationship_type`` / ``personality_traits_json``
+    结构化设定）；新增 ``resident_drafts`` 承载 preview → 消费的短期草稿，行内存的是
+    **已清洗** 文本与已渲染的 persona seed，保证「所见即所存」。
+
+    纯加列 + 新表，无回填、无锁表风险；两后端均幂等。
+    """
+    _ensure_column(conn, "character_templates", "persona_key", "TEXT")
+    _ensure_column(conn, "character_templates", "long_summary", "TEXT")
+    _ensure_column(conn, "character_templates", "relationship_type", "TEXT")
+    _ensure_column(conn, "character_templates", "personality_traits_json", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS resident_drafts (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,          -- 草稿绑定真人，跨用户消费一律 not_found
+            draft_token TEXT NOT NULL UNIQUE,        -- 不可枚举、单次消费
+            name TEXT NOT NULL,                      -- 已过清洗器
+            avatar_key TEXT NOT NULL,                -- 受控取值
+            relationship_type TEXT NOT NULL,         -- 受控取值
+            relationship_label TEXT,                 -- custom 关系的自由文本，已过清洗器
+            personality_traits_json TEXT NOT NULL,   -- 受控取值数组
+            style_note TEXT,                         -- 自由文本，已过清洗器
+            normalized_summary TEXT NOT NULL,        -- 预览摘要，与持久化同一段渲染代码产出
+            persona_seed_json TEXT NOT NULL,         -- 服务端模板化渲染的 SOUL/IDENTITY
+            safety_json TEXT,                        -- 清洗器判定留痕（verdict/风险分类）
+            status TEXT NOT NULL DEFAULT 'open',     -- open | consumed
+            client_request_id TEXT,                  -- 消费时写入，承载 IDEM-001
+            resident_id TEXT,                        -- 消费结果，幂等重放直接回放
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_resident_drafts_owner
+            ON resident_drafts(platform_user_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_drafts_client_request
+            ON resident_drafts(platform_user_id, client_request_id)
+            WHERE client_request_id IS NOT NULL;
+        """
+    )
+
+
+def _migration_0049_companion_world_naming(conn: Connection) -> None:
+    """候选实例名快照（NAME-001）+ 候选稳定身份（CAND-001）。
+
+    ``character_templates`` 加运营名池：``name_pool_json``（3–5 个已审核候选名）与
+    ``name_pool_version``（改名池必须换版本号，否则新老快照无法区分来源）。
+    ``universe_residents`` 加 ``suggested_display_name`` / ``naming_version``：
+    首次快照候选时确定性选名并写入，之后**只读回**——重复 bootstrap、换设备、重装
+    都拿到同一个名字，且不随选名算法升级静默变化。
+
+    纯加列，无回填：既有候选行两列为 NULL，DTO 侧表现为 ``naming_status=unavailable``，
+    与「模板未配名池」同一条退化路径，不影响 bootstrap 成功。
+    """
+    _ensure_column(conn, "character_templates", "name_pool_json", "TEXT")
+    _ensure_column(conn, "character_templates", "name_pool_version", "TEXT")
+    _ensure_column(conn, "universe_residents", "suggested_display_name", "TEXT")
+    _ensure_column(conn, "universe_residents", "naming_version", "TEXT")
+
+
+def _migration_0050_ai_conversation_read_cursor(conn: Connection) -> None:
+    """AI 会话最小 read cursor（CONV-002 方案 B）。
+
+    ``last_read_message_id`` 存该会话已读到的 ``messages.id``；未读数 = App scope 内
+    ``id > 游标`` 的 assistant 消息数。不建新表、不改 turn 链路。
+
+    纯加列无回填：既有会话为 NULL，等价于「一条都没读过」，未读数即全部 AI 消息数。
+    """
+    _ensure_column(conn, "ai_conversations", "last_read_message_id", "INTEGER")
+
+
+def _migration_0051_app_me_tab(conn: Connection) -> None:
+    """「我的」Tab 收尾：用户 Profile（ME-01）、注销申请（ME-06/07）、通知偏好（ME-10）。
+
+    ``platform_users.avatar_key`` 存受控头像 key（不存 URL——资产前缀由
+    ``COMPANION_WORLD_ASSET_BASE_URL`` 决定，换 CDN 不用改数据）；昵称沿用既有
+    ``display_name`` 列，不新建。
+
+    ``account_deletion_requests`` 是注销的**执行流水**。产品口径为「注销立即删聊天记录
+    和相关记忆」（Q14，2026-07-26 拍板），没有冷静期、没有待办状态，所以本表记的是
+    「谁在什么时候删了什么」而不是「谁申请了删除」。刻意建表而不是给 ``platform_users``
+    加列：注销后手机号可重新注册，加列会被下一次注销覆盖掉，合规追溯要的是完整历史。
+    ``purge_stats_json`` 存本次实际删除的行数快照，供运营核对清除范围。
+
+    ``app_notification_preferences`` 一行一个真人；缺行等价于默认值 ``standard``，
+    因此无需回填。
+
+    纯加列 + 两张新表，无回填、无锁表风险；两后端均幂等。
+    """
+    _ensure_column(conn, "platform_users", "avatar_key", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS account_deletion_requests (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,                    -- 发起注销的产品，便于运营分流
+            status TEXT NOT NULL DEFAULT 'executed', -- 当前只有 executed：注销即时生效
+            reason_code TEXT,                        -- 受控取值，非自由文本
+            executed_at TEXT NOT NULL,               -- 实际完成清除的时刻
+            purge_stats_json TEXT,                   -- 本次删除行数快照，供运营核对
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        -- 同一真人可多次注销（注销后手机号仍可重新注册），因此**不**加唯一约束。
+        CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_owner
+            ON account_deletion_requests(platform_user_id, executed_at);
+
+        CREATE TABLE IF NOT EXISTS app_notification_preferences (
+            platform_user_id TEXT PRIMARY KEY,
+            quiet_level TEXT NOT NULL DEFAULT 'standard',  -- standard | quiet
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4107,6 +4247,11 @@ _MIGRATIONS = [
     (44, _migration_0044_referral_app_id_contract),
     (45, _migration_0045_multi_product_phase1_contract),
     (46, _migration_0046_billing_idempotency_contract),
+    (47, _migration_0047_legacy_template_display_name),
+    (48, _migration_0048_companion_world_resident_drafts),
+    (49, _migration_0049_companion_world_naming),
+    (50, _migration_0050_ai_conversation_read_cursor),
+    (51, _migration_0051_app_me_tab),
 ]
 
 

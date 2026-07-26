@@ -9,12 +9,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.db import SessionPrincipal
 from app.products.zhaoxi.domain.companion_world import CompanionWorldNotificationService
 from app.products.zhaoxi.application import SqlAppNotificationRepository
+from app.products.zhaoxi.api.contracts import NotificationPreferencesResponse
+from app.products.zhaoxi.infrastructure.persistence import me_settings
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,
@@ -36,11 +38,19 @@ class EmptyPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class NotificationPreferencesPayload(BaseModel):
+    """ME-10 通知偏好入参；取值表由 GET 下发，客户端不硬编码。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    quiet_level: str = Field(max_length=32)
+
+
 def _require_notification_session(
     authorization: Optional[str] = Header(default=None),
 ) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_app_inbox_enabled", False)):
-        raise CompanionWorldApiError("not_found", 404)
+        raise CompanionWorldApiError("feature_disabled", 404)
     return _require_world_session(authorization)
 
 
@@ -219,6 +229,57 @@ def mark_all_read(
         request,
         code="ok",
         data={"marked_count": marked_count, "read_at": _public_time(read_at)},
+    )
+
+
+@router.get("/notifications/preferences", response_model=NotificationPreferencesResponse)
+def get_preferences(
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_notification_session),
+) -> dict:
+    """读取通知安静程度（ME-10）；从未设置过时返回默认 ``standard``，读不写库。"""
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            **me_settings.get_notification_preferences(
+                platform_user_id=principal.platform_user_id
+            ),
+            "available_levels": list(me_settings.QUIET_LEVELS),
+        },
+    )
+
+
+@router.patch(
+    "/notifications/preferences", response_model=NotificationPreferencesResponse
+)
+def update_preferences(
+    payload: NotificationPreferencesPayload,
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_notification_session),
+) -> dict:
+    """设置通知安静程度（ME-10），幂等。
+
+    ``quiet`` 只压制**将来**的投递；已在箱内的通知不回收——用户已经看到的东西不该
+    因为改了偏好而消失。
+    """
+    current = beijing_now().astimezone(_BEIJING_TZ).replace(tzinfo=None, microsecond=0)
+    try:
+        result = me_settings.set_notification_preferences(
+            platform_user_id=principal.platform_user_id,
+            quiet_level=payload.quiet_level,
+            now=current,
+        )
+    except ValueError as err:
+        raise CompanionWorldApiError("quiet_level_invalid", 422) from err
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={**result, "available_levels": list(me_settings.QUIET_LEVELS)},
     )
 
 

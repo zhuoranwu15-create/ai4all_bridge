@@ -1,0 +1,5993 @@
+{
+  "components": {
+    "schemas": {
+      "AccountDeletionRequest": {
+        "additionalProperties": false,
+        "description": "ME-06/07 注销入参；原因是受控取值，不接受自由文本。\n\n``confirm`` 必须显式传 true：注销**立即且不可撤销**地删除聊天记录与记忆，空 body\n就能触发这种操作太危险——误调一次没有任何补救手段。",
+        "properties": {
+          "confirm": {
+            "title": "Confirm",
+            "type": "boolean"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "title": "AccountDeletionRequest",
+        "type": "object"
+      },
+      "AccountDeletionRequestData": {
+        "description": "注销流水公开视图；``purge_stats_json`` 等运营字段刻意不出现在客户端契约里。",
+        "properties": {
+          "executed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executed At"
+          },
+          "reason_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Code"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "status"
+        ],
+        "title": "AccountDeletionRequestData",
+        "type": "object"
+      },
+      "AccountDeletionResponse": {
+        "description": "注销已**立即完成**。客户端收到后必须就地登出——本次 token 已在服务端失效。",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/AccountDeletionRequestData"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "request"
+        ],
+        "title": "AccountDeletionResponse",
+        "type": "object"
+      },
+      "AppConfigCaptcha": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          },
+          "prefix": {
+            "title": "Prefix",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "scene_id": {
+            "title": "Scene Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "scene_id",
+          "prefix",
+          "configured"
+        ],
+        "title": "AppConfigCaptcha",
+        "type": "object"
+      },
+      "AppConfigFeatures": {
+        "description": "公开能力位。新增 capability 必须在此登记，否则响应里会被过滤掉。",
+        "properties": {
+          "app_notifications": {
+            "title": "App Notifications",
+            "type": "boolean"
+          },
+          "human_chat_send": {
+            "title": "Human Chat Send",
+            "type": "boolean"
+          },
+          "mailbox": {
+            "title": "Mailbox",
+            "type": "boolean"
+          },
+          "resident_lifecycle": {
+            "title": "Resident Lifecycle",
+            "type": "boolean"
+          },
+          "resident_world": {
+            "title": "Resident World",
+            "type": "boolean"
+          },
+          "voice_input": {
+            "title": "Voice Input",
+            "type": "boolean"
+          },
+          "world_feed": {
+            "title": "World Feed",
+            "type": "boolean"
+          },
+          "world_visits": {
+            "title": "World Visits",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "voice_input",
+          "resident_world",
+          "world_feed",
+          "app_notifications",
+          "resident_lifecycle",
+          "mailbox",
+          "world_visits",
+          "human_chat_send"
+        ],
+        "title": "AppConfigFeatures",
+        "type": "object"
+      },
+      "AppConfigLimits": {
+        "properties": {
+          "audio_bytes": {
+            "title": "Audio Bytes",
+            "type": "integer"
+          },
+          "audio_duration_ms": {
+            "title": "Audio Duration Ms",
+            "type": "integer"
+          },
+          "message_chars": {
+            "title": "Message Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "message_chars",
+          "audio_bytes",
+          "audio_duration_ms"
+        ],
+        "title": "AppConfigLimits",
+        "type": "object"
+      },
+      "AppConfigMinimumVersionByPlatform": {
+        "properties": {
+          "android": {
+            "title": "Android",
+            "type": "string"
+          },
+          "ios": {
+            "title": "Ios",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ios",
+          "android"
+        ],
+        "title": "AppConfigMinimumVersionByPlatform",
+        "type": "object"
+      },
+      "AppConfigResponse": {
+        "properties": {
+          "captcha": {
+            "$ref": "#/components/schemas/AppConfigCaptcha"
+          },
+          "client_contract_version": {
+            "title": "Client Contract Version",
+            "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/AppConfigFeatures"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/AppConfigLimits"
+          },
+          "minimum_supported_version": {
+            "title": "Minimum Supported Version",
+            "type": "string"
+          },
+          "minimum_supported_version_by_platform": {
+            "$ref": "#/components/schemas/AppConfigMinimumVersionByPlatform"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "captcha",
+          "features",
+          "limits",
+          "client_contract_version",
+          "server_time",
+          "minimum_supported_version",
+          "minimum_supported_version_by_platform"
+        ],
+        "title": "AppConfigResponse",
+        "type": "object"
+      },
+      "AppSessionRequest": {
+        "properties": {
+          "campaign_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Code"
+          },
+          "invite_code": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Code"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          },
+          "verified_token": {
+            "maxLength": 256,
+            "minLength": 8,
+            "title": "Verified Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone",
+          "verified_token"
+        ],
+        "title": "AppSessionRequest",
+        "type": "object"
+      },
+      "AppTurnRequest": {
+        "properties": {
+          "client_message_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Client Message Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "client_message_id"
+        ],
+        "title": "AppTurnRequest",
+        "type": "object"
+      },
+      "Body_app_transcription_v1_audio_transcriptions_post": {
+        "properties": {
+          "audio": {
+            "format": "binary",
+            "title": "Audio",
+            "type": "string"
+          },
+          "duration_ms": {
+            "minimum": 1.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "language": {
+            "default": "zh",
+            "title": "Language",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audio",
+          "duration_ms"
+        ],
+        "title": "Body_app_transcription_v1_audio_transcriptions_post",
+        "type": "object"
+      },
+      "BootstrapData": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateData"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "existing_residents": {
+            "items": {
+              "$ref": "#/components/schemas/ResidentData"
+            },
+            "title": "Existing Residents",
+            "type": "array"
+          },
+          "world": {
+            "$ref": "#/components/schemas/WorldSummary"
+          }
+        },
+        "required": [
+          "world",
+          "candidates",
+          "existing_residents"
+        ],
+        "title": "BootstrapData",
+        "type": "object"
+      },
+      "CandidateData": {
+        "description": "候选居民公开字段；刻意不含 persona_seed_json 与内部 resident id。",
+        "properties": {
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "long_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Long Summary"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "naming_status": {
+            "title": "Naming Status",
+            "type": "string"
+          },
+          "naming_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Naming Version"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "persona_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Persona Key"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "suggested_display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggested Display Name"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "string"
+          },
+          "template_version": {
+            "title": "Template Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "template_version",
+          "name",
+          "tags",
+          "origin",
+          "status",
+          "naming_status"
+        ],
+        "title": "CandidateData",
+        "type": "object"
+      },
+      "CandidateListData": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateData"
+            },
+            "title": "Candidates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "title": "CandidateListData",
+        "type": "object"
+      },
+      "ConfirmResidentsPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "selections": {
+            "items": {
+              "$ref": "#/components/schemas/SelectionPayload"
+            },
+            "maxItems": 10,
+            "title": "Selections",
+            "type": "array"
+          }
+        },
+        "required": [
+          "selections"
+        ],
+        "title": "ConfirmResidentsPayload",
+        "type": "object"
+      },
+      "ConversationItem": {
+        "description": "``sort_time`` 是排序与分页锚，``last_message_at`` 是最近一条消息时间。\n\n没聊过的居民 ``last_message_at``/``last_preview`` 为 null 但 ``sort_time`` 有值——\n两者刻意分开，服务端不伪造消息时间（CONV-001）。",
+        "properties": {
+          "can_send": {
+            "title": "Can Send",
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "last_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Preview"
+          },
+          "read_only_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read Only Reason"
+          },
+          "resident": {
+            "$ref": "#/components/schemas/ConversationResident"
+          },
+          "sort_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Time"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "unread": {
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "resident",
+          "state",
+          "unread",
+          "can_send"
+        ],
+        "title": "ConversationItem",
+        "type": "object"
+      },
+      "ConversationListData": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ConversationListData",
+        "type": "object"
+      },
+      "ConversationMessageItem": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "message_type": {
+            "title": "Message Type",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "message_type"
+        ],
+        "title": "ConversationMessageItem",
+        "type": "object"
+      },
+      "ConversationMessagesData": {
+        "properties": {
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationMessageItem"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "messages"
+        ],
+        "title": "ConversationMessagesData",
+        "type": "object"
+      },
+      "ConversationReadData": {
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "last_read_message_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Read Message Id"
+          },
+          "unread": {
+            "title": "Unread",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "unread"
+        ],
+        "title": "ConversationReadData",
+        "type": "object"
+      },
+      "ConversationReadPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "last_message_id": {
+            "minimum": 1.0,
+            "title": "Last Message Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "last_message_id"
+        ],
+        "title": "ConversationReadPayload",
+        "type": "object"
+      },
+      "ConversationResident": {
+        "properties": {
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "title": "ConversationResident",
+        "type": "object"
+      },
+      "ConversationTurnPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "client_message_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Client Message Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_message_id",
+          "text"
+        ],
+        "title": "ConversationTurnPayload",
+        "type": "object"
+      },
+      "CreateResidentPayload": {
+        "additionalProperties": false,
+        "description": "新增居民。两条路径互斥：预设 `template_id`，或自建 `draft_token + client_request_id`。\n\nM1 已下线裸 `name + persona_hint` 路径 —— 自由文本不再直通人设（SEC-001 / D-B）。",
+        "properties": {
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "draft_token": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Token"
+          },
+          "template_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Id"
+          }
+        },
+        "title": "CreateResidentPayload",
+        "type": "object"
+      },
+      "FeedPostPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "client_request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_request_id",
+          "text"
+        ],
+        "title": "FeedPostPayload",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HumanReportPayload": {
+        "additionalProperties": false,
+        "description": "举报正文；block=true 时提交证据后立即拉黑。",
+        "properties": {
+          "block": {
+            "default": false,
+            "title": "Block",
+            "type": "boolean"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "maxLength": 1000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "reason_code": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Reason Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason_code"
+        ],
+        "title": "HumanReportPayload",
+        "type": "object"
+      },
+      "MePlatformUser": {
+        "description": "真人公开身份。``display_name``/``avatar_key`` 未设置时为 null，客户端自行兜底展示。",
+        "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "phone_masked": {
+            "title": "Phone Masked",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "phone_masked"
+        ],
+        "title": "MePlatformUser",
+        "type": "object"
+      },
+      "MeResponse": {
+        "description": "``account`` 与 ``world`` 都可为 null：P1 新用户确认居民前**恒无** account。",
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PublicAccount"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "platform_user": {
+            "$ref": "#/components/schemas/MePlatformUser"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "world": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MeWorld"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "platform_user",
+          "server_time"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
+      "MeWorld": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "onboarding_state": {
+            "title": "Onboarding State",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "onboarding_state"
+        ],
+        "title": "MeWorld",
+        "type": "object"
+      },
+      "NotificationPreferencesData": {
+        "description": "ME-10 通知偏好；``available_levels`` 由服务端下发，客户端不硬编码枚举。",
+        "properties": {
+          "available_levels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Available Levels",
+            "type": "array"
+          },
+          "quiet_level": {
+            "title": "Quiet Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quiet_level",
+          "available_levels"
+        ],
+        "title": "NotificationPreferencesData",
+        "type": "object"
+      },
+      "NotificationPreferencesPayload": {
+        "additionalProperties": false,
+        "description": "ME-10 通知偏好入参；取值表由 GET 下发，客户端不硬编码。",
+        "properties": {
+          "quiet_level": {
+            "maxLength": 32,
+            "title": "Quiet Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quiet_level"
+        ],
+        "title": "NotificationPreferencesPayload",
+        "type": "object"
+      },
+      "ProfileAvatarOption": {
+        "properties": {
+          "avatar_ref": {
+            "title": "Avatar Ref",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "avatar_ref"
+        ],
+        "title": "ProfileAvatarOption",
+        "type": "object"
+      },
+      "ProfileLimits": {
+        "properties": {
+          "nickname_chars": {
+            "title": "Nickname Chars",
+            "type": "integer"
+          },
+          "nickname_min_chars": {
+            "title": "Nickname Min Chars",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nickname_chars",
+          "nickname_min_chars"
+        ],
+        "title": "ProfileLimits",
+        "type": "object"
+      },
+      "ProfileOptionsResponse": {
+        "description": "ME-01 受控取值表；头像库为空时 ``avatars`` 是空数组，客户端应隐藏头像选择器。",
+        "properties": {
+          "avatars": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileAvatarOption"
+            },
+            "title": "Avatars",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ProfileLimits"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "avatars",
+          "limits"
+        ],
+        "title": "ProfileOptionsResponse",
+        "type": "object"
+      },
+      "ProfileUpdateResponse": {
+        "properties": {
+          "platform_user": {
+            "$ref": "#/components/schemas/MePlatformUser"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "platform_user"
+        ],
+        "title": "ProfileUpdateResponse",
+        "type": "object"
+      },
+      "PublicAccount": {
+        "properties": {
+          "ai_display_name": {
+            "title": "Ai Display Name",
+            "type": "string"
+          },
+          "ai_subtitle": {
+            "title": "Ai Subtitle",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "required": [
+          "id",
+          "ai_display_name",
+          "ai_subtitle"
+        ],
+        "title": "PublicAccount",
+        "type": "object"
+      },
+      "RedeemVisitPayload": {
+        "additionalProperties": false,
+        "description": "认证后兑换的一次性 code；大小写敏感。",
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "title": "RedeemVisitPayload",
+        "type": "object"
+      },
+      "ResidentData": {
+        "description": "owner 可见的居民字段；不暴露 runtime account id。",
+        "properties": {
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "conversation_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation State"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "resident_id": {
+            "title": "Resident Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resident_id",
+          "name",
+          "status",
+          "origin"
+        ],
+        "title": "ResidentData",
+        "type": "object"
+      },
+      "ResidentDraftPreviewPayload": {
+        "additionalProperties": false,
+        "description": "自建角色第一步：结构化设定 + 自由文本，服务端清洗后渲染出可预览的人设。",
+        "properties": {
+          "avatar_key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Avatar Key",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "personality_traits": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Personality Traits",
+            "type": "array"
+          },
+          "relationship_label": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship Label"
+          },
+          "relationship_type": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Relationship Type",
+            "type": "string"
+          },
+          "style_note": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Style Note"
+          }
+        },
+        "required": [
+          "name",
+          "avatar_key",
+          "relationship_type",
+          "personality_traits"
+        ],
+        "title": "ResidentDraftPreviewPayload",
+        "type": "object"
+      },
+      "ResidentListData": {
+        "properties": {
+          "residents": {
+            "items": {
+              "$ref": "#/components/schemas/ResidentData"
+            },
+            "title": "Residents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "residents"
+        ],
+        "title": "ResidentListData",
+        "type": "object"
+      },
+      "SelectionPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 50,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "template_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Template Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id"
+        ],
+        "title": "SelectionPayload",
+        "type": "object"
+      },
+      "SendHumanMessagePayload": {
+        "additionalProperties": false,
+        "description": "真人纯文字发送 payload。",
+        "properties": {
+          "client_message_id": {
+            "maxLength": 64,
+            "minLength": 8,
+            "title": "Client Message Id",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_message_id",
+          "text"
+        ],
+        "title": "SendHumanMessagePayload",
+        "type": "object"
+      },
+      "SendOtpRequest": {
+        "properties": {
+          "captcha_verify_param": {
+            "title": "Captcha Verify Param",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone",
+          "captcha_verify_param"
+        ],
+        "title": "SendOtpRequest",
+        "type": "object"
+      },
+      "TurnData": {
+        "description": "``no_reply=true`` 时 ``reply`` 整体为 null，不存在「有对象但 text 为 null」。",
+        "properties": {
+          "deduplicated": {
+            "title": "Deduplicated",
+            "type": "boolean"
+          },
+          "no_reply": {
+            "title": "No Reply",
+            "type": "boolean"
+          },
+          "reply": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurnReply"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "no_reply",
+          "deduplicated"
+        ],
+        "title": "TurnData",
+        "type": "object"
+      },
+      "TurnReply": {
+        "description": "``reply`` 非 null 时 ``text`` 必非空；重放回放原持久化 ``message_id``。",
+        "properties": {
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TurnReply",
+        "type": "object"
+      },
+      "UpdateProfileRequest": {
+        "additionalProperties": false,
+        "description": "ME-01 Profile 更新入参；两字段均可选，但不能同时为空。",
+        "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          }
+        },
+        "title": "UpdateProfileRequest",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifyOtpRequest": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "phone": {
+            "title": "Phone",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phone",
+          "code"
+        ],
+        "title": "VerifyOtpRequest",
+        "type": "object"
+      },
+      "WorldEnvelope_BootstrapData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/BootstrapData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[BootstrapData]",
+        "type": "object"
+      },
+      "WorldEnvelope_CandidateListData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/CandidateListData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[CandidateListData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ConversationListData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ConversationListData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ConversationListData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ConversationMessagesData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ConversationMessagesData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ConversationMessagesData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ConversationReadData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ConversationReadData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ConversationReadData]",
+        "type": "object"
+      },
+      "WorldEnvelope_NotificationPreferencesData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/NotificationPreferencesData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[NotificationPreferencesData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ResidentListData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentListData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentListData]",
+        "type": "object"
+      },
+      "WorldEnvelope_TurnData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/TurnData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[TurnData]",
+        "type": "object"
+      },
+      "WorldErrorEnvelope": {
+        "description": "世界类端点的失败信封：无 ``data``，``message`` 恒为 null，分支只看 ``code``。",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time"
+        ],
+        "title": "WorldErrorEnvelope",
+        "type": "object"
+      },
+      "WorldSummary": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "onboarding_state": {
+            "title": "Onboarding State",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "onboarding_state"
+        ],
+        "title": "WorldSummary",
+        "type": "object"
+      },
+      "app__products__zhaoxi__api__app_notifications__EmptyPayload": {
+        "additionalProperties": false,
+        "description": "显式拒绝 read 端点中的 owner/account 注入字段。",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      },
+      "app__products__zhaoxi__api__companion_world_human_chat__EmptyPayload": {
+        "additionalProperties": false,
+        "description": "拒绝 participant/visit/world/account 注入字段。",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      },
+      "app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload": {
+        "additionalProperties": false,
+        "description": "拒绝 owner/account/universe 注入字段。",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      },
+      "app__products__zhaoxi__api__companion_world_visits__EmptyPayload": {
+        "additionalProperties": false,
+        "description": "拒绝 owner/visitor/universe/account 注入字段。",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "朝夕相伴移动端 App 对接的 /v1 契约。公网入口 https://ai4company.top/api/v1/，nginx 剥掉 /api 前缀后即本文档的路径。落地口径见 docs/products/zhaoxi/app_api_handoff.md。",
+    "title": "朝夕相伴 App 客户端 API",
+    "version": "v1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/ai-conversations/{conversation_id}/messages": {
+      "get": {
+        "operationId": "list_conversation_messages_v1_ai_conversations__conversation_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ConversationMessagesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "List Conversation Messages",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/ai-conversations/{conversation_id}/read": {
+      "post": {
+        "description": "把会话标记为已读到某条消息（CONV-002）。幂等：重放同一 id 结果不变。",
+        "operationId": "mark_conversation_read_v1_ai_conversations__conversation_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationReadPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ConversationReadData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Mark Conversation Read",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/ai-conversations/{conversation_id}/turn": {
+      "post": {
+        "operationId": "conversation_turn_v1_ai_conversations__conversation_id__turn_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationTurnPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_TurnData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Conversation Turn",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/app/config": {
+      "get": {
+        "operationId": "app_config_v1_app_config_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppConfigResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "App Config",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "app_transcription_v1_audio_transcriptions_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_app_transcription_v1_audio_transcriptions_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Transcription V1 Audio Transcriptions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Transcription",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/auth/otp/send": {
+      "post": {
+        "operationId": "app_send_otp_v1_auth_otp_send_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendOtpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Send Otp V1 Auth Otp Send Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Send Otp",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/auth/otp/verify": {
+      "post": {
+        "operationId": "app_verify_otp_v1_auth_otp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyOtpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Verify Otp V1 Auth Otp Verify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Verify Otp",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/auth/session": {
+      "post": {
+        "operationId": "app_create_session_v1_auth_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Create Session V1 Auth Session Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Create Session",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/auth/session/current": {
+      "delete": {
+        "operationId": "app_logout_v1_auth_session_current_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Logout V1 Auth Session Current Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Logout",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/chat/messages": {
+      "get": {
+        "operationId": "app_messages_v1_chat_messages_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Messages V1 Chat Messages Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Messages",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/chat/turn": {
+      "post": {
+        "operationId": "app_turn_v1_chat_turn_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppTurnRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response App Turn V1 Chat Turn Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Turn",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/conversations": {
+      "get": {
+        "operationId": "list_conversations_v1_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ConversationListData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "List Conversations",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/human-conversations": {
+      "get": {
+        "operationId": "list_human_conversations_v1_human_conversations_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Human Conversations V1 Human Conversations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Human Conversations",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/human-conversations/{conversation_id}/block": {
+      "post": {
+        "operationId": "block_human_counterpart_v1_human_conversations__conversation_id__block_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_human_chat__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Block Human Counterpart V1 Human Conversations  Conversation Id  Block Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Block Human Counterpart",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/human-conversations/{conversation_id}/entry": {
+      "delete": {
+        "operationId": "hide_human_conversation_v1_human_conversations__conversation_id__entry_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Hide Human Conversation V1 Human Conversations  Conversation Id  Entry Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Hide Human Conversation",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/human-conversations/{conversation_id}/messages": {
+      "get": {
+        "operationId": "list_human_messages_v1_human_conversations__conversation_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Human Messages V1 Human Conversations  Conversation Id  Messages Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Human Messages",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      },
+      "post": {
+        "operationId": "send_human_message_v1_human_conversations__conversation_id__messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendHumanMessagePayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Send Human Message V1 Human Conversations  Conversation Id  Messages Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Human Message",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/human-conversations/{conversation_id}/read": {
+      "post": {
+        "operationId": "read_human_conversation_v1_human_conversations__conversation_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_human_chat__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Human Conversation V1 Human Conversations  Conversation Id  Read Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Human Conversation",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/human-conversations/{conversation_id}/report": {
+      "post": {
+        "operationId": "report_human_conversation_v1_human_conversations__conversation_id__report_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanReportPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Report Human Conversation V1 Human Conversations  Conversation Id  Report Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Report Human Conversation",
+        "tags": [
+          "companion-world-human-chat"
+        ]
+      }
+    },
+    "/v1/mailbox/letters": {
+      "get": {
+        "operationId": "list_mailbox_letters_v1_mailbox_letters_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Mailbox Letters V1 Mailbox Letters Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Mailbox Letters",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/letters/{letter_id}": {
+      "get": {
+        "operationId": "mailbox_letter_detail_v1_mailbox_letters__letter_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "letter_id",
+            "required": true,
+            "schema": {
+              "title": "Letter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Mailbox Letter Detail V1 Mailbox Letters  Letter Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mailbox Letter Detail",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/letters/{letter_id}/accept": {
+      "post": {
+        "operationId": "accept_mailbox_letter_v1_mailbox_letters__letter_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "letter_id",
+            "required": true,
+            "schema": {
+              "title": "Letter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Accept Mailbox Letter V1 Mailbox Letters  Letter Id  Accept Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept Mailbox Letter",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/letters/{letter_id}/decline": {
+      "post": {
+        "operationId": "decline_mailbox_letter_v1_mailbox_letters__letter_id__decline_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "letter_id",
+            "required": true,
+            "schema": {
+              "title": "Letter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Decline Mailbox Letter V1 Mailbox Letters  Letter Id  Decline Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decline Mailbox Letter",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/letters/{letter_id}/defer": {
+      "post": {
+        "operationId": "defer_mailbox_letter_v1_mailbox_letters__letter_id__defer_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "letter_id",
+            "required": true,
+            "schema": {
+              "title": "Letter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Defer Mailbox Letter V1 Mailbox Letters  Letter Id  Defer Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Defer Mailbox Letter",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/letters/{letter_id}/read": {
+      "post": {
+        "operationId": "read_mailbox_letter_v1_mailbox_letters__letter_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "letter_id",
+            "required": true,
+            "schema": {
+              "title": "Letter Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Read Mailbox Letter V1 Mailbox Letters  Letter Id  Read Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read Mailbox Letter",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/mailbox/unread-count": {
+      "get": {
+        "operationId": "mailbox_unread_count_v1_mailbox_unread_count_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Mailbox Unread Count V1 Mailbox Unread Count Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mailbox Unread Count",
+        "tags": [
+          "companion-world-mailbox"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "operationId": "app_me_v1_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Me",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/me/account/deletion": {
+      "post": {
+        "description": "注销账号（ME-06/07）：**立即**删除聊天记录与相关记忆，不可撤销。\n\n清除范围与保留项见 :mod:`app.products.zhaoxi.application.account_deletion`。返回后\n该真人的全部登录态已失效，客户端应直接回到登录页——继续用旧 token 会拿到 401。\n\n没有查询/撤销接口：不存在待执行状态，查了也永远是「已完成」。",
+        "operationId": "app_delete_account_v1_me_account_deletion_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountDeletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Delete Account",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/me/profile": {
+      "patch": {
+        "description": "更新真人昵称/头像（ME-01）。\n\n两个字段都可单独提交；``None`` 表示本次不改。昵称除字符白名单外还要过 D-B 清洗器\n—— 它会展示给来访的真实好友，风险面与自建角色名一致；清洗器不可用时 fail closed。",
+        "operationId": "app_update_profile_v1_me_profile_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileUpdateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Update Profile",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/me/profile-options": {
+      "get": {
+        "description": "下发昵称限额与受控头像表（ME-01）；客户端不硬编码头像枚举。",
+        "operationId": "app_profile_options_v1_me_profile_options_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOptionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "App Profile Options",
+        "tags": [
+          "app-v1"
+        ]
+      }
+    },
+    "/v1/notifications": {
+      "get": {
+        "operationId": "list_notifications_v1_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "pattern": "^(all|unread)$",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Notifications V1 Notifications Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Notifications",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/notifications/preferences": {
+      "get": {
+        "description": "读取通知安静程度（ME-10）；从未设置过时返回默认 ``standard``，读不写库。",
+        "operationId": "get_preferences_v1_notifications_preferences_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_NotificationPreferencesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Preferences",
+        "tags": [
+          "app-notifications"
+        ]
+      },
+      "patch": {
+        "description": "设置通知安静程度（ME-10），幂等。\n\n``quiet`` 只压制**将来**的投递；已在箱内的通知不回收——用户已经看到的东西不该\n因为改了偏好而消失。",
+        "operationId": "update_preferences_v1_notifications_preferences_patch",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NotificationPreferencesPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_NotificationPreferencesData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Preferences",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/notifications/read-all": {
+      "post": {
+        "operationId": "mark_all_read_v1_notifications_read_all_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__app_notifications__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Mark All Read V1 Notifications Read All Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark All Read",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/notifications/unread-count": {
+      "get": {
+        "operationId": "unread_count_v1_notifications_unread_count_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Unread Count V1 Notifications Unread Count Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unread Count",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/notifications/{notification_id}/read": {
+      "post": {
+        "operationId": "mark_read_v1_notifications__notification_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "notification_id",
+            "required": true,
+            "schema": {
+              "title": "Notification Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__app_notifications__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Mark Read V1 Notifications  Notification Id  Read Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Read",
+        "tags": [
+          "app-notifications"
+        ]
+      }
+    },
+    "/v1/visits": {
+      "get": {
+        "operationId": "list_world_visits_v1_visits_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List World Visits V1 Visits Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List World Visits",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/redeem": {
+      "post": {
+        "operationId": "redeem_world_invite_v1_visits_redeem_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemVisitPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Redeem World Invite V1 Visits Redeem Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Redeem World Invite",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/accept": {
+      "post": {
+        "operationId": "accept_world_visit_v1_visits__visit_id__accept_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Accept World Visit V1 Visits  Visit Id  Accept Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Accept World Visit",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/block": {
+      "post": {
+        "operationId": "block_visit_counterpart_v1_visits__visit_id__block_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Block Visit Counterpart V1 Visits  Visit Id  Block Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Block Visit Counterpart",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/cancel": {
+      "post": {
+        "operationId": "cancel_world_visit_v1_visits__visit_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Cancel World Visit V1 Visits  Visit Id  Cancel Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel World Visit",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/feed": {
+      "get": {
+        "operationId": "list_visited_world_feed_v1_visits__visit_id__feed_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Visited World Feed V1 Visits  Visit Id  Feed Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Visited World Feed",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/leave": {
+      "post": {
+        "operationId": "leave_world_visit_v1_visits__visit_id__leave_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Leave World Visit V1 Visits  Visit Id  Leave Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leave World Visit",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/reject": {
+      "post": {
+        "operationId": "reject_world_visit_v1_visits__visit_id__reject_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reject World Visit V1 Visits  Visit Id  Reject Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reject World Visit",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/visits/{visit_id}/revoke": {
+      "post": {
+        "operationId": "revoke_world_visit_v1_visits__visit_id__revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "visit_id",
+            "required": true,
+            "schema": {
+              "title": "Visit Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke World Visit V1 Visits  Visit Id  Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke World Visit",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/world/invites": {
+      "get": {
+        "operationId": "list_world_invites_v1_world_invites_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List World Invites V1 World Invites Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List World Invites",
+        "tags": [
+          "companion-world-visits"
+        ]
+      },
+      "post": {
+        "operationId": "create_world_invite_v1_world_invites_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_visits__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create World Invite V1 World Invites Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create World Invite",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/world/invites/{invite_id}": {
+      "delete": {
+        "operationId": "revoke_world_invite_v1_world_invites__invite_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "invite_id",
+            "required": true,
+            "schema": {
+              "title": "Invite Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke World Invite V1 World Invites  Invite Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke World Invite",
+        "tags": [
+          "companion-world-visits"
+        ]
+      }
+    },
+    "/v1/worlds/home/bootstrap": {
+      "post": {
+        "operationId": "bootstrap_home_v1_worlds_home_bootstrap_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_BootstrapData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Bootstrap Home",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/feed": {
+      "get": {
+        "operationId": "list_home_feed_v1_worlds_home_feed_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Home Feed V1 Worlds Home Feed Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Home Feed",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/feed/posts": {
+      "post": {
+        "operationId": "publish_home_feed_post_v1_worlds_home_feed_posts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedPostPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Publish Home Feed Post V1 Worlds Home Feed Posts Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish Home Feed Post",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/resident-candidates": {
+      "get": {
+        "operationId": "list_candidates_v1_worlds_home_resident_candidates_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_CandidateListData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "List Candidates",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/resident-drafts/preview": {
+      "post": {
+        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。",
+        "operationId": "preview_resident_draft_v1_worlds_home_resident_drafts_preview_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResidentDraftPreviewPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Preview Resident Draft V1 Worlds Home Resident Drafts Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Resident Draft",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/resident-options": {
+      "get": {
+        "description": "自建角色的受控取值表。客户端据此渲染选择器，**不得硬编码枚举**。",
+        "operationId": "resident_options_v1_worlds_home_resident_options_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resident Options V1 Worlds Home Resident Options Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resident Options",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/residents": {
+      "get": {
+        "operationId": "list_residents_v1_worlds_home_residents_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentListData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "List Residents",
+        "tags": [
+          "companion-world"
+        ]
+      },
+      "post": {
+        "operationId": "create_resident_v1_worlds_home_residents_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResidentPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Resident V1 Worlds Home Residents Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Resident",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/residents/confirm": {
+      "post": {
+        "operationId": "confirm_residents_v1_worlds_home_residents_confirm_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmResidentsPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentListData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Confirm Residents",
+        "tags": [
+          "companion-world"
+        ]
+      }
+    }
+  }
+}
