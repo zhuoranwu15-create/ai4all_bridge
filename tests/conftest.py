@@ -17,6 +17,15 @@ _app_config.settings.database_url = ""
 # 装了 CLI 的开发机上 cmd[0] 变成绝对路径致误判失败（CI/干净环境无 .env 故不暴露）。在此固定回默认裸名，
 # 使测试与本机 .env 无关；需要绝对路径的测试自行 monkeypatch 覆盖。
 _app_config.settings.openclaw_cli_path = "openclaw"
+# Nooki 生产开关默认关闭，但现有 nooki 测试套件依赖路由已挂载（app 在 import 时单次构造）。
+# 在此把全局 settings 置为 True，保证 app.main import 阶段 install_central_routes 挂载 Nooki 路由；
+# 关闭行为由 tests/products/nooki/test_feature_flag.py 用独立构造的 app 验证，不受此处影响。
+_app_config.settings.nooki_product_enabled = True
+# Nooki 微信登录：auth._wx_appid() 读全局 settings.nooki_wx_appid；fresh_db 不 patch
+# app.config.settings，故在此固定一个测试用 appid，避免依赖本机 .env（空值会让 bind 落库时
+# wx_appid 列为空字符串，与 find 时用的值不一致）。真实微信调用在测试里全量 mock。
+_app_config.settings.nooki_wx_appid = "wx-test-appid"
+_app_config.settings.nooki_wx_app_secret = "test-wx-secret"
 
 
 # ---------------------------------------------------------------------------

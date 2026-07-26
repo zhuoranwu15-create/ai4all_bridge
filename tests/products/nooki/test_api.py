@@ -13,19 +13,19 @@ def _bind(client, monkeypatch, *, openid: str, phone: str) -> dict:
     monkeypatch.setattr(
         auth_module,
         "code2session",
-        lambda code: {"openid": openid, "session_key": "sess-key", "unionid": None},
+        lambda login_code: {"openid": openid, "session_key": "sess-key", "unionid": None},
     )
     monkeypatch.setattr(
         auth_module,
-        "decrypt_phone_number",
-        lambda *, encrypted_data, iv, session_key: {
+        "get_phone_number",
+        lambda phone_code: {
             "phone_number": phone,
             "country_code": "86",
         },
     )
     resp = client.post(
         f"{_PREFIX}/auth/bind",
-        json={"code": "js-code", "encrypted_data": "enc", "iv": "iv"},
+        json={"login_code": "js-code", "phone_code": "pc"},
     )
     assert resp.status_code == 200
     return resp.json()

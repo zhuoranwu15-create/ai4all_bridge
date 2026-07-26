@@ -4080,13 +4080,14 @@ def _migration_0047_nooki_core(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             platform_user_id TEXT NOT NULL,
             app_id TEXT NOT NULL,
+            wx_appid TEXT NOT NULL,
             openid TEXT NOT NULL,
             unionid TEXT,
             created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
             FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
         );
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_wx_identities_app_openid
-            ON nooki_wx_identities(app_id, openid);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_wx_identities_wx_openid
+            ON nooki_wx_identities(wx_appid, openid);
         CREATE INDEX IF NOT EXISTS ix_nooki_wx_identities_platform_user
             ON nooki_wx_identities(platform_user_id);
 
