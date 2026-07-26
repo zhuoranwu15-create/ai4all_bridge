@@ -440,6 +440,11 @@ class Settings(BaseSettings):
     nooki_wx_appid: str = ""
     nooki_wx_app_secret: str = ""
 
+    # Nooki 产品总开关：未完成前保持 false。
+    # 关闭时：Nooki 路由不挂载、不能签发 Nooki session、不能创建 Nooki membership/account。
+    # 朝夕完全不受影响。
+    nooki_product_enabled: bool = False
+
     class Config:
         env_file = ".env"
         extra = "ignore"

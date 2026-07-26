@@ -2,6 +2,10 @@
 
 生产注册表当前只启用朝夕。测试可显式构造独立 ``ProductRegistry`` 注入数据库原语，
 但 API 不从 Header 或其他客户端输入动态扩充注册表。
+
+Nooki 受 ``settings.nooki_product_enabled`` 控制：未开启时注册项以 ``enabled=False``
+存在，``require_enabled('nooki')`` fail closed；同时 ``app/bootstrap/http.py`` 不挂载
+Nooki 路由。朝夕恒启用、不受该开关影响。
 """
 from __future__ import annotations
 
@@ -9,6 +13,8 @@ import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Iterable, Mapping
+
+from app.config import settings
 
 ZHAOXI_APP_ID = "zhaoxi"
 NOOKI_APP_ID = "nooki"
@@ -58,12 +64,23 @@ class ProductRegistry:
         return tuple(self._products[key] for key in sorted(self._products))
 
 
-PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
-    [
-        ProductRegistration(app_id=ZHAOXI_APP_ID),
-        ProductRegistration(app_id=NOOKI_APP_ID),
-    ]
-)
+def _production_registry() -> ProductRegistry:
+    """构造生产注册表；Nooki 的 enabled 绑定 ``settings.nooki_product_enabled``。
+
+    模块导入时读取一次（与 ``settings`` 单例一致），进程生命周期内不再变化；
+    测试通过 patch ``app.bootstrap.product_registry.settings`` 或直接构造
+    ``ProductRegistry`` 覆盖。
+    """
+
+    return ProductRegistry(
+        [
+            ProductRegistration(app_id=ZHAOXI_APP_ID),
+            ProductRegistration(app_id=NOOKI_APP_ID, enabled=settings.nooki_product_enabled),
+        ]
+    )
+
+
+PRODUCTION_PRODUCT_REGISTRY = _production_registry()
 
 
 def build_test_product_registry() -> ProductRegistry:
