@@ -249,6 +249,8 @@ def create_character_template(
     long_summary: Optional[str] = None,
     relationship_type: Optional[str] = None,
     personality_traits_json: Optional[str] = None,
+    name_pool_json: Optional[str] = None,
+    name_pool_version: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> Dict[str, Any]:
     """新建一个角色模板，返回行 dict。source_type ∈ official|operations|user_created|generated。
@@ -257,7 +259,8 @@ def create_character_template(
     （§2.2 / 客户端 §4.2）——candidates 端点须显式剔除该列。
 
     m0048 起额外承载结构化设定：``persona_key``（跨模板版本稳定的人设身份）、``long_summary``、
-    ``relationship_type`` 与 ``personality_traits_json``；均可空，老调用方无需改。
+    ``relationship_type`` 与 ``personality_traits_json``；m0049 起再加 ``name_pool_json`` /
+    ``name_pool_version``（运营实例名池，NAME-001）；均可空，老调用方无需改。
     """
     resolved_template_id = template_id or _new_id("tmpl")
     with _tx(conn) as tx:
@@ -266,9 +269,10 @@ def create_character_template(
             INSERT INTO character_templates(
                 id, source_type, owner_platform_user_id, name, avatar_ref, summary,
                 tags_json, persona_seed_json, persona_version, status, initial_candidate_rank,
-                persona_key, long_summary, relationship_type, personality_traits_json
+                persona_key, long_summary, relationship_type, personality_traits_json,
+                name_pool_json, name_pool_version
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 resolved_template_id,
@@ -286,6 +290,8 @@ def create_character_template(
                 long_summary,
                 relationship_type,
                 personality_traits_json,
+                name_pool_json,
+                name_pool_version,
             ),
         )
         row = tx.execute(
@@ -554,20 +560,36 @@ def get_or_create_candidate_resident(
     character_template_id: str,
     template_version: str,
     origin: str,
+    suggested_display_name: Optional[str] = None,
+    naming_version: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> Dict[str, Any]:
-    """幂等快照一条非 legacy candidate；已存在 active/dismissed 关系也原样返回、不复活。"""
+    """幂等快照一条非 legacy candidate；已存在 active/dismissed 关系也原样返回、不复活。
+
+    ``suggested_display_name`` / ``naming_version`` 只随 INSERT 落一次（NAME-001）：
+    ``ON CONFLICT DO NOTHING`` 意味着已存在的候选原样返回，选名算法或名池版本之后怎么变，
+    都不会改写已经发给客户端的名字。
+    """
     if origin == "legacy":
         raise ValueError("legacy origin is not a candidate")
     with _tx(conn) as tx:
         tx.execute(
             """
             INSERT INTO universe_residents(
-                id, universe_id, character_template_id, template_version, origin, status
-            ) VALUES (?, ?, ?, ?, ?, 'candidate')
+                id, universe_id, character_template_id, template_version, origin, status,
+                suggested_display_name, naming_version
+            ) VALUES (?, ?, ?, ?, ?, 'candidate', ?, ?)
             ON CONFLICT DO NOTHING
             """,
-            (_new_id("res"), universe_id, character_template_id, template_version, origin),
+            (
+                _new_id("res"),
+                universe_id,
+                character_template_id,
+                template_version,
+                origin,
+                suggested_display_name,
+                naming_version,
+            ),
         )
         row = tx.execute(
             """
@@ -598,9 +620,11 @@ def list_candidate_residents(
             SELECT
                 r.id AS resident_id, r.universe_id, r.character_template_id,
                 r.template_version, r.runtime_account_id, r.origin, r.status,
+                r.suggested_display_name, r.naming_version,
                 t.source_type, t.owner_platform_user_id, t.name, t.avatar_ref,
                 t.summary, t.tags_json, t.persona_seed_json, t.persona_version,
                 t.status AS template_status, t.initial_candidate_rank,
+                t.persona_key, t.long_summary, t.name_pool_json, t.name_pool_version,
                 c.id AS conversation_id, c.state AS conversation_state
             FROM universe_residents r
             JOIN character_templates t ON t.id = r.character_template_id

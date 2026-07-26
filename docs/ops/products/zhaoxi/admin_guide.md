@@ -433,6 +433,18 @@ curl -fsS http://127.0.0.1:8180/health/ready
 
 预期：实际导入报告 `errors=[]`、`catalog_ready=true`。再次执行应只出现 `keep_ids`，不得新增重复模板。manifest 放受控目录，不提交密钥或生产 persona 到临时日志。
 
+**运营名池（m0049 / NAME-001，2026-07-26 起）**：每条模板可选带 `name_pool`（3–5 个已审核
+实例名，去重、不含表情/控制字符）、`name_pool_version`（两者必须成对出现）、`long_summary`、
+`persona_key`。这四项是**可原地更新的运营元数据**，不参与人设内容的不可变判定——生产四模板
+早已上线、`template_id` 不能换，所以名池只能这样补配；被原地更新的模板会出现在报告的
+`update_ids` 里。规则：
+
+- 改名池必须同时换 `name_pool_version`，否则新老快照无法区分来源。
+- 已快照过的候选**不会**因换名池而改名（`suggested_display_name` 只随首次 INSERT 落一次）。
+- manifest 未提供的字段一律不动，重放一份不含名池的老 manifest 不会抹掉已配好的名池。
+- `persona_key` 允许从空补上，但一旦非空就不许改值，否则报 `persona_key is immutable once assigned`。
+- 不配名池不阻断任何流程：候选 `naming_status=unavailable`，客户端回落本地兜底名池。
+
 ### M4 Mailbox 签名 catalog（默认关闭）
 
 M4 mailbox catalog 只接受运营已发布的 official/operations template，不在代码或导入器中生成角色、人设或来信正文。manifest 顶层必须严格为 `version=1`、`entries`、`signature`；`signature` 是去掉自身后，对 canonical JSON `{"entries":...,"version":1}`（UTF-8、key 排序、无多余空格）计算的 HMAC-SHA256 hex。签名必须由受控发布流程产生。

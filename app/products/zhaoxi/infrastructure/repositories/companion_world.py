@@ -93,6 +93,10 @@ def _template(row: dict) -> TemplateRecord:
             if row.get("initial_candidate_rank") is not None
             else None
         ),
+        persona_key=row.get("persona_key"),
+        long_summary=row.get("long_summary"),
+        name_pool=_decode_tags(row.get("name_pool_json")),
+        name_pool_version=row.get("name_pool_version"),
     )
 
 
@@ -106,6 +110,8 @@ def _candidate(row: dict) -> CandidateRecord:
         status=str(row["status"]),
         runtime_account_id=row.get("runtime_account_id"),
         conversation_id=row.get("conversation_id"),
+        suggested_display_name=row.get("suggested_display_name"),
+        naming_version=row.get("naming_version"),
     )
 
 
@@ -419,13 +425,21 @@ class SqlCompanionWorldRepository(WorldRepository):
         )
 
     def ensure_candidate(
-        self, universe_id: str, template: TemplateRecord, origin: str
+        self,
+        universe_id: str,
+        template: TemplateRecord,
+        origin: str,
+        *,
+        suggested_display_name: Optional[str] = None,
+        naming_version: Optional[str] = None,
     ) -> CandidateRecord:
         row = world_db.get_or_create_candidate_resident(
             universe_id=universe_id,
             character_template_id=template.id,
             template_version=template.persona_version,
             origin=origin,
+            suggested_display_name=suggested_display_name,
+            naming_version=naming_version,
             conn=self._conn,
         )
         candidates = self.list_candidates(

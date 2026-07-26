@@ -1,7 +1,7 @@
 # Companion World App M1 服务端需求评审与开发计划
 
 更新时间：2026-07-26
-状态：**执行中** —— S1、S2 已交付（2026-07-26），S3–S5 待开工，每批独立 PR
+状态：**执行中** —— S1、S2、S3 已交付（2026-07-26），S4–S5 待开工，每批独立 PR
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World M1 服务端需求积压 V0.2》与《AI 陪伴 App 私人平行世界 PRD V1.1》
@@ -478,17 +478,30 @@ mailbox（`companion_world_mailbox.py:53-57`）**都已**转成 `+08:00`。
 **遗留（需运营跟进）**：自建角色目前只能复用首发四张头像资产。扩充头像库是运营任务
 （补静态资产 + 在 `AVATAR_KEYS` 加一行），不阻断 M1 联调。
 
-### S3 — 命名与候选身份（M1 联调前，约 3 人日）
+### S3 — 命名与候选身份 — ✅ 已交付（2026-07-26）
 
-| 项 | 改动 |
+| 项 | 实际改动 |
 | --- | --- |
-| 迁移 `m0049` | `universe_residents` 加 `suggested_display_name`、`naming_version` |
-| 运营配置 | `scripts/import_companion_world_presets.py` 支持每模板 3–5 个候选名 + `name_pool_version` |
-| NAME-001 | `bootstrap_home` 首次快照候选时确定性选名并落库；后续只读回 |
-| CAND-001 | 候选 DTO 增 `suggested_display_name`、`naming_version`、`persona_key`、`naming_status`、`long_summary` |
+| 迁移 `m0049` | `character_templates` 加 `name_pool_json`、`name_pool_version`；`universe_residents` 加 `suggested_display_name`、`naming_version`。纯加列无回填，既有候选两列为 NULL → DTO 表现为 `naming_status=unavailable`，与「模板未配名池」同一条退化路径 |
+| 选名算法 | 新增 `domain/companion_world/naming.py`：`normalize_name_pool`（3–5 个、去重、复用展示名白名单）、`select_suggested_name`（`sha256(universe_id \| template_id \| name_pool_version)` 取模）、`naming_status`。**刻意不用内建 `hash()`**——CPython 对 str 按进程加盐，重启即变 |
+| NAME-001 | `bootstrap_home` 与 `_create_resident_locked` 在 `ensure_candidate` 前选名并随 INSERT 落库；`get_or_create_candidate_resident` 是 `ON CONFLICT DO NOTHING`，快照只写一次，之后一律读回。运营换名池换版本不影响已快照的世界 |
+| 默认展示名 | `confirm_residents` 未传 `display_name` 时依次取 快照实例名 → 模板工作名；`_create_resident_locked` 的 confirmed 期直接激活同样口径 |
+| CAND-001 | 候选 DTO 增 `suggested_display_name`、`naming_version`、`persona_key`、`naming_status`、`long_summary`；`persona_seed_json` 与内部 resident/runtime id 仍不外泄 |
+| 运营配置 | `import_companion_world_presets.py` 支持 `name_pool` / `name_pool_version` / `long_summary` / `persona_key`。这四项属**可原地更新的运营元数据**（生产四模板已上线、id 不能换，否则名池永远配不上去），不参与人设内容的不可变判定；`persona_key` 允许从空补上但非空后不许改值。manifest 未提供的字段一律不动，重放老 manifest 不会抹掉已配名池；`name_pool` 与 `name_pool_version` 必须成对出现 |
 
-验收：同一 world/candidate 多次 bootstrap / 换设备 / 重装返回同值；
-模板未配名池时 `naming_status=unavailable` 且 bootstrap 仍成功。
+**仓库不预设名池值**：与 Feed 窗口时间同惯例，名池是运营内容，由部署评审提供。未配置时
+候选 `naming_status=unavailable`、bootstrap 正常成功，客户端按契约回落本地兜底名池。
+
+新增回归：`test_companion_world_naming.py` 21 例（名池校验 6、选名确定性/三输入敏感/
+**跨进程稳定**（子进程 `PYTHONHASHSEED` 校验）/状态映射 5、service 快照写一次与换名池不变、
+未配名池仍成功、跨真人世界隔离、确认默认名两级回落 4、API DTO 新字段与 unavailable 2、
+运营导入名池落库/原地更新/重放不抹除/`persona_key` 不可变 5）；`test_companion_world_schema.py`
+新增 2 例（m0049 幂等、候选选名快照只落一次）。
+
+验收结论：同一 world/candidate 多次 bootstrap / 换设备 / 重装返回同值 ✅；
+模板未配名池时 `naming_status=unavailable` 且 bootstrap 仍成功 ✅。
+两档全量：SQLite 1652 passed（2 例为本机 sqlite 3.26 缺 `DROP COLUMN` 的既有失败）、
+PG 1684 passed / 9 skipped。
 
 ### S4 — 会话与 turn 契约冻结（M1 联调前，约 3 人日）
 

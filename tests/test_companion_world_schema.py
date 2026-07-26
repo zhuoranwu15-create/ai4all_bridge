@@ -20,6 +20,7 @@ from app.db._core import (
     _migration_0035_companion_world_visit_human_chat,
     _migration_0047_legacy_template_display_name,
     _migration_0048_companion_world_resident_drafts,
+    _migration_0049_companion_world_naming,
 )
 
 _P1_TABLES = (
@@ -73,14 +74,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        48,
-        _migration_0048_companion_world_resident_drafts,
+        49,
+        _migration_0049_companion_world_naming,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 48
+        assert int(version) == 49
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -436,3 +437,51 @@ def test_resident_draft_token_is_unique_and_owner_scoped(fresh_db):
     # 跨真人读取一律 not found：草稿按 owner 隔离。
     assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=other) is None
     assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=pu) is not None
+
+
+def test_m0049_naming_columns_and_idempotency(fresh_db):
+    """m0049：名池与候选选名列已加，且重复执行不重复加列。"""
+    with db.connect() as conn:
+        conn.execute(
+            "SELECT name_pool_json, name_pool_version FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT suggested_display_name, naming_version FROM universe_residents WHERE 1 = 0"
+        ).fetchall()
+        _migration_0049_companion_world_naming(conn)
+        _migration_0049_companion_world_naming(conn)
+        conn.execute(
+            "SELECT name_pool_json, name_pool_version FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_candidate_naming_snapshot_is_written_once(fresh_db):
+    """选名只随 INSERT 落一次；同一候选再次 ensure 不会被新名字覆盖（NAME-001）。"""
+    pu = _pu("19911110050")
+    universe = db.get_or_create_home_universe(platform_user_id=pu)
+    template = db.create_character_template(
+        source_type="operations",
+        name="运营工作名",
+        persona_version="v1",
+        name_pool_json='["甲","乙","丙"]',
+        name_pool_version="np_v1",
+    )
+    first = db.get_or_create_candidate_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        suggested_display_name="甲",
+        naming_version="np_v1",
+    )
+    second = db.get_or_create_candidate_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        suggested_display_name="丙",
+        naming_version="np_v2",
+    )
+    assert first["id"] == second["id"]
+    assert second["suggested_display_name"] == "甲"
+    assert second["naming_version"] == "np_v1"

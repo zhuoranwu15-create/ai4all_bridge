@@ -43,7 +43,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
 
     if is_postgres():
         # 常规 PG init_db 已禁止既有库跨 Phase 1 contract；迁移回放测试显式走受控 API。
-        migrate_db_through(target_version=48, expected_current_version=35)
+        migrate_db_through(target_version=49, expected_current_version=35)
     else:
         db.init_db()
 
@@ -63,7 +63,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         ).fetchone()["channel"] == "native"
         assert conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
-        ).fetchone()["version"] == 48
+        ).fetchone()["version"] == 49
         _migration_0036_repair_account_app_id(conn)
         _migration_0036_repair_account_app_id(conn)
 

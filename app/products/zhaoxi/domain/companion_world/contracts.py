@@ -43,6 +43,12 @@ class TemplateRecord:
     persona_version: str
     status: str
     initial_candidate_rank: Optional[int] = None
+    # m0048/m0049 运营元数据：``persona_key`` 跨模板版本稳定的人设身份（CAND-001），
+    # ``long_summary`` 角色预览页长介绍，``name_pool``/``name_pool_version`` 实例名池（NAME-001）。
+    persona_key: Optional[str] = None
+    long_summary: Optional[str] = None
+    name_pool: Tuple[str, ...] = ()
+    name_pool_version: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,9 @@ class CandidateRecord:
     status: str
     runtime_account_id: Optional[str] = None
     conversation_id: Optional[str] = None
+    # 首次快照候选时定下的实例名与所用名池版本（NAME-001）；之后只读回，不重算。
+    suggested_display_name: Optional[str] = None
+    naming_version: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -430,7 +439,13 @@ class WorldRepository(Protocol):
     ) -> bool: ...
 
     def ensure_candidate(
-        self, universe_id: str, template: TemplateRecord, origin: str
+        self,
+        universe_id: str,
+        template: TemplateRecord,
+        origin: str,
+        *,
+        suggested_display_name: Optional[str] = None,
+        naming_version: Optional[str] = None,
     ) -> CandidateRecord: ...
 
     def list_candidates(

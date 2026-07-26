@@ -222,13 +222,30 @@ POST /v1/worlds/home/residents                   → 用 draft_token 落地
   "name": "林小满",
   "avatar_ref": "https://ai4company.top/companion_world/avatars/linxiaoman.png",
   "summary": "温柔的倾听者……",
+  "long_summary": "……角色预览页用的长介绍，可能为 null",
   "tags": ["温柔", "共情", "治愈"],
   "origin": "...",
-  "status": "..."
+  "status": "...",
+  "persona_key": "linxiaoman",
+  "suggested_display_name": "小满",
+  "naming_version": "np_v1",
+  "naming_status": "ready"
 }
 ```
 
 > **刻意不返回** `persona_seed_json` 与内部 resident/runtime id。App 只按 `template_id` 提交选择。
+
+命名字段（NAME-001 / CAND-001）：
+
+- `suggested_display_name` 是**服务端已快照**的建议实例名，同一 world + 候选永远返回同值，
+  重复 bootstrap、换设备、重装都不变，也不随服务端选名算法升级而变化。
+- `naming_status`：`ready` = 已有建议名；`unavailable` = 运营尚未给该模板配名池
+  （此时 `suggested_display_name` 与 `naming_version` 均为 `null`）。**命名不可用不会让
+  bootstrap 失败**，候选照常下发，客户端按契约回落到自己的本地兜底名池。
+- `naming_version` 是名池版本号，仅供排查；客户端不应据此重新选名。
+- `persona_key` 跨模板版本稳定，用于客户端在模板换版后仍认出「同一个人设」；
+  `template_id` / `template_version` 会随内容变更而更换，`persona_key` 不会。
+- `long_summary` 为角色预览页的长介绍，运营未录入时为 `null`（`sample_dialogue` 在 P2）。
 
 **首发 4 位官方候选**（生产 preset v1）：
 
@@ -248,6 +265,10 @@ POST /v1/worlds/home/residents                   → 用 draft_token 落地
 ```
 
 `data`：`{ "residents": [ { /* 见下方居民结构 */ } ] }`
+
+`display_name` 可省略。省略时服务端依次回落：候选的 `suggested_display_name` →
+模板工作名（`name`）。传入时会过展示名白名单（拒表情、控制字符、超长），
+不合法返回 `display_name_invalid`(400)；沿用服务端值时不受该限制。
 
 ### 5.4 居民结构（`_resident_data`）
 

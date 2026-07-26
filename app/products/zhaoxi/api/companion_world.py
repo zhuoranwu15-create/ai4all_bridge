@@ -39,6 +39,7 @@ from app.products.zhaoxi.domain.companion_world import (
     ResidentRecord,
     ResidentSelection,
 )
+from app.products.zhaoxi.domain.companion_world.naming import naming_status
 from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     MAX_DISPLAY_NAME_CHARS,
     MAX_PERSONALITY_TRAITS,
@@ -325,16 +326,26 @@ def _run_domain(action: Callable):
 
 
 def _candidate_data(candidate: CandidateRecord) -> dict:
-    """序列化候选公开字段；刻意不含 persona_seed_json 和内部 resident id。"""
+    """序列化候选公开字段；刻意不含 persona_seed_json 和内部 resident id。
+
+    CAND-001/NAME-001 新增：``suggested_display_name`` 是服务端已快照的实例名（同一候选
+    永远返回同值），``naming_status=unavailable`` 表示运营未配名池，客户端按契约回落到
+    自己的本地兜底名池；``persona_key`` 供客户端跨模板版本认出同一个人设。
+    """
     return {
         "template_id": candidate.template.id,
         "template_version": candidate.template_version,
         "name": candidate.template.name,
         "avatar_ref": candidate.template.avatar_ref,
         "summary": candidate.template.summary,
+        "long_summary": candidate.template.long_summary,
         "tags": list(candidate.template.tags),
         "origin": candidate.origin,
         "status": candidate.status,
+        "persona_key": candidate.template.persona_key,
+        "suggested_display_name": candidate.suggested_display_name,
+        "naming_version": candidate.naming_version,
+        "naming_status": naming_status(candidate.suggested_display_name),
     }
 
 

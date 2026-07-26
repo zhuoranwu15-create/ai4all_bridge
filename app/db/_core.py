@@ -4128,6 +4128,24 @@ def _migration_0048_companion_world_resident_drafts(conn: Connection) -> None:
     )
 
 
+def _migration_0049_companion_world_naming(conn: Connection) -> None:
+    """候选实例名快照（NAME-001）+ 候选稳定身份（CAND-001）。
+
+    ``character_templates`` 加运营名池：``name_pool_json``（3–5 个已审核候选名）与
+    ``name_pool_version``（改名池必须换版本号，否则新老快照无法区分来源）。
+    ``universe_residents`` 加 ``suggested_display_name`` / ``naming_version``：
+    首次快照候选时确定性选名并写入，之后**只读回**——重复 bootstrap、换设备、重装
+    都拿到同一个名字，且不随选名算法升级静默变化。
+
+    纯加列，无回填：既有候选行两列为 NULL，DTO 侧表现为 ``naming_status=unavailable``，
+    与「模板未配名池」同一条退化路径，不影响 bootstrap 成功。
+    """
+    _ensure_column(conn, "character_templates", "name_pool_json", "TEXT")
+    _ensure_column(conn, "character_templates", "name_pool_version", "TEXT")
+    _ensure_column(conn, "universe_residents", "suggested_display_name", "TEXT")
+    _ensure_column(conn, "universe_residents", "naming_version", "TEXT")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4172,6 +4190,7 @@ _MIGRATIONS = [
     (46, _migration_0046_billing_idempotency_contract),
     (47, _migration_0047_legacy_template_display_name),
     (48, _migration_0048_companion_world_resident_drafts),
+    (49, _migration_0049_companion_world_naming),
 ]
 
 

@@ -20,6 +20,7 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     WorldRecord,
     WorldRepository,
 )
+from app.products.zhaoxi.domain.companion_world.naming import select_suggested_name
 from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     PERSONALITY_TRAITS,
     PersonaCatalogError,
@@ -94,7 +95,21 @@ class CompanionWorldService:
                 world = self._carry_in_legacy_resident(repo, world, platform_user_id)
                 templates = self._validate_initial_catalog(repo.list_initial_templates())
                 for template in templates:
-                    repo.ensure_candidate(world.id, template, "preset")
+                    # NAME-001：选名只发生在这一次快照，之后 ensure_candidate 命中已有行原样返回。
+                    suggested = select_suggested_name(
+                        universe_id=world.id,
+                        template_id=template.id,
+                        name_pool=template.name_pool,
+                        name_pool_version=template.name_pool_version or "",
+                    )
+                    repo.ensure_candidate(
+                        world.id,
+                        template,
+                        "preset",
+                        suggested_display_name=suggested,
+                        # 名池未配时不记版本，避免出现「有版本却没名字」的自相矛盾行。
+                        naming_version=template.name_pool_version if suggested else None,
+                    )
                 world = repo.set_universe_onboarding_state(world.id, "selecting")
             candidates = tuple(repo.list_candidates(world.id, ("candidate",)))
             residents = tuple(repo.list_residents_for_owner(platform_user_id, ("active",)))
@@ -164,7 +179,12 @@ class CompanionWorldService:
             for candidate, selection in chosen:
                 if candidate.status == "active":
                     continue
-                display_name = (selection.display_name or candidate.template.name).strip()
+                # 客户端不传称呼时用快照下来的实例名（NAME-001），没有名池才退回模板工作名。
+                display_name = (
+                    selection.display_name
+                    or candidate.suggested_display_name
+                    or candidate.template.name
+                ).strip()
                 if not display_name:
                     raise CompanionWorldError("resident_selection_invalid")
                 # 用户自定义称呼走字符白名单 + 控制字符过滤；沿用模板名时不设限
@@ -266,7 +286,20 @@ class CompanionWorldService:
                 raise CompanionWorldError("template_not_available")
             origin = "preset"
 
-        candidate = repo.ensure_candidate(world.id, template, origin)
+        # 与 bootstrap 同一套选名规则；自建模板没有名池，这里恒得 None。
+        suggested = select_suggested_name(
+            universe_id=world.id,
+            template_id=template.id,
+            name_pool=template.name_pool,
+            name_pool_version=template.name_pool_version or "",
+        )
+        candidate = repo.ensure_candidate(
+            world.id,
+            template,
+            origin,
+            suggested_display_name=suggested,
+            naming_version=template.name_pool_version if suggested else None,
+        )
         if candidate.status == "active":
             raise CompanionWorldError("resident_already_exists")
         if candidate.status != "candidate":
@@ -280,7 +313,7 @@ class CompanionWorldService:
         return repo.activate_candidate_with_runtime(
             candidate,
             owner_platform_user_id=platform_user_id,
-            display_name=template.name,
+            display_name=candidate.suggested_display_name or template.name,
         )
 
     def preview_resident_draft(
