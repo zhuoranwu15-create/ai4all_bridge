@@ -58,7 +58,17 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 .venv/bin/pytest tests/test_turn_service.py -v
 ```
 
-测试不需要启动服务。测试使用内存 SQLite。
+测试不需要启动服务。默认档使用内存 SQLite。
+
+PG 档（生产真实后端，改动触及持久化/迁移时必跑）：
+
+```bash
+AI4ALL_TEST_DB=postgres .venv/bin/pytest tests/ -q
+```
+
+由 `pytest-postgresql` 起临时实例，只需 PATH 上有 `pg_ctl`/`initdb`（RPM 系装
+`postgresql-server` 即可，**不需要** `pg_config` / `*-devel`）；多版本共存时用
+`AI4ALL_TEST_PG_CTL` 指定绝对路径。
 
 测试选择策略：
 

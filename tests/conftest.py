@@ -1,4 +1,5 @@
 import os
+import shutil
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -28,10 +29,25 @@ _PG_MODE = os.environ.get("AI4ALL_TEST_DB", "").strip().lower() in (
     "pg", "postgres", "postgresql",
 )
 
+def _resolve_pg_ctl() -> "str | None":
+    """定位 ``pg_ctl``；返回 None 表示交回 pytest-postgresql 的默认查找逻辑。
+
+    pytest-postgresql 默认只认 Debian 布局 ``/usr/lib/postgresql/<ver>/bin/pg_ctl``，
+    路径不存在时退回 ``pg_config --bindir``。RPM 系（阿里云 Linux/RHEL）把 ``pg_ctl``
+    直接装进 ``/usr/bin``，而 ``pg_config`` 属于 ``*-devel`` 包，服务器上通常没装，
+    于是整档在 fixture setup 阶段全量 error。这里优先用 PATH 上真实存在的 pg_ctl，
+    并允许 ``AI4ALL_TEST_PG_CTL`` 显式指定（多版本共存时用）。
+    """
+    explicit = os.environ.get("AI4ALL_TEST_PG_CTL", "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("pg_ctl")
+
+
 if _PG_MODE:  # 仅 PG 档注册，SQLite 档完全不引入 pytest-postgresql
     from pytest_postgresql import factories as _pg_factories
 
-    postgresql_proc = _pg_factories.postgresql_proc()
+    postgresql_proc = _pg_factories.postgresql_proc(executable=_resolve_pg_ctl())
     postgresql_db = _pg_factories.postgresql("postgresql_proc")
 
 
