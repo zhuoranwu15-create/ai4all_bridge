@@ -13,8 +13,9 @@ def install_shared_routes(app: FastAPI) -> None:
 
 
 def install_central_routes(app: FastAPI) -> None:
-    """按既有顺序挂载中心节点控制面与朝夕产品路由。"""
+    """按既有顺序挂载中心节点控制面、朝夕产品路由与 Nooki 产品路由。"""
 
+    from app.products.nooki.manifest import install_public_routes as install_nooki_public_routes
     from app.products.zhaoxi.manifest import (
         install_admin_routes,
         install_operational_routes,
@@ -24,6 +25,7 @@ def install_central_routes(app: FastAPI) -> None:
     from app.routers import admin_ops
 
     install_public_routes(app)
+    install_nooki_public_routes(app)
     install_operational_routes(app)
     app.include_router(admin_ops.router)
     app.include_router(admin_llm.router)
