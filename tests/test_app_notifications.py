@@ -45,14 +45,14 @@ def test_notification_routes_require_p1_and_inbox_flags(client, fresh_db):
     fresh_db.companion_world_p1_enabled = True
     response = client.get("/v1/notifications")
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "feature_disabled"
     assert response.headers["Cache-Control"] == "no-store"
 
     fresh_db.companion_world_app_inbox_enabled = True
     fresh_db.companion_world_p1_enabled = False
     response = client.get("/v1/notifications")
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "feature_disabled"
 
 
 def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_db):

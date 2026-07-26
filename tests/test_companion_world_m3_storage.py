@@ -71,7 +71,7 @@ def test_m0033_is_idempotent(fresh_db):
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
         # 当前库已继续追加到 Phase 1 contract m0046；重跑历史 m0033 不得回退或推进版本。
-    assert int(version) == 46
+    assert int(version) == 48
 
 
 def test_feed_slot_owner_isolation_and_atomic_outbox(fresh_db):

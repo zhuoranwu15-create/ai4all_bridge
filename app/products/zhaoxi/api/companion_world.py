@@ -5,9 +5,10 @@ import base64
 import binascii
 import json
 import re
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Callable, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -22,6 +23,14 @@ from app.db import (
     get_platform_user,
     try_conversation_turn_lock,
 )
+from app.platform.moderation.text_sanitizer import (
+    FIELD_DISPLAY_NAME,
+    FIELD_RELATIONSHIP_LABEL,
+    FIELD_STYLE_NOTE,
+    TextRejected,
+    TextSanitizerUnavailable,
+    sanitize_text,
+)
 from app.products.zhaoxi.domain.companion_world import (
     CandidateRecord,
     CompanionWorldError,
@@ -29,7 +38,16 @@ from app.products.zhaoxi.domain.companion_world import (
     CompanionWorldService,
     ResidentRecord,
     ResidentSelection,
-    TemplateDraft,
+)
+from app.products.zhaoxi.domain.companion_world.persona_catalog import (
+    MAX_DISPLAY_NAME_CHARS,
+    MAX_PERSONALITY_TRAITS,
+    MAX_RELATIONSHIP_LABEL_CHARS,
+    MAX_STYLE_NOTE_CHARS,
+    MIN_PERSONALITY_TRAITS,
+    PersonaInput,
+    options_catalog,
+    resolve_avatar_ref,
 )
 from app.products.zhaoxi.application import (
     SqlCompanionWorldRepository,
@@ -37,11 +55,18 @@ from app.products.zhaoxi.application import (
 )
 from app.time_utils import beijing_now
 from app.routers.deps import _resolve_legacy_session_principal
+from app.products.zhaoxi.manifest import (
+    CANONICAL_API_PREFIX,
+    PROXY_STRIPPED_API_PREFIX,
+)
 
 router = APIRouter(tags=["companion-world"])
 
 _ERROR_STATUS = {
     "not_found": 404,
+    # 能力被 flag 关闭。刻意与 not_found 分开：客户端据此区分「这个功能没开」和
+    # 「这个资源不存在」，配合 /app/config 的 capability 决定要不要发这个请求。
+    "feature_disabled": 404,
     "unauthorized": 401,
     "account_id_not_accepted": 400,
     "world_not_ready": 409,
@@ -55,6 +80,19 @@ _ERROR_STATUS = {
     "resident_selection_invalid": 400,
     "resident_already_exists": 409,
     "custom_candidate_limit_exceeded": 409,
+    # 自建角色受控取值与草稿生命周期
+    "avatar_key_invalid": 400,
+    "relationship_type_invalid": 400,
+    "relationship_label_required": 400,
+    "personality_trait_invalid": 400,
+    "personality_trait_count_invalid": 400,
+    "display_name_invalid": 400,
+    "resident_draft_not_found": 404,
+    "resident_draft_expired": 409,
+    "resident_draft_consumed": 409,
+    # D-B：自由文本清洗器 fail closed（可重试）与硬拒绝红线（不可重试）
+    "content_review_unavailable": 503,
+    "content_rejected": 422,
     "conversation_not_found": 404,
     "conversation_read_only": 409,
     "turn_in_progress": 409,
@@ -90,6 +128,28 @@ _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _FEED_CLIENT_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _FEED_CURSOR_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))
+# 自建角色草稿有效期。短期 + 单次消费：预览页停留过久应重新预览，避免陈旧人设被下单。
+RESIDENT_DRAFT_TTL_MINUTES = 30
+
+# 世界端点在剥掉挂载前缀后的路径。用于给 422 套上统一错误信封。
+_COMPANION_WORLD_ROUTES = (
+    "/worlds/",
+    "/conversations",
+    "/ai-conversations/",
+    "/notifications",
+    "/world/invites",
+    "/visits",
+    "/human-conversations",
+    "/mailbox/",
+)
+# 长前缀优先，否则 "/v1" 会先吃掉 "/v1/products/zhaoxi"。
+_MOUNT_PREFIXES = tuple(
+    sorted(
+        ("/v1", CANONICAL_API_PREFIX, PROXY_STRIPPED_API_PREFIX),
+        key=len,
+        reverse=True,
+    )
+)
 
 
 class CompanionWorldApiError(Exception):
@@ -114,19 +174,60 @@ class ConfirmResidentsPayload(BaseModel):
     selections: list[SelectionPayload] = Field(max_length=10)
 
 
+class ResidentDraftPreviewPayload(BaseModel):
+    """自建角色第一步：结构化设定 + 自由文本，服务端清洗后渲染出可预览的人设。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=MAX_DISPLAY_NAME_CHARS)
+    avatar_key: str = Field(min_length=1, max_length=64)
+    relationship_type: str = Field(min_length=1, max_length=32)
+    relationship_label: Optional[str] = Field(
+        default=None, max_length=MAX_RELATIONSHIP_LABEL_CHARS
+    )
+    personality_traits: list[str] = Field(
+        min_length=MIN_PERSONALITY_TRAITS, max_length=MAX_PERSONALITY_TRAITS
+    )
+    style_note: Optional[str] = Field(default=None, max_length=MAX_STYLE_NOTE_CHARS)
+
+    @model_validator(mode="after")
+    def _clean_draft(self) -> "ResidentDraftPreviewPayload":
+        self.name = self.name.strip()
+        self.avatar_key = self.avatar_key.strip()
+        self.relationship_type = self.relationship_type.strip()
+        self.relationship_label = (self.relationship_label or "").strip() or None
+        self.style_note = (self.style_note or "").strip() or None
+        if not self.name:
+            raise ValueError("name is required")
+        return self
+
+
 class CreateResidentPayload(BaseModel):
+    """新增居民。两条路径互斥：预设 `template_id`，或自建 `draft_token + client_request_id`。
+
+    M1 已下线裸 `name + persona_hint` 路径 —— 自由文本不再直通人设（SEC-001 / D-B）。
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     template_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
-    name: Optional[str] = Field(default=None, min_length=1, max_length=50)
-    persona_hint: Optional[str] = Field(default=None, max_length=1000)
+    draft_token: Optional[str] = Field(default=None, min_length=16, max_length=128)
+    client_request_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
 
     @model_validator(mode="after")
     def _exactly_one_source(self) -> "CreateResidentPayload":
-        if bool(self.template_id) == bool(self.name):
-            raise ValueError("provide exactly one of template_id or name")
-        if self.template_id and self.persona_hint:
-            raise ValueError("persona_hint requires name")
+        self.template_id = (self.template_id or "").strip() or None
+        self.draft_token = (self.draft_token or "").strip() or None
+        self.client_request_id = (self.client_request_id or "").strip() or None
+        if bool(self.template_id) == bool(self.draft_token):
+            raise ValueError("provide exactly one of template_id or draft_token")
+        if self.draft_token:
+            if not self.client_request_id:
+                raise ValueError("draft_token requires client_request_id")
+            if not _FEED_CLIENT_REQUEST_ID_RE.fullmatch(self.client_request_id):
+                raise ValueError("invalid client_request_id")
+        elif self.client_request_id:
+            raise ValueError("client_request_id only applies to draft_token")
         return self
 
 
@@ -191,7 +292,7 @@ def _require_world_session(
     authorization: Optional[str] = Header(default=None),
 ) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_p1_enabled", False)):
-        raise CompanionWorldApiError("not_found", 404)
+        raise CompanionWorldApiError("feature_disabled", 404)
     if not authorization or not authorization.startswith("Bearer "):
         raise CompanionWorldApiError("unauthorized", 401)
     principal = _resolve_legacy_session_principal(authorization)
@@ -204,7 +305,7 @@ def _require_feed_session(
     authorization: Optional[str] = Header(default=None),
 ) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_feed_enabled", False)):
-        raise CompanionWorldApiError("not_found", 404)
+        raise CompanionWorldApiError("feature_disabled", 404)
     return _require_world_session(authorization)
 
 
@@ -263,6 +364,11 @@ def _conversation_data(item) -> dict:
         "last_preview": item.last_preview,
         "unread": item.unread,
     }
+
+
+def _db_time(value: datetime) -> str:
+    """把北京时间转成 DB 存储用的 naive 串，与各表 DEFAULT 的格式一致。"""
+    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _feed_time(value: Optional[str]) -> Optional[str]:
@@ -343,6 +449,9 @@ def bootstrap_home(
                 "onboarding_state": result.world.onboarding_state,
             },
             "candidates": [_candidate_data(item) for item in result.candidates],
+            # 已经在世界里的居民（微信带入的 legacy 角色即在此）。selecting 阶段客户端
+            # 要把它们和候选一起展示，但它们不可被叉掉。
+            "existing_residents": [_resident_data(item) for item in result.residents],
         },
     )
 
@@ -408,6 +517,115 @@ def list_residents(
     )
 
 
+@router.get("/worlds/home/resident-options")
+def resident_options(
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_world_session),
+) -> dict:
+    """自建角色的受控取值表。客户端据此渲染选择器，**不得硬编码枚举**。"""
+    _no_store(response)
+    return _envelope(request, code="ok", data=options_catalog())
+
+
+def _sanitize_optional(
+    text: Optional[str],
+    *,
+    field_kind: str,
+    max_chars: int,
+    safety: Dict[str, dict],
+) -> Optional[str]:
+    """可选自由文本清洗；空值直接跳过，不浪费一次 LLM 调用。"""
+    if not text:
+        return None
+    return (
+        _sanitize_required(
+            text, field_kind=field_kind, max_chars=max_chars, safety=safety
+        )
+        or None
+    )
+
+
+def _sanitize_required(
+    text: str, *, field_kind: str, max_chars: int, safety: Dict[str, dict]
+) -> str:
+    """必填自由文本清洗；改写结果直接作为最终值返回（Q7：不提示「内容已被修改」）。
+
+    判定结果按字段写入 ``safety`` 留痕（只存 verdict 与风险分类，不存原文）。
+    """
+    try:
+        result = sanitize_text(text=text, field_kind=field_kind, max_chars=max_chars)
+    except TextRejected as err:
+        raise CompanionWorldApiError("content_rejected") from err
+    except TextSanitizerUnavailable as err:
+        raise CompanionWorldApiError("content_review_unavailable") from err
+    safety[field_kind] = result.as_safety_record()
+    return result.text
+
+
+@router.post("/worlds/home/resident-drafts/preview")
+def preview_resident_draft(
+    payload: ResidentDraftPreviewPayload,
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_world_session),
+) -> dict:
+    """自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。
+
+    清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。
+    """
+    safety: Dict[str, dict] = {}
+    persona = PersonaInput(
+        name=_sanitize_required(
+            payload.name,
+            field_kind=FIELD_DISPLAY_NAME,
+            max_chars=MAX_DISPLAY_NAME_CHARS,
+            safety=safety,
+        ),
+        avatar_key=payload.avatar_key,
+        relationship_type=payload.relationship_type,
+        relationship_label=_sanitize_optional(
+            payload.relationship_label,
+            field_kind=FIELD_RELATIONSHIP_LABEL,
+            max_chars=MAX_RELATIONSHIP_LABEL_CHARS,
+            safety=safety,
+        ),
+        personality_traits=tuple(payload.personality_traits),
+        style_note=_sanitize_optional(
+            payload.style_note,
+            field_kind=FIELD_STYLE_NOTE,
+            max_chars=MAX_STYLE_NOTE_CHARS,
+            safety=safety,
+        ),
+    )
+    now = beijing_now()
+    draft, rendered = _run_domain(
+        lambda: _service().preview_resident_draft(
+            principal.platform_user_id,
+            persona,
+            draft_token=secrets.token_urlsafe(32),
+            expires_at=_db_time(now + timedelta(minutes=RESIDENT_DRAFT_TTL_MINUTES)),
+            safety_json=json.dumps(safety, ensure_ascii=False),
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data={
+            "draft_id": draft.id,
+            "draft_token": draft.draft_token,
+            "expires_at": _feed_time(draft.expires_at),
+            "name": draft.name,
+            "avatar_ref": resolve_avatar_ref(draft.avatar_key),
+            "relationship_display": rendered.relationship_display,
+            "tags": list(rendered.tags),
+            "normalized_summary": draft.normalized_summary,
+            "ai_identity_notice": rendered.ai_identity_notice,
+        },
+    )
+
+
 @router.post("/worlds/home/residents")
 def create_resident(
     payload: CreateResidentPayload,
@@ -415,31 +633,21 @@ def create_resident(
     response: Response,
     principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
-    custom = None
-    if payload.name:
-        name = payload.name.strip()
-        hint = (payload.persona_hint or "").strip()
-        soul = hint or f"你是{name}，是用户世界里一位独立、自然的 AI 陪伴。"
-        custom = TemplateDraft(
-            name=name,
-            persona_seed_json=json.dumps(
-                {
-                    "SOUL.md": f"# SOUL\n\n{soul}",
-                    "IDENTITY.md": (
-                        f"# IDENTITY\n\n- 你的名字是 {name}，用它自称。\n"
-                        "- 你是用户的个人 AI 陪伴。"
-                    ),
-                },
-                ensure_ascii=False,
-            ),
+    if payload.draft_token:
+        result = _run_domain(
+            lambda: _service().create_resident_from_draft(
+                principal.platform_user_id,
+                draft_token=payload.draft_token or "",
+                client_request_id=payload.client_request_id or "",
+                now=_db_time(beijing_now()),
+            )
         )
-    result = _run_domain(
-        lambda: _service().create_resident(
-            principal.platform_user_id,
-            template_id=payload.template_id,
-            custom_template=custom,
+    else:
+        result = _run_domain(
+            lambda: _service().create_resident(
+                principal.platform_user_id, template_id=payload.template_id
+            )
         )
-    )
     _no_store(response)
     if isinstance(result, CandidateRecord):
         data = {"candidate": _candidate_data(result)}
@@ -655,6 +863,19 @@ def conversation_turn(
     )
 
 
+def _is_companion_world_path(path: str) -> bool:
+    """判断请求是否落在世界端点上，三条挂载前缀一视同仁。
+
+    产品 router 同时挂在 legacy `/v1`、规范命名空间和反代剥前缀三条路径上（见 manifest）。
+    以前这里只匹配 `/v1/...`，导致我们**推荐**客户端使用的规范前缀反而拿不到统一错误信封，
+    422 会退化成 FastAPI 默认的 `{"detail": [...]}`。这里先剥掉挂载前缀再判断。
+    """
+    for prefix in _MOUNT_PREFIXES:
+        if path.startswith(prefix):
+            return path[len(prefix):].startswith(_COMPANION_WORLD_ROUTES)
+    return False
+
+
 async def _api_error_handler(request: Request, exc: CompanionWorldApiError):
     response = JSONResponse(
         status_code=exc.status_code,
@@ -665,18 +886,7 @@ async def _api_error_handler(request: Request, exc: CompanionWorldApiError):
 
 
 async def _validation_error_handler(request: Request, exc: RequestValidationError):
-    companion_path = request.url.path.startswith(
-        (
-            "/v1/worlds/",
-            "/v1/conversations",
-            "/v1/ai-conversations/",
-            "/v1/notifications",
-            "/v1/world/invites",
-            "/v1/visits",
-            "/v1/human-conversations",
-        )
-    )
-    if companion_path:
+    if _is_companion_world_path(request.url.path):
         forbidden_account_id = isinstance(exc.body, dict) and bool(
             {"account_id", "runtime_account_id", "universe_id"}.intersection(exc.body)
         )

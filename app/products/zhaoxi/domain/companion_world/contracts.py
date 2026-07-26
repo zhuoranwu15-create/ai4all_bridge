@@ -94,6 +94,33 @@ class TemplateDraft:
     summary: Optional[str] = None
     tags: Tuple[str, ...] = ()
     persona_version: str = "v1"
+    relationship_type: Optional[str] = None
+    personality_traits: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ResidentDraftRecord:
+    """一条已清洗、已渲染的自建角色草稿。
+
+    ``persona_seed_json`` 在 preview 阶段就已定稿，消费时原样落模板 —— 这是「所见即所存」
+    的落点：预览与最终人设不可能不一致。
+    """
+
+    id: str
+    platform_user_id: str
+    draft_token: str
+    name: str
+    avatar_key: str
+    relationship_type: str
+    relationship_label: Optional[str]
+    personality_traits: Tuple[str, ...]
+    style_note: Optional[str]
+    normalized_summary: str
+    persona_seed_json: str
+    status: str
+    client_request_id: Optional[str]
+    resident_id: Optional[str]
+    expires_at: str
 
 
 @dataclass(frozen=True)
@@ -136,10 +163,16 @@ class ConversationMessage:
 
 @dataclass(frozen=True)
 class BootstrapResult:
-    """幂等 bootstrap 的领域返回。"""
+    """幂等 bootstrap 的领域返回。
+
+    ``residents`` 是本世界已 active 的居民。selecting 阶段它通常只在微信老用户身上非空
+    （带入的 legacy 居民），用于让客户端在选择角色页同时展示"已经在你世界里"的角色；
+    legacy 居民被 ``list_candidates`` 按 ``origin <> 'legacy'`` 过滤掉，不会出现在候选里。
+    """
 
     world: WorldRecord
     candidates: Tuple[CandidateRecord, ...]
+    residents: Tuple[ResidentRecord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -363,6 +396,39 @@ class WorldRepository(Protocol):
         self, owner_platform_user_id: str, draft: TemplateDraft
     ) -> TemplateRecord: ...
 
+    def create_resident_draft(
+        self,
+        platform_user_id: str,
+        *,
+        draft_token: str,
+        name: str,
+        avatar_key: str,
+        relationship_type: str,
+        relationship_label: Optional[str],
+        personality_traits: Sequence[str],
+        style_note: Optional[str],
+        normalized_summary: str,
+        persona_seed_json: str,
+        safety_json: Optional[str],
+        expires_at: str,
+    ) -> ResidentDraftRecord: ...
+
+    def get_resident_draft(
+        self, draft_token: str, platform_user_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def get_resident_draft_by_request(
+        self, platform_user_id: str, client_request_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def consume_resident_draft(
+        self,
+        draft_id: str,
+        platform_user_id: str,
+        client_request_id: str,
+        resident_id: str,
+    ) -> bool: ...
+
     def ensure_candidate(
         self, universe_id: str, template: TemplateRecord, origin: str
     ) -> CandidateRecord: ...
@@ -414,5 +480,10 @@ class WorldRepository(Protocol):
     ) -> ResidentRecord: ...
 
     def mark_legacy_world(
+        self, universe_id: str, legacy_primary_account_id: str
+    ) -> WorldRecord: ...
+
+    # D-A：只落 legacy primary 锚，不动 onboarding_state（老用户照走选择角色页）。
+    def mark_legacy_primary(
         self, universe_id: str, legacy_primary_account_id: str
     ) -> WorldRecord: ...

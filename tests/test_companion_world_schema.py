@@ -18,7 +18,8 @@ from app.db._core import (
     _migration_0033_companion_world_m3_content,
     _migration_0034_companion_world_lifecycle_mailbox,
     _migration_0035_companion_world_visit_human_chat,
-    _migration_0046_billing_idempotency_contract,
+    _migration_0047_legacy_template_display_name,
+    _migration_0048_companion_world_resident_drafts,
 )
 
 _P1_TABLES = (
@@ -72,14 +73,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        46,
-        _migration_0046_billing_idempotency_contract,
+        48,
+        _migration_0048_companion_world_resident_drafts,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 46
+        assert int(version) == 48
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -384,3 +385,54 @@ def test_concurrent_l3_append_no_overwrite(fresh_db):
     a = sum(1 for r in rows if r["source_account_id"] == "acc-A")
     b = sum(1 for r in rows if r["source_account_id"] == "acc-B")
     assert a == per and b == per
+
+
+def test_m0048_resident_drafts_schema_and_idempotency(fresh_db):
+    """m0048：草稿表可用、结构化列已加，且重复执行不重复建表/加列。"""
+    with db.connect() as conn:
+        conn.execute("SELECT 1 FROM resident_drafts WHERE 1 = 0").fetchall()
+        conn.execute(
+            "SELECT persona_key, long_summary, relationship_type, personality_traits_json "
+            "FROM character_templates WHERE 1 = 0"
+        ).fetchall()
+        _migration_0048_companion_world_resident_drafts(conn)
+        _migration_0048_companion_world_resident_drafts(conn)
+        conn.execute("SELECT 1 FROM resident_drafts WHERE 1 = 0").fetchall()
+
+
+def test_resident_draft_token_is_unique_and_owner_scoped(fresh_db):
+    """draft_token 全局唯一；同一真人的 client_request_id 唯一以承载幂等。"""
+    pu = _pu("19911110048")
+    other = _pu("19911110049")
+    db.insert_resident_draft(
+        platform_user_id=pu,
+        draft_token="tok-a",
+        name="草稿甲",
+        avatar_key="linxiaoman",
+        relationship_type="friend",
+        relationship_label=None,
+        personality_traits_json='["steady"]',
+        style_note=None,
+        normalized_summary="摘要",
+        persona_seed_json='{"SOUL.md": "x", "IDENTITY.md": "y"}',
+        safety_json=None,
+        expires_at="2099-01-01 00:00:00",
+    )
+    with pytest.raises(IntegrityError):
+        db.insert_resident_draft(
+            platform_user_id=other,
+            draft_token="tok-a",
+            name="草稿乙",
+            avatar_key="linxiaoman",
+            relationship_type="friend",
+            relationship_label=None,
+            personality_traits_json='["steady"]',
+            style_note=None,
+            normalized_summary="摘要",
+            persona_seed_json='{"SOUL.md": "x", "IDENTITY.md": "y"}',
+            safety_json=None,
+            expires_at="2099-01-01 00:00:00",
+        )
+    # 跨真人读取一律 not found：草稿按 owner 隔离。
+    assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=other) is None
+    assert db.get_resident_draft_by_token(draft_token="tok-a", platform_user_id=pu) is not None

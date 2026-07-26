@@ -48,6 +48,7 @@ from app.routers.web import (
     web_send_otp,
     web_verify_otp,
 )
+from app.time_utils import beijing_now
 from app.agent_runtime.turns.service import ChannelTurnInput
 from app.products.zhaoxi.application.turns import run_zhaoxi_turn as run_turn_for_account
 
@@ -58,6 +59,9 @@ router = APIRouter(tags=["app-v1"])
 # 使 IDENTITY 播种为「你的名字是 朝夕」、LLM 自称与 UI 展示一致(见 §9.3 C4/L4)。
 # get_or_create 不覆盖已有账号,故用户在其它渠道已起的名不受影响。
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
+
+# App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
+CLIENT_CONTRACT_VERSION = "2026-07-26"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _ALLOWED_AUDIO_TYPES = {
@@ -118,16 +122,50 @@ def _public_account(result: dict) -> dict:
     }
 
 
-def _account_for_user(principal: SessionPrincipal) -> dict:
+def _optional_account_for_user(principal: SessionPrincipal) -> Optional[dict]:
+    """解析当前真人的 legacy account；没有则返回 None。
+
+    P1 开启后新用户在确认居民之前**恒无** account，这是正常状态而不是错误——
+    `/me` 必须能在这种状态下工作，否则 App 被杀进程后无法恢复未完成的世界引导。
+    账号被禁用仍然是错误（403），语义不变。
+    """
     result = get_active_bound_account_for_user_in_app(
         platform_user_id=principal.platform_user_id,
         app_id=principal.app_id,
     )
     if result is None:
-        raise HTTPException(status_code=409, detail="account_not_ready")
+        return None
     if result["account"].get("status") == "disabled":
         raise HTTPException(status_code=403, detail="account_disabled")
     return result
+
+
+def _account_for_user(principal: SessionPrincipal) -> dict:
+    """`/chat/*` 等确实需要 runtime account 的端点使用；无 account 时 409。"""
+    result = _optional_account_for_user(principal)
+    if result is None:
+        raise HTTPException(status_code=409, detail="account_not_ready")
+    return result
+
+
+def _world_summary(platform_user_id: str) -> Optional[dict]:
+    """返回 home world 的引导摘要；能力关闭或尚未建世界时为 None。
+
+    刻意**只读不建**：建世界仍然只由 `POST /worlds/home/bootstrap` 负责，
+    `/me` 不产生副作用。
+    """
+    if not bool(getattr(settings, "companion_world_p1_enabled", False)):
+        return None
+    from app.products.zhaoxi.application import SqlCompanionWorldRepository
+
+    world = SqlCompanionWorldRepository().get_home_universe(platform_user_id)
+    if world is None:
+        return None
+    return {
+        "id": world.id,
+        "status": world.status,
+        "onboarding_state": world.onboarding_state,
+    }
 
 
 def _turn_lock(account_id: str) -> threading.Lock:
@@ -148,10 +186,36 @@ def _bearer_token(authorization: Optional[str]) -> str:
     return token
 
 
+# 公开 capability → 内部 flag 的唯一映射。刻意不暴露 flag 名、阈值和 scheduler 开关，
+# 只回答「这个能力现在能不能用」。两处口径必须一起改，否则客户端会按错误的能力做分支。
+#
+# 注意两条不是一一映射的：
+#   * human_chat_send —— 真人聊天的**读**由 p1 门控（随 resident_world），只有**发送**由
+#     human_chat flag 门控。给一个笼统的 human_chat 会让客户端在开读关写时整块隐藏历史。
+#   * resident_lifecycle —— 映射 commit（真正会让居民下线的开关），不是只跑评估不落地的
+#     evaluation。
+def _companion_world_capabilities() -> dict:
+    world_enabled = bool(getattr(settings, "companion_world_p1_enabled", False))
+
+    def _gated(flag: str) -> bool:
+        return world_enabled and bool(getattr(settings, flag, False))
+
+    return {
+        "resident_world": world_enabled,
+        "world_feed": _gated("companion_world_feed_enabled"),
+        "app_notifications": _gated("companion_world_app_inbox_enabled"),
+        "resident_lifecycle": _gated("companion_world_lifecycle_commit_enabled"),
+        "mailbox": _gated("companion_world_mailbox_enabled"),
+        "world_visits": _gated("companion_world_visits_enabled"),
+        "human_chat_send": _gated("companion_world_human_chat_enabled"),
+    }
+
+
 @router.get("/app/config")
-def app_config() -> dict:
+def app_config(response: Response) -> dict:
     scene_id = str(settings.aliyun_captcha_scene_id or "").strip()
     prefix = str(settings.aliyun_captcha_prefix or "").strip()
+    _no_store(response)
     return {
         "captcha": {
             "provider": "aliyun",
@@ -159,13 +223,21 @@ def app_config() -> dict:
             "prefix": prefix,
             "configured": bool(scene_id and prefix),
         },
-        "features": {"voice_input": is_asr_available()},
+        # 字段只加不改：旧客户端继续只读 voice_input。
+        "features": {
+            "voice_input": is_asr_available(),
+            **_companion_world_capabilities(),
+        },
         "limits": {
             "message_chars": 4000,
             "audio_bytes": int(settings.asr_max_audio_bytes),
             "audio_duration_ms": int(settings.asr_max_duration_ms),
         },
+        "client_contract_version": CLIENT_CONTRACT_VERSION,
+        "server_time": beijing_now().isoformat(timespec="seconds"),
         "minimum_supported_version": "0.1.0",
+        # 分平台最低版本先按「不拦」上线，值等实际灰度需求再调（CONFIG-201）。
+        "minimum_supported_version_by_platform": {"ios": "0.0.0", "android": "0.0.0"},
     }
 
 
@@ -247,7 +319,7 @@ def app_me(
     response: Response,
     principal: SessionPrincipal = Depends(_require_session),
 ) -> dict:
-    account_result = _account_for_user(principal)
+    account_result = _optional_account_for_user(principal)
     platform_user = get_platform_user(platform_user_id=principal.platform_user_id)
     if platform_user is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新验证")
@@ -259,7 +331,9 @@ def app_me(
             "id": platform_user["id"],
             "phone_masked": f"{phone[:3]}****{phone[-4:]}" if len(phone) >= 7 else "***",
         },
-        "account": _public_account(account_result),
+        "account": _public_account(account_result) if account_result else None,
+        "world": _world_summary(principal.platform_user_id),
+        "server_time": beijing_now().isoformat(timespec="seconds"),
     }
 
 

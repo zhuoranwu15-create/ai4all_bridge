@@ -64,14 +64,14 @@ def test_feed_requires_both_p1_and_feed_flags(client, fresh_db):
     fresh_db.companion_world_p1_enabled = True
     response = client.get("/v1/worlds/home/feed")
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "feature_disabled"
     assert response.headers["Cache-Control"] == "no-store"
 
     fresh_db.companion_world_p1_enabled = False
     fresh_db.companion_world_feed_enabled = True
     response = client.get("/v1/worlds/home/feed")
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "feature_disabled"
 
 
 def test_feed_rejects_unconfirmed_world(client, fresh_db):

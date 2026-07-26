@@ -40,7 +40,7 @@ def _require_notification_session(
     authorization: Optional[str] = Header(default=None),
 ) -> SessionPrincipal:
     if not bool(getattr(settings, "companion_world_app_inbox_enabled", False)):
-        raise CompanionWorldApiError("not_found", 404)
+        raise CompanionWorldApiError("feature_disabled", 404)
     return _require_world_session(authorization)
 
 

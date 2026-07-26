@@ -4065,6 +4065,69 @@ def _migration_0046_billing_idempotency_contract(conn: Connection) -> None:
     )
 
 
+def _migration_0047_legacy_template_display_name(conn: Connection) -> None:
+    """把 legacy 哨兵模板的占位名换成面向用户的默认展示名。
+
+    legacy 居民的展示名走 ``COALESCE(profiles.display_name, character_templates.name)``。
+    微信侧从未起过名的账号会回落到哨兵串 ``'legacy'`` 并直接暴露到 App 界面。这里只在
+    模板名仍是原始哨兵值时改写，运营手工改过的名字不覆盖。
+    """
+    conn.execute(
+        """
+        UPDATE character_templates
+        SET name = ?
+        WHERE id = 'tmpl_legacy' AND name = 'legacy'
+        """,
+        ("来自微信的Bot",),
+    )
+
+
+def _migration_0048_companion_world_resident_drafts(conn: Connection) -> None:
+    """结构化自建角色（CUSTOM-001）+ 两步式草稿（SEC-001/D-B）+ 幂等键（IDEM-001）。
+
+    ``character_templates`` 加 4 个可空列（``persona_key`` 跨模板版本稳定的人设身份、
+    ``long_summary`` 运营长介绍、``relationship_type`` / ``personality_traits_json``
+    结构化设定）；新增 ``resident_drafts`` 承载 preview → 消费的短期草稿，行内存的是
+    **已清洗** 文本与已渲染的 persona seed，保证「所见即所存」。
+
+    纯加列 + 新表，无回填、无锁表风险；两后端均幂等。
+    """
+    _ensure_column(conn, "character_templates", "persona_key", "TEXT")
+    _ensure_column(conn, "character_templates", "long_summary", "TEXT")
+    _ensure_column(conn, "character_templates", "relationship_type", "TEXT")
+    _ensure_column(conn, "character_templates", "personality_traits_json", "TEXT")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS resident_drafts (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,          -- 草稿绑定真人，跨用户消费一律 not_found
+            draft_token TEXT NOT NULL UNIQUE,        -- 不可枚举、单次消费
+            name TEXT NOT NULL,                      -- 已过清洗器
+            avatar_key TEXT NOT NULL,                -- 受控取值
+            relationship_type TEXT NOT NULL,         -- 受控取值
+            relationship_label TEXT,                 -- custom 关系的自由文本，已过清洗器
+            personality_traits_json TEXT NOT NULL,   -- 受控取值数组
+            style_note TEXT,                         -- 自由文本，已过清洗器
+            normalized_summary TEXT NOT NULL,        -- 预览摘要，与持久化同一段渲染代码产出
+            persona_seed_json TEXT NOT NULL,         -- 服务端模板化渲染的 SOUL/IDENTITY
+            safety_json TEXT,                        -- 清洗器判定留痕（verdict/风险分类）
+            status TEXT NOT NULL DEFAULT 'open',     -- open | consumed
+            client_request_id TEXT,                  -- 消费时写入，承载 IDEM-001
+            resident_id TEXT,                        -- 消费结果，幂等重放直接回放
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_resident_drafts_owner
+            ON resident_drafts(platform_user_id, status);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_drafts_client_request
+            ON resident_drafts(platform_user_id, client_request_id)
+            WHERE client_request_id IS NOT NULL;
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4107,6 +4170,8 @@ _MIGRATIONS = [
     (44, _migration_0044_referral_app_id_contract),
     (45, _migration_0045_multi_product_phase1_contract),
     (46, _migration_0046_billing_idempotency_contract),
+    (47, _migration_0047_legacy_template_display_name),
+    (48, _migration_0048_companion_world_resident_drafts),
 ]
 
 

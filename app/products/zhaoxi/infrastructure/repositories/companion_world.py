@@ -15,6 +15,7 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     ConversationMessage,
     ConversationSummary,
     ConversationTarget,
+    ResidentDraftRecord,
     ResidentRecord,
     TemplateDraft,
     TemplateRecord,
@@ -43,6 +44,26 @@ def _decode_tags(raw: Optional[str]) -> Tuple[str, ...]:
     if not isinstance(value, list):
         return ()
     return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _resident_draft(row: dict) -> ResidentDraftRecord:
+    return ResidentDraftRecord(
+        id=str(row["id"]),
+        platform_user_id=str(row["platform_user_id"]),
+        draft_token=str(row["draft_token"]),
+        name=str(row["name"]),
+        avatar_key=str(row["avatar_key"]),
+        relationship_type=str(row["relationship_type"]),
+        relationship_label=row.get("relationship_label"),
+        personality_traits=_decode_tags(row.get("personality_traits_json")),
+        style_note=row.get("style_note"),
+        normalized_summary=str(row["normalized_summary"]),
+        persona_seed_json=str(row["persona_seed_json"]),
+        status=str(row["status"]),
+        client_request_id=row.get("client_request_id"),
+        resident_id=row.get("resident_id"),
+        expires_at=str(row["expires_at"]),
+    )
 
 
 def _world(row: dict) -> WorldRecord:
@@ -317,9 +338,85 @@ class SqlCompanionWorldRepository(WorldRepository):
             tags_json=json.dumps(list(draft.tags), ensure_ascii=False),
             persona_seed_json=draft.persona_seed_json,
             persona_version=draft.persona_version,
+            relationship_type=draft.relationship_type,
+            personality_traits_json=(
+                json.dumps(list(draft.personality_traits), ensure_ascii=False)
+                if draft.personality_traits
+                else None
+            ),
             conn=self._conn,
         )
         return _template(row)
+
+    def create_resident_draft(
+        self,
+        platform_user_id: str,
+        *,
+        draft_token: str,
+        name: str,
+        avatar_key: str,
+        relationship_type: str,
+        relationship_label: Optional[str],
+        personality_traits: Sequence[str],
+        style_note: Optional[str],
+        normalized_summary: str,
+        persona_seed_json: str,
+        safety_json: Optional[str],
+        expires_at: str,
+    ) -> ResidentDraftRecord:
+        row = world_db.insert_resident_draft(
+            platform_user_id=platform_user_id,
+            draft_token=draft_token,
+            name=name,
+            avatar_key=avatar_key,
+            relationship_type=relationship_type,
+            relationship_label=relationship_label,
+            personality_traits_json=json.dumps(
+                list(personality_traits), ensure_ascii=False
+            ),
+            style_note=style_note,
+            normalized_summary=normalized_summary,
+            persona_seed_json=persona_seed_json,
+            safety_json=safety_json,
+            expires_at=expires_at,
+            conn=self._conn,
+        )
+        return _resident_draft(row)
+
+    def get_resident_draft(
+        self, draft_token: str, platform_user_id: str
+    ) -> Optional[ResidentDraftRecord]:
+        row = world_db.get_resident_draft_by_token(
+            draft_token=draft_token,
+            platform_user_id=platform_user_id,
+            conn=self._conn,
+        )
+        return _resident_draft(row) if row else None
+
+    def get_resident_draft_by_request(
+        self, platform_user_id: str, client_request_id: str
+    ) -> Optional[ResidentDraftRecord]:
+        row = world_db.get_resident_draft_by_client_request(
+            platform_user_id=platform_user_id,
+            client_request_id=client_request_id,
+            conn=self._conn,
+        )
+        return _resident_draft(row) if row else None
+
+    def consume_resident_draft(
+        self,
+        draft_id: str,
+        platform_user_id: str,
+        client_request_id: str,
+        resident_id: str,
+    ) -> bool:
+        return world_db.consume_resident_draft(
+            draft_id=draft_id,
+            platform_user_id=platform_user_id,
+            client_request_id=client_request_id,
+            resident_id=resident_id,
+            conn=self._conn,
+        )
 
     def ensure_candidate(
         self, universe_id: str, template: TemplateRecord, origin: str
@@ -598,6 +695,18 @@ class SqlCompanionWorldRepository(WorldRepository):
             if item.resident_id == resident["id"]:
                 return item
         raise RuntimeError("legacy resident details were not found")
+
+    def mark_legacy_primary(
+        self, universe_id: str, legacy_primary_account_id: str
+    ) -> WorldRecord:
+        row = world_db.mark_universe_legacy_primary(
+            universe_id=universe_id,
+            legacy_primary_account_id=legacy_primary_account_id,
+            conn=self._conn,
+        )
+        if row is None:
+            raise RuntimeError("universe not found")
+        return _world(row)
 
     def mark_legacy_world(
         self, universe_id: str, legacy_primary_account_id: str

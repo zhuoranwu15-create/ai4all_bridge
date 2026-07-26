@@ -101,7 +101,7 @@ def test_visit_flag_off_is_hidden(client):
     response = client.post("/v1/world/invites")
     assert response.status_code == 404
     assert response.headers["Cache-Control"] == "no-store"
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "feature_disabled"
 
 
 def test_invite_redeem_requires_owner_accept_and_accept_is_atomic(

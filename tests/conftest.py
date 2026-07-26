@@ -85,6 +85,27 @@ def _dsn_from_conn(conn) -> str:
     return f"postgresql://{info.user}@{info.host}:{info.port}/{info.dbname}"
 
 
+@pytest.fixture(autouse=True)
+def _stub_text_sanitizer_llm(monkeypatch):
+    """默认把自由文本清洗器（D-B）的 LLM 调用短路为「原样放行」。
+
+    清洗器按产品决策 fail closed：LLM 不可用即拒绝放行。测试环境没有 provider，若不桩住，
+    每个碰到自建角色/称呼的用例都会退化成 503，掩盖真正要断言的行为。
+    需要验证改写/硬拒绝/fail-closed 的用例自行 monkeypatch 覆盖本桩。
+    """
+    def _pass_through(messages, **_kwargs):
+        import json as _json
+
+        payload = _json.loads(messages[-1]["content"])
+        return _json.dumps(
+            {"verdict": "pass", "sanitized_text": payload["text"], "categories": []}
+        )
+
+    monkeypatch.setattr(
+        "app.platform.moderation.text_sanitizer.generate_completion", _pass_through
+    )
+
+
 @pytest.fixture
 def db_dsn(request):
     """SQLite 档返回空串（→ 走 database_path）；PG 档返回本测试独立临时库的 DSN。"""
