@@ -63,7 +63,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         ).fetchone()["channel"] == "native"
         assert conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
-        ).fetchone()["version"] == 46
+        ).fetchone()["version"] == 47
         _migration_0036_repair_account_app_id(conn)
         _migration_0036_repair_account_app_id(conn)
 

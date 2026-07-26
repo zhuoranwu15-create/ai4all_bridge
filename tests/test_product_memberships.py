@@ -12,10 +12,10 @@ from app.bootstrap.product_registry import (
 from app.db._backend import is_postgres
 
 
-def test_production_registry_only_enables_zhaoxi():
+def test_production_registry_enables_zhaoxi_and_nooki():
     assert [
         product.app_id for product in PRODUCTION_PRODUCT_REGISTRY.registrations()
-    ] == ["zhaoxi"]
+    ] == ["nooki", "zhaoxi"]
     with pytest.raises(ValueError, match="unregistered app_id"):
         PRODUCTION_PRODUCT_REGISTRY.require_enabled("test_product")
 
