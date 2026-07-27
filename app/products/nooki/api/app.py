@@ -24,6 +24,7 @@ from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import CHANNEL_APP, CHANNELS
 from app.products.nooki.application.persona import DEFAULT_ARCHETYPE, DEFAULT_COMPANION_NAME
 from app.products.nooki.application.turns import run_nooki_turn
+from app.products.nooki.application.ui_projection import project_task_view
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
 from app.products.nooki.infrastructure.repositories.user_profile import (
@@ -73,6 +74,22 @@ def _account_id_for_principal(principal: SessionPrincipal) -> str:
             app_id=NOOKI_APP_ID,
         )
     return result["account"]["id"]
+
+
+def _authoritative_view(
+    platform_user_id: str, *, source_message_id: Optional[str] = None
+) -> tuple[dict, list[dict]]:
+    """每次响应都重新读取数据库；重复聊天也不复用旧卡片。"""
+
+    service = GoalBreakdownService(SqlTaskRepository())
+    focus_task_id = None
+    if source_message_id:
+        focus_task_id = service.get_focus_task_id_for_source_message(
+            platform_user_id=platform_user_id,
+            source_message_id=source_message_id,
+        )
+    projection = service.get_authoritative_state(platform_user_id, focus_task_id)
+    return project_task_view(projection)
 
 
 class CompanionRequest(BaseModel):
@@ -153,48 +170,9 @@ def nooki_state(
     response: Response,
     principal: SessionPrincipal = Depends(_require_nooki_session),
 ) -> dict:
-    service = GoalBreakdownService(SqlTaskRepository())
-    projection = service.get_authoritative_state(principal.platform_user_id)
+    state, cards = _authoritative_view(principal.platform_user_id)
     _no_store(response)
-    if projection.focus_task is None:
-        return {
-            "status": "ok",
-            "has_focus_task": False,
-            "active_tasks_count": projection.active_tasks_count,
-        }
-    task = projection.focus_task
-    return {
-        "status": "ok",
-        "has_focus_task": True,
-        "task": {
-            "task_id": task.id,
-            "title": task.title,
-            "raw_goal": task.raw_goal,
-            "status": task.status,
-            "current_step_id": task.current_step_id,
-        },
-        "current_step": (
-            {
-                "step_id": projection.current_step.id,
-                "title": projection.current_step.title,
-                "status": projection.current_step.status,
-            }
-            if projection.current_step is not None
-            else None
-        ),
-        "plans": [
-            {
-                "plan_id": p.id,
-                "mode": p.mode,
-                "title": p.title,
-                "description": p.description,
-                "estimated_minutes": p.estimated_minutes,
-            }
-            for p in projection.plans
-        ],
-        "active_tasks_count": projection.active_tasks_count,
-        "state_version": projection.state_version,
-    }
+    return {"status": "ok", "reply": None, "state": state, "cards": cards, "metadata": {}}
 
 
 @router.post("/chat")
@@ -211,12 +189,17 @@ def nooki_chat(
         account_id=account_id, reply_to_message_id=mapped_message_id
     )
     if duplicate_reply is not None:
+        state, cards = _authoritative_view(
+            principal.platform_user_id, source_message_id=mapped_message_id
+        )
         _no_store(response)
         return {
             "status": "ok",
             "reply": duplicate_reply,
             "no_reply": False,
-            "metadata": {"deduplicated": True},
+            "state": state,
+            "cards": cards,
+            "metadata": {"deduplicated": True, "message_id": mapped_message_id},
         }
 
     lock = _turn_lock(account_id)
@@ -227,12 +210,17 @@ def nooki_chat(
             account_id=account_id, reply_to_message_id=mapped_message_id
         )
         if duplicate_reply is not None:
+            state, cards = _authoritative_view(
+                principal.platform_user_id, source_message_id=mapped_message_id
+            )
             _no_store(response)
             return {
                 "status": "ok",
                 "reply": duplicate_reply,
                 "no_reply": False,
-                "metadata": {"deduplicated": True},
+                "state": state,
+                "cards": cards,
+                "metadata": {"deduplicated": True, "message_id": mapped_message_id},
             }
 
         identity = ResolvedIdentity(
@@ -265,11 +253,16 @@ def nooki_chat(
         raise HTTPException(status_code=429, detail=result.reply or "rate_limited")
     if result.status == "disabled":
         raise HTTPException(status_code=403, detail="account_disabled")
+    state, cards = _authoritative_view(
+        principal.platform_user_id, source_message_id=mapped_message_id
+    )
     _no_store(response)
     return {
         "status": "ok" if result.status == "duplicate" else result.status,
         "reply": result.reply,
         "no_reply": result.no_reply,
+        "state": state,
+        "cards": cards,
         "metadata": {
             "deduplicated": result.status == "duplicate",
             "message_id": result.metadata.get("reply_message_id"),

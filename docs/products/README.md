@@ -7,8 +7,9 @@
 | 产品 | `app_id` | 状态 | 文档入口 |
 | --- | --- | --- | --- |
 | 朝夕相伴 | `zhaoxi` | 已启用 | [产品 manifest](zhaoxi/README.md) |
+| Nooki | `nooki` | P0+P1 已实现，默认关闭 | [产品 manifest](nooki/README.md) |
 
-Fatetell、Nooki 等候选产品尚未冻结可开发的核心 PRD，因此不建立空目录或占位能力文档。
+Fatetell 等候选产品尚未冻结可开发的核心 PRD，因此不建立空目录或占位能力文档。
 哪个产品先具备真实需求，哪个先按[新增产品开发清单](../guides/adding-product.md)建立产品
 manifest 和总 PRD，再根据实际范围添加能力、架构设计与实施计划。
 

@@ -1,4 +1,4 @@
-"""Nooki API 端到端：登录后 chat/profile/state/按钮态接口，以及 session 401 边界。"""
+"""Nooki App API：统一 state/cards、按钮幂等和账号隔离。"""
 from __future__ import annotations
 
 from app.products.nooki.api import auth as auth_module
@@ -13,169 +13,183 @@ def _bind(client, monkeypatch, *, openid: str, phone: str) -> dict:
     monkeypatch.setattr(
         auth_module,
         "code2session",
-        lambda login_code: {"openid": openid, "session_key": "sess-key", "unionid": None},
+        lambda login_code: {"openid": openid, "unionid": None},
     )
     monkeypatch.setattr(
         auth_module,
         "get_phone_number",
-        lambda phone_code: {
-            "phone_number": phone,
-            "country_code": "86",
-        },
+        lambda phone_code: {"phone_number": phone, "country_code": "86"},
     )
-    resp = client.post(
+    response = client.post(
         f"{_PREFIX}/auth/bind",
-        json={"login_code": "js-code", "phone_code": "pc"},
+        json={"login_code": "js-code", "phone_code": "phone-code"},
     )
-    assert resp.status_code == 200
-    return resp.json()
+    assert response.status_code == 200
+    return response.json()
 
 
-def _auth_headers(token: str) -> dict:
+def _headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def test_chat_state_profile_and_button_endpoints_require_session(client):
-    assert (
-        client.post(
-            f"{_PREFIX}/chat", json={"text": "你好", "client_message_id": "abcdefgh"}
-        ).status_code
-        == 401
+def _action(request_id: str, version=None) -> dict:
+    body = {"client_request_id": request_id}
+    if version is not None:
+        body["expected_version"] = version
+    return body
+
+
+def _create_task(user_id: str):
+    return GoalBreakdownService(SqlTaskRepository()).create_task_with_options(
+        platform_user_id=user_id,
+        title="写周报",
+        raw_goal="我想开始写周报",
+        options=(
+            PlanDraft("tiny", "打开文档", "看见页面即可", 2),
+            PlanDraft("light", "列出提纲", "列三个点", 6),
+            PlanDraft("normal", "写完初稿", "暂时不润色", 20),
+        ),
+        source_message_id=f"seed:{user_id}",
+        operation_id=f"seed:create:{user_id}",
     )
+
+
+def test_product_endpoints_require_session(client):
+    assert client.post(
+        f"{_PREFIX}/chat", json={"text": "你好", "client_message_id": "abcdefgh"}
+    ).status_code == 401
     assert client.get(f"{_PREFIX}/state").status_code == 401
     assert client.get(f"{_PREFIX}/profile/companion").status_code == 401
-    assert (
-        client.post(f"{_PREFIX}/tasks/some-task/plans/some-plan/select").status_code
-        == 401
-    )
-    assert client.post(f"{_PREFIX}/steps/some-step/start").status_code == 401
-    assert client.post(f"{_PREFIX}/steps/some-step/complete").status_code == 401
+    assert client.post(
+        f"{_PREFIX}/tasks/task/plans/plan/select", json=_action("request01")
+    ).status_code == 401
 
 
 def test_companion_profile_defaults_and_roundtrip(client, monkeypatch):
     bound = _bind(client, monkeypatch, openid="openid-app-1", phone="13900011101")
-    headers = _auth_headers(bound["access_token"])
-
-    default = client.get(f"{_PREFIX}/profile/companion", headers=headers)
-    assert default.status_code == 200
-    assert default.json()["status"] == "ok"
-
+    headers = _headers(bound["access_token"])
+    assert client.get(f"{_PREFIX}/profile/companion", headers=headers).status_code == 200
     updated = client.post(
         f"{_PREFIX}/profile/companion",
         json={"archetype": "bestie", "companion_name": "阿福"},
         headers=headers,
     )
-    assert updated.status_code == 200
-    assert updated.json() == {
-        "status": "ok",
-        "archetype": "bestie",
-        "companion_name": "阿福",
-    }
-
-    fetched = client.get(f"{_PREFIX}/profile/companion", headers=headers)
-    assert fetched.json() == {
-        "status": "ok",
-        "archetype": "bestie",
-        "companion_name": "阿福",
-    }
-
-    rejected = client.post(
-        f"{_PREFIX}/profile/companion",
-        json={"archetype": "not_a_real_archetype"},
-        headers=headers,
-    )
-    assert rejected.status_code == 422
+    assert updated.json()["companion_name"] == "阿福"
+    assert client.get(f"{_PREFIX}/profile/companion", headers=headers).json()[
+        "archetype"
+    ] == "bestie"
 
 
-def test_state_reflects_no_focus_task_initially(client, monkeypatch):
+def test_state_and_chat_share_authoritative_view(client, monkeypatch):
     bound = _bind(client, monkeypatch, openid="openid-app-2", phone="13900011102")
-    headers = _auth_headers(bound["access_token"])
-
-    resp = client.get(f"{_PREFIX}/state", headers=headers)
-    assert resp.status_code == 200
-    assert resp.json() == {
-        "status": "ok",
-        "has_focus_task": False,
-        "active_tasks_count": 0,
-    }
-
-
-def test_chat_returns_reply_and_dedupes_by_client_message_id(client, monkeypatch):
-    bound = _bind(client, monkeypatch, openid="openid-app-3", phone="13900011103")
-    headers = _auth_headers(bound["access_token"])
+    headers = _headers(bound["access_token"])
+    empty = client.get(f"{_PREFIX}/state", headers=headers).json()
+    assert empty["state"]["has_focus_task"] is False
+    assert empty["cards"] == []
 
     first = client.post(
         f"{_PREFIX}/chat",
-        json={"text": "我今天想写周报", "client_message_id": "client-msg-1"},
+        json={"text": "今天有点累", "client_message_id": "client-msg-1"},
         headers=headers,
     )
     assert first.status_code == 200
-    body = first.json()
-    assert body["status"] == "ok"
-    assert body["reply"] == "mock reply"
-    assert body["metadata"]["deduplicated"] is False
+    assert first.json()["reply"] == "mock reply"
+    assert first.json()["state"]["has_focus_task"] is False
+    assert first.json()["metadata"]["deduplicated"] is False
 
-    second = client.post(
+    duplicate = client.post(
         f"{_PREFIX}/chat",
-        json={"text": "我今天想写周报", "client_message_id": "client-msg-1"},
+        json={"text": "今天有点累", "client_message_id": "client-msg-1"},
         headers=headers,
     )
-    assert second.status_code == 200
-    assert second.json()["metadata"]["deduplicated"] is True
+    assert duplicate.status_code == 200
+    assert duplicate.json()["metadata"]["deduplicated"] is True
+    assert "state" in duplicate.json() and "cards" in duplicate.json()
 
 
-def test_button_endpoints_drive_state_machine_and_reject_other_user(client, monkeypatch):
-    owner = _bind(client, monkeypatch, openid="openid-app-4", phone="13900011104")
-    owner_headers = _auth_headers(owner["access_token"])
-    intruder = _bind(client, monkeypatch, openid="openid-app-5", phone="13900011105")
-    intruder_headers = _auth_headers(intruder["access_token"])
-
-    svc = GoalBreakdownService(SqlTaskRepository())
-    task = svc.create_task_draft(
-        platform_user_id=owner["platform_user_id"],
-        title="写周报",
-        raw_goal="周报还没写",
-        source_message_id=None,
-    )
-    task = svc.create_step_options(
-        task.id,
-        (
-            PlanDraft(mode="tiny", title="打开文档"),
-            PlanDraft(mode="light", title="列提纲"),
-            PlanDraft(mode="normal", title="写完"),
-        ),
-        platform_user_id=owner["platform_user_id"],
-    )
-    plan = svc._repository.list_plans(task.id)[0]
-
-    forbidden_select = client.post(
-        f"{_PREFIX}/tasks/{task.id}/plans/{plan.id}/select", headers=intruder_headers
-    )
-    assert forbidden_select.status_code == 404
+def test_button_api_drives_loop_and_preserves_completion_card(client, monkeypatch):
+    bound = _bind(client, monkeypatch, openid="openid-app-3", phone="13900011103")
+    headers = _headers(bound["access_token"])
+    created = _create_task(bound["platform_user_id"])
+    plan = created.plans[0]
 
     selected = client.post(
-        f"{_PREFIX}/tasks/{task.id}/plans/{plan.id}/select", headers=owner_headers
+        f"{_PREFIX}/tasks/{created.task.id}/plans/{plan.id}/select",
+        json=_action("select001", created.task.version),
+        headers=headers,
     )
     assert selected.status_code == 200
-    step_id = selected.json()["current_step_id"]
-    assert step_id
+    selected_body = selected.json()
+    assert selected_body["state"]["task"]["status"] == "ready"
+    assert selected_body["cards"][0]["type"] == "ready_to_start"
+    step_id = selected_body["state"]["current_step"]["step_id"]
 
-    forbidden_start = client.post(
-        f"{_PREFIX}/steps/{step_id}/start", headers=intruder_headers
+    started = client.post(
+        f"{_PREFIX}/steps/{step_id}/start",
+        json=_action("start0001", selected_body["state"]["state_version"]),
+        headers=headers,
     )
-    assert forbidden_start.status_code == 404
-
-    started = client.post(f"{_PREFIX}/steps/{step_id}/start", headers=owner_headers)
     assert started.status_code == 200
-    assert started.json()["status"] == "active"
-
-    forbidden_complete = client.post(
-        f"{_PREFIX}/steps/{step_id}/complete", headers=intruder_headers
-    )
-    assert forbidden_complete.status_code == 404
+    started_body = started.json()
+    assert started_body["state"]["task"]["status"] == "active"
+    assert started_body["cards"][0]["type"] == "active_step"
 
     completed = client.post(
-        f"{_PREFIX}/steps/{step_id}/complete", headers=owner_headers
+        f"{_PREFIX}/steps/{step_id}/complete",
+        json=_action("complete1", started_body["state"]["state_version"]),
+        headers=headers,
     )
     assert completed.status_code == 200
-    assert completed.json()["status"] == "done"
+    completed_body = completed.json()
+    assert completed_body["state"]["task"]["status"] == "done"
+    assert completed_body["cards"][0]["type"] == "completion"
+    assert completed_body["cards"][0]["message"] == "你已经完成了这次行动。"
+
+    repeated = client.post(
+        f"{_PREFIX}/steps/{step_id}/complete",
+        json=_action("complete1", 1),
+        headers=headers,
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["state"]["state_version"] == completed_body["state"]["state_version"]
+
+
+def test_button_api_rejects_stale_version_and_other_user(client, monkeypatch):
+    owner = _bind(client, monkeypatch, openid="openid-app-4", phone="13900011104")
+    intruder = _bind(client, monkeypatch, openid="openid-app-5", phone="13900011105")
+    created = _create_task(owner["platform_user_id"])
+    path = f"{_PREFIX}/tasks/{created.task.id}/plans/{created.plans[0].id}/select"
+
+    forbidden = client.post(
+        path,
+        json=_action("intruder1"),
+        headers=_headers(intruder["access_token"]),
+    )
+    assert forbidden.status_code == 404
+    stale = client.post(
+        path,
+        json=_action("stale0001", 999),
+        headers=_headers(owner["access_token"]),
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == "task_version_conflict"
+
+
+def test_abandon_button_and_request_validation(client, monkeypatch):
+    bound = _bind(client, monkeypatch, openid="openid-app-6", phone="13900011106")
+    headers = _headers(bound["access_token"])
+    created = _create_task(bound["platform_user_id"])
+    invalid = client.post(
+        f"{_PREFIX}/tasks/{created.task.id}/abandon",
+        json={"client_request_id": "bad"},
+        headers=headers,
+    )
+    assert invalid.status_code == 422
+    abandoned = client.post(
+        f"{_PREFIX}/tasks/{created.task.id}/abandon",
+        json=_action("abandon01", created.task.version),
+        headers=headers,
+    )
+    assert abandoned.status_code == 200
+    assert abandoned.json()["state"]["task"]["status"] == "abandoned"
+    assert abandoned.json()["cards"] == []

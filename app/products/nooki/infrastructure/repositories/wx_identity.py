@@ -26,8 +26,8 @@ def find_platform_user_id_by_openid(*, wx_appid: str, openid: str) -> Optional[s
 
 def bind_wx_identity(
     *, platform_user_id: str, wx_appid: str, openid: str, unionid: Optional[str] = None
-) -> None:
-    """建立 openid 绑定；`(wx_appid, openid)` 已存在时是幂等 no-op（不改绑到另一个 platform_user）。"""
+) -> str:
+    """建立绑定并返回实际 owner；并发冲突时绝不把既有 OpenID 改绑。"""
 
     with connect() as conn:
         conn.execute(
@@ -38,6 +38,16 @@ def bind_wx_identity(
             """,
             (_new_id("nkwx"), platform_user_id, _APP_ID_VALUE, wx_appid, openid, unionid),
         )
+        row = conn.execute(
+            """
+            SELECT platform_user_id FROM nooki_wx_identities
+            WHERE wx_appid = ? AND openid = ?
+            """,
+            (wx_appid, openid),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("wx identity was not bound")
+    return str(row["platform_user_id"])
 
 
 __all__ = ["find_platform_user_id_by_openid", "bind_wx_identity"]

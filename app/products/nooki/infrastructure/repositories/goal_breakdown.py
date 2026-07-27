@@ -9,7 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator, Optional, Sequence
 
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection, IntegrityError, is_postgres
 from app.db._core import _new_id, _tx, connect
 from app.time_utils import beijing_now_str
 from app.products.nooki.domain.goal_breakdown.contracts import (
@@ -20,6 +20,7 @@ from app.products.nooki.domain.goal_breakdown.contracts import (
     TASK_STATUS_ABANDONED,
     TASK_STATUS_DONE,
     TASK_STATUS_DRAFT,
+    TaskEventRecord,
     TaskRecord,
     TaskRepository,
 )
@@ -36,6 +37,8 @@ def _task(row: dict) -> TaskRecord:
         current_step_id=row.get("current_step_id"),
         source_message_id=row.get("source_message_id"),
         version=int(row["version"]),
+        completed_at=row.get("completed_at"),
+        abandoned_at=row.get("abandoned_at"),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -56,14 +59,33 @@ def _plan(row: dict) -> PlanRecord:
 
 
 def _step(row: dict) -> StepRecord:
+    suggested_minutes = row.get("suggested_minutes")
     return StepRecord(
         id=str(row["id"]),
         task_id=str(row["task_id"]),
         plan_id=str(row["plan_id"]),
         title=str(row["title"]),
+        description=row.get("description"),
+        suggested_minutes=(
+            int(suggested_minutes) if suggested_minutes is not None else None
+        ),
+        replaces_step_id=row.get("replaces_step_id"),
         status=str(row["status"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+    )
+
+
+def _event(row: dict) -> TaskEventRecord:
+    return TaskEventRecord(
+        id=str(row["id"]),
+        task_id=str(row["task_id"]),
+        platform_user_id=str(row["platform_user_id"]),
+        event_type=str(row["event_type"]),
+        payload=row.get("payload"),
+        source_message_id=row.get("source_message_id"),
+        operation_id=str(row["operation_id"]),
+        created_at=str(row["created_at"]),
     )
 
 
@@ -100,11 +122,16 @@ class SqlTaskRepository(TaskRepository):
             ).fetchone()
         return _task(dict(row)) if row else None
 
-    def get_task_by_source_message(self, source_message_id: str) -> Optional[TaskRecord]:
+    def get_task_by_source_message(
+        self, *, platform_user_id: str, source_message_id: str
+    ) -> Optional[TaskRecord]:
         with _tx(self._conn) as tx:
             row = tx.execute(
-                "SELECT * FROM nooki_tasks WHERE source_message_id = ?",
-                (source_message_id,),
+                """
+                SELECT * FROM nooki_tasks
+                WHERE platform_user_id = ? AND source_message_id = ?
+                """,
+                (platform_user_id, source_message_id),
             ).fetchone()
         return _task(dict(row)) if row else None
 
@@ -127,19 +154,29 @@ class SqlTaskRepository(TaskRepository):
         conn = self._required_conn()
         task_id = _new_id("nktask")
         # ON CONFLICT 只在 source_message_id 非空时命中（对齐 ux_nooki_tasks_source_message
-        # 的 partial unique index），是 create_task_draft 幂等的 DB 层兜底。
-        conn.execute(
-            """
-            INSERT INTO nooki_tasks(id, platform_user_id, title, raw_goal, status, source_message_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(source_message_id) WHERE source_message_id IS NOT NULL DO NOTHING
-            """,
-            (task_id, platform_user_id, title, raw_goal, TASK_STATUS_DRAFT, source_message_id),
-        )
+        # 的 partial unique index），是原子创建流程的 DB 层幂等兜底。
+        try:
+            conn.execute(
+                """
+                INSERT INTO nooki_tasks(
+                    id, platform_user_id, title, raw_goal, status, source_message_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(platform_user_id, source_message_id)
+                    WHERE source_message_id IS NOT NULL DO NOTHING
+                """,
+                (task_id, platform_user_id, title, raw_goal, TASK_STATUS_DRAFT, source_message_id),
+            )
+        except IntegrityError as err:
+            # 并发请求可能都通过前置读取；数据库的单未终结任务唯一索引是最终兜底。
+            raise NookiDomainError("open_task_exists") from err
         if source_message_id:
             row = conn.execute(
-                "SELECT * FROM nooki_tasks WHERE source_message_id = ?",
-                (source_message_id,),
+                """
+                SELECT * FROM nooki_tasks
+                WHERE platform_user_id = ? AND source_message_id = ?
+                """,
+                (platform_user_id, source_message_id),
             ).fetchone()
         else:
             row = conn.execute(
@@ -157,6 +194,8 @@ class SqlTaskRepository(TaskRepository):
         status: Optional[str] = None,
         selected_plan_id: Optional[str] = None,
         current_step_id: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        abandoned_at: Optional[str] = None,
     ) -> TaskRecord:
         conn = self._required_conn()
         set_clauses = ["version = version + 1", "updated_at = ?"]
@@ -170,6 +209,12 @@ class SqlTaskRepository(TaskRepository):
         if current_step_id is not None:
             set_clauses.append("current_step_id = ?")
             params.append(current_step_id)
+        if completed_at is not None:
+            set_clauses.append("completed_at = ?")
+            params.append(completed_at)
+        if abandoned_at is not None:
+            set_clauses.append("abandoned_at = ?")
+            params.append(abandoned_at)
         params.extend([task_id, expected_version])
         cursor = conn.execute(
             f"UPDATE nooki_tasks SET {', '.join(set_clauses)} WHERE id = ? AND version = ?",
@@ -199,7 +244,11 @@ class SqlTaskRepository(TaskRepository):
     def list_plans(self, task_id: str) -> Sequence[PlanRecord]:
         with _tx(self._conn) as tx:
             rows = tx.execute(
-                "SELECT * FROM nooki_task_plans WHERE task_id = ? ORDER BY created_at, id",
+                """
+                SELECT * FROM nooki_task_plans
+                WHERE task_id = ?
+                ORDER BY CASE mode WHEN 'tiny' THEN 1 WHEN 'light' THEN 2 ELSE 3 END, id
+                """,
                 (task_id,),
             ).fetchall()
         return tuple(_plan(dict(row)) for row in rows)
@@ -267,13 +316,36 @@ class SqlTaskRepository(TaskRepository):
         return _step(dict(row)) if row else None
 
     def create_step(
-        self, *, task_id: str, plan_id: str, title: str, status: str
+        self,
+        *,
+        task_id: str,
+        plan_id: str,
+        title: str,
+        description: Optional[str],
+        suggested_minutes: Optional[int],
+        replaces_step_id: Optional[str],
+        status: str,
     ) -> StepRecord:
         conn = self._required_conn()
         step_id = _new_id("nkstep")
         conn.execute(
-            "INSERT INTO nooki_steps(id, task_id, plan_id, title, status) VALUES (?, ?, ?, ?, ?)",
-            (step_id, task_id, plan_id, title, status),
+            """
+            INSERT INTO nooki_steps(
+                id, task_id, plan_id, title, description, suggested_minutes,
+                replaces_step_id, status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                step_id,
+                task_id,
+                plan_id,
+                title,
+                description,
+                suggested_minutes,
+                replaces_step_id,
+                status,
+            ),
         )
         row = conn.execute("SELECT * FROM nooki_steps WHERE id = ?", (step_id,)).fetchone()
         if row is None:
@@ -301,17 +373,59 @@ class SqlTaskRepository(TaskRepository):
         event_type: str,
         payload: Optional[str] = None,
         source_message_id: Optional[str] = None,
-    ) -> None:
+        operation_id: str,
+    ) -> TaskEventRecord:
         conn = self._required_conn()
+        event_id = _new_id("nkevt")
         conn.execute(
             """
             INSERT INTO nooki_task_events(
-                id, task_id, platform_user_id, event_type, payload, source_message_id
+                id, task_id, platform_user_id, event_type, payload,
+                source_message_id, operation_id
             )
-            VALUES (?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (_new_id("nkevt"), task_id, platform_user_id, event_type, payload, source_message_id),
+            (
+                event_id,
+                task_id,
+                platform_user_id,
+                event_type,
+                payload,
+                source_message_id,
+                operation_id,
+            ),
         )
+        row = conn.execute(
+            "SELECT * FROM nooki_task_events WHERE id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("task event was not created")
+        return _event(dict(row))
+
+    def get_task_event_by_operation_id(
+        self, operation_id: str
+    ) -> Optional[TaskEventRecord]:
+        with _tx(self._conn) as tx:
+            row = tx.execute(
+                "SELECT * FROM nooki_task_events WHERE operation_id = ?",
+                (operation_id,),
+            ).fetchone()
+        return _event(dict(row)) if row else None
+
+    def get_latest_task_id_by_source_message(
+        self, *, platform_user_id: str, source_message_id: str
+    ) -> Optional[str]:
+        with _tx(self._conn) as tx:
+            row = tx.execute(
+                """
+                SELECT task_id FROM nooki_task_events
+                WHERE platform_user_id = ? AND source_message_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (platform_user_id, source_message_id),
+            ).fetchone()
+        return str(row["task_id"]) if row else None
 
 
 __all__ = ["SqlTaskRepository"]

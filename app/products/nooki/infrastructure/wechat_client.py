@@ -76,7 +76,7 @@ def _get_access_token() -> str:
 
 
 def code2session(login_code: str) -> Dict[str, Any]:
-    """用小程序 wx.login() 拿到的 code 换 openid/session_key（微信官方 jscode2session）。"""
+    """用小程序 wx.login() 的 code 换 openid/unionid，不向上暴露 session_key。"""
 
     if not settings.nooki_wx_appid or not settings.nooki_wx_app_secret:
         raise WeChatAuthError("wx_not_configured", "NOOKI_WX_APPID/NOOKI_WX_APP_SECRET 未配置")
@@ -102,10 +102,9 @@ def code2session(login_code: str) -> Dict[str, Any]:
             "wx_code2session_failed", f"errcode={errcode} errmsg={payload.get('errmsg')}"
         )
     openid = payload.get("openid")
-    session_key = payload.get("session_key")
-    if not openid or not session_key:
-        raise WeChatAuthError("wx_code2session_failed", "微信返回缺少 openid/session_key")
-    return {"openid": openid, "session_key": session_key, "unionid": payload.get("unionid")}
+    if not openid:
+        raise WeChatAuthError("wx_code2session_failed", "微信返回缺少 openid")
+    return {"openid": openid, "unionid": payload.get("unionid")}
 
 
 def get_phone_number(phone_code: str) -> Dict[str, Any]:

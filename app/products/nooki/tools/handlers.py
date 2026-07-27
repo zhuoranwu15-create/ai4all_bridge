@@ -1,20 +1,11 @@
-"""Nooki 工具 handler：参数解析 + 转调 `GoalBreakdownService`，领域异常翻译成失败结果。
-
-状态机校验、幂等、乐观锁全部在 domain service（见 `app.products.nooki.domain.goal_breakdown.
-service`），这里只做 args 解析和 `NookiDomainError` → `{"status": "failed", "error": code}` 的
-翻译，不重复业务判断。
-"""
+"""Nooki Tool handlers：可信身份解析、operation_id 生成和领域错误翻译。"""
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from app.db import get_platform_user_id_for_account
-from app.products.nooki.domain.goal_breakdown.contracts import (
-    NookiDomainError,
-    PlanDraft,
-    StepRecord,
-    TaskRecord,
-)
+from app.products.nooki.application.ui_projection import project_task_view
+from app.products.nooki.domain.goal_breakdown.contracts import NookiDomainError, PlanDraft
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
 
@@ -33,20 +24,21 @@ def _platform_user_id(ctx: "TurnContext") -> str:
     return platform_user_id
 
 
-def _task_dict(task: TaskRecord) -> Dict[str, Any]:
-    return {
-        "task_id": task.id,
-        "status": task.status,
-        "title": task.title,
-        "current_step_id": task.current_step_id,
-    }
+def _operation_id(ctx: "TurnContext", action: str, *resource_ids: str) -> str:
+    suffix = ":".join(str(item) for item in resource_ids if item)
+    return f"message:{ctx.message_id}:{action}" + (f":{suffix}" if suffix else "")
 
 
-def _step_dict(step: StepRecord) -> Dict[str, Any]:
-    return {"step_id": step.id, "status": step.status, "title": step.title}
+def _expected_version(args: dict) -> Optional[int]:
+    value = args.get("expected_version")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise NookiDomainError("expected_version_invalid")
+    return value
 
 
-def _plan_draft(item: Dict[str, Any]) -> PlanDraft:
+def _plan_draft(item: dict) -> PlanDraft:
     return PlanDraft(
         mode=str(item.get("mode") or ""),
         title=str(item.get("title") or ""),
@@ -55,153 +47,196 @@ def _plan_draft(item: Dict[str, Any]) -> PlanDraft:
     )
 
 
-def handle_nooki_create_task_draft(args: dict, ctx: "TurnContext") -> dict:
-    """建任务草稿；source_message_id 固定取当前消息 id，保证同一条用户消息重试幂等。"""
+def _ok(
+    service: GoalBreakdownService,
+    *,
+    platform_user_id: str,
+    focus_task_id: str,
+    operation: str,
+) -> dict:
+    projection = service.get_authoritative_state(platform_user_id, focus_task_id)
+    state, cards = project_task_view(projection)
+    return {"status": "ok", "operation": operation, "state": state, "cards": cards}
 
+
+def _failed(err: NookiDomainError) -> dict:
+    return {"status": "failed", "error": err.code}
+
+
+def handle_nooki_create_task_with_options(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    """原子创建一次行动任务；tool_invocation_id 仅用于 Runtime 审计，不作为幂等键。"""
+
+    del tool_invocation_id
     try:
         platform_user_id = _platform_user_id(ctx)
-        task = _service().create_task_draft(
+        service = _service()
+        result = service.create_task_with_options(
             platform_user_id=platform_user_id,
-            title=str(args.get("title") or args.get("raw_goal") or ""),
-            raw_goal=str(args.get("raw_goal") or args.get("title") or ""),
+            title=str(args.get("title") or ""),
+            raw_goal=str(args.get("raw_goal") or ""),
+            options=tuple(_plan_draft(item) for item in (args.get("options") or [])),
+            source_message_id=ctx.message_id,
+            operation_id=_operation_id(ctx, "create_task"),
+        )
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=result.task.id,
+            operation="create_task_with_options",
+        )
+    except NookiDomainError as err:
+        return _failed(err)
+
+
+def handle_nooki_select_task_plan(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    del tool_invocation_id
+    try:
+        platform_user_id = _platform_user_id(ctx)
+        task_id = str(args.get("task_id") or "")
+        plan_id = str(args.get("plan_id") or "")
+        service = _service()
+        service.select_task_plan(
+            task_id,
+            plan_id,
+            platform_user_id=platform_user_id,
+            operation_id=_operation_id(ctx, "select_plan", task_id, plan_id),
+            expected_version=_expected_version(args),
             source_message_id=ctx.message_id,
         )
-        return {"status": "ok", **_task_dict(task)}
-    except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
-
-
-def handle_nooki_create_step_options(args: dict, ctx: "TurnContext") -> dict:
-    """写入三档方案（tiny/light/normal 缺一不可）。"""
-
-    try:
-        platform_user_id = _platform_user_id(ctx)
-        options = tuple(_plan_draft(item) for item in (args.get("options") or []))
-        task = _service().create_step_options(
-            str(args.get("task_id") or ""), options, platform_user_id=platform_user_id
-        )
-        return {"status": "ok", **_task_dict(task)}
-    except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
-
-
-def handle_nooki_select_task_plan(args: dict, ctx: "TurnContext") -> dict:
-    """用户选中一档方案：任务转 active，生成待开始的 step。"""
-
-    try:
-        platform_user_id = _platform_user_id(ctx)
-        task = _service().select_task_plan(
-            str(args.get("task_id") or ""),
-            str(args.get("plan_id") or ""),
+        return _ok(
+            service,
             platform_user_id=platform_user_id,
+            focus_task_id=task_id,
+            operation="select_task_plan",
         )
-        return {"status": "ok", **_task_dict(task)}
     except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
+        return _failed(err)
 
 
-def handle_nooki_start_step(args: dict, ctx: "TurnContext") -> dict:
-    """pending → active。"""
-
+def handle_nooki_start_step(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    del tool_invocation_id
     try:
         platform_user_id = _platform_user_id(ctx)
-        step = _service().start_step(
-            str(args.get("step_id") or ""), platform_user_id=platform_user_id
-        )
-        return {"status": "ok", **_step_dict(step)}
-    except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
-
-
-def handle_nooki_complete_step(args: dict, ctx: "TurnContext") -> dict:
-    """active → done；任务是否整体完成由 nooki_complete_task 另行调用。"""
-
-    try:
-        platform_user_id = _platform_user_id(ctx)
-        step = _service().complete_step(
-            str(args.get("step_id") or ""), platform_user_id=platform_user_id
-        )
-        return {"status": "ok", **_step_dict(step)}
-    except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
-
-
-def handle_nooki_shrink_step(args: dict, ctx: "TurnContext") -> dict:
-    """当前 step 转 skipped，新建一个更小的 active step。"""
-
-    try:
-        platform_user_id = _platform_user_id(ctx)
-        new_step = args.get("new_step") or {}
-        step = _service().shrink_step(
-            str(args.get("step_id") or ""),
-            _plan_draft(new_step),
+        step_id = str(args.get("step_id") or "")
+        service = _service()
+        step = service.start_step(
+            step_id,
             platform_user_id=platform_user_id,
+            operation_id=_operation_id(ctx, "start_step", step_id),
+            expected_version=_expected_version(args),
+            source_message_id=ctx.message_id,
         )
-        return {"status": "ok", **_step_dict(step)}
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=step.task_id,
+            operation="start_step",
+        )
     except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
+        return _failed(err)
 
 
-def handle_nooki_complete_task(args: dict, ctx: "TurnContext") -> dict:
-    """任务整体完成（终态）。"""
-
+def handle_nooki_complete_step(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    del tool_invocation_id
     try:
         platform_user_id = _platform_user_id(ctx)
-        task = _service().complete_task(
-            str(args.get("task_id") or ""), platform_user_id=platform_user_id
+        step_id = str(args.get("step_id") or "")
+        service = _service()
+        step = service.complete_step(
+            step_id,
+            platform_user_id=platform_user_id,
+            operation_id=_operation_id(ctx, "complete_step", step_id),
+            expected_version=_expected_version(args),
+            source_message_id=ctx.message_id,
         )
-        return {"status": "ok", **_task_dict(task)}
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=step.task_id,
+            operation="complete_step",
+        )
     except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
+        return _failed(err)
 
 
-def handle_nooki_abandon_task(args: dict, ctx: "TurnContext") -> dict:
-    """放弃任务（终态）。"""
-
+def handle_nooki_shrink_step(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    del tool_invocation_id
     try:
         platform_user_id = _platform_user_id(ctx)
-        task = _service().abandon_task(
-            str(args.get("task_id") or ""), platform_user_id=platform_user_id
+        step_id = str(args.get("step_id") or "")
+        service = _service()
+        step = service.shrink_step(
+            step_id,
+            _plan_draft(args.get("replacement") or {}),
+            platform_user_id=platform_user_id,
+            operation_id=_operation_id(ctx, "shrink_step", step_id),
+            expected_version=_expected_version(args),
+            source_message_id=ctx.message_id,
         )
-        return {"status": "ok", **_task_dict(task)}
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=step.task_id,
+            operation="shrink_step",
+        )
     except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
+        return _failed(err)
+
+
+def handle_nooki_abandon_task(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    del tool_invocation_id
+    try:
+        platform_user_id = _platform_user_id(ctx)
+        task_id = str(args.get("task_id") or "")
+        service = _service()
+        service.abandon_task(
+            task_id,
+            platform_user_id=platform_user_id,
+            operation_id=_operation_id(ctx, "abandon_task", task_id),
+            expected_version=_expected_version(args),
+            source_message_id=ctx.message_id,
+        )
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=task_id,
+            operation="abandon_task",
+        )
+    except NookiDomainError as err:
+        return _failed(err)
 
 
 def handle_nooki_list_state(args: dict, ctx: "TurnContext") -> dict:
-    """读取用户当前聚焦任务/step 的最新状态；无副作用。"""
+    """只读查询不需要 invocation call style。"""
 
     try:
         platform_user_id = _platform_user_id(ctx)
-        focus_task_id: Optional[str] = args.get("focus_task_id") or None
-        projection = _service().get_authoritative_state(platform_user_id, focus_task_id)
-        if projection.focus_task is None:
-            return {
-                "status": "ok",
-                "has_focus_task": False,
-                "active_tasks_count": projection.active_tasks_count,
-            }
-        return {
-            "status": "ok",
-            "has_focus_task": True,
-            **_task_dict(projection.focus_task),
-            "current_step": _step_dict(projection.current_step) if projection.current_step else None,
-            "plans": [
-                {"plan_id": p.id, "mode": p.mode, "title": p.title}
-                for p in projection.plans
-            ],
-            "active_tasks_count": projection.active_tasks_count,
-        }
+        service = _service()
+        projection = service.get_authoritative_state(
+            platform_user_id, args.get("focus_task_id") or None
+        )
+        state, cards = project_task_view(projection)
+        return {"status": "ok", "operation": "list_state", "state": state, "cards": cards}
     except NookiDomainError as err:
-        return {"status": "failed", "error": err.code}
+        return _failed(err)
 
 
 __all__ = [
     "handle_nooki_abandon_task",
     "handle_nooki_complete_step",
-    "handle_nooki_complete_task",
-    "handle_nooki_create_step_options",
-    "handle_nooki_create_task_draft",
+    "handle_nooki_create_task_with_options",
     "handle_nooki_list_state",
     "handle_nooki_select_task_plan",
     "handle_nooki_shrink_step",

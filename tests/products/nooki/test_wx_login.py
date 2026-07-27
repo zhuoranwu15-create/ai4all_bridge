@@ -5,19 +5,21 @@ from __future__ import annotations
 from fastapi import HTTPException, Response
 import pytest
 
+import app.db as db
 from app.products.nooki.api import auth as auth_module
 from app.products.nooki.infrastructure.repositories.wx_identity import (
     find_platform_user_id_by_openid,
 )
+from app.products.nooki.infrastructure import wechat_client
 from app.products.nooki.infrastructure.wechat_client import WeChatAuthError
 
 # conftest.py 顶部固定的测试用 wx_appid
 _WX_APPID = "wx-test-appid"
 
 
-def _fake_code2session(openid: str, session_key: str = "sess-key", unionid=None):
+def _fake_code2session(openid: str, unionid=None):
     def _call(login_code: str):
-        return {"openid": openid, "session_key": session_key, "unionid": unionid}
+        return {"openid": openid, "unionid": unionid}
 
     return _call
 
@@ -162,3 +164,79 @@ def test_bind_same_openid_same_phone_after_conflict_is_idempotent(fresh_db, monk
 
     assert first["platform_user_id"] == second["platform_user_id"]
     assert second["is_new_user"] is False
+
+
+def test_bind_rejects_bound_openid_with_previously_unknown_phone(fresh_db, monkeypatch):
+    """新手机号也会解析成独立用户，不能借已绑定 OpenID 登录旧用户。"""
+
+    monkeypatch.setattr(auth_module, "code2session", _fake_code2session("openid-D"))
+    monkeypatch.setattr(auth_module, "get_phone_number", _fake_get_phone("13900004444"))
+    first = auth_module.nooki_auth_bind(
+        auth_module.WxBindRequest(login_code="js-D", phone_code="pc-D"), Response()
+    )
+
+    monkeypatch.setattr(auth_module, "get_phone_number", _fake_get_phone("13900005555"))
+    with pytest.raises(HTTPException) as exc_info:
+        auth_module.nooki_auth_bind(
+            auth_module.WxBindRequest(login_code="js-D-2", phone_code="pc-new"),
+            Response(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "wx_identity_conflict"
+    assert find_platform_user_id_by_openid(
+        wx_appid=_WX_APPID, openid="openid-D"
+    ) == first["platform_user_id"]
+
+
+def test_session_rejects_disabled_membership_with_403(fresh_db, monkeypatch):
+    monkeypatch.setattr(auth_module, "code2session", _fake_code2session("openid-E"))
+    monkeypatch.setattr(auth_module, "get_phone_number", _fake_get_phone("13900006666"))
+    bound = auth_module.nooki_auth_bind(
+        auth_module.WxBindRequest(login_code="js-E", phone_code="pc-E"), Response()
+    )
+    db.update_product_membership_status(
+        platform_user_id=bound["platform_user_id"], app_id="nooki", status="disabled"
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_module.nooki_auth_session(
+            auth_module.WxSessionRequest(login_code="js-E-renew"), Response()
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "product_membership_disabled"
+
+
+def test_bind_rechecks_identity_owner_after_concurrent_insert(fresh_db, monkeypatch):
+    monkeypatch.setattr(auth_module, "code2session", _fake_code2session("openid-race"))
+    monkeypatch.setattr(auth_module, "get_phone_number", _fake_get_phone("13900007777"))
+    monkeypatch.setattr(
+        auth_module,
+        "bind_wx_identity",
+        lambda **kwargs: "another-platform-user",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        auth_module.nooki_auth_bind(
+            auth_module.WxBindRequest(login_code="js-race", phone_code="pc-race"),
+            Response(),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "wx_identity_conflict"
+
+
+def test_code2session_does_not_require_or_return_session_key(monkeypatch):
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"openid": "openid-no-session-key", "unionid": "union-1"}
+
+    monkeypatch.setattr(wechat_client.httpx, "get", lambda *args, **kwargs: _Response())
+
+    result = wechat_client.code2session("login-code")
+
+    assert result == {"openid": "openid-no-session-key", "unionid": "union-1"}

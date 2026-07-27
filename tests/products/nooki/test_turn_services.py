@@ -74,13 +74,11 @@ def test_nooki_turn_exposes_only_goal_breakdown_tools(fresh_db, monkeypatch):
     assert response.reply == "陪伴回复"
     assert captured["context_app_id"] == NOOKI_APP_ID
     assert captured["tool_names"] == {
-        "nooki_create_task_draft",
-        "nooki_create_step_options",
+        "nooki_create_task_with_options",
         "nooki_select_task_plan",
         "nooki_start_step",
         "nooki_complete_step",
         "nooki_shrink_step",
-        "nooki_complete_task",
         "nooki_abandon_task",
         "nooki_list_state",
     }
@@ -101,21 +99,27 @@ def test_nooki_turn_soul_reflects_archetype_and_companion_name(fresh_db, monkeyp
 def test_nooki_turn_focus_task_block_reflects_active_task(fresh_db, monkeypatch):
     user, account = _make_account("13800038003")
     service = GoalBreakdownService(SqlTaskRepository())
-    task = service.create_task_draft(
-        platform_user_id=user["id"], title="写周报", raw_goal="写周报", source_message_id="seed-msg-1"
-    )
-    task = service.create_step_options(
-        task.id,
-        (
-            PlanDraft(mode="tiny", title="打开文档"),
-            PlanDraft(mode="light", title="列出三个要点"),
-            PlanDraft(mode="normal", title="写完第一段"),
-        ),
+    created = service.create_task_with_options(
         platform_user_id=user["id"],
+        title="写周报",
+        raw_goal="写周报",
+        options=(
+            PlanDraft(mode="tiny", title="打开文档", estimated_minutes=2),
+            PlanDraft(mode="light", title="列出三个要点", estimated_minutes=6),
+            PlanDraft(mode="normal", title="写完第一段", estimated_minutes=20),
+        ),
+        source_message_id="seed-msg-1",
+        operation_id="seed:create:1",
     )
-    plans = SqlTaskRepository().list_plans(task.id)
+    task = created.task
+    plans = created.plans
     selected = next(p for p in plans if p.mode == "tiny")
-    service.select_task_plan(task.id, selected.id, platform_user_id=user["id"])
+    service.select_task_plan(
+        task.id,
+        selected.id,
+        platform_user_id=user["id"],
+        operation_id="seed:select:1",
+    )
 
     captured = {}
     _run_turn(account["id"], "在写周报", monkeypatch, captured)

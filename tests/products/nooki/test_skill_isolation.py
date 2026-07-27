@@ -6,18 +6,26 @@ ZhaoxiTurnServices 注入 tuple(list_skill_catalog())。
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
+from datetime import datetime
 
+import app.db as db
 from app.agent_runtime.turns.contracts import ProductPromptContext
+from app.bootstrap.product_registry import (
+    NOOKI_APP_ID,
+    PRODUCTION_PRODUCT_REGISTRY,
+    ZHAOXI_APP_ID,
+)
 from app.products.nooki.application.turn_services import NOOKI_TURN_SERVICES
 from app.products.zhaoxi.application.turn_services import ZHAOXI_TURN_SERVICES
 from app.skills import list_skill_catalog
 
 
-def _load(product) -> ProductPromptContext:
+def _load(product, *, account_id: str, account: dict) -> ProductPromptContext:
+    """对真实建的账号调用产品 load_prompt_context，不 mock。"""
+
     return product.load_prompt_context(
-        account_id="acc-1",
-        account={},
+        account_id=account_id,
+        account=account,
         session={},
         channel="native",
         onboarding_state="",
@@ -25,17 +33,51 @@ def _load(product) -> ProductPromptContext:
         onboarding_pre_written=None,
         onboarding_pre_extracted=None,
         include_tool_instructions=False,
-        now=__import__("datetime").datetime.now(),
+        now=datetime.now(),
     )
 
 
-def test_nooki_prompt_context_exposes_no_skills():
-    ctx = _load(NOOKI_TURN_SERVICES)
+def _make_account(phone: str, app_id: str, display_name: str):
+    """建真人 + 产品 membership + runtime account（含 owner_binding），返回 (user, account)。
+
+    复用 test_turn_services 的建号模式：先 create_or_get_platform_user_by_phone，
+    再 ensure_product_membership，最后 create_ai4all_account_for_user——后者同时落
+    account_owner_bindings，使 resolve_owner_platform_user_id 能把 account 解析到真人。
+    """
+
+    user = db.create_or_get_platform_user_by_phone(phone=phone)
+    db.ensure_product_membership(
+        platform_user_id=user["id"], app_id=app_id, registry=PRODUCTION_PRODUCT_REGISTRY
+    )
+    account = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"],
+        display_name=display_name,
+        app_id=app_id,
+        registry=PRODUCTION_PRODUCT_REGISTRY,
+    )["account"]
+    return user, account
+
+
+def test_nooki_prompt_context_exposes_no_skills(fresh_db):
+    """Nooki 账号经真实 load_prompt_context 后 skill_catalog 为空 tuple。"""
+
+    _, account = _make_account("13800039001", NOOKI_APP_ID, "Nooki 隔离测试用户")
+    ctx = _load(NOOKI_TURN_SERVICES, account_id=account["id"], account=account)
+
     assert ctx.skill_catalog == ()
 
 
-def test_zhaoxi_prompt_context_exposes_global_skill_catalog():
-    ctx = _load(ZHAOXI_TURN_SERVICES)
+def test_zhaoxi_prompt_context_exposes_global_skill_catalog(fresh_db):
+    """朝夕账号经真实 load_prompt_context 后 skill_catalog 等于全局 catalog。
+
+    朝夕 load_prompt_context 会读 profile 文件（account_profile_files）并播种默认
+    SOUL/IDENTITY/USER 等；fresh_db 已建表，read_agent_context 的 ensure_*
+    会自动落账号级 profile，无需额外造数据。
+    """
+
+    _, account = _make_account("13800039002", ZHAOXI_APP_ID, "朝夕隔离测试用户")
+    ctx = _load(ZHAOXI_TURN_SERVICES, account_id=account["id"], account=account)
+
     assert ctx.skill_catalog == tuple(list_skill_catalog())
 
 

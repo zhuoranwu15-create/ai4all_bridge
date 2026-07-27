@@ -30,13 +30,22 @@ def _focus_task_block_text(platform_user_id: str) -> str:
     task = projection.focus_task
     lines = [
         "## FOCUS_TASK",
-        f"task_id={task.id}，任务：{task.title}（原始诉求：{task.raw_goal}），状态：{task.status}",
+        (
+            f"task_id={task.id}，任务：{task.title}（原始诉求：{task.raw_goal}），"
+            f"状态：{task.status}，version={task.version}"
+        ),
     ]
     if projection.current_step is not None:
         step = projection.current_step
-        lines.append(f"当前 step：step_id={step.id}，{step.title}（{step.status}）")
+        lines.append(
+            f"当前 step：step_id={step.id}，{step.title}（{step.status}），"
+            f"suggested_minutes={step.suggested_minutes}"
+        )
     if projection.plans:
-        options = "；".join(f"plan_id={p.id} {p.mode}={p.title}" for p in projection.plans)
+        options = "；".join(
+            f"plan_id={p.id} {p.mode}={p.title}（{p.estimated_minutes}分钟）"
+            for p in projection.plans
+        )
         lines.append(f"待选方案：{options}")
     if projection.active_tasks_count > 1:
         lines.append(f"用户还有其他 {projection.active_tasks_count - 1} 个进行中任务未在此展示。")

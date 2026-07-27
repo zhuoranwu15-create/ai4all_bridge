@@ -4158,6 +4158,110 @@ def _migration_0047_nooki_core(conn: Connection) -> None:
     )
 
 
+def _migration_0048_nooki_state_contract(conn: Connection) -> None:
+    """收口 Nooki P1 状态机、幂等与 shrink 数据契约。
+
+    m0047 已进入迁移序列，因此不修改其既有生产语义；本迁移同时支持从已执行
+    m0047 的数据库升级，以及 fresh DB 顺序执行 47→48。
+    """
+
+    _ensure_column(conn, "nooki_tasks", "completed_at", "TEXT")
+    _ensure_column(conn, "nooki_tasks", "abandoned_at", "TEXT")
+    _ensure_column(conn, "nooki_steps", "description", "TEXT")
+    _ensure_column(conn, "nooki_steps", "suggested_minutes", "INTEGER")
+    _ensure_column(conn, "nooki_steps", "replaces_step_id", "TEXT")
+
+    if is_postgres():
+        _ensure_column(conn, "nooki_task_events", "operation_id", "TEXT")
+        conn.execute(
+            """
+            UPDATE nooki_task_events
+            SET operation_id = 'legacy:' || id
+            WHERE operation_id IS NULL OR operation_id = ''
+            """
+        )
+        conn.execute(
+            "ALTER TABLE nooki_task_events ALTER COLUMN operation_id SET NOT NULL"
+        )
+    else:
+        columns = {
+            row["name"]: row
+            for row in conn.execute(
+                "PRAGMA table_info(nooki_task_events)"
+            ).fetchall()
+        }
+        operation_column = columns.get("operation_id")
+        if operation_column is None or not bool(operation_column["notnull"]):
+            conn.executescript(
+                """
+                DROP TABLE IF EXISTS nooki_task_events_m0048;
+                CREATE TABLE nooki_task_events_m0048 (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    platform_user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload TEXT,
+                    source_message_id TEXT,
+                    operation_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                    FOREIGN KEY(task_id) REFERENCES nooki_tasks(id),
+                    FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+                );
+                """
+            )
+            if operation_column is None:
+                conn.execute(
+                    """
+                    INSERT INTO nooki_task_events_m0048(
+                        id, task_id, platform_user_id, event_type, payload,
+                        source_message_id, operation_id, created_at
+                    )
+                    SELECT id, task_id, platform_user_id, event_type, payload,
+                           source_message_id, 'legacy:' || id, created_at
+                    FROM nooki_task_events
+                    """
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO nooki_task_events_m0048(
+                        id, task_id, platform_user_id, event_type, payload,
+                        source_message_id, operation_id, created_at
+                    )
+                    SELECT id, task_id, platform_user_id, event_type, payload,
+                           source_message_id,
+                           COALESCE(NULLIF(operation_id, ''), 'legacy:' || id), created_at
+                    FROM nooki_task_events
+                    """
+                )
+            conn.executescript(
+                """
+                DROP TABLE nooki_task_events;
+                ALTER TABLE nooki_task_events_m0048 RENAME TO nooki_task_events;
+                """
+            )
+
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS ux_nooki_tasks_source_message;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_tasks_source_message
+            ON nooki_tasks(platform_user_id, source_message_id)
+            WHERE source_message_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_tasks_one_open_per_user
+            ON nooki_tasks(platform_user_id)
+            WHERE status NOT IN ('done', 'abandoned');
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_task_plans_task_mode
+            ON nooki_task_plans(task_id, mode);
+        CREATE INDEX IF NOT EXISTS ix_nooki_steps_replaces
+            ON nooki_steps(replaces_step_id);
+        CREATE INDEX IF NOT EXISTS ix_nooki_task_events_task
+            ON nooki_task_events(task_id, created_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_task_events_operation
+            ON nooki_task_events(operation_id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4201,6 +4305,7 @@ _MIGRATIONS = [
     (45, _migration_0045_multi_product_phase1_contract),
     (46, _migration_0046_billing_idempotency_contract),
     (47, _migration_0047_nooki_core),
+    (48, _migration_0048_nooki_state_contract),
 ]
 
 

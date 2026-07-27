@@ -45,6 +45,8 @@ class TaskRecord:
     current_step_id: Optional[str]
     source_message_id: Optional[str]
     version: int
+    completed_at: Optional[str]
+    abandoned_at: Optional[str]
     created_at: str
     updated_at: str
 
@@ -81,6 +83,9 @@ class StepRecord:
     task_id: str
     plan_id: str
     title: str
+    description: Optional[str]
+    suggested_minutes: Optional[int]
+    replaces_step_id: Optional[str]
     status: str
     created_at: str
     updated_at: str
@@ -97,6 +102,28 @@ class TaskProjection:
     state_version: int = 0
 
 
+@dataclass(frozen=True)
+class TaskWithOptionsResult:
+    """`create_task_with_options` 的原子创建结果：task + 三档 plans。"""
+
+    task: TaskRecord
+    plans: tuple[PlanRecord, ...]
+
+
+@dataclass(frozen=True)
+class TaskEventRecord:
+    """一次已提交的状态转换；`operation_id` 是跨重试的唯一业务键。"""
+
+    id: str
+    task_id: str
+    platform_user_id: str
+    event_type: str
+    payload: Optional[str]
+    source_message_id: Optional[str]
+    operation_id: str
+    created_at: str
+
+
 class TaskRepository(Protocol):
     """目标拆解领域的仓储接口；具体 SQL 实现见 infrastructure/repositories。"""
 
@@ -107,7 +134,10 @@ class TaskRepository(Protocol):
     def get_task(self, task_id: str) -> Optional[TaskRecord]:
         ...
 
-    def get_task_by_source_message(self, source_message_id: str) -> Optional[TaskRecord]:
+    def get_task_by_source_message(
+        self, *, platform_user_id: str, source_message_id: str
+    ) -> Optional[TaskRecord]:
+        """按用户作用域读取幂等任务，禁止跨账号命中同名消息。"""
         ...
 
     def lock_task(self, task_id: str) -> Optional[TaskRecord]:
@@ -132,6 +162,8 @@ class TaskRepository(Protocol):
         status: Optional[str] = None,
         selected_plan_id: Optional[str] = None,
         current_step_id: Optional[str] = None,
+        completed_at: Optional[str] = None,
+        abandoned_at: Optional[str] = None,
     ) -> TaskRecord:
         """乐观锁更新：`WHERE id=? AND version=?`；版本不匹配抛 `task_version_conflict`。"""
         ...
@@ -158,7 +190,15 @@ class TaskRepository(Protocol):
         ...
 
     def create_step(
-        self, *, task_id: str, plan_id: str, title: str, status: str
+        self,
+        *,
+        task_id: str,
+        plan_id: str,
+        title: str,
+        description: Optional[str],
+        suggested_minutes: Optional[int],
+        replaces_step_id: Optional[str],
+        status: str,
     ) -> StepRecord:
         ...
 
@@ -173,7 +213,18 @@ class TaskRepository(Protocol):
         event_type: str,
         payload: Optional[str] = None,
         source_message_id: Optional[str] = None,
-    ) -> None:
+        operation_id: str,
+    ) -> TaskEventRecord:
+        ...
+
+    def get_task_event_by_operation_id(
+        self, operation_id: str
+    ) -> Optional[TaskEventRecord]:
+        ...
+
+    def get_latest_task_id_by_source_message(
+        self, *, platform_user_id: str, source_message_id: str
+    ) -> Optional[str]:
         ...
 
     def list_active_tasks(self, platform_user_id: str) -> Sequence[TaskRecord]:
@@ -196,6 +247,8 @@ __all__ = [
     "TASK_STATUS_DRAFT",
     "TASK_STATUS_READY",
     "TaskProjection",
+    "TaskEventRecord",
     "TaskRecord",
     "TaskRepository",
+    "TaskWithOptionsResult",
 ]
