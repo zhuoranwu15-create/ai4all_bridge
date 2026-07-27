@@ -54,11 +54,18 @@ def _create_task(user_id: str):
     )
 
 
+def _bootstrap(client, token: str) -> dict:
+    response = client.get(f"{_PREFIX}/bootstrap", headers=_headers(token))
+    assert response.status_code == 200
+    return response.json()
+
+
 def test_product_endpoints_require_session(client):
     assert client.post(
         f"{_PREFIX}/chat", json={"text": "你好", "client_message_id": "abcdefgh"}
     ).status_code == 401
     assert client.get(f"{_PREFIX}/state").status_code == 401
+    assert client.get(f"{_PREFIX}/bootstrap").status_code == 401
     assert client.get(f"{_PREFIX}/profile/companion").status_code == 401
     assert client.post(
         f"{_PREFIX}/tasks/task/plans/plan/select", json=_action("request01")
@@ -83,28 +90,90 @@ def test_companion_profile_defaults_and_roundtrip(client, monkeypatch):
 def test_state_and_chat_share_authoritative_view(client, monkeypatch):
     bound = _bind(client, monkeypatch, openid="openid-app-2", phone="13900011102")
     headers = _headers(bound["access_token"])
+    bootstrap = _bootstrap(client, bound["access_token"])
+    conversation_id = bootstrap["conversation"]["conversation_id"]
+    assert bootstrap["messages"] == []
+    assert bootstrap["server_cursor"] is None
     empty = client.get(f"{_PREFIX}/state", headers=headers).json()
     assert empty["state"]["has_focus_task"] is False
     assert empty["cards"] == []
 
     first = client.post(
         f"{_PREFIX}/chat",
-        json={"text": "今天有点累", "client_message_id": "client-msg-1"},
+        json={
+            "conversation_id": conversation_id,
+            "text": "今天有点累",
+            "client_message_id": "client-msg-1",
+        },
         headers=headers,
     )
     assert first.status_code == 200
     assert first.json()["reply"] == "mock reply"
     assert first.json()["state"]["has_focus_task"] is False
     assert first.json()["metadata"]["deduplicated"] is False
+    assert first.json()["user_message"]["content"] == "今天有点累"
+    assert first.json()["assistant_message"]["content"] == "mock reply"
+    assert first.json()["server_cursor"] is not None
 
     duplicate = client.post(
         f"{_PREFIX}/chat",
-        json={"text": "今天有点累", "client_message_id": "client-msg-1"},
+        json={
+            "conversation_id": conversation_id,
+            "text": "今天有点累",
+            "client_message_id": "client-msg-1",
+        },
         headers=headers,
     )
     assert duplicate.status_code == 200
     assert duplicate.json()["metadata"]["deduplicated"] is True
     assert "state" in duplicate.json() and "cards" in duplicate.json()
+    assert duplicate.json()["assistant_message"] == first.json()["assistant_message"]
+
+    history = client.get(
+        f"{_PREFIX}/conversations/{conversation_id}/messages?limit=1",
+        headers=headers,
+    ).json()
+    assert [item["role"] for item in history["messages"]] == ["assistant"]
+    assert history["has_more"] is True
+    older = client.get(
+        f"{_PREFIX}/conversations/{conversation_id}/messages",
+        params={"before_cursor": history["next_cursor"], "limit": 10},
+        headers=headers,
+    ).json()
+    assert [item["role"] for item in older["messages"]] == ["user"]
+
+    synced = client.get(
+        f"{_PREFIX}/sync",
+        params={"conversation_id": conversation_id, "after_cursor": "0"},
+        headers=headers,
+    ).json()
+    assert [item["role"] for item in synced["messages"]] == ["user", "assistant"]
+    assert synced["conversation_id"] == conversation_id
+
+
+def test_conversation_is_stable_and_isolated(client, monkeypatch):
+    owner = _bind(client, monkeypatch, openid="openid-conv-1", phone="13900011111")
+    intruder = _bind(client, monkeypatch, openid="openid-conv-2", phone="13900011112")
+    first = _bootstrap(client, owner["access_token"])
+    second = _bootstrap(client, owner["access_token"])
+    conversation_id = first["conversation"]["conversation_id"]
+    assert second["conversation"]["conversation_id"] == conversation_id
+
+    forbidden_history = client.get(
+        f"{_PREFIX}/conversations/{conversation_id}/messages",
+        headers=_headers(intruder["access_token"]),
+    )
+    assert forbidden_history.status_code == 404
+    forbidden_chat = client.post(
+        f"{_PREFIX}/chat",
+        json={
+            "conversation_id": conversation_id,
+            "text": "越权消息",
+            "client_message_id": "cross-user-1",
+        },
+        headers=_headers(intruder["access_token"]),
+    )
+    assert forbidden_chat.status_code == 404
 
 
 def test_button_api_drives_loop_and_preserves_completion_card(client, monkeypatch):

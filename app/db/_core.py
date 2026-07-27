@@ -4262,6 +4262,33 @@ def _migration_0048_nooki_state_contract(conn: Connection) -> None:
     )
 
 
+def _migration_0049_nooki_conversations(conn: Connection) -> None:
+    """新增 Nooki 长期 Conversation；Runtime Session 仍按业务日独立轮转。"""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS nooki_conversations (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            runtime_account_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            last_message_at TEXT,
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_conversations_runtime_account
+            ON nooki_conversations(runtime_account_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_nooki_conversations_one_active_per_user
+            ON nooki_conversations(platform_user_id)
+            WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS ix_nooki_conversations_user_updated
+            ON nooki_conversations(platform_user_id, updated_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4306,6 +4333,7 @@ _MIGRATIONS = [
     (46, _migration_0046_billing_idempotency_contract),
     (47, _migration_0047_nooki_core),
     (48, _migration_0048_nooki_state_contract),
+    (49, _migration_0049_nooki_conversations),
 ]
 
 
