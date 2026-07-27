@@ -336,6 +336,9 @@ def nooki_chat(
             "no_reply": False,
             "state": state,
             "cards": cards,
+            "later_items": NookiLaterItemRepository().list_items(
+                platform_user_id=principal.platform_user_id
+            ),
             "user_message": user_message,
             "assistant_message": assistant_message,
             "server_cursor": NookiConversationRepository().latest_cursor(
@@ -365,6 +368,9 @@ def nooki_chat(
                 "no_reply": False,
                 "state": state,
                 "cards": cards,
+                "later_items": NookiLaterItemRepository().list_items(
+                    platform_user_id=principal.platform_user_id
+                ),
                 "user_message": user_message,
                 "assistant_message": assistant_message,
                 "server_cursor": NookiConversationRepository().latest_cursor(
@@ -418,6 +424,9 @@ def nooki_chat(
         "no_reply": result.no_reply,
         "state": state,
         "cards": cards,
+        "later_items": NookiLaterItemRepository().list_items(
+            platform_user_id=principal.platform_user_id
+        ),
         "user_message": user_message,
         "assistant_message": assistant_message,
         "server_cursor": conversations.latest_cursor(conversation=conversation),

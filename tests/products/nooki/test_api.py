@@ -114,6 +114,7 @@ def test_state_and_chat_share_authoritative_view(client, monkeypatch):
     assert first.status_code == 200
     assert first.json()["reply"] == "mock reply"
     assert first.json()["state"]["has_focus_task"] is False
+    assert first.json()["later_items"] == []
     assert first.json()["metadata"]["deduplicated"] is False
     assert first.json()["user_message"]["content"] == "今天有点累"
     assert first.json()["assistant_message"]["content"] == "mock reply"
@@ -131,6 +132,7 @@ def test_state_and_chat_share_authoritative_view(client, monkeypatch):
     assert duplicate.status_code == 200
     assert duplicate.json()["metadata"]["deduplicated"] is True
     assert "state" in duplicate.json() and "cards" in duplicate.json()
+    assert duplicate.json()["later_items"] == []
     assert duplicate.json()["assistant_message"] == first.json()["assistant_message"]
 
     history = client.get(
