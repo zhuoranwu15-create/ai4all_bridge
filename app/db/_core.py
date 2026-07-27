@@ -4289,6 +4289,35 @@ def _migration_0049_nooki_conversations(conn: Connection) -> None:
     )
 
 
+def _migration_0050_nooki_later_items(conn: Connection) -> None:
+    """新增服务端权威稍后盒子；旧小程序本地数据不在本迁移中导入。"""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS nooki_later_items (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            source_message_id TEXT,
+            client_request_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'inbox',
+            converted_task_id TEXT,
+            version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            archived_at TEXT,
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(converted_task_id) REFERENCES nooki_tasks(id),
+            UNIQUE(platform_user_id, client_request_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_nooki_later_items_user_status_created
+            ON nooki_later_items(platform_user_id, status, created_at);
+        CREATE INDEX IF NOT EXISTS ix_nooki_later_items_converted_task
+            ON nooki_later_items(converted_task_id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4334,6 +4363,7 @@ _MIGRATIONS = [
     (47, _migration_0047_nooki_core),
     (48, _migration_0048_nooki_state_contract),
     (49, _migration_0049_nooki_conversations),
+    (50, _migration_0050_nooki_later_items),
 ]
 
 

@@ -18,6 +18,7 @@ Nooki 是一个帮助用户“开始行动”的 AI 陪伴产品，不是完整�
 - 一个 `platform_user_id` 同时最多一个未终结 Task；P2 再支持多任务与切换。
 - 一个 `platform_user_id` 在 P1 只有一个 active Conversation；聊天原文只保存在共享
   Runtime `messages`，小程序只缓存，不按日期或角色建立第二份权威记录。
+- 稍后盒子以服务端 `nooki_later_items` 为准；本地只缓存 inbox 投影，修改使用版本检查。
 
 ## 3. 状态机
 

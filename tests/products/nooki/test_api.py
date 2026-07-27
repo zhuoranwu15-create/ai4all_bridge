@@ -176,6 +176,67 @@ def test_conversation_is_stable_and_isolated(client, monkeypatch):
     assert forbidden_chat.status_code == 404
 
 
+def test_later_items_are_authoritative_idempotent_and_isolated(client, monkeypatch):
+    owner = _bind(client, monkeypatch, openid="openid-later-1", phone="13900011121")
+    intruder = _bind(client, monkeypatch, openid="openid-later-2", phone="13900011122")
+    headers = _headers(owner["access_token"])
+
+    created = client.post(
+        f"{_PREFIX}/later-items",
+        json={"content": "整理书桌", "client_request_id": "later-create-1"},
+        headers=headers,
+    )
+    assert created.status_code == 200
+    item = created.json()["item"]
+    assert item["content"] == "整理书桌"
+    assert item["status"] == "inbox"
+    assert item["version"] == 1
+    repeated = client.post(
+        f"{_PREFIX}/later-items",
+        json={"content": "不会覆盖", "client_request_id": "later-create-1"},
+        headers=headers,
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["item"] == item
+    assert repeated.json()["metadata"]["deduplicated"] is True
+
+    assert _bootstrap(client, owner["access_token"])["later_items"] == [item]
+    assert client.get(f"{_PREFIX}/later-items", headers=headers).json()[
+        "items"
+    ] == [item]
+    assert client.get(
+        f"{_PREFIX}/later-items", headers=_headers(intruder["access_token"])
+    ).json()["items"] == []
+
+    stale = client.patch(
+        f"{_PREFIX}/later-items/{item['later_item_id']}",
+        json={"content": "擦干净书桌", "expected_version": 99},
+        headers=headers,
+    )
+    assert stale.status_code == 409
+    updated = client.patch(
+        f"{_PREFIX}/later-items/{item['later_item_id']}",
+        json={"content": "擦干净书桌", "expected_version": 1},
+        headers=headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["item"]["version"] == 2
+
+    hidden = client.post(
+        f"{_PREFIX}/later-items/{item['later_item_id']}/archive",
+        json={"expected_version": 2},
+        headers=headers,
+    )
+    assert hidden.status_code == 200
+    assert hidden.json()["item"]["status"] == "archived"
+    assert client.get(f"{_PREFIX}/later-items", headers=headers).json()["items"] == []
+    assert client.patch(
+        f"{_PREFIX}/later-items/{item['later_item_id']}",
+        json={"content": "越权", "expected_version": 3},
+        headers=_headers(intruder["access_token"]),
+    ).status_code == 404
+
+
 def test_button_api_drives_loop_and_preserves_completion_card(client, monkeypatch):
     bound = _bind(client, monkeypatch, openid="openid-app-3", phone="13900011103")
     headers = _headers(bound["access_token"])

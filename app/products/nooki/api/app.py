@@ -34,6 +34,9 @@ from app.products.nooki.infrastructure.repositories.user_profile import (
     get_explicit_preferences,
     set_explicit_preferences,
 )
+from app.products.nooki.infrastructure.repositories.later_items import (
+    NookiLaterItemRepository,
+)
 from app.routers.deps import require_product_session
 from app.time_utils import beijing_now
 
@@ -233,7 +236,9 @@ def nooki_bootstrap(
         },
         "state": state,
         "cards": cards,
-        "later_items": [],
+        "later_items": NookiLaterItemRepository().list_items(
+            platform_user_id=principal.platform_user_id
+        ),
     }
 
 
@@ -289,7 +294,9 @@ def nooki_sync(
         "messages": messages,
         "state": state,
         "cards": cards,
-        "later_items": [],
+        "later_items": NookiLaterItemRepository().list_items(
+            platform_user_id=principal.platform_user_id
+        ),
         "has_more": has_more,
         "server_cursor": conversations.latest_cursor(conversation=conversation),
         "server_time": beijing_now().isoformat(),

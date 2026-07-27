@@ -31,9 +31,10 @@ def install_public_routes(app: FastAPI) -> None:
 
     from app.products.nooki.api import app as app_api
     from app.products.nooki.api import auth
+    from app.products.nooki.api import later_items
     from app.products.nooki.api import tasks
 
-    for product_router in (auth.router, app_api.router, tasks.router):
+    for product_router in (auth.router, app_api.router, tasks.router, later_items.router):
         _install_versioned_product_router(app, product_router)
 
 
