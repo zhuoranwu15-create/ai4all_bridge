@@ -75,16 +75,20 @@ def test_product_endpoints_require_session(client):
 def test_companion_profile_defaults_and_roundtrip(client, monkeypatch):
     bound = _bind(client, monkeypatch, openid="openid-app-1", phone="13900011101")
     headers = _headers(bound["access_token"])
-    assert client.get(f"{_PREFIX}/profile/companion", headers=headers).status_code == 200
+    initial = client.get(f"{_PREFIX}/profile/companion", headers=headers)
+    assert initial.status_code == 200
+    assert initial.json()["configured"] is False
     updated = client.post(
         f"{_PREFIX}/profile/companion",
         json={"archetype": "bestie", "companion_name": "阿福"},
         headers=headers,
     )
     assert updated.json()["companion_name"] == "阿福"
+    assert updated.json()["configured"] is True
     assert client.get(f"{_PREFIX}/profile/companion", headers=headers).json()[
         "archetype"
     ] == "bestie"
+    assert _bootstrap(client, bound["access_token"])["profile"]["configured"] is True
 
 
 def test_state_and_chat_share_authoritative_view(client, monkeypatch):

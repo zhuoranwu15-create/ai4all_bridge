@@ -174,6 +174,7 @@ def nooki_set_companion(
     _no_store(response)
     return {
         "status": "ok",
+        "configured": True,
         "archetype": merged.get("archetype") or DEFAULT_ARCHETYPE,
         "companion_name": merged.get("companion_name") or DEFAULT_COMPANION_NAME,
     }
@@ -188,6 +189,7 @@ def nooki_get_companion(
     _no_store(response)
     return {
         "status": "ok",
+        "configured": bool(preferences.get("archetype")),
         "archetype": preferences.get("archetype") or DEFAULT_ARCHETYPE,
         "companion_name": preferences.get("companion_name") or DEFAULT_COMPANION_NAME,
     }
@@ -231,6 +233,7 @@ def nooki_bootstrap(
         "server_cursor": conversations.latest_cursor(conversation=conversation),
         "server_time": beijing_now().isoformat(),
         "profile": {
+            "configured": bool(preferences.get("archetype")),
             "archetype": preferences.get("archetype") or DEFAULT_ARCHETYPE,
             "companion_name": preferences.get("companion_name") or DEFAULT_COMPANION_NAME,
         },
