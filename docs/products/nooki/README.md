@@ -41,3 +41,5 @@ Conversation；它绑定一个 Nooki Runtime account，但 API 不向小程序�
 
 `nooki_later_items` 以 `platform_user_id` 隔离，`client_request_id` 保证创建重试不重复，
 `version` 防止多设备用旧状态覆盖新状态。`bootstrap` 与 `sync` 都返回当前 inbox 投影。
+用户明确要开始某个稍后项时，Runtime 通过 `nooki_convert_later_item_with_options`
+在同一事务中创建 Task + 三档 Plan、写 Task Event 并把稍后项标为 converted。

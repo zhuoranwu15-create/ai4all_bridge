@@ -1,4 +1,4 @@
-"""Nooki P1 的七个目标拆解工具 schema。"""
+"""Nooki P1 的目标拆解与稍后项转换工具 schema。"""
 
 _PLAN_OPTION_SCHEMA = {
     "type": "object",
@@ -16,6 +16,27 @@ def get_goal_breakdown_tools() -> list:
     """返回稳定顺序的 P1 Tool schemas。"""
 
     return [
+        {
+            "type": "function",
+            "function": {
+                "name": "nooki_convert_later_item_with_options",
+                "description": "用户明确要开始某个稍后项时，原子转换为任务和三档方案。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "later_item_id": {"type": "string"},
+                        "expected_version": {"type": "integer", "minimum": 1},
+                        "options": {
+                            "type": "array",
+                            "items": _PLAN_OPTION_SCHEMA,
+                            "minItems": 3,
+                            "maxItems": 3,
+                        },
+                    },
+                    "required": ["later_item_id", "options"],
+                },
+            },
+        },
         {
             "type": "function",
             "function": {

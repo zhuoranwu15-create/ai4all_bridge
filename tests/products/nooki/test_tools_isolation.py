@@ -10,6 +10,7 @@ from app.tools.registry import CALL_INVOCATION, CALL_PLAIN
 
 _EXPECTED_NOOKI_TOOLS = {
     "nooki_create_task_with_options",
+    "nooki_convert_later_item_with_options",
     "nooki_select_task_plan",
     "nooki_start_step",
     "nooki_complete_step",

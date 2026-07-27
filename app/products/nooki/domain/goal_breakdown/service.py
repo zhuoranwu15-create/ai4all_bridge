@@ -44,6 +44,7 @@ _EVENT_STEP_STARTED = "step_started"
 _EVENT_STEP_COMPLETED = "step_completed"
 _EVENT_STEP_SHRUNK = "step_shrunk"
 _EVENT_TASK_ABANDONED = "task_abandoned"
+_EVENT_LATER_ITEM_CONVERTED = "later_item_converted"
 
 
 class GoalBreakdownService:
@@ -138,6 +139,59 @@ class GoalBreakdownService:
                 platform_user_id=platform_user_id,
                 event_type=_EVENT_TASK_CREATED,
                 payload=self._payload(task_id=task.id),
+                source_message_id=source_message_id,
+                operation_id=operation_id,
+            )
+            return TaskWithOptionsResult(task=task, plans=plans)
+
+    def convert_later_item_with_options(
+        self,
+        item_id: str,
+        *,
+        platform_user_id: str,
+        options: Sequence[PlanDraft],
+        operation_id: str,
+        expected_version: Optional[int] = None,
+        source_message_id: Optional[str] = None,
+    ) -> TaskWithOptionsResult:
+        """单事务把 inbox 稍后项转换为 Task + 三档方案，并记录幂等事件。"""
+
+        self._validate_operation_id(operation_id)
+        plan_drafts = self._validate_plan_drafts(options)
+        with self._repository.transaction() as repo:
+            event = self._replay_event(
+                repo, operation_id, _EVENT_LATER_ITEM_CONVERTED, platform_user_id
+            )
+            if event is not None:
+                task = self._require_owned_task(repo, event.task_id, platform_user_id)
+                return TaskWithOptionsResult(task=task, plans=tuple(repo.list_plans(task.id)))
+
+            item = repo.lock_later_item(item_id)
+            if item is None or item.platform_user_id != platform_user_id:
+                raise NookiDomainError("later_item_not_found")
+            if item.status != "inbox":
+                raise NookiDomainError("later_item_not_convertible")
+            if expected_version is not None and expected_version != item.version:
+                raise NookiDomainError("later_item_version_conflict")
+            if repo.list_active_tasks(platform_user_id):
+                raise NookiDomainError("open_task_exists")
+
+            title, raw_goal = self._validate_task_input(item.content, item.content)
+            task = repo.create_task(
+                platform_user_id=platform_user_id,
+                title=title,
+                raw_goal=raw_goal,
+                source_message_id=f"later:{item.id}",
+            )
+            plans = tuple(repo.create_plans(task.id, plan_drafts))
+            repo.mark_later_item_converted(
+                item.id, expected_version=item.version, task_id=task.id
+            )
+            repo.append_task_event(
+                task_id=task.id,
+                platform_user_id=platform_user_id,
+                event_type=_EVENT_LATER_ITEM_CONVERTED,
+                payload=self._payload(task_id=task.id, later_item_id=item.id),
                 source_message_id=source_message_id,
                 operation_id=operation_id,
             )

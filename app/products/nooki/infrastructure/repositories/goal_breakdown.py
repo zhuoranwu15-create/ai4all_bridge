@@ -14,6 +14,7 @@ from app.db._core import _new_id, _tx, connect
 from app.time_utils import beijing_now_str
 from app.products.nooki.domain.goal_breakdown.contracts import (
     NookiDomainError,
+    LaterItemRecord,
     PlanDraft,
     PlanRecord,
     StepRecord,
@@ -86,6 +87,18 @@ def _event(row: dict) -> TaskEventRecord:
         source_message_id=row.get("source_message_id"),
         operation_id=str(row["operation_id"]),
         created_at=str(row["created_at"]),
+    )
+
+
+def _later_item(row: dict) -> LaterItemRecord:
+    return LaterItemRecord(
+        id=str(row["id"]),
+        platform_user_id=str(row["platform_user_id"]),
+        content=str(row["content"]),
+        source_message_id=row.get("source_message_id"),
+        status=str(row["status"]),
+        converted_task_id=row.get("converted_task_id"),
+        version=int(row["version"]),
     )
 
 
@@ -238,6 +251,38 @@ class SqlTaskRepository(TaskRepository):
                 (platform_user_id, TASK_STATUS_DONE, TASK_STATUS_ABANDONED),
             ).fetchall()
         return tuple(_task(dict(row)) for row in rows)
+
+    # -- later item conversion -------------------------------------------
+
+    def lock_later_item(self, item_id: str) -> Optional[LaterItemRecord]:
+        conn = self._required_conn()
+        suffix = " FOR UPDATE" if is_postgres() else ""
+        row = conn.execute(
+            "SELECT * FROM nooki_later_items WHERE id = ?" + suffix, (item_id,)
+        ).fetchone()
+        return _later_item(dict(row)) if row else None
+
+    def mark_later_item_converted(
+        self, item_id: str, *, expected_version: int, task_id: str
+    ) -> LaterItemRecord:
+        conn = self._required_conn()
+        cursor = conn.execute(
+            """
+            UPDATE nooki_later_items
+            SET status = 'converted', converted_task_id = ?, version = version + 1,
+                updated_at = ?
+            WHERE id = ? AND status = 'inbox' AND version = ?
+            """,
+            (task_id, beijing_now_str(), item_id, expected_version),
+        )
+        if (cursor.rowcount or 0) == 0:
+            raise NookiDomainError("later_item_version_conflict")
+        row = conn.execute(
+            "SELECT * FROM nooki_later_items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("later item disappeared after conversion")
+        return _later_item(dict(row))
 
     # -- plans -------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Nooki 产品 ToolPolicy：七个 P1 工具，且不暴露朝夕/共享检索工具。"""
+"""Nooki 产品 ToolPolicy：P1 任务工具，且不暴露朝夕/共享检索工具。"""
 
 from __future__ import annotations
 
@@ -15,6 +15,11 @@ _BINDINGS: Mapping[str, ToolBinding] = MappingProxyType(
     {
         "nooki_create_task_with_options": ToolBinding(
             _HANDLER_MODULE, "handle_nooki_create_task_with_options", call_style=CALL_INVOCATION
+        ),
+        "nooki_convert_later_item_with_options": ToolBinding(
+            _HANDLER_MODULE,
+            "handle_nooki_convert_later_item_with_options",
+            call_style=CALL_INVOCATION,
         ),
         "nooki_select_task_plan": ToolBinding(
             _HANDLER_MODULE, "handle_nooki_select_task_plan", call_style=CALL_INVOCATION

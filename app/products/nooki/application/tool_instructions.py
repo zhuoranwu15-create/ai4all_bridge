@@ -29,6 +29,9 @@ nooki_create_task_with_options 的三档方案规则（tiny/light/normal 缺一�
 - 每档 title 必须是具体、物理、不超过15字的动作，禁止"做到第一步""类似的小动作""小阶段"
   "一点点""准备一下"等模板化描述
 
+LATER_ITEMS 中存在用户点名或明确要开始的稍后项时，调用 nooki_convert_later_item_with_options，
+并传该项 later_item_id、version 与三档方案；不得绕过转换另建同名任务，也不得替用户自动开始。
+
 用户觉得当前 step 太难并明确想缩小时，调用 nooki_shrink_step。replacement 的预计时间必须严格
 小于当前 step；当前 step 没有预计时间时不能猜，先追问或重新确认行动。
 

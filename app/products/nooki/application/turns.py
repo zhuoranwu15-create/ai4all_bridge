@@ -18,6 +18,7 @@ from app.db import get_platform_user_id_for_account
 from app.products.nooki.application.turn_services import NOOKI_TURN_SERVICES
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.infrastructure.repositories.later_items import NookiLaterItemRepository
 
 
 def _focus_task_block_text(platform_user_id: str) -> str:
@@ -52,15 +53,31 @@ def _focus_task_block_text(platform_user_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _later_items_block_text(platform_user_id: str) -> str:
+    """只给模型展示 inbox 稍后项的稳定 id、版本和原文。"""
+
+    items = NookiLaterItemRepository().list_items(platform_user_id=platform_user_id)
+    if not items:
+        return "## LATER_ITEMS\n稍后盒子为空。\n"
+    lines = ["## LATER_ITEMS", "只有用户明确要开始某项时才能转换："]
+    lines.extend(
+        f"later_item_id={item['later_item_id']}，version={item['version']}，内容：{item['content']}"
+        for item in items[:20]
+    )
+    return "\n".join(lines) + "\n"
+
+
 def run_nooki_turn(ctx: ChannelTurnInput):
     """执行一次显式绑定 Nooki 产品服务的 turn；先把 FOCUS_TASK 域层块注入 `ctx.extra_blocks`。"""
 
     platform_user_id = get_platform_user_id_for_account(account_id=ctx.account_id)
     if platform_user_id:
         focus_text = _focus_task_block_text(platform_user_id)
+        later_text = _later_items_block_text(platform_user_id)
         ctx.extra_blocks = [
             *ctx.extra_blocks,
             ContextBlock(name="nooki_focus_task", text=focus_text, trim_priority=70),
+            ContextBlock(name="nooki_later_items", text=later_text, trim_priority=60),
         ]
     return run_product_turn(ctx, product_services=NOOKI_TURN_SERVICES)
 

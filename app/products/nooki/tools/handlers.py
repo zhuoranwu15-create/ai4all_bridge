@@ -90,6 +90,34 @@ def handle_nooki_create_task_with_options(
         return _failed(err)
 
 
+def handle_nooki_convert_later_item_with_options(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    """把 prompt 中的 inbox 稍后项原子转换为新任务。"""
+
+    del tool_invocation_id
+    try:
+        platform_user_id = _platform_user_id(ctx)
+        item_id = str(args.get("later_item_id") or "")
+        service = _service()
+        result = service.convert_later_item_with_options(
+            item_id,
+            platform_user_id=platform_user_id,
+            options=tuple(_plan_draft(item) for item in (args.get("options") or [])),
+            operation_id=_operation_id(ctx, "convert_later", item_id),
+            expected_version=_expected_version(args),
+            source_message_id=ctx.message_id,
+        )
+        return _ok(
+            service,
+            platform_user_id=platform_user_id,
+            focus_task_id=result.task.id,
+            operation="convert_later_item_with_options",
+        )
+    except NookiDomainError as err:
+        return _failed(err)
+
+
 def handle_nooki_select_task_plan(
     args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
 ) -> dict:
@@ -236,6 +264,7 @@ def handle_nooki_list_state(args: dict, ctx: "TurnContext") -> dict:
 __all__ = [
     "handle_nooki_abandon_task",
     "handle_nooki_complete_step",
+    "handle_nooki_convert_later_item_with_options",
     "handle_nooki_create_task_with_options",
     "handle_nooki_list_state",
     "handle_nooki_select_task_plan",

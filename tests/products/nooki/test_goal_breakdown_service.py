@@ -20,6 +20,7 @@ from app.products.nooki.domain.goal_breakdown.contracts import (
 )
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.infrastructure.repositories.later_items import NookiLaterItemRepository
 
 
 def _service() -> GoalBreakdownService:
@@ -173,6 +174,69 @@ def test_every_write_is_idempotent_by_operation_id(fresh_db):
         "op:select",
         "op:start",
     ]
+
+
+def test_convert_later_item_creates_task_and_plans_atomically(fresh_db):
+    user = db.create_or_get_platform_user_by_phone(phone="13800037931")
+    item, _ = NookiLaterItemRepository().create(
+        platform_user_id=user["id"],
+        content="整理书桌",
+        client_request_id="later-service-1",
+    )
+    svc = _service()
+    result = svc.convert_later_item_with_options(
+        item["later_item_id"],
+        platform_user_id=user["id"],
+        options=_options(),
+        operation_id="op:convert-later",
+        expected_version=1,
+        source_message_id="msg:convert-later",
+    )
+    assert result.task.title == "整理书桌"
+    assert [plan.mode for plan in result.plans] == ["tiny", "light", "normal"]
+    assert NookiLaterItemRepository().list_items(platform_user_id=user["id"]) == []
+    with connect() as conn:
+        converted = conn.execute(
+            "SELECT status, converted_task_id, version FROM nooki_later_items WHERE id = ?",
+            (item["later_item_id"],),
+        ).fetchone()
+    assert dict(converted) == {
+        "status": "converted",
+        "converted_task_id": result.task.id,
+        "version": 2,
+    }
+
+    repeated = svc.convert_later_item_with_options(
+        item["later_item_id"],
+        platform_user_id=user["id"],
+        options=_options(),
+        operation_id="op:convert-later",
+        expected_version=1,
+    )
+    assert repeated.task.id == result.task.id
+
+
+def test_convert_later_item_rolls_back_when_open_task_exists(fresh_db):
+    user = db.create_or_get_platform_user_by_phone(phone="13800037932")
+    existing = _create(_service(), user["id"], operation_id="op:existing")
+    item, _ = NookiLaterItemRepository().create(
+        platform_user_id=user["id"],
+        content="洗衣服",
+        client_request_id="later-service-2",
+    )
+    with pytest.raises(NookiDomainError, match="open_task_exists"):
+        _service().convert_later_item_with_options(
+            item["later_item_id"],
+            platform_user_id=user["id"],
+            options=_options(),
+            operation_id="op:blocked-convert",
+            expected_version=1,
+        )
+    assert NookiLaterItemRepository().list_items(platform_user_id=user["id"])[0][
+        "later_item_id"
+    ] == item["later_item_id"]
+    assert len(_service()._repository.list_active_tasks(user["id"])) == 1
+    assert _service()._repository.list_active_tasks(user["id"])[0].id == existing.task.id
 
 
 @pytest.mark.parametrize("start_first", [False, True])

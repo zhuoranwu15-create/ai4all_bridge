@@ -75,6 +75,7 @@ def test_nooki_turn_exposes_only_goal_breakdown_tools(fresh_db, monkeypatch):
     assert captured["context_app_id"] == NOOKI_APP_ID
     assert captured["tool_names"] == {
         "nooki_create_task_with_options",
+        "nooki_convert_later_item_with_options",
         "nooki_select_task_plan",
         "nooki_start_step",
         "nooki_complete_step",

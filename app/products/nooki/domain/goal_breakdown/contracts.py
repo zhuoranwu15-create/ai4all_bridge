@@ -124,6 +124,19 @@ class TaskEventRecord:
     created_at: str
 
 
+@dataclass(frozen=True)
+class LaterItemRecord:
+    """供 Later → Task 原子转换使用的稍后项领域快照。"""
+
+    id: str
+    platform_user_id: str
+    content: str
+    source_message_id: Optional[str]
+    status: str
+    converted_task_id: Optional[str]
+    version: int
+
+
 class TaskRepository(Protocol):
     """目标拆解领域的仓储接口；具体 SQL 实现见 infrastructure/repositories。"""
 
@@ -231,9 +244,19 @@ class TaskRepository(Protocol):
         """返回该用户所有非终态（active/ready/draft）任务，按最近更新排序。"""
         ...
 
+    def lock_later_item(self, item_id: str) -> Optional[LaterItemRecord]:
+        """在任务事务内锁定稍后项，保证转换和任务创建同成同败。"""
+        ...
+
+    def mark_later_item_converted(
+        self, item_id: str, *, expected_version: int, task_id: str
+    ) -> LaterItemRecord:
+        ...
+
 
 __all__ = [
     "NookiDomainError",
+    "LaterItemRecord",
     "PlanDraft",
     "PlanRecord",
     "STEP_STATUS_ACTIVE",
