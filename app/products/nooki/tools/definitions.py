@@ -19,6 +19,20 @@ def get_goal_breakdown_tools() -> list:
         {
             "type": "function",
             "function": {
+                "name": "nooki_capture_later_item",
+                "description": "用户明确要求把一件事留到稍后时，将其收进稍后盒子。",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    },
+                    "required": ["content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "nooki_convert_later_item_with_options",
                 "description": "用户明确要开始某个稍后项时，原子转换为任务和三档方案。",
                 "parameters": {

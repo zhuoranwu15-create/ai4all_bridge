@@ -13,6 +13,9 @@ _HANDLER_MODULE = "app.products.nooki.tools.handlers"
 
 _BINDINGS: Mapping[str, ToolBinding] = MappingProxyType(
     {
+        "nooki_capture_later_item": ToolBinding(
+            _HANDLER_MODULE, "handle_nooki_capture_later_item", call_style=CALL_INVOCATION
+        ),
         "nooki_create_task_with_options": ToolBinding(
             _HANDLER_MODULE, "handle_nooki_create_task_with_options", call_style=CALL_INVOCATION
         ),

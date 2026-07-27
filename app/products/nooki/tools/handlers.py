@@ -8,6 +8,7 @@ from app.products.nooki.application.ui_projection import project_task_view
 from app.products.nooki.domain.goal_breakdown.contracts import NookiDomainError, PlanDraft
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.infrastructure.repositories.later_items import NookiLaterItemRepository
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -61,6 +62,33 @@ def _ok(
 
 def _failed(err: NookiDomainError) -> dict:
     return {"status": "failed", "error": err.code}
+
+
+def handle_nooki_capture_later_item(
+    args: dict, ctx: "TurnContext", tool_invocation_id: Optional[int] = None
+) -> dict:
+    """把当前消息明确提到的待办幂等收进当前用户的稍后盒子。"""
+
+    del tool_invocation_id
+    try:
+        platform_user_id = _platform_user_id(ctx)
+        content = str(args.get("content") or "").strip()
+        if not content or len(content) > 1000:
+            raise NookiDomainError("later_item_content_invalid")
+        item, deduplicated = NookiLaterItemRepository().create(
+            platform_user_id=platform_user_id,
+            content=content,
+            client_request_id=_operation_id(ctx, "capture_later"),
+            source_message_id=ctx.message_id,
+        )
+        return {
+            "status": "ok",
+            "operation": "capture_later_item",
+            "item": item,
+            "metadata": {"deduplicated": deduplicated},
+        }
+    except NookiDomainError as err:
+        return _failed(err)
 
 
 def handle_nooki_create_task_with_options(
@@ -263,6 +291,7 @@ def handle_nooki_list_state(args: dict, ctx: "TurnContext") -> dict:
 
 __all__ = [
     "handle_nooki_abandon_task",
+    "handle_nooki_capture_later_item",
     "handle_nooki_complete_step",
     "handle_nooki_convert_later_item_with_options",
     "handle_nooki_create_task_with_options",

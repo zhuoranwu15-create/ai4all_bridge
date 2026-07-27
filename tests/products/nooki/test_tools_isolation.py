@@ -9,6 +9,7 @@ from app.tools.executor import execute_tool_call
 from app.tools.registry import CALL_INVOCATION, CALL_PLAIN
 
 _EXPECTED_NOOKI_TOOLS = {
+    "nooki_capture_later_item",
     "nooki_create_task_with_options",
     "nooki_convert_later_item_with_options",
     "nooki_select_task_plan",
