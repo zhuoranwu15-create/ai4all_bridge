@@ -11,5 +11,6 @@
 | [基线优化](products/zhaoxi/baseline_optimization_alignment.md) | 尚未排期的 P1/P2 项 |
 | [App 账号收敛与渠道人设](products/zhaoxi/app_account_convergence_and_channel_persona.md) | 以文首状态与验收表为准 |
 | [Companion World App M1 服务端](products/zhaoxi/companion_world_app_m1_server_plan.md) | 客户端 M1 服务端需求评审结论与 S1–S6 批次；S1–S6 已全部交付（2026-07-26），联调 ready，待合入 main |
+| [Companion World App M2 主人 Feed 管理](products/zhaoxi/companion_world_app_m2_feed_management_plan.md) | 客户端 M2–M5 需求评审；P0（删除/隐藏动态 + 契约）与 P1（举报原因契约、真人会话读模型）已落地，P2/运营项见文末 §8 |
 
 计划完成时应把稳定结论回写 `../architecture/` 或 `../products/<app_id>/`，再归档计划本身。

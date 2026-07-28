@@ -85,7 +85,7 @@ router = APIRouter(tags=["app-v1"])
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 
 # App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
-CLIENT_CONTRACT_VERSION = "2026-07-26"
+CLIENT_CONTRACT_VERSION = "2026-07-28"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))

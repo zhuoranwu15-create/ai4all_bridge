@@ -30,6 +30,9 @@ from app.products.zhaoxi.api.contracts import (
     ConversationListResponse,
     ConversationMessagesResponse,
     ConversationReadResponse,
+    FeedListResponse,
+    FeedPostResponse,
+    FeedRetireResponse,
     ResidentListResponse,
     TurnResponse,
 )
@@ -111,6 +114,9 @@ _ERROR_STATUS = {
     "account_disabled": 403,
     "invalid_cursor": 400,
     "idempotency_conflict": 409,
+    # 不存在、跨 owner、作者类型不符与格式非法统一收敛到这一个码，不给资源枚举信号。
+    "post_not_found": 404,
+    "post_not_hideable": 409,
     "notification_not_found": 404,
     "letter_not_found": 404,
     "letter_not_open": 409,
@@ -261,6 +267,12 @@ class ConversationReadPayload(BaseModel):
 
     # 客户端把「已读到的最后一条」消息 id 报上来；服务端只前进不回退，也不会越过真实最新一条。
     last_message_id: int = Field(ge=1)
+
+
+class EmptyFeedPayload(BaseModel):
+    """隐藏动态不接受任何请求体字段：原因、作者、居民状态与世界 ID 全部由服务端决定。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class FeedPostPayload(BaseModel):
@@ -450,6 +462,15 @@ def _feed_item_data(item) -> dict:
         "post_type": item.post_type,
         "source": item.source_type,
         "published_at": _feed_time(item.published_at),
+    }
+
+
+def _feed_retire_data(item, *, replayed: bool) -> dict:
+    """下架结果 DTO：库里终态统一是 ``deleted``，对外按原因投影成 deleted/hidden。"""
+    return {
+        "post_id": item.id,
+        "status": "hidden" if item.terminal_reason == "owner_hidden" else "deleted",
+        "replayed": replayed,
     }
 
 
@@ -729,7 +750,11 @@ def create_resident(
     return _envelope(request, code="ok", data=data)
 
 
-@router.get("/worlds/home/feed")
+@router.get(
+    "/worlds/home/feed",
+    response_model=FeedListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_home_feed(
     request: Request,
     response: Response,
@@ -760,7 +785,11 @@ def list_home_feed(
     )
 
 
-@router.post("/worlds/home/feed/posts")
+@router.post(
+    "/worlds/home/feed/posts",
+    response_model=FeedPostResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def publish_home_feed_post(
     payload: FeedPostPayload,
     request: Request,
@@ -781,6 +810,73 @@ def publish_home_feed_post(
         request,
         code="ok",
         data={"post": _feed_item_data(post)},
+    )
+
+
+@router.delete(
+    "/worlds/home/feed/posts/{post_id}",
+    response_model=FeedRetireResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
+def delete_home_feed_post(
+    post_id: str,
+    request: Request,
+    response: Response,
+    principal: SessionPrincipal = Depends(_require_feed_session),
+) -> dict:
+    """主人删除自己发布的文字动态（FEED-MGMT-001）。
+
+    只作用于当前 Session 主人的 home world；AI 居民动态走隐藏语义，这里一律按
+    ``post_not_found`` 拒绝。删除后主人与所有有效访客再次读 Feed 立即不可见。
+    重复删除幂等，回放首次结果并置 ``replayed=true``，不产生 5xx。
+    """
+    post, changed = _run_domain(
+        lambda: _feed_service().retire_post(
+            principal.platform_user_id,
+            post_id=post_id,
+            mode="delete",
+            retired_at=beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data=_feed_retire_data(post, replayed=not changed),
+    )
+
+
+@router.post(
+    "/worlds/home/feed/posts/{post_id}/hide",
+    response_model=FeedRetireResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
+def hide_home_feed_post(
+    post_id: str,
+    request: Request,
+    response: Response,
+    payload: Optional[EmptyFeedPayload] = None,
+    principal: SessionPrincipal = Depends(_require_feed_session),
+) -> dict:
+    """主人隐藏本世界内 AI 居民发布的动态（FEED-MGMT-002）。
+
+    隐藏是服务端权威状态，不是单设备偏好：主人与所有有效访客后续都读不到。不接受客户端
+    提供原因、作者或世界 ID；不修改居民生命周期、会话、记忆或离开状态。离别动态
+    （``post_type='farewell'``）M2 不允许隐藏，返回 ``post_not_hideable``。
+    """
+    post, changed = _run_domain(
+        lambda: _feed_service().retire_post(
+            principal.platform_user_id,
+            post_id=post_id,
+            mode="hide",
+            retired_at=beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+    )
+    _no_store(response)
+    return _envelope(
+        request,
+        code="ok",
+        data=_feed_retire_data(post, replayed=not changed),
     )
 
 

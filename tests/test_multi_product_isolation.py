@@ -7,6 +7,7 @@ import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
 from app.db._backend import is_postgres
 from app.db._core import (
+    _MIGRATIONS,
     _migration_0045_multi_product_phase1_contract,
     _phase1_contract_violation_counts,
     migrate_db_through,
@@ -281,7 +282,8 @@ def test_m0045_final_contract_is_clean_idempotent_and_has_final_indexes(fresh_db
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
 
-    assert int(version) == 51
+    # head 取注册表末位：重放 m0045 不得推进版本，但写死版本号会被后续迁移撞红。
+    assert int(version) == _MIGRATIONS[-1][0]
     assert nullable_app_columns == []
     assert {
         "ix_accounts_app_status",

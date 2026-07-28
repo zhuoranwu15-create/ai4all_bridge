@@ -97,6 +97,38 @@ def _publish(owner_id: str, text: str = "只公开这一条") -> dict:
     return post
 
 
+def _ai_post(owner_id: str, *, text: str = "居民今天说了句话。") -> dict:
+    """走真实 claim + publish 造一条 AI 居民动态，供隐藏语义使用。"""
+    world = db.get_universe(owner_platform_user_id=owner_id)
+    with db.connect() as conn:
+        resident_id = str(
+            conn.execute(
+                "SELECT id FROM universe_residents "
+                "WHERE universe_id = ? AND status = 'active' ORDER BY id LIMIT 1",
+                (world["id"],),
+            ).fetchone()["id"]
+        )
+    post, created = db.claim_ai_feed_slot(
+        universe_id=world["id"],
+        author_resident_id=resident_id,
+        ai_local_date="2026-07-23",
+        ai_slot="morning",
+        slot_window_end_at="2026-07-23 11:00:00",
+        claim_token=f"claim-{owner_id[-6:]}-morning",
+        claimed_at="2026-07-23 09:00:00",
+    )
+    assert post is not None and created is True
+    published, _outbox = db.publish_ai_feed_post_with_outbox(
+        post_id=post["id"],
+        claim_token=post["claim_token"],
+        text=text,
+        published_at="2026-07-23 09:30:00",
+        outbox_idempotency_key=f"world-post-published:v1:{post['id']}",
+        payload={"post_id": post["id"], "universe_id": world["id"]},
+    )
+    return published
+
+
 def test_visit_flag_off_is_hidden(client):
     response = client.post("/v1/world/invites")
     assert response.status_code == 404
@@ -346,6 +378,57 @@ def test_visitor_feed_is_active_visit_only_and_published_projection(
     assert client.get(
         f"/v1/visits/{pending['visit_id']}/feed", headers=outsider_headers
     ).status_code == 404
+
+
+def test_owner_retire_hides_post_from_active_visitor_immediately(
+    client, fresh_db, monkeypatch
+):
+    """FEED-MGMT-001/002 要求：删除/隐藏后**有效访客**再读也必须立即不可见。
+
+    访客 Feed 与主人 Feed 共用同一条 ``status = 'published'`` 查询，所以这是结构性保证；
+    但客户端把「主人/访客立即不可见」写成了验收项，这里用真实 active visit 显式钉住，
+    以后谁给访客 Feed 换查询都会在这里断。
+    """
+    _enable(monkeypatch)
+    fresh_db.companion_world_feed_enabled = True
+    owner_headers, owner_login = _login(client, "19965104801")
+    visitor_headers, _visitor_login = _login(client, "19965104802")
+    owner_id = owner_login["platform_user"]["id"]
+    _confirm_world(owner_id)
+    human_post = _publish(owner_id)
+    ai_post = _ai_post(owner_id)
+    code = client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+        "invite"
+    ]["code"]
+    visit_id = client.post(
+        "/v1/visits/redeem", headers=visitor_headers, json={"code": code}
+    ).json()["data"]["visit"]["visit_id"]
+    assert client.post(
+        f"/v1/visits/{visit_id}/accept", headers=owner_headers
+    ).status_code == 200
+
+    def _visitor_post_ids() -> list[str]:
+        response = client.get(
+            f"/v1/visits/{visit_id}/feed", headers=visitor_headers, params={"limit": 50}
+        )
+        assert response.status_code == 200, response.text
+        return [item["post_id"] for item in response.json()["data"]["items"]]
+
+    assert set(_visitor_post_ids()) == {human_post["id"], ai_post["id"]}
+
+    deleted = client.delete(
+        f"/v1/worlds/home/feed/posts/{human_post['id']}", headers=owner_headers
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["data"]["status"] == "deleted"
+    hidden = client.post(
+        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide", headers=owner_headers
+    )
+    assert hidden.status_code == 200, hidden.text
+    assert hidden.json()["data"]["status"] == "hidden"
+
+    # 访客侧不做任何缓存失效动作，直接回读——服务端必须已经是权威真相。
+    assert _visitor_post_ids() == []
 
 
 def test_exact_active_expiry_revokes_feed_and_makes_chat_read_only(fresh_db):

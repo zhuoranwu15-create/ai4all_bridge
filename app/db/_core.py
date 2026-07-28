@@ -4205,6 +4205,26 @@ def _migration_0051_app_me_tab(conn: Connection) -> None:
     )
 
 
+def _migration_0052_human_conversation_read_cursor(conn: Connection) -> None:
+    """真人会话 read cursor（M5-CONV-001），沿用 m0050 给 AI 会话定下的形状。
+
+    原先未读只能靠 ``owner/visitor_last_read_at`` 时间戳推算，而 read marker 与消息
+    ``created_at`` 都是**秒**精度：与标记已读同一秒到达的对方消息会被判成已读并永久
+    漏计——是漏不是多，用户根本不知道有消息没看到。改用 ``human_messages.sequence_no``
+    做游标后比较的是序号而非墙钟，同秒问题从根上消失。
+
+    ``last_read_at`` 保留：它仍是客户端的展示字段，只是不再承担未读计算。
+
+    纯加列无回填：既有会话为 NULL，等价于「一条都没读过」，未读数即对方全部消息数。
+    """
+    _ensure_column(
+        conn, "human_conversations", "owner_last_read_sequence", "INTEGER"
+    )
+    _ensure_column(
+        conn, "human_conversations", "visitor_last_read_sequence", "INTEGER"
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4252,6 +4272,7 @@ _MIGRATIONS = [
     (49, _migration_0049_companion_world_naming),
     (50, _migration_0050_ai_conversation_read_cursor),
     (51, _migration_0051_app_me_tab),
+    (52, _migration_0052_human_conversation_read_cursor),
 ]
 
 

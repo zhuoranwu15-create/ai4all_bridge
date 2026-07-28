@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from dataclasses import dataclass
 from typing import Optional, Tuple
 
 from app.products.zhaoxi.domain.companion_world.contracts import (
@@ -13,7 +14,29 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
 )
 
 _CLIENT_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+_POST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 MAX_FEED_TEXT_CODEPOINTS = 2000
+
+
+@dataclass(frozen=True)
+class _RetireRule:
+    """一种下架语义对应的固定原因与作者/类型约束。"""
+
+    reason_code: str
+    author_type: str
+    forbid_post_types: Tuple[str, ...] = ()
+
+
+# 主人可用的两种下架语义。原因码是持久化层区分「用户删自己内容」与「主人隐藏 AI 内容」的
+# 唯一依据（终态 status 统一为 deleted），也是审计口径，因此只能在这里单点定义。
+_RETIRE_MODES: dict[str, _RetireRule] = {
+    "delete": _RetireRule(reason_code="owner_deleted", author_type="human"),
+    "hide": _RetireRule(
+        reason_code="owner_hidden",
+        author_type="resident",
+        forbid_post_types=("farewell",),
+    ),
+}
 
 
 def user_post_fingerprint(text: str) -> str:
@@ -76,21 +99,36 @@ class CompanionWorldFeedService:
             )
         )
 
-    def delete_post(
+    def retire_post(
         self,
         platform_user_id: str,
         *,
         post_id: str,
-        reason_code: str,
-        deleted_at: str,
-    ) -> UniversePostRecord:
-        """保留未来内容治理下架接缝；M3 不暴露审核/管理路由。"""
-        clean_reason = str(reason_code or "").strip()
-        if not str(post_id or "").strip() or not clean_reason:
+        mode: str,
+        retired_at: str,
+    ) -> Tuple[UniversePostRecord, bool]:
+        """主人下架一条动态；返回 ``(post, changed)``，``changed=False`` 即重放。
+
+        ``mode`` 是本层唯一的语义输入，``reason_code`` 与作者/类型约束都由它推导——调用方
+        （含 HTTP 层）不能自带下架原因或作者/世界 ID，避免用户内容与系统生成记录被混为一类。
+
+        - ``delete``：只允许主人删自己的文字动态（``author_type='human'``）。
+        - ``hide``：只允许主人隐藏 AI 居民动态（``author_type='resident'``）；离别动态
+          （``post_type='farewell'``）M2 不允许隐藏——它同时是世界 readiness 的信号，隐藏
+          会让整个 Feed 变成 ``world_not_ready``。
+        """
+        clean_post_id = str(post_id or "").strip()
+        if not clean_post_id or not _POST_ID_RE.fullmatch(clean_post_id):
+            # 格式非法与不存在同码，不给出「ID 形状对不对」的区分信号。
+            raise CompanionWorldError("post_not_found")
+        rule = _RETIRE_MODES.get(str(mode or "").strip())
+        if rule is None:
             raise CompanionWorldError("invalid_request")
-        return self._repository.delete_post(
+        return self._repository.retire_post(
             platform_user_id=platform_user_id,
-            post_id=post_id,
-            reason_code=clean_reason,
-            deleted_at=deleted_at,
+            post_id=clean_post_id,
+            reason_code=rule.reason_code,
+            expected_author_type=rule.author_type,
+            forbid_post_types=rule.forbid_post_types,
+            retired_at=retired_at,
         )

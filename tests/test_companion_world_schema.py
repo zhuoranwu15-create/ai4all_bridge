@@ -23,6 +23,7 @@ from app.db._core import (
     _migration_0049_companion_world_naming,
     _migration_0050_ai_conversation_read_cursor,
     _migration_0051_app_me_tab,
+    _migration_0052_human_conversation_read_cursor,
 )
 
 _P1_TABLES = (
@@ -76,14 +77,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        51,
-        _migration_0051_app_me_tab,
+        52,
+        _migration_0052_human_conversation_read_cursor,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 51
+        assert int(version) == 52
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -489,6 +490,21 @@ def test_m0051_me_tab_schema_and_idempotency(fresh_db):
             "SELECT platform_user_id FROM app_notification_preferences WHERE 1 = 0",
         ):
             conn.execute(statement).fetchall()
+
+
+def test_m0052_human_read_cursor_schema_and_idempotency(fresh_db):
+    """m0052：真人会话读游标列可查询，重复执行不重复加列，且默认 NULL（不回填）。"""
+    with db.connect() as conn:
+        conn.execute(
+            "SELECT owner_last_read_sequence, visitor_last_read_sequence "
+            "FROM human_conversations WHERE 1 = 0"
+        ).fetchall()
+        _migration_0052_human_conversation_read_cursor(conn)
+        _migration_0052_human_conversation_read_cursor(conn)
+        conn.execute(
+            "SELECT owner_last_read_sequence, visitor_last_read_sequence "
+            "FROM human_conversations WHERE 1 = 0"
+        ).fetchall()
 
 
 def test_candidate_naming_snapshot_is_written_once(fresh_db):

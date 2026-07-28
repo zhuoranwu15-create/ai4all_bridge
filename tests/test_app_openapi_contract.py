@@ -34,6 +34,14 @@ MAIN_CHAIN_OPERATIONS = [
     ("/v1/me/account/deletion", "post"),
     ("/v1/notifications/preferences", "get"),
     ("/v1/notifications/preferences", "patch"),
+    # M2 世界 Feed：读取、发布与两条主人管理操作（CONTRACT-M2-001）。
+    ("/v1/worlds/home/feed", "get"),
+    ("/v1/worlds/home/feed/posts", "post"),
+    ("/v1/worlds/home/feed/posts/{post_id}", "delete"),
+    ("/v1/worlds/home/feed/posts/{post_id}/hide", "post"),
+    # M5 真人聊天：会话列表读模型与举报原因契约（M5-CONV-001 / M5-REPORT-001）。
+    ("/v1/human-conversations", "get"),
+    ("/v1/human-conversations/report-options", "get"),
 ]
 
 

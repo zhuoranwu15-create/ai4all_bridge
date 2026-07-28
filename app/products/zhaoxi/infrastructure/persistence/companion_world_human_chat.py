@@ -8,7 +8,11 @@ from typing import Any, Dict, Iterator, List, Optional
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
+#: 列表页预览截断长度。正文上限 4000 字，一页最多 100 条，不截断会让列表响应到 400KB。
+HUMAN_CONVERSATION_PREVIEW_CHARS = 120
+
 __all__ = [
+    "HUMAN_CONVERSATION_PREVIEW_CHARS",
     "create_human_conversation_for_visit",
     "get_human_conversation_for_participant",
     "get_human_conversation_for_visit",
@@ -143,22 +147,47 @@ def list_human_conversations_for_participant(
     limit: int = 50,
     conn: Optional[Connection] = None,
 ) -> List[Dict[str, Any]]:
-    """列出 participant 会话；默认按各自 hidden 字段过滤。"""
+    """列出 participant 会话；默认按各自 hidden 字段过滤。
+
+    未读数、最近预览与 visit 到期时间都在同一条 SQL 里用相关子查询取回（M5-CONV-001），
+    不逐会话补查——一页最多 100 行，逐行查就是 300 次往返。预览在 SQL 里就截断，避免把
+    100 条 4000 字正文全量搬回进程再丢掉。
+    """
     hidden = "" if include_hidden else (
         " AND ((c.owner_platform_user_id = ? AND c.owner_hidden_at IS NULL) "
         "OR (c.visitor_platform_user_id = ? AND c.visitor_hidden_at IS NULL))"
     )
-    params: list[Any] = [platform_user_id, platform_user_id]
+    # 参数顺序必须与 SQL 中 ? 的出现顺序严格一致；这里的值恰好全是同一个 id，写错不会
+    # 报错只会算错，所以逐个占位符列出而不是循环生成。
+    params: list[Any] = [
+        HUMAN_CONVERSATION_PREVIEW_CHARS,  # SUBSTR 截断长度
+        platform_user_id,                  # 未读子查询：sender <> 自己
+        platform_user_id,                  # 未读子查询：CASE 判定自己是不是 owner
+        platform_user_id,                  # WHERE owner = 自己
+        platform_user_id,                  # WHERE visitor = 自己
+    ]
     if not include_hidden:
         params.extend([platform_user_id, platform_user_id])
     params.append(max(1, min(int(limit), 100)))
     with _tx(conn) as tx:
         rows = tx.execute(
             "SELECT c.*, owner.display_name AS owner_display_name, "
-            "visitor.display_name AS visitor_display_name "
+            "visitor.display_name AS visitor_display_name, "
+            "v.status AS visit_status, v.expires_at AS visit_expires_at, "
+            "(SELECT SUBSTR(m.body_text, 1, ?) FROM human_messages m "
+            " WHERE m.conversation_id = c.id "
+            " ORDER BY m.sequence_no DESC LIMIT 1) AS last_preview, "
+            # 未读只数对方发的；游标为 NULL 等价于一条都没读过。
+            "(SELECT COUNT(*) FROM human_messages m "
+            " WHERE m.conversation_id = c.id "
+            "   AND m.sender_platform_user_id <> ? "
+            "   AND m.sequence_no > COALESCE(CASE WHEN c.owner_platform_user_id = ? "
+            "       THEN c.owner_last_read_sequence ELSE c.visitor_last_read_sequence "
+            "       END, 0)) AS unread_count "
             "FROM human_conversations c "
             "JOIN platform_users owner ON owner.id = c.owner_platform_user_id "
             "JOIN platform_users visitor ON visitor.id = c.visitor_platform_user_id "
+            "LEFT JOIN universe_visits v ON v.id = c.visit_id "
             "WHERE (c.owner_platform_user_id = ? OR c.visitor_platform_user_id = ?)"
             + hidden
             + " ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC LIMIT ?",
@@ -365,7 +394,12 @@ def mark_human_conversation_read(
     read_at: str,
     conn: Optional[Connection] = None,
 ) -> Optional[Dict[str, Any]]:
-    """只更新当前 participant 的 read marker。"""
+    """只更新当前 participant 的 read marker。
+
+    时间戳与序号游标一起推进：``last_read_at`` 供展示，``last_read_sequence`` 才是未读数
+    的判据（m0052）。序号在**同一个写事务内**快照当前最大 ``sequence_no``，因此不存在
+    「读到一半又进来一条被顺手标已读」的窗口。游标只前进不回退。
+    """
     with _human_write_tx(conn) as tx:
         conversation = lock_human_conversation(
             conversation_id=conversation_id, conn=tx
@@ -375,14 +409,23 @@ def mark_human_conversation_read(
             conversation["visitor_platform_user_id"],
         }:
             return None
-        column = (
-            "owner_last_read_at"
-            if conversation["owner_platform_user_id"] == platform_user_id
-            else "visitor_last_read_at"
+        is_owner = conversation["owner_platform_user_id"] == platform_user_id
+        read_at_column = "owner_last_read_at" if is_owner else "visitor_last_read_at"
+        sequence_column = (
+            "owner_last_read_sequence" if is_owner else "visitor_last_read_sequence"
         )
+        latest = tx.execute(
+            "SELECT COALESCE(MAX(sequence_no), 0) AS seq FROM human_messages "
+            "WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        target = int(latest["seq"] or 0)
         tx.execute(
-            f"UPDATE human_conversations SET {column} = ?, updated_at = ? WHERE id = ?",
-            (read_at, read_at, conversation_id),
+            f"UPDATE human_conversations SET {read_at_column} = ?, "
+            f"{sequence_column} = CASE WHEN {sequence_column} IS NULL "
+            f"  OR {sequence_column} < ? THEN ? ELSE {sequence_column} END, "
+            "updated_at = ? WHERE id = ?",
+            (read_at, target, target, read_at, conversation_id),
         )
         row = tx.execute(
             "SELECT * FROM human_conversations WHERE id = ?", (conversation_id,)

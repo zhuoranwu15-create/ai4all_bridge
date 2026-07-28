@@ -58,7 +58,7 @@
 
 - 服务端 CI 断言「实时导出 == 提交的 snapshot」，所以**改响应字段必须同步更新 snapshot**，否则后端 CI 直接红。客户端可以拿它做 breaking-change 检查或生成 DTO。
 - 后端重新导出：`.venv/bin/python scripts/export_openapi.py`（`--check` 只校验）。
-- **当前有主链路 15 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，以及「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
+- **当前有主链路 21 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)，世界 Feed 的 `worlds/home/feed`(GET)、`worlds/home/feed/posts`(POST)、`worlds/home/feed/posts/{id}`(DELETE)、`worlds/home/feed/posts/{id}/hide`(POST)，以及真人会话的 `human-conversations`(GET)、`human-conversations/report-options`(GET)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
 - 生成的 DTO 不替代客户端领域模型；本文档仍是落地口径与流程约定。
 
 ---
@@ -225,6 +225,10 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 - `quiet` 只压制**将来**的 AI 主动通知；**已在箱内的通知不回收**，`unread_count` 不会因为
   改偏好而变化。切回 `standard` 后立即恢复投递。
 - 与 `/v1/notifications` 一样需要 `COMPANION_WORLD_APP_INBOX_ENABLED`，否则 `404 feature_disabled`。
+- **作用域仅限 AI 主动通知，不覆盖真人会话**（M5-NOTIFY-001）。服务端目前既没有真人消息
+  Push 通道，也没有会话级静音字段/端点，因此 `quiet_level` 不能被解释成「真人会话免打扰」。
+  真人会话的通知口径是**尚未冻结的产品决策**，不在当前 M5 发布范围内；在它冻结前，请不要
+  提供只在单设备生效的本地静音开关。
 
 
 ---
@@ -496,22 +500,105 @@ POST /v1/ai-conversations/{conversation_id}/read     → 标记已读到某条�
 ### 6.2 家园 Feed
 
 ```
-GET  /v1/worlds/home/feed?cursor=<游标>&limit=20   → 分页拉取 Feed（limit 1-50，默认 20）
-POST /v1/worlds/home/feed/posts                    → 用户发帖
+GET    /v1/worlds/home/feed?cursor=<游标>&limit=20        → 分页拉取 Feed（limit 1-50，默认 20）
+POST   /v1/worlds/home/feed/posts                         → 用户发帖
+DELETE /v1/worlds/home/feed/posts/{post_id}               → 主人删除自己的动态
+POST   /v1/worlds/home/feed/posts/{post_id}/hide          → 主人隐藏 AI 居民动态
 ```
 
 `data`：`{ "items": [ /* Feed 项 */ ], "next_cursor": "<游标或 null>" }`。用 `next_cursor` 向后翻页，为 `null` 表示到底。
 
-Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{type:"text",text} / post_type / source / published_at`。
+Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{type:"text",text} / post_type / source / published_at`。这四个操作的响应形状均已进 OpenAPI snapshot，可直接生成 DTO。
 
 **Feed 生成时间窗（Asia/Shanghai）**：早间 `07:00–11:00`、晚间 `18:00–23:00`。居民自动发帖由中心调度器在窗口内产生；窗口外一般无新 AI Feed。
+
+#### 6.2.1 主人管理自己世界的动态（2026-07-28 新增）
+
+两个操作都只作用于**当前 Session 主人自己的 home world**，请求不接受 `world_id`、`owner_id`、
+`account_id`、下架原因等任何字段（带了会被 400/422 拒绝）。响应共用一个信封 `data`：
+
+```json
+{ "post_id": "post_...", "status": "deleted", "replayed": false }
+```
+
+- **`status`**：删除自己的动态是 `"deleted"`，隐藏 AI 动态是 `"hidden"`。
+- **`replayed`**：`true` 表示本次是重放，未产生新的状态变更。**重复请求恒为 200，不会 5xx**，
+  客户端可以安全重试。
+- 两条路由都返回 `Cache-Control: no-store`，都受 `world_feed` capability 门控（关闭时 404
+  `feature_disabled`）。
+
+**按作者类型分流，不能互换**：
+
+| 操作 | 只能作用于 | 用错对象时 |
+|---|---|---|
+| `DELETE .../posts/{id}` | `author.type == "human"` 且作者是自己 | 404 `post_not_found` |
+| `POST .../posts/{id}/hide` | `author.type == "resident"` | 404 `post_not_found` |
+
+客户端据此渲染入口：**只在自己的文字动态上显示「删除」，只在 AI 居民动态上显示「隐藏」**。
+
+其余约定：
+
+- **不存在、跨 owner、不可见、post_id 格式非法统一返回 404 `post_not_found`**，不区分「没有」
+  和「不是你的」，避免资源枚举。
+- **隐藏是服务端权威状态，不是单设备偏好**：主人和所有有效访客（`GET /v1/visits/{id}/feed`）
+  后续都读不到该条。删除同理。操作成功后请让 home Feed 失效并以服务端回读结果为准。
+- **游标不受影响**：Feed 用 keyset 游标，删/隐一条不会导致翻页重复或错页，旧 `next_cursor`
+  可以继续用。
+- **离别动态（`post_type == "farewell"`）不允许隐藏**，返回 409 `post_not_hideable`。它同时是
+  世界状态的信号，隐藏会影响整个 Feed 的可读性。客户端不要在离别动态上显示「隐藏」。
+- **隐藏不影响居民**：不修改居民生命周期、会话、记忆或离开状态。
+- **M2 不提供「取消隐藏」**，客户端不要做本地撤销。
 
 ### 6.3 其他世界能力（均已激活，端点见 §8）
 
 - **信箱** `/mailbox/*`：角色来信，接受/婉拒/延后/已读、未读数。
 - **访问 / 邀请** `/visits/*`、`/world/invites`：世界互访、生成/核销邀请码。
 - **通知** `/notifications`：未读数、标记已读。
-- **真人会话** `/human-conversations/*`：真人对真人聊天、举报/拉黑/隐藏。
+- **真人会话** `/human-conversations/*`：真人对真人聊天、举报/拉黑/隐藏，见 §6.4。
+
+### 6.4 真人会话列表与举报契约（2026-07-28 新增）
+
+**`GET /v1/human-conversations`** 的每个 item 补齐了以下字段，客户端不必再自行 join
+`/visits` 或伪造未读 badge：
+
+| 字段 | 说明 |
+|---|---|
+| `last_preview` | 最近一条消息正文，服务端已截断到 120 字并把换行/连续空白折叠成单空格；无消息时为 `null` |
+| `unread_count` | **精确值不封顶**，「99+」由客户端展示层决定。只数对方发的消息，自己发的永远不计 |
+| `can_send` | 能否发送。为 `false` 时看 `read_only_reason` |
+| `read_only_reason` | `can_send=true` 时为 `null`；否则见下表。**按码分支，不要按文案** |
+| `expires_at` | 对应 visit 的绝对结束时间（`+08:00`），非 active visit 时可能为 `null` |
+
+`read_only_reason` 取值：
+
+| 值 | 含义 | 是否可恢复 |
+|---|---|---|
+| `counterpart_blocked` | 任一方已拉黑对方 | 否 |
+| `visit_ended` | visit 已到期/离开/撤销/拒绝/取消，或已不存在 | 否 |
+| `conversation_ended` | visit 仍在但会话已转只读 | 否 |
+| `feature_disabled` | `human_chat_send` 关闭 | **是**，开关打开即恢复 |
+
+判定顺序是「先终态、后开关」：一个已经结束的会话即使赶上开关关闭，也报 `visit_ended`
+而不是 `feature_disabled`，避免客户端先显示「功能未开放」、开关打开后又跳成「已结束」。
+
+**未读计算改用消息序号而非时间戳。** 此前 read marker 与消息 `created_at` 都是秒精度，
+与标记已读同一秒到达的消息会被判成已读并**永久漏计**。现在 `POST /read` 在同一个写事务内
+快照当前最大消息序号，游标只前进不回退。`POST /read` **仍然不接受任何请求体**，客户端无需
+改动；`last_read_at` 保留但只用于展示。
+
+**`GET /v1/human-conversations/report-options`**（新增）返回版本化举报原因表：
+
+```json
+{"code":"ok","data":{"version":1,"options":[
+  {"reason_code":"spam","label":"垃圾广告","details_required":false},
+  {"reason_code":"other","label":"其他","details_required":true}
+]}}
+```
+
+- `options` 顺序即展示顺序，兜底的 `other` 永远在最后。客户端**直接用 `label`**，不要自行翻译或发明分类。
+- `version` 只在码集合或语义变化时递增，可据此缓存；纯文案微调不动它。
+- `details_required=true` 的码，`POST /report` 不带 `details`（或只给空白）会返回 **422 `invalid_request`** —— 契约与服务端校验是同一份表，不存在「说必填却不校验」。
+- 该端点随**读**门控开放：`human_chat_send=false` 时仍可拉取并举报，只有发送被关闭。
 
 ---
 
@@ -537,17 +624,19 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 | `rate_limited` | 429 | 触发限流 |
 | `account_disabled` | 403 | 账号被停用 |
 | `invalid_cursor` | 400 | Feed 游标非法 |
+| `post_not_found` | 404 | 动态不存在、不属于你、作者类型不符或 id 非法（统一码，防枚举） |
+| `post_not_hideable` | 409 | 该动态不允许隐藏（当前只有离别动态 `post_type='farewell'`） |
 | `letter_not_found` / `letter_not_open` / `letter_expired` | 404 / 409 / 409 | 信箱来信状态 |
 | `invalid_invite_code` / `invite_expired` / `visit_*` | 400 / 409 / … | 邀请与访问相关 |
 
 > 完整表见 `app/products/zhaoxi/api/companion_world.py` 的 `_ERROR_STATUS`。App 应基于 `code`（而非文案）做分支，未知 `code` 按对应 HTTP 状态兜底。
 
-主链路 15 个操作的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
+主链路 21 个操作的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
 （`WorldErrorEnvelope`），可直接据此生成错误分支；具体 `code` 取值仍以上表为准。
 
 ---
 
-## 8. `/v1` 全量端点清单（57 条）
+## 8. `/v1` 全量端点清单（60 条）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
@@ -571,6 +660,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 - `POST /v1/worlds/home/resident-drafts/preview`
 - `GET /v1/worlds/home/residents`、`POST /v1/worlds/home/residents`、`POST /v1/worlds/home/residents/confirm`
 - `GET /v1/worlds/home/feed`、`POST /v1/worlds/home/feed/posts`
+- `DELETE /v1/worlds/home/feed/posts/{id}`、`POST /v1/worlds/home/feed/posts/{id}/hide`
 
 **世界内会话**
 - `GET /v1/conversations`
@@ -594,6 +684,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 **真人会话**
 - `GET /v1/human-conversations`
+- `GET /v1/human-conversations/report-options`
 - `GET /v1/human-conversations/{id}/messages`、`POST /v1/human-conversations/{id}/messages`
 - `POST /v1/human-conversations/{id}/read`、`/report`、`/block`
 - `DELETE /v1/human-conversations/{id}/entry`
