@@ -31,14 +31,19 @@ from app.db._backend import is_postgres  # noqa: E402
 # nearline 经 source 连接读取的操作库表（与 nearline/analytics/* 的 FROM/JOIN 对齐）。
 # 新增被 nearline 读取的操作表时，必须同步加进这里，否则日报读不到该表。
 SOURCE_TABLES = (
+    "account_owner_bindings",
     "accounts",
     "daily_usage",
     "dreaming_memory_items",
     "dreaming_runs",
     "messages",
     "outbound_messages",
+    "platform_users",
+    "product_memberships",
     "scheduler_heartbeats",
     "sessions",
+    "universe_residents",
+    "universes",
 )
 
 

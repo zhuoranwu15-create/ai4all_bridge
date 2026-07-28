@@ -11,5 +11,5 @@ After=network.target
 Type=oneshot
 User=jack
 WorkingDirectory=/opt/workspace/ai4all_bridge
-ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python nearline/run_daily.py --yesterday
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python nearline/run_daily.py --yesterday --product zhaoxi --channel openclaw-weixin
 # 失败由脚本内飞书告警 + 非零退出；systemd 记 journal。

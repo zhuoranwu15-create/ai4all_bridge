@@ -13,6 +13,7 @@ _SELECT_SQL = """
 SELECT
     m.id,
     m.account_id,
+    CASE WHEN json_valid(m.raw_json) THEN json_extract(m.raw_json, '$.channel') END AS channel,
     m.session_id,
     m.direction,
     m.role,
@@ -61,6 +62,7 @@ def load(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection) -> int
             (
                 r["id"],
                 r["account_id"],
+                r["channel"],
                 r["session_id"],
                 r["direction"],
                 r["role"],
@@ -78,11 +80,41 @@ def load(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection) -> int
 
     facts_conn.executemany(
         "INSERT OR IGNORE INTO fct_message"
-        "(message_pk, account_id, session_id, direction, role, message_type, "
+        "(message_pk, account_id, channel, session_id, direction, role, message_type, "
         " created_at, event_date, event_hour, business_day, "
         " is_account_first_ever, is_account_first_of_day) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         out,
     )
     set_watermark(facts_conn, "fct_message", max_id)
     return len(out)
+
+
+def refresh_missing_channels(
+    source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection
+) -> int:
+    """从消息 raw_json 回填历史 facts 的事件渠道，返回更新行数。"""
+    ids = [
+        r["message_pk"]
+        for r in facts_conn.execute(
+            "SELECT message_pk FROM fct_message WHERE channel IS NULL"
+        ).fetchall()
+    ]
+    updated = 0
+    for start in range(0, len(ids), 500):
+        batch = ids[start:start + 500]
+        placeholders = ",".join("?" * len(batch))
+        rows = source_conn.execute(
+            "SELECT id, CASE WHEN json_valid(raw_json) "
+            "THEN json_extract(raw_json, '$.channel') END AS channel "
+            f"FROM messages WHERE id IN ({placeholders})",
+            batch,
+        ).fetchall()
+        for row in rows:
+            if row["channel"]:
+                facts_conn.execute(
+                    "UPDATE fct_message SET channel = ? WHERE message_pk = ?",
+                    (row["channel"], row["id"]),
+                )
+                updated += 1
+    return updated

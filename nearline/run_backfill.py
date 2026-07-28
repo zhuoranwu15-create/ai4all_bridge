@@ -23,6 +23,7 @@ from nearline.analytics import quality  # noqa: E402
 from nearline.analytics.metrics import daily_users, dreaming, onboarding, proactive  # noqa: E402
 from nearline.analytics.warehouse import etl  # noqa: E402
 from nearline.reporting import formatter  # noqa: E402
+from nearline.reporting.scope import resolve_scope  # noqa: E402
 
 REPORTS_DIR = Path(__file__).resolve().parent / "data" / "reports"
 
@@ -46,7 +47,13 @@ def main(argv=None) -> int:
     parser.add_argument("--facts-db", default=None,
                         help="覆盖 facts 库路径（配合 --source-db 使用，避免污染生产 facts）")
     parser.add_argument("--write-reports", action="store_true", help="逐日落 Markdown 报告文件")
+    parser.add_argument("--product", default="zhaoxi", help="服务端注册的产品 app_id")
+    parser.add_argument("--channel", default="openclaw-weixin", help="服务端注册的渠道")
     args = parser.parse_args(argv)
+    try:
+        scope = resolve_scope(args.product, args.channel)
+    except ValueError as err:
+        parser.error(str(err))
 
     # 1) 重建基线一次。
     stats = etl.refresh_all(args.source_db, facts_db_override=args.facts_db)
@@ -69,14 +76,15 @@ def main(argv=None) -> int:
         soft_notes = [f"{r.name}: {r.detail}" for r in summary["soft_failed"]]
 
         sections = {
-            "users": daily_users.compute(target, facts_db_override=args.facts_db),
-            "proactive": proactive.compute(target, facts_db_override=args.facts_db),
+            "users": daily_users.compute(target, facts_db_override=args.facts_db, scope=scope),
+            "proactive": proactive.compute(target, facts_db_override=args.facts_db, scope=scope),
             "dreaming": dreaming.compute(
                 target,
                 source_db_override=args.source_db,
                 facts_db_override=args.facts_db,
+                scope=scope,
             ),
-            "onboarding": onboarding.compute(target, facts_db_override=args.facts_db),
+            "onboarding": onboarding.compute(target, facts_db_override=args.facts_db, scope=scope),
         }
         u = sections["users"]
         print(
@@ -84,8 +92,8 @@ def main(argv=None) -> int:
             f"主动sent={sections['proactive']['total_sent']} dreaming={sections['dreaming']['runs_total']}"
         )
         if args.write_reports:
-            report = formatter.render_daily(sections, quality_notes=soft_notes)
-            (REPORTS_DIR / f"daily_{target}.md").write_text(report, encoding="utf-8")
+            report = formatter.render_daily(sections, quality_notes=soft_notes, scope=scope)
+            (REPORTS_DIR / f"daily_{scope.key}_{target}.md").write_text(report, encoding="utf-8")
 
     return 0
 

@@ -77,3 +77,38 @@ CREATE TABLE IF NOT EXISTS agg_onboarding_funnel_daily (
     style_distribution_json TEXT,                  -- 占位，待 onboarding_events 落库
     computed_at       TEXT
 );
+
+-- 产品×渠道日报专用 marts。保留旧全局表供历史调用，避免不同作用域互相覆盖。
+CREATE TABLE IF NOT EXISTS agg_daily_users_scoped (
+    date TEXT NOT NULL, app_id TEXT NOT NULL, channel TEXT NOT NULL,
+    new_users INTEGER NOT NULL DEFAULT 0,
+    dau INTEGER NOT NULL DEFAULT 0,
+    active_accounts INTEGER NOT NULL DEFAULT 0,
+    inbound_messages INTEGER NOT NULL DEFAULT 0,
+    d1_cohort_size INTEGER NOT NULL DEFAULT 0,
+    d1_retained INTEGER NOT NULL DEFAULT 0,
+    d1_retention_rate REAL, d1_status TEXT, computed_at TEXT,
+    PRIMARY KEY(date, app_id, channel)
+);
+
+CREATE TABLE IF NOT EXISTS agg_daily_proactive_scoped (
+    date TEXT NOT NULL, app_id TEXT NOT NULL, channel TEXT NOT NULL,
+    total_sent INTEGER NOT NULL DEFAULT 0, blocked_count INTEGER NOT NULL DEFAULT 0,
+    failed_count INTEGER NOT NULL DEFAULT 0, covered_accounts INTEGER NOT NULL DEFAULT 0,
+    replied_total INTEGER NOT NULL DEFAULT 0, resolved_sent INTEGER NOT NULL DEFAULT 0,
+    reply_rate_overall REAL, reply_latency_p50_sec INTEGER, reply_window_hours INTEGER,
+    by_category_json TEXT, computed_at TEXT,
+    PRIMARY KEY(date, app_id, channel)
+);
+
+CREATE TABLE IF NOT EXISTS agg_daily_dreaming_scoped (
+    date TEXT NOT NULL, app_id TEXT NOT NULL, channel TEXT NOT NULL,
+    payload_json TEXT NOT NULL, computed_at TEXT,
+    PRIMARY KEY(date, app_id, channel)
+);
+
+CREATE TABLE IF NOT EXISTS agg_onboarding_funnel_daily_scoped (
+    date TEXT NOT NULL, app_id TEXT NOT NULL, channel TEXT NOT NULL,
+    payload_json TEXT NOT NULL, computed_at TEXT,
+    PRIMARY KEY(date, app_id, channel)
+);

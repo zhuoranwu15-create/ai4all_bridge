@@ -346,6 +346,12 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
   - H4「回复外键」（2026-06-16 增量）：facts 为 append-only 基线，账号被解绑清空（`wipe_account_data`）后历史归因到的 `reply_message_id` 会从源 messages 消失，属预期。改为只对"账号源库仍有存活消息"的孤儿硬失败，已清空账号豁免并在 detail 注明，避免误阻断 `run_daily`。
 - [x] 调度模板：`nearline/deploy/ai4all-nearline.{service,timer}`（systemd，推荐）+ `crontab.example`；独立进程不挂 FastAPI/dreaming_scheduler
 - [x] **每日日报飞书群推送**（2026-06-16 增量）：`run_daily` 成功出报告后，把四域核心数字的纯文本摘要（`formatter.render_feishu_summary`）推送到运营飞书群（`FEISHU_WEBSITE_WEBHOOK_URL`，经 `alerting.send_report`，区别于运维群告警 `FEISHU_ALERT_WEBHOOK_URL`）；`--no-feishu` 可关闭，`run_state.json` 记录 `feishu_pushed`，best-effort 失败不影响日报产出
+- [x] **产品×渠道日报作用域**（2026-07-28 增量）：服务端通过
+  `nearline/reporting/scope.py` 注册可信 `app_id + channel` 组合；当前定时任务生成
+  `zhaoxi + openclaw-weixin`（朝夕相伴微信渠道），`zhaoxi + native` 已注册但未进入定时推送。
+  增长指标按真人 owner 去重（产品 membership 加入日、真人 DAU、真人首聊 D1），同时保留
+  活跃 AI 账号数；消息/主动消息使用事件级 channel，Dreaming 因缺少事件渠道暂按账号归属渠道。
+  scoped marts 以 `(date, app_id, channel)` 为主键，避免后续 App/第二产品报告互相覆盖。
 - [x] 已接 cron：每日定时跑 `--yesterday`（`crontab.example` 提供模板；cron 不读 `.env`，需在 crontab 内显式提供 `FEISHU_WEBSITE_WEBHOOK_URL`）
 - 校验：7 检查全过（DAU 对账 facts=源=14）；注入孤儿行→硬检查 FAIL 且软对账独立命中→报告阻断 exit 1；清理后恢复 exit 0；backfill 06-04..06-06 逐日重算正常；`run_state.json` 落盘
 

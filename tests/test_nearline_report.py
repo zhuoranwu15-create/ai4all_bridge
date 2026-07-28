@@ -1,17 +1,26 @@
 """nearline 日报相关聚焦测试：
 
 1. H4 质量检查（proactive_reply_fk）对已清空账号的孤儿归因豁免，对活跃账号仍硬失败。
-2. 飞书精简摘要渲染（纯函数）。
+2. 飞书精简摘要渲染（纯函数）及平台发送模块接线。
 
 注：nearline 与主 app 解耦，用临时 sqlite 文件构造最小 facts/source 库，
 不依赖标准库 data/ai4all.sqlite3。
 """
 
 import sqlite3
+import json
+from datetime import datetime
 
+from app.config import settings
+from app.platform.observability import alerting as platform_alerting
+from nearline import alerting as nearline_alerting
+from nearline import run_daily as nearline_run_daily
 from nearline.analytics import quality
 from nearline.analytics.facts_db import init_facts
+from nearline.analytics.metrics import daily_users
+from nearline.analytics.warehouse import dim_account, fct_message, fct_proactive
 from nearline.reporting import formatter
+from nearline.reporting.scope import resolve_scope
 
 
 def _result(results, name):
@@ -211,3 +220,235 @@ def test_feishu_summary_renders_core_numbers():
 def test_feishu_summary_includes_quality_notes():
     text = formatter.render_feishu_summary(_sections(), quality_notes=["dau_reconciliation: x"])
     assert "数据质量提示" in text
+
+
+def test_scoped_users_deduplicates_humans_and_isolates_channel(tmp_path):
+    """同一真人的多个 resident 只算 1 DAU，Native 入站不进入微信版。"""
+    facts_path = tmp_path / "facts.sqlite3"
+    init_facts(str(facts_path))
+    conn = sqlite3.connect(str(facts_path))
+    conn.executemany(
+        "INSERT INTO dim_account("
+        "account_id, app_id, channel, platform_user_id, platform_user_registered_date, "
+        "registered_date, is_debug) VALUES (?, 'zhaoxi', ?, ?, ?, ?, 0)",
+        [
+            ("aid_wx_1", "openclaw-weixin", "uid_old", "2026-06-01", "2026-06-01"),
+            ("aid_wx_2", "openclaw-weixin", "uid_old", "2026-06-01", "2026-06-15"),
+            ("aid_native", "native", "uid_old", "2026-06-01", "2026-06-15"),
+            ("aid_new", "openclaw-weixin", "uid_new", "2026-06-15", "2026-06-15"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO fct_message("
+        "message_pk, account_id, channel, direction, role, event_date) "
+        "VALUES (?, ?, ?, 'inbound', 'user', '2026-06-15')",
+        [
+            (1, "aid_wx_1", "openclaw-weixin"),
+            (2, "aid_wx_1", "openclaw-weixin"),
+            (3, "aid_wx_2", "openclaw-weixin"),
+            (4, "aid_native", "native"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    result = daily_users.compute(
+        "2026-06-15",
+        today="2026-06-17",
+        facts_db_override=str(facts_path),
+        scope=resolve_scope("zhaoxi", "openclaw-weixin"),
+    )
+
+    assert result["new_users"] == 1
+    assert result["dau"] == 1
+    assert result["active_accounts"] == 2
+    assert result["inbound_messages"] == 3
+
+
+def test_scoped_feishu_summary_names_product_channel_and_metric_units():
+    sections = _sections()
+    sections["users"]["active_accounts"] = 16
+    text = formatter.render_feishu_summary(
+        sections, scope=resolve_scope("zhaoxi", "openclaw-weixin")
+    )
+
+    assert text.startswith("朝夕相伴（微信渠道） 每日运营报告")
+    assert "新增真人 7" in text
+    assert "真人DAU 14" in text
+    assert "活跃AI账号 16" in text
+    assert "Dreaming 按 AI 账号归属渠道" in text
+
+
+def test_report_scope_rejects_unregistered_product_channel():
+    try:
+        resolve_scope("unknown_product", "native")
+    except ValueError as err:
+        assert "unregistered report scope" in str(err)
+    else:
+        raise AssertionError("unknown report scope must fail closed")
+
+
+def test_native_scope_is_registered_but_not_the_scheduled_default():
+    scope = resolve_scope("zhaoxi", "native")
+    assert scope.title == "朝夕相伴（App 渠道）"
+    assert scope.onboarding_mode == "not_configured"
+    sections = _sections()
+    sections["users"]["active_accounts"] = 2
+    text = formatter.render_daily(sections, scope=scope)
+    assert "App Onboarding 指标待事件接入" in text
+    assert "存量状态" not in text
+
+
+def test_run_state_isolated_by_scope_with_default_legacy_alias(tmp_path, monkeypatch):
+    legacy = tmp_path / "run_state.json"
+    monkeypatch.setattr(nearline_run_daily, "STATE_FILE", legacy)
+
+    nearline_run_daily._save_state(
+        {"target_date": "2026-06-15", "channel": "native"},
+        "zhaoxi_native",
+        legacy_alias=False,
+    )
+    assert json.loads((tmp_path / "run_state_zhaoxi_native.json").read_text())["channel"] == "native"
+    assert not legacy.exists()
+
+    nearline_run_daily._save_state(
+        {"target_date": "2026-06-15", "channel": "openclaw-weixin"},
+        "zhaoxi_openclaw-weixin",
+        legacy_alias=True,
+    )
+    assert json.loads(legacy.read_text())["channel"] == "openclaw-weixin"
+
+
+def test_facts_capture_product_owner_and_event_channel(tmp_path):
+    """facts 应保存产品、真人 owner 和每条消息的真实渠道。"""
+    source_path = tmp_path / "source.sqlite3"
+    facts_path = tmp_path / "facts.sqlite3"
+    source = sqlite3.connect(str(source_path))
+    source.row_factory = sqlite3.Row
+    source.executescript(
+        """
+        CREATE TABLE accounts(
+            id TEXT PRIMARY KEY, app_id TEXT, channel TEXT, is_debug INTEGER,
+            created_at TEXT, onboarding_state TEXT
+        );
+        CREATE TABLE messages(
+            id INTEGER PRIMARY KEY, account_id TEXT, session_id INTEGER,
+            direction TEXT, role TEXT, message_type TEXT, raw_json TEXT, created_at TEXT
+        );
+        CREATE TABLE sessions(id INTEGER PRIMARY KEY, business_day TEXT);
+        CREATE TABLE account_owner_bindings(
+            account_id TEXT, platform_user_id TEXT, status TEXT
+        );
+        CREATE TABLE platform_users(id TEXT, created_at TEXT);
+        CREATE TABLE product_memberships(platform_user_id TEXT, app_id TEXT, created_at TEXT);
+        CREATE TABLE universes(id TEXT, owner_platform_user_id TEXT);
+        CREATE TABLE universe_residents(universe_id TEXT, runtime_account_id TEXT);
+        """
+    )
+    source.execute(
+        "INSERT INTO accounts VALUES "
+        "('aid_1', 'zhaoxi', 'openclaw-weixin', 0, '2026-06-10 09:00:00', 'complete')"
+    )
+    source.execute("INSERT INTO sessions VALUES (1, '2026-06-15')")
+    source.execute(
+        "INSERT INTO messages VALUES "
+        "(1, 'aid_1', 1, 'inbound', 'user', 'text', "
+        "'{\"channel\":\"openclaw-weixin\"}', '2026-06-15 10:00:00')"
+    )
+    source.execute("INSERT INTO account_owner_bindings VALUES ('aid_1', 'uid_1', 'active')")
+    source.execute("INSERT INTO platform_users VALUES ('uid_1', '2026-06-10 08:00:00')")
+    source.execute("INSERT INTO product_memberships VALUES ('uid_1', 'zhaoxi', '2026-06-11 08:00:00')")
+    source.commit()
+
+    init_facts(str(facts_path))
+    facts = sqlite3.connect(str(facts_path))
+    facts.row_factory = sqlite3.Row
+    dim_account.load(source, facts, "2026-06-16T04:00:00")
+    fct_message.load(source, facts)
+    facts.commit()
+
+    account = facts.execute("SELECT * FROM dim_account WHERE account_id = 'aid_1'").fetchone()
+    message = facts.execute("SELECT * FROM fct_message WHERE message_pk = 1").fetchone()
+    assert account["app_id"] == "zhaoxi"
+    assert account["platform_user_id"] == "uid_1"
+    assert account["platform_user_registered_date"] == "2026-06-10"
+    # membership 晚于既有产品账号时视为历史回填，产品加入日取更早的账号日。
+    assert account["product_member_registered_date"] == "2026-06-10"
+    assert message["channel"] == "openclaw-weixin"
+    source.close()
+    facts.close()
+
+
+def test_proactive_reply_attribution_does_not_cross_channels(tmp_path):
+    """微信主动消息不能把同账号更早的 Native 入站认作回复。"""
+    source = sqlite3.connect(str(tmp_path / "source.sqlite3"))
+    source.row_factory = sqlite3.Row
+    source.executescript(
+        """
+        CREATE TABLE outbound_messages(
+            id INTEGER PRIMARY KEY, account_id TEXT, channel TEXT,
+            product_category TEXT, source TEXT, status TEXT, policy_reason TEXT,
+            created_at TEXT, scheduled_at TEXT, sent_at TEXT
+        );
+        CREATE TABLE messages(
+            id INTEGER PRIMARY KEY, account_id TEXT, direction TEXT, role TEXT,
+            raw_json TEXT, created_at TEXT
+        );
+        """
+    )
+    source.execute(
+        "INSERT INTO outbound_messages VALUES "
+        "(1, 'aid_1', 'openclaw-weixin', 'followup', 'test', 'sent', NULL, "
+        "'2026-06-15 08:00:00', NULL, '2026-06-15 08:00:00')"
+    )
+    source.executemany(
+        "INSERT INTO messages VALUES (?, 'aid_1', 'inbound', 'user', ?, ?)",
+        [
+            (10, '{"channel":"native"}', "2026-06-15 08:05:00"),
+            (11, '{"channel":"openclaw-weixin"}', "2026-06-15 08:10:00"),
+        ],
+    )
+    source.commit()
+
+    facts_path = tmp_path / "facts.sqlite3"
+    init_facts(str(facts_path))
+    facts = sqlite3.connect(str(facts_path))
+    facts.row_factory = sqlite3.Row
+    fct_proactive.load(source, facts, now=datetime(2026, 6, 16, 9, 0, 0))
+    facts.commit()
+    row = facts.execute("SELECT * FROM fct_proactive_message WHERE id = 1").fetchone()
+
+    assert row["replied"] == 1
+    assert row["reply_message_id"] == 11
+    source.close()
+    facts.close()
+
+
+def test_nearline_report_uses_platform_feishu_sender(monkeypatch):
+    """日报推送应通过平台 observability 模块发送，避免模块迁移后静默失效。"""
+    calls = []
+    monkeypatch.setattr(settings, "feishu_website_webhook_url", "https://example.test/hook")
+    monkeypatch.setattr(
+        platform_alerting,
+        "_send_feishu_text",
+        lambda url, text, timeout: calls.append((url, text, timeout)),
+    )
+
+    assert nearline_alerting.send_report("daily summary") is True
+    assert calls == [("https://example.test/hook", "daily summary", 5.0)]
+
+
+def test_nearline_alert_uses_platform_feishu_sender(monkeypatch):
+    """质量告警应通过平台 observability 模块发送并保留 nearline 前缀。"""
+    calls = []
+    monkeypatch.setattr(settings, "feishu_alert_webhook_url", "https://example.test/hook")
+    monkeypatch.setattr(
+        platform_alerting,
+        "_send_feishu_text",
+        lambda url, text, timeout: calls.append((url, text, timeout)),
+    )
+
+    assert nearline_alerting.send_alert("quality failed") is True
+    assert calls == [
+        ("https://example.test/hook", "[ai4all][nearline] quality failed", 3.0)
+    ]
