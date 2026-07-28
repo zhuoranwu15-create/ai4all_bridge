@@ -5,6 +5,8 @@
 
 from typing import Dict, List, Optional
 
+from nearline.reporting.scope import ReportScope
+
 
 def _retention_line(m: Dict) -> str:
     status = m["d1_status"]
@@ -25,10 +27,16 @@ def _num(value: Optional[int]) -> str:
     return str(value) if value is not None else "—"
 
 
-def _users_section(m: Dict) -> list:
+def _users_section(m: Dict, scoped: bool = False) -> list:
+    headline = (
+        f"- 新增真人：{m['new_users']} | 真人 DAU：{m['dau']} | "
+        f"活跃 AI 账号：{m['active_accounts']} | 入站消息：{m['inbound_messages']}"
+        if scoped else
+        f"- 新注册：{m['new_users']} | DAU：{m['dau']} | 入站消息：{m['inbound_messages']}"
+    )
     return [
         "## 用户增长",
-        f"- 新注册：{m['new_users']} | DAU：{m['dau']} | 入站消息：{m['inbound_messages']}",
+        headline,
         f"- D1 留存（首聊 cohort）：{_retention_line(m)}",
         "",
     ]
@@ -79,7 +87,13 @@ def _dreaming_section(m: Dict) -> list:
     ]
 
 
-def _onboarding_section(m: Dict) -> list:
+def _onboarding_section(m: Dict, scope: Optional[ReportScope] = None) -> list:
+    if scope is not None and scope.onboarding_mode == "not_configured":
+        return [
+            "## Onboarding",
+            "- 当前渠道不使用微信首次聊天 Onboarding；App Onboarding 指标待事件接入。",
+            "",
+        ]
     return [
         "## Onboarding",
         f"- 存量状态：complete {m['cnt_complete']} / pending {m['cnt_pending']} / "
@@ -94,7 +108,8 @@ def _onboarding_section(m: Dict) -> list:
 
 
 def render_feishu_summary(sections: Dict,
-                          quality_notes: Optional[List[str]] = None) -> str:
+                          quality_notes: Optional[List[str]] = None,
+                          scope: Optional[ReportScope] = None) -> str:
     """渲染推送飞书群的精简纯文本摘要（四域核心数字）。
 
     飞书自定义机器人 webhook 用 msg_type=text，不渲染 Markdown，故输出纯文本；
@@ -104,11 +119,15 @@ def render_feishu_summary(sections: Dict,
     p = sections["proactive"]
     d = sections["dreaming"]
     o = sections["onboarding"]
-    lines = [
-        f"AI4ALL 每日运营报告 — {u['date']}",
-        "【用户增长】"
+    growth_metrics = (
+        f"新增真人 {u['new_users']} | 真人DAU {u['dau']} | "
+        f"活跃AI账号 {u['active_accounts']} | 入站 {u['inbound_messages']} "
+        if scope else
         f"新注册 {u['new_users']} | DAU {u['dau']} | 入站 {u['inbound_messages']} "
-        f"| D1留存 {_retention_line(u)}",
+    )
+    lines = [
+        f"{scope.title if scope else 'AI4ALL'} 每日运营报告 — {u['date']}",
+        f"【用户增长】{growth_metrics}| D1留存 {_retention_line(u)}",
         "【主动消息】"
         f"发送 {p['total_sent']} | 覆盖账号 {p['covered_accounts']} | 策略拦截 {p['blocked_count']} "
         f"| 发送失败 {p.get('failed_count', 0)} "
@@ -117,17 +136,26 @@ def render_feishu_summary(sections: Dict,
         f"运行 {d['runs_total']}（成功 {d['runs_succeeded']}/partial {d['runs_partial']}/失败 "
         f"{d['runs_failed']}）| 记忆 {d['items_generated']} 条（应用率 {_pct(d['items_applied_rate'])}）"
         f"| 调度 {d.get('scheduler_status') or '未知'}",
-        "【Onboarding】"
-        f"complete {o['cnt_complete']}/pending {o['cnt_pending']} | 完成率 {_pct(o['completion_rate'])} "
-        f"| 当日注册 cohort {o['cohort_registered']}（完成 {o['cohort_completed']}）",
     ]
+    if scope is not None and scope.onboarding_mode == "not_configured":
+        lines.append("【Onboarding】App 指标待事件接入")
+    else:
+        lines.append(
+            "【Onboarding】"
+            f"complete {o['cnt_complete']}/pending {o['cnt_pending']} | "
+            f"完成率 {_pct(o['completion_rate'])} | 当日注册 cohort "
+            f"{o['cohort_registered']}（完成 {o['cohort_completed']}）"
+        )
+    if scope:
+        lines.append("【口径】增长/入站按事件渠道；Dreaming 按 AI 账号归属渠道。")
     if quality_notes:
         lines.append("【数据质量提示】" + "；".join(quality_notes))
     return "\n".join(lines)
 
 
 def render_daily(sections: Dict, quality_notes: Optional[List[str]] = None,
-                 quality_skipped: bool = False) -> str:
+                 quality_skipped: bool = False,
+                 scope: Optional[ReportScope] = None) -> str:
     """把四个域的指标 dict 组合渲染成完整 Markdown 日报。
 
     sections: {'users':..., 'proactive':..., 'dreaming':..., 'onboarding':...}
@@ -135,15 +163,24 @@ def render_daily(sections: Dict, quality_notes: Optional[List[str]] = None,
     quality_skipped: --skip-quality 应急模式时为 True，页脚如实标注。
     """
     date = sections["users"]["date"]
-    lines = [f"# AI4ALL 每日运营报告 — {date}", ""]
-    lines += _users_section(sections["users"])
+    title = scope.title if scope else "AI4ALL"
+    lines = [f"# {title} 每日运营报告 — {date}", ""]
+    lines += _users_section(sections["users"], scoped=scope is not None)
     lines += _proactive_section(sections["proactive"])
     lines += _dreaming_section(sections["dreaming"])
-    lines += _onboarding_section(sections["onboarding"])
+    lines += _onboarding_section(sections["onboarding"], scope=scope)
     if quality_notes:
         lines += ["## 数据质量提示（软）"]
         lines += [f"- ⚠️ {note}" for note in quality_notes]
         lines += [""]
+    if scope:
+        lines += [
+            "## 统计口径",
+            "- 新增真人、真人 DAU、D1：按产品内真人 UID 去重；未解析 owner 的历史账号按账号兜底。",
+            "- 入站与主动消息：按事件实际渠道；Onboarding：按账号归属渠道。",
+            "- Dreaming 当前无事件级渠道，按 AI 账号的初始/归属渠道统计。",
+            "",
+        ]
     quality_mark = "硬质量检查已跳过（--skip-quality）" if quality_skipped else "硬质量检查已通过"
     lines += ["---", f"*由 nearline/run_daily.py 自动生成（已排除 debug 账号；{quality_mark}）*"]
     return "\n".join(lines) + "\n"

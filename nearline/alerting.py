@@ -1,4 +1,4 @@
-"""nearline 告警：复用 app.alerting 的飞书发送 + 脱敏（懒加载，失败不致命）。
+"""nearline 告警：复用平台层的飞书发送 + 脱敏（懒加载，失败不致命）。
 
 与 scripts/backup_data.py 一致的接入方式：无 webhook 配置时静默跳过，
 告警本身失败也不掩盖原始错误。
@@ -15,7 +15,7 @@ def send_alert(message: str) -> bool:
         webhook = str(getattr(settings, "feishu_alert_webhook_url", "") or "").strip()
         if not webhook:
             return False
-        from app.alerting import _send_feishu_text, redact_alert_text
+        from app.platform.observability.alerting import _send_feishu_text, redact_alert_text
 
         text = redact_alert_text(f"[ai4all][nearline] {message}")
         _send_feishu_text(webhook, text, 3.0)
@@ -38,7 +38,7 @@ def send_report(text: str) -> bool:
         webhook = str(getattr(settings, "feishu_website_webhook_url", "") or "").strip()
         if not webhook:
             return False
-        from app.alerting import _send_feishu_text
+        from app.platform.observability.alerting import _send_feishu_text
 
         _send_feishu_text(webhook, text, 5.0)
         return True

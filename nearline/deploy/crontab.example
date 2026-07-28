@@ -14,7 +14,7 @@ FEISHU_WEBSITE_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/REPLACE_
 # export_pg_to_sqlite.py 把操作库快照成 SQLite，再让 run_daily 经 NEARLINE_SOURCE_DB
 # 指向该快照。export 失败会飞书告警并以 && 阻断 run_daily，避免出陈旧报告。
 # （export 经 app.config.settings 读 .env 取 DATABASE_URL，无需在此硬编码密钥。）
-17 4 * * * cd /opt/workspace/ai4all_bridge && .venv/bin/python scripts/export_pg_to_sqlite.py --dest nearline/data/source_snapshot.sqlite3 && NEARLINE_SOURCE_DB=nearline/data/source_snapshot.sqlite3 .venv/bin/python nearline/run_daily.py --yesterday >> nearline/data/cron.log 2>&1
+17 4 * * * cd /opt/workspace/ai4all_bridge && .venv/bin/python scripts/export_pg_to_sqlite.py --dest nearline/data/source_snapshot.sqlite3 && NEARLINE_SOURCE_DB=nearline/data/source_snapshot.sqlite3 .venv/bin/python nearline/run_daily.py --yesterday --product zhaoxi --channel openclaw-weixin >> nearline/data/cron.log 2>&1
 
 # 【SQLite 模式（本地/单机）】操作库本就是 SQLite，nearline 直接读活库，无需快照步骤：
 # 17 4 * * * cd /path/to/repo && .venv/bin/python nearline/run_daily.py --yesterday >> nearline/data/cron.log 2>&1

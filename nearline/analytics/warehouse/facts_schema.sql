@@ -23,7 +23,11 @@ CREATE TABLE IF NOT EXISTS dim_date (
 -- 把历史 contacts/sender_id 命名归一为 account_id，对分析侧隐藏技术债。
 CREATE TABLE IF NOT EXISTS dim_account (
     account_id               TEXT PRIMARY KEY,
+    app_id                   TEXT NOT NULL DEFAULT 'zhaoxi',
     channel                  TEXT,
+    platform_user_id         TEXT,
+    platform_user_registered_date TEXT,
+    product_member_registered_date TEXT,
     is_debug                 INTEGER NOT NULL DEFAULT 0,
     registered_at            TEXT,  -- accounts.created_at
     registered_date          TEXT,  -- DATE(registered_at)，注册 cohort 键
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS dim_account (
 CREATE TABLE IF NOT EXISTS fct_message (
     message_pk              INTEGER PRIMARY KEY,  -- = messages.id
     account_id              TEXT NOT NULL,
+    channel                 TEXT,
     session_id              INTEGER,
     direction               TEXT,
     role                    TEXT,
@@ -61,6 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_fct_message_first_ever ON fct_message(is_account_
 CREATE TABLE IF NOT EXISTS fct_proactive_message (
     id                INTEGER PRIMARY KEY,  -- = outbound_messages.id
     account_id        TEXT NOT NULL,
+    channel           TEXT,
     category          TEXT,                 -- product_category
     source            TEXT,
     status            TEXT,                 -- sent / cancelled / blocked / ...

@@ -38,9 +38,22 @@ def init_facts(path_override: Optional[str] = None) -> None:
     conn = connect_facts(path_override)
     try:
         conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+        _ensure_column(conn, "dim_account", "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
+        _ensure_column(conn, "dim_account", "platform_user_id", "TEXT")
+        _ensure_column(conn, "dim_account", "platform_user_registered_date", "TEXT")
+        _ensure_column(conn, "dim_account", "product_member_registered_date", "TEXT")
+        _ensure_column(conn, "fct_message", "channel", "TEXT")
+        _ensure_column(conn, "fct_proactive_message", "channel", "TEXT")
         conn.commit()
     finally:
         conn.close()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    """给已有 facts 表补充加性列，保持历史 durable facts 可原地升级。"""
+    cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def get_watermark(conn: sqlite3.Connection, table_name: str) -> int:

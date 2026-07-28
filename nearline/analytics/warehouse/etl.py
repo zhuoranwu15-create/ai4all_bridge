@@ -49,6 +49,7 @@ def refresh_all(source_db_override: Optional[str] = None,
 
         stats["dim_account"] = dim_account.load(source, facts, now_iso)
         stats["fct_message"] = fct_message.load(source, facts)
+        stats["fct_message_channel_refreshed"] = fct_message.refresh_missing_channels(source, facts)
 
         # Phase 1 事实表
         proactive = fct_proactive.load(source, facts)

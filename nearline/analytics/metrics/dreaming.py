@@ -12,6 +12,8 @@ from typing import Dict, Optional
 from nearline.analytics.facts_db import connect_facts
 from nearline.analytics.marts_db import connect_marts, init_marts
 from nearline.analytics.source_db import connect_source
+from nearline.analytics.metrics._scope import account_clause
+from nearline.reporting.scope import ReportScope
 
 
 def _scheduler_health(source_db_override: Optional[str]) -> Dict[str, Optional[str]]:
@@ -36,6 +38,7 @@ def compute(
     target_date: str,
     source_db_override: Optional[str] = None,
     facts_db_override: Optional[str] = None,
+    scope: Optional[ReportScope] = None,
 ) -> Dict:
     """计算并落库某日 Dreaming 指标。"""
     init_marts()
@@ -43,6 +46,9 @@ def compute(
     marts = connect_marts()
     try:
         d = target_date
+        scope_sql, scope_params = (
+            account_clause(scope) if scope is not None else ("1 = 1", [])
+        )
         runs = facts.execute(
             "SELECT "
             " COUNT(*) AS total, "
@@ -54,8 +60,8 @@ def compute(
             " SUM(r.token_input) AS tok_in, "
             " SUM(r.token_output) AS tok_out "
             "FROM fct_dreaming_run r JOIN dim_account a ON r.account_id = a.account_id "
-            "WHERE r.run_date = ? AND a.is_debug = 0",
-            (d,),
+            f"WHERE r.run_date = ? AND a.is_debug = 0 AND {scope_sql}",
+            [d, *scope_params],
         ).fetchone()
 
         items = facts.execute(
@@ -64,16 +70,17 @@ def compute(
             " SUM(CASE WHEN i.apply_status = 'applied' THEN 1 ELSE 0 END) AS applied, "
             " SUM(CASE WHEN i.apply_status = 'skipped' THEN 1 ELSE 0 END) AS skipped "
             "FROM fct_dreaming_memory_item i JOIN dim_account a ON i.account_id = a.account_id "
-            "WHERE i.event_date = ? AND a.is_debug = 0",
-            (d,),
+            f"WHERE i.event_date = ? AND a.is_debug = 0 AND {scope_sql}",
+            [d, *scope_params],
         ).fetchone()
 
         skip_rows = facts.execute(
             "SELECT COALESCE(i.skip_reason, 'unknown') AS reason, COUNT(*) AS c "
             "FROM fct_dreaming_memory_item i JOIN dim_account a ON i.account_id = a.account_id "
-            "WHERE i.event_date = ? AND a.is_debug = 0 AND i.apply_status = 'skipped' "
+            "WHERE i.event_date = ? AND a.is_debug = 0 AND i.apply_status = 'skipped' AND "
+            f"{scope_sql} "
             "GROUP BY 1",
-            (d,),
+            [d, *scope_params],
         ).fetchall()
         by_skip = {r["reason"]: r["c"] for r in skip_rows}
 
@@ -104,7 +111,8 @@ def compute(
             "scheduler_last_success_at": health["last_success_at"],
         }
 
-        marts.execute(
+        if scope is None:
+            marts.execute(
             "INSERT OR REPLACE INTO agg_daily_dreaming"
             "(date, runs_total, runs_succeeded, runs_partial, runs_failed, accounts_covered, "
             " avg_duration_sec, tokens_input, tokens_output, items_generated, items_applied, "
@@ -119,7 +127,17 @@ def compute(
                 health["status"], health["last_success_at"],
                 datetime.now().isoformat(timespec="seconds"),
             ),
-        )
+            )
+        else:
+            marts.execute(
+                "INSERT OR REPLACE INTO agg_daily_dreaming_scoped"
+                "(date, app_id, channel, payload_json, computed_at) VALUES (?, ?, ?, ?, ?)",
+                (
+                    d, scope.app_id, scope.channel,
+                    json.dumps(result, ensure_ascii=False),
+                    datetime.now().isoformat(timespec="seconds"),
+                ),
+            )
         marts.commit()
         return result
     finally:

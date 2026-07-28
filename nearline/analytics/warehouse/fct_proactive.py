@@ -26,7 +26,7 @@ def _insert_new(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection,
     """A 段：增量插入新 outbound 行。"""
     last_id = get_watermark(facts_conn, "fct_proactive_message")
     rows = source_conn.execute(
-        "SELECT id, account_id, product_category, source, status, policy_reason, "
+        "SELECT id, account_id, channel, product_category, source, status, policy_reason, "
         "created_at, scheduled_at, sent_at FROM outbound_messages WHERE id > ? ORDER BY id",
         (last_id,),
     ).fetchall()
@@ -42,6 +42,7 @@ def _insert_new(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection,
             (
                 r["id"],
                 r["account_id"],
+                r["channel"],
                 r["product_category"],
                 r["source"],
                 r["status"],
@@ -61,13 +62,41 @@ def _insert_new(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection,
 
     facts_conn.executemany(
         "INSERT OR IGNORE INTO fct_proactive_message"
-        "(id, account_id, category, source, status, policy_reason, created_at, created_date, "
+        "(id, account_id, channel, category, source, status, policy_reason, created_at, created_date, "
         " scheduled_at, sent_at, sent_date, sent_hour, reply_window_hours, resolution_status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         out,
     )
     set_watermark(facts_conn, "fct_proactive_message", max_id)
     return len(out)
+
+
+def _refresh_missing_channels(
+    source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection
+) -> int:
+    """从 outbound_messages 回填历史主动消息的事件渠道。"""
+    ids = [
+        r["id"]
+        for r in facts_conn.execute(
+            "SELECT id FROM fct_proactive_message WHERE channel IS NULL"
+        ).fetchall()
+    ]
+    updated = 0
+    for start in range(0, len(ids), 500):
+        batch = ids[start:start + 500]
+        placeholders = ",".join("?" * len(batch))
+        rows = source_conn.execute(
+            f"SELECT id, channel FROM outbound_messages WHERE id IN ({placeholders})",
+            batch,
+        ).fetchall()
+        for row in rows:
+            if row["channel"]:
+                facts_conn.execute(
+                    "UPDATE fct_proactive_message SET channel = ? WHERE id = ?",
+                    (row["channel"], row["id"]),
+                )
+                updated += 1
+    return updated
 
 
 def _refresh_unsent(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection,
@@ -109,7 +138,7 @@ def _attribute_pending(source_conn: sqlite3.Connection, facts_conn: sqlite3.Conn
                        now: datetime) -> int:
     """B 段：对仍 pending 的 sent 行做回复归因，回填并在窗口闭合时置 resolved。返回已 resolve 行数。"""
     pending = facts_conn.execute(
-        "SELECT id, account_id, sent_at, reply_window_hours FROM fct_proactive_message "
+        "SELECT id, account_id, channel, sent_at, reply_window_hours FROM fct_proactive_message "
         "WHERE resolution_status = 'pending' AND sent_at IS NOT NULL"
     ).fetchall()
     if not pending:
@@ -126,8 +155,9 @@ def _attribute_pending(source_conn: sqlite3.Connection, facts_conn: sqlite3.Conn
         # 同账号下一条 sent 主动消息截断窗口。
         nxt = source_conn.execute(
             "SELECT MIN(sent_at) AS s FROM outbound_messages "
-            "WHERE account_id = ? AND status = 'sent' AND sent_at > ?",
-            (row["account_id"], row["sent_at"]),
+            "WHERE account_id = ? AND status = 'sent' AND sent_at > ? "
+            "AND (? IS NULL OR channel = ?)",
+            (row["account_id"], row["sent_at"], row["channel"], row["channel"]),
         ).fetchone()
         nxt_dt = parse_dt(nxt["s"]) if nxt else None
         if nxt_dt and nxt_dt < window_end:
@@ -138,8 +168,14 @@ def _attribute_pending(source_conn: sqlite3.Connection, facts_conn: sqlite3.Conn
         reply = source_conn.execute(
             "SELECT id, created_at FROM messages "
             "WHERE account_id = ? AND direction = 'inbound' AND role = 'user' "
-            "AND created_at > ? AND created_at <= ? ORDER BY created_at, id LIMIT 1",
-            (row["account_id"], row["sent_at"], window_end_str),
+            "AND created_at > ? AND created_at <= ? "
+            "AND (? IS NULL OR (json_valid(raw_json) "
+            "AND json_extract(raw_json, '$.channel') = ?)) "
+            "ORDER BY created_at, id LIMIT 1",
+            (
+                row["account_id"], row["sent_at"], window_end_str,
+                row["channel"], row["channel"],
+            ),
         ).fetchone()
 
         if reply:
@@ -169,6 +205,7 @@ def load(source_conn: sqlite3.Connection, facts_conn: sqlite3.Connection,
     """跑三段装载，返回 {inserted, refreshed, resolved}。"""
     now = now or datetime.now()
     inserted = _insert_new(source_conn, facts_conn, window_hours)
+    _refresh_missing_channels(source_conn, facts_conn)
     refreshed = _refresh_unsent(source_conn, facts_conn, window_hours)
     resolved = _attribute_pending(source_conn, facts_conn, now)
     return {"inserted": inserted, "refreshed": refreshed, "resolved": resolved}
