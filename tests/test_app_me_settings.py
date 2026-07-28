@@ -444,6 +444,8 @@ def test_quiet_mode_cancels_new_dispatches_but_keeps_existing_inbox(client, fres
     # 本用例断言的是安静模式，不是频次策略；放开分类日上限以免撞上 daily_limit。
     fresh_db.companion_followup_daily_limit = 5
     headers, account_id, user_id = _ready_user(client, "13800139018", "小满")
+    # 固定到当天白天，避免 CI 在北京时间 22:00–08:00 运行时先被全局 quiet hours 拦截。
+    dispatch_now = beijing_naive_now().replace(hour=12, minute=0, second=0, microsecond=0)
 
     def _dispatch(key: str):
         return dispatch_proactive_text(
@@ -455,7 +457,7 @@ def test_quiet_mode_cancels_new_dispatches_but_keeps_existing_inbox(client, fres
             source="commitment",
             text=f"通知 {key}",
             idempotency_key=f"resident-obligation:v1:commitment:{key}",
-            now=beijing_naive_now(),
+            now=dispatch_now,
             product_category="companion_followup",
         )
 
