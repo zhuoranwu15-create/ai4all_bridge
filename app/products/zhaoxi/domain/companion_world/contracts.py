@@ -225,6 +225,8 @@ class UniversePostRecord:
     author_avatar_ref: Optional[str] = None
     published_at: Optional[str] = None
     post_type: str = "normal"
+    # 终态原因。终态 status 统一是 deleted，「主人删自己的」与「主人隐藏 AI 的」靠它区分。
+    terminal_reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -289,14 +291,16 @@ class FeedRepository(Protocol):
         limit: int,
     ) -> Sequence[UniversePostRecord]: ...
 
-    def delete_post(
+    def retire_post(
         self,
         *,
         platform_user_id: str,
         post_id: str,
         reason_code: str,
-        deleted_at: str,
-    ) -> UniversePostRecord: ...
+        expected_author_type: str,
+        forbid_post_types: Sequence[str],
+        retired_at: str,
+    ) -> Tuple[UniversePostRecord, bool]: ...
 
     def claim_ai_slot(
         self,

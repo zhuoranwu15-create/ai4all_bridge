@@ -151,6 +151,7 @@ def _feed_post(row: dict) -> UniversePostRecord:
         author_avatar_ref=row.get("author_avatar_ref"),
         published_at=row.get("published_at"),
         post_type=str(row.get("post_type") or "normal"),
+        terminal_reason=row.get("terminal_reason"),
     )
 
 
@@ -267,25 +268,34 @@ class SqlCompanionWorldRepository(WorldRepository):
             raise
         return tuple(_feed_post(row) for row in rows)
 
-    def delete_post(
+    def retire_post(
         self,
         *,
         platform_user_id: str,
         post_id: str,
         reason_code: str,
-        deleted_at: str,
-    ) -> UniversePostRecord:
+        expected_author_type: str,
+        forbid_post_types: Sequence[str],
+        retired_at: str,
+    ) -> Tuple[UniversePostRecord, bool]:
         try:
-            row = world_db.delete_feed_post_with_outbox(
+            row, changed = world_db.retire_feed_post_with_outbox(
                 owner_platform_user_id=platform_user_id,
                 post_id=post_id,
                 reason_code=reason_code,
-                deleted_at=deleted_at,
+                deleted_at=retired_at,
+                expected_author_type=expected_author_type,
+                forbid_post_types=tuple(forbid_post_types),
                 conn=self._conn,
             )
         except ValueError as err:
-            raise CompanionWorldError(str(err)) from err
-        return _feed_post(row)
+            code = str(err)
+            # 只把已冻结的业务码翻译成领域错误；其余（如 outbox 冲突）是真故障，不能被
+            # 降级成一个客户端可分支的 4xx。
+            if code in {"post_not_found", "post_not_hideable"}:
+                raise CompanionWorldError(code) from err
+            raise
+        return _feed_post(row), changed
 
     def lock_universe(self, universe_id: str) -> WorldRecord:
         row = world_db.lock_universe(

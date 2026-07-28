@@ -84,7 +84,7 @@ __all__ = [
     "get_universe_post_for_owner",
     "publish_user_feed_post_with_outbox",
     "list_published_feed_posts_for_owner",
-    "delete_feed_post_with_outbox",
+    "retire_feed_post_with_outbox",
     "publish_ai_feed_post_with_outbox",
     "claim_companion_world_outbox",
     "get_companion_world_outbox_metrics",
@@ -1931,15 +1931,31 @@ def list_published_feed_posts_for_owner(
     return [dict(row) for row in rows]
 
 
-def delete_feed_post_with_outbox(
+def retire_feed_post_with_outbox(
     *,
     owner_platform_user_id: str,
     post_id: str,
     reason_code: str,
     deleted_at: str,
+    expected_author_type: Optional[str] = None,
+    forbid_post_types: Sequence[str] = (),
     conn: Optional[Connection] = None,
-) -> Dict[str, Any]:
-    """owner-scoped 下架 post 并原子追加 deleted outbox；暂不暴露 HTTP 路由。"""
+) -> Tuple[Dict[str, Any], bool]:
+    """owner-scoped 下架 post 并原子追加 deleted outbox；返回 ``(post, changed)``。
+
+    「删除自己的动态」与「隐藏 AI 居民动态」共用这一条终态写路径：状态恒为 ``deleted``，
+    语义差异只落在 ``terminal_reason``（``owner_deleted`` / ``owner_hidden`` /
+    ``admin_correction``），由调用方给定，本层不猜。主人 Feed 与访客 Feed 都只筛
+    ``published``，因此一次写入即对双方同时生效。
+
+    ``expected_author_type`` 与 ``forbid_post_types`` 是**事务内**的授权断言，不做先查后写：
+    author 不匹配一律按 ``post_not_found`` 处理（不泄漏资源存在性），被禁 ``post_type``
+    返回 ``post_not_hideable``。
+
+    幂等按「首次写入者胜出」：重放时以**已落库**的 ``deleted_at``/``terminal_reason`` 重算
+    outbox payload 再比对，本次请求带的时间与原因被忽略——否则跨秒重放会因 payload 不等而
+    误判成 outbox 冲突（IDEM-002）。
+    """
     with _m3_write_tx(conn) as tx:
         current = tx.execute(
             """
@@ -1952,7 +1968,21 @@ def delete_feed_post_with_outbox(
         if current is None:
             raise ValueError("post_not_found")
         current_row = dict(current)
-        if current_row["status"] == "published":
+        if current_row["status"] not in {"published", "deleted"}:
+            # generating / skipped 的 AI 行对主人不可见，按「不存在」处理，避免资源枚举。
+            raise ValueError("post_not_found")
+        if (
+            expected_author_type is not None
+            and str(current_row["author_type"]) != expected_author_type
+        ):
+            raise ValueError("post_not_found")
+        if forbid_post_types and str(
+            current_row.get("post_type") or "normal"
+        ) in set(forbid_post_types):
+            raise ValueError("post_not_hideable")
+
+        changed = current_row["status"] == "published"
+        if changed:
             tx.execute(
                 """
                 UPDATE universe_posts
@@ -1962,14 +1992,17 @@ def delete_feed_post_with_outbox(
                 """,
                 (reason_code, deleted_at, post_id, current_row["universe_id"]),
             )
-        elif current_row["status"] != "deleted":
-            raise ValueError("post_not_publishable")
+            terminal_at, terminal_reason = deleted_at, reason_code
+        else:
+            # 重放：以首次落库的终态为准，本次请求的时间与原因不参与 payload。
+            terminal_at = str(current_row["deleted_at"] or deleted_at)
+            terminal_reason = str(current_row["terminal_reason"] or reason_code)
 
         payload_json = json.dumps(
             {
                 "post_id": post_id,
-                "deleted_at": deleted_at,
-                "reason_code": reason_code,
+                "deleted_at": terminal_at,
+                "reason_code": terminal_reason,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -1990,14 +2023,14 @@ def delete_feed_post_with_outbox(
                 post_id,
                 outbox_key,
                 payload_json,
-                deleted_at,
+                terminal_at,
             ),
         )
         outbox = tx.execute(
             "SELECT * FROM companion_world_outbox WHERE idempotency_key = ?",
             (outbox_key,),
         ).fetchone()
-        if outbox is None or str(outbox["payload_json"]) != payload_json:
+        if outbox is None or str(outbox["post_id"]) != post_id:
             raise ValueError("outbox idempotency conflict")
         result = get_universe_post_for_owner(
             post_id=post_id,
@@ -2005,8 +2038,8 @@ def delete_feed_post_with_outbox(
             conn=tx,
         )
         if result is None:
-            raise RuntimeError("deleted post disappeared")
-    return result
+            raise RuntimeError("retired post disappeared")
+    return result, changed
 
 
 def publish_ai_feed_post_with_outbox(

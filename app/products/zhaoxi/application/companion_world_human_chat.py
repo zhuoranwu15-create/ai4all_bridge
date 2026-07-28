@@ -24,19 +24,17 @@ from app.db import (
 )
 from app.db._backend import is_postgres
 from app.db._core import connect
-from app.products.zhaoxi.domain.companion_world.human_chat import normalize_human_message_body
+from app.products.zhaoxi.domain.companion_world.human_chat import (
+    HUMAN_REPORT_REASONS,
+    HUMAN_REPORT_REASONS_VERSION,
+    human_report_reason,
+    normalize_human_message_body,
+)
 from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
 from app.time_utils import parse_db_timestamp
 
-_REPORT_REASONS = {
-    "spam",
-    "harassment",
-    "threat",
-    "hate",
-    "sexual",
-    "privacy",
-    "other",
-}
+
+
 
 
 class HumanChatError(Exception):
@@ -56,8 +54,38 @@ def _write_begin(conn) -> None:
         conn.execute("BEGIN IMMEDIATE")
 
 
-def _conversation_public(row: Dict[str, Any], platform_user_id: str) -> Dict[str, Any]:
+def _read_only_reason(row: Dict[str, Any], *, write_enabled: bool) -> Optional[str]:
+    """会话为何只读；可发送时返回 ``None``。
+
+    先判终态再判开关：visit 结束是不可逆的，而 ``feature_disabled`` 是可恢复的运营态。
+    反过来排序会让一个已经结束的会话显示成「功能未开放」，等开关打开又变「已结束」。
+    """
+    visit_status = row.get("visit_status")
+    if visit_status == "blocked":
+        return "counterpart_blocked"
+    if visit_status != "active":
+        # 含 expired/left/revoked/rejected/cancelled/pending，以及 visit 行已不存在。
+        return "visit_ended"
+    if row.get("status") != "active":
+        return "conversation_ended"
+    if not write_enabled:
+        return "feature_disabled"
+    return None
+
+
+def _preview_text(value: Optional[str]) -> Optional[str]:
+    """列表预览：折叠换行与连续空白，让单行渲染不被正文排版撑破。"""
+    if value is None:
+        return None
+    collapsed = " ".join(str(value).split())
+    return collapsed or None
+
+
+def _conversation_public(
+    row: Dict[str, Any], platform_user_id: str, *, write_enabled: bool = False
+) -> Dict[str, Any]:
     is_owner = row["owner_platform_user_id"] == platform_user_id
+    reason = _read_only_reason(row, write_enabled=write_enabled)
     return {
         "conversation_id": row["id"],
         "visit_id": row["visit_id"],
@@ -70,6 +98,11 @@ def _conversation_public(row: Dict[str, Any], platform_user_id: str) -> Dict[str
             "owner_last_read_at" if is_owner else "visitor_last_read_at"
         ),
         "created_at": row["created_at"],
+        "last_preview": _preview_text(row.get("last_preview")),
+        "unread_count": int(row.get("unread_count") or 0),
+        "can_send": reason is None,
+        "read_only_reason": reason,
+        "expires_at": row.get("visit_expires_at"),
     }
 
 
@@ -77,16 +110,23 @@ class CompanionWorldHumanChatService:
     """一对一真人文字聊天；所有 sender/participant 均来自 session。"""
 
     def list_conversations(
-        self, platform_user_id: str, *, now: datetime
+        self, platform_user_id: str, *, now: datetime, write_enabled: bool = False
     ) -> Sequence[Dict[str, Any]]:
-        """request-time 处理 visit expiry 后返回未 self-hide 的会话。"""
+        """request-time 处理 visit expiry 后返回未 self-hide 的会话。
+
+        先跑 expiry 再读列表，因此 ``visit_status`` 一定是最新的，``can_send`` 不需要
+        再拿 ``now`` 和 ``expires_at`` 二次比较。
+        """
         CompanionWorldVisitService().list_visits_current(
             platform_user_id, now=now
         )
         rows = list_human_conversations_for_participant(
             platform_user_id=platform_user_id, include_hidden=False, limit=100
         )
-        return tuple(_conversation_public(row, platform_user_id) for row in rows)
+        return tuple(
+            _conversation_public(row, platform_user_id, write_enabled=write_enabled)
+            for row in rows
+        )
 
     def list_messages(
         self,
@@ -266,6 +306,20 @@ class CompanionWorldHumanChatService:
             raise HumanChatError("human_conversation_not_found")
         return row
 
+    def report_options(self) -> Dict[str, Any]:
+        """返回版本化举报原因表；与 :meth:`report` 的校验共用同一份领域受控表。"""
+        return {
+            "version": HUMAN_REPORT_REASONS_VERSION,
+            "options": [
+                {
+                    "reason_code": reason.reason_code,
+                    "label": reason.label,
+                    "details_required": reason.details_required,
+                }
+                for reason in HUMAN_REPORT_REASONS
+            ],
+        }
+
     def report(
         self,
         platform_user_id: str,
@@ -283,11 +337,14 @@ class CompanionWorldHumanChatService:
         )
         if conversation is None:
             raise HumanChatError("human_conversation_not_found")
-        reason = str(reason_code or "").strip().lower()
-        if reason not in _REPORT_REASONS:
+        reason = human_report_reason(reason_code)
+        if reason is None:
             raise HumanChatError("invalid_request")
         details = str(details_text or "").strip() or None
         if details and len(details) > 1000:
+            raise HumanChatError("invalid_request")
+        # 契约里 details_required 为真的码必须真的强制，否则 report-options 在撒谎。
+        if reason.details_required and details is None:
             raise HumanChatError("invalid_request")
         counterpart = (
             conversation["visitor_platform_user_id"]
@@ -323,7 +380,7 @@ class CompanionWorldHumanChatService:
             reporter_platform_user_id=platform_user_id,
             reported_platform_user_id=counterpart,
             reported_message_id=message_id,
-            reason_code=reason,
+            reason_code=reason.reason_code,
             details_text=details,
             evidence_snapshot=snapshot,
             created_at=_db_time(now),

@@ -265,6 +265,306 @@ def test_report_copies_immutable_evidence_and_optional_block(
     assert stored["retained_until"] is None
 
 
+# --- M5-REPORT-001 / M5-CONV-001：举报契约与会话列表读模型 -------------------
+
+
+def test_report_options_are_versioned_and_match_accepted_codes(
+    client, fresh_db, monkeypatch
+):
+    """契约表就是校验表：列出的每个码都必须真的被 report 接受。"""
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965206001")
+    visitor_headers, visitor_login = _login(client, "19965206002")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    _visit, conversation = _active(owner, visitor)
+
+    options = client.get(
+        "/v1/human-conversations/report-options", headers=visitor_headers
+    )
+    assert options.status_code == 200, options.text
+    assert options.headers["Cache-Control"] == "no-store"
+    data = options.json()["data"]
+    assert data["version"] >= 1
+    codes = [option["reason_code"] for option in data["options"]]
+    # 兜底项永远排最后，客户端据此渲染顺序。
+    assert codes[-1] == "other"
+    assert len(codes) == len(set(codes))
+    for option in data["options"]:
+        assert option["label"].strip()
+        assert isinstance(option["details_required"], bool)
+
+    # 未知码不得被接受，否则契约形同虚设。
+    unknown = client.post(
+        f"/v1/human-conversations/{conversation['id']}/report",
+        headers=visitor_headers,
+        json={"reason_code": "made_up_reason"},
+    )
+    assert unknown.status_code == 422
+    assert unknown.json()["code"] == "invalid_request"
+
+    # 契约里 details_required=false 的码必须真的能不带正文提交。
+    optional_codes = [
+        option["reason_code"]
+        for option in data["options"]
+        if not option["details_required"]
+    ]
+    assert optional_codes
+    for index, code in enumerate(optional_codes):
+        accepted = client.post(
+            f"/v1/human-conversations/{conversation['id']}/report",
+            headers=visitor_headers,
+            json={"reason_code": code},
+        )
+        assert accepted.status_code == 200, f"{code}: {accepted.text}"
+
+
+def test_report_enforces_details_required_codes(client, fresh_db, monkeypatch):
+    """details_required=true 的码不带正文必须 422——契约说必填就得真校验。"""
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965207001")
+    visitor_headers, visitor_login = _login(client, "19965207002")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    _visit, conversation = _active(owner, visitor)
+
+    options = client.get(
+        "/v1/human-conversations/report-options", headers=visitor_headers
+    ).json()["data"]["options"]
+    required = [
+        option["reason_code"] for option in options if option["details_required"]
+    ]
+    assert required, "至少 other 应当要求正文"
+
+    for code in required:
+        missing = client.post(
+            f"/v1/human-conversations/{conversation['id']}/report",
+            headers=visitor_headers,
+            json={"reason_code": code},
+        )
+        blank = client.post(
+            f"/v1/human-conversations/{conversation['id']}/report",
+            headers=visitor_headers,
+            json={"reason_code": code, "details": "   "},
+        )
+        filled = client.post(
+            f"/v1/human-conversations/{conversation['id']}/report",
+            headers=visitor_headers,
+            json={"reason_code": code, "details": "对方一直发无关内容"},
+        )
+        assert missing.status_code == 422, missing.text
+        assert missing.json()["code"] == "invalid_request"
+        # 纯空白等价于没填，不能靠空格绕过。
+        assert blank.status_code == 422, blank.text
+        assert filled.status_code == 200, filled.text
+
+    with db.connect() as conn:
+        rows = conn.execute("SELECT reason_code, details_text FROM human_chat_reports").fetchall()
+    # 被拒的两次不得留下任何举报记录。
+    assert len(rows) == len(required)
+
+
+def test_report_options_available_when_send_flag_is_off(
+    client, fresh_db, monkeypatch
+):
+    """human_chat_send=false 只关写入；举报入口仍必须可用。"""
+    _enable(monkeypatch, write=False)
+    _owner_headers, owner_login = _login(client, "19965208001")
+    visitor_headers, visitor_login = _login(client, "19965208002")
+    _active(owner_login["platform_user"]["id"], visitor_login["platform_user"]["id"])
+
+    options = client.get(
+        "/v1/human-conversations/report-options", headers=visitor_headers
+    )
+    assert options.status_code == 200
+    assert options.json()["data"]["options"]
+
+
+def test_conversation_list_unread_preview_and_read_marker(
+    client, fresh_db, monkeypatch
+):
+    """未读只数对方的消息；标记已读后归零，自己发的永远不算未读。"""
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965209001")
+    visitor_headers, visitor_login = _login(client, "19965209002")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    _visit, conversation = _active(owner, visitor)
+
+    def _item(headers) -> dict:
+        listed = client.get("/v1/human-conversations", headers=headers)
+        assert listed.status_code == 200, listed.text
+        return listed.json()["data"]["items"][0]
+
+    # 一条消息都没有：预览为空、未读为 0，而不是缺字段。
+    fresh = _item(owner_headers)
+    assert fresh["last_preview"] is None
+    assert fresh["unread_count"] == 0
+
+    for index in range(3):
+        assert client.post(
+            f"/v1/human-conversations/{conversation['id']}/messages",
+            headers=visitor_headers,
+            json={"client_message_id": f"client_100{index}", "text": f"访客第{index}句"},
+        ).status_code == 200
+
+    owner_item = _item(owner_headers)
+    visitor_item = _item(visitor_headers)
+    assert owner_item["unread_count"] == 3
+    assert owner_item["last_preview"] == "访客第2句"
+    # 自己发的消息对自己永远不是未读。
+    assert visitor_item["unread_count"] == 0
+    assert visitor_item["last_preview"] == "访客第2句"
+
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+    ).status_code == 200
+    assert _item(owner_headers)["unread_count"] == 0
+
+    # 已读之后对方再发，未读重新计数且只算新的那条。
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=visitor_headers,
+        json={"client_message_id": "client_1003", "text": "已读之后的新消息"},
+    ).status_code == 200
+    after = _item(owner_headers)
+    assert after["unread_count"] == 1
+    assert after["last_preview"] == "已读之后的新消息"
+
+
+def test_read_marker_uses_sequence_not_timestamp(client, fresh_db, monkeypatch):
+    """m0052 回归：与标记已读同一秒到达的消息不得被吞掉。
+
+    ``_enable`` 把 ``beijing_naive_now`` 钉死成常量 NOW，read marker 与消息 created_at
+    因此严格同秒——这正是旧时间戳实现会漏计的场景。
+    """
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965210001")
+    visitor_headers, visitor_login = _login(client, "19965210002")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    _visit, conversation = _active(owner, visitor)
+
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=visitor_headers,
+        json={"client_message_id": "client_2001", "text": "已读前"},
+    ).status_code == 200
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+    ).status_code == 200
+    # 同一秒内到达的下一条：时间戳比不出先后，序号可以。
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=visitor_headers,
+        json={"client_message_id": "client_2002", "text": "同秒到达"},
+    ).status_code == 200
+
+    item = client.get("/v1/human-conversations", headers=owner_headers).json()[
+        "data"
+    ]["items"][0]
+    assert item["unread_count"] == 1
+    assert item["last_preview"] == "同秒到达"
+
+    # 游标只前进不回退：重复标记已读不会把未读数算成负或让它复活。
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+    ).status_code == 200
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+    ).status_code == 200
+    assert (
+        client.get("/v1/human-conversations", headers=owner_headers).json()["data"][
+            "items"
+        ][0]["unread_count"]
+        == 0
+    )
+
+
+def test_conversation_list_exposes_send_gate_and_expiry(
+    client, fresh_db, monkeypatch
+):
+    """can_send/read_only_reason/expires_at 三件套覆盖终态与开关两种只读来源。"""
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965211001")
+    _visitor_headers, visitor_login = _login(client, "19965211002")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    visit, _conversation = _active(owner, visitor)
+
+    item = client.get("/v1/human-conversations", headers=owner_headers).json()[
+        "data"
+    ]["items"][0]
+    assert item["can_send"] is True
+    assert item["read_only_reason"] is None
+    # active visit 必须带绝对到期时间，客户端不再自己 join visit 列表。
+    assert item["expires_at"] and item["expires_at"].endswith("+08:00")
+
+    # 关掉写开关：只读原因是可恢复的 feature_disabled，不是终态。
+    monkeypatch.setattr(
+        "app.products.zhaoxi.api.companion_world_human_chat.settings"
+        ".companion_world_human_chat_enabled",
+        False,
+    )
+    gated = client.get("/v1/human-conversations", headers=owner_headers).json()[
+        "data"
+    ]["items"][0]
+    assert gated["can_send"] is False
+    assert gated["read_only_reason"] == "feature_disabled"
+
+    # visit 进终态后，即使开关重新打开也必须是 visit_ended——终态优先于开关。
+    monkeypatch.setattr(
+        "app.products.zhaoxi.api.companion_world_human_chat.settings"
+        ".companion_world_human_chat_enabled",
+        True,
+    )
+    CompanionWorldVisitService().terminate(
+        visitor, visit_id=visit["id"], action="leave", now=NOW
+    )
+    ended = client.get("/v1/human-conversations", headers=owner_headers).json()[
+        "data"
+    ]["items"][0]
+    assert ended["can_send"] is False
+    assert ended["read_only_reason"] == "visit_ended"
+
+
+def test_conversation_list_is_participant_scoped_and_preview_is_bounded(
+    client, fresh_db, monkeypatch
+):
+    """列表按 participant 隔离；预览截断且折叠换行，不把 4000 字正文塞进列表。"""
+    from app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat import (
+        HUMAN_CONVERSATION_PREVIEW_CHARS,
+    )
+
+    _enable(monkeypatch)
+    owner_headers, owner_login = _login(client, "19965212001")
+    visitor_headers, visitor_login = _login(client, "19965212002")
+    stranger_headers, stranger_login = _login(client, "19965212003")
+    owner = owner_login["platform_user"]["id"]
+    visitor = visitor_login["platform_user"]["id"]
+    _confirm_world(stranger_login["platform_user"]["id"])
+    _visit, conversation = _active(owner, visitor)
+
+    long_text = "第一行\n\n第二行   多空格" + "长" * 300
+    assert client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=visitor_headers,
+        json={"client_message_id": "client_3001", "text": long_text},
+    ).status_code == 200
+
+    preview = client.get("/v1/human-conversations", headers=owner_headers).json()[
+        "data"
+    ]["items"][0]["last_preview"]
+    assert len(preview) <= HUMAN_CONVERSATION_PREVIEW_CHARS
+    assert "\n" not in preview
+    assert preview.startswith("第一行 第二行 多空格")
+
+    # 第三方看不到别人的会话，更看不到预览。
+    stranger = client.get("/v1/human-conversations", headers=stranger_headers)
+    assert stranger.status_code == 200
+    assert stranger.json()["data"]["items"] == []
+
+
 def test_pg_concurrent_same_client_message_inserts_once(fresh_db):
     if not is_postgres():
         pytest.skip("PG 并发权威门禁")

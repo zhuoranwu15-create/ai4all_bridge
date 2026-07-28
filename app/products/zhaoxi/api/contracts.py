@@ -281,6 +281,93 @@ class TurnData(BaseModel):
     deduplicated: bool
 
 
+# --- B 类 data：世界 Feed ---------------------------------------------------
+
+
+class FeedAuthor(BaseModel):
+    """``type='human'`` 是主人本人，``'resident'`` 是 AI 居民；客户端据此决定删除/隐藏入口。"""
+
+    type: str
+    resident_id: Optional[str] = None
+    name: Optional[str] = None
+    avatar_ref: Optional[str] = None
+
+
+class FeedContent(BaseModel):
+    type: str
+    text: Optional[str] = None
+
+
+class FeedItem(BaseModel):
+    post_id: str
+    author: FeedAuthor
+    content: FeedContent
+    post_type: str
+    source: str
+    published_at: Optional[str] = None
+
+
+class FeedListData(BaseModel):
+    items: List[FeedItem]
+    next_cursor: Optional[str] = None
+
+
+class FeedPostData(BaseModel):
+    post: FeedItem
+
+
+class FeedRetireData(BaseModel):
+    """下架结果。``status`` 是对外语义投影：主人删自己的是 ``deleted``，隐藏 AI 的是
+    ``hidden``；``replayed=true`` 表示本次是重放，未产生新的状态变更。"""
+
+    post_id: str
+    status: str
+    replayed: bool
+
+
+# --- B 类 data：真人一对一聊天 ---------------------------------------------
+
+
+class HumanReportOption(BaseModel):
+    """举报原因受控条目；``label`` 直接展示，客户端不自行翻译或发明分类。"""
+
+    reason_code: str
+    label: str
+    details_required: bool
+
+
+class HumanReportOptionsData(BaseModel):
+    """``version`` 只在码集合或语义变化时递增，客户端可按它缓存。"""
+
+    version: int
+    options: List[HumanReportOption]
+
+
+class HumanConversationItem(BaseModel):
+    """会话列表条目。
+
+    ``unread_count`` 是精确值不封顶，「99+」由客户端展示层决定。``read_only_reason``
+    在 ``can_send=true`` 时为 ``None``，否则是稳定错误码，客户端按码分支不按文案。
+    """
+
+    conversation_id: str
+    visit_id: str
+    counterpart_display_name: Optional[str] = None
+    status: str
+    last_message_at: Optional[str] = None
+    last_read_at: Optional[str] = None
+    created_at: str
+    last_preview: Optional[str] = None
+    unread_count: int
+    can_send: bool
+    read_only_reason: Optional[str] = None
+    expires_at: Optional[str] = None
+
+
+class HumanConversationListData(BaseModel):
+    items: List[HumanConversationItem]
+
+
 # --- B 类 data：通知偏好 ---------------------------------------------------
 
 
@@ -300,6 +387,11 @@ ConversationListResponse = WorldEnvelope[ConversationListData]
 ConversationMessagesResponse = WorldEnvelope[ConversationMessagesData]
 ConversationReadResponse = WorldEnvelope[ConversationReadData]
 TurnResponse = WorldEnvelope[TurnData]
+FeedListResponse = WorldEnvelope[FeedListData]
+FeedPostResponse = WorldEnvelope[FeedPostData]
+FeedRetireResponse = WorldEnvelope[FeedRetireData]
+HumanConversationListResponse = WorldEnvelope[HumanConversationListData]
+HumanReportOptionsResponse = WorldEnvelope[HumanReportOptionsData]
 NotificationPreferencesResponse = WorldEnvelope[NotificationPreferencesData]
 
 # 世界类端点的失败响应统一是错误信封。逐码含义见交接文档 §7；客户端按 code 分支。
@@ -320,6 +412,11 @@ __all__ = [
     "ConversationListResponse",
     "ConversationMessagesResponse",
     "ConversationReadResponse",
+    "FeedListResponse",
+    "FeedPostResponse",
+    "FeedRetireResponse",
+    "HumanConversationListResponse",
+    "HumanReportOptionsResponse",
     "MeResponse",
     "NotificationPreferencesResponse",
     "ProfileOptionsResponse",

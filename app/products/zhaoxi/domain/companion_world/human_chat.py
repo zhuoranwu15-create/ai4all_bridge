@@ -3,10 +3,49 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Optional, Protocol, Sequence
+from typing import Dict, Optional, Protocol, Sequence, Tuple
 
 HUMAN_CONVERSATION_STATUSES = frozenset({"active", "read_only"})
 HUMAN_REPORT_STATUSES = frozenset({"open", "reviewed", "closed"})
+
+
+@dataclass(frozen=True)
+class HumanReportReason:
+    """举报原因的受控条目。
+
+    ``label`` 是客户端直接展示的中文文案——服务端给文案而不是只给码，是为了让所有端口
+    的举报分类保持一致，不各自翻译。``details_required`` 为真时服务端会强制校验正文，
+    契约与校验共用本表，不允许「契约说必填、实现不校验」。
+    """
+
+    reason_code: str
+    label: str
+    details_required: bool = False
+
+
+#: 码集合或语义变更时递增；纯文案微调不动它——客户端按 version 决定要不要重拉。
+HUMAN_REPORT_REASONS_VERSION = 1
+
+#: 顺序即客户端展示顺序：具体分类在前，兜底的「其他」永远在最后。
+HUMAN_REPORT_REASONS: Tuple[HumanReportReason, ...] = (
+    HumanReportReason("spam", "垃圾广告"),
+    HumanReportReason("harassment", "骚扰辱骂"),
+    HumanReportReason("threat", "威胁恐吓"),
+    HumanReportReason("hate", "仇恨言论"),
+    HumanReportReason("sexual", "色情低俗"),
+    HumanReportReason("privacy", "侵犯隐私"),
+    # 「其他」没有分类信息，运营只能靠正文判断，因此正文必填。
+    HumanReportReason("other", "其他", details_required=True),
+)
+
+_HUMAN_REPORT_REASONS_BY_CODE: Dict[str, HumanReportReason] = {
+    reason.reason_code: reason for reason in HUMAN_REPORT_REASONS
+}
+
+
+def human_report_reason(reason_code: str) -> Optional[HumanReportReason]:
+    """按码查受控举报原因；未知码返回 ``None`` 由调用方统一成 invalid_request。"""
+    return _HUMAN_REPORT_REASONS_BY_CODE.get(str(reason_code or "").strip().lower())
 
 
 @dataclass(frozen=True)
@@ -79,11 +118,15 @@ class HumanChatRepository(Protocol):
 
 __all__ = [
     "HUMAN_CONVERSATION_STATUSES",
+    "HUMAN_REPORT_REASONS",
+    "HUMAN_REPORT_REASONS_VERSION",
     "HUMAN_REPORT_STATUSES",
     "HumanChatRepository",
     "HumanConversationRecord",
     "HumanMessageRecord",
+    "HumanReportReason",
     "human_conversation_transition_allowed",
     "human_message_fingerprint",
+    "human_report_reason",
     "normalize_human_message_body",
 ]

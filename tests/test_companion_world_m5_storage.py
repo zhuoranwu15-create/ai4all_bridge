@@ -5,7 +5,7 @@ import pytest
 
 import app.db as db
 from app.db._backend import IntegrityError
-from app.db._core import _migration_0035_companion_world_visit_human_chat
+from app.db._core import _MIGRATIONS, _migration_0035_companion_world_visit_human_chat
 from app.products.zhaoxi.domain.companion_world.human_chat import (
     human_conversation_transition_allowed,
     human_message_fingerprint,
@@ -76,7 +76,8 @@ def test_m0035_tables_idempotency_and_flags_default_off(fresh_db):
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-    assert int(version) == 51
+    # head 取注册表末位：重放 m0035 不得推进版本，但写死版本号会被后续迁移撞红。
+    assert int(version) == _MIGRATIONS[-1][0]
     assert fresh_db.companion_world_visits_enabled is False
     assert fresh_db.companion_world_human_chat_enabled is False
 

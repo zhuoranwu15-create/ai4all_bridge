@@ -3,7 +3,7 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.db._core import _migration_0033_companion_world_m3_content
+from app.db._core import _MIGRATIONS, _migration_0033_companion_world_m3_content
 from app.products.zhaoxi.domain.companion_world import user_post_fingerprint
 
 
@@ -70,8 +70,9 @@ def test_m0033_is_idempotent(fresh_db):
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        # 当前库已继续追加到 Phase 1 contract m0046；重跑历史 m0033 不得回退或推进版本。
-    assert int(version) == 51
+        # 重跑历史 m0033 不得回退或推进版本。head 取当前注册表末位而非写死版本号，
+        # 否则每加一条新迁移这条无关断言就假红一次。
+    assert int(version) == _MIGRATIONS[-1][0]
 
 
 def test_feed_slot_owner_isolation_and_atomic_outbox(fresh_db):
@@ -277,26 +278,34 @@ def test_user_feed_publish_list_idempotency_and_delete_seam(fresh_db):
             (post["id"],),
         ).fetchone()["c"] == 1
 
-    deleted = db.delete_feed_post_with_outbox(
+    deleted, changed = db.retire_feed_post_with_outbox(
         owner_platform_user_id=user_a,
         post_id=post["id"],
-        reason_code="future_policy_test",
+        reason_code="owner_deleted",
         deleted_at="2026-07-22 12:05:00",
+        expected_author_type="human",
     )
-    assert deleted["status"] == "deleted"
-    replay_deleted = db.delete_feed_post_with_outbox(
+    assert deleted["status"] == "deleted" and changed is True
+    # IDEM-002：重放**跨秒**（真实 HTTP 走 now()，不会撞上同一个时间戳）也必须幂等。
+    # 首次写入者胜出：终态时间与原因回放首次的值，本次请求带的被忽略。
+    replay_deleted, replay_changed = db.retire_feed_post_with_outbox(
         owner_platform_user_id=user_a,
         post_id=post["id"],
-        reason_code="future_policy_test",
-        deleted_at="2026-07-22 12:05:00",
+        reason_code="changed_reason",
+        deleted_at="2026-07-22 12:05:01",
+        expected_author_type="human",
     )
-    assert replay_deleted["id"] == post["id"]
-    with pytest.raises(ValueError, match="outbox idempotency conflict"):
-        db.delete_feed_post_with_outbox(
+    assert replay_deleted["id"] == post["id"] and replay_changed is False
+    assert replay_deleted["deleted_at"] == "2026-07-22 12:05:00"
+    assert replay_deleted["terminal_reason"] == "owner_deleted"
+    # 作者类型不符按「不存在」拒绝，不泄漏资源存在性。
+    with pytest.raises(ValueError, match="post_not_found"):
+        db.retire_feed_post_with_outbox(
             owner_platform_user_id=user_a,
             post_id=post["id"],
-            reason_code="changed_reason",
-            deleted_at="2026-07-22 12:05:01",
+            reason_code="owner_hidden",
+            deleted_at="2026-07-22 12:05:02",
+            expected_author_type="resident",
         )
     assert db.list_published_feed_posts_for_owner(
         owner_platform_user_id=user_a, limit=20

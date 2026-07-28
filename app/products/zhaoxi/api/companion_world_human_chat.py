@@ -20,6 +20,11 @@ from app.products.zhaoxi.api.companion_world import (
     _no_store,
     _require_world_session,
 )
+from app.products.zhaoxi.api.contracts import (
+    WORLD_ERROR_RESPONSES,
+    HumanConversationListResponse,
+    HumanReportOptionsResponse,
+)
 from app.time_utils import beijing_naive_now
 
 router = APIRouter(tags=["companion-world-human-chat"])
@@ -90,6 +95,11 @@ def _public_time(value: Optional[str]) -> Optional[str]:
     return parsed.replace(tzinfo=_BEIJING_TZ).isoformat()
 
 
+def _write_enabled() -> bool:
+    """发送门控；只关闭写入，历史/隐藏/拉黑/举报不受影响。"""
+    return bool(getattr(settings, "companion_world_human_chat_enabled", False))
+
+
 def _conversation_data(row: dict) -> dict:
     return {
         "conversation_id": row["conversation_id"],
@@ -99,6 +109,11 @@ def _conversation_data(row: dict) -> dict:
         "last_message_at": _public_time(row.get("last_message_at")),
         "last_read_at": _public_time(row.get("last_read_at")),
         "created_at": _public_time(row["created_at"]),
+        "last_preview": row.get("last_preview"),
+        "unread_count": int(row.get("unread_count") or 0),
+        "can_send": bool(row.get("can_send")),
+        "read_only_reason": row.get("read_only_reason"),
+        "expires_at": _public_time(row.get("expires_at")),
     }
 
 
@@ -157,19 +172,40 @@ def _call(action):
         raise CompanionWorldApiError(err.code) from err
 
 
-@router.get("/human-conversations")
+@router.get(
+    "/human-conversations",
+    response_model=HumanConversationListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_human_conversations(
     request: Request,
     response: Response,
     platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
-    rows = _service().list_conversations(platform_user.platform_user_id, now=_now())
+    rows = _service().list_conversations(
+        platform_user.platform_user_id, now=_now(), write_enabled=_write_enabled()
+    )
     _no_store(response)
     return _envelope(
         request,
         code="ok",
         data={"items": [_conversation_data(row) for row in rows]},
     )
+
+
+@router.get(
+    "/human-conversations/report-options",
+    response_model=HumanReportOptionsResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
+def list_human_report_options(
+    request: Request,
+    response: Response,
+    platform_user: SessionPrincipal = Depends(_require_human_session),
+) -> dict:
+    """举报原因受控表；随读门控开放，`human_chat_send=false` 时仍可举报。"""
+    _no_store(response)
+    return _envelope(request, code="ok", data=_service().report_options())
 
 
 @router.get("/human-conversations/{conversation_id}/messages")
@@ -223,9 +259,7 @@ def send_human_message(
             client_message_id=payload.client_message_id,
             body_text=payload.text,
             now=_now(),
-            write_enabled=bool(
-                getattr(settings, "companion_world_human_chat_enabled", False)
-            ),
+            write_enabled=_write_enabled(),
         )
     )
     _no_store(response)
