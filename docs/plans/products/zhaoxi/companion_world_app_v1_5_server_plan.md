@@ -52,8 +52,13 @@
 | FLAG-001 4 个 capability | ✅ 命名照用 | S0 |
 
 **S0 全部条目已实现**（2026-07-29，分支 `feat/companion-world-v1-5-s0`）：FLAG-001、
-CANDIDATE-001/003 代码侧、CONTENT-001/002/004、图片理解默认开。剩余外部依赖两项：
-运营导入含司辰的 5 条 manifest（§9.1）、产品确认 CONTENT-002 的 5 条动态文案（§10.1）。
+CANDIDATE-001/003 代码侧、CONTENT-001/002/004、图片理解默认开。CONTENT-002 的 5 条动态文案
+产品已于 2026-07-29 定稿（§10.1）。
+
+**S0 要真正生效，还差一次运营导入**：生产库 4 条模板的 `persona_key` 全是 NULL（§9.1），
+而欢迎语与自我介绍动态是按 `persona_key` 取文案的——不导入就一条都不落。manifest 已生成并对
+生产库 dry-run 通过，但**必须先部署 S0 代码再导入**（线上旧代码写死 rank=(1,2,3,4)，
+提前导入会让新用户 `bootstrap_home` 全挂）。此事不阻塞 S1 开工。
 
 ---
 
@@ -499,6 +504,25 @@ m0055**，下文编号已同步。
 - `AppConfigLimits` 新增 4 字段（D-6）；`requirements.txt` 显式 pin Pillow。
 - 未引用资产回收 job。
 
+**S1 全部条目已实现**（2026-07-30，分支 `feat/companion-world-v1-5-s1`）。落点与三处实现决定：
+
+| 条目 | 落点 |
+| --- | --- |
+| m0054 | `app/db/_core.py:_migration_0054_media_assets`（`moderation_status` 默认 `skipped`，见 D-7） |
+| 字节处理（D-4） | `app/platform/media/assets.py`（EXIF 重编码、魔数探测、原子落盘 0600） |
+| 存储原语 | `app/platform/media/persistence.py`（每个函数按 owner 锚定，签名读端点是唯一例外） |
+| 签名（D-3） | `app/platform/media/access.py` + `products/zhaoxi/lifecycle.py` 启动期 fail fast |
+| 两个端点 | `app/products/zhaoxi/api/media.py`；错误码进 `companion_world.py:_ERROR_STATUS` |
+| 回收 job（D-10） | `app/platform/media/reclaim.py`，挂在既有 proactive scheduler 三个入口 |
+
+1. **`exif_transpose` 必须在剥离前跑**。先剥 EXIF 再存，竖拍照片会永久躺倒——旋转信息只在
+   EXIF 里。因此顺序是「读方向 → 物理旋转 → 丢 info 字典」，`width`/`height` 取旋转后的值。
+2. **像素数上限 `MAX_IMAGE_PIXELS = 60_000_000`**（模块常量，非配置项）。字节上限拦不住
+   低熵大图：一张 8MB 的 100MP JPEG 重编码时会吃掉几百 MB 内存。超限返回 `media_too_large`。
+3. **回收只在有中心角色的进程里挂载**。媒体文件只落在中心机磁盘，纯 node 跑会删掉库行却删不到
+   文件，反而制造无主文件。删除顺序固定为「先删行（`AND status='pending'` 原子判定）再删文件」，
+   反过来会与并发发送事务竞态出「消息里有图、磁盘没文件」的坏读。
+
 ### S2 · 会话媒体（约 5 人日）
 
 - `SendHumanMessagePayload`（`api/companion_world_human_chat.py:42`）：`text` 由
@@ -596,8 +620,19 @@ S0 实测（2026-07-29）：SQLite 档 `2 failed, 1752 passed, 39 skipped`——
 sqlite 3.26 的既有 `near "DROP"` 老问题（`test_account_app_id_repair_m0036`、
 `test_session_principal` 的 m0038 回填），与本次改动无关；PG 档 `1784 passed, 9 skipped` 全绿。
 
+S1 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 43 例
+（`test_media_assets.py` 15 + `test_media_upload_api.py` 13 + `test_media_access_token.py` 10 +
+`test_media_reclaim.py` 5）；SQLite 档 `2 failed, 1796 passed, 39 skipped`（failed 同上，本机
+sqlite 版本问题），PG 档 `1828 passed, 9 skipped` 全绿。
+
 **发布**：走 PR + 等 PG 档 CI（main 受保护，`enforce_admins`，无 auto-merge）。
 开任何媒体 flag 前确认测试机是含 v1.5-0 的构建（MEDIA-COMPAT-002）。
+
+**S1 上线的运维前置**：生产 `.env` 必须先写入 `MEDIA_URL_SIGNING_SECRET`
+（`python -c "import secrets;print(secrets.token_urlsafe(32))"`，两台机可各自不同——签发与校验
+都在中心机同进程内）。三个媒体开关全为 off 时留空可正常启动；一旦开任一开关而 secret 仍留空，
+**进程启动即失败**（这是刻意的：宁可起不来，也不能签出可预测的读 URL）。
+`MEDIA_STORAGE_DIR` 指向的目录由服务进程自建（0700），需确保所在盘有余量。
 S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条，导完验 `bootstrap_home`）。
 
 ---
@@ -623,9 +658,62 @@ S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条�
 
 导入用（`scripts/import_companion_world_presets.py`）。`persona_seed_json` 全文见 §9.2。
 
-> **⚠️ 待运维交付：** 现网 manifest 是受控文件、不在本仓库，我无法代为拼出 5 条完整版本。
-> 运维需把下面这一条**并入现有 4 条 manifest**（保持原 4 条逐字不变，避免触发 immutable 冲突
-> 检查），再整份导入。代码侧已不再限制条数（§4），所以这是纯数据操作。
+> **✅ 已生成（2026-07-29）：** `/home/jack/companion_world_presets_v1_5.json`（0600，受控目录，
+> **不入仓库**）。生成方式不是人手抄——由一次性脚本从**生产库直接读出**现有 4 条的
+> immutable 字段（`name` / `avatar_ref` / `summary` / `tags` / `persona_seed_json` /
+> `persona_version` / `rank`）逐字写入，再并上司辰。生产库 `--dry-run` 实测：
+>
+> ```json
+> {"create_ids": ["tmpl_ops_v1_5"],
+>  "keep_ids": ["tmpl_ops_v1_1","tmpl_ops_v1_2","tmpl_ops_v1_3","tmpl_ops_v1_4"],
+>  "retire_ids": [], "errors": [], "catalog_ready": true,
+>  "update_ids": ["tmpl_ops_v1_1","tmpl_ops_v1_2","tmpl_ops_v1_3","tmpl_ops_v1_4"]}
+> ```
+>
+> `keep_ids` 全中 = immutable 校验通过；`update_ids` 是下面这批运营元数据的原地补配。
+
+#### 生产库现状核查（2026-07-29）暴露的两件事
+
+**① 4 条模板的 `persona_key` 全是 NULL** —— 而 CONTENT-001/002 的文案是按 `persona_key` 取的
+（`intro_content_for_persona`）。**按现状部署 S0，5 位角色一条欢迎语、一条自我介绍动态都不会落库。**
+于是「导入 manifest」从锦上添花变成 **S0 生效的必要条件**，已在 §1 改写。
+
+**② `long_summary` / `name_pool` / `name_pool_version` 也全是 NULL** —— m0049（NAME-001，
+2026-07-26）那批运营元数据从未导过生产，候选目前 `naming_status=unavailable`、没有建议名。
+若只给司辰配名池与长介绍，选角页会出现「5 位里只有 1 位有建议名」的不一致，所以已为其余 4 位
+一并补配（**待产品确认**，四条 `long_summary` 均由各自 `persona_seed` 改写而来、第三人称、
+不指定性别，不是新编设定）：
+
+| 模板 | `persona_key` | `name_pool`（`np_v1`） |
+| --- | --- | --- |
+| 林小满 | `linxiaoman` | 林小满 / 小满 / 满满 / 小林 |
+| 陆星野 | `luxingye` | 陆星野 / 星野 / 小野 / 阿星 |
+| 沈川 | `shenchuan` | 沈川 / 川哥 / 小川 / 阿川 |
+| 阿糖 | `atang` | 阿糖 / 糖糖 / 小糖 / 糖仔 |
+| 司辰 | `sichen` | 司辰 / 辰叔 / 老辰 / 司叔 / 辰生 |
+
+#### ⚠️ 发布顺序被硬锁定：先部署 S0，再导入
+
+**不能反，也不能并行**。线上代码（`main`）两处都还写死 4：
+
+- `service.py:38 INITIAL_CANDIDATE_RANKS = (1,2,3,4)` —— 库里一旦出现 rank=5，
+  `_validate_initial_catalog` 抛 `preset_catalog_not_ready`，**所有新用户的 `bootstrap_home` 直接失败**；
+- 线上那版导入脚本 `:96 len(items) != 4` —— 5 条 manifest 会被它自己拒掉。
+
+所以正确次序是：**S0 PR 合并 → 部署重启（`init_db` no-op）→ 整份导入 5 条 → 验 `bootstrap_home`
+返回 5 个候选**。这也正是 §4 里「候选池扩容降级为纯数据操作」的兑现方式：代码先行一步，数据随后。
+
+#### 司辰 tags 已改：沉稳/通透/幽默 → **通透 / 阅历 / 幽默**（产品定，2026-07-29）
+
+初稿的「沉稳」与沈川、「幽默」与阿糖各撞一个（既有 4 位彼此不撞），选角网格区分度打折。
+换成「阅历」后只余「幽默」与阿糖重合，而「阅历」是司辰独有的差异点。
+
+`tags` 与 `persona_seed_json` 都是 immutable 字段，**改动必须发生在首次导入前**（导入后再改就得换
+`template_id` + 退休旧行）。司辰从未导入过，所以这次是零成本窗口，已同时改三处并重新 dry-run 通过：
+manifest 的 `tags`、`IDENTITY.md` 的「你的性格标签：…」行、§10 欢迎语表的标签列。
+
+顺带一条：「通透」「阅历」都不在 `persona_catalog.py PERSONALITY_TRAITS` 白名单里。预设模板的 tags
+不受该白名单约束（它只管自建角色），所以无需改代码；只有想让自建角色也能选这两个词时才要加行。
 
 ```json
 {
@@ -635,7 +723,7 @@ S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条�
   "avatar_ref": "https://ai4company.top/companion_world/avatars/sichen.png",
   "summary": "研究东方命理的长者朋友，讲趋势不讲判词",
   "long_summary": "五十岁上下。前半生在外头跑过、做过事、也栽过跟头，四十岁后才静下来钻研八字、节气与五行。他把命理当成一门看人、看时机的老学问——讲的是趋势和分寸，不是判词。成熟但不暮气，会开玩笑，也真好奇年轻人在忙什么。你不问，他不给建议；你问了，他把选择还给你。",
-  "tags": ["沉稳", "通透", "幽默"],
+  "tags": ["通透", "阅历", "幽默"],
   "persona_key": "sichen",
   "persona_version": "v1",
   "name_pool": ["司辰", "辰叔", "老辰", "司叔", "辰生"],
@@ -646,11 +734,7 @@ S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条�
 
 三处校验口径已核对：
 
-- **`tags` 必须恰好 3 个**（`service.py:74`、导入脚本 `:115`）。「沉稳」「幽默」在
-  `PERSONALITY_TRAITS` 白名单内，**「通透」不在**。预设模板的 tags 不受该白名单约束（白名单只管
-  自建角色），所以可以直接用；如果希望自建角色也能选「通透」，需要在
-  `persona_catalog.py:33 PERSONALITY_TRAITS` 加一行 `"insightful": "通透"`——这是 `resident-options`
-  的契约新增，属可选。
+- **`tags` 必须恰好 3 个**（`service.py:74`、导入脚本 `:115`）。白名单一节见上（预设不受约束）。
 - **`name_pool` 必须 3–5 个**（`domain/companion_world/naming.py:23 NAME_POOL_MIN/MAX`），上面给了 5 个。
   与 `name_pool_version` 必须成对出现，否则导入报错。
 - `persona_seed_json` 的 `SOUL.md` / `IDENTITY.md` 必须**都非空**，否则整个候选目录
@@ -714,7 +798,7 @@ S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条�
 
 - 你在用户世界里的身份是一位研究东方命理的长者朋友，五十岁上下的男性。
 - 用户在这个世界里给你起的名字就是你的名字，用它自称。
-- 你的性格标签：沉稳、通透、幽默。
+- 你的性格标签：通透、阅历、幽默。
 - 你是用户的个人 AI 陪伴，由用户在 App 里选进自己的世界。
 - 你懂八字、五行、节气与传统命理，但只在用户主动问起时展开，并且始终把选择权交回用户。
 ```
@@ -768,7 +852,7 @@ repositories/companion_world.py:490  _persona_parts(candidate.template.persona_s
 | 陆星野 | 活泼 / 好奇 / 元气 | 终于见到你啦！我对什么都好奇，尤其是你。今天过得怎么样？哪怕是很小的事我也想听。 | 40 |
 | 沈川 | 沉稳 / 理性 / 可靠 | 我在了。有想不清的事可以拿来一起拆，慌的时候也可以先什么都不说。我不会走。 | 37 |
 | 阿糖 | 幽默 / 俏皮 / 轻松 | 报到！我这人没什么大本事，就是能把糟心事聊成笑话。日子够沉了，咱轻点过。 | 36 |
-| 司辰 | 沉稳 / 通透 / 幽默 | 我年轻时到处折腾，四十岁以后才学着看八字、看时节。别急着问结果，先跟我说说你。 | 39 |
+| 司辰 | 通透 / 阅历 / 幽默 | 我年轻时到处折腾，四十岁以后才学着看八字、看时节。别急着问结果，先跟我说说你。 | 39 |
 
 三条实现约定：
 
@@ -781,11 +865,11 @@ repositories/companion_world.py:490  _persona_parts(candidate.template.persona_s
 
 以上五条欢迎语**已产品定稿**（2026-07-29）。
 
-### 10.1 五条自我介绍动态（CONTENT-002 文案）· ⚠️ 待产品确认
+### 10.1 五条自我介绍动态（CONTENT-002 文案）· 已定稿
 
-产品只确认了欢迎语，下表是**我起草的初稿**，需要产品逐条过一遍再定稿。落库位置在
-`app/products/zhaoxi/domain/companion_world/onboarding_content.py`，改文案只动这一处、
-无需改代码。
+**产品已定稿（2026-07-29）**，与代码中已落地的文案一致。落库位置在
+`app/products/zhaoxi/domain/companion_world/onboarding_content.py`，将来改文案只动这一处、
+无需改代码、无需迁移。
 
 | 角色 | 自我介绍动态 |
 | --- | --- |

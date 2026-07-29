@@ -373,6 +373,19 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_chat_voice_enabled = False
     s.companion_world_feed_image_enabled = False
     s.companion_world_resident_wish_enabled = False
+    # v1.5 媒体地基：数值必须显式给，MagicMock 的 __int__ 恒为 1，否则 /app/config 的限额
+    # 会静默变成 1 字节、契约测试也失去意义。签名密钥给固定测试值，与生产的"留空即报错"无关。
+    s.media_storage_dir = str(tmp_path / "media")
+    s.media_url_signing_secret = "test-media-signing-secret"
+    s.media_url_owner_ttl_seconds = 900
+    s.media_url_visitor_ttl_seconds = 600
+    s.media_pending_ttl_hours = 2
+    s.media_reclaim_interval_seconds = 3600.0
+    s.media_image_max_bytes = 8_388_608
+    s.media_image_count_max = 4
+    s.media_voice_max_bytes = 512_000
+    s.media_voice_max_duration_ms = 60_000
+    s.voice_message_fallback_text = "这段语音我没听清，你可以打字告诉我，或者再发一次～"
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""
@@ -455,6 +468,10 @@ def fresh_db(test_settings):
         patch("app.products.zhaoxi.proactive.contract.common.settings", test_settings),
         patch("app.products.zhaoxi.proactive.delivery.outbound.settings", test_settings),
         patch("app.platform.media.asr.settings", test_settings),
+        # v1.5 媒体：assets 决定落盘根目录（不 patch 会往仓库 data/media 写测试文件），
+        # access 决定签名密钥与 TTL。
+        patch("app.platform.media.assets.settings", test_settings),
+        patch("app.platform.media.access.settings", test_settings),
         patch("app.products.zhaoxi.api.debug.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_proactive.settings", test_settings),

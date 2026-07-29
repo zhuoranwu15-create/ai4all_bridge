@@ -40,6 +40,16 @@ def test_app_config_exposes_only_public_settings(client, fresh_db):
     assert data["captcha"]["scene_id"] == "scene-public"
     assert data["features"]["voice_input"] is True
     assert "secret-not-in-response" not in response.text
+    # v1.5 媒体限额恒下发（MEDIA-LIMIT-001）：与三个媒体能力位无关，客户端拿它做上传前校验。
+    limits = data["limits"]
+    assert limits["image_bytes_max"] == 8 * 1024 * 1024
+    assert limits["image_count_max"] == 4
+    assert limits["voice_bytes_max"] == 512_000
+    assert limits["voice_duration_ms_max"] == 60_000
+    # 语音消息与 ASR 转写是两个口径，不能混：语音消息上限必须严格小于 ASR 上限。
+    assert limits["voice_bytes_max"] < limits["audio_bytes"]
+    # 签名密钥属于凭证，绝不能出现在公开配置里。
+    assert "test-media-signing-secret" not in response.text
 
 
 def test_product_namespace_preserves_zhaoxi_contract(client):

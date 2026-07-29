@@ -323,6 +323,12 @@ def app_config(response: Response) -> dict:
             "message_chars": 4000,
             "audio_bytes": int(settings.asr_max_audio_bytes),
             "audio_duration_ms": int(settings.asr_max_duration_ms),
+            # 媒体限额恒下发（与能力位无关）：客户端拿它做上传前校验，
+            # 开关关闭时它拿不到上传入口，多下发几个数字无副作用。
+            "image_bytes_max": int(settings.media_image_max_bytes),
+            "image_count_max": int(settings.media_image_count_max),
+            "voice_bytes_max": int(settings.media_voice_max_bytes),
+            "voice_duration_ms_max": int(settings.media_voice_max_duration_ms),
         },
         "client_contract_version": CLIENT_CONTRACT_VERSION,
         "server_time": beijing_now().isoformat(timespec="seconds"),

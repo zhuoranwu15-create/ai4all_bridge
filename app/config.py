@@ -381,6 +381,28 @@ class Settings(BaseSettings):
     companion_world_feed_image_enabled: bool = False
     companion_world_resident_wish_enabled: bool = False
 
+    # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
+    # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。
+    media_storage_dir: str = "data/media"
+    # 访客/主人读 URL 的 HMAC 签名密钥。**不给弱默认值**：留空且任一媒体开关为开时启动即报错，
+    # 避免"忘配 secret 却签得出 URL"。生成方式：python -c "import secrets;print(secrets.token_urlsafe(32))"
+    media_url_signing_secret: str = ""
+    # 签名 URL 有效期：主人 15 分钟；访客取 min(本值, visit 剩余时长)，visit 一结束立即失效。
+    media_url_owner_ttl_seconds: int = 900
+    media_url_visitor_ttl_seconds: int = 600
+    # 已上传未被任何消息/动态引用的资产保留时长，到点连行带文件回收；被引用后不再过期。
+    media_pending_ttl_hours: int = 2
+    media_reclaim_interval_seconds: float = 3600.0
+    # 单张图片上传上限（重编码前）。与 asr_max_audio_bytes 无关，后者是 ASR 转写口径。
+    media_image_max_bytes: int = 8_388_608
+    # 动态单条最多几张图；聊天图片消息恒为 1 张。
+    media_image_count_max: int = 4
+    # 单条语音消息上限。AAC-LC 32kbps 60 秒约 240KB，留 2 倍余量；刻意远小于 ASR 的 10MB。
+    media_voice_max_bytes: int = 512_000
+    media_voice_max_duration_ms: int = 60_000
+    # 语音转写失败时写进 LLM 上下文的兜底话术（红线：禁止让主模型瞎猜语音内容）。
+    voice_message_fallback_text: str = "这段语音我没听清，你可以打字告诉我，或者再发一次～"
+
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
     # standalone 下所有新路径不触发,行为逐字节不变。

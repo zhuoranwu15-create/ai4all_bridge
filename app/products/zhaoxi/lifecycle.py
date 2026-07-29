@@ -8,6 +8,8 @@ from fastapi import FastAPI
 
 from app.config import settings
 from app.db import cleanup_app_notifications_batch
+from app.platform.media.access import validate_media_signing_config
+from app.platform.media.reclaim import reclaim_orphan_media_batch
 from app.products.zhaoxi.application import (
     build_companion_world_memory_sink,
     compact_companion_world_memory_batch,
@@ -39,6 +41,9 @@ def install_lifecycle(app: FastAPI) -> None:
         )
 
         validate_category_registry()
+        # D-3：任一媒体开关为开而 MEDIA_URL_SIGNING_SECRET 留空 → 启动即失败。
+        # 宁可起不来，也不能"忘配 secret 却签得出可预测的读 URL"。
+        validate_media_signing_config()
 
     @app.on_event("startup")
     async def startup_proactive_scheduler() -> None:
@@ -60,6 +65,9 @@ def install_lifecycle(app: FastAPI) -> None:
             notification_cleanup_batch_size=(
                 settings.companion_world_notification_cleanup_batch_size
             ),
+            # D-10：媒体文件只落在中心机磁盘上，回收必须在中心侧执行（此处已被
+            # has_central_role 拦过一道）。函数自身按小时节流。
+            reclaim_orphan_media=reclaim_orphan_media_batch,
         )
         logger.info("proactive scheduler started: %s", scheduler.status())
 

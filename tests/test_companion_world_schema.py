@@ -25,6 +25,7 @@ from app.db._core import (
     _migration_0051_app_me_tab,
     _migration_0052_human_conversation_read_cursor,
     _migration_0053_resident_intro_post,
+    _migration_0054_media_assets,
 )
 
 _P1_TABLES = (
@@ -78,14 +79,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        53,
-        _migration_0053_resident_intro_post,
+        54,
+        _migration_0054_media_assets,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 53
+        assert int(version) == 54
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -542,6 +543,23 @@ def test_m0053_resident_intro_index_and_idempotency(fresh_db):
     assert rows[0][1] is True and rows[1][1] is False
     assert rows[0][0]["id"] == rows[1][0]["id"]
     assert rows[1][0]["text"] == "介绍 0"
+
+
+def test_m0054_media_assets_and_idempotency(fresh_db):
+    """m0054：媒体表与三个消息侧列可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0054_media_assets(conn)
+        _migration_0054_media_assets(conn)
+        # 后端中立：空结果查询覆盖全部列名，缺列即抛错。
+        conn.execute(
+            "SELECT id, owner_platform_user_id, kind, mime, bytes, width, height, "
+            "duration_ms, sha256, storage_path, transcript, status, moderation_status, "
+            "moderation_task_id, expires_at, created_at FROM media_assets WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT content_json, media_id FROM messages WHERE 1 = 0"
+        ).fetchall()
+        conn.execute("SELECT media_id FROM human_messages WHERE 1 = 0").fetchall()
 
 
 def test_candidate_naming_snapshot_is_written_once(fresh_db):

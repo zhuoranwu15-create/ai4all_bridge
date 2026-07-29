@@ -194,15 +194,35 @@
             "title": "Audio Duration Ms",
             "type": "integer"
           },
+          "image_bytes_max": {
+            "title": "Image Bytes Max",
+            "type": "integer"
+          },
+          "image_count_max": {
+            "title": "Image Count Max",
+            "type": "integer"
+          },
           "message_chars": {
             "title": "Message Chars",
+            "type": "integer"
+          },
+          "voice_bytes_max": {
+            "title": "Voice Bytes Max",
+            "type": "integer"
+          },
+          "voice_duration_ms_max": {
+            "title": "Voice Duration Ms Max",
             "type": "integer"
           }
         },
         "required": [
           "message_chars",
           "audio_bytes",
-          "audio_duration_ms"
+          "audio_duration_ms",
+          "image_bytes_max",
+          "image_count_max",
+          "voice_bytes_max",
+          "voice_duration_ms_max"
         ],
         "title": "AppConfigLimits",
         "type": "object"
@@ -353,6 +373,38 @@
           "duration_ms"
         ],
         "title": "Body_app_transcription_v1_audio_transcriptions_post",
+        "type": "object"
+      },
+      "Body_upload_media_v1_media_uploads_post": {
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "kind": {
+            "description": "image | voice",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "kind"
+        ],
+        "title": "Body_upload_media_v1_media_uploads_post",
         "type": "object"
       },
       "BootstrapData": {
@@ -1419,6 +1471,100 @@
         "title": "MeWorld",
         "type": "object"
       },
+      "MediaUploadData": {
+        "description": "上传结果。\n\n``url`` 是**短 TTL 签名地址**（D-3），客户端可直接加载但不要持久化：过期后重新读列表/详情\n会拿到新签名。``expires_at`` 是\"这份未被引用的媒体什么时候被回收\"，与 URL 过期是两件事。\n``transcript`` 只在语音且转写成功时非空——转写失败不阻塞发送。",
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "url_expires_at": {
+            "title": "Url Expires At",
+            "type": "string"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id",
+          "kind",
+          "mime",
+          "bytes",
+          "url",
+          "url_expires_at"
+        ],
+        "title": "MediaUploadData",
+        "type": "object"
+      },
       "NotificationPreferencesData": {
         "description": "ME-10 通知偏好；``available_levels`` 由服务端下发，客户端不硬编码枚举。",
         "properties": {
@@ -2241,6 +2387,36 @@
           "data"
         ],
         "title": "WorldEnvelope[HumanReportOptionsData]",
+        "type": "object"
+      },
+      "WorldEnvelope_MediaUploadData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MediaUploadData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MediaUploadData]",
         "type": "object"
       },
       "WorldEnvelope_NotificationPreferencesData_": {
@@ -4704,6 +4880,244 @@
         "summary": "App Profile Options",
         "tags": [
           "app-v1"
+        ]
+      }
+    },
+    "/v1/media/uploads": {
+      "post": {
+        "description": "上传一份媒体资产，返回 ``media_ref`` 与一条短 TTL 的主人读 URL。\n\n服务端不信任客户端声明：图片一律重编码并剥离 EXIF/GPS（D-4），语音容器按魔数复核。\n``duration_ms`` 由客户端声明（与 ``/audio/transcriptions`` 同口径），仅做上限校验。",
+        "operationId": "upload_media_v1_media_uploads_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_media_v1_media_uploads_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_MediaUploadData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "413": {
+            "description": "超出字节或时长上限（media_too_large / media_duration_exceeded）"
+          },
+          "415": {
+            "description": "格式不在白名单（media_kind_unsupported）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Upload Media",
+        "tags": [
+          "companion-world-media"
+        ]
+      }
+    },
+    "/v1/media/{media_id}": {
+      "get": {
+        "description": "按签名下发媒体字节流。**不读 ``Authorization``**，签名 URL 是唯一凭据（D-3）。\n\n任何失败（签名不符、过期、scope 失效、行或文件缺失）统一收敛到 ``media_access_denied``，\n不给资源枚举信号。",
+        "operationId": "read_media_v1_media__media_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "media_id",
+            "required": true,
+            "schema": {
+              "title": "Media Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "签名过期时间（unix 秒）",
+            "in": "query",
+            "name": "exp",
+            "required": true,
+            "schema": {
+              "description": "签名过期时间（unix 秒）",
+              "title": "Exp",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 16,
+              "title": "Sig",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "媒体字节流"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Read Media",
+        "tags": [
+          "companion-world-media"
         ]
       }
     },

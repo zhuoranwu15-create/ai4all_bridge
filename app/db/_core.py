@@ -4244,6 +4244,68 @@ def _migration_0053_resident_intro_post(conn: Connection) -> None:
     )
 
 
+def _migration_0054_media_assets(conn: Connection) -> None:
+    """v1.5 媒体地基：一张 ``media_assets`` + 消息侧三个可空列（MEDIA-* 系列）。
+
+    ``media_assets`` 是**上传与消息解耦**的中间态：客户端先传拿到 ``media_ref``，之后才在
+    发消息/发动态时引用它。因此 ``status`` 只有两态——``pending``（已上传未引用，
+    ``expires_at`` 到点连行带文件一起回收）与 ``referenced``（已被引用，不再过期）。
+    刻意不做反向扫描（"有没有消息指向我"）：引用与状态翻转在同一事务内完成，
+    状态位就是唯一真相，比每小时 JOIN 三张表便宜得多。
+
+    ``storage_path`` 存相对路径（``<sha256[0:2]>/<sha256[2:4]>/<media_id>``），
+    不存绝对路径也不存 URL——存储根由 ``settings.media_storage_dir`` 决定，将来换对象存储
+    只需换解析函数，库里的数据不用动。
+
+    ``owner_platform_user_id`` 是账号隔离的锚：读端点除了验签名，还要复核 scope 与 owner
+    的关系，任何不带 owner 约束的媒体查询都是 bug。
+
+    消息侧只加列不改约束：
+    - ``messages.content_json`` 存 D-1 判别联合的完整 ``content``（``messages.content``
+      继续存 LLM 上下文用的纯文本，两者口径不同，刻意不合并）；
+    - ``messages.media_id`` / ``human_messages.media_id`` 单列引用，**不加 FK**——
+      SQLite 无法用 ALTER 补 FK，为一个可空列重建带 2 个 UNIQUE + 2 个 FK 的
+      ``human_messages`` 表不值当，完整性由应用层与回收 job 的状态位保证；
+    - ``human_messages.body_text`` 保持 ``NOT NULL``（同上，重建风险 > 收益），
+      纯媒体消息写空串，"文本或媒体至少有一个"在 API 层校验。
+
+    纯加表 + 加列，无回填、无锁表风险，两后端幂等。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS media_assets (
+            id TEXT PRIMARY KEY,                             -- mda_<token_urlsafe(24)>，不透明
+            owner_platform_user_id TEXT NOT NULL,            -- 账号隔离锚，读写都必须带上
+            kind TEXT NOT NULL,                              -- image | voice
+            mime TEXT NOT NULL,                              -- 重编码后的真实 mime，非客户端声明
+            bytes INTEGER NOT NULL,                           -- 落盘字节数（重编码后）
+            width INTEGER,                                   -- 图片；语音为 NULL
+            height INTEGER,
+            duration_ms INTEGER,                             -- 语音；图片为 NULL
+            sha256 TEXT NOT NULL,                            -- 落盘内容摘要，也是分片目录来源
+            storage_path TEXT NOT NULL,                      -- 相对 media_storage_dir 的路径
+            transcript TEXT,                                 -- 语音同步转写结果；失败或图片为 NULL
+            status TEXT NOT NULL DEFAULT 'pending',          -- pending | referenced
+            -- D-7 定稿口径：默认 skipped=本资产没有过审流程（S4 接阿里云前恒为此值）；
+            -- S4 上线后入队时才置 pending，终态 passed / rejected。
+            moderation_status TEXT NOT NULL DEFAULT 'skipped',  -- skipped | pending | passed | rejected
+            moderation_task_id TEXT,                         -- S4 接阿里云内容安全后回填
+            expires_at TEXT,                                 -- pending 的回收截止；referenced 置 NULL
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_media_assets_owner
+            ON media_assets(owner_platform_user_id, created_at);
+        -- 回收 job 的唯一扫描路径：status='pending' AND expires_at <= now。
+        CREATE INDEX IF NOT EXISTS ix_media_assets_reclaim
+            ON media_assets(status, expires_at);
+        """
+    )
+    _ensure_column(conn, "messages", "content_json", "TEXT")
+    _ensure_column(conn, "messages", "media_id", "TEXT")
+    _ensure_column(conn, "human_messages", "media_id", "TEXT")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4293,6 +4355,7 @@ _MIGRATIONS = [
     (51, _migration_0051_app_me_tab),
     (52, _migration_0052_human_conversation_read_cursor),
     (53, _migration_0053_resident_intro_post),
+    (54, _migration_0054_media_assets),
 ]
 
 

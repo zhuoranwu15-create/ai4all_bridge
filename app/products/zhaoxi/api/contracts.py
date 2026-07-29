@@ -70,8 +70,15 @@ class AppConfigFeatures(BaseModel):
 
 class AppConfigLimits(BaseModel):
     message_chars: int
+    # audio_* 是**语音输入转写（ASR）**的上限，沿用既有值不动；下面 voice_* 才是语音消息上限。
+    # 两个口径分离：AAC-LC 32kbps 60 秒仅约 240KB，语音消息沿用 ASR 的 10MB 是错误的宽松。
     audio_bytes: int
     audio_duration_ms: int
+    # v1.5 媒体消息限额（MEDIA-LIMIT-001）。
+    image_bytes_max: int
+    image_count_max: int          # 动态单条上限；聊天图片消息恒为 1 张
+    voice_bytes_max: int
+    voice_duration_ms_max: int
 
 
 class AppConfigMinimumVersionByPlatform(BaseModel):
@@ -333,6 +340,30 @@ class FeedRetireData(BaseModel):
     replayed: bool
 
 
+# --- B 类 data：媒体上传（v1.5 S1）-----------------------------------------
+
+
+class MediaUploadData(BaseModel):
+    """上传结果。
+
+    ``url`` 是**短 TTL 签名地址**（D-3），客户端可直接加载但不要持久化：过期后重新读列表/详情
+    会拿到新签名。``expires_at`` 是"这份未被引用的媒体什么时候被回收"，与 URL 过期是两件事。
+    ``transcript`` 只在语音且转写成功时非空——转写失败不阻塞发送。
+    """
+
+    media_id: str
+    kind: str
+    mime: str
+    bytes: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_ms: Optional[int] = None
+    transcript: Optional[str] = None
+    expires_at: Optional[str] = None
+    url: str
+    url_expires_at: str
+
+
 # --- B 类 data：真人一对一聊天 ---------------------------------------------
 
 
@@ -399,6 +430,7 @@ FeedListResponse = WorldEnvelope[FeedListData]
 FeedPostResponse = WorldEnvelope[FeedPostData]
 FeedRetireResponse = WorldEnvelope[FeedRetireData]
 HumanConversationListResponse = WorldEnvelope[HumanConversationListData]
+MediaUploadResponse = WorldEnvelope[MediaUploadData]
 HumanReportOptionsResponse = WorldEnvelope[HumanReportOptionsData]
 NotificationPreferencesResponse = WorldEnvelope[NotificationPreferencesData]
 
@@ -426,6 +458,7 @@ __all__ = [
     "HumanConversationListResponse",
     "HumanReportOptionsResponse",
     "MeResponse",
+    "MediaUploadResponse",
     "NotificationPreferencesResponse",
     "ProfileOptionsResponse",
     "ProfileUpdateResponse",

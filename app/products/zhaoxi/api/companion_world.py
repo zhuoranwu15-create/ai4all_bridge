@@ -139,6 +139,20 @@ _ERROR_STATUS = {
     "human_conversation_not_found": 404,
     "human_message_not_found": 404,
     "human_chat_read_only": 409,
+    # v1.5 媒体（MEDIA-COMPAT-001，plan §6）。media_access_denied 刻意收敛所有失败原因
+    # （签名不符 / 过期 / scope 已失效 / 行或文件缺失），不给资源枚举信号。
+    "media_disabled": 404,
+    "media_ref_invalid": 409,
+    "media_ref_expired": 409,
+    "media_kind_unsupported": 415,
+    "media_decode_failed": 422,
+    "media_too_large": 413,
+    "media_duration_exceeded": 413,
+    "media_count_exceeded": 422,
+    "media_content_required": 422,
+    "media_access_denied": 403,
+    # 部署错误（MEDIA_URL_SIGNING_SECRET 未配置）：可重试，不是客户端的问题。
+    "media_signing_unavailable": 503,
     "invalid_request": 422,
 }
 
@@ -159,6 +173,7 @@ _COMPANION_WORLD_ROUTES = (
     "/visits",
     "/human-conversations",
     "/mailbox/",
+    "/media/",
 )
 # 长前缀优先，否则 "/v1" 会先吃掉 "/v1/products/zhaoxi"。
 _MOUNT_PREFIXES = tuple(
