@@ -63,6 +63,7 @@ from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     options_catalog,
     resolve_avatar_ref,
 )
+from app.products.zhaoxi.domain.missions.registry import mission_display_for_persona
 from app.products.zhaoxi.application import (
     SqlCompanionWorldRepository,
     run_companion_world_turn,
@@ -379,7 +380,11 @@ def _candidate_data(candidate: CandidateRecord) -> dict:
 
 
 def _resident_data(resident: ResidentRecord) -> dict:
-    """序列化 owner 可见居民字段；不暴露 runtime account id。"""
+    """序列化 owner 可见居民字段；不暴露 runtime account id。
+
+    CONTENT-004：下发 ``mission_display`` 而不是 ``persona_key``——客户端要的是"这个居民的
+    使命该不该显示计数"，给它人设 key 就等于把角色名单和分支规则又推回端上。
+    """
     return {
         "resident_id": resident.resident_id,
         "name": resident.name,
@@ -388,6 +393,7 @@ def _resident_data(resident: ResidentRecord) -> dict:
         "origin": resident.origin,
         "conversation_id": resident.conversation_id,
         "conversation_state": resident.conversation_state,
+        "mission_display": mission_display_for_persona(resident.persona_key),
     }
 
 

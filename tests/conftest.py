@@ -367,6 +367,12 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_outbox_max_attempts = 5
     s.companion_world_visits_enabled = False
     s.companion_world_human_chat_enabled = False
+    # v1.5 媒体与许愿四位（FLAG-001）：与其余能力位同样显式置 False——MagicMock 的自动属性
+    # 是 truthy，漏一个就会让所有开了 p1 的用例误以为该能力已灰度开启。
+    s.companion_world_chat_image_enabled = False
+    s.companion_world_chat_voice_enabled = False
+    s.companion_world_feed_image_enabled = False
+    s.companion_world_resident_wish_enabled = False
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""

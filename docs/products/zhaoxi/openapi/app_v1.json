@@ -122,6 +122,18 @@
             "title": "App Notifications",
             "type": "boolean"
           },
+          "chat_image_message": {
+            "title": "Chat Image Message",
+            "type": "boolean"
+          },
+          "chat_voice_message": {
+            "title": "Chat Voice Message",
+            "type": "boolean"
+          },
+          "feed_image_post": {
+            "title": "Feed Image Post",
+            "type": "boolean"
+          },
           "human_chat_send": {
             "title": "Human Chat Send",
             "type": "boolean"
@@ -132,6 +144,10 @@
           },
           "resident_lifecycle": {
             "title": "Resident Lifecycle",
+            "type": "boolean"
+          },
+          "resident_wish_create": {
+            "title": "Resident Wish Create",
             "type": "boolean"
           },
           "resident_world": {
@@ -159,7 +175,11 @@
           "resident_lifecycle",
           "mailbox",
           "world_visits",
-          "human_chat_send"
+          "human_chat_send",
+          "chat_image_message",
+          "chat_voice_message",
+          "feed_image_post",
+          "resident_wish_create"
         ],
         "title": "AppConfigFeatures",
         "type": "object"
@@ -1602,6 +1622,11 @@
               }
             ],
             "title": "Conversation State"
+          },
+          "mission_display": {
+            "default": "countable",
+            "title": "Mission Display",
+            "type": "string"
           },
           "name": {
             "title": "Name",

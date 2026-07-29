@@ -12,7 +12,7 @@ app/products/zhaoxi/infrastructure/persistence/mission.py 的不可变性
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 _MISSION_TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -119,3 +119,26 @@ def get_mission_template(mission_id: str) -> MissionTemplate:
 
 def list_mission_templates() -> List[MissionTemplate]:
     return [MISSION_TEMPLATES[mission_id] for mission_id in _TEMPLATE_ORDER]
+
+
+# --- 使命展示形态（CONTENT-004）-------------------------------------------
+#
+# 客户端需要知道一个居民的使命该按「可数进度」还是「只讲长期文案」渲染。这份名单必须留在
+# 服务端：让客户端按角色 ID 硬编码，等于每加一个不计数角色就要发一次客户端版本，且业务规则
+# 会散落到端上。
+#
+# 判据是**人设**而不是使命模板：使命按 account hash 指派（见 application/missions/assignment.py），
+# 同一个模板可能落到任何角色身上，所以「这个角色适不适合谈计数」只能由 persona_key 决定。
+MISSION_DISPLAY_COUNTABLE = "countable"
+MISSION_DISPLAY_NARRATIVE = "narrative"
+
+# 占卜/命理类人设：其行为本身不该被计数（PRD ENRICH-05 红线：不出现百分比、进度条、
+# 连续天数或排行）。未来新增同类人设在此追加一行即可，客户端零改动。
+NARRATIVE_MISSION_PERSONA_KEYS = frozenset({"sichen"})
+
+
+def mission_display_for_persona(persona_key: Optional[str]) -> str:
+    """按人设决定使命展示形态；未知/自建人设一律按可数（与现状一致）。"""
+    if persona_key and persona_key.strip() in NARRATIVE_MISSION_PERSONA_KEYS:
+        return MISSION_DISPLAY_NARRATIVE
+    return MISSION_DISPLAY_COUNTABLE

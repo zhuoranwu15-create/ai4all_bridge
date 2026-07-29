@@ -22,6 +22,9 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     WorldRepository,
 )
 from app.products.zhaoxi.domain.companion_world.naming import select_suggested_name
+from app.products.zhaoxi.domain.companion_world.onboarding_content import (
+    intro_content_for_persona,
+)
 from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     PERSONALITY_TRAITS,
     PersonaCatalogError,
@@ -35,7 +38,15 @@ from app.products.zhaoxi.domain.companion_world.persona_catalog import (
 logger = logging.getLogger(__name__)
 
 MAX_ACTIVE_RESIDENTS = 10
-INITIAL_CANDIDATE_RANKS = (1, 2, 3, 4)
+# 初始候选目录的 rank 必须是**连续的 1..N**，且至少 MIN_INITIAL_CANDIDATES 位。
+#
+# CANDIDATE-001（v1.5，候选 4→5 加入司辰）刻意改成「连续 + 下限」而不是写死 (1,2,3,4)：
+# 写死会让「代码期望 N 位」与「库里有 M 位」互为死锁——先改代码则选角页立刻
+# preset_catalog_not_ready，先导数据则导入脚本拒收，必须精确编排两次发布。改成下限后，
+# 加一位预设变成**纯数据操作**（导入新 manifest 即生效），代码无需再动。
+#
+# 原有保护未丢：少一位（(1,2,3)）撞下限、缺号（(1,2,4,5)）不连续，两种脏数据仍然硬失败。
+MIN_INITIAL_CANDIDATES = 4
 
 
 class CompanionWorldService:
@@ -77,7 +88,12 @@ class CompanionWorldService:
             and item.persona_version.strip()
             for item in ordered
         )
-        if ranks != INITIAL_CANDIDATE_RANKS or not metadata_ready:
+        expected = tuple(range(1, len(ordered) + 1))
+        if (
+            len(ordered) < MIN_INITIAL_CANDIDATES
+            or ranks != expected
+            or not metadata_ready
+        ):
             raise CompanionWorldError("preset_catalog_not_ready")
         return ordered
 
@@ -192,11 +208,12 @@ class CompanionWorldService:
                 # （模板名是运营录入的可信值，可能超过用户输入的长度上限）。
                 if selection.display_name and not is_valid_display_name(display_name):
                     raise CompanionWorldError("display_name_invalid")
-                repo.activate_candidate_with_runtime(
+                resident = repo.activate_candidate_with_runtime(
                     candidate,
                     owner_platform_user_id=platform_user_id,
                     display_name=display_name,
                 )
+                self._seed_resident_intro(repo, resident, candidate.template.persona_key)
             repo.dismiss_unselected_candidates(world.id, tuple(normalized))
             repo.set_universe_onboarding_state(world.id, "confirmed")
             residents = tuple(repo.list_residents_for_owner(platform_user_id, ("active",)))
@@ -311,10 +328,32 @@ class CompanionWorldService:
             raise CompanionWorldError("world_not_ready")
         if repo.count_active_residents(world.id) >= MAX_ACTIVE_RESIDENTS:
             raise CompanionWorldError("resident_capacity_exceeded")
-        return repo.activate_candidate_with_runtime(
+        resident = repo.activate_candidate_with_runtime(
             candidate,
             owner_platform_user_id=platform_user_id,
             display_name=candidate.suggested_display_name or template.name,
+        )
+        self._seed_resident_intro(repo, resident, template.persona_key)
+        return resident
+
+    @staticmethod
+    def _seed_resident_intro(
+        repo: WorldRepository,
+        resident: ResidentRecord,
+        persona_key: Optional[str],
+    ) -> None:
+        """新居民落地即写一条欢迎语与一条自我介绍动态（CONTENT-001 / CONTENT-002）。
+
+        查不到该人设的文案就整体跳过、不写兜底句——自建角色（persona_key 恒 None）与运营
+        新加但还没配文案的预设都走这条路径，宁可少两条内容也不让通用文案顶上。
+        """
+        content = intro_content_for_persona(persona_key)
+        if content is None:
+            return
+        repo.seed_resident_intro(
+            resident,
+            welcome_message=content.welcome_message,
+            intro_post=content.intro_post,
         )
 
     def preview_resident_draft(

@@ -4225,6 +4225,25 @@ def _migration_0052_human_conversation_read_cursor(conn: Connection) -> None:
     )
 
 
+def _migration_0053_resident_intro_post(conn: Connection) -> None:
+    """CONTENT-002：一位居民最多一条自我介绍动态。
+
+    只加一个部分唯一索引，不加表不加列。``resident_intro`` 与既有 ``ai_feed`` /
+    ``user_post`` 的两个部分唯一索引互不相交（各自带 ``WHERE source_type=...``），
+    所以新 source_type 不会撞上 AI 每日双档位的槽位唯一约束。
+
+    幂等锚落在库上而不是应用层：确认候选是一次性操作，重放/并发只应有一条介绍动态，
+    而 ``client_request_id`` 那条索引限定 ``source_type='user_post'``，管不到这里。
+    """
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_resident_intro
+            ON universe_posts(universe_id, author_resident_id)
+            WHERE source_type = 'resident_intro';
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4273,6 +4292,7 @@ _MIGRATIONS = [
     (50, _migration_0050_ai_conversation_read_cursor),
     (51, _migration_0051_app_me_tab),
     (52, _migration_0052_human_conversation_read_cursor),
+    (53, _migration_0053_resident_intro_post),
 ]
 
 

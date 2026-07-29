@@ -61,6 +61,11 @@ class AppConfigFeatures(BaseModel):
     mailbox: bool
     world_visits: bool
     human_chat_send: bool
+    # v1.5（FLAG-001）：客户端按**可选**读取以下四位，缺失即视为关闭，不进启动必需字段校验。
+    chat_image_message: bool
+    chat_voice_message: bool
+    feed_image_post: bool
+    resident_wish_create: bool
 
 
 class AppConfigLimits(BaseModel):
@@ -196,6 +201,9 @@ class ResidentData(BaseModel):
     origin: str
     conversation_id: Optional[str] = None
     conversation_state: Optional[str] = None
+    # CONTENT-004：使命展示形态。``countable`` 走可数进度，``narrative`` 只展示长期使命文案、
+    # 不触发计数 UI。服务端持有名单，客户端不再按角色 ID 硬编码。
+    mission_display: str = "countable"
 
 
 class BootstrapData(BaseModel):

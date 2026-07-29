@@ -229,7 +229,8 @@ class Settings(BaseSettings):
 
     # ===== 图片理解（DashScope qwen3-vl-plus）=====
     # 总开关：关闭时图片轮直接走兜底，不调 VL、不扣图片费。
-    image_understanding_enabled: bool = False
+    # 默认开（v1.5）：DashScope key 缺失时 describe_image 返回 None 自动落兜底，不会因缺配置 500。
+    image_understanding_enabled: bool = True
     image_understanding_model: str = "qwen3-vl-plus"
     image_understanding_timeout_seconds: float = 30.0
     # 单张图片读取上限，超过则放弃理解（防止超大文件拖垮请求）。
@@ -372,6 +373,13 @@ class Settings(BaseSettings):
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
     companion_world_visits_enabled: bool = False
     companion_world_human_chat_enabled: bool = False
+    # v1.5 媒体与许愿：四个能力位各自 default-off，逐个灰度（FLAG-001）。
+    # 三个媒体开关共用同一套上传/签名链路，但分别门控「会话图片」「会话语音」「动态图文」，
+    # 便于先开图片再开语音。开任何一个之前须确认客户端已是含 v1.5-0 的构建（MEDIA-COMPAT-002）。
+    companion_world_chat_image_enabled: bool = False
+    companion_world_chat_voice_enabled: bool = False
+    companion_world_feed_image_enabled: bool = False
+    companion_world_resident_wish_enabled: bool = False
 
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。

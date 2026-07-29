@@ -62,6 +62,7 @@ __all__ = [
     "list_residents",
     "list_resident_details_for_owner",
     "create_ai_conversation",
+    "insert_resident_welcome_message",
     "get_conversation",
     "resolve_conversation_for_owner",
     "list_conversations_for_owner",
@@ -83,6 +84,7 @@ __all__ = [
     "claim_ai_feed_slot",
     "get_universe_post_for_owner",
     "publish_user_feed_post_with_outbox",
+    "publish_resident_intro_post_with_outbox",
     "list_published_feed_posts_for_owner",
     "retire_feed_post_with_outbox",
     "publish_ai_feed_post_with_outbox",
@@ -780,6 +782,7 @@ def list_resident_details_for_owner(
                 r.id AS resident_id, r.universe_id, r.character_template_id,
                 r.template_version, r.runtime_account_id, r.origin, r.status,
                 COALESCE(p.display_name, t.name) AS name, t.avatar_ref,
+                t.persona_key,
                 c.id AS conversation_id, c.state AS conversation_state
             FROM universe_residents r
             JOIN universes u ON u.id = r.universe_id
@@ -843,6 +846,64 @@ def create_ai_conversation(
     if any(str(result[key]) != str(value) for key, value in expected.items()):
         raise ValueError("resident conversation ownership mismatch")
     return result
+
+
+def insert_resident_welcome_message(
+    *,
+    runtime_account_id: str,
+    resident_id: str,
+    text: str,
+    conn: Connection,
+) -> bool:
+    """在新居民的 App 会话里落一条欢迎语，作为第一条 assistant 消息（CONTENT-001）。
+
+    必须在调用方事务内执行：建号、激活、建会话与这条消息要么一起成功要么一起回滚，绝不
+    出现「有居民但没有开场白」的中间态。所以这里**不能**调
+    ``get_or_create_account_active_session``——它自己 ``connect()`` 开新连接，SQLite 下与
+    外层写事务互锁、PG 下看不到尚未提交的 account 行。
+
+    改为就地 upsert ``__app_active__`` session：其余字段留空，等真实一轮对话用
+    ``COALESCE`` 补齐；``business_day`` 留 NULL 也不会被判成跨业务日而触发会话轮转。
+
+    幂等锚是 ``ux_messages_account_message``（UNIQUE(account_id, message_id)）：
+    ``message_id`` 由 resident id 决定，重放时 ``insert_message`` 吞掉冲突返回 None。
+    返回值表示**本次是否真的写入**，供调用方区分首次与重放。
+    """
+    from app.db.accounts import insert_message
+
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return False
+    conn.execute(
+        """
+        INSERT INTO sessions(account_id, session_key, metadata_json, updated_at)
+        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        ON CONFLICT(account_id, session_key) DO NOTHING
+        """,
+        (
+            runtime_account_id,
+            APP_ACTIVE_SESSION_KEY,
+            json.dumps({"created_reason": "resident_welcome"}, ensure_ascii=False),
+        ),
+    )
+    session = conn.execute(
+        "SELECT id FROM sessions WHERE account_id = ? AND session_key = ?",
+        (runtime_account_id, APP_ACTIVE_SESSION_KEY),
+    ).fetchone()
+    if session is None:  # 理论不可达
+        raise RuntimeError("app active session was not created")
+    inserted = insert_message(
+        account_id=runtime_account_id,
+        session_id=int(session["id"]),
+        message_id=f"welcome-{resident_id}",
+        reply_to_message_id=None,
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content=clean_text,
+        conn=conn,
+    )
+    return inserted is not None
 
 
 def get_conversation(
@@ -1848,6 +1909,93 @@ def publish_user_feed_post_with_outbox(
         if result is None:
             raise RuntimeError("published user post disappeared")
     return result, created
+
+
+def publish_resident_intro_post_with_outbox(
+    *,
+    universe_id: str,
+    author_resident_id: str,
+    text: str,
+    published_at: str,
+    conn: Connection,
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """发布一条居民自我介绍动态并挂 published outbox（CONTENT-002）。
+
+    与 ``ai_feed`` 的「先 claim 再 publish」两步不同：这条动态的正文是运营定稿文案、不过
+    LLM，没有生成失败与超窗需要表达，因此一步直接落 ``published``。
+
+    刻意**不复核** ``onboarding_state='confirmed'``：确认候选的事务里居民先激活、世界的
+    onboarding_state 最后才置 confirmed，若在此复核会把首次确认整体打回。归属与可见性仍受
+    约束——``author_resident_id`` 必须属于本 universe 且 ``status='active'``，世界必须 active。
+
+    幂等由 ``ux_universe_posts_resident_intro``（m0053，``WHERE source_type='resident_intro'``）
+    裁决：重放返回既有行、``created=False``。前置不满足时返回 ``(None, False)``，由调用方跳过
+    ——一条自我介绍动态不值得让整次确认失败。
+    """
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        raise ValueError("text is required")
+    post_id = _new_id("post")
+    with _m3_write_tx(conn) as tx:
+        tx.execute(
+            """
+            INSERT INTO universe_posts(
+                id, universe_id, author_type, author_resident_id,
+                source_type, content_type, text, status, published_at
+            )
+            SELECT ?, u.id, 'resident', r.id, 'resident_intro', 'text', ?, 'published', ?
+            FROM universes u
+            JOIN universe_residents r ON r.universe_id = u.id
+            WHERE u.id = ? AND u.status = 'active'
+              AND r.id = ? AND r.status = 'active'
+            ON CONFLICT DO NOTHING
+            """,
+            (post_id, clean_text, published_at, universe_id, author_resident_id),
+        )
+        post = tx.execute(
+            """
+            SELECT * FROM universe_posts
+            WHERE universe_id = ? AND author_resident_id = ?
+              AND source_type = 'resident_intro'
+            """,
+            (universe_id, author_resident_id),
+        ).fetchone()
+        if post is None:
+            return None, False
+        post_row = dict(post)
+        created = str(post_row["id"]) == post_id
+
+        payload_json = json.dumps(
+            {
+                "v": 1,
+                "post_id": post_row["id"],
+                "universe_id": post_row["universe_id"],
+                "source_type": post_row["source_type"],
+                "published_at": post_row["published_at"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        outbox_key = f"world-post-published:v1:{post_row['id']}"
+        tx.execute(
+            """
+            INSERT INTO companion_world_outbox(
+                id, universe_id, post_id, event_type, idempotency_key,
+                payload_json, status, available_at
+            ) VALUES (?, ?, ?, 'universe_post.published.v1', ?, ?, 'pending', ?)
+            ON CONFLICT(idempotency_key) DO NOTHING
+            """,
+            (
+                _new_id("wout"),
+                post_row["universe_id"],
+                post_row["id"],
+                outbox_key,
+                payload_json,
+                post_row["published_at"],
+            ),
+        )
+    return post_row, created
 
 
 def list_published_feed_posts_for_owner(

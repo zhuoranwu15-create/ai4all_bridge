@@ -83,6 +83,9 @@ class ResidentRecord:
     avatar_ref: Optional[str]
     conversation_id: str
     conversation_state: str
+    # 模板人设身份（跨模板换版稳定）。App DTO 只用它推导使命展示形态（CONTENT-004），
+    # 不直接下发——下发 persona_key 等于把「按角色分支」的能力重新交回客户端。
+    persona_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -489,6 +492,14 @@ class WorldRepository(Protocol):
         owner_platform_user_id: str,
         display_name: str,
     ) -> ResidentRecord: ...
+
+    def seed_resident_intro(
+        self,
+        resident: ResidentRecord,
+        *,
+        welcome_message: str,
+        intro_post: str,
+    ) -> None: ...
 
     def dismiss_unselected_candidates(
         self, universe_id: str, selected_template_ids: Sequence[str]

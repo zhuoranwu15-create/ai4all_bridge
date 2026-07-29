@@ -24,6 +24,7 @@ from app.db._core import (
     _migration_0050_ai_conversation_read_cursor,
     _migration_0051_app_me_tab,
     _migration_0052_human_conversation_read_cursor,
+    _migration_0053_resident_intro_post,
 )
 
 _P1_TABLES = (
@@ -77,14 +78,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        52,
-        _migration_0052_human_conversation_read_cursor,
+        53,
+        _migration_0053_resident_intro_post,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 52
+        assert int(version) == 53
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -505,6 +506,42 @@ def test_m0052_human_read_cursor_schema_and_idempotency(fresh_db):
             "SELECT owner_last_read_sequence, visitor_last_read_sequence "
             "FROM human_conversations WHERE 1 = 0"
         ).fetchall()
+
+
+def test_m0053_resident_intro_index_and_idempotency(fresh_db):
+    """m0053：自我介绍动态的偏唯一索引可用，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0053_resident_intro_post(conn)
+        _migration_0053_resident_intro_post(conn)
+
+    pu = _pu("19911110053")
+    universe = db.get_or_create_home_universe(platform_user_id=pu)
+    template = db.create_character_template(
+        source_type="operations", name="人设", persona_version="v1"
+    )
+    resident = db.create_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        status="active",
+        runtime_account_id=_runtime_account(),
+    )
+    with db.connect() as conn:
+        rows = [
+            db.publish_resident_intro_post_with_outbox(
+                universe_id=universe["id"],
+                author_resident_id=resident["id"],
+                text=f"介绍 {index}",
+                published_at="2026-07-29 10:00:00",
+                conn=conn,
+            )
+            for index in range(2)
+        ]
+    # 同一居民只允许一条 resident_intro：第二次落到既有行、created=False。
+    assert rows[0][1] is True and rows[1][1] is False
+    assert rows[0][0]["id"] == rows[1][0]["id"]
+    assert rows[1][0]["text"] == "介绍 0"
 
 
 def test_candidate_naming_snapshot_is_written_once(fresh_db):
