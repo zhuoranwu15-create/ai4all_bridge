@@ -330,10 +330,11 @@ def nooki_chat(
         user_message, assistant_message = NookiConversationRepository().get_message_pair(
             conversation=conversation, inbound_message_id=mapped_message_id
         )
+        public_reply = duplicate_reply if assistant_message is not None else None
         return {
             "status": "ok",
-            "reply": duplicate_reply,
-            "no_reply": False,
+            "reply": public_reply,
+            "no_reply": public_reply is None,
             "state": state,
             "cards": cards,
             "later_items": NookiLaterItemRepository().list_items(
@@ -362,10 +363,11 @@ def nooki_chat(
             user_message, assistant_message = NookiConversationRepository().get_message_pair(
                 conversation=conversation, inbound_message_id=mapped_message_id
             )
+            public_reply = duplicate_reply if assistant_message is not None else None
             return {
                 "status": "ok",
-                "reply": duplicate_reply,
-                "no_reply": False,
+                "reply": public_reply,
+                "no_reply": public_reply is None,
                 "state": state,
                 "cards": cards,
                 "later_items": NookiLaterItemRepository().list_items(

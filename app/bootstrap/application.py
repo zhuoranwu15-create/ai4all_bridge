@@ -24,6 +24,13 @@ _LOCAL_ONLY_DEBUG_UI_PATHS = {
 }
 
 
+def _configure_logging() -> None:
+    """初始化应用日志，并避免 httpx 在 INFO 日志中记录敏感 URL 查询参数。"""
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
 class ApiPrefixStripMiddleware:
     """对齐 nginx 的 /api 与 /ops 反代前缀，同时保留规范产品 API。"""
 
@@ -60,7 +67,7 @@ class ApiPrefixStripMiddleware:
 def create_app() -> FastAPI:
     """创建并显式组合共享平台与已注册产品。"""
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    _configure_logging()
     app = FastAPI(title="AI4ALL Weixin Bot", version="0.1.0")
 
     @app.middleware("http")

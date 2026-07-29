@@ -32,3 +32,4 @@ nearline/data/cron.log
 .claude/
 .specify/
 lark_sync.sh
+.idea/

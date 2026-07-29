@@ -7,6 +7,8 @@ from typing import Optional
 from app.db import APP_ACTIVE_SESSION_KEY, connect
 from app.db._backend import IntegrityError
 
+CARD_ONLY_MESSAGE_TYPE = "nooki_card_only"
+
 
 def _new_conversation_id() -> str:
     return f"conv_{uuid.uuid4().hex}"
@@ -128,6 +130,8 @@ class NookiConversationRepository:
             APP_ACTIVE_SESSION_KEY,
             len(prefix),
             prefix,
+            CARD_ONLY_MESSAGE_TYPE,
+            conversation["platform_user_id"],
         ]
         if cursor_id is not None:
             params.append(cursor_id)
@@ -142,6 +146,14 @@ class NookiConversationRepository:
                 WHERE m.account_id = ? AND s.account_id = ?
                   AND (s.session_key = ? OR substr(s.session_key, 1, ?) = ?)
                   AND m.role IN ('user', 'assistant')
+                  AND m.message_type != ?
+                  AND NOT (
+                    m.role = 'assistant' AND EXISTS (
+                      SELECT 1 FROM nooki_tasks task
+                      WHERE task.platform_user_id = ?
+                        AND task.source_message_id = m.reply_to_message_id
+                    )
+                  )
                   AND m.content IS NOT NULL AND m.content != ''
                   {cursor_clause}
                 ORDER BY m.id {order}
@@ -164,15 +176,43 @@ class NookiConversationRepository:
             outbound = conn.execute(
                 """
                 SELECT id, message_id, reply_to_message_id, role, message_type, content, created_at
-                FROM messages WHERE account_id = ? AND reply_to_message_id = ? AND role = 'assistant'
+                FROM messages
+                WHERE account_id = ? AND reply_to_message_id = ? AND role = 'assistant'
+                  AND message_type != ?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM nooki_tasks task
+                    WHERE task.platform_user_id = ?
+                      AND task.source_message_id = messages.reply_to_message_id
+                  )
                 ORDER BY id DESC LIMIT 1
                 """,
-                (runtime_account_id, inbound_message_id),
+                (
+                    runtime_account_id,
+                    inbound_message_id,
+                    CARD_ONLY_MESSAGE_TYPE,
+                    conversation["platform_user_id"],
+                ),
             ).fetchone()
         return (
             _public_message(inbound) if inbound else None,
             _public_message(outbound) if outbound else None,
         )
+
+    def mark_assistant_card_only(
+        self, *, runtime_account_id: str, inbound_message_id: str
+    ) -> bool:
+        """把结构化卡片回合的模型复述保留为内部上下文，但从 Nooki 时间线隐藏。"""
+
+        with connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE messages
+                SET message_type = ?
+                WHERE account_id = ? AND reply_to_message_id = ? AND role = 'assistant'
+                """,
+                (CARD_ONLY_MESSAGE_TYPE, runtime_account_id, inbound_message_id),
+            )
+        return bool(cursor.rowcount)
 
     def latest_cursor(self, *, conversation: dict) -> Optional[str]:
         runtime_account_id = conversation["runtime_account_id"]

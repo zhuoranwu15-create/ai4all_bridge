@@ -439,6 +439,8 @@ class Settings(BaseSettings):
     # Nooki 微信小程序静默登录（jscode2session + 手机号一键组件解密）
     nooki_wx_appid: str = ""
     nooki_wx_app_secret: str = ""
+    # 临时联调开关：未绑定 OpenID 可跳过手机号自动建立测试账号。
+    nooki_wx_openid_test_login_enabled: bool = False
 
     # Nooki 产品总开关：未完成前保持 false。
     # 关闭时：Nooki 路由不挂载、不能签发 Nooki session、不能创建 Nooki membership/account。

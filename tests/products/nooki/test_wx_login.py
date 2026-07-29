@@ -82,8 +82,11 @@ def test_session_renews_for_bound_openid(fresh_db, monkeypatch):
     assert session_result["access_token"] != bind_result["access_token"]
 
 
-def test_session_rejects_unbound_openid(fresh_db, monkeypatch):
+def test_session_rejects_unbound_openid_when_test_login_disabled(fresh_db, monkeypatch):
     monkeypatch.setattr(auth_module, "code2session", _fake_code2session("openid-never-bound"))
+    monkeypatch.setattr(
+        auth_module.settings, "nooki_wx_openid_test_login_enabled", False
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         auth_module.nooki_auth_session(
@@ -92,6 +95,27 @@ def test_session_rejects_unbound_openid(fresh_db, monkeypatch):
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "wx_identity_not_bound"
+
+
+def test_session_auto_provisions_unbound_openid_in_test_mode(fresh_db, monkeypatch):
+    monkeypatch.setattr(auth_module, "code2session", _fake_code2session("openid-test-mode"))
+    monkeypatch.setattr(
+        auth_module.settings, "nooki_wx_openid_test_login_enabled", True
+    )
+
+    first = auth_module.nooki_auth_session(
+        auth_module.WxSessionRequest(login_code="js-code-test-1"), Response()
+    )
+    second = auth_module.nooki_auth_session(
+        auth_module.WxSessionRequest(login_code="js-code-test-2"), Response()
+    )
+
+    assert first["status"] == "ok"
+    assert first["test_login"] is True
+    assert second["platform_user_id"] == first["platform_user_id"]
+    assert find_platform_user_id_by_openid(
+        wx_appid=_WX_APPID, openid="openid-test-mode"
+    ) == first["platform_user_id"]
 
 
 def test_bind_translates_wechat_error_to_400(fresh_db, monkeypatch):

@@ -1,0 +1,42 @@
+{
+  "$version": "1.0",
+  "type": "object",
+  "required": ["reply", "intent", "tasks", "execution_mode", "confidence"],
+  "properties": {
+    "reply": { "type": "string", "description": "对用户的自然语言回复（简短、温暖）" },
+    "intent": {
+      "type": "string",
+      "enum": ["single_task", "multiple_tasks", "clarification_needed", "non_task"],
+      "description": "意图类型"
+    },
+    "tasks": {
+      "type": "array",
+      "description": "识别出的任务列表",
+      "items": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title": { "type": "string", "description": "任务标题" },
+          "estimated_minutes": { "type": "number", "description": "预估完成时间（分钟），不确定时为 0", "minimum": 0 }
+        }
+      }
+    },
+    "execution_mode": {
+      "type": "string",
+      "enum": ["step_by_step", "all_at_once", "unknown"],
+      "description": "建议的执行模式"
+    },
+    "confidence": { "type": "number", "description": "对意图理解的置信度", "minimum": 0, "maximum": 1 },
+    "recommendations": {
+      "type": "array",
+      "description": "对业务方的建议（suggestions only，调用方决定是否执行）",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "description": "建议类型，如 suggest_create_task" },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

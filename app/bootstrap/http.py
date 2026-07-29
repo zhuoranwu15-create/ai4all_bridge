@@ -9,9 +9,10 @@ from app.config import settings
 def install_shared_routes(app: FastAPI) -> None:
     """挂载所有部署角色都需要的共享健康检查。"""
 
-    from app.routers import health
+    from app.routers import agent, health
 
     app.include_router(health.router)
+    app.include_router(agent.router)
 
 
 def install_central_routes(app: FastAPI) -> None:

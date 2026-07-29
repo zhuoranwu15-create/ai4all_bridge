@@ -10,6 +10,9 @@ from app.products.nooki.application.turns import run_nooki_turn
 from app.products.nooki.domain.goal_breakdown.contracts import PlanDraft
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.infrastructure.repositories.conversation import (
+    NookiConversationRepository,
+)
 from app.products.nooki.infrastructure.repositories.user_profile import set_explicit_preferences
 
 import app.db as db
@@ -29,11 +32,20 @@ def _make_account(phone: str):
     return user, account
 
 
-def _run_turn(account_id: str, text: str, monkeypatch, captured: dict):
+def _run_turn(
+    account_id: str,
+    text: str,
+    monkeypatch,
+    captured: dict,
+    *,
+    detected_tools=(),
+):
     def fake_generate_reply_with_tools(**kwargs):
         captured["tool_names"] = {schema["function"]["name"] for schema in kwargs["tools"]}
         captured["context_app_id"] = kwargs["ctx"].app_id
         captured["system_prompt"] = kwargs["system_prompt"]
+        if detected_tools:
+            kwargs["on_tool_detected"](list(detected_tools))
         return "陪伴回复", None
 
     monkeypatch.setattr("app.turn_service.generate_reply_with_tools", fake_generate_reply_with_tools)
@@ -85,6 +97,77 @@ def test_nooki_turn_exposes_only_goal_breakdown_tools(fresh_db, monkeypatch):
         "nooki_list_state",
     }
     assert "用户目前没有进行中的任务" in captured["system_prompt"]
+
+
+def test_card_tool_reply_is_not_exposed_as_chat_message(fresh_db, monkeypatch):
+    user, account = _make_account("13800038004")
+    conversations = NookiConversationRepository()
+    conversation = conversations.get_or_create_active(
+        platform_user_id=user["id"], runtime_account_id=account["id"]
+    )
+    GoalBreakdownService(SqlTaskRepository()).create_task_with_options(
+        platform_user_id=user["id"],
+        title="跑步",
+        raw_goal="我要跑步",
+        options=(
+            PlanDraft(mode="tiny", title="穿上运动鞋", estimated_minutes=1),
+            PlanDraft(mode="light", title="出门热身", estimated_minutes=5),
+            PlanDraft(mode="normal", title="慢跑十五分钟", estimated_minutes=15),
+        ),
+        source_message_id="nooki-msg-我要跑步",
+        operation_id="test:create:running",
+    )
+
+    response = _run_turn(
+        account["id"],
+        "我要跑步",
+        monkeypatch,
+        {},
+        detected_tools=("nooki_create_task_with_options",),
+    )
+
+    assert response.reply is None
+    assert response.no_reply is True
+    user_message, assistant_message = conversations.get_message_pair(
+        conversation=conversation,
+        inbound_message_id="nooki-msg-我要跑步",
+    )
+    assert user_message["content"] == "我要跑步"
+    assert assistant_message is None
+    messages, _ = conversations.list_messages_after(
+        conversation=conversation,
+        after_id=0,
+    )
+    assert [message["role"] for message in messages] == ["user"]
+
+
+def test_legacy_task_creation_reply_is_hidden_from_history(fresh_db, monkeypatch):
+    user, account = _make_account("13800038005")
+    conversations = NookiConversationRepository()
+    conversation = conversations.get_or_create_active(
+        platform_user_id=user["id"], runtime_account_id=account["id"]
+    )
+    GoalBreakdownService(SqlTaskRepository()).create_task_with_options(
+        platform_user_id=user["id"],
+        title="跑步",
+        raw_goal="我要跑步",
+        options=(
+            PlanDraft(mode="tiny", title="穿上运动鞋", estimated_minutes=1),
+            PlanDraft(mode="light", title="出门热身", estimated_minutes=5),
+            PlanDraft(mode="normal", title="慢跑十五分钟", estimated_minutes=15),
+        ),
+        source_message_id="nooki-msg-旧版跑步",
+        operation_id="test:create:legacy-running",
+    )
+
+    response = _run_turn(account["id"], "旧版跑步", monkeypatch, {})
+    assert response.reply == "陪伴回复"
+
+    messages, _ = conversations.list_messages_after(
+        conversation=conversation,
+        after_id=0,
+    )
+    assert [message["role"] for message in messages] == ["user"]
 
 
 def test_nooki_turn_soul_reflects_archetype_and_companion_name(fresh_db, monkeypatch):

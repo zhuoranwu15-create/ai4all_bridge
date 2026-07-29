@@ -14,6 +14,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 
@@ -57,6 +59,33 @@ def _create_session(platform_user_id: str) -> dict:
         )
     except ValueError as err:
         raise HTTPException(status_code=403, detail="product_membership_disabled") from err
+
+
+def _openid_test_phone(*, wx_appid: str, openid: str) -> str:
+    """生成稳定的临时手机号占位值；只在 OpenID 测试开关开启时使用。"""
+
+    digest = hashlib.sha256(f"{wx_appid}:{openid}".encode("utf-8")).digest()
+    suffix = int.from_bytes(digest[:8], "big") % 100_000_000
+    return f"199{suffix:08d}"
+
+
+def _provision_openid_test_user(wx_session: dict) -> str:
+    """为未绑定 OpenID 幂等建立临时 Nooki 用户并返回实际 owner。"""
+
+    wx_appid = _wx_appid()
+    registration = register_platform_user_with_referral(
+        phone=_openid_test_phone(wx_appid=wx_appid, openid=wx_session["openid"]),
+        display_name="Nooki OpenID test user",
+        invite_code=None,
+        verified_token=None,
+        app_id=NOOKI_APP_ID,
+    )
+    return bind_wx_identity(
+        platform_user_id=registration["platform_user"]["id"],
+        wx_appid=wx_appid,
+        openid=wx_session["openid"],
+        unionid=wx_session.get("unionid"),
+    )
 
 
 class WxBindRequest(BaseModel):
@@ -142,7 +171,12 @@ def nooki_auth_session(payload: WxSessionRequest, response: Response) -> dict:
         wx_appid=_wx_appid(), openid=wx_session["openid"]
     )
     if platform_user_id is None:
-        raise HTTPException(status_code=404, detail="wx_identity_not_bound")
+        if not settings.nooki_wx_openid_test_login_enabled:
+            raise HTTPException(status_code=404, detail="wx_identity_not_bound")
+        try:
+            platform_user_id = _provision_openid_test_user(wx_session)
+        except ValueError as err:
+            raise HTTPException(status_code=400, detail=str(err)) from err
 
     session = _create_session(platform_user_id)
     _no_store(response)
@@ -150,6 +184,8 @@ def nooki_auth_session(payload: WxSessionRequest, response: Response) -> dict:
         "status": "ok",
         "access_token": session["token"],
         "expires_at": session["expires_at"],
+        "platform_user_id": platform_user_id,
+        "test_login": bool(settings.nooki_wx_openid_test_login_enabled),
     }
 
 

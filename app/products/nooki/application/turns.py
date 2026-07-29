@@ -18,7 +18,16 @@ from app.db import get_platform_user_id_for_account
 from app.products.nooki.application.turn_services import NOOKI_TURN_SERVICES
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.infrastructure.repositories.conversation import (
+    NookiConversationRepository,
+)
 from app.products.nooki.infrastructure.repositories.later_items import NookiLaterItemRepository
+
+
+_CARD_ONLY_CREATE_TOOLS = {
+    "nooki_create_task_with_options",
+    "nooki_convert_later_item_with_options",
+}
 
 
 def _focus_task_block_text(platform_user_id: str) -> str:
@@ -79,7 +88,37 @@ def run_nooki_turn(ctx: ChannelTurnInput):
             ContextBlock(name="nooki_focus_task", text=focus_text, trim_priority=70),
             ContextBlock(name="nooki_later_items", text=later_text, trim_priority=60),
         ]
-    return run_product_turn(ctx, product_services=NOOKI_TURN_SERVICES)
+    result = run_product_turn(ctx, product_services=NOOKI_TURN_SERVICES)
+    tool_names = {
+        str(name)
+        for name in (result.metadata.get("tool_names_used") or [])
+        if str(name or "").strip()
+    }
+    if platform_user_id and tool_names.intersection(_CARD_ONLY_CREATE_TOOLS):
+        projection = GoalBreakdownService(SqlTaskRepository()).get_authoritative_state(
+            platform_user_id
+        )
+        task = projection.focus_task
+        if (
+            task is not None
+            and task.source_message_id == ctx.message_id
+            and ctx.message_id
+            and NookiConversationRepository().mark_assistant_card_only(
+                runtime_account_id=ctx.account_id,
+                inbound_message_id=ctx.message_id,
+            )
+        ):
+            return result.model_copy(
+                update={
+                    "reply": None,
+                    "no_reply": True,
+                    "metadata": {
+                        **result.metadata,
+                        "nooki_card_only": True,
+                    },
+                }
+            )
+    return result
 
 
 __all__ = ["run_nooki_turn"]

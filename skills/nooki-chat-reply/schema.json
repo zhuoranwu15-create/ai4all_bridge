@@ -1,0 +1,33 @@
+{
+  "$version": "1.0",
+  "type": "object",
+  "required": ["reply", "suggestedAction"],
+  "properties": {
+    "reply": {
+      "type": "string",
+      "description": "对话回复（60字以内，以角色身份说话）"
+    },
+    "suggestedAction": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["none", "create_task_plan", "create_step_options", "single_task_intent", "capture_later_item", "mark_completed", "shrink_action"]
+        },
+        "payload": {
+          "type": "object",
+          "properties": {
+            "taskTitle": {
+              "type": "string",
+              "description": "mark_completed 时，从当前消息或最近对话解析出的实际完成任务名"
+            }
+          }
+        },
+        "originalGoal": {"type": "string"},
+        "options": {"type": "array"},
+        "planDraft": {"type": "object"}
+      }
+    }
+  }
+}

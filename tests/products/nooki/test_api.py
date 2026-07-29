@@ -5,6 +5,7 @@ from app.products.nooki.api import auth as auth_module
 from app.products.nooki.domain.goal_breakdown.contracts import PlanDraft
 from app.products.nooki.domain.goal_breakdown.service import GoalBreakdownService
 from app.products.nooki.infrastructure.repositories.goal_breakdown import SqlTaskRepository
+from app.products.nooki.tools.handlers import handle_nooki_create_task_with_options
 
 _PREFIX = "/api/v1/products/nooki"
 
@@ -155,6 +156,57 @@ def test_state_and_chat_share_authoritative_view(client, monkeypatch):
     ).json()
     assert [item["role"] for item in synced["messages"]] == ["user", "assistant"]
     assert synced["conversation_id"] == conversation_id
+
+
+def test_card_tool_chat_omits_repeated_assistant_text(client, monkeypatch):
+    bound = _bind(client, monkeypatch, openid="openid-card-only", phone="13900011104")
+    headers = _headers(bound["access_token"])
+    bootstrap = _bootstrap(client, bound["access_token"])
+    conversation_id = bootstrap["conversation"]["conversation_id"]
+
+    def generate_card_reply(**kwargs):
+        kwargs["on_tool_detected"](["nooki_create_task_with_options"])
+        result = handle_nooki_create_task_with_options(
+            {
+                "title": "跑步",
+                "raw_goal": "我要跑步",
+                "options": [
+                    {"mode": "tiny", "title": "穿上运动鞋", "estimated_minutes": 1},
+                    {"mode": "light", "title": "出门热身", "estimated_minutes": 5},
+                    {"mode": "normal", "title": "慢跑十五分钟", "estimated_minutes": 15},
+                ],
+            },
+            kwargs["ctx"],
+        )
+        assert result["status"] == "ok"
+        return "这里是本不应展示的方案复述", None
+
+    monkeypatch.setattr("app.turn_service.generate_reply_with_tools", generate_card_reply)
+
+    payload = {
+        "conversation_id": conversation_id,
+        "text": "我要跑步",
+        "client_message_id": "client-card-only-1",
+    }
+    first = client.post(f"{_PREFIX}/chat", json=payload, headers=headers)
+    assert first.status_code == 200
+    assert first.json()["reply"] is None
+    assert first.json()["no_reply"] is True
+    assert first.json()["assistant_message"] is None
+    assert first.json()["cards"][0]["type"] == "plan_options"
+
+    duplicate = client.post(f"{_PREFIX}/chat", json=payload, headers=headers)
+    assert duplicate.status_code == 200
+    assert duplicate.json()["reply"] is None
+    assert duplicate.json()["no_reply"] is True
+    assert duplicate.json()["assistant_message"] is None
+
+    synced = client.get(
+        f"{_PREFIX}/sync",
+        params={"conversation_id": conversation_id, "after_cursor": "0"},
+        headers=headers,
+    ).json()
+    assert [message["role"] for message in synced["messages"]] == ["user"]
 
 
 def test_conversation_is_stable_and_isolated(client, monkeypatch):
