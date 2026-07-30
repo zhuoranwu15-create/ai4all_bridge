@@ -9,7 +9,7 @@ import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -51,6 +51,8 @@ from app.platform.media.persistence import (
     list_media_assets_unscoped,
 )
 from app.platform.media.view import (
+    CONTENT_TYPE_IMAGE,
+    build_feed_image_item,
     build_media_content,
     build_stored_content,
     decode_stored_content,
@@ -66,6 +68,7 @@ from app.platform.moderation.text_sanitizer import (
     sanitize_text,
 )
 from app.products.zhaoxi.domain.companion_world import (
+    MAX_FEED_POST_IMAGES,
     CandidateRecord,
     CompanionWorldError,
     CompanionWorldFeedService,
@@ -324,15 +327,23 @@ class FeedPostPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_request_id: str = Field(min_length=8, max_length=128)
-    text: str
+    # v1.5：``text`` 默认空串以支持"只发图"；不带 media_refs 时仍要求非空正文——
+    # 那是 v1.5 之前的载荷形状，它的 422 已是冻结行为，不能因为加了图片能力就变。
+    text: str = ""
+    media_refs: List[str] = Field(default_factory=list, max_length=MAX_FEED_POST_IMAGES)
 
     @model_validator(mode="after")
     def _clean_feed_post(self) -> "FeedPostPayload":
         self.client_request_id = self.client_request_id.strip()
         self.text = self.text.strip()
+        self.media_refs = [str(ref or "").strip() for ref in self.media_refs]
         if not _FEED_CLIENT_REQUEST_ID_RE.fullmatch(self.client_request_id):
             raise ValueError("invalid client_request_id")
-        if not self.text or len(self.text) > 2000:
+        if any(not ref or len(ref) > 64 for ref in self.media_refs):
+            raise ValueError("invalid media_ref")
+        if len(self.text) > 2000:
+            raise ValueError("invalid feed text")
+        if not self.text and not self.media_refs:
             raise ValueError("invalid feed text")
         return self
 
@@ -500,6 +511,67 @@ def resolve_chat_media(*, media_ref: str, platform_user_id: str) -> Dict[str, An
     return asset
 
 
+def feed_image_enabled() -> bool:
+    """图文动态门控；与聊天图片分开，运营可以只放开一侧。"""
+    return bool(getattr(settings, "companion_world_feed_image_enabled", False))
+
+
+def resolve_feed_media(*, media_ref: str, platform_user_id: str) -> Dict[str, Any]:
+    """把动态里的 ``media_ref`` 解析成一条可发布的图片资产行。
+
+    与 :func:`resolve_chat_media` 同构（owner 锚定、状态与回收期、``referenced`` 放行留给
+    发布事务里的原子认领独家把守），两点差别：门控走 feed 开关，且**只收图片**——动态不支持
+    语音，把语音资产挂上去在这里就拒（合并成同一个 ``media_ref_invalid``，不给 kind 探测信号）。
+    """
+    asset = get_media_asset(
+        media_id=media_ref, owner_platform_user_id=platform_user_id
+    )
+    if asset is None:
+        raise CompanionWorldApiError("media_ref_invalid")
+    if not feed_image_enabled():
+        raise CompanionWorldApiError("media_disabled")
+    if str(asset.get("kind") or "") != MEDIA_KIND_IMAGE:
+        raise CompanionWorldApiError("media_ref_invalid")
+    if str(asset.get("status") or "") not in {
+        MEDIA_STATUS_PENDING,
+        MEDIA_STATUS_REFERENCED,
+    }:
+        raise CompanionWorldApiError("media_ref_invalid")
+    expires_at = str(asset.get("expires_at") or "")
+    if expires_at and expires_at <= beijing_now().strftime("%Y-%m-%d %H:%M:%S"):
+        raise CompanionWorldApiError("media_ref_expired")
+    return asset
+
+
+def build_feed_content(
+    *,
+    text: Optional[str],
+    media_ids: Sequence[str],
+    assets: Dict[str, Dict[str, Any]],
+    scope: str,
+    ttl_seconds: int,
+) -> Dict[str, Any]:
+    """按 D-1 投影一条动态的 ``content``；主人与访客两条读路径共用。
+
+    ``scope``/``ttl_seconds`` 由调用方按"看的人是谁"给定（主人 ``pu:``、访客 ``visit:``），
+    本函数不猜。资产行全丢失（回收竞态/人工删除）时降级成纯文本动态而不是空 ``images``，
+    免得客户端渲染出一个没有任何内容的图文卡片。
+    """
+    items: List[Dict[str, Any]] = []
+    for media_id in media_ids:
+        asset = assets.get(str(media_id))
+        if asset is None:
+            continue
+        item = build_feed_image_item(
+            asset=asset, scope=scope, ttl_seconds=ttl_seconds
+        )
+        if item is not None:
+            items.append(item)
+    if not items:
+        return text_content(text)
+    return {"type": CONTENT_TYPE_IMAGE, "text": str(text or ""), "images": items}
+
+
 def _ai_message_data(
     item,
     *,
@@ -625,8 +697,30 @@ def _feed_time(value: Optional[str]) -> Optional[str]:
     return parsed.replace(tzinfo=_BEIJING_TZ).isoformat()
 
 
-def _feed_item_data(item) -> dict:
-    """序列化 Feed 公开 DTO，不泄漏 owner/runtime/fingerprint/outbox 字段。"""
+def _feed_item_data(
+    item,
+    *,
+    assets: Optional[Dict[str, Dict[str, Any]]] = None,
+    scope: Optional[str] = None,
+    ttl_seconds: int = 0,
+) -> dict:
+    """序列化 Feed 公开 DTO，不泄漏 owner/runtime/fingerprint/outbox 字段。
+
+    ``assets``/``scope`` 缺省时按纯文本投影：AI 动态与发布响应之外的路径不带图，不必为了
+    形状统一去多查一次库。
+    """
+    content = (
+        build_feed_content(
+            text=item.text,
+            media_ids=item.media_ids,
+            assets=assets,
+            scope=scope,
+            ttl_seconds=ttl_seconds,
+        )
+        if item.media_ids and assets is not None and scope
+        # 无图动态保持 v1 形状原样（``text`` 允许为 null，不改成空串）。
+        else {"type": "text", "text": item.text}
+    )
     return {
         "post_id": item.id,
         "author": {
@@ -635,7 +729,7 @@ def _feed_item_data(item) -> dict:
             "name": item.author_name,
             "avatar_ref": item.author_avatar_ref,
         },
-        "content": {"type": "text", "text": item.text},
+        "content": content,
         "post_type": item.post_type,
         "source": item.source_type,
         "published_at": _feed_time(item.published_at),
@@ -949,12 +1043,24 @@ def list_home_feed(
         )
     )
     page = rows[:limit]
+    # 一次批量取本页所有图，避免逐条查库；主人自己的 Feed 恒用 owner scope 签 URL。
+    assets = list_media_assets_unscoped(
+        media_ids=[media_id for item in page for media_id in item.media_ids]
+    )
     _no_store(response)
     return _envelope(
         request,
         code="ok",
         data={
-            "items": [_feed_item_data(item) for item in page],
+            "items": [
+                _feed_item_data(
+                    item,
+                    assets=assets,
+                    scope=owner_scope(principal.platform_user_id),
+                    ttl_seconds=owner_ttl_seconds(),
+                )
+                for item in page
+            ],
             "next_cursor": (
                 _encode_feed_cursor(page[-1]) if len(rows) > limit and page else None
             ),
@@ -973,12 +1079,23 @@ def publish_home_feed_post(
     response: Response,
     principal: SessionPrincipal = Depends(_require_feed_session),
 ) -> dict:
+    # 先逐个解析 media_ref（门控/归属/回收期），再进发布事务；真正的认领在事务内完成。
+    assets = {
+        str(asset["id"]): asset
+        for asset in (
+            resolve_feed_media(
+                media_ref=media_ref, platform_user_id=principal.platform_user_id
+            )
+            for media_ref in payload.media_refs
+        )
+    }
     post, created = _run_domain(
         lambda: _feed_service().publish_user_post(
             principal.platform_user_id,
             client_request_id=payload.client_request_id,
             text=payload.text,
             published_at=beijing_now().strftime("%Y-%m-%d %H:%M:%S"),
+            media_ids=payload.media_refs,
         )
     )
     response.status_code = 201 if created else 200
@@ -986,7 +1103,14 @@ def publish_home_feed_post(
     return _envelope(
         request,
         code="ok",
-        data={"post": _feed_item_data(post)},
+        data={
+            "post": _feed_item_data(
+                post,
+                assets=assets,
+                scope=owner_scope(principal.platform_user_id),
+                ttl_seconds=owner_ttl_seconds(),
+            )
+        },
     )
 
 

@@ -1069,9 +1069,25 @@
         "title": "FeedAuthor",
         "type": "object"
       },
-      "FeedContent": {
+      "FeedImage": {
+        "description": "图文动态里的一张图；``url`` 语义同 :class:`ImageMessageContent`（短 TTL 现签，可为 null）。",
         "properties": {
-          "text": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "url": {
             "anyOf": [
               {
                 "type": "string"
@@ -1080,17 +1096,52 @@
                 "type": "null"
               }
             ],
-            "title": "Text"
+            "title": "Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "FeedImage",
+        "type": "object"
+      },
+      "FeedImageContent": {
+        "description": "图文动态（v1.5）。\n\n正文属于整条动态而不属于某张图，所以 ``text`` 在这一层、``images`` 是有序列表\n（按主人发布时的排版顺序，最多 4 张）。只发图时 ``text`` 是空串。",
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/FeedImage"
+            },
+            "title": "Images",
+            "type": "array"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
           },
           "type": {
+            "const": "image",
+            "default": "image",
             "title": "Type",
             "type": "string"
           }
         },
         "required": [
-          "type"
+          "images"
         ],
-        "title": "FeedContent",
+        "title": "FeedImageContent",
         "type": "object"
       },
       "FeedItem": {
@@ -1099,7 +1150,22 @@
             "$ref": "#/components/schemas/FeedAuthor"
           },
           "content": {
-            "$ref": "#/components/schemas/FeedContent"
+            "discriminator": {
+              "mapping": {
+                "image": "#/components/schemas/FeedImageContent",
+                "text": "#/components/schemas/FeedTextContent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FeedTextContent"
+              },
+              {
+                "$ref": "#/components/schemas/FeedImageContent"
+              }
+            ],
+            "title": "Content"
           },
           "post_id": {
             "title": "Post Id",
@@ -1183,14 +1249,22 @@
             "title": "Client Request Id",
             "type": "string"
           },
+          "media_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Media Refs",
+            "type": "array"
+          },
           "text": {
+            "default": "",
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_request_id",
-          "text"
+          "client_request_id"
         ],
         "title": "FeedPostPayload",
         "type": "object"
@@ -1217,6 +1291,30 @@
           "replayed"
         ],
         "title": "FeedRetireData",
+        "type": "object"
+      },
+      "FeedTextContent": {
+        "description": "纯文字动态。AI 居民动态与 v1.5 之前的全部动态都投影成这一支。",
+        "properties": {
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "FeedTextContent",
         "type": "object"
       },
       "HTTPValidationError": {

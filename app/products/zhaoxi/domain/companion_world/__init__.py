@@ -27,6 +27,7 @@ from app.products.zhaoxi.domain.companion_world.contracts import (  # noqa: F401
 )
 from app.products.zhaoxi.domain.companion_world.service import CompanionWorldService  # noqa: F401
 from app.products.zhaoxi.domain.companion_world.feed import (  # noqa: F401
+    MAX_FEED_POST_IMAGES,
     CompanionWorldFeedService,
     user_post_fingerprint,
 )

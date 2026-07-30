@@ -26,6 +26,7 @@ from app.db._core import (
     _migration_0052_human_conversation_read_cursor,
     _migration_0053_resident_intro_post,
     _migration_0054_media_assets,
+    _migration_0055_universe_post_media,
 )
 
 _P1_TABLES = (
@@ -79,14 +80,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        54,
-        _migration_0054_media_assets,
+        55,
+        _migration_0055_universe_post_media,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 54
+        assert int(version) == 55
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -560,6 +561,17 @@ def test_m0054_media_assets_and_idempotency(fresh_db):
             "SELECT content_json, media_id FROM messages WHERE 1 = 0"
         ).fetchall()
         conn.execute("SELECT media_id FROM human_messages WHERE 1 = 0").fetchall()
+
+
+def test_m0055_universe_post_media_and_idempotency(fresh_db):
+    """m0055：图文动态关联表可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0055_universe_post_media(conn)
+        _migration_0055_universe_post_media(conn)
+        conn.execute(
+            "SELECT post_id, media_id, position, created_at "
+            "FROM universe_post_media WHERE 1 = 0"
+        ).fetchall()
 
 
 def test_candidate_naming_snapshot_is_written_once(fresh_db):

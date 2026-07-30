@@ -50,6 +50,7 @@ __all__ = [
     "CONTENT_TYPE_AUDIO",
     "CONTENT_TYPE_IMAGE",
     "CONTENT_TYPE_TEXT",
+    "build_feed_image_item",
     "build_media_content",
     "build_stored_content",
     "content_type_for_kind",
@@ -124,6 +125,43 @@ def stored_content_preview(
     return cleaned or _PREVIEW_BY_CONTENT_TYPE.get(stored["type"], "")
 
 
+def _sign_read_url(*, media_id: str, scope: str, ttl_seconds: int) -> Optional[str]:
+    """现签一条读 URL；签不出来返回 ``None`` 而不是抛错。
+
+    两种签不出的情形都不该让整页读接口 500：部署缺 secret（记 error，是运维问题），
+    以及 visit 已无剩余时长（记 info，此刻本就无权看，下发 null 与"签了也 403"等价）。
+    """
+    try:
+        return sign_media_url(
+            media_id=media_id, scope=scope, ttl_seconds=ttl_seconds
+        ).url
+    except MediaSigningNotConfiguredError:
+        logger.error("media_signing_secret_missing media_id=%s", media_id)
+    except (MediaAccessDeniedError, ValueError):
+        logger.info("media_url_not_signed media_id=%s", media_id)
+    return None
+
+
+def build_feed_image_item(
+    *, asset: Mapping[str, Any], scope: str, ttl_seconds: int
+) -> Optional[Dict[str, Any]]:
+    """把一条图片资产投影成图文动态 ``content.images[]`` 里的一项。
+
+    与 :func:`build_media_content` 的差别只在形状：动态的正文属于整条动态、不属于某张图，
+    所以这里不带 ``type``/``text``。非图片资产返回 ``None``（调用方跳过该项）——动态只支持图，
+    真出现语音资产挂在动态上是数据错误，宁可少一项也不要投影出客户端认不出的形状。
+    """
+    if content_type_for_kind(asset.get("kind")) != CONTENT_TYPE_IMAGE:
+        return None
+    media_id = str(asset.get("id") or "")
+    return {
+        "media_id": media_id,
+        "url": _sign_read_url(media_id=media_id, scope=scope, ttl_seconds=ttl_seconds),
+        "width": asset.get("width"),
+        "height": asset.get("height"),
+    }
+
+
 def build_media_content(
     *,
     asset: Mapping[str, Any],
@@ -153,13 +191,7 @@ def build_media_content(
         content["duration_ms"] = asset.get("duration_ms")
         # transcript 是用户自己说的话，不是服务端生成内容，因此允许下发（D-2 的唯一例外）。
         content["transcript"] = asset.get("transcript")
-    try:
-        content["url"] = sign_media_url(
-            media_id=str(asset.get("id") or ""), scope=scope, ttl_seconds=ttl_seconds
-        ).url
-    except MediaSigningNotConfiguredError:
-        logger.error("media_signing_secret_missing media_id=%s", asset.get("id"))
-    except (MediaAccessDeniedError, ValueError):
-        # TTL <= 0：visit 已到期。此刻本就无权看，下发 null 与"签了也 403"等价。
-        logger.info("media_url_not_signed media_id=%s", asset.get("id"))
+    content["url"] = _sign_read_url(
+        media_id=str(asset.get("id") or ""), scope=scope, ttl_seconds=ttl_seconds
+    )
     return content

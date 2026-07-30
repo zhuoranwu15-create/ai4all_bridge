@@ -547,6 +547,7 @@ m0055**，下文编号已同步。
 1. **`content_json` 只存 `{type, text}`，偏离 m0054 docstring 里"完整展示载荷"的设想。**
    URL 是短 TTL 签名的，存进库第二天就过期；宽高/时长/转写存两份必然与 `media_assets` 漂移。
    所以库里只留不可再生的那一份（caption），其余读时现取、URL 现签。
+   （m0054 的 docstring 已随 S3 改写成与此定稿一致——迁移体本身没动，只订正注释。）
 2. **图片走内联字节而非本地路径。** `describe_image` 的 `image_path` 分支被硬限制在
    `settings.image_inbound_dir` 白名单内，媒体库不在其中；改走 `data_base64`（多机链路本来
    就用它），仍受 `image_max_bytes` 保护。
@@ -573,6 +574,39 @@ m0055**，下文编号已同步。
 - `FeedPostPayload`（`api/companion_world.py:278`）加 `media_refs`；`FeedContent`
   （`api/contracts.py:296`）扩展 `images[]`；`universe_posts.content_type` 落 `image`。
 - **访客 Feed 逐条重签 URL**，`scope=visit:<visit_id>`，TTL 按 D-3。
+
+**S3 全部条目已实现**（2026-07-30，分支 `feat/companion-world-v1-5-s1`）。落点与实现决定：
+
+| 条目 | 落点 |
+| --- | --- |
+| m0055 | `app/db/_core.py:_migration_0055_universe_post_media`（`PK(post_id, position)` + `media_id` 全局唯一） |
+| 领域 | `domain/companion_world/feed.py`（`MAX_FEED_POST_IMAGES=4`、指纹双形状）、`contracts.py:UniversePostRecord.media_ids` |
+| 事务内认领 | `infrastructure/persistence/companion_world.py:publish_user_feed_post_with_outbox`（认领 + 关联表写入同一事务） |
+| 读模型 | 同文件 `list_post_media_ids` / `_attach_post_media_ids`（只对 `content_type='image'` 的动态多查一次） |
+| 契约 | `api/contracts.py`：`FeedContent` 改判别联合（`FeedTextContent` / `FeedImageContent` + `FeedImage`） |
+| 主人读写 | `api/companion_world.py`（`resolve_feed_media` / `build_feed_content` / `_feed_item_data`） |
+| 访客读 | `application/companion_world_visits.py:list_feed` 返回 `(visit_expires_at, rows)`；`api/companion_world_visits.py:_feed_data` 按 `visit:<id>` 重签 |
+| 投影 | `app/platform/media/view.py:build_feed_image_item`（与会话媒体共用签名兜底 `_sign_read_url`） |
+
+1. **一份资产全局只能挂一条动态**（唯一索引 `ux_universe_post_media_media`）。与聊天侧
+   `media_assets.status` 的一次性语义同构：二态模型下「`pending` 到期即删、`referenced` 永久留」
+   足够且不漏删，允许跨动态复用就必须引入引用计数。跨动态复用会撞唯一键 → 整条发布事务回滚 →
+   对外收敛成 `media_ref_invalid`。
+2. **空内容与超 4 张不返 §6 的新码，保持既有 422 `invalid_request`。** 正文空白时的 422 是
+   v1.5 之前就冻结的行为（`tests/test_companion_world_feed_api.py`），为了新增图片能力去改它，
+   等于让**没带图的老客户端**收到不同错误码；超 4 张则先被 pydantic `max_length=4` 拦下。
+   领域层的 `media_content_required` / `media_count_exceeded` 因此只是防御码，HTTP 上不可达
+   （§6 表已标注）。
+3. **读路径不受 `companion_world_feed_image_enabled` 门控**，与 S2 会话媒体一致：开关只管写入。
+   关掉开关后已发出的图文动态照常返回 `content.type='image'`，不会变成空白卡片。
+4. **`media_ids` 补在 `list_published_feed_posts_for_owner` 里，而不是每条读路径各查一次。**
+   访客 Feed 复用的就是这个函数，所以访客侧只需接 scope/TTL，不需要第二条查询。
+5. **纯文字动态的幂等指纹保持 v1 形状**（不塞空 `media_ids`）。v1.5 上线前发出的动态库里存的是
+   v1 指纹，无条件改 v2 会让存量动态的重放全部变成 `idempotency_conflict`。带图动态走 v2 且
+   `media_ids` 有序参与——换图或换顺序都算换内容。
+6. **访客 Feed 的图恒签 `visit:` scope，不做 owner 判断。** `list_feed` 只对访客开放
+   （owner 调用直接 `visit_not_found`），世界里的动态恒属于主人。这与真人会话不同——那边双向
+   发图，必须逐条比 `owner_platform_user_id` 决定 scope。
 
 ### S4 · 图片机审接线（约 2 人日）
 
@@ -606,12 +640,18 @@ m0055**，下文编号已同步。
 | `media_decode_failed` | Pillow 打不开（含伪装文件） |
 | `media_too_large` | 超 `image_bytes_max` / `voice_bytes_max` |
 | `media_duration_exceeded` | 超 `voice_duration_ms_max` |
-| `media_count_exceeded` | 动态超 4 张 / 聊天图片超 1 张 |
-| `media_content_required` | `text` 与 `media_ref` 都为空 |
+| `media_count_exceeded` | 动态超 4 张 / 聊天图片超 1 张（**动态路径不可达**，见下） |
+| `media_content_required` | `text` 与 `media_ref` 都为空（**动态路径不可达**，见下） |
 | `media_access_denied` | 签名无效、过期，或 scope 已失效（visit 终止） |
 | `wish_text_rejected` | 自由文本命中安全护栏 |
 | `wish_rate_limited` | 许愿频率超限 |
 | `wish_generation_failed` | LLM 超时/不可用 |
+
+**两个码在动态发布路径上客户端见不到**（S3 实现决定 2）：图文都为空、以及图超 4 张，都在
+pydantic 层就被拦成既有的 422 `invalid_request`——那是 v1.5 之前冻结的行为，不为新能力回改。
+`media_content_required` / `media_count_exceeded` 只留在领域层做防御。客户端在动态发布上需要
+分支的码是：`media_disabled`(404) / `media_ref_invalid`(409) / `media_ref_expired`(409) /
+`invalid_request`(422) / `idempotency_conflict`(409)。
 
 ---
 
@@ -665,6 +705,17 @@ S2 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 10 �
 `2 failed, 1806 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
 `1838 passed, 9 skipped` 全绿。
 
+S3 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 8 例
+（`test_companion_world_feed_media.py` 7：发布认领与投影、主人 Feed 列表、门控关闭、跨用户与
+跨动态复用回滚、限额/空内容/重放三态，以及访客侧 `visit:` scope 重签与 revoke 后 URL 立刻失效；
+`test_companion_world_schema.py` +1：m0055 幂等）；SQLite 档
+`2 failed, 1814 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
+`1846 passed, 9 skipped` 全绿。
+
+计划原文把图文动态测试写在 `tests/test_companion_world_feed_api.py` 上，实际另开了
+`test_companion_world_feed_media.py`：前者守的是 v1 纯文字动态的冻结行为（含空正文 422），
+混进媒体用例会让"哪些断言是冻结契约"变得难认。
+
 两个顺带修掉的**既有**缺陷（都不在 S2 范围内，是被新用例照出来的）：
 
 - `_savepoint` 在 SQLite 上不真正开事务（见上文 S2 实现决定 6）。
@@ -696,6 +747,7 @@ S0 合并后运维导入含司辰的 5 条 manifest（§4：一次给全 5 条�
 | CONTENT-003 任务章节 | 缺领域模型，非字段问题（§3） | v1.6 单独设计 |
 | 对象存储 / CDN | 当前量级不成立，抽象已留在 `storage_path` 后 | 触发信号：上传带宽或应用服务器内存成为瓶颈 |
 | 访客图片 `no-store` 的流量代价 | 隐私红线换来的，已知 | 观察 |
+| `GET /v1/visits/{id}/feed` 无 `response_model` | **先于 v1.5 存在**：整条 visits 路由族都未进冻结契约，故访客 Feed 的图文形状只有单测在守、快照守不到 | 补 visits 路由族契约模型，单独排 |
 | 预设角色头像与自建可选头像拆成两组 | **产品已定：不拆**。司辰头像进 `AVATAR_KEYS`，自建角色可选 | 无后续 |
 | 司辰头像构图与其余 4 位不一致（侧脸 vs 正面） | 见 §9.3，技术上可用，是否重出由设计定 | 设计确认 |
 | 预设 persona seed 无 `{display_name}` 占位替换 | 见 §9.4，本次用「名随用户」写法规避，不改代码 | 可选优化 |

@@ -236,6 +236,9 @@ class UniversePostRecord:
     post_type: str = "normal"
     # 终态原因。终态 status 统一是 deleted，「主人删自己的」与「主人隐藏 AI 的」靠它区分。
     terminal_reason: Optional[str] = None
+    # v1.5 图文动态挂的图，按客户端排版顺序。只出 id：宽高与短 TTL URL 由展示层现取现签，
+    # 领域层不持有任何 URL（D-3）。
+    media_ids: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -289,6 +292,7 @@ class FeedRepository(Protocol):
         text: str,
         request_fingerprint: str,
         published_at: str,
+        media_ids: Sequence[str] = (),
     ) -> Tuple[UniversePostRecord, bool]: ...
 
     def list_published_posts(

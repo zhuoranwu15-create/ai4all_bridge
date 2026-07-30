@@ -154,6 +154,7 @@ def _feed_post(row: dict) -> UniversePostRecord:
         published_at=row.get("published_at"),
         post_type=str(row.get("post_type") or "normal"),
         terminal_reason=row.get("terminal_reason"),
+        media_ids=tuple(str(mid) for mid in (row.get("media_ids") or ())),
     )
 
 
@@ -230,6 +231,7 @@ class SqlCompanionWorldRepository(WorldRepository):
         text: str,
         request_fingerprint: str,
         published_at: str,
+        media_ids: Sequence[str] = (),
     ) -> Tuple[UniversePostRecord, bool]:
         try:
             row, created = world_db.publish_user_feed_post_with_outbox(
@@ -238,11 +240,17 @@ class SqlCompanionWorldRepository(WorldRepository):
                 text=text,
                 request_fingerprint=request_fingerprint,
                 published_at=published_at,
+                media_ids=tuple(media_ids),
                 conn=self._conn,
             )
         except ValueError as err:
             code = str(err)
-            if code in {"world_not_ready", "world_disabled", "idempotency_conflict"}:
+            if code in {
+                "world_not_ready",
+                "world_disabled",
+                "idempotency_conflict",
+                "media_ref_invalid",
+            }:
                 raise CompanionWorldError(code) from err
             raise
         return _feed_post(row), created

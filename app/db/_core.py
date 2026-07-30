@@ -4268,8 +4268,10 @@ def _migration_0054_media_assets(conn: Connection) -> None:
     的关系，任何不带 owner 约束的媒体查询都是 bug。
 
     消息侧只加列不改约束：
-    - ``messages.content_json`` 存 D-1 判别联合的完整 ``content``（``messages.content``
-      继续存 LLM 上下文用的纯文本，两者口径不同，刻意不合并）；
+    - ``messages.content_json`` 存 D-1 判别联合的**可持久化部分**（``messages.content``
+      继续存 LLM 上下文用的纯文本，两者口径不同，刻意不合并）。S2 定稿只落
+      ``{"type", "text"}``：URL 是短 TTL 签名的、宽高/时长/转写在 ``media_assets`` 里，
+      存第二份必然漂移，所以库里只留不可再生的 caption，其余读时现取；
     - ``messages.media_id`` / ``human_messages.media_id`` 单列引用，**不加 FK**——
       SQLite 无法用 ALTER 补 FK，为一个可空列重建带 2 个 UNIQUE + 2 个 FK 的
       ``human_messages`` 表不值当，完整性由应用层与回收 job 的状态位保证；
@@ -4311,6 +4313,39 @@ def _migration_0054_media_assets(conn: Connection) -> None:
     _ensure_column(conn, "messages", "content_json", "TEXT")
     _ensure_column(conn, "messages", "media_id", "TEXT")
     _ensure_column(conn, "human_messages", "media_id", "TEXT")
+
+
+def _migration_0055_universe_post_media(conn: Connection) -> None:
+    """v1.5 图文动态：一条动态最多挂 4 张图（``universe_post_media``）。
+
+    为什么另开一张表而不是在 ``universe_posts`` 上加 4 个列：顺序是产品可见的（客户端按
+    ``position`` 排版），而"第 N 张"这种列名做不出稳定的插入/删除语义；多对一独立成行后
+    回收 job 与引用计数也只需扫一张窄表。
+
+    两条唯一约束各管一件事：
+    - ``PRIMARY KEY(post_id, position)`` —— 同一条动态里位次不重复（发布是一次性写入，
+      重放靠 ``ON CONFLICT DO NOTHING`` 收敛）；
+    - ``ux_universe_post_media_media`` —— **一份资产全局只能挂一条动态**，与聊天侧
+      ``media_assets.status`` 的一次性语义同构。跨 post 复用会在这里撞唯一键，
+      连同发布事务一起回滚，对外收敛成 ``media_ref_invalid``。
+
+    ``media_id`` 不加 FK（同 m0054 的理由）：完整性由发布事务内的原子认领与状态位保证。
+    纯加表，无回填。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_post_media (
+            post_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            position INTEGER NOT NULL,               -- 0..3，客户端按此排版
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY (post_id, position),
+            FOREIGN KEY(post_id) REFERENCES universe_posts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_post_media_media
+            ON universe_post_media(media_id);
+        """
+    )
 
 
 _MIGRATIONS = [
@@ -4363,6 +4398,7 @@ _MIGRATIONS = [
     (52, _migration_0052_human_conversation_read_cursor),
     (53, _migration_0053_resident_intro_post),
     (54, _migration_0054_media_assets),
+    (55, _migration_0055_universe_post_media),
 ]
 
 

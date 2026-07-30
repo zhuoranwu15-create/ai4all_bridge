@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection, IntegrityError, is_postgres
 from app.db._core import (
     APP_ACTIVE_SESSION_KEY,
     _new_id,
@@ -27,6 +27,7 @@ from app.db._core import (
     advisory_lock_key,
     connect,
 )
+from app.platform.media.persistence import mark_media_assets_referenced
 from app.platform.media.view import stored_content_preview
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
@@ -87,6 +88,7 @@ __all__ = [
     "publish_user_feed_post_with_outbox",
     "publish_resident_intro_post_with_outbox",
     "list_published_feed_posts_for_owner",
+    "list_post_media_ids",
     "retire_feed_post_with_outbox",
     "publish_ai_feed_post_with_outbox",
     "claim_companion_world_outbox",
@@ -1789,7 +1791,9 @@ def get_universe_post_for_owner(
             """,
             (post_id, owner_platform_user_id),
         ).fetchone()
-    return dict(row) if row else None
+        if row is None:
+            return None
+        return _attach_post_media_ids([dict(row)], tx)[0]
 
 
 def publish_user_feed_post_with_outbox(
@@ -1799,10 +1803,17 @@ def publish_user_feed_post_with_outbox(
     text: str,
     request_fingerprint: str,
     published_at: str,
+    media_ids: Sequence[str] = (),
     conn: Optional[Connection] = None,
 ) -> Tuple[Dict[str, Any], bool]:
-    """直接发布 owner 用户文字动态，并与 published outbox 同事务提交。"""
+    """直接发布 owner 用户动态（v1.5 起可带图），并与 published outbox 同事务提交。
+
+    ``media_ids`` 非空时 ``content_type`` 落 ``image``，资产认领与 ``universe_post_media``
+    写入都在**本事务内**完成：任何一步失败整条动态一起回滚，不留 referenced 孤儿。
+    认领失败（资产不存在/不属于本人/已被引用）抛 ``ValueError("media_ref_invalid")``。
+    """
     post_id = _new_id("post")
+    clean_media_ids = [str(mid or "").strip() for mid in media_ids]
     with _m3_write_tx(conn) as tx:
         world = tx.execute(
             """
@@ -1834,13 +1845,14 @@ def publish_user_feed_post_with_outbox(
                 source_type, content_type, text, status, client_request_id,
                 request_fingerprint, published_at
             )
-            VALUES (?, ?, 'human', ?, 'user_post', 'text', ?, 'published', ?, ?, ?)
+            VALUES (?, ?, 'human', ?, 'user_post', ?, ?, 'published', ?, ?, ?)
             ON CONFLICT DO NOTHING
             """,
             (
                 post_id,
                 world_row["id"],
                 owner_platform_user_id,
+                "image" if clean_media_ids else "text",
                 text,
                 client_request_id,
                 request_fingerprint,
@@ -1863,6 +1875,30 @@ def publish_user_feed_post_with_outbox(
         ):
             raise ValueError("idempotency_conflict")
         created = str(post_row["id"]) == post_id
+        if created and clean_media_ids:
+            # 重放（created=False）不再认领：fingerprint 已含 media_ids，换图会在上面先撞
+            # idempotency_conflict，走到这里的重放一定是同一组资产，且早已 referenced。
+            try:
+                mark_media_assets_referenced(
+                    media_ids=clean_media_ids,
+                    owner_platform_user_id=owner_platform_user_id,
+                    conn=tx,
+                )
+            except ValueError as err:
+                raise ValueError("media_ref_invalid") from err
+            for position, media_id in enumerate(clean_media_ids):
+                try:
+                    tx.execute(
+                        """
+                        INSERT INTO universe_post_media(post_id, media_id, position)
+                        VALUES (?, ?, ?)
+                        """,
+                        (post_row["id"], media_id, position),
+                    )
+                except IntegrityError as err:
+                    # 兜底：撞 ux_universe_post_media_media 说明这份资产已挂在别的动态上。
+                    # 正常路径上面的认领就该拦住，这里只保证不把 500 抛给客户端。
+                    raise ValueError("media_ref_invalid") from err
 
         payload_json = json.dumps(
             {
@@ -2081,7 +2117,61 @@ def list_published_feed_posts_for_owner(
             """,
             tuple(params),
         ).fetchall()
-    return [dict(row) for row in rows]
+        return _attach_post_media_ids([dict(row) for row in rows], tx)
+
+
+def list_post_media_ids(
+    *,
+    post_ids: Sequence[str],
+    conn: Connection,
+) -> Dict[str, Tuple[str, ...]]:
+    """批量取一页动态挂的图 id（按 ``position`` 升序），返回 ``{post_id: (media_id, ...)}``。
+
+    只出 id、不出资产行：资产的宽高与 URL 由展示层按 owner/visitor 口径现取现签，与
+    会话媒体走同一条投影路径（``list_media_assets_unscoped`` + ``build_*``），避免出现
+    第二套"顺手把资产字段也带出来"的读法。
+
+    这里刻意不带 owner 过滤：调用方拿到的 ``post_ids`` 已经是自己有权看的那一页
+    （主人 Feed 按 owner 筛、访客 Feed 按 active visit 筛），媒体只是这些动态的从属数据。
+    """
+    cleaned = [str(pid or "").strip() for pid in post_ids if str(pid or "").strip()]
+    if not cleaned:
+        return {}
+    placeholders = ",".join(["?"] * len(cleaned))
+    rows = conn.execute(
+        f"""
+        SELECT post_id, media_id
+        FROM universe_post_media
+        WHERE post_id IN ({placeholders})
+        ORDER BY post_id, position
+        """,
+        tuple(cleaned),
+    ).fetchall()
+    grouped: Dict[str, List[str]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["post_id"]), []).append(str(row["media_id"]))
+    return {post_id: tuple(ids) for post_id, ids in grouped.items()}
+
+
+def _attach_post_media_ids(
+    rows: List[Dict[str, Any]], conn: Connection
+) -> List[Dict[str, Any]]:
+    """给一批动态行补上有序 ``media_ids``（无图动态是空 tuple）。
+
+    只对 ``content_type='image'`` 的动态查一次表：纯文字 Feed（绝大多数）因此不多付一次
+    查询，也不会因为这张新表出现在读路径上而变慢。
+    """
+    image_post_ids = [
+        str(row["id"]) for row in rows if str(row.get("content_type") or "") == "image"
+    ]
+    grouped = (
+        list_post_media_ids(post_ids=image_post_ids, conn=conn)
+        if image_post_ids
+        else {}
+    )
+    for row in rows:
+        row["media_ids"] = grouped.get(str(row["id"]), ())
+    return rows
 
 
 def retire_feed_post_with_outbox(

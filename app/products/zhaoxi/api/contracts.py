@@ -360,9 +360,38 @@ class FeedAuthor(BaseModel):
     avatar_ref: Optional[str] = None
 
 
-class FeedContent(BaseModel):
-    type: str
+class FeedImage(BaseModel):
+    """图文动态里的一张图；``url`` 语义同 :class:`ImageMessageContent`（短 TTL 现签，可为 null）。"""
+
+    media_id: str
+    url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class FeedTextContent(BaseModel):
+    """纯文字动态。AI 居民动态与 v1.5 之前的全部动态都投影成这一支。"""
+
+    type: Literal["text"] = "text"
     text: Optional[str] = None
+
+
+class FeedImageContent(BaseModel):
+    """图文动态（v1.5）。
+
+    正文属于整条动态而不属于某张图，所以 ``text`` 在这一层、``images`` 是有序列表
+    （按主人发布时的排版顺序，最多 4 张）。只发图时 ``text`` 是空串。
+    """
+
+    type: Literal["image"] = "image"
+    text: str = ""
+    images: List[FeedImage]
+
+
+# D-1 同款：``content.type`` 是唯一权威判别字段，客户端遇到未知 type 按占位降级。
+FeedContent = Annotated[
+    Union[FeedTextContent, FeedImageContent], Field(discriminator="type")
+]
 
 
 class FeedItem(BaseModel):
