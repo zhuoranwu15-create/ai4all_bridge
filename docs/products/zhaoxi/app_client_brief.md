@@ -99,6 +99,20 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 [`app_api_handoff.md`](app_api_handoff.md) §6–§8。家园 Feed 的 AI 内容只在
 早 07:00–11:00、晚 18:00–23:00 窗口生成，窗口外无新内容属正常。
 
+## 6.0 v1.5：会话/动态媒体与许愿创建（2026-07-30 新增，服务端已完成、开关待开）
+
+- 图片与语音**一律两步**：`POST {base}/media/uploads` 拿 `media_id` → 再挂到
+  `ai-conversations/{id}/turn`、`human-conversations/{id}/messages` 的 `media_ref`
+  或 `worlds/home/feed/posts` 的 `media_refs`（≤4 张）。
+- 读媒体用返回的**短 TTL 签名 URL**，**不带 `Authorization`、不要持久化**；`url=null` 渲染占位。
+- 图片只收 JPEG/PNG（**iOS 的 HEIC 必须客户端先转码**），未被引用的上传 2 小时后失效需重传。
+- 消息新增 `content` 判别联合（`text`/`image`/`audio`），老字段 `message_type`/`text` 已 deprecated。
+- 许愿创建居民：`resident-drafts/preview` 传 `wish_text` + `client_request_id`，出参与表单路径同形，
+  预览卡片零改动。
+- 四个能力位 `chat_image_message` / `chat_voice_message` / `feed_image_post` / `resident_wish_create`
+  **当前为 `false`**，为假时入口必须隐藏。完整契约与红线见
+  [`app_api_handoff.md`](app_api_handoff.md) §6.5 / §6.6，联调前置见 §9.1。
+
 ## 6.1 「我的」Tab（2026-07-26 新增）
 
 - Profile：`GET /me/profile-options` 拿受控头像表与昵称限额（**不要硬编码枚举**），
@@ -107,7 +121,8 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 - 注销：只有 `POST /me/account/deletion`，body 必带 `{"confirm": true}`。**立即删除聊天记录
   与相关记忆、不可撤销**，没有冷静期也没有撤销接口，所以**二次确认弹窗必须由客户端做**。
   返回后全部设备登录态失效：就地清 token 回登录页，旧 token 会拿 401。同一手机号可以重新
-  注册，登录后得到的是全新空世界。
+  注册，登录后得到的是全新空世界。v1.5 起注销还会连带删除已上传的媒体文件与自己世界的全部动态，
+  **客户端本地缓存需一并清**。
 - 通知偏好：`GET/PATCH /notifications/preferences`，`standard` / `quiet`。`quiet` 只压制
   将来的 AI 主动通知，**已在箱内的不回收**，切回来即恢复。
 - 字段与错误码全表见 [`app_api_handoff.md`](app_api_handoff.md) §3.6。
