@@ -209,7 +209,14 @@ def _savepoint(conn: Connection, name: str = "sp") -> Iterator[None]:
     PG 在任一语句报错后会中止整个事务，后续语句一律 InFailedSqlTransaction；因此
     「INSERT 失败 → 捕获 IntegrityError → 同一连接继续重试/查询」的模式在 PG 必须靠
     SAVEPOINT 才能继续（SQLite 同样支持 SAVEPOINT，两后端行为一致）。
+
+    SQLite 上必须先显式开事务：Python sqlite3 只在 DML 前隐式 BEGIN，``SAVEPOINT`` 不算
+    DML，于是它成为**最外层**保存点，对应的 ``RELEASE`` 会直接提交——外层 ``connect()``
+    之后再 rollback 就什么也回滚不掉（表现为「认领失败了但消息还在」）。PG 侧连接恒为
+    ``autocommit=False``，事务一直开着，不需要也不能再 BEGIN。
     """
+    if not is_postgres() and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
