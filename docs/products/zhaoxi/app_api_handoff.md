@@ -3,8 +3,9 @@
 > 面向：朝夕相伴移动端 App 开发者。
 > 服务端状态：Companion World 3.0 已在生产全量激活（aliyun1 中心节点），本文档描述的所有能力均线上可用。
 > 最后核对：2026-07-23，对着生产 `https://ai4company.top` 实测。
-> **v1.5（会话与动态媒体 + 许愿创建居民）服务端已开发完成**，契约见 §6.5 / §6.6；但**尚未上线、四个能力位默认关闭**，
-> 客户端可按契约先行开发，联调前置条件见 §9.1。
+> **v1.5（会话与动态媒体 + 许愿创建居民）服务端已上线**（2026-07-30），契约见 §6.5 / §6.6。
+> 四个能力位默认打开；媒体三位还要求服务端配好 `MEDIA_URL_SIGNING_SECRET`，未配时它们下发
+> `false`、上传返回 `media_disabled`。一律以 `/app/config` 的能力位渲染入口，细节见 §9.1。
 
 ---
 
@@ -896,17 +897,21 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 
 ### 9.1 v1.5 能力的联调前置（媒体 + 许愿）
 
-服务端代码已完成，但**尚未上线，四个 flag 默认关闭**，所以现在 `/app/config` 里这四位是 `false`：
+服务端代码已上线，四个 flag **默认打开**（2026-07-30 起改为「代码默认开、`.env` 显式写
+`false` 才关」）。真正决定媒体三位可见性的是**签名密钥是否配置**：
 
-| flag | 能力位 | 状态 |
+| flag（默认 true） | 能力位 | 还需要什么 |
 |---|---|---|
-| `COMPANION_WORLD_CHAT_IMAGE_ENABLED` | `chat_image_message` | 待打开 |
-| `COMPANION_WORLD_CHAT_VOICE_ENABLED` | `chat_voice_message` | 待打开 |
-| `COMPANION_WORLD_FEED_IMAGE_ENABLED` | `feed_image_post` | 待打开 |
-| `COMPANION_WORLD_RESIDENT_WISH_ENABLED` | `resident_wish_create` | 待打开 |
+| `COMPANION_WORLD_CHAT_IMAGE_ENABLED` | `chat_image_message` | `MEDIA_URL_SIGNING_SECRET` |
+| `COMPANION_WORLD_CHAT_VOICE_ENABLED` | `chat_voice_message` | `MEDIA_URL_SIGNING_SECRET` |
+| `COMPANION_WORLD_FEED_IMAGE_ENABLED` | `feed_image_post` | `MEDIA_URL_SIGNING_SECRET` |
+| `COMPANION_WORLD_RESIDENT_WISH_ENABLED` | `resident_wish_create` | 无（已可用） |
 
-联调需要服务端侧依次完成：**合入 main 并部署中心节点 → 配好媒体签名密钥与公网媒体基址 →
-逐个打开上述 flag**。图片机审是独立的运维配置（见
+`MEDIA_URL_SIGNING_SECRET` 留空时媒体链路整体视为未就绪：三个媒体能力位一律下发 `false`，
+`POST /media/uploads` 返回 `media_disabled`——**不会**出现「能力位是 `true` 却拿不到读 URL」的
+半开状态，客户端照能力位渲染即可。配好密钥并重启后三位自动转 `true`，客户端无需发版。
+
+图片机审是独立的运维配置（见
 [`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），
 **未配置不阻塞任何客户端功能**，只是图片一律放过不送审。
 

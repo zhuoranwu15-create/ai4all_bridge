@@ -265,8 +265,12 @@ def test_v1_5_capabilities_are_registered_and_follow_their_flags(client, fresh_d
         assert client.get("/v1/app/config").json()["features"][capability] is False
 
 
-def test_v1_5_flag_declared_defaults_are_off():
-    """代码声明的默认值必须是 off（FLAG-001 逐个灰度）。
+def test_v1_5_flag_declared_defaults_are_on():
+    """代码声明的默认值必须是 on（开关默认极性约定，2026-07-30）。
+
+    新开关一律代码里默认打开、由 ``.env`` 显式写 false 关停，避免「功能上线了却因为忘了
+    开开关而看不到」这类误判。媒体三位是否真正对客户端可见另由签名密钥是否配置决定，
+    见 ``test_media_capabilities_require_signing_secret``。
 
     读 ``model_fields`` 的声明默认值而不是实例化 ``Settings()``——后者会吃开发机/生产机的
     ``.env``，让「默认是什么」这条断言随环境漂移。
@@ -274,9 +278,33 @@ def test_v1_5_flag_declared_defaults_are_off():
     from app.config import Settings
 
     for flag in V1_5_CAPABILITY_FLAGS.values():
-        assert Settings.model_fields[flag].default is False, flag
-    # 图片理解相反：v1.5 起默认开，缺 DashScope key 时由 describe_image 落兜底文案。
+        assert Settings.model_fields[flag].default is True, flag
+    # 图片理解同理：默认开，缺 DashScope key 时由 describe_image 落兜底文案。
     assert Settings.model_fields["image_understanding_enabled"].default is True
+
+
+def test_media_capabilities_require_signing_secret(client, fresh_db):
+    """未配 MEDIA_URL_SIGNING_SECRET 时媒体三位必须报 false，许愿不受影响。
+
+    开关默认打开后，「密钥没配」成了常态；此时上传与读 URL 整条链路都不可用，能力位若还
+    报 true，客户端就会画出必然 503 的入口。许愿不依赖签名，只跟自己的开关。
+    """
+    fresh_db.companion_world_p1_enabled = True
+    for flag in V1_5_CAPABILITY_FLAGS.values():
+        setattr(fresh_db, flag, True)
+
+    fresh_db.media_url_signing_secret = ""
+    features = client.get("/v1/app/config").json()["features"]
+    assert features["chat_image_message"] is False
+    assert features["chat_voice_message"] is False
+    assert features["feed_image_post"] is False
+    assert features["resident_wish_create"] is True
+
+    fresh_db.media_url_signing_secret = "test-media-signing-secret"
+    features = client.get("/v1/app/config").json()["features"]
+    assert features["chat_image_message"] is True
+    assert features["chat_voice_message"] is True
+    assert features["feed_image_post"] is True
 
 
 def test_world_capabilities_are_false_when_parent_flag_is_off(client, fresh_db):

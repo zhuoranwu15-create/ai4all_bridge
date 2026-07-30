@@ -28,6 +28,7 @@ from app.platform.media.access import (
     owner_scope,
     owner_ttl_seconds,
     sign_media_url,
+    signing_configured,
     verify_media_signature,
 )
 from app.platform.media.asr import ASRError, transcribe_audio
@@ -98,14 +99,17 @@ def _epoch_to_public_time(value: int) -> str:
 
 def _image_upload_enabled() -> bool:
     """图片上传只要"聊天图片"或"图文动态"任一开着就允许——上传是共用地基。"""
-    return bool(
+    return signing_configured() and bool(
         getattr(settings, "companion_world_chat_image_enabled", False)
         or getattr(settings, "companion_world_feed_image_enabled", False)
     )
 
 
 def _voice_upload_enabled() -> bool:
-    return bool(getattr(settings, "companion_world_chat_voice_enabled", False))
+    # 与 /app/config 的能力位同一判据：未配签名密钥时整条媒体链路视为未就绪。
+    return signing_configured() and bool(
+        getattr(settings, "companion_world_chat_voice_enabled", False)
+    )
 
 
 def _require_media_enabled(kind: str) -> None:

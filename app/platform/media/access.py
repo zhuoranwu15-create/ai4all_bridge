@@ -83,6 +83,11 @@ def signing_secret() -> str:
     return secret
 
 
+def signing_configured() -> bool:
+    """secret 是否已配置。媒体能力的「配置就绪」判据，不抛错，供能力位与门控调用。"""
+    return bool(str(getattr(settings, "media_url_signing_secret", "") or "").strip())
+
+
 def media_features_enabled() -> bool:
     """三个媒体能力位里有没有开着的（决定 secret 是否为必填）。"""
     return any(
@@ -96,13 +101,20 @@ def media_features_enabled() -> bool:
 
 
 def validate_media_signing_config() -> None:
-    """启动期校验：任一媒体开关为开而 secret 留空 → 直接抛错，拒绝带病启动。
+    """启动期校验：开关为开而 secret 留空 → 只告警，媒体能力按「未就绪」对外呈现。
 
+    三个媒体开关自 2026-07-30 起默认为 True（开关默认极性约定），此时「secret 未配」是
+    尚未配置的常态而非部署事故，起不来反而会拖垮整个服务；真正的 fail-closed 落在下游：
+    能力位下发 false、上传返回 ``media_disabled``、签名调用抛
+    ``MediaSigningNotConfiguredError``，不存在"没有密钥却签得出 URL"的路径。
     生成方式见 `.env.example`：``python -c "import secrets;print(secrets.token_urlsafe(32))"``。
     """
-    if not media_features_enabled():
+    if not media_features_enabled() or signing_configured():
         return
-    signing_secret()
+    logger.warning(
+        "media_signing_secret_missing: 媒体能力按未就绪下发（能力位 false / 上传 media_disabled），"
+        "配置 MEDIA_URL_SIGNING_SECRET 后重启即生效"
+    )
 
 
 def _sign(*, media_id: str, scope: str, expires_at: int) -> str:
@@ -197,6 +209,7 @@ __all__ = [
     "owner_scope",
     "owner_ttl_seconds",
     "sign_media_url",
+    "signing_configured",
     "signing_secret",
     "validate_media_signing_config",
     "verify_media_signature",
