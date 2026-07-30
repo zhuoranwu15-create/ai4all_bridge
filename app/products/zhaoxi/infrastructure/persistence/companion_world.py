@@ -29,6 +29,7 @@ from app.db._core import (
 )
 from app.platform.media.persistence import mark_media_assets_referenced
 from app.platform.media.view import stored_content_preview
+from app.platform.moderation.image_review import image_review_configured
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
@@ -89,6 +90,7 @@ __all__ = [
     "publish_resident_intro_post_with_outbox",
     "list_published_feed_posts_for_owner",
     "list_post_media_ids",
+    "find_post_owner_by_media_id",
     "retire_feed_post_with_outbox",
     "publish_ai_feed_post_with_outbox",
     "claim_companion_world_outbox",
@@ -1883,6 +1885,8 @@ def publish_user_feed_post_with_outbox(
                     media_ids=clean_media_ids,
                     owner_platform_user_id=owner_platform_user_id,
                     conn=tx,
+                    # 机审配好了才入队；没配就恒 skipped，不堆一队永远没人处理的待办。
+                    queue_moderation=image_review_configured(),
                 )
             except ValueError as err:
                 raise ValueError("media_ref_invalid") from err
@@ -2151,6 +2155,36 @@ def list_post_media_ids(
     for row in rows:
         grouped.setdefault(str(row["post_id"]), []).append(str(row["media_id"]))
     return {post_id: tuple(ids) for post_id, ids in grouped.items()}
+
+
+def find_post_owner_by_media_id(
+    *, media_id: str, conn: Optional[Connection] = None
+) -> Optional[Dict[str, Any]]:
+    """按图反查它挂在哪条动态上，返回 ``{post_id, universe_id, owner_platform_user_id}``。
+
+    ``ux_universe_post_media_media`` 保证一份资产全局最多挂一条动态，所以这里最多一行；
+    查不到说明这张图不在 Feed 上（会话图，或还没被任何内容引用）。
+
+    **只给图片机审的后台下架用**：拿到主人后仍走 owner-scoped 的
+    :func:`retire_feed_post_with_outbox` 做终态写，本函数不带 owner 过滤只是因为后台 job
+    没有"当前用户"这个概念。
+    """
+    cleaned = str(media_id or "").strip()
+    if not cleaned:
+        return None
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT pm.post_id AS post_id, p.universe_id AS universe_id,
+                   u.owner_platform_user_id AS owner_platform_user_id
+            FROM universe_post_media pm
+            JOIN universe_posts p ON p.id = pm.post_id
+            JOIN universes u ON u.id = p.universe_id
+            WHERE pm.media_id = ?
+            """,
+            (cleaned,),
+        ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def _attach_post_media_ids(

@@ -10,6 +10,7 @@ from app.routers.deps import verify_admin_auth
 from app.routers.serializers import _beijing_display, _content_invitation_for_overview, _list_reactivation_candidate_admin_items, _normalize_optional_state_datetime, _normalize_ts, _proactive_message_settings_with_resolved, _proactive_state_for_overview, _redact_text_field
 from app.db import cancel_proactive_commitment, cleanup_app_notifications_batch, get_account, get_proactive_account_state, get_proactive_commitment, list_content_invitations_for_account, list_outbound_messages, list_proactive_commitments_for_account, list_proactive_message_setting_events, list_reactivation_outbound_messages_admin, list_reminders_for_account, upsert_proactive_account_state
 from app.platform.media.reclaim import reclaim_orphan_media_batch
+from app.products.zhaoxi.jobs.media_moderation import review_pending_media_job
 from app.products.zhaoxi.proactive.recall.manual_companion import clear_account_check_candidate_draft, generate_account_check_candidate_draft, promote_account_check_candidate_draft
 from app.products.zhaoxi.proactive.delivery.account_check import decide_account_check_action, execute_account_check_decision
 from app.products.zhaoxi.proactive.recall.content_invitation import generate_content_invitation_candidate
@@ -424,6 +425,13 @@ async def admin_proactive_scheduler_run_once(
         # 手动 run-once 时强制跑一轮媒体回收（跳过小时节流），方便运营核对磁盘占用。
         reclaim_orphan_media=(
             functools.partial(reclaim_orphan_media_batch, force=True)
+            if settings.has_central_role
+            else None
+        ),
+        # 图片机审同理强制跑一轮：这是运维核对阿里云配置是否真的生效的唯一手动入口
+        # （未配置时返回 status=disabled，不报错）。
+        review_pending_media=(
+            functools.partial(review_pending_media_job, force=True)
             if settings.has_central_role
             else None
         ),

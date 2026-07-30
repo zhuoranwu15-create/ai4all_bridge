@@ -381,6 +381,11 @@ def test_settings(tmp_path, db_dsn):
     s.media_url_visitor_ttl_seconds = 600
     s.media_pending_ttl_hours = 2
     s.media_reclaim_interval_seconds = 3600.0
+    # v1.5 S4 图片机审：公网基址默认留空 = 机审不可用（批处理直接返回 disabled，不读库）。
+    # 两个数值同样必须显式给，否则 MagicMock 的 __int__/__float__ 会让批量恒为 1。
+    s.media_public_base_url = ""
+    s.media_moderation_interval_seconds = 60.0
+    s.media_moderation_batch_size = 50
     s.media_image_max_bytes = 8_388_608
     s.media_image_count_max = 4
     s.media_voice_max_bytes = 512_000
@@ -472,6 +477,8 @@ def fresh_db(test_settings):
         # access 决定签名密钥与 TTL。
         patch("app.platform.media.assets.settings", test_settings),
         patch("app.platform.media.access.settings", test_settings),
+        # S4 图片机审批处理：节流间隔、批量与公网基址都从这里读。
+        patch("app.platform.media.moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.debug.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_proactive.settings", test_settings),

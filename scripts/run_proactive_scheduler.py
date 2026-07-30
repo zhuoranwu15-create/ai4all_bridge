@@ -17,6 +17,7 @@ from app.products.zhaoxi.application import (  # noqa: E402
     compact_companion_world_memory_batch,
 )
 from app.platform.media.reclaim import reclaim_orphan_media_batch  # noqa: E402
+from app.products.zhaoxi.jobs.media_moderation import review_pending_media_job  # noqa: E402
 from app.platform.observability.alerting import configure_error_log_alerting  # noqa: E402
 from app.time_utils import verify_host_timezone  # noqa: E402
 
@@ -36,6 +37,11 @@ async def main() -> None:
         # 反而留下无主文件，所以只在具备中心能力的进程里挂载。函数自身按小时节流。
         reclaim_orphan_media=(
             reclaim_orphan_media_batch if settings.has_central_role else None
+        ),
+        # v1.5 S4 图片机审：待审队列是中心库里的 App 内容，且送审 URL 必须指向中心机的媒体读
+        # 端点，纯 node 挂它只会签出自己取不到的地址，所以同样只在中心角色上挂。
+        review_pending_media=(
+            review_pending_media_job if settings.has_central_role else None
         ),
     )
     # 统一编排 P4：4 点 dreaming 扫描默认挂在本单例进程（proactive scheduler 已是单例 asyncio

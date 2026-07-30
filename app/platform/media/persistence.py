@@ -30,10 +30,13 @@ __all__ = [
     "get_media_asset",
     "get_media_asset_unscoped",
     "insert_media_asset",
+    "bump_media_moderation_attempts",
     "list_expired_pending_media_assets",
     "list_media_assets_unscoped",
+    "list_pending_moderation_media_assets",
     "mark_media_assets_referenced",
     "pending_expires_at",
+    "update_media_moderation_status",
     "update_media_transcript",
 ]
 
@@ -253,6 +256,71 @@ def list_expired_pending_media_assets(
             (MEDIA_STATUS_PENDING, cutoff, max(int(limit), 1)),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def list_pending_moderation_media_assets(
+    *, limit: int = 50, conn: Optional[Connection] = None
+) -> List[Dict[str, Any]]:
+    """图片机审批处理的唯一扫描路径（走 ``ix_media_assets_moderation``）。
+
+    只出 ``kind='image'`` 且已被引用的资产。这两个条件在当前链路上恒真——
+    ``moderation_status`` 只在 :func:`mark_media_assets_referenced` 里对图片置 ``pending``
+    ——写出来是为了将来若改成"上传即入队"，注定被回收的孤儿资产不会被送去过审。
+
+    按 ``created_at`` 升序：先发后审的口径下，越早发出去的内容敞口越久，先审它。
+    """
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            "SELECT * FROM media_assets WHERE moderation_status = ? AND kind = 'image' "
+            "AND status = ? ORDER BY created_at ASC LIMIT ?",
+            (MODERATION_STATUS_PENDING, MEDIA_STATUS_REFERENCED, max(int(limit), 1)),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def bump_media_moderation_attempts(
+    *, media_id: str, conn: Optional[Connection] = None
+) -> int:
+    """把机审重试次数 +1 并返回新值；返回 0 表示这行已不存在（并发删）。
+
+    必须在**调用云接口之前**加：若放在之后，一次让进程卡死或崩溃的调用就不计数，坏配置下
+    这份资产会被无限重试。
+    """
+    cleaned = str(media_id or "").strip()
+    with _tx(conn) as tx:
+        tx.execute(
+            "UPDATE media_assets SET moderation_attempts = moderation_attempts + 1 "
+            "WHERE id = ?",
+            (cleaned,),
+        )
+        row = tx.execute(
+            "SELECT moderation_attempts FROM media_assets WHERE id = ?", (cleaned,)
+        ).fetchone()
+    return int(row["moderation_attempts"]) if row is not None else 0
+
+
+def update_media_moderation_status(
+    *, media_id: str, status: str, conn: Optional[Connection] = None
+) -> bool:
+    """把 ``pending`` 结案成终态；**只允许从 pending 翻**，不覆盖别人写下的结论。
+
+    返回 False 说明本次没结案（另一个进程抢先，或行已被删）。副作用（下架）刻意排在
+    这个写之前而不是之后：下架是幂等的（outbox「首次写入者胜出」），重复一次无害，但
+    "已记 rejected 却没下架"会让红线内容留在线上。
+    """
+    if status not in {
+        MODERATION_STATUS_PASSED,
+        MODERATION_STATUS_REJECTED,
+        MODERATION_STATUS_SKIPPED,
+    }:
+        raise ValueError(f"invalid moderation status: {status}")
+    with _tx(conn) as tx:
+        updated = tx.execute(
+            "UPDATE media_assets SET moderation_status = ? "
+            "WHERE id = ? AND moderation_status = ?",
+            (status, str(media_id or "").strip(), MODERATION_STATUS_PENDING),
+        )
+    return updated.rowcount == 1
 
 
 def delete_media_asset_row(

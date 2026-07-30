@@ -1,7 +1,8 @@
 # Companion World App v1.5 服务端开发计划
 
-更新时间：2026-07-29
-状态：**S0 已实现，待 PR 合并**；S1–S5 未开工。分支 `feat/companion-world-v1-5-s0`。
+更新时间：2026-07-30
+状态：**S0–S4 已实现，待 PR 合并**；仅剩 S5（许愿创建）未开工。
+分支：S0 在 `feat/companion-world-v1-5-s0`，S1–S4 在 `feat/companion-world-v1-5-s1`。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World v1.5 服务端需求清单 V0.3》（`/home/jack/companion_world_v1_5_server_requirements.md`）。
@@ -615,6 +616,37 @@ m0055**，下文编号已同步。
 - `docs/ops/platform/image_moderation_setup.md`。
 - **生效依赖人工完成阿里云配置**，代码上线不等于能力开启。
 
+**S4 全部条目已实现**（2026-07-30，分支 `feat/companion-world-v1-5-s1`）。落点与实现决定：
+
+| 条目 | 落点 |
+| --- | --- |
+| m0056 | `app/db/_core.py:_migration_0056_media_moderation_scan_index`（`ix_media_assets_moderation(moderation_status, created_at)` + `moderation_attempts` 列） |
+| 阿里云图片接口 | `app/platform/moderation/image_review.py:review_image_url`（解析件复用文本侧 `aliyun_review`）；`review_image_task` 供既有审核 worker 适配 |
+| 批处理 | `app/platform/media/moderation.py:review_pending_media_batch`（节流/`force`/计数器沿用 D-10 回收的形状） |
+| 扫描与结案原语 | `app/platform/media/persistence.py`：`list_pending_moderation_media_assets` / `bump_media_moderation_attempts` / `update_media_moderation_status` |
+| 入队 | `mark_media_assets_referenced(queue_moderation=image_review_configured())`，两个 App 写入点（动态发布、真人会话发送） |
+| 下架注入 | `app/products/zhaoxi/jobs/media_moderation.py`（反查 `find_post_owner_by_media_id` → `retire_feed_post_with_outbox(reason='moderation')`） |
+| 调度 | `proactive/orchestration/scheduler.py` 新增 `media_moderation` tick 步骤；`scripts/run_proactive_scheduler.py` 与 admin `run-once` 按 `has_central_role` 注入 |
+| 运维文档 | `docs/ops/platform/image_moderation_setup.md`（阿里云开通、RAM、公网基址校验、三步验证、失败语义） |
+
+1. **App 侧内容不进 `content_moderation_tasks`。** 那张表的 `account_id` 带
+   `FOREIGN KEY → accounts`，而 App 内容属于 `platform_users`（没有 accounts 行）。所以
+   `media_assets.moderation_status` 本身就是状态机，直接调 `review_image_url`，不进审核队列
+   ——不是图省事，是外键不允许。
+2. **送审地址是我们自己签的短 TTL 主人 scope URL。** 阿里云 `ImageModeration` 只收
+   `imageUrl`/OSS 对象、不收字节流，所以必须给它一个能回源取到图的绝对地址。复用主人自己的
+   `pu:` scope 意味着**不新增任何鉴权面**，代价是 `MEDIA_PUBLIC_BASE_URL` 成了硬部署约束：
+   媒体读端点不公网可达，机审就跑不起来（此时恒 `disabled`，连库都不读、不入队）。
+3. **重试耗尽 fail-open 记 `skipped`，不是 `rejected`。** 机审自己坏了不该删用户内容。
+   代价是**云侧配错的表现是"图片全被放过"而不是"队列越堆越长"**，只能靠 `exhausted` 计数与
+   `media moderation gave up` 日志发现，已写进运维文档并建议告警。
+4. **下架排在写 `rejected` 之前。** 下架幂等（outbox 首次写入者胜出），而"已判红线却没下架"
+   会把红线内容留在线上。下架抛错则不结案、留 `pending` 下轮重试，只累加 `takedown_errors`。
+5. **`review` 中间档放过。** D-7 是仅红线；阿里云 review 档误报率不低，先发后审下删掉用户
+   已经看见的内容代价更高。放过但 info 记 categories，供运营事后人工处置。
+6. **微信入站图片路径刻意未改**（`agent_runtime/turns/service.py`）：那些资产属于
+   `accounts`，已经走 `content_moderation_tasks` worker，`queue_moderation` 默认 False。
+
 ### S5 · 许愿创建（约 3 人日）
 
 - `ResidentDraftPreviewPayload` 加互斥 `wish_text` + `client_request_id`；preview 端点
@@ -711,6 +743,17 @@ S3 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 8 例
 `test_companion_world_schema.py` +1：m0055 幂等）；SQLite 档
 `2 failed, 1814 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
 `1846 passed, 9 skipped` 全绿。
+
+S4 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 12 例
+（`test_media_image_moderation.py` 11：未配置时批处理返回 `disabled` 且不动状态、pending 扫描
+按 `(status, created_at)` 顺序取批、`passed` / `rejected` 判定、`review` 档放过、
+`block` 命中先下架动态再写 `rejected`、云侧报错重试且 attempts 累加、attempts 超 3 次
+fail-open 成 `skipped` 并打 `gave up` 日志、会话图片只记判定不撤回、账号隔离（只扫自己主人的
+资产）、以及调度接线——结果落在 tick 的 `media_moderation` 键、机审抛错只进 `errors`
+不拖垮整个 tick、未注入时该键恒为 `{}`；`test_companion_world_schema.py` +1：m0056 幂等）；
+SQLite 档 `2 failed, 1826 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
+`1858 passed, 9 skipped` 全绿。`CLIENT_CONTRACT_VERSION` 不变（S4 无客户端契约变更，
+`test_app_openapi_contract.py` 原样通过）。
 
 计划原文把图文动态测试写在 `tests/test_companion_world_feed_api.py` 上，实际另开了
 `test_companion_world_feed_media.py`：前者守的是 v1 纯文字动态的冻结行为（含空正文 422），

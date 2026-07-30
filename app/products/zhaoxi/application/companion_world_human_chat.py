@@ -26,6 +26,7 @@ from app.db._backend import is_postgres
 from app.db._core import connect
 from app.platform.media.persistence import mark_media_assets_referenced
 from app.platform.media.view import media_preview_text
+from app.platform.moderation.image_review import image_review_configured
 from app.products.zhaoxi.domain.companion_world.human_chat import (
     HUMAN_REPORT_REASONS,
     HUMAN_REPORT_REASONS_VERSION,
@@ -295,6 +296,9 @@ class CompanionWorldHumanChatService:
                             media_ids=[media_id],
                             owner_platform_user_id=platform_user_id,
                             conn=conn,
+                            # 机审配好了才入队；会话图命中红线只记录不撤回（D-7 已知敞口），
+                            # 但审核结论仍要落库，供事后人工处置与 v1.6 撤回补做。
+                            queue_moderation=image_review_configured(),
                         )
                     except ValueError as err:
                         raise HumanChatError("media_ref_invalid") from err
