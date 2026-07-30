@@ -28,6 +28,19 @@ from app.time_utils import beijing_naive_now  # noqa: E402
 DEFAULT_STATE_FILE = "/tmp/ai4all_monitor_health_state.json"
 
 
+def _ensure_schema_best_effort() -> None:
+    """建表兜底：监控只读现有表，被 PG 迁移闸拦下时不该把整轮健康检查带崩。
+
+    闸门见 ``app.db._core._guard_unattended_pg_migrations``——`git pull` 之后、服务重启之前
+    会短暂存在「有待执行迁移」的窗口，此时监控（未 opt-in）会被拒；表其实早已存在，继续跑
+    即可，真缺表时后续查询自会报错。
+    """
+    try:
+        init_db()
+    except RuntimeError as err:
+        print(f"init_db skipped: {err}", file=sys.stderr)
+
+
 def _http_get_json(url: str, timeout: float) -> Tuple[bool, Dict]:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
@@ -497,7 +510,7 @@ def main() -> int:
     if env_schedulers:
         scheduler_values.append(env_schedulers)
     if scheduler_values:
-        init_db()
+        _ensure_schema_best_effort()
         for service, max_age_seconds in _parse_scheduler_specs(scheduler_values):
             error = _check_scheduler(service, max_age_seconds)
             if error:
@@ -535,7 +548,7 @@ def main() -> int:
 
     # 水位采集是测量旁路：每次运行都采，独立于健康告警（不进 errors），失败只打到 stderr。
     if args.record_water_level:
-        init_db()
+        _ensure_schema_best_effort()
         wl_error = _record_water_level(args.water_level_file)
         if wl_error:
             print(wl_error, file=sys.stderr)

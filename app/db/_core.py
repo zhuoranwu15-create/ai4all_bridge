@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import uuid
 from contextlib import contextmanager
@@ -279,17 +280,52 @@ def _guard_automatic_phase1_contract_migrations(conn: Connection) -> None:
         )
 
 
+# PG 上「首次应用迁移」必须是受控部署动作的 opt-in 环境变量。
+# 背景：生产机同时是开发机，`.env` 指向生产 PG，而 pydantic 的 env_file 让**任何**在仓库
+# 目录里手跑的 python 进程都读到它。于是自测时顺手跑一条会触发 init_db 的命令，就把尚未
+# 评审的迁移写进了生产库（2026-07-16 / 07-29 / 07-30 三次，皆无害但均属意外）。
+# 该变量只写进 systemd 单元的 ``Environment=``——**绝不能写进 `.env`**，否则同目录的手跑
+# 进程会一起继承，闸门等于不存在。
+AUTO_MIGRATE_ENV = "AI4ALL_ALLOW_AUTO_MIGRATE"
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def auto_migrate_allowed() -> bool:
+    """当前进程是否获准在 PG 上应用待执行迁移。"""
+    return (os.getenv(AUTO_MIGRATE_ENV, "") or "").strip().lower() in _TRUTHY
+
+
+def _guard_unattended_pg_migrations(conn: Connection) -> None:
+    """未显式 opt-in 的进程不得在 PG 上应用待执行迁移（无待执行迁移时不拦）。"""
+    if auto_migrate_allowed():
+        return
+    _ensure_schema_migrations_table(conn)
+    current = _applied_schema_version(conn)
+    pending = [version for version, _apply in _MIGRATIONS if version > current]
+    if not pending:
+        return
+    raise RuntimeError(
+        "unattended PostgreSQL migration blocked: "
+        f"current={current}, pending={','.join(str(v) for v in pending)}; "
+        f"迁移只应由受控部署应用（systemd 单元已带 {AUTO_MIGRATE_ENV}=1）。"
+        f"本地自测请改用 SQLite（DATABASE_URL=\"\"）或临时库；确需手工迁移生产库时显式加 "
+        f"{AUTO_MIGRATE_ENV}=1 前缀。"
+    )
+
+
 def init_db() -> None:
     """应用所有待执行的 schema 迁移（版本由 schema_migrations 表跟踪）。
 
     PG 后端：用事务级 advisory lock 防止多节点同时 DDL。持锁节点完成迁移后提交释放，
     后续节点持锁时迁移已全部应用，幂等跳过。既有 PG 库不得由应用启动跨越
     Phase 1 contract，必须使用受控逐闸 runner；空库与 SQLite 路径不受影响。
+    另有 opt-in 闸：PG 上有待执行迁移时，只有受控部署进程可以应用（见 AUTO_MIGRATE_ENV）。
     """
     with connect() as conn:
         if is_postgres():
             conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
             _guard_automatic_phase1_contract_migrations(conn)
+            _guard_unattended_pg_migrations(conn)
         _run_migrations(conn)
         if is_postgres():
             _ensure_pg_functions(conn)
