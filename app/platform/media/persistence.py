@@ -22,6 +22,10 @@ from app.time_utils import beijing_now, beijing_now_str
 __all__ = [
     "MEDIA_STATUS_PENDING",
     "MEDIA_STATUS_REFERENCED",
+    "MODERATION_STATUS_PASSED",
+    "MODERATION_STATUS_PENDING",
+    "MODERATION_STATUS_REJECTED",
+    "MODERATION_STATUS_SKIPPED",
     "delete_media_asset_row",
     "get_media_asset",
     "get_media_asset_unscoped",
@@ -35,6 +39,13 @@ __all__ = [
 
 MEDIA_STATUS_PENDING = "pending"
 MEDIA_STATUS_REFERENCED = "referenced"
+
+# 机审状态（m0054 / D-7）。``skipped`` 是默认值，含义是"这份资产没有过审流程"——
+# 未开图片机审时全部如此；开了以后语音资产也仍然是它（v1.5 只审图）。
+MODERATION_STATUS_SKIPPED = "skipped"
+MODERATION_STATUS_PENDING = "pending"
+MODERATION_STATUS_PASSED = "passed"
+MODERATION_STATUS_REJECTED = "rejected"
 
 _MEDIA_KINDS = {"image", "voice"}
 
@@ -167,11 +178,18 @@ def mark_media_assets_referenced(
     media_ids: Sequence[str],
     owner_platform_user_id: str,
     conn: Connection,
+    queue_moderation: bool = False,
 ) -> List[Dict[str, Any]]:
     """把 ``pending`` 资产翻成 ``referenced`` 并清掉 ``expires_at``。
 
     必须在发消息/发动态的**同一事务**内调用（因此 ``conn`` 是必填）。任一 id 不存在、
     不属于该 owner，或已被引用过，就抛 ``ValueError``——上层映射成 ``media_ref_invalid``。
+
+    :param queue_moderation: 顺带把**图片**资产的 ``moderation_status`` 置 ``pending``，
+        交给批处理异步过审（S4 / D-7 先发后审）。由调用方按
+        :func:`app.platform.moderation.image_review.image_review_configured` 决定：
+        机审未配置时传 False，机审状态恒为 ``skipped``，不堆待办。语音资产不入队
+        （v1.5 只审图），所以这里按 ``kind`` 分支而不是无条件写。
     """
     owner_platform_user_id = _required(owner_platform_user_id, "owner_platform_user_id")
     cleaned = [str(mid or "").strip() for mid in media_ids]
@@ -179,13 +197,18 @@ def mark_media_assets_referenced(
         raise ValueError("media_ref is required")
     if len(set(cleaned)) != len(cleaned):
         raise ValueError("duplicated media_ref")
+    moderation_status = (
+        MODERATION_STATUS_PENDING if queue_moderation else MODERATION_STATUS_SKIPPED
+    )
     referenced: List[Dict[str, Any]] = []
     for media_id in cleaned:
         updated = conn.execute(
-            "UPDATE media_assets SET status = ?, expires_at = NULL "
+            "UPDATE media_assets SET status = ?, expires_at = NULL, "
+            "moderation_status = CASE WHEN kind = 'image' THEN ? ELSE moderation_status END "
             "WHERE id = ? AND owner_platform_user_id = ? AND status = ?",
             (
                 MEDIA_STATUS_REFERENCED,
+                moderation_status,
                 media_id,
                 owner_platform_user_id,
                 MEDIA_STATUS_PENDING,

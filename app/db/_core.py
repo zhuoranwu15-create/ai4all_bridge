@@ -4348,6 +4348,29 @@ def _migration_0055_universe_post_media(conn: Connection) -> None:
     )
 
 
+def _migration_0056_media_moderation_scan_index(conn: Connection) -> None:
+    """v1.5 图片机审：待审资产的扫描索引 + 重试次数列。
+
+    索引：m0054 建表时只索引了 owner 与回收路径；S4 的批处理按 ``moderation_status`` 取待审
+    资产，没有索引就是全表扫。绝大多数行恒为 ``skipped``（未开机审时全部如此），因此索引前导列
+    选择性很低——但查询恒带等值条件 ``= 'pending'``，两个后端都能走索引只扫这一小段。
+    刻意不用 partial index：谓词一旦与查询不完全匹配就静默退化成全表扫，收益不值这个脆弱性。
+
+    ``moderation_attempts``：云调用失败的资产会留在 ``pending`` 等下一轮，没有计数就会对着
+    一个坏配置无限重试。达到上限后按**先发后审的 fail-open 口径**记 ``skipped`` 放过，
+    而不是当成命中红线误删用户内容。
+
+    纯加索引 + 带默认值加列，无回填、无锁表风险，两后端幂等。
+    """
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_media_assets_moderation
+            ON media_assets(moderation_status, created_at);
+        """
+    )
+    _ensure_column(conn, "media_assets", "moderation_attempts", "INTEGER NOT NULL DEFAULT 0")
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4399,6 +4422,7 @@ _MIGRATIONS = [
     (53, _migration_0053_resident_intro_post),
     (54, _migration_0054_media_assets),
     (55, _migration_0055_universe_post_media),
+    (56, _migration_0056_media_moderation_scan_index),
 ]
 
 
