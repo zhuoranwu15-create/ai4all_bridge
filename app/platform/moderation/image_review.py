@@ -66,10 +66,12 @@ def _aliyun_credentials() -> Optional[tuple]:
 
 
 def image_review_configured() -> bool:
-    """图片机审此刻是否真的可用（开关 + 凭证 + 场景码全齐）。
+    """云侧图片审核接口此刻能不能调（开关 + 凭证 + 场景码全齐）。
 
-    批处理用它决定"要不要入队"：未配置时连 ``pending`` 都不置，资产的
-    ``moderation_status`` 恒为 ``skipped``，不产生任何待办堆积。
+    **不要用它决定"要不要入队"**：入队与批处理都必须用
+    :func:`app.platform.media.moderation.media_moderation_ready`，它在本函数之上再判
+    ``MEDIA_PUBLIC_BASE_URL``（签不出可回源的 URL 就没法送审）。只判凭证会在缺基址时
+    入一队永远处理不掉的 ``pending``。
     """
     if not bool(getattr(settings, "moderation_image_safety_enabled", False)):
         return False

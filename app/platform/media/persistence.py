@@ -32,6 +32,7 @@ __all__ = [
     "insert_media_asset",
     "bump_media_moderation_attempts",
     "list_expired_pending_media_assets",
+    "list_media_assets_for_owner",
     "list_media_assets_unscoped",
     "list_pending_moderation_media_assets",
     "mark_media_assets_referenced",
@@ -190,9 +191,11 @@ def mark_media_assets_referenced(
 
     :param queue_moderation: 顺带把**图片**资产的 ``moderation_status`` 置 ``pending``，
         交给批处理异步过审（S4 / D-7 先发后审）。由调用方按
-        :func:`app.platform.moderation.image_review.image_review_configured` 决定：
-        机审未配置时传 False，机审状态恒为 ``skipped``，不堆待办。语音资产不入队
-        （v1.5 只审图），所以这里按 ``kind`` 分支而不是无条件写。
+        :func:`app.platform.media.moderation.media_moderation_ready` 决定——**必须是这个谓词**，
+        它比 ``image_review_configured()`` 多判 ``MEDIA_PUBLIC_BASE_URL``，而后者是批处理
+        自己的可运行前提；两边不一致就会入一队 worker 永不处理的 ``pending``。机审不可跑时
+        传 False，机审状态恒为 ``skipped``，不堆待办。语音资产不入队（v1.5 只审图），
+        所以这里按 ``kind`` 分支而不是无条件写。
     """
     owner_platform_user_id = _required(owner_platform_user_id, "owner_platform_user_id")
     cleaned = [str(mid or "").strip() for mid in media_ids]
@@ -323,15 +326,44 @@ def update_media_moderation_status(
     return updated.rowcount == 1
 
 
+def list_media_assets_for_owner(
+    *, owner_platform_user_id: str, conn: Optional[Connection] = None
+) -> List[Dict[str, Any]]:
+    """列出某个主人**全部**资产（含已引用的），按 ``created_at`` 升序。
+
+    只给账号注销的清除用：那条链路必须能看到 ``referenced`` 资产——它们的 ``expires_at``
+    已被置 NULL，孤儿回收永远抓不到（见 :func:`mark_media_assets_referenced`）。
+    """
+    owner_platform_user_id = _required(owner_platform_user_id, "owner_platform_user_id")
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            "SELECT * FROM media_assets WHERE owner_platform_user_id = ? "
+            "ORDER BY created_at ASC, id ASC",
+            (owner_platform_user_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def delete_media_asset_row(
-    *, media_id: str, conn: Optional[Connection] = None, only_pending: bool = True
+    *,
+    media_id: str,
+    conn: Optional[Connection] = None,
+    only_pending: bool = True,
+    owner_platform_user_id: Optional[str] = None,
 ) -> bool:
-    """删除资产行；``only_pending`` 保证回收 job 不会误删已被引用的媒体。"""
+    """删除资产行；``only_pending`` 保证回收 job 不会误删已被引用的媒体。
+
+    ``owner_platform_user_id`` 非空时额外锚定主人，供账号注销用（那条链路要删
+    ``referenced`` 行，因此 ``only_pending=False``，唯一的护栏就是这个 owner 条件）。
+    """
     sql = "DELETE FROM media_assets WHERE id = ?"
     params: List[Any] = [str(media_id or "").strip()]
     if only_pending:
         sql += " AND status = ?"
         params.append(MEDIA_STATUS_PENDING)
+    if owner_platform_user_id is not None:
+        sql += " AND owner_platform_user_id = ?"
+        params.append(_required(owner_platform_user_id, "owner_platform_user_id"))
     with _tx(conn) as tx:
         deleted = tx.execute(sql, tuple(params))
     return deleted.rowcount == 1

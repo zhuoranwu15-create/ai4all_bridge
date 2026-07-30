@@ -329,6 +329,13 @@ SEC-001 / D-B 禁止的是 M1 已下线的**裸 `name + persona_hint` 直通人�
 - 发送失败 = 同上，客户端只需清本地临时文件；
 - **v1.5 不提供"发送后取消"**（那就是撤回，已移出）。
 
+**回收 job 覆盖不到的一条路径：账号注销。** 资产一旦被引用 `expires_at` 就置 NULL，
+D-10 的孤儿回收永远抓不到它，所以注销必须自己按 owner 删库行 + 磁盘文件
+（`application/account_deletion.py:purge_owner_media`）。同一次注销把 `universe_posts`
+及其图片挂载、outbox 与居民告别事件一起删——只删图不删动态会留下一批加载不出图的空壳。
+唯一例外是被 `human_messages` 引用的、自己发出的媒体：与真人会话副本本身保留同理
+（PRD §11.2-10）。
+
 ---
 
 ## 3. CONTENT-003 详解：为什么"任务章节"不是加字段能解决的
@@ -624,7 +631,7 @@ m0055**，下文编号已同步。
 | 阿里云图片接口 | `app/platform/moderation/image_review.py:review_image_url`（解析件复用文本侧 `aliyun_review`）；`review_image_task` 供既有审核 worker 适配 |
 | 批处理 | `app/platform/media/moderation.py:review_pending_media_batch`（节流/`force`/计数器沿用 D-10 回收的形状） |
 | 扫描与结案原语 | `app/platform/media/persistence.py`：`list_pending_moderation_media_assets` / `bump_media_moderation_attempts` / `update_media_moderation_status` |
-| 入队 | `mark_media_assets_referenced(queue_moderation=image_review_configured())`，两个 App 写入点（动态发布、真人会话发送） |
+| 入队 | `mark_media_assets_referenced(queue_moderation=media_moderation_ready())`，三个 App 写入点（AI 会话 turn、真人会话发送、动态发布） |
 | 下架注入 | `app/products/zhaoxi/jobs/media_moderation.py`（反查 `find_post_owner_by_media_id` → `retire_feed_post_with_outbox(reason='moderation')`） |
 | 调度 | `proactive/orchestration/scheduler.py` 新增 `media_moderation` tick 步骤；`scripts/run_proactive_scheduler.py` 与 admin `run-once` 按 `has_central_role` 注入 |
 | 运维文档 | `docs/ops/platform/image_moderation_setup.md`（阿里云开通、RAM、公网基址校验、三步验证、失败语义） |
@@ -644,8 +651,15 @@ m0055**，下文编号已同步。
    会把红线内容留在线上。下架抛错则不结案、留 `pending` 下轮重试，只累加 `takedown_errors`。
 5. **`review` 中间档放过。** D-7 是仅红线；阿里云 review 档误报率不低，先发后审下删掉用户
    已经看见的内容代价更高。放过但 info 记 categories，供运营事后人工处置。
-6. **微信入站图片路径刻意未改**（`agent_runtime/turns/service.py`）：那些资产属于
-   `accounts`，已经走 `content_moderation_tasks` worker，`queue_moderation` 默认 False。
+6. **AI 会话 turn 也入队**（`agent_runtime/turns/service.py`）。S4 首版把这条路径当成
+   "微信入站图片"而漏掉了——它在 `agent_runtime` 下、不在 `companion_world` 目录里，按
+   写入点找必然找不到。实际上微信形态根本不带 `media_asset_id`（走不到这段），带资产的
+   全是 App 的 AI 居民会话，而这恰是用户上传图片最大的一条路径；旧的同步审核对非文本
+   内容恒 `inbound_non_text_skipped`，不入队就等于完全没有审核结论。
+7. **入队谓词就是批处理的可运行谓词**（`media_moderation_ready()`，含 `MEDIA_PUBLIC_BASE_URL`）。
+   S4 首版入队用的是只判凭证的 `image_review_configured()`，与 worker readiness 不一致：
+   凭证齐而基址为空时会入一队永远处理不掉的 `pending`，与本文档"不入队、恒 skipped"的
+   承诺相反。现在三条写入路径与 worker 共用同一个谓词，并有交叉档测试守住这条不变量。
 
 ### S5 · 许愿创建（约 3 人日）
 

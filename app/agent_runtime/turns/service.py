@@ -48,6 +48,7 @@ from app.db import (
 from app.platform.auth.identity import ResolvedIdentity, identity_response_metadata, resolve_openclaw_identity
 from app.platform.media.assets import MediaRefInvalidError
 from app.platform.media.image_understanding import describe_image
+from app.platform.media.moderation import media_moderation_ready
 from app.platform.media.persistence import mark_media_assets_referenced
 from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
@@ -1078,6 +1079,10 @@ def _persist_and_screen_inbound(
                     media_ids=[ctx.media_asset_id],
                     owner_platform_user_id=str(ctx.media_asset_owner_id or ""),
                     conn=conn,
+                    # AI 会话图与 Feed / 真人会话图同样入图片机审队列（S4）：这条是用户上传图片
+                    # 最大的一条路径，旧的同步审核对非文本恒 skip，不入队就等于完全没有审核结论。
+                    # 微信形态无媒体资产（media_asset_id 恒空），走不到这里。
+                    queue_moderation=media_moderation_ready(),
                 )
             except ValueError as err:
                 raise MediaRefInvalidError(str(err)) from err

@@ -27,9 +27,9 @@ from app.db._core import (
     advisory_lock_key,
     connect,
 )
+from app.platform.media.moderation import media_moderation_ready
 from app.platform.media.persistence import mark_media_assets_referenced
 from app.platform.media.view import stored_content_preview
-from app.platform.moderation.image_review import image_review_configured
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
@@ -1934,8 +1934,9 @@ def publish_user_feed_post_with_outbox(
                     media_ids=clean_media_ids,
                     owner_platform_user_id=owner_platform_user_id,
                     conn=tx,
-                    # 机审配好了才入队；没配就恒 skipped，不堆一队永远没人处理的待办。
-                    queue_moderation=image_review_configured(),
+                    # 入队条件必须与批处理的可运行条件是同一个谓词（含 MEDIA_PUBLIC_BASE_URL）：
+                    # 只判凭证的话，缺公网基址时会入一队 worker 永远不会来取的 pending。
+                    queue_moderation=media_moderation_ready(),
                 )
             except ValueError as err:
                 raise ValueError("media_ref_invalid") from err

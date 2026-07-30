@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from io import BytesIO
 from typing import Any, Dict, List
 
@@ -28,6 +29,8 @@ from app.products.zhaoxi.infrastructure.persistence import companion_world as wo
 from app.products.zhaoxi.jobs.media_moderation import review_pending_media_job
 
 BASE_URL = "https://media.example.com"
+# 真人会话链路（邀请码/来访/会话）要求一个固定"现在"，与 S2 会话媒体测试同一取值。
+NOW = datetime(2026, 7, 23, 12, 0, 0)
 
 
 def _result(level: str, *, error: str = "", categories=()) -> MachineReviewResult:
@@ -301,6 +304,167 @@ def _jpeg() -> bytes:
     buffer = BytesIO()
     Image.new("RGB", (12, 8), color="green").save(buffer, format="JPEG")
     return buffer.getvalue()
+
+
+def _upload_image(client, headers) -> str:
+    response = client.post(
+        "/v1/media/uploads",
+        headers=headers,
+        files={"file": ("photo.jpg", _jpeg(), "image/jpeg")},
+        data={"kind": "image"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]["media_id"]
+
+
+def _enable_app_media(fresh_db, monkeypatch) -> None:
+    """打开 P1 与三条写入路径的媒体位（上传门控读 api.media 模块自己的 settings）。"""
+    fresh_db.companion_world_p1_enabled = True
+    fresh_db.companion_world_feed_enabled = True
+    fresh_db.companion_world_chat_image_enabled = True
+    fresh_db.companion_world_feed_image_enabled = True
+    for module in ("app.products.zhaoxi.api.media", "app.products.zhaoxi.api.companion_world"):
+        monkeypatch.setattr(f"{module}.settings.companion_world_feed_image_enabled", True)
+    monkeypatch.setattr(
+        "app.products.zhaoxi.api.media.settings.companion_world_chat_image_enabled", True
+    )
+    monkeypatch.setattr(
+        "app.products.zhaoxi.api.companion_world_human_chat.settings."
+        "companion_world_human_chat_enabled",
+        True,
+    )
+    monkeypatch.setattr(
+        "app.products.zhaoxi.api.companion_world_human_chat.beijing_naive_now", lambda: NOW
+    )
+
+
+def _send_ai_conversation_image(client, headers, *, client_message_id) -> str:
+    """在 AI 居民会话里发一张图，返回 media_id。"""
+    candidates = client.post("/v1/worlds/home/bootstrap", headers=headers).json()["data"][
+        "candidates"
+    ]
+    confirmed = client.post(
+        "/v1/worlds/home/residents/confirm",
+        headers=headers,
+        json={"selections": [{"template_id": candidates[0]["template_id"]}]},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    conversation_id = confirmed.json()["data"]["residents"][0]["conversation_id"]
+    media_id = _upload_image(client, headers)
+    turn = client.post(
+        f"/v1/ai-conversations/{conversation_id}/turn",
+        headers=headers,
+        json={
+            "client_message_id": client_message_id,
+            "text": "这是我拍的",
+            "media_ref": media_id,
+        },
+    )
+    assert turn.status_code == 200, turn.text
+    return media_id
+
+
+def _send_human_chat_image(
+    client, owner_headers, owner_id: str, visitor_id: str, *, client_message_id: str
+) -> str:
+    """在真人会话里发一张图（主人发出），返回 media_id。"""
+    from app.products.zhaoxi.application.companion_world_visits import (
+        CompanionWorldVisitService,
+    )
+
+    world = db.get_or_create_home_universe(platform_user_id=owner_id)
+    db.set_universe_onboarding_state(universe_id=world["id"], onboarding_state="confirmed")
+    service = CompanionWorldVisitService()
+    invitation = service.create_invite(owner_id, now=NOW)
+    visit = service.redeem(visitor_id, code=invitation["code"], now=NOW)
+    conversation = service.accept(owner_id, visit_id=visit["id"], now=NOW)["conversation"]
+    media_id = _upload_image(client, owner_headers)
+    sent = client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=owner_headers,
+        json={"client_message_id": client_message_id, "media_ref": media_id},
+    )
+    assert sent.status_code == 200, sent.text
+    return media_id
+
+
+def test_ai_conversation_image_enters_review_queue(client, fresh_db, monkeypatch):
+    """AI 居民会话的图必须入队：它是用户上传图片最大的一条路径。
+
+    旧的同步审核对非文本内容恒 skip（``moderation/service.py``），这条路径不入队就等于
+    完全没有审核结论。
+    """
+    _configure_moderation(fresh_db)
+    _enable_app_media(fresh_db, monkeypatch)
+    _seed_catalog()
+    headers, _platform_user_id = _login(client, "19911160010")
+
+    media_id = _send_ai_conversation_image(
+        client, headers, client_message_id="ai_moderation_0001"
+    )
+
+    assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "pending"
+    # 结案走同一条批处理；会话图只落结论、不撤回（D-7）。
+    _stub_review(monkeypatch, _result("pass"))
+    reset_media_moderation_throttle()
+    assert review_pending_media_job()["passed"] == 1
+    assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "passed"
+
+
+def test_human_chat_image_enters_review_queue(client, fresh_db, monkeypatch):
+    """真人会话的图同样入队（结论锚在发出者身上）。"""
+    _configure_moderation(fresh_db)
+    _enable_app_media(fresh_db, monkeypatch)
+    owner_headers, owner_id = _login(client, "19911160011")
+    _visitor_headers, visitor_id = _login(client, "19911160012")
+
+    media_id = _send_human_chat_image(
+        client, owner_headers, owner_id, visitor_id, client_message_id="human_moderation_0001"
+    )
+
+    assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "pending"
+
+
+def test_no_write_path_queues_images_when_public_base_url_is_missing(
+    client, fresh_db, monkeypatch
+):
+    """入队条件必须与 worker 可跑条件是同一个谓词。
+
+    凭证齐但缺 ``MEDIA_PUBLIC_BASE_URL`` 时 ``image_review_configured()`` 为 True 而
+    ``media_moderation_ready()`` 为 False。三条写入路径若按前者入队，就会堆一队 worker
+    永远不来取的 ``pending``——文档承诺的是"不入队、恒 skipped"。
+    """
+    from app.platform.moderation.image_review import image_review_configured
+
+    _configure_moderation(fresh_db, base_url="")
+    _enable_app_media(fresh_db, monkeypatch)
+    assert image_review_configured() is True and media_moderation_ready() is False
+    _seed_catalog()
+    headers, owner_id = _login(client, "19911160013")
+    _visitor_headers, visitor_id = _login(client, "19911160014")
+
+    ai_media_id = _send_ai_conversation_image(
+        client, headers, client_message_id="ai_moderation_0002"
+    )
+    human_media_id = _send_human_chat_image(
+        client, headers, owner_id, visitor_id, client_message_id="human_moderation_0002"
+    )
+    feed_media_id = _upload_image(client, headers)
+    published = client.post(
+        "/v1/worlds/home/feed/posts",
+        headers=headers,
+        json={
+            "client_request_id": "moderation-gate-001",
+            "text": "一张照片",
+            "media_refs": [feed_media_id],
+        },
+    )
+    assert published.status_code == 201, published.text
+
+    for media_id in (ai_media_id, human_media_id, feed_media_id):
+        assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "skipped"
+    reset_media_moderation_throttle()
+    assert review_pending_media_batch()["status"] == "disabled"
 
 
 def test_rejected_feed_image_retires_post_and_hides_it_from_owner_feed(

@@ -125,10 +125,14 @@ FROM media_assets ORDER BY created_at DESC LIMIT 5;
 `media_assets.moderation_status` 就是状态机本身，App 侧内容**不进** `content_moderation_tasks`
 队列（那张表的 `account_id` 外键指向 `accounts`，而 App 内容属于 `platform_users`）。
 
+入队的写入路径有三条，覆盖 App 里所有用户上传的图：AI 居民会话 turn、真人会话发送、
+图文动态发布。三处都按同一个 `media_moderation_ready()` 判定，因此不会出现"入了队但
+worker 不肯跑"的永久 `pending`。
+
 | 值 | 含义 |
 | --- | --- |
 | `skipped` | 默认值。未开机审时的一切图片，以及重试耗尽后 fail-open 放过的图片 |
-| `pending` | 已发出、待审（只有图片、且只在机审配好时才会入队） |
+| `pending` | 已发出、待审（只有图片，且只在机审整链可跑时才会入队） |
 | `passed` | 审过放行（含阿里云 `review` 中间档） |
 | `rejected` | 命中红线，已执行下架动作 |
 
