@@ -42,13 +42,18 @@
 交给阿里云回源下载。
 
 因此必须配置 `MEDIA_PUBLIC_BASE_URL` = 媒体读端点的公网绝对基址（如 `https://api.example.com`，
-不带尾斜杠、不带路径）。校验方法：在**外网**机器上执行
+不带尾斜杠、不带路径）。送审 URL 由它直接拼上相对路径 `/v1/media/…`，所以**公网必须有
+`/v1/media/` 这条路由**：aliyun1 填 `https://ai4company.top`，该路径由
+[`deploy/nginx/ai4company.top.conf`](../../../deploy/nginx/ai4company.top.conf) 的
+`location ^~ /v1/media/` 提供（2026-07-31 补上；在那之前请求会落到官网 SPA，拿到 200 HTML，
+表现为阿里云"下载成功"但取到的不是图）。校验方法：在**外网**机器上执行
 
 ```bash
 curl -sI "https://api.example.com/v1/media/whatever"
 ```
 
-期望拿到 4xx 的业务响应（签名缺失/无效），而不是连接超时或 nginx 502——能连通并进到应用层就够了。
+期望拿到 4xx 的**业务**响应（`media_access_denied` / `invalid_request`），而不是连接超时、
+nginx 502，**也不能是 200 HTML**——后者说明请求落到了官网 SPA，路由没配对。
 
 两个必须注意的点：
 

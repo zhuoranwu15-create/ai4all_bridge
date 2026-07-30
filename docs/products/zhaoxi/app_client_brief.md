@@ -105,13 +105,15 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
   `ai-conversations/{id}/turn`、`human-conversations/{id}/messages` 的 `media_ref`
   或 `worlds/home/feed/posts` 的 `media_refs`（≤4 张）。
 - 读媒体用返回的**短 TTL 签名 URL**，**不带 `Authorization`、不要持久化**；`url=null` 渲染占位。
+  该 URL 是 **origin 相对路径**（`/v1/media/…?scope=&exp=&sig=`）：拼 `https://ai4company.top` 即可，
+  **不要拼 base URL**（base 带 `/api/v1/products/zhaoxi` 前缀，拼出来取不到图）。
 - 图片只收 JPEG/PNG（**iOS 的 HEIC 必须客户端先转码**），未被引用的上传 2 小时后失效需重传。
 - 消息新增 `content` 判别联合（`text`/`image`/`audio`），老字段 `message_type`/`text` 已 deprecated。
 - 许愿创建居民：`resident-drafts/preview` 传 `wish_text` + `client_request_id`，出参与表单路径同形，
   预览卡片零改动。
 - 四个能力位 `chat_image_message` / `chat_voice_message` / `feed_image_post` / `resident_wish_create`
-  服务端默认打开，但媒体三位在服务端配好签名密钥前仍下发 `false`（此时上传返回
-  `media_disabled`）。**一律按能力位渲染，为假时入口必须隐藏**。完整契约与红线见
+  **生产已全部为 `true`**（签名密钥 2026-07-31 配置完成）。**仍要一律按能力位渲染，
+  为假时入口必须隐藏**——服务端可能临时收回。完整契约与红线见
   [`app_api_handoff.md`](app_api_handoff.md) §6.5 / §6.6，联调前置见 §9.1。
 
 ## 6.1 「我的」Tab（2026-07-26 新增）
