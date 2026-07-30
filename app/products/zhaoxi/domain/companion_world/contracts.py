@@ -462,6 +462,8 @@ class WorldRepository(Protocol):
         persona_seed_json: str,
         safety_json: Optional[str],
         expires_at: str,
+        source: str = "form",
+        wish_request_id: Optional[str] = None,
     ) -> ResidentDraftRecord: ...
 
     def get_resident_draft(
@@ -471,6 +473,12 @@ class WorldRepository(Protocol):
     def get_resident_draft_by_request(
         self, platform_user_id: str, client_request_id: str
     ) -> Optional[ResidentDraftRecord]: ...
+
+    def get_resident_draft_by_wish_request(
+        self, platform_user_id: str, wish_request_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def count_wish_drafts_since(self, platform_user_id: str, since: str) -> int: ...
 
     def consume_resident_draft(
         self,

@@ -380,6 +380,9 @@ class Settings(BaseSettings):
     companion_world_chat_voice_enabled: bool = False
     companion_world_feed_image_enabled: bool = False
     companion_world_resident_wish_enabled: bool = False
+    # 每人每日许愿预览次数上限（每次预览要跑一次清洗 + 一次生成，故按预览计而非按创建计）。
+    # 同一 client_request_id 的重放不计次；<=0 表示不限制。
+    companion_world_wish_daily_max: int = 10
 
     # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
     # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。

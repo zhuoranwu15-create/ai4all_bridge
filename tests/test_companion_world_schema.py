@@ -28,6 +28,7 @@ from app.db._core import (
     _migration_0054_media_assets,
     _migration_0055_universe_post_media,
     _migration_0056_media_moderation_scan_index,
+    _migration_0057_resident_wish_drafts,
 )
 
 _P1_TABLES = (
@@ -81,14 +82,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        56,
-        _migration_0056_media_moderation_scan_index,
+        57,
+        _migration_0057_resident_wish_drafts,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 56
+        assert int(version) == 57
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -583,6 +584,18 @@ def test_m0056_media_moderation_scan_index_and_idempotency(fresh_db):
         conn.execute(
             "SELECT id, moderation_attempts FROM media_assets "
             "WHERE moderation_status = 'pending' ORDER BY created_at ASC"
+        ).fetchall()
+
+
+def test_m0057_wish_draft_columns_and_idempotency(fresh_db):
+    """m0057：许愿来源与许愿幂等键可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0057_resident_wish_drafts(conn)
+        _migration_0057_resident_wish_drafts(conn)
+        conn.execute(
+            "SELECT id, source, wish_request_id FROM resident_drafts "
+            "WHERE platform_user_id = 'nobody' AND source = 'wish' "
+            "ORDER BY created_at ASC"
         ).fetchall()
 
 

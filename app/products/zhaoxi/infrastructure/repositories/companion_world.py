@@ -390,6 +390,8 @@ class SqlCompanionWorldRepository(WorldRepository):
         persona_seed_json: str,
         safety_json: Optional[str],
         expires_at: str,
+        source: str = "form",
+        wish_request_id: Optional[str] = None,
     ) -> ResidentDraftRecord:
         row = world_db.insert_resident_draft(
             platform_user_id=platform_user_id,
@@ -406,9 +408,29 @@ class SqlCompanionWorldRepository(WorldRepository):
             persona_seed_json=persona_seed_json,
             safety_json=safety_json,
             expires_at=expires_at,
+            source=source,
+            wish_request_id=wish_request_id,
             conn=self._conn,
         )
         return _resident_draft(row)
+
+    def get_resident_draft_by_wish_request(
+        self, platform_user_id: str, wish_request_id: str
+    ) -> Optional[ResidentDraftRecord]:
+        row = world_db.get_resident_draft_by_wish_request(
+            platform_user_id=platform_user_id,
+            wish_request_id=wish_request_id,
+            conn=self._conn,
+        )
+        return _resident_draft(row) if row else None
+
+    def count_wish_drafts_since(self, platform_user_id: str, since: str) -> int:
+        return world_db.count_resident_drafts_since(
+            platform_user_id=platform_user_id,
+            source="wish",
+            since=since,
+            conn=self._conn,
+        )
 
     def get_resident_draft(
         self, draft_token: str, platform_user_id: str

@@ -1,8 +1,8 @@
 # Companion World App v1.5 服务端开发计划
 
 更新时间：2026-07-30
-状态：**S0–S4 已实现，待 PR 合并**；仅剩 S5（许愿创建）未开工。
-分支：S0 在 `feat/companion-world-v1-5-s0`，S1–S4 在 `feat/companion-world-v1-5-s1`。
+状态：**S0–S5 全部已实现，待 PR 合并**。
+分支：S0 在 `feat/companion-world-v1-5-s0`，S1–S5 在 `feat/companion-world-v1-5-s1`。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World v1.5 服务端需求清单 V0.3》（`/home/jack/companion_world_v1_5_server_requirements.md`）。
@@ -654,6 +654,35 @@ m0055**，下文编号已同步。
 - LLM 生成 → 复用 `render_persona` 落草稿（保住"所见即所存"）→ 既有 `draft_token` 链路。
 - 自由文本审核（真人复刻 / 已故亲友 / 监护恋爱混合等高风险设定）+ 频率限制经 `AppConfigLimits` 下发。
 
+**S5 全部条目已实现**（2026-07-30，分支 `feat/companion-world-v1-5-s1`）。落点与实现决定：
+
+| 条目 | 落点 |
+| --- | --- |
+| m0057 | `app/db/_core.py:_migration_0057_resident_wish_drafts`（`resident_drafts` 加 `source` / `wish_request_id` + 两个索引） |
+| 许愿翻译 | `app/products/zhaoxi/application/companion_world_wish.py:generate_wish_persona`（清洗 → LLM → 受控取值收敛） |
+| 生成前关卡 | `domain/companion_world/service.py:begin_wish_preview`（幂等重放 / 世界可用性 / 日额度）与 `_render_draft` |
+| 持久化 | `infrastructure/persistence/companion_world.py`：`insert_resident_draft(source=, wish_request_id=)`、`get_resident_draft_by_wish_request`、`count_resident_drafts_since` |
+| API | `api/companion_world.py`：`ResidentDraftPreviewPayload` 双路径互斥校验、`_preview_from_wish`、`response_model=ResidentDraftPreviewResponse` |
+| 契约 | `api/contracts.py:ResidentDraftPreviewData` + `AppConfigLimits.wish_text_chars/wish_daily_max`；`CLIENT_CONTRACT_VERSION=2026-07-30` |
+| 配置 | `COMPANION_WORLD_WISH_DAILY_MAX=10`（`app/config.py` + `.env.example`） |
+
+1. **许愿幂等键单开一列 `wish_request_id`，不复用 `client_request_id`。** 后者是 m0048 定下的
+   **消费阶段**键（IDEM-001，确认创建时才写）。两者合用一列会让"预览重试"和"确认创建"抢同一个
+   唯一约束：预览一落库就占了消费键，之后真正的创建幂等无从判断。
+2. **模型输出一律不可信，越界取值一律收敛而不是报错。** 关系→默认 `friend`、性格标签→过白名单
+   去重截 3（空则兜底 `gentle`）、头像→按名字 sha256 在 `sorted(AVATAR_KEYS)` 里确定性挑一张。
+   理由：把模型抖动变成用户可见 4xx，等于"同一句话有时能建有时不能"。唯一不可收敛的是名字——
+   渲染必须有个能显示的名字，取不到就 `wish_generation_failed` 让用户重试。
+3. **重放、世界可用性、日额度都判在生成之前。** 用户不会"花了一次 LLM 才被告知世界没就绪/额度已满"。
+   代价是同一用户自己并发许愿时额度有 TOCTOU 窗口（最多多放一两次），可接受。
+4. **额度按预览计，不按创建计。** 一次预览就是一次清洗 + 一次生成，成本发生在预览；重放不计次。
+5. **清洗器不可用复用既有 `content_review_unavailable`（503），不新造码。** 同一个子系统同一个码；
+   新码 `wish_generation_failed` 专指"翻译成受控取值"那一步的模型不可用。两者对客户端都是稍后重试。
+6. **结构化字段在 payload 里降级为 Optional 只是为了两条路径共用一个模型。** 表单路径的必填性
+   由 `_clean_draft` 校验器保证，缺字段仍是 422 `invalid_request`，与 v1.5 之前逐字节相同。
+7. **`preview` 出参形状三条路径同源**（表单 / 许愿 / 重放共用 `_draft_preview_data`），
+   客户端预览卡片零改动；重放靠纯函数 `render_persona` 从草稿行重算，因此与首次响应逐字段等值。
+
 **总量约 20 人日**（撤回移出后从原估 25 降下来），不含司辰人设/文案/头像等产品侧交付物
 ——那些是 S0 的外部阻塞项。
 
@@ -754,6 +783,17 @@ fail-open 成 `skipped` 并打 `gave up` 日志、会话图片只记判定不撤
 SQLite 档 `2 failed, 1826 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
 `1858 passed, 9 skipped` 全绿。`CLIENT_CONTRACT_VERSION` 不变（S4 无客户端契约变更，
 `test_app_openapi_contract.py` 原样通过）。
+
+S5 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 16 例
+（`test_companion_world_wish.py` 15：flag 关闭时 404 且一次模型都不调、happy path 落受控人设
+且 `draft_token` 可消费、白名单外取值收敛不报错、生成报错与名字不可用同为 503 且不落半成品、
+硬拒绝 422 与清洗器不可用 503 分码且都发生在生成之前、同 `client_request_id` 重放逐字段等值
+只调一次模型只落一份草稿、`wish_request_id` 按主人隔离、日额度 429 且重放不计次、五种非法
+payload 形状恒 422、表单路径出参与 `source='form'` 不受影响、`/app/config` 下发两项许愿限额；
+`test_companion_world_schema.py` +1：m0057 幂等）；SQLite 档 `2 failed, 1842 passed, 39 skipped`
+（failed 同上，本机 sqlite 版本问题），PG 档 `1874 passed, 9 skipped` 全绿。
+`CLIENT_CONTRACT_VERSION` 推到 `2026-07-30`，`app_v1.json` 已重导——本批同时把 preview 端点
+从裸 dict 换成 `ResidentDraftPreviewResponse`，§8 记的那笔技术债在这里还上了一半（visits 家族仍欠）。
 
 计划原文把图文动态测试写在 `tests/test_companion_world_feed_api.py` 上，实际另开了
 `test_companion_world_feed_media.py`：前者守的是 v1 纯文字动态的冻结行为（含空正文 422），

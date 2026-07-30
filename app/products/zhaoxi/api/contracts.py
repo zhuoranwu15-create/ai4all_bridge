@@ -79,6 +79,10 @@ class AppConfigLimits(BaseModel):
     image_count_max: int          # 动态单条上限；聊天图片消息恒为 1 张
     voice_bytes_max: int
     voice_duration_ms_max: int
+    # v1.5 许愿创建（WISH-001）：一句话许愿的字数上限与每人每日许愿次数上限。
+    # ``wish_daily_max <= 0`` 表示服务端未设限，客户端不必自行做次数拦截。
+    wish_text_chars: int
+    wish_daily_max: int
 
 
 class AppConfigMinimumVersionByPlatform(BaseModel):
@@ -421,6 +425,27 @@ class FeedRetireData(BaseModel):
     replayed: bool
 
 
+# --- B 类 data：自建角色草稿预览 -------------------------------------------
+
+
+class ResidentDraftPreviewData(BaseModel):
+    """草稿预览回显（表单与许愿两条路径同形）。
+
+    这些字段就是最终会落进居民人设的值——「所见即所存」；``draft_token`` 一次性，
+    在 ``expires_at`` 前拿去确认创建。许愿路径重放同一 ``client_request_id`` 时逐字段等值。
+    """
+
+    draft_id: str
+    draft_token: str
+    expires_at: str
+    name: str
+    avatar_ref: Optional[str] = None
+    relationship_display: str
+    tags: List[str]
+    normalized_summary: str
+    ai_identity_notice: str
+
+
 # --- B 类 data：媒体上传（v1.5 S1）-----------------------------------------
 
 
@@ -510,6 +535,7 @@ TurnResponse = WorldEnvelope[TurnData]
 FeedListResponse = WorldEnvelope[FeedListData]
 FeedPostResponse = WorldEnvelope[FeedPostData]
 FeedRetireResponse = WorldEnvelope[FeedRetireData]
+ResidentDraftPreviewResponse = WorldEnvelope[ResidentDraftPreviewData]
 HumanConversationListResponse = WorldEnvelope[HumanConversationListData]
 MediaUploadResponse = WorldEnvelope[MediaUploadData]
 HumanReportOptionsResponse = WorldEnvelope[HumanReportOptionsData]
@@ -543,6 +569,7 @@ __all__ = [
     "NotificationPreferencesResponse",
     "ProfileOptionsResponse",
     "ProfileUpdateResponse",
+    "ResidentDraftPreviewResponse",
     "ResidentListResponse",
     "TurnResponse",
     "WORLD_ERROR_RESPONSES",

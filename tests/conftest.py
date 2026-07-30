@@ -373,6 +373,7 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_chat_voice_enabled = False
     s.companion_world_feed_image_enabled = False
     s.companion_world_resident_wish_enabled = False
+    s.companion_world_wish_daily_max = 10
     # v1.5 媒体地基：数值必须显式给，MagicMock 的 __int__ 恒为 1，否则 /app/config 的限额
     # 会静默变成 1 字节、契约测试也失去意义。签名密钥给固定测试值，与生产的"留空即报错"无关。
     s.media_storage_dir = str(tmp_path / "media")

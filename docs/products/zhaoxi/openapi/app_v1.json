@@ -213,6 +213,14 @@
           "voice_duration_ms_max": {
             "title": "Voice Duration Ms Max",
             "type": "integer"
+          },
+          "wish_daily_max": {
+            "title": "Wish Daily Max",
+            "type": "integer"
+          },
+          "wish_text_chars": {
+            "title": "Wish Text Chars",
+            "type": "integer"
           }
         },
         "required": [
@@ -222,7 +230,9 @@
           "image_bytes_max",
           "image_count_max",
           "voice_bytes_max",
-          "voice_duration_ms_max"
+          "voice_duration_ms_max",
+          "wish_text_chars",
+          "wish_daily_max"
         ],
         "title": "AppConfigLimits",
         "type": "object"
@@ -2049,30 +2059,124 @@
         "title": "ResidentData",
         "type": "object"
       },
-      "ResidentDraftPreviewPayload": {
-        "additionalProperties": false,
-        "description": "自建角色第一步：结构化设定 + 自由文本，服务端清洗后渲染出可预览的人设。",
+      "ResidentDraftPreviewData": {
+        "description": "草稿预览回显（表单与许愿两条路径同形）。\n\n这些字段就是最终会落进居民人设的值——「所见即所存」；``draft_token`` 一次性，\n在 ``expires_at`` 前拿去确认创建。许愿路径重放同一 ``client_request_id`` 时逐字段等值。",
         "properties": {
-          "avatar_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Avatar Key",
+          "ai_identity_notice": {
+            "title": "Ai Identity Notice",
+            "type": "string"
+          },
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_token": {
+            "title": "Draft Token",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
             "type": "string"
           },
           "name": {
-            "maxLength": 20,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
-          "personality_traits": {
+          "normalized_summary": {
+            "title": "Normalized Summary",
+            "type": "string"
+          },
+          "relationship_display": {
+            "title": "Relationship Display",
+            "type": "string"
+          },
+          "tags": {
             "items": {
               "type": "string"
             },
-            "maxItems": 3,
-            "minItems": 1,
-            "title": "Personality Traits",
+            "title": "Tags",
             "type": "array"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_token",
+          "expires_at",
+          "name",
+          "relationship_display",
+          "tags",
+          "normalized_summary",
+          "ai_identity_notice"
+        ],
+        "title": "ResidentDraftPreviewData",
+        "type": "object"
+      },
+      "ResidentDraftPreviewPayload": {
+        "additionalProperties": false,
+        "description": "自建角色第一步。两条**互斥**路径，出参形状完全一致（客户端预览卡片零改动）：\n\n- **表单**（M1 起的既有路径）：结构化设定 + 可选自由文本，服务端清洗后渲染人设；\n- **许愿**（v1.5 WISH-001）：只给 ``wish_text`` + ``client_request_id``，服务端先清洗，\n  再由 LLM 翻译成同一套受控取值，交给同一个渲染函数。\n\n结构化字段在此声明为可选**只是**为了让两条路径共用一个模型；表单路径的必填性由\n校验器保证，缺字段仍然是 422，与 v1.5 之前逐字节相同。",
+        "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "personality_traits": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personality Traits"
           },
           "relationship_label": {
             "anyOf": [
@@ -2087,10 +2191,16 @@
             "title": "Relationship Label"
           },
           "relationship_type": {
-            "maxLength": 32,
-            "minLength": 1,
-            "title": "Relationship Type",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship Type"
           },
           "style_note": {
             "anyOf": [
@@ -2103,14 +2213,20 @@
               }
             ],
             "title": "Style Note"
+          },
+          "wish_text": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wish Text"
           }
         },
-        "required": [
-          "name",
-          "avatar_key",
-          "relationship_type",
-          "personality_traits"
-        ],
         "title": "ResidentDraftPreviewPayload",
         "type": "object"
       },
@@ -2725,6 +2841,36 @@
           "data"
         ],
         "title": "WorldEnvelope[NotificationPreferencesData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ResidentDraftPreviewData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentDraftPreviewData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentDraftPreviewData]",
         "type": "object"
       },
       "WorldEnvelope_ResidentListData_": {
@@ -7306,7 +7452,7 @@
     },
     "/v1/worlds/home/resident-drafts/preview": {
       "post": {
-        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。",
+        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。\n许愿路径（``wish_text``）在清洗之后多一步「LLM 翻译成受控取值」，此后与表单路径\n完全同源——自由文本仍然不直通人设。",
         "operationId": "preview_resident_draft_v1_worlds_home_resident_drafts_preview_post",
         "parameters": [
           {
@@ -7341,23 +7487,71 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Preview Resident Draft V1 Worlds Home Resident Drafts Preview Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentDraftPreviewData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
           }
         },
         "summary": "Preview Resident Draft",

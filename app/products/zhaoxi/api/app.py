@@ -49,6 +49,7 @@ from app.products.zhaoxi.api.contracts import (
     ProfileUpdateResponse,
 )
 from app.products.zhaoxi.application.account_deletion import delete_account_now
+from app.products.zhaoxi.application.companion_world_wish import MAX_WISH_TEXT_CHARS
 from app.products.zhaoxi.domain.user_profile import (
     MAX_NICKNAME_CHARS,
     UserProfileError,
@@ -85,7 +86,7 @@ router = APIRouter(tags=["app-v1"])
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 
 # App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
-CLIENT_CONTRACT_VERSION = "2026-07-29"
+CLIENT_CONTRACT_VERSION = "2026-07-30"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))
@@ -329,6 +330,9 @@ def app_config(response: Response) -> dict:
             "image_count_max": int(settings.media_image_count_max),
             "voice_bytes_max": int(settings.media_voice_max_bytes),
             "voice_duration_ms_max": int(settings.media_voice_max_duration_ms),
+            # 许愿限额同理恒下发；日额度 <=0 表示服务端不设限。
+            "wish_text_chars": MAX_WISH_TEXT_CHARS,
+            "wish_daily_max": int(settings.companion_world_wish_daily_max),
         },
         "client_contract_version": CLIENT_CONTRACT_VERSION,
         "server_time": beijing_now().isoformat(timespec="seconds"),

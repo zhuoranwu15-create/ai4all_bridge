@@ -385,9 +385,15 @@ def insert_resident_draft(
     persona_seed_json: str,
     safety_json: Optional[str],
     expires_at: str,
+    source: str = "form",
+    wish_request_id: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> Dict[str, Any]:
-    """落一条自建角色草稿。行内的文本必须**已过清洗器**，原文不入库。"""
+    """落一条自建角色草稿。行内的文本必须**已过清洗器**，原文不入库。
+
+    ``source``/``wish_request_id`` 见 m0057：许愿路径用后者做 **preview 阶段**幂等，
+    与消费阶段的 ``client_request_id`` 分列两列。
+    """
     draft_id = _new_id("draft")
     with _tx(conn) as tx:
         tx.execute(
@@ -395,9 +401,10 @@ def insert_resident_draft(
             INSERT INTO resident_drafts(
                 id, platform_user_id, draft_token, name, avatar_key, relationship_type,
                 relationship_label, personality_traits_json, style_note,
-                normalized_summary, persona_seed_json, safety_json, expires_at
+                normalized_summary, persona_seed_json, safety_json, expires_at,
+                source, wish_request_id
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 draft_id,
@@ -413,6 +420,8 @@ def insert_resident_draft(
                 persona_seed_json,
                 safety_json,
                 expires_at,
+                source,
+                wish_request_id,
             ),
         )
         row = tx.execute(
@@ -452,6 +461,46 @@ def get_resident_draft_by_client_request(
             (platform_user_id, client_request_id),
         ).fetchone()
     return dict(row) if row else None
+
+
+def get_resident_draft_by_wish_request(
+    *,
+    platform_user_id: str,
+    wish_request_id: str,
+    conn: Optional[Connection] = None,
+) -> Optional[Dict[str, Any]]:
+    """WISH-005：按 (platform_user_id, wish_request_id) 找许愿草稿，供 preview 幂等重放。
+
+    owner-scoped：别人的 ``wish_request_id`` 与不存在一样返回 None，重放不跨账号。
+    """
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT * FROM resident_drafts
+            WHERE platform_user_id = ? AND wish_request_id = ?
+            """,
+            (platform_user_id, wish_request_id),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def count_resident_drafts_since(
+    *,
+    platform_user_id: str,
+    source: str,
+    since: str,
+    conn: Optional[Connection] = None,
+) -> int:
+    """数某个来源的草稿在 ``since`` 之后的条数；许愿日额度用它，恒按 owner 约束。"""
+    with _tx(conn) as tx:
+        row = tx.execute(
+            """
+            SELECT COUNT(*) AS n FROM resident_drafts
+            WHERE platform_user_id = ? AND source = ? AND created_at >= ?
+            """,
+            (platform_user_id, source, since),
+        ).fetchone()
+    return int(row["n"] if row else 0)
 
 
 def consume_resident_draft(

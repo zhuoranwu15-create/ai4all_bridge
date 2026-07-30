@@ -4371,6 +4371,36 @@ def _migration_0056_media_moderation_scan_index(conn: Connection) -> None:
     _ensure_column(conn, "media_assets", "moderation_attempts", "INTEGER NOT NULL DEFAULT 0")
 
 
+def _migration_0057_resident_wish_drafts(conn: Connection) -> None:
+    """v1.5 许愿创建（WISH-001/005）：草稿加来源与许愿幂等键。
+
+    ``source``：``form``（结构化表单，m0048 起的既有路径）| ``wish``（一句话许愿，LLM 生成）。
+    存量行按 ``form`` 回落——它们全部来自表单路径，语义准确。
+
+    ``wish_request_id``：**preview 阶段**的幂等键，与既有 ``client_request_id``（消费阶段的
+    IDEM-001 键）刻意分列两列。合用一列会让"预览重试"与"确认创建"抢同一个唯一约束：
+    preview 先占了 (user, id)，随后 create 再往同一行写同一个 id 就分不清是重放还是新请求。
+    分列之后语义清晰——同一个 ``wish_request_id`` 恒等于同一份草稿，重试不会产生第二份草稿、
+    也不会产生第二次 LLM 计费。
+
+    ``ix_resident_drafts_wish_window`` 服务于日额度计数（按 owner + source 数时间窗内的许愿
+    次数）。计数恒带 ``platform_user_id`` 等值条件，账号隔离由查询与索引共同保证。
+
+    纯加列 + 加索引，无回填、无锁表风险，两后端幂等。
+    """
+    _ensure_column(conn, "resident_drafts", "source", "TEXT NOT NULL DEFAULT 'form'")
+    _ensure_column(conn, "resident_drafts", "wish_request_id", "TEXT")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_drafts_wish_request
+            ON resident_drafts(platform_user_id, wish_request_id)
+            WHERE wish_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_resident_drafts_wish_window
+            ON resident_drafts(platform_user_id, source, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4423,6 +4453,7 @@ _MIGRATIONS = [
     (54, _migration_0054_media_assets),
     (55, _migration_0055_universe_post_media),
     (56, _migration_0056_media_moderation_scan_index),
+    (57, _migration_0057_resident_wish_drafts),
 ]
 
 
