@@ -13,7 +13,7 @@ snapshot 一致。**改响应字段必须同时改这里并重新导出 snapshot
 """
 from __future__ import annotations
 
-from typing import Generic, List, Optional, TypeVar
+from typing import Annotated, Generic, List, Literal, Optional, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -260,12 +260,64 @@ class ConversationListData(BaseModel):
     next_cursor: Optional[str] = None
 
 
+class TextMessageContent(BaseModel):
+    """纯文本消息。存量消息（v1.5 之前的全部消息）都投影成这一支。"""
+
+    type: Literal["text"] = "text"
+    text: str = ""
+
+
+class ImageMessageContent(BaseModel):
+    """图片消息。
+
+    ``url`` 是**短 TTL 签名地址**，每次读接口现签，不要持久化或跨会话复用。为 null 表示
+    服务端此刻签不出（部署缺 secret，或访客拜访已结束）——按占位渲染，不要降级成文本。
+    ``text`` 是用户自己写的 caption，**不含**服务端生成的图片描述（D-2 红线）。
+    """
+
+    type: Literal["image"] = "image"
+    text: str = ""
+    media_id: str
+    url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class AudioMessageContent(BaseModel):
+    """语音消息。``transcript`` 是上传时同步转写的结果，供"长按转文字"；转写失败为 null。"""
+
+    type: Literal["audio"] = "audio"
+    text: str = ""
+    media_id: str
+    url: Optional[str] = None
+    duration_ms: Optional[int] = None
+    transcript: Optional[str] = None
+
+
+# D-1：``content.type`` 是**唯一权威判别字段**。客户端遇到未知 type 按占位降级，
+# 不要再拿 ``message_type`` 做分支。
+MessageContent = Annotated[
+    Union[TextMessageContent, ImageMessageContent, AudioMessageContent],
+    Field(discriminator="type"),
+]
+
+
 class ConversationMessageItem(BaseModel):
+    """``message_type`` 与 ``text`` 是 v1.5 之前的老字段，服务端保证与 ``content`` 一致：
+
+    - ``message_type`` **deprecated**，恒等于 ``content.type``（``audio`` 除外——历史上
+      库内 ``message_type`` 用 ``voice``，这里统一投影成 ``content.type`` 的取值）；
+    - ``text`` 恒等于 ``content.text``，即用户自己写的正文/caption。
+
+    新客户端只读 ``content``。
+    """
+
     id: int
     message_id: Optional[str] = None
     role: str
     message_type: str
     text: Optional[str] = None
+    content: MessageContent
     created_at: Optional[str] = None
 
 

@@ -108,6 +108,20 @@ def _assert_shape(value, schema: dict, spec: dict, where: str) -> None:
             return
         _assert_shape(value, branches[0], spec, where)
         return
+    if "oneOf" in schema:
+        # 判别联合（MessageContent）：按 discriminator 的取值选分支，选不中就是契约漏了一支。
+        if value is None:
+            return
+        field = (schema.get("discriminator") or {}).get("propertyName", "type")
+        assert isinstance(value, dict), f"{where} 期望对象，实际 {type(value).__name__}"
+        tag = value.get(field)
+        for branch in schema["oneOf"]:
+            resolved = _resolve(branch, spec)
+            const = (resolved.get("properties") or {}).get(field, {})
+            if tag in (const.get("const"), *const.get("enum", [])):
+                _assert_shape(value, resolved, spec, f"{where}<{tag}>")
+                return
+        raise AssertionError(f"{where} 的 {field}={tag!r} 在契约的 oneOf 里没有对应分支")
     if value is None:
         return
     if schema.get("type") == "array":

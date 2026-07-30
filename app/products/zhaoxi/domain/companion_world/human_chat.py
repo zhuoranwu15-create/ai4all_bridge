@@ -84,10 +84,15 @@ def human_conversation_transition_allowed(
     )
 
 
-def normalize_human_message_body(body_text: str, *, max_chars: int = 4000) -> str:
-    """校验并返回首版真人纯文字正文，不接受空白或超长内容。"""
+def normalize_human_message_body(
+    body_text: str, *, max_chars: int = 4000, allow_empty: bool = False
+) -> str:
+    """校验并返回真人消息正文，不接受超长内容。
+
+    ``allow_empty`` 供 v1.5 媒体消息使用：图片不带 caption 是常态，但长度上限仍然生效。
+    """
     cleaned = str(body_text or "").strip()
-    if not cleaned:
+    if not cleaned and not allow_empty:
         raise ValueError("human message body is required")
     if len(cleaned) > max_chars:
         raise ValueError("human message body is too long")

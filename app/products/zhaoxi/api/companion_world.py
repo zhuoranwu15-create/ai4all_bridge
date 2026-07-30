@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import logging
 import re
 import secrets
 import uuid
@@ -35,6 +36,26 @@ from app.products.zhaoxi.api.contracts import (
     FeedRetireResponse,
     ResidentListResponse,
     TurnResponse,
+)
+from app.platform.media.access import owner_scope, owner_ttl_seconds
+from app.platform.media.assets import (
+    MEDIA_KIND_IMAGE,
+    MEDIA_KIND_VOICE,
+    MediaRefInvalidError,
+    read_media_file,
+)
+from app.platform.media.persistence import (
+    MEDIA_STATUS_PENDING,
+    MEDIA_STATUS_REFERENCED,
+    get_media_asset,
+    list_media_assets_unscoped,
+)
+from app.platform.media.view import (
+    build_media_content,
+    build_stored_content,
+    decode_stored_content,
+    media_preview_text,
+    text_content,
 )
 from app.platform.moderation.text_sanitizer import (
     FIELD_DISPLAY_NAME,
@@ -68,12 +89,15 @@ from app.products.zhaoxi.application import (
     SqlCompanionWorldRepository,
     run_companion_world_turn,
 )
+from app.schemas import MediaPayload
 from app.time_utils import beijing_now
 from app.routers.deps import _resolve_legacy_session_principal
 from app.products.zhaoxi.manifest import (
     CANONICAL_API_PREFIX,
     PROXY_STRIPPED_API_PREFIX,
 )
+
+logger = logging.getLogger("ai4all.products.zhaoxi.companion_world")
 
 router = APIRouter(tags=["companion-world"])
 
@@ -268,12 +292,17 @@ class ConversationTurnPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     client_message_id: str = Field(min_length=8, max_length=64)
-    text: str = Field(min_length=1, max_length=4000)
+    # v1.5：``text`` 与 ``media_ref`` 至少给一个（图片不带 caption 是常态）。
+    # 「两个都空」刻意不在这里拦，而是由端点抛 ``media_content_required``——校验错误统一
+    # 收敛成 ``invalid_request``，客户端分不出是格式错还是内容缺失。
+    text: str = Field(default="", max_length=4000)
+    media_ref: Optional[str] = Field(default=None, max_length=64)
 
     @model_validator(mode="after")
     def _clean_turn(self) -> "ConversationTurnPayload":
         self.text = self.text.strip()
-        if not self.text or not _CLIENT_MESSAGE_ID_RE.fullmatch(self.client_message_id):
+        self.media_ref = (self.media_ref or "").strip() or None
+        if not _CLIENT_MESSAGE_ID_RE.fullmatch(self.client_message_id):
             raise ValueError("invalid turn payload")
         return self
 
@@ -430,6 +459,133 @@ def _conversation_data(item) -> dict:
         "can_send": item.can_send,
         "read_only_reason": item.read_only_reason,
     }
+
+
+def chat_media_enabled(kind: str) -> bool:
+    """聊天媒体按 kind 分别门控；与上传门控（图文动态也能开图片上传）刻意分开。"""
+    if kind == MEDIA_KIND_IMAGE:
+        return bool(getattr(settings, "companion_world_chat_image_enabled", False))
+    if kind == MEDIA_KIND_VOICE:
+        return bool(getattr(settings, "companion_world_chat_voice_enabled", False))
+    return False
+
+
+def resolve_chat_media(*, media_ref: str, platform_user_id: str) -> Dict[str, Any]:
+    """把 ``media_ref`` 解析成一条可发送的资产行（AI 会话与真人会话共用）。
+
+    只判「能不能发」：owner 锚定（跨 owner 与不存在合并成同一码，不给资源枚举信号）、
+    kind 门控、状态与回收期。真正的认领（``pending`` → ``referenced``）必须留到消息落库的
+    **同一事务**里做，在这里翻状态会在后续失败时留下永不回收的孤儿。
+
+    ``referenced`` 也放行，一次性语义由那次原子认领独家把守：客户端拿同一个
+    ``client_message_id`` 重试时资产已经是 ``referenced``，在这里拒掉会让本该幂等的重试
+    报错；而真的拿旧资产发新消息时，认领会失败并收敛成同一个 ``media_ref_invalid``。
+    """
+    asset = get_media_asset(
+        media_id=media_ref, owner_platform_user_id=platform_user_id
+    )
+    if asset is None:
+        raise CompanionWorldApiError("media_ref_invalid")
+    if not chat_media_enabled(str(asset.get("kind") or "")):
+        raise CompanionWorldApiError("media_disabled")
+    if str(asset.get("status") or "") not in {
+        MEDIA_STATUS_PENDING,
+        MEDIA_STATUS_REFERENCED,
+    }:
+        raise CompanionWorldApiError("media_ref_invalid")
+    expires_at = str(asset.get("expires_at") or "")
+    if expires_at and expires_at <= beijing_now().strftime("%Y-%m-%d %H:%M:%S"):
+        # 回收 job 还没扫到但已过期；提前拒绝，避免发出去转头文件就没了。
+        raise CompanionWorldApiError("media_ref_expired")
+    return asset
+
+
+def _ai_message_data(
+    item,
+    *,
+    assets: Dict[str, Dict[str, Any]],
+    scope: str,
+    ttl_seconds: int,
+) -> dict:
+    """把一条 AI 会话消息投影成 D-1 的判别联合。
+
+    ``content`` 是唯一权威来源；``message_type``/``text`` 是兼容老客户端的镜像字段，恒与
+    ``content`` 一致。资产行缺失（回收竞态/人工删除）时降级成纯文本，不 500。
+    """
+    stored = decode_stored_content(item.content_json)
+    if not item.media_id:
+        # 存量消息与非媒体消息：库里的 content 就是用户原文。
+        content = text_content(stored["text"] if stored else item.content)
+    else:
+        # 媒体消息的正文只能取 content_json 的 caption——item.content 含 VL 描述（D-2 红线）。
+        caption = stored["text"] if stored else ""
+        asset = assets.get(str(item.media_id))
+        content = (
+            build_media_content(
+                asset=asset, caption=caption, scope=scope, ttl_seconds=ttl_seconds
+            )
+            if asset is not None
+            else text_content(caption)
+        )
+    return {
+        "id": item.id,
+        "message_id": item.message_id,
+        "role": item.role,
+        "message_type": content["type"],
+        "text": content["text"],
+        "content": content,
+        "created_at": _feed_time(item.created_at),
+    }
+
+
+def _voice_llm_text(*, caption: str, transcript: str) -> str:
+    """语音轮喂给模型的上下文文本：转写为主，caption 在前（D-5）。
+
+    两者皆空时返回空串——Runtime 会据此走「没听清」兜底话术，不让主模型对着空内容瞎猜。
+    """
+    return "\n".join(part for part in (caption.strip(), transcript.strip()) if part)
+
+
+def _turn_media_kwargs(
+    *, asset: Optional[Dict[str, Any]], caption: str, platform_user_id: str
+) -> Dict[str, Any]:
+    """把一条待发送资产翻译成 ``run_companion_world_turn`` 的媒体入参（D-2 / D-5）。
+
+    三份文本口径**刻意不同**：``text`` 是 LLM 上下文（图片轮的 VL 描述由 Runtime 合成，
+    语音轮在这里拼上转写）；``display_content`` 只留用户自己写的 caption；资产元信息一律
+    读时从 ``media_assets`` 现取，不冗余落库。
+    """
+    if asset is None:
+        return {"text": caption, "message_type": "text"}
+    kind = str(asset.get("kind") or "")
+    kwargs: Dict[str, Any] = {
+        "display_content": build_stored_content(kind=kind, caption=caption),
+        "media_asset_id": str(asset.get("id") or ""),
+        "media_asset_owner_id": platform_user_id,
+    }
+    if kind == MEDIA_KIND_IMAGE:
+        kwargs["message_type"] = "image"
+        kwargs["text"] = caption
+        # 走内联字节而非 path：``describe_image`` 的本地路径分支限死在 image_inbound_dir
+        # 白名单内，媒体库不在其中；字节路径无路径概念，仍受 image_max_bytes 保护。
+        try:
+            raw = read_media_file(str(asset.get("storage_path") or ""))
+            kwargs["media"] = MediaPayload(
+                media_id=str(asset.get("id") or ""),
+                data_base64=base64.b64encode(raw).decode("ascii"),
+                format=str(asset.get("mime") or "image/jpeg"),
+                size=len(raw),
+            )
+        except (FileNotFoundError, ValueError):
+            # 文件没了（人工干预或回收竞态）：消息照发，VL 拿不到字节自动落兜底话术。
+            logger.warning("chat_media_file_missing media_id=%s", asset.get("id"))
+            kwargs["media"] = None
+    else:
+        kwargs["message_type"] = "voice"
+        kwargs["text"] = _voice_llm_text(
+            caption=caption, transcript=str(asset.get("transcript") or "")
+        )
+    return kwargs
 
 
 def _turn_data(
@@ -952,6 +1108,13 @@ def list_conversation_messages(
             limit=limit,
         )
     )
+    # 媒体资产一次批量取回（避免逐条 N+1）；这一页的消息已经证明属于本人，因此可用
+    # unscoped 批读——AI 会话里的媒体恒由 owner 自己上传，owner 锚在上面的查询已经加过。
+    assets = list_media_assets_unscoped(
+        media_ids=[item.media_id for item in messages if item.media_id]
+    )
+    scope = owner_scope(principal.platform_user_id)
+    ttl = owner_ttl_seconds()
     _no_store(response)
     return _envelope(
         request,
@@ -959,14 +1122,7 @@ def list_conversation_messages(
         data={
             "state": target.state,
             "messages": [
-                {
-                    "id": item.id,
-                    "message_id": item.message_id,
-                    "role": item.role,
-                    "message_type": item.message_type,
-                    "text": item.content,
-                    "created_at": _feed_time(item.created_at),
-                }
+                _ai_message_data(item, assets=assets, scope=scope, ttl_seconds=ttl)
                 for item in messages
             ],
             "next_cursor": messages[0].id if len(messages) == limit else None,
@@ -1019,6 +1175,14 @@ def conversation_turn(
     principal: SessionPrincipal = Depends(_require_world_session),
 ) -> dict:
     service = _service()
+    if payload.media_ref:
+        media_asset = resolve_chat_media(
+            media_ref=payload.media_ref, platform_user_id=principal.platform_user_id
+        )
+    elif not payload.text:
+        raise CompanionWorldApiError("media_content_required")
+    else:
+        media_asset = None
     target = _run_domain(
         lambda: service.resolve_conversation(
             principal.platform_user_id, conversation_id
@@ -1055,16 +1219,24 @@ def conversation_turn(
             platform_user = get_platform_user(
                 platform_user_id=principal.platform_user_id
             ) or {}
-            result = run_companion_world_turn(
-                conversation_id=target.conversation_id,
-                universe_id=target.universe_id,
-                resident_id=target.resident_id,
-                runtime_account_id=target.runtime_account_id,
-                platform_user_id=principal.platform_user_id,
-                sender_name=platform_user.get("display_name"),
-                message_id=mapped_message_id,
-                text=payload.text,
-            )
+            try:
+                result = run_companion_world_turn(
+                    conversation_id=target.conversation_id,
+                    universe_id=target.universe_id,
+                    resident_id=target.resident_id,
+                    runtime_account_id=target.runtime_account_id,
+                    platform_user_id=principal.platform_user_id,
+                    sender_name=platform_user.get("display_name"),
+                    message_id=mapped_message_id,
+                    **_turn_media_kwargs(
+                        asset=media_asset,
+                        caption=payload.text,
+                        platform_user_id=principal.platform_user_id,
+                    ),
+                )
+            except MediaRefInvalidError as err:
+                # 资产在校验之后、认领之前被并发抢走或回收；入站消息已随事务一起回滚。
+                raise CompanionWorldApiError("media_ref_invalid") from err
 
     if result is None:
         data = _turn_data(duplicate)

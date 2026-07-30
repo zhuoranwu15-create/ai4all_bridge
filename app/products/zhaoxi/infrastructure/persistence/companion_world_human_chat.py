@@ -177,6 +177,12 @@ def list_human_conversations_for_participant(
             "(SELECT SUBSTR(m.body_text, 1, ?) FROM human_messages m "
             " WHERE m.conversation_id = c.id "
             " ORDER BY m.sequence_no DESC LIMIT 1) AS last_preview, "
+            # 最后一条若是媒体消息，正文可能为空；带上 kind 让上层落 [图片]/[语音] 占位。
+            # 必须用 LEFT JOIN：INNER JOIN 会跳过最新的纯文本消息，把更早的图片 kind 顶上来。
+            "(SELECT a.kind FROM human_messages m "
+            " LEFT JOIN media_assets a ON a.id = m.media_id "
+            " WHERE m.conversation_id = c.id "
+            " ORDER BY m.sequence_no DESC LIMIT 1) AS last_media_kind, "
             # 未读只数对方发的；游标为 NULL 等价于一条都没读过。
             "(SELECT COUNT(*) FROM human_messages m "
             " WHERE m.conversation_id = c.id "
@@ -260,8 +266,13 @@ def insert_human_message(
     body_text: str,
     created_at: str,
     conn: Connection,
+    media_id: Optional[str] = None,
 ) -> tuple[Dict[str, Any], bool]:
-    """在已锁定 active conversation 中幂等插入真人消息。"""
+    """在已锁定 active conversation 中幂等插入真人消息。
+
+    ``media_id`` 是 v1.5 媒体消息的资产引用；重放时它与 ``body_text`` 一起参与幂等比对——
+    同一个 ``client_message_id`` 换一张图必须报冲突，否则客户端能悄悄改写已发出的消息。
+    """
     existing = conn.execute(
         "SELECT * FROM human_messages WHERE conversation_id = ? "
         "AND sender_platform_user_id = ? AND client_message_id = ?",
@@ -269,7 +280,7 @@ def insert_human_message(
     ).fetchone()
     if existing is not None:
         result = dict(existing)
-        if result["body_text"] != body_text:
+        if result["body_text"] != body_text or result.get("media_id") != media_id:
             raise ValueError("idempotency_conflict")
         return result, False
     message_id = _new_id("hmsg")
@@ -281,8 +292,8 @@ def insert_human_message(
     sequence_no = int(sequence_row["next_sequence"])
     conn.execute(
         "INSERT INTO human_messages(id, conversation_id, sender_platform_user_id, "
-        "client_message_id, sequence_no, body_text, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "client_message_id, sequence_no, body_text, media_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT DO NOTHING",
         (
             message_id,
@@ -291,6 +302,7 @@ def insert_human_message(
             client_message_id,
             sequence_no,
             body_text,
+            media_id,
             created_at,
         ),
     )
@@ -303,7 +315,9 @@ def insert_human_message(
         raise RuntimeError("human message was not inserted")
     result = dict(row)
     created = result["id"] == message_id
-    if not created and result["body_text"] != body_text:
+    if not created and (
+        result["body_text"] != body_text or result.get("media_id") != media_id
+    ):
         raise ValueError("idempotency_conflict")
     if created:
         conn.execute(

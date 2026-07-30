@@ -188,7 +188,11 @@ class ConversationReadState:
 
 @dataclass(frozen=True)
 class ConversationMessage:
-    """App 私聊历史中的一条用户可见消息。"""
+    """App 私聊历史中的一条用户可见消息。
+
+    ``content`` 是库里的 LLM 上下文文本（图片轮含 VL 描述），**不可直接下发**；对外展示的
+    正文由 API 层按 ``content_json``（用户自己写的 caption）与 ``media_id`` 投影（D-2）。
+    """
 
     id: int
     message_id: Optional[str]
@@ -196,6 +200,8 @@ class ConversationMessage:
     message_type: str
     content: str
     created_at: str
+    content_json: Optional[str] = None
+    media_id: Optional[str] = None
 
 
 @dataclass(frozen=True)

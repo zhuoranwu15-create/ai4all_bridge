@@ -74,6 +74,12 @@ class MediaTooLargeError(MediaError):
     code = "media_too_large"
 
 
+class MediaRefInvalidError(MediaError):
+    """``media_ref`` 认领失败：不存在、不属于本人，或已被别的消息引用过。"""
+
+    code = "media_ref_invalid"
+
+
 @dataclass(frozen=True)
 class NormalizedImage:
     """重编码后的图片：``data`` 是准备落盘的字节，``mime`` 是真实格式。"""

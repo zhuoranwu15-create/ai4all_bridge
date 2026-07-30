@@ -228,8 +228,15 @@ def insert_message(
     raw: Optional[Dict[str, Any]] = None,
     latency_ms: Optional[int] = None,
     error: Optional[str] = None,
+    content_json: Optional[Dict[str, Any]] = None,
+    media_id: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> Optional[int]:
+    """插入一条消息。
+
+    ``content`` 是 **LLM 上下文文本**（图片轮含 VL 描述）；``content_json`` 是 v1.5 新增的
+    **展示载荷**（D-2），只有 App 媒体消息会填，微信链路恒为 None。两者口径不同，刻意不合并。
+    """
     try:
         with _tx(conn) as tx:
             # _savepoint 保证 IntegrityError 只回滚到保存点，不污染外部事务（PG 下必须）。
@@ -239,9 +246,9 @@ def insert_message(
                     INSERT INTO messages(
                         account_id, session_id, message_id, reply_to_message_id,
                         direction, role, message_type, content, raw_json, latency_ms, error,
-                        created_at
+                        content_json, media_id, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
                     """,
                     (
                         account_id,
@@ -255,6 +262,12 @@ def insert_message(
                         json.dumps(raw or {}, ensure_ascii=False),
                         latency_ms,
                         error,
+                        (
+                            None
+                            if content_json is None
+                            else json.dumps(content_json, ensure_ascii=False)
+                        ),
+                        media_id,
                     ),
                 )
                 return int(cursor.lastrowid)
@@ -985,7 +998,7 @@ def list_app_conversation_messages_before(
         rows = tx.execute(
             f"""
             SELECT m.id, m.message_id, m.reply_to_message_id, m.role,
-                   m.message_type, m.content, m.created_at
+                   m.message_type, m.content, m.content_json, m.media_id, m.created_at
             FROM messages m
             JOIN sessions s ON s.id = m.session_id
             WHERE m.account_id = ? AND s.account_id = ?
@@ -1035,7 +1048,7 @@ def summarize_app_conversations(
     with _tx(conn) as tx:
         latest_rows = tx.execute(
             f"""
-            SELECT m.account_id, m.id, m.content, m.created_at
+            SELECT m.account_id, m.id, m.content, m.content_json, m.media_id, m.created_at
             FROM messages m
             JOIN (
                 SELECT m.account_id AS account_id, MAX(m.id) AS id
@@ -1049,9 +1062,13 @@ def summarize_app_conversations(
             tuple([*scope_params, *account_ids]),
         ).fetchall()
         for row in latest_rows:
+            # 预览取 content_json 的 caption 而不是 content：媒体轮的 content 里含服务端
+            # 生成的 VL 描述，直接展示等于把它冒充成用户自己写的话（D-2 红线）。
             summary[str(row["account_id"])] = {
                 "last_message_id": int(row["id"]),
                 "last_preview": row["content"],
+                "last_content_json": row["content_json"],
+                "last_media_id": row["media_id"],
                 "last_message_at": row["created_at"],
                 "unread": 0,
             }

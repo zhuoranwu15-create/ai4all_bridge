@@ -663,6 +663,8 @@ class SqlCompanionWorldRepository(WorldRepository):
                 message_type=str(row["message_type"]),
                 content=str(row["content"]),
                 created_at=str(row["created_at"]),
+                content_json=row.get("content_json"),
+                media_id=row.get("media_id"),
             )
             for row in rows
         )

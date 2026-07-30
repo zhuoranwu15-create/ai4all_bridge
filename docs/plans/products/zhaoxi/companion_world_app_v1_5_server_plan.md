@@ -533,6 +533,40 @@ m0055**，下文编号已同步。
   `companion_world_human_chat.py:129` 本来就是 `{"type":"text",...}`，天然兼容）。
 - VL / ASR 接入 App 链路（D-5），5 贝壳计费与兜底文案复用微信侧。
 
+**S2 全部条目已实现**（2026-07-30，分支 `feat/companion-world-v1-5-s1`）。无新迁移——m0054
+已备好三个列。落点与实现决定：
+
+| 条目 | 落点 |
+| --- | --- |
+| 展示层投影（D-1/D-2） | `app/platform/media/view.py`（`build_media_content` / `build_stored_content` / 预览） |
+| 落库 | `app/db/accounts.py:insert_message` 加 `content_json` + `media_id`；`insert_human_message` 加 `media_id` |
+| 事务内认领 | `agent_runtime/turns/service.py:_persist_and_screen_inbound`、`application/companion_world_human_chat.py:send` |
+| AI 会话读写 | `api/companion_world.py`（`resolve_chat_media` / `_turn_media_kwargs` / `_ai_message_data`） |
+| 真人会话读写 | `api/companion_world_human_chat.py`（按 viewer 选 owner/visit scope 逐条重签） |
+
+1. **`content_json` 只存 `{type, text}`，偏离 m0054 docstring 里"完整展示载荷"的设想。**
+   URL 是短 TTL 签名的，存进库第二天就过期；宽高/时长/转写存两份必然与 `media_assets` 漂移。
+   所以库里只留不可再生的那一份（caption），其余读时现取、URL 现签。
+2. **图片走内联字节而非本地路径。** `describe_image` 的 `image_path` 分支被硬限制在
+   `settings.image_inbound_dir` 白名单内，媒体库不在其中；改走 `data_base64`（多机链路本来
+   就用它），仍受 `image_max_bytes` 保护。
+3. **语音"没听清"是回复兜底，不是上下文注入。** 计划原文说把 `voice_message_fallback_text`
+   当 LLM 上下文，但那句话是**角色口吻**的（"这段语音我没听清…"），塞进 user 历史等于让模型
+   读自己的台词。改成与图片同构：转写与 caption 皆空时直接回兜底话术、跳过主模型。判据是
+   `bool(ctx.media_asset_id)`，因此微信链路（bridge 恒把转写当 `text` 传入）行为不变。
+4. **`resolve_chat_media` 放行 `referenced`**。一次性语义由事务内那次原子认领独家把守：
+   客户端拿同一个 `client_message_id` 重试时资产已是 `referenced`，在校验处拒掉会让本该幂等
+   的重试报错；真的拿旧资产发新消息时，认领失败并收敛成同一个 `media_ref_invalid`。
+5. **顺手修掉两处预览泄漏**（不在原计划里，是写读模型时发现的）：会话列表的
+   `last_preview` 原本取 `messages.content`，图片轮那一列含 VL 描述，直接展示等于把服务端
+   生成的文本冒充用户自己发的话；真人会话则相反——纯媒体消息 `body_text` 为空会渲染成空白
+   气泡，现在落 `[图片]`/`[语音]` 占位。
+6. **`_savepoint` 在 SQLite 上必须先显式开事务**（`app/db/_core.py`）。Python sqlite3 只在
+   DML 前隐式 BEGIN，`SAVEPOINT` 不算 DML，于是它成了最外层保存点，对应的 `RELEASE` 直接
+   提交——外层 `connect()` 之后再 rollback 什么也回滚不掉。这是**先于 v1.5 存在**的缺陷，
+   被"认领失败要连消息一起回滚"这条新用例照出来：错误码返对了，消息行却留了下来。PG 侧连接
+   恒 `autocommit=False`，不受影响。
+
 ### S3 · 动态图文（约 3 人日）
 
 - **迁移 m0055**：`universe_post_media(post_id, media_id, position)`，≤4 张。
@@ -624,6 +658,22 @@ S1 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 43 �
 （`test_media_assets.py` 15 + `test_media_upload_api.py` 13 + `test_media_access_token.py` 10 +
 `test_media_reclaim.py` 5）；SQLite 档 `2 failed, 1796 passed, 39 skipped`（failed 同上，本机
 sqlite 版本问题），PG 档 `1828 passed, 9 skipped` 全绿。
+
+S2 实测（2026-07-30，分支 `feat/companion-world-v1-5-s1`）：新增 10 例
+（`test_companion_world_chat_media.py`，含 D-2 红线用例：VL 描述必须只出现在 `content`、
+不出现在 `content_json` / 历史响应 / 会话预览里）；SQLite 档
+`2 failed, 1806 passed, 39 skipped`（failed 同上，本机 sqlite 版本问题），PG 档
+`1838 passed, 9 skipped` 全绿。
+
+两个顺带修掉的**既有**缺陷（都不在 S2 范围内，是被新用例照出来的）：
+
+- `_savepoint` 在 SQLite 上不真正开事务（见上文 S2 实现决定 6）。
+- `process_referral_message_for_account` 的两把锁获取顺序相反，PG 并发下会死锁：
+  `_mark_referral_relationship_bound_in_conn` 先 UPDATE `referral_relationships`（拿行锁）、
+  再抢 `pg_advisory_xact_lock`，与另一个已持 advisory lock、正等这一行的节点成环。首次跑
+  全量 PG 档时 `test_pg_concurrent_referral_message_processing_counts_and_rewards_once`
+  以 `DeadlockDetected` 失败（约 1/4 概率复现，单跑必过，所以此前一直没暴露）。改为先按
+  `(invitee, app_id)` 只读地取 relationship id 并上锁、再做任何写入。
 
 **发布**：走 PR + 等 PG 档 CI（main 受保护，`enforce_admins`，无 auto-merge）。
 开任何媒体 flag 前确认测试机是含 v1.5-0 的构建（MEDIA-COMPAT-002）。

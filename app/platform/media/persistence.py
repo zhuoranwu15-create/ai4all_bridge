@@ -27,6 +27,7 @@ __all__ = [
     "get_media_asset_unscoped",
     "insert_media_asset",
     "list_expired_pending_media_assets",
+    "list_media_assets_unscoped",
     "mark_media_assets_referenced",
     "pending_expires_at",
     "update_media_transcript",
@@ -138,6 +139,27 @@ def get_media_asset_unscoped(
             "SELECT * FROM media_assets WHERE id = ?", (str(media_id or "").strip(),)
         ).fetchone()
     return dict(row) if row is not None else None
+
+
+def list_media_assets_unscoped(
+    *, media_ids: Sequence[str], conn: Optional[Connection] = None
+) -> Dict[str, Dict[str, Any]]:
+    """批量按 id 读资产，返回 ``{media_id: row}``。**不带 owner 约束**。
+
+    只给"已经证明有权看这些消息"的读路径用：真人会话里对方发来的图不属于你，但你有权看，
+    owner 锚在这里判不出来——授权由上游的 conversation participant 查询完成。
+    业务侧任何按用户维度的读仍必须走 :func:`get_media_asset`。
+    """
+    cleaned = [str(mid or "").strip() for mid in media_ids if str(mid or "").strip()]
+    if not cleaned:
+        return {}
+    unique = list(dict.fromkeys(cleaned))
+    placeholders = ",".join("?" for _ in unique)
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            f"SELECT * FROM media_assets WHERE id IN ({placeholders})", tuple(unique)
+        ).fetchall()
+    return {str(row["id"]): dict(row) for row in rows}
 
 
 def mark_media_assets_referenced(

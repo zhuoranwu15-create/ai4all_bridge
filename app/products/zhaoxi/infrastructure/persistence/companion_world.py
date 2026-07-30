@@ -27,6 +27,7 @@ from app.db._core import (
     advisory_lock_key,
     connect,
 )
+from app.platform.media.view import stored_content_preview
 
 LEGACY_CHARACTER_TEMPLATE_ID = "tmpl_legacy"
 
@@ -1006,7 +1007,11 @@ def list_conversations_for_owner(
         )
         for item in items:
             stats = summary.get(str(item["runtime_account_id"])) or {}
-            item["last_preview"] = stats.get("last_preview")
+            # 媒体消息的预览取 caption/占位，不能用 content——那一列含 VL 描述（D-2）。
+            item["last_preview"] = stored_content_preview(
+                raw_content_json=stats.get("last_content_json"),
+                fallback_text=stats.get("last_preview"),
+            )
             item["last_message_at"] = stats.get("last_message_at")
             item["unread"] = int(stats.get("unread") or 0)
     return items

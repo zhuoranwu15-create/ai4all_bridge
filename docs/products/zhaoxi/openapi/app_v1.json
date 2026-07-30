@@ -350,6 +350,64 @@
         "title": "AppTurnRequest",
         "type": "object"
       },
+      "AudioMessageContent": {
+        "description": "语音消息。``transcript`` 是上传时同步转写的结果，供\"长按转文字\"；转写失败为 null。",
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript"
+          },
+          "type": {
+            "const": "audio",
+            "default": "audio",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "AudioMessageContent",
+        "type": "object"
+      },
       "Body_app_transcription_v1_audio_transcriptions_post": {
         "properties": {
           "audio": {
@@ -687,7 +745,30 @@
         "type": "object"
       },
       "ConversationMessageItem": {
+        "description": "``message_type`` 与 ``text`` 是 v1.5 之前的老字段，服务端保证与 ``content`` 一致：\n\n- ``message_type`` **deprecated**，恒等于 ``content.type``（``audio`` 除外——历史上\n  库内 ``message_type`` 用 ``voice``，这里统一投影成 ``content.type`` 的取值）；\n- ``text`` 恒等于 ``content.text``，即用户自己写的正文/caption。\n\n新客户端只读 ``content``。",
         "properties": {
+          "content": {
+            "discriminator": {
+              "mapping": {
+                "audio": "#/components/schemas/AudioMessageContent",
+                "image": "#/components/schemas/ImageMessageContent",
+                "text": "#/components/schemas/TextMessageContent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMessageContent"
+              },
+              {
+                "$ref": "#/components/schemas/ImageMessageContent"
+              },
+              {
+                "$ref": "#/components/schemas/AudioMessageContent"
+              }
+            ],
+            "title": "Content"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -737,7 +818,8 @@
         "required": [
           "id",
           "role",
-          "message_type"
+          "message_type",
+          "content"
         ],
         "title": "ConversationMessageItem",
         "type": "object"
@@ -861,16 +943,27 @@
             "title": "Client Message Id",
             "type": "string"
           },
+          "media_ref": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Ref"
+          },
           "text": {
+            "default": "",
             "maxLength": 4000,
-            "minLength": 1,
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_message_id",
-          "text"
+          "client_message_id"
         ],
         "title": "ConversationTurnPayload",
         "type": "object"
@@ -1351,6 +1444,64 @@
           "reason_code"
         ],
         "title": "HumanReportPayload",
+        "type": "object"
+      },
+      "ImageMessageContent": {
+        "description": "图片消息。\n\n``url`` 是**短 TTL 签名地址**，每次读接口现签，不要持久化或跨会话复用。为 null 表示\n服务端此刻签不出（部署缺 secret，或访客拜访已结束）——按占位渲染，不要降级成文本。\n``text`` 是用户自己写的 caption，**不含**服务端生成的图片描述（D-2 红线）。",
+        "properties": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "image",
+            "default": "image",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "ImageMessageContent",
         "type": "object"
       },
       "MePlatformUser": {
@@ -1912,7 +2063,7 @@
       },
       "SendHumanMessagePayload": {
         "additionalProperties": false,
-        "description": "真人纯文字发送 payload。",
+        "description": "真人消息发送 payload：文字、媒体，或带 caption 的媒体。",
         "properties": {
           "client_message_id": {
             "maxLength": 64,
@@ -1920,16 +2071,27 @@
             "title": "Client Message Id",
             "type": "string"
           },
+          "media_ref": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Ref"
+          },
           "text": {
+            "default": "",
             "maxLength": 4000,
-            "minLength": 1,
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_message_id",
-          "text"
+          "client_message_id"
         ],
         "title": "SendHumanMessagePayload",
         "type": "object"
@@ -1950,6 +2112,24 @@
           "captcha_verify_param"
         ],
         "title": "SendOtpRequest",
+        "type": "object"
+      },
+      "TextMessageContent": {
+        "description": "纯文本消息。存量消息（v1.5 之前的全部消息）都投影成这一支。",
+        "properties": {
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "TextMessageContent",
         "type": "object"
       },
       "TurnData": {
