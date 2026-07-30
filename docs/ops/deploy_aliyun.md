@@ -232,6 +232,9 @@ journalctl -u ai4all-monitor-health.service -n 50 --no-pager
 - `/`：用户主页，反代到 Backend `/ui/home.html`。
 - `/user/dashboard.html`：用户中心，反代到 Backend `/ui/dashboard.html`。
 - `/api/web/*`：用户侧前端 API，反代到 Backend `/web/*`。
+- `/v1/media/*`：App 媒体读端点，反代到 Backend 同名路径。签名三元组即凭据、不读
+  `Authorization`；服务端签发的读 URL 是 origin 相对路径，所以这条必须直连后端，
+  不能落到官网 SPA catch-all（否则返回 200 HTML，客户端与图片机审都取不到图）。
 - `/api/health`：公开基础存活检查，反代到 Backend `/health`。
 - `/api/health/ready`：生产 readiness，只允许本机、监控或办公网访问。
 - `/ops/*`：运营后台、Debug UI、Admin/Debug API 和 Swagger，必须通过 allowlist/VPN 保护。

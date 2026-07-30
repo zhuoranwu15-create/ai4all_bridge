@@ -4,8 +4,8 @@
 > 服务端状态：Companion World 3.0 已在生产全量激活（aliyun1 中心节点），本文档描述的所有能力均线上可用。
 > 最后核对：2026-07-23，对着生产 `https://ai4company.top` 实测。
 > **v1.5（会话与动态媒体 + 许愿创建居民）服务端已上线**（2026-07-30），契约见 §6.5 / §6.6。
-> 四个能力位默认打开；媒体三位还要求服务端配好 `MEDIA_URL_SIGNING_SECRET`，未配时它们下发
-> `false`、上传返回 `media_disabled`。一律以 `/app/config` 的能力位渲染入口，细节见 §9.1。
+> 生产已于 **2026-07-31** 配好 `MEDIA_URL_SIGNING_SECRET`，四个能力位现在全部下发 `true`，
+> 媒体链路可直接联调。仍请一律以 `/app/config` 的能力位渲染入口，细节见 §9.1。
 
 ---
 
@@ -660,7 +660,7 @@ GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authoriza
   "media_id": "med_…", "kind": "image", "mime": "image/jpeg",
   "bytes": 204800, "width": 1080, "height": 1440, "duration_ms": null,
   "transcript": null,
-  "url": "https://ai4company.top/api/v1/media/med_…?scope=pu:…&exp=…&sig=…",
+  "url": "/v1/media/med_…?scope=pu:…&exp=…&sig=…",
   "url_expires_at": "2026-07-30T14:20:00+08:00",
   "expires_at": "2026-07-30T16:05:00+08:00"
 }
@@ -682,6 +682,9 @@ GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authoriza
 #### 6.5.2 读 URL 的规则（最容易踩的一节）
 
 - 所有返回媒体的接口（上传、消息列表、Feed、访客 Feed）都**现签**一条短 TTL URL。
+- **`url` 是 origin 相对路径**（形如 `/v1/media/med_…?scope=…&exp=…&sig=…`），不是绝对地址：
+  拼 **origin**（生产 `https://ai4company.top`）即可，**不要**拼 `{base}`——`{base}` 带
+  `/api/v1/products/zhaoxi` 前缀，拼出来是错的。生产已放开 `/v1/media/` 这条公网路径。
 - **不要持久化、不要跨会话复用、不要写进本地库**。过期就重新拉一次列表/详情拿新签名。
 - `GET /v1/media/{media_id}` **不读 `Authorization`**，签名三元组（`scope` / `exp` / `sig`）就是唯一凭据；
   原样使用返回的 URL，不要自己拼参数。
@@ -910,6 +913,8 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 `MEDIA_URL_SIGNING_SECRET` 留空时媒体链路整体视为未就绪：三个媒体能力位一律下发 `false`，
 `POST /media/uploads` 返回 `media_disabled`——**不会**出现「能力位是 `true` 却拿不到读 URL」的
 半开状态，客户端照能力位渲染即可。配好密钥并重启后三位自动转 `true`，客户端无需发版。
+
+**生产状态（2026-07-31）**：密钥已配置，四位全部为 `true`，媒体上传与读取均可用。
 
 图片机审是独立的运维配置（见
 [`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），
