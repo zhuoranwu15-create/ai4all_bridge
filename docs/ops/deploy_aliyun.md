@@ -80,7 +80,23 @@ WantedBy=multi-user.target
 
 如果仓库实际部署路径不是 `/opt/ai4all-weixin-bot`，同步替换
 `WorkingDirectory`、`EnvironmentFile` 和 `ExecStart`。本次阿里云节点实测路径为
-`/opt/workspace/ai4all_bridge`，服务用户为 `jack`。
+`/home/jack/ai4all_bridge`，服务用户为 `jack`。
+
+**中心角色（`AI4ALL_ROLE` 含 `central`）的单元还必须带一行**：
+
+```ini
+Environment=AI4ALL_ALLOW_AUTO_MIGRATE=1
+```
+
+这是 PG schema 迁移的 opt-in 闸（`app/db/_core.py` 的 `AUTO_MIGRATE_ENV`）：PG 上存在待执行
+迁移时，只有带该变量的进程可以应用，其余进程直接报错退出。目的是挡住「开发机 = 生产机」
+场景下，自测时随手跑一条命令就把未评审的迁移写进生产库（2026-07-16 / 07-29 / 07-30 各发生
+过一次）。**绝不能把它写进 `.env`**——`.env` 会被同目录任何手跑的 python 进程读到，闸门等于
+不存在。节点角色（`AI4ALL_ROLE=node`）本就跳过 `init_db`，不需要该变量。
+
+确需在部署之外手工迁移生产库时，显式加前缀：
+`AI4ALL_ALLOW_AUTO_MIGRATE=1 .venv/bin/python -c "from app.db import init_db; init_db()"`。
+本机自测请改用 SQLite（`DATABASE_URL="" .venv/bin/pytest …`）或临时库。
 
 启动：
 

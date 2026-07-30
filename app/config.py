@@ -373,13 +373,16 @@ class Settings(BaseSettings):
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
     companion_world_visits_enabled: bool = False
     companion_world_human_chat_enabled: bool = False
-    # v1.5 媒体与许愿：四个能力位各自 default-off，逐个灰度（FLAG-001）。
-    # 三个媒体开关共用同一套上传/签名链路，但分别门控「会话图片」「会话语音」「动态图文」，
-    # 便于先开图片再开语音。开任何一个之前须确认客户端已是含 v1.5-0 的构建（MEDIA-COMPAT-002）。
-    companion_world_chat_image_enabled: bool = False
-    companion_world_chat_voice_enabled: bool = False
-    companion_world_feed_image_enabled: bool = False
-    companion_world_resident_wish_enabled: bool = False
+    # v1.5 媒体与许愿：四个能力位**默认打开**，需要停用时在 .env 显式写 false（开关默认极性
+    # 约定，2026-07-30）。三个媒体开关共用同一套上传/签名链路，但分别门控「会话图片」
+    # 「会话语音」「动态图文」，仍可单独关掉其中一个。
+    # 注意：媒体三位对客户端是否可见还取决于 MEDIA_URL_SIGNING_SECRET 是否配置——密钥留空时
+    # 能力位一律下发 false、上传返回 media_disabled（见 app/platform/media/access.py），
+    # 不会出现「能力位为 true 却签不出读 URL」的半开状态。
+    companion_world_chat_image_enabled: bool = True
+    companion_world_chat_voice_enabled: bool = True
+    companion_world_feed_image_enabled: bool = True
+    companion_world_resident_wish_enabled: bool = True
     # 每人每日许愿预览次数上限（每次预览要跑一次清洗 + 一次生成，故按预览计而非按创建计）。
     # 同一 client_request_id 的重放不计次；<=0 表示不限制。
     companion_world_wish_daily_max: int = 10
@@ -387,8 +390,9 @@ class Settings(BaseSettings):
     # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
     # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。
     media_storage_dir: str = "data/media"
-    # 访客/主人读 URL 的 HMAC 签名密钥。**不给弱默认值**：留空且任一媒体开关为开时启动即报错，
-    # 避免"忘配 secret 却签得出 URL"。生成方式：python -c "import secrets;print(secrets.token_urlsafe(32))"
+    # 访客/主人读 URL 的 HMAC 签名密钥。**不给弱默认值**：留空 = 媒体能力整体视为未就绪
+    # （能力位下发 false、上传返回 media_disabled），避免"忘配 secret 却签得出 URL"。
+    # 生成方式：python -c "import secrets;print(secrets.token_urlsafe(32))"
     media_url_signing_secret: str = ""
     # 签名 URL 有效期：主人 15 分钟；访客取 min(本值, visit 剩余时长)，visit 一结束立即失效。
     media_url_owner_ttl_seconds: int = 900

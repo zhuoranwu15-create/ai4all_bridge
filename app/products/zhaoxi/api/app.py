@@ -26,6 +26,7 @@ from app.platform.media.asr import (
     is_asr_available,
     transcribe_audio,
 )
+from app.platform.media.access import signing_configured
 from app.platform.channels import CHANNEL_APP, CHANNELS
 from app.config import settings
 from app.db import (
@@ -284,8 +285,15 @@ def _bearer_token(authorization: Optional[str]) -> str:
 def _companion_world_capabilities() -> dict:
     world_enabled = bool(getattr(settings, "companion_world_p1_enabled", False))
 
+    # 媒体三位额外要求签名密钥已配：开关默认打开后，"未配 secret" 是常态而非事故，
+    # 此时上传/读 URL 整条链路都不可用，能力位必须一起报 false，否则客户端会画出必然失败的入口。
+    media_ready = signing_configured()
+
     def _gated(flag: str) -> bool:
         return world_enabled and bool(getattr(settings, flag, False))
+
+    def _media_gated(flag: str) -> bool:
+        return _gated(flag) and media_ready
 
     return {
         "resident_world": world_enabled,
@@ -296,9 +304,9 @@ def _companion_world_capabilities() -> dict:
         "world_visits": _gated("companion_world_visits_enabled"),
         "human_chat_send": _gated("companion_world_human_chat_enabled"),
         # v1.5：媒体与许愿四位。同样随 p1 总闸，关闭 world 时不会出现「能发图但没有世界」。
-        "chat_image_message": _gated("companion_world_chat_image_enabled"),
-        "chat_voice_message": _gated("companion_world_chat_voice_enabled"),
-        "feed_image_post": _gated("companion_world_feed_image_enabled"),
+        "chat_image_message": _media_gated("companion_world_chat_image_enabled"),
+        "chat_voice_message": _media_gated("companion_world_chat_voice_enabled"),
+        "feed_image_post": _media_gated("companion_world_feed_image_enabled"),
         "resident_wish_create": _gated("companion_world_resident_wish_enabled"),
     }
 

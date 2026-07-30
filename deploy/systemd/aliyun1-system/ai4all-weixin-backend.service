@@ -13,6 +13,9 @@ WorkingDirectory=/opt/workspace/ai4all_bridge
 EnvironmentFile=/opt/workspace/ai4all_bridge/.env
 Environment=HOME=/home/jack
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jack/.local/bin:/home/jack/.npm-global/bin:/home/jack/bin
+# 中心角色进程才应用 schema 迁移；opt-in 闸见 app/db/_core.py 的 AUTO_MIGRATE_ENV。
+# 只能写在这里，**不要写进 .env**（否则同目录手跑的 python 进程会一起继承，闸门失效）。
+Environment=AI4ALL_ALLOW_AUTO_MIGRATE=1
 ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8180
 Restart=always
 RestartSec=3

@@ -99,7 +99,7 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 [`app_api_handoff.md`](app_api_handoff.md) §6–§8。家园 Feed 的 AI 内容只在
 早 07:00–11:00、晚 18:00–23:00 窗口生成，窗口外无新内容属正常。
 
-## 6.0 v1.5：会话/动态媒体与许愿创建（2026-07-30 新增，服务端已完成、开关待开）
+## 6.0 v1.5：会话/动态媒体与许愿创建（2026-07-30 上线）
 
 - 图片与语音**一律两步**：`POST {base}/media/uploads` 拿 `media_id` → 再挂到
   `ai-conversations/{id}/turn`、`human-conversations/{id}/messages` 的 `media_ref`
@@ -110,7 +110,8 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 - 许愿创建居民：`resident-drafts/preview` 传 `wish_text` + `client_request_id`，出参与表单路径同形，
   预览卡片零改动。
 - 四个能力位 `chat_image_message` / `chat_voice_message` / `feed_image_post` / `resident_wish_create`
-  **当前为 `false`**，为假时入口必须隐藏。完整契约与红线见
+  服务端默认打开，但媒体三位在服务端配好签名密钥前仍下发 `false`（此时上传返回
+  `media_disabled`）。**一律按能力位渲染，为假时入口必须隐藏**。完整契约与红线见
   [`app_api_handoff.md`](app_api_handoff.md) §6.5 / §6.6，联调前置见 §9.1。
 
 ## 6.1 「我的」Tab（2026-07-26 新增）

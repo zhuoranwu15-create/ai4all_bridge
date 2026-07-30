@@ -18,6 +18,10 @@ _app_config.settings.database_url = ""
 # 装了 CLI 的开发机上 cmd[0] 变成绝对路径致误判失败（CI/干净环境无 .env 故不暴露）。在此固定回默认裸名，
 # 使测试与本机 .env 无关；需要绝对路径的测试自行 monkeypatch 覆盖。
 _app_config.settings.openclaw_cli_path = "openclaw"
+# init_db 的 PG 迁移闸（app.db._core._guard_unattended_pg_migrations）：PG 档用的是
+# pytest-postgresql 每测试临时空库，必须允许自动建表。真实库不会被误连——上面的 ambient
+# guard 已把 database_url 清空，PG 档的 DSN 只来自 test_settings 注入的临时库。
+os.environ.setdefault("AI4ALL_ALLOW_AUTO_MIGRATE", "1")
 
 
 # ---------------------------------------------------------------------------
