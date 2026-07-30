@@ -30,6 +30,7 @@ from app.products.zhaoxi.domain.companion_world.proactive import (
     decide_human_proactive_delivery,
 )
 from app.products.zhaoxi.infrastructure.persistence import companion_world as world_db
+from app.time_utils import beijing_now_str
 
 
 HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON = (
@@ -133,6 +134,7 @@ def _resident(row: dict) -> ResidentRecord:
         avatar_ref=row.get("avatar_ref"),
         conversation_id=str(conversation_id),
         conversation_state=str(row.get("conversation_state") or "active"),
+        persona_key=row.get("persona_key"),
     )
 
 
@@ -152,6 +154,7 @@ def _feed_post(row: dict) -> UniversePostRecord:
         published_at=row.get("published_at"),
         post_type=str(row.get("post_type") or "normal"),
         terminal_reason=row.get("terminal_reason"),
+        media_ids=tuple(str(mid) for mid in (row.get("media_ids") or ())),
     )
 
 
@@ -228,6 +231,7 @@ class SqlCompanionWorldRepository(WorldRepository):
         text: str,
         request_fingerprint: str,
         published_at: str,
+        media_ids: Sequence[str] = (),
     ) -> Tuple[UniversePostRecord, bool]:
         try:
             row, created = world_db.publish_user_feed_post_with_outbox(
@@ -236,11 +240,17 @@ class SqlCompanionWorldRepository(WorldRepository):
                 text=text,
                 request_fingerprint=request_fingerprint,
                 published_at=published_at,
+                media_ids=tuple(media_ids),
                 conn=self._conn,
             )
         except ValueError as err:
             code = str(err)
-            if code in {"world_not_ready", "world_disabled", "idempotency_conflict"}:
+            if code in {
+                "world_not_ready",
+                "world_disabled",
+                "idempotency_conflict",
+                "media_ref_invalid",
+            }:
                 raise CompanionWorldError(code) from err
             raise
         return _feed_post(row), created
@@ -380,6 +390,8 @@ class SqlCompanionWorldRepository(WorldRepository):
         persona_seed_json: str,
         safety_json: Optional[str],
         expires_at: str,
+        source: str = "form",
+        wish_request_id: Optional[str] = None,
     ) -> ResidentDraftRecord:
         row = world_db.insert_resident_draft(
             platform_user_id=platform_user_id,
@@ -396,9 +408,29 @@ class SqlCompanionWorldRepository(WorldRepository):
             persona_seed_json=persona_seed_json,
             safety_json=safety_json,
             expires_at=expires_at,
+            source=source,
+            wish_request_id=wish_request_id,
             conn=self._conn,
         )
         return _resident_draft(row)
+
+    def get_resident_draft_by_wish_request(
+        self, platform_user_id: str, wish_request_id: str
+    ) -> Optional[ResidentDraftRecord]:
+        row = world_db.get_resident_draft_by_wish_request(
+            platform_user_id=platform_user_id,
+            wish_request_id=wish_request_id,
+            conn=self._conn,
+        )
+        return _resident_draft(row) if row else None
+
+    def count_wish_drafts_since(self, platform_user_id: str, since: str) -> int:
+        return world_db.count_resident_drafts_since(
+            platform_user_id=platform_user_id,
+            source="wish",
+            since=since,
+            conn=self._conn,
+        )
 
     def get_resident_draft(
         self, draft_token: str, platform_user_id: str
@@ -524,6 +556,33 @@ class SqlCompanionWorldRepository(WorldRepository):
                 return resident
         raise RuntimeError("activated resident details were not found")
 
+    def seed_resident_intro(
+        self,
+        resident: ResidentRecord,
+        *,
+        welcome_message: str,
+        intro_post: str,
+    ) -> None:
+        """在激活同事务里落一条欢迎语与一条自我介绍动态（CONTENT-001 / CONTENT-002）。
+
+        文案由领域层挑好后传入，本层不认识 persona_key、也不持有兜底文案——决定"发什么"
+        是产品口径，决定"怎么落"才是这里的职责。两条写入都幂等，重放不会重复。
+        """
+        conn = self._required_conn()
+        world_db.insert_resident_welcome_message(
+            runtime_account_id=resident.runtime_account_id,
+            resident_id=resident.resident_id,
+            text=welcome_message,
+            conn=conn,
+        )
+        world_db.publish_resident_intro_post_with_outbox(
+            universe_id=resident.universe_id,
+            author_resident_id=resident.resident_id,
+            text=intro_post,
+            published_at=beijing_now_str(),
+            conn=conn,
+        )
+
     def dismiss_unselected_candidates(
         self, universe_id: str, selected_template_ids: Sequence[str]
     ) -> None:
@@ -634,6 +693,8 @@ class SqlCompanionWorldRepository(WorldRepository):
                 message_type=str(row["message_type"]),
                 content=str(row["content"]),
                 created_at=str(row["created_at"]),
+                content_json=row.get("content_json"),
+                media_id=row.get("media_id"),
             )
             for row in rows
         )

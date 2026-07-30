@@ -236,14 +236,61 @@ def test_app_config_publishes_world_capabilities_tracking_flags(client, fresh_db
     assert on["human_chat_send"] is False
 
 
+# v1.5 媒体与许愿四位（FLAG-001）：能力位名 → settings flag 名。
+V1_5_CAPABILITY_FLAGS = {
+    "chat_image_message": "companion_world_chat_image_enabled",
+    "chat_voice_message": "companion_world_chat_voice_enabled",
+    "feed_image_post": "companion_world_feed_image_enabled",
+    "resident_wish_create": "companion_world_resident_wish_enabled",
+}
+
+
+def test_v1_5_capabilities_are_registered_and_follow_their_flags(client, fresh_db):
+    """四位新能力必须**出现**在响应里，并逐个跟随自己的 settings 开关。
+
+    只加 settings 不在 ``AppConfigFeatures`` 登记，会被 response_model 静默过滤掉，
+    客户端读到 undefined——测试盯的正是这条静默失败。
+    """
+    fresh_db.companion_world_p1_enabled = True
+    features = client.get("/v1/app/config").json()["features"]
+    for capability in V1_5_CAPABILITY_FLAGS:
+        assert features[capability] is False, capability
+
+    # 逐个打开：四位之间互不牵连，媒体先开图片不会顺手把语音和许愿也放出去。
+    for capability, flag in V1_5_CAPABILITY_FLAGS.items():
+        setattr(fresh_db, flag, True)
+        features = client.get("/v1/app/config").json()["features"]
+        assert features[capability] is True, capability
+        setattr(fresh_db, flag, False)
+        assert client.get("/v1/app/config").json()["features"][capability] is False
+
+
+def test_v1_5_flag_declared_defaults_are_off():
+    """代码声明的默认值必须是 off（FLAG-001 逐个灰度）。
+
+    读 ``model_fields`` 的声明默认值而不是实例化 ``Settings()``——后者会吃开发机/生产机的
+    ``.env``，让「默认是什么」这条断言随环境漂移。
+    """
+    from app.config import Settings
+
+    for flag in V1_5_CAPABILITY_FLAGS.values():
+        assert Settings.model_fields[flag].default is False, flag
+    # 图片理解相反：v1.5 起默认开，缺 DashScope key 时由 describe_image 落兜底文案。
+    assert Settings.model_fields["image_understanding_enabled"].default is True
+
+
 def test_world_capabilities_are_false_when_parent_flag_is_off(client, fresh_db):
     """子能力永远不能在世界能力关闭时报 true，否则客户端会发必然 404 的请求。"""
     fresh_db.companion_world_p1_enabled = False
     fresh_db.companion_world_feed_enabled = True
     fresh_db.companion_world_mailbox_enabled = True
+    for flag in V1_5_CAPABILITY_FLAGS.values():
+        setattr(fresh_db, flag, True)
     features = client.get("/v1/app/config").json()["features"]
     assert features["world_feed"] is False
     assert features["mailbox"] is False
+    for capability in V1_5_CAPABILITY_FLAGS:
+        assert features[capability] is False, capability
 
 
 def test_me_recovers_selecting_session_without_account(client, fresh_db):
@@ -343,8 +390,10 @@ def test_resident_options_publishes_controlled_vocabulary(client, fresh_db):
         {"key": "custom", "label": "自定义关系", "requires_label": True}
     ]
     assert data["personality_trait_limits"] == {"min": 1, "max": 3}
+    # 预设角色头像与自建可选头像不分组（产品 2026-07-29 决议），所以 v1.5 新增的司辰
+    # 头像同时是自建角色的一项可选值。
     assert {item["key"] for item in data["avatars"]} == {
-        "linxiaoman", "luxingye", "shenchuan", "atang",
+        "linxiaoman", "luxingye", "shenchuan", "atang", "sichen",
     }
 
 

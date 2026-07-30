@@ -83,6 +83,9 @@ class ResidentRecord:
     avatar_ref: Optional[str]
     conversation_id: str
     conversation_state: str
+    # 模板人设身份（跨模板换版稳定）。App DTO 只用它推导使命展示形态（CONTENT-004），
+    # 不直接下发——下发 persona_key 等于把「按角色分支」的能力重新交回客户端。
+    persona_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -185,7 +188,11 @@ class ConversationReadState:
 
 @dataclass(frozen=True)
 class ConversationMessage:
-    """App 私聊历史中的一条用户可见消息。"""
+    """App 私聊历史中的一条用户可见消息。
+
+    ``content`` 是库里的 LLM 上下文文本（图片轮含 VL 描述），**不可直接下发**；对外展示的
+    正文由 API 层按 ``content_json``（用户自己写的 caption）与 ``media_id`` 投影（D-2）。
+    """
 
     id: int
     message_id: Optional[str]
@@ -193,6 +200,8 @@ class ConversationMessage:
     message_type: str
     content: str
     created_at: str
+    content_json: Optional[str] = None
+    media_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -227,6 +236,9 @@ class UniversePostRecord:
     post_type: str = "normal"
     # 终态原因。终态 status 统一是 deleted，「主人删自己的」与「主人隐藏 AI 的」靠它区分。
     terminal_reason: Optional[str] = None
+    # v1.5 图文动态挂的图，按客户端排版顺序。只出 id：宽高与短 TTL URL 由展示层现取现签，
+    # 领域层不持有任何 URL（D-3）。
+    media_ids: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -280,6 +292,7 @@ class FeedRepository(Protocol):
         text: str,
         request_fingerprint: str,
         published_at: str,
+        media_ids: Sequence[str] = (),
     ) -> Tuple[UniversePostRecord, bool]: ...
 
     def list_published_posts(
@@ -449,6 +462,8 @@ class WorldRepository(Protocol):
         persona_seed_json: str,
         safety_json: Optional[str],
         expires_at: str,
+        source: str = "form",
+        wish_request_id: Optional[str] = None,
     ) -> ResidentDraftRecord: ...
 
     def get_resident_draft(
@@ -458,6 +473,12 @@ class WorldRepository(Protocol):
     def get_resident_draft_by_request(
         self, platform_user_id: str, client_request_id: str
     ) -> Optional[ResidentDraftRecord]: ...
+
+    def get_resident_draft_by_wish_request(
+        self, platform_user_id: str, wish_request_id: str
+    ) -> Optional[ResidentDraftRecord]: ...
+
+    def count_wish_drafts_since(self, platform_user_id: str, since: str) -> int: ...
 
     def consume_resident_draft(
         self,
@@ -489,6 +510,14 @@ class WorldRepository(Protocol):
         owner_platform_user_id: str,
         display_name: str,
     ) -> ResidentRecord: ...
+
+    def seed_resident_intro(
+        self,
+        resident: ResidentRecord,
+        *,
+        welcome_message: str,
+        intro_post: str,
+    ) -> None: ...
 
     def dismiss_unselected_candidates(
         self, universe_id: str, selected_template_ids: Sequence[str]

@@ -339,6 +339,184 @@ def test_deletion_is_isolated_across_users(client, fresh_db):
     assert account_a != account_b
 
 
+def _upload_image(client, headers) -> str:
+    from io import BytesIO
+
+    from PIL import Image
+
+    buffer = BytesIO()
+    Image.new("RGB", (12, 8), color="red").save(buffer, format="JPEG")
+    response = client.post(
+        "/v1/media/uploads",
+        headers=headers,
+        files={"file": ("photo.jpg", buffer.getvalue(), "image/jpeg")},
+        data={"kind": "image"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]["media_id"]
+
+
+def _media_file_exists(media_id: str) -> bool:
+    from app.platform.media.assets import resolve_media_file
+    from app.platform.media.persistence import get_media_asset_unscoped
+
+    asset = get_media_asset_unscoped(media_id=media_id)
+    assert asset is not None, f"asset row missing: {media_id}"
+    return resolve_media_file(str(asset["storage_path"])).exists()
+
+
+def test_deletion_purges_owned_media_and_keeps_human_chat_media(
+    client, fresh_db, monkeypatch
+):
+    """媒体清除（口径 B）：AI 会话与未发出的资产连行带文件删；真人会话里自己发的保留。
+
+    已被引用的资产 ``expires_at`` 是 NULL，孤儿回收永远抓不到它们——这条路径不删，
+    「注销成功」之后图和语音就永久留在库与磁盘上。
+    """
+    from app.db._core import _tx
+    from app.platform.media.persistence import (
+        get_media_asset_unscoped,
+        mark_media_assets_referenced,
+    )
+    from app.products.zhaoxi.application.companion_world_visits import (
+        CompanionWorldVisitService,
+    )
+
+    fresh_db.companion_world_p1_enabled = True
+    fresh_db.companion_world_chat_image_enabled = True
+    for target in (
+        "app.products.zhaoxi.api.media.settings.companion_world_chat_image_enabled",
+        "app.products.zhaoxi.api.companion_world_human_chat.settings"
+        ".companion_world_human_chat_enabled",
+    ):
+        monkeypatch.setattr(target, True)
+    now = beijing_naive_now()
+
+    headers, _account_id, user_id = _ready_user(client, "13800139020", "小满")
+    other_headers, _other_account, other_id = _ready_user(client, "13800139021", "访客")
+
+    chat_media = _upload_image(client, headers)      # 已发进 AI 会话
+    pending_media = _upload_image(client, headers)   # 传了但没发出去
+    other_media = _upload_image(client, other_headers)
+    with _tx(None) as conn:
+        mark_media_assets_referenced(
+            media_ids=[chat_media], owner_platform_user_id=user_id, conn=conn
+        )
+        mark_media_assets_referenced(
+            media_ids=[other_media], owner_platform_user_id=other_id, conn=conn
+        )
+
+    # 真人会话：主人给访客发一张图（同一条资产既属于我，也出现在对方的聊天记录里）。
+    service = CompanionWorldVisitService()
+    invitation = service.create_invite(user_id, now=now)
+    visit = service.redeem(other_id, code=invitation["code"], now=now)
+    conversation = service.accept(user_id, visit_id=visit["id"], now=now)["conversation"]
+    human_media = _upload_image(client, headers)
+    sent = client.post(
+        f"/v1/human-conversations/{conversation['id']}/messages",
+        headers=headers,
+        json={"client_message_id": "human_media_del_001", "media_ref": human_media},
+    )
+    assert sent.status_code == 200, sent.text
+    assert all(
+        _media_file_exists(media_id)
+        for media_id in (chat_media, pending_media, other_media, human_media)
+    )
+
+    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+
+    # AI 会话图与未发出的资产：行与文件都不复存在。
+    for media_id in (chat_media, pending_media):
+        assert get_media_asset_unscoped(media_id=media_id) is None
+    # 真人会话图保留：删了等于在对方的聊天记录里留一张永远加载不出来的图。
+    assert get_media_asset_unscoped(media_id=human_media) is not None
+    assert _media_file_exists(human_media)
+    # 账号隔离：别人的资产一根汗毛都不动。
+    assert get_media_asset_unscoped(media_id=other_media) is not None
+    assert _media_file_exists(other_media)
+
+    record = me_settings.get_last_deletion_record(platform_user_id=user_id, app_id="zhaoxi")
+    stats = json.loads(record["purge_stats_json"])
+    assert stats["media_assets_deleted"] == 2
+    assert stats["media_files_deleted"] == 2
+    assert stats["media_assets_kept"] == 1
+    assert stats["media_file_errors"] == 0
+
+
+def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, monkeypatch):
+    """Feed 归零：动态、图片挂载与 outbox 一起删，别人世界的动态不受影响。
+
+    与媒体清除必须同一口径——只删图不删动态会留下一批永远加载不出图的空壳动态。
+    """
+    from app.platform.media.persistence import get_media_asset_unscoped
+
+    fresh_db.companion_world_p1_enabled = True
+    fresh_db.companion_world_feed_enabled = True
+    fresh_db.companion_world_feed_image_enabled = True
+    for module in ("app.products.zhaoxi.api.media", "app.products.zhaoxi.api.companion_world"):
+        monkeypatch.setattr(f"{module}.settings.companion_world_feed_image_enabled", True)
+
+    headers, account_a, user_a = _ready_user(client, "13800139022", "甲居民")
+    other_headers, account_b, _user_b = _ready_user(client, "13800139023", "乙居民")
+    universe_a = db.resolve_resident_memory_scope(runtime_account_id=account_a)["universe_id"]
+    universe_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)["universe_id"]
+
+    feed_media = _upload_image(client, headers)
+    published = client.post(
+        "/v1/worlds/home/feed/posts",
+        headers=headers,
+        json={
+            "client_request_id": "deletion-feed-001",
+            "text": "带图动态",
+            "media_refs": [feed_media],
+        },
+    )
+    assert published.status_code == 201, published.text
+    kept = client.post(
+        "/v1/worlds/home/feed/posts",
+        headers=other_headers,
+        json={"client_request_id": "deletion-feed-002", "text": "乙的动态"},
+    )
+    assert kept.status_code == 201, kept.text
+    assert _media_file_exists(feed_media)
+
+    def _counts(universe_id: str) -> dict:
+        with db.connect() as conn:
+            return {
+                "posts": conn.execute(
+                    "SELECT COUNT(*) c FROM universe_posts WHERE universe_id = ?",
+                    (universe_id,),
+                ).fetchone()["c"],
+                "post_media": conn.execute(
+                    "SELECT COUNT(*) c FROM universe_post_media WHERE post_id IN "
+                    "(SELECT id FROM universe_posts WHERE universe_id = ?)",
+                    (universe_id,),
+                ).fetchone()["c"],
+                "outbox": conn.execute(
+                    "SELECT COUNT(*) c FROM companion_world_outbox WHERE universe_id = ?",
+                    (universe_id,),
+                ).fetchone()["c"],
+            }
+
+    before = _counts(universe_a)
+    assert before["posts"] == 1 and before["post_media"] == 1 and before["outbox"] >= 1
+
+    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+
+    assert _counts(universe_a) == {"posts": 0, "post_media": 0, "outbox": 0}
+    # 账号隔离：乙的动态与推送派生物完好。
+    after_b = _counts(universe_b)
+    assert after_b["posts"] == 1 and after_b["outbox"] >= 1
+    # 图片资产同批删掉，动态与媒体不会一边留一边删。
+    assert get_media_asset_unscoped(media_id=feed_media) is None
+
+    record = me_settings.get_last_deletion_record(platform_user_id=user_a, app_id="zhaoxi")
+    stats = json.loads(record["purge_stats_json"])
+    assert stats["universe_posts_deleted"] == 1
+    assert stats["companion_world_outbox_deleted"] == before["outbox"]
+    assert stats["media_assets_deleted"] == 1
+
+
 def test_repeated_deletion_after_reregistration_keeps_full_history(client):
     """注销后可用同一手机号重新注册；第二次注销另起一条流水，不覆盖第一条。"""
     phone = "13800139013"

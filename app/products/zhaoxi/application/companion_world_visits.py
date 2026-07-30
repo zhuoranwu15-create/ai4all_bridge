@@ -405,12 +405,18 @@ class CompanionWorldVisitService:
         cursor_published_at: Optional[str],
         cursor_post_id: Optional[str],
         limit: int,
-    ) -> Sequence[Dict[str, Any]]:
-        """用 server-resolved active visit 读取 published Feed，绝不接受 world id。"""
+    ) -> tuple[Optional[str], Sequence[Dict[str, Any]]]:
+        """用 server-resolved active visit 读取 published Feed，绝不接受 world id。
+
+        返回 ``(visit_expires_at, rows)``：图文动态的图不属于访客，只能用 ``visit:<id>``
+        scope 签读 URL，而访客 TTL 是 ``min(配置, visit 剩余)``，调用方需要拿到到期时间。
+        时间取自事务内 locked 的那一行，与本次 ACL 判定同一份真相。
+        """
         preview = get_universe_visit(visit_id=visit_id)
         if preview is None or preview["visitor_platform_user_id"] != platform_user_id:
             raise VisitError("visit_not_found")
         expired = False
+        visit_expires_at: Optional[str] = None
         blocked = False
         rows: Sequence[Dict[str, Any]] = ()
         with connect() as conn:
@@ -422,6 +428,7 @@ class CompanionWorldVisitService:
                 raise VisitError("visit_not_found")
             if locked["status"] != "active":
                 raise VisitError("visit_not_active")
+            visit_expires_at = locked["expires_at"]
             if now >= parse_db_timestamp(locked["expires_at"]):
                 mark_universe_visit_terminal(
                     visit_id=visit_id,
@@ -467,7 +474,7 @@ class CompanionWorldVisitService:
             raise VisitError("visit_not_active")
         if blocked:
             raise VisitError("visit_contact_blocked")
-        return rows
+        return visit_expires_at, rows
 
     def block(
         self, platform_user_id: str, *, visit_id: str, now: datetime

@@ -22,6 +22,9 @@ from app.products.zhaoxi.domain.companion_world.contracts import (
     WorldRepository,
 )
 from app.products.zhaoxi.domain.companion_world.naming import select_suggested_name
+from app.products.zhaoxi.domain.companion_world.onboarding_content import (
+    intro_content_for_persona,
+)
 from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     PERSONALITY_TRAITS,
     PersonaCatalogError,
@@ -35,7 +38,15 @@ from app.products.zhaoxi.domain.companion_world.persona_catalog import (
 logger = logging.getLogger(__name__)
 
 MAX_ACTIVE_RESIDENTS = 10
-INITIAL_CANDIDATE_RANKS = (1, 2, 3, 4)
+# 初始候选目录的 rank 必须是**连续的 1..N**，且至少 MIN_INITIAL_CANDIDATES 位。
+#
+# CANDIDATE-001（v1.5，候选 4→5 加入司辰）刻意改成「连续 + 下限」而不是写死 (1,2,3,4)：
+# 写死会让「代码期望 N 位」与「库里有 M 位」互为死锁——先改代码则选角页立刻
+# preset_catalog_not_ready，先导数据则导入脚本拒收，必须精确编排两次发布。改成下限后，
+# 加一位预设变成**纯数据操作**（导入新 manifest 即生效），代码无需再动。
+#
+# 原有保护未丢：少一位（(1,2,3)）撞下限、缺号（(1,2,4,5)）不连续，两种脏数据仍然硬失败。
+MIN_INITIAL_CANDIDATES = 4
 
 
 class CompanionWorldService:
@@ -77,7 +88,12 @@ class CompanionWorldService:
             and item.persona_version.strip()
             for item in ordered
         )
-        if ranks != INITIAL_CANDIDATE_RANKS or not metadata_ready:
+        expected = tuple(range(1, len(ordered) + 1))
+        if (
+            len(ordered) < MIN_INITIAL_CANDIDATES
+            or ranks != expected
+            or not metadata_ready
+        ):
             raise CompanionWorldError("preset_catalog_not_ready")
         return ordered
 
@@ -192,11 +208,12 @@ class CompanionWorldService:
                 # （模板名是运营录入的可信值，可能超过用户输入的长度上限）。
                 if selection.display_name and not is_valid_display_name(display_name):
                     raise CompanionWorldError("display_name_invalid")
-                repo.activate_candidate_with_runtime(
+                resident = repo.activate_candidate_with_runtime(
                     candidate,
                     owner_platform_user_id=platform_user_id,
                     display_name=display_name,
                 )
+                self._seed_resident_intro(repo, resident, candidate.template.persona_key)
             repo.dismiss_unselected_candidates(world.id, tuple(normalized))
             repo.set_universe_onboarding_state(world.id, "confirmed")
             residents = tuple(repo.list_residents_for_owner(platform_user_id, ("active",)))
@@ -311,10 +328,86 @@ class CompanionWorldService:
             raise CompanionWorldError("world_not_ready")
         if repo.count_active_residents(world.id) >= MAX_ACTIVE_RESIDENTS:
             raise CompanionWorldError("resident_capacity_exceeded")
-        return repo.activate_candidate_with_runtime(
+        resident = repo.activate_candidate_with_runtime(
             candidate,
             owner_platform_user_id=platform_user_id,
             display_name=candidate.suggested_display_name or template.name,
+        )
+        self._seed_resident_intro(repo, resident, template.persona_key)
+        return resident
+
+    @staticmethod
+    def _seed_resident_intro(
+        repo: WorldRepository,
+        resident: ResidentRecord,
+        persona_key: Optional[str],
+    ) -> None:
+        """新居民落地即写一条欢迎语与一条自我介绍动态（CONTENT-001 / CONTENT-002）。
+
+        查不到该人设的文案就整体跳过、不写兜底句——自建角色（persona_key 恒 None）与运营
+        新加但还没配文案的预设都走这条路径，宁可少两条内容也不让通用文案顶上。
+        """
+        content = intro_content_for_persona(persona_key)
+        if content is None:
+            return
+        repo.seed_resident_intro(
+            resident,
+            welcome_message=content.welcome_message,
+            intro_post=content.intro_post,
+        )
+
+    def begin_wish_preview(
+        self,
+        platform_user_id: str,
+        *,
+        wish_request_id: str,
+        window_start: str,
+        daily_max: int,
+    ) -> Optional[Tuple[ResidentDraftRecord, RenderedPersona]]:
+        """许愿预览的**生成前**关卡（WISH-005）。
+
+        返回非空即命中幂等重放：同一个 ``wish_request_id`` 恒等于同一份草稿，直接按存量行
+        重新渲染回显——渲染是纯函数，重放响应与首次逐字段相同，且不会再调一次 LLM、
+        不再占一次日额度。
+
+        返回 None 表示这是一笔新许愿，调用方可以去生成。世界可用性与日额度都在**这里**
+        先判，避免"花了一次 LLM 才发现世界没就绪/额度已满"。
+
+        :raises CompanionWorldError: ``wish_rate_limited`` 及世界不可用类错误码。
+        """
+        replay = self._repository.get_resident_draft_by_wish_request(
+            platform_user_id, wish_request_id
+        )
+        if replay is not None:
+            return replay, self._render_draft(replay)
+
+        world = self._repository.get_home_universe(platform_user_id)
+        if world is None or world.onboarding_state == "preparing":
+            raise CompanionWorldError("world_not_ready")
+        self._ensure_world_available(world)
+        if daily_max > 0 and (
+            self._repository.count_wish_drafts_since(platform_user_id, window_start)
+            >= daily_max
+        ):
+            raise CompanionWorldError("wish_rate_limited")
+        return None
+
+    @staticmethod
+    def _render_draft(draft: ResidentDraftRecord) -> RenderedPersona:
+        """由草稿行重新渲染回显字段。
+
+        渲染是纯函数且草稿存的就是渲染输入，所以重放结果与首次预览必然一致——这正是
+        「所见即所存」在重放路径上的体现，不需要把 tags/关系展示名再冗余存一份。
+        """
+        return render_persona(
+            PersonaInput(
+                name=draft.name,
+                avatar_key=draft.avatar_key,
+                relationship_type=draft.relationship_type,
+                relationship_label=draft.relationship_label,
+                personality_traits=tuple(draft.personality_traits),
+                style_note=draft.style_note,
+            )
         )
 
     def preview_resident_draft(
@@ -325,6 +418,8 @@ class CompanionWorldService:
         draft_token: str,
         expires_at: str,
         safety_json: Optional[str] = None,
+        source: str = "form",
+        wish_request_id: Optional[str] = None,
     ) -> Tuple[ResidentDraftRecord, RenderedPersona]:
         """渲染并落一条自建角色草稿。
 
@@ -365,6 +460,8 @@ class CompanionWorldService:
             ),
             safety_json=safety_json,
             expires_at=expires_at,
+            source=source,
+            wish_request_id=wish_request_id,
         )
         return draft, rendered
 

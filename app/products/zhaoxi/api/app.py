@@ -49,6 +49,7 @@ from app.products.zhaoxi.api.contracts import (
     ProfileUpdateResponse,
 )
 from app.products.zhaoxi.application.account_deletion import delete_account_now
+from app.products.zhaoxi.application.companion_world_wish import MAX_WISH_TEXT_CHARS
 from app.products.zhaoxi.domain.user_profile import (
     MAX_NICKNAME_CHARS,
     UserProfileError,
@@ -85,7 +86,7 @@ router = APIRouter(tags=["app-v1"])
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 
 # App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
-CLIENT_CONTRACT_VERSION = "2026-07-28"
+CLIENT_CONTRACT_VERSION = "2026-07-30"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))
@@ -294,6 +295,11 @@ def _companion_world_capabilities() -> dict:
         "mailbox": _gated("companion_world_mailbox_enabled"),
         "world_visits": _gated("companion_world_visits_enabled"),
         "human_chat_send": _gated("companion_world_human_chat_enabled"),
+        # v1.5：媒体与许愿四位。同样随 p1 总闸，关闭 world 时不会出现「能发图但没有世界」。
+        "chat_image_message": _gated("companion_world_chat_image_enabled"),
+        "chat_voice_message": _gated("companion_world_chat_voice_enabled"),
+        "feed_image_post": _gated("companion_world_feed_image_enabled"),
+        "resident_wish_create": _gated("companion_world_resident_wish_enabled"),
     }
 
 
@@ -318,6 +324,15 @@ def app_config(response: Response) -> dict:
             "message_chars": 4000,
             "audio_bytes": int(settings.asr_max_audio_bytes),
             "audio_duration_ms": int(settings.asr_max_duration_ms),
+            # 媒体限额恒下发（与能力位无关）：客户端拿它做上传前校验，
+            # 开关关闭时它拿不到上传入口，多下发几个数字无副作用。
+            "image_bytes_max": int(settings.media_image_max_bytes),
+            "image_count_max": int(settings.media_image_count_max),
+            "voice_bytes_max": int(settings.media_voice_max_bytes),
+            "voice_duration_ms_max": int(settings.media_voice_max_duration_ms),
+            # 许愿限额同理恒下发；日额度 <=0 表示服务端不设限。
+            "wish_text_chars": MAX_WISH_TEXT_CHARS,
+            "wish_daily_max": int(settings.companion_world_wish_daily_max),
         },
         "client_contract_version": CLIENT_CONTRACT_VERSION,
         "server_time": beijing_now().isoformat(timespec="seconds"),

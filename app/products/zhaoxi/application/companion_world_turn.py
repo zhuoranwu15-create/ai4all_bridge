@@ -1,7 +1,7 @@
 """Companion World turn 的产品 composition adapter。"""
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from app.agent_runtime.adapter import DefaultAgentRuntimeAdapter
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
@@ -11,7 +11,7 @@ from app.products.zhaoxi.infrastructure.persistence.companion_world import read_
 from app.products.zhaoxi.domain.companion_world.l3_context import render_universe_l3_block
 from app.platform.auth.identity import ResolvedIdentity
 from app.agent_runtime.context.prompt_builder import ContextBlock
-from app.schemas import OpenClawTurnResponse
+from app.schemas import MediaPayload, OpenClawTurnResponse
 from app.agent_runtime.turns.service import ChannelTurnInput
 
 from app.products.zhaoxi.application.companion_world_memory import build_companion_world_memory_sink
@@ -36,8 +36,18 @@ def run_companion_world_turn(
     sender_name: Optional[str],
     message_id: str,
     text: str,
+    message_type: str = "text",
+    media: Optional[MediaPayload] = None,
+    display_content: Optional[Dict[str, Any]] = None,
+    media_asset_id: Optional[str] = None,
+    media_asset_owner_id: Optional[str] = None,
 ) -> OpenClawTurnResponse:
-    """组装 World/App 输入与共享 context，再委派给形态无关 Runtime。"""
+    """组装 World/App 输入与共享 context，再委派给形态无关 Runtime。
+
+    媒体消息（v1.5）由调用方在 API 层完成资产解析与鉴权后传入：``text`` 仍是**LLM 上下文
+    文本**（语音=caption+转写），``display_content`` 是落 ``content_json`` 的展示载荷，
+    ``media_asset_id``/``media_asset_owner_id`` 交给 Runtime 在入站事务内认领。
+    """
     block = read_companion_world_context(universe_id)
     identity = ResolvedIdentity(
         ai4all_account_id=runtime_account_id,
@@ -55,9 +65,9 @@ def run_companion_world_turn(
             identity=identity,
             message_id=message_id,
             event_id=None,
-            message_type="text",
+            message_type=message_type,
             text=text,
-            media=None,
+            media=media,
             raw={
                 "source": "companion_world_p1",
                 "conversation_id": conversation_id,
@@ -66,6 +76,9 @@ def run_companion_world_turn(
             sender_name=sender_name,
             extra_blocks=[block] if block is not None else [],
             memory_sink=build_companion_world_memory_sink(),
+            display_content=display_content,
+            media_asset_id=media_asset_id,
+            media_asset_owner_id=media_asset_owner_id,
         )
     )
 

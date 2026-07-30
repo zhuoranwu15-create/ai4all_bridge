@@ -13,7 +13,7 @@ snapshot 一致。**改响应字段必须同时改这里并重新导出 snapshot
 """
 from __future__ import annotations
 
-from typing import Generic, List, Optional, TypeVar
+from typing import Annotated, Generic, List, Literal, Optional, TypeVar, Union
 
 from pydantic import BaseModel, Field
 
@@ -61,12 +61,28 @@ class AppConfigFeatures(BaseModel):
     mailbox: bool
     world_visits: bool
     human_chat_send: bool
+    # v1.5（FLAG-001）：客户端按**可选**读取以下四位，缺失即视为关闭，不进启动必需字段校验。
+    chat_image_message: bool
+    chat_voice_message: bool
+    feed_image_post: bool
+    resident_wish_create: bool
 
 
 class AppConfigLimits(BaseModel):
     message_chars: int
+    # audio_* 是**语音输入转写（ASR）**的上限，沿用既有值不动；下面 voice_* 才是语音消息上限。
+    # 两个口径分离：AAC-LC 32kbps 60 秒仅约 240KB，语音消息沿用 ASR 的 10MB 是错误的宽松。
     audio_bytes: int
     audio_duration_ms: int
+    # v1.5 媒体消息限额（MEDIA-LIMIT-001）。
+    image_bytes_max: int
+    image_count_max: int          # 动态单条上限；聊天图片消息恒为 1 张
+    voice_bytes_max: int
+    voice_duration_ms_max: int
+    # v1.5 许愿创建（WISH-001）：一句话许愿的字数上限与每人每日许愿次数上限。
+    # ``wish_daily_max <= 0`` 表示服务端未设限，客户端不必自行做次数拦截。
+    wish_text_chars: int
+    wish_daily_max: int
 
 
 class AppConfigMinimumVersionByPlatform(BaseModel):
@@ -196,6 +212,9 @@ class ResidentData(BaseModel):
     origin: str
     conversation_id: Optional[str] = None
     conversation_state: Optional[str] = None
+    # CONTENT-004：使命展示形态。``countable`` 走可数进度，``narrative`` 只展示长期使命文案、
+    # 不触发计数 UI。服务端持有名单，客户端不再按角色 ID 硬编码。
+    mission_display: str = "countable"
 
 
 class BootstrapData(BaseModel):
@@ -245,12 +264,64 @@ class ConversationListData(BaseModel):
     next_cursor: Optional[str] = None
 
 
+class TextMessageContent(BaseModel):
+    """纯文本消息。存量消息（v1.5 之前的全部消息）都投影成这一支。"""
+
+    type: Literal["text"] = "text"
+    text: str = ""
+
+
+class ImageMessageContent(BaseModel):
+    """图片消息。
+
+    ``url`` 是**短 TTL 签名地址**，每次读接口现签，不要持久化或跨会话复用。为 null 表示
+    服务端此刻签不出（部署缺 secret，或访客拜访已结束）——按占位渲染，不要降级成文本。
+    ``text`` 是用户自己写的 caption，**不含**服务端生成的图片描述（D-2 红线）。
+    """
+
+    type: Literal["image"] = "image"
+    text: str = ""
+    media_id: str
+    url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class AudioMessageContent(BaseModel):
+    """语音消息。``transcript`` 是上传时同步转写的结果，供"长按转文字"；转写失败为 null。"""
+
+    type: Literal["audio"] = "audio"
+    text: str = ""
+    media_id: str
+    url: Optional[str] = None
+    duration_ms: Optional[int] = None
+    transcript: Optional[str] = None
+
+
+# D-1：``content.type`` 是**唯一权威判别字段**。客户端遇到未知 type 按占位降级，
+# 不要再拿 ``message_type`` 做分支。
+MessageContent = Annotated[
+    Union[TextMessageContent, ImageMessageContent, AudioMessageContent],
+    Field(discriminator="type"),
+]
+
+
 class ConversationMessageItem(BaseModel):
+    """``message_type`` 与 ``text`` 是 v1.5 之前的老字段，服务端保证与 ``content`` 一致：
+
+    - ``message_type`` **deprecated**，恒等于 ``content.type``（``audio`` 除外——历史上
+      库内 ``message_type`` 用 ``voice``，这里统一投影成 ``content.type`` 的取值）；
+    - ``text`` 恒等于 ``content.text``，即用户自己写的正文/caption。
+
+    新客户端只读 ``content``。
+    """
+
     id: int
     message_id: Optional[str] = None
     role: str
     message_type: str
     text: Optional[str] = None
+    content: MessageContent
     created_at: Optional[str] = None
 
 
@@ -293,9 +364,38 @@ class FeedAuthor(BaseModel):
     avatar_ref: Optional[str] = None
 
 
-class FeedContent(BaseModel):
-    type: str
+class FeedImage(BaseModel):
+    """图文动态里的一张图；``url`` 语义同 :class:`ImageMessageContent`（短 TTL 现签，可为 null）。"""
+
+    media_id: str
+    url: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class FeedTextContent(BaseModel):
+    """纯文字动态。AI 居民动态与 v1.5 之前的全部动态都投影成这一支。"""
+
+    type: Literal["text"] = "text"
     text: Optional[str] = None
+
+
+class FeedImageContent(BaseModel):
+    """图文动态（v1.5）。
+
+    正文属于整条动态而不属于某张图，所以 ``text`` 在这一层、``images`` 是有序列表
+    （按主人发布时的排版顺序，最多 4 张）。只发图时 ``text`` 是空串。
+    """
+
+    type: Literal["image"] = "image"
+    text: str = ""
+    images: List[FeedImage]
+
+
+# D-1 同款：``content.type`` 是唯一权威判别字段，客户端遇到未知 type 按占位降级。
+FeedContent = Annotated[
+    Union[FeedTextContent, FeedImageContent], Field(discriminator="type")
+]
 
 
 class FeedItem(BaseModel):
@@ -323,6 +423,51 @@ class FeedRetireData(BaseModel):
     post_id: str
     status: str
     replayed: bool
+
+
+# --- B 类 data：自建角色草稿预览 -------------------------------------------
+
+
+class ResidentDraftPreviewData(BaseModel):
+    """草稿预览回显（表单与许愿两条路径同形）。
+
+    这些字段就是最终会落进居民人设的值——「所见即所存」；``draft_token`` 一次性，
+    在 ``expires_at`` 前拿去确认创建。许愿路径重放同一 ``client_request_id`` 时逐字段等值。
+    """
+
+    draft_id: str
+    draft_token: str
+    expires_at: str
+    name: str
+    avatar_ref: Optional[str] = None
+    relationship_display: str
+    tags: List[str]
+    normalized_summary: str
+    ai_identity_notice: str
+
+
+# --- B 类 data：媒体上传（v1.5 S1）-----------------------------------------
+
+
+class MediaUploadData(BaseModel):
+    """上传结果。
+
+    ``url`` 是**短 TTL 签名地址**（D-3），客户端可直接加载但不要持久化：过期后重新读列表/详情
+    会拿到新签名。``expires_at`` 是"这份未被引用的媒体什么时候被回收"，与 URL 过期是两件事。
+    ``transcript`` 只在语音且转写成功时非空——转写失败不阻塞发送。
+    """
+
+    media_id: str
+    kind: str
+    mime: str
+    bytes: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+    duration_ms: Optional[int] = None
+    transcript: Optional[str] = None
+    expires_at: Optional[str] = None
+    url: str
+    url_expires_at: str
 
 
 # --- B 类 data：真人一对一聊天 ---------------------------------------------
@@ -390,7 +535,9 @@ TurnResponse = WorldEnvelope[TurnData]
 FeedListResponse = WorldEnvelope[FeedListData]
 FeedPostResponse = WorldEnvelope[FeedPostData]
 FeedRetireResponse = WorldEnvelope[FeedRetireData]
+ResidentDraftPreviewResponse = WorldEnvelope[ResidentDraftPreviewData]
 HumanConversationListResponse = WorldEnvelope[HumanConversationListData]
+MediaUploadResponse = WorldEnvelope[MediaUploadData]
 HumanReportOptionsResponse = WorldEnvelope[HumanReportOptionsData]
 NotificationPreferencesResponse = WorldEnvelope[NotificationPreferencesData]
 
@@ -418,9 +565,11 @@ __all__ = [
     "HumanConversationListResponse",
     "HumanReportOptionsResponse",
     "MeResponse",
+    "MediaUploadResponse",
     "NotificationPreferencesResponse",
     "ProfileOptionsResponse",
     "ProfileUpdateResponse",
+    "ResidentDraftPreviewResponse",
     "ResidentListResponse",
     "TurnResponse",
     "WORLD_ERROR_RESPONSES",

@@ -28,6 +28,8 @@ ScanDueAccountChecks = Callable[..., List[Dict[str, Any]]]
 RefreshHotTopicPool = Callable[..., Dict[str, Any]]
 ReclaimExpiredReservations = Callable[..., int]
 CleanupAppNotifications = Callable[..., Dict[str, Any]]
+ReclaimOrphanMedia = Callable[..., Dict[str, Any]]
+ReviewPendingMedia = Callable[..., Dict[str, Any]]
 
 logger = logging.getLogger("ai4all.proactive.scheduler")
 
@@ -85,6 +87,9 @@ class ProactiveScheduler:
         reclaim_quota_reservations: ReclaimExpiredReservations = reclaim_expired_reservations,
         cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
         notification_cleanup_batch_size: int = 100,
+        reclaim_orphan_media: Optional[ReclaimOrphanMedia] = None,
+        media_reclaim_batch_size: int = 200,
+        review_pending_media: Optional[ReviewPendingMedia] = None,
     ) -> None:
         self.interval_seconds = max(float(interval_seconds), 1.0)
         self.batch_size = max(int(batch_size), 1)
@@ -105,6 +110,13 @@ class ProactiveScheduler:
         self.notification_cleanup_batch_size = max(
             int(notification_cleanup_batch_size), 1
         )
+        # v1.5 D-10：孤儿媒体回收。每 tick 都调用，函数内部按
+        # media_reclaim_interval_seconds 自节流（同 hot topic pool 的做法），不另起进程。
+        self._reclaim_orphan_media = reclaim_orphan_media
+        self.media_reclaim_batch_size = max(int(media_reclaim_batch_size), 1)
+        # v1.5 S4 图片机审：同样每 tick 都调，函数内部按 media_moderation_interval_seconds
+        # 自节流；机审未配置时它直接返回 disabled，连库都不读。批量大小走配置，不在这里覆写。
+        self._review_pending_media = review_pending_media
         self._task: Optional[asyncio.Task[None]] = None
         self._stop_event: Optional[asyncio.Event] = None
         self.last_run: Optional[Dict[str, Any]] = None
@@ -161,6 +173,28 @@ class ProactiveScheduler:
                     err,
                 )
                 step_errors["app_notification_cleanup"] = str(err)
+
+        media_reclaim: Dict[str, Any] = {}
+        if self._reclaim_orphan_media is not None:
+            try:
+                media_reclaim = await asyncio.to_thread(
+                    self._reclaim_orphan_media,
+                    now=current.strftime("%Y-%m-%d %H:%M:%S"),
+                    limit=self.media_reclaim_batch_size,
+                )
+            except Exception as err:  # noqa: BLE001 — 回收与投递步骤相互隔离
+                logger.exception("proactive scheduler step media_reclaim failed: %s", err)
+                step_errors["media_reclaim"] = str(err)
+
+        media_moderation: Dict[str, Any] = {}
+        if self._review_pending_media is not None:
+            try:
+                media_moderation = await asyncio.to_thread(self._review_pending_media)
+            except Exception as err:  # noqa: BLE001 — 机审与投递步骤相互隔离
+                logger.exception(
+                    "proactive scheduler step media_moderation failed: %s", err
+                )
+                step_errors["media_moderation"] = str(err)
 
         async def _step(name: str, fn: Callable[..., List[Dict[str, Any]]], **kwargs: Any) -> List[Dict[str, Any]]:
             try:
@@ -247,6 +281,8 @@ class ProactiveScheduler:
             "finished_at": finished_at.isoformat(timespec="seconds"),
             "reclaimed_quota_reservations": reclaimed_quota_reservations,
             "app_notification_cleanup": notification_cleanup,
+            "media_reclaim": media_reclaim,
+            "media_moderation": media_moderation,
             "reminder_count": len(reminder_results),
             "reminders": reminder_results,
             "dynamic_reminder_count": len(dynamic_reminder_results),
@@ -369,6 +405,9 @@ def start_proactive_scheduler(
     node_id: Optional[str] = None,
     cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
     notification_cleanup_batch_size: int = 100,
+    reclaim_orphan_media: Optional[ReclaimOrphanMedia] = None,
+    media_reclaim_batch_size: int = 200,
+    review_pending_media: Optional[ReviewPendingMedia] = None,
 ) -> ProactiveScheduler:
     global _scheduler
     if _scheduler is None:
@@ -380,6 +419,9 @@ def start_proactive_scheduler(
             node_id=node_id,
             cleanup_app_notifications=cleanup_app_notifications,
             notification_cleanup_batch_size=notification_cleanup_batch_size,
+            reclaim_orphan_media=reclaim_orphan_media,
+            media_reclaim_batch_size=media_reclaim_batch_size,
+            review_pending_media=review_pending_media,
         )
     if not _scheduler.is_running:
         _scheduler.start()
@@ -403,6 +445,9 @@ async def run_proactive_scheduler_once(
     now: Optional[datetime] = None,
     cleanup_app_notifications: Optional[CleanupAppNotifications] = None,
     notification_cleanup_batch_size: int = 100,
+    reclaim_orphan_media: Optional[ReclaimOrphanMedia] = None,
+    media_reclaim_batch_size: int = 200,
+    review_pending_media: Optional[ReviewPendingMedia] = None,
 ) -> Dict[str, Any]:
     scheduler = ProactiveScheduler(
         interval_seconds=60,
@@ -412,5 +457,8 @@ async def run_proactive_scheduler_once(
         node_id=node_id,
         cleanup_app_notifications=cleanup_app_notifications,
         notification_cleanup_batch_size=notification_cleanup_batch_size,
+        reclaim_orphan_media=reclaim_orphan_media,
+        media_reclaim_batch_size=media_reclaim_batch_size,
+        review_pending_media=review_pending_media,
     )
     return await scheduler.run_once(now=now)

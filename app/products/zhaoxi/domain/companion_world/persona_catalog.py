@@ -59,12 +59,14 @@ MIN_PERSONALITY_TRAITS = 1
 MAX_PERSONALITY_TRAITS = 3
 
 # 头像。只允许已审核的静态资产，服务端把 key 解析成 avatar_ref，客户端不提交 URL。
-# 注意：当前仅有首发四张资产，自建角色只能复用；扩充头像库是运营任务（补资产 + 加一行）。
+# 注意：预设角色头像与自建可选头像**不分组**（产品 2026-07-29 决议），所以每张首发资产
+# 都同时是自建角色的可选项；扩充头像库是运营任务（补资产 + 加一行）。
 AVATAR_KEYS: Dict[str, str] = {
     "linxiaoman": "/companion_world/avatars/linxiaoman.png",
     "luxingye": "/companion_world/avatars/luxingye.png",
     "shenchuan": "/companion_world/avatars/shenchuan.png",
     "atang": "/companion_world/avatars/atang.png",
+    "sichen": "/companion_world/avatars/sichen.png",
 }
 
 MAX_STYLE_NOTE_CHARS = 500

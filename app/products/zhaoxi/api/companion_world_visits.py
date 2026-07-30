@@ -13,12 +13,15 @@ from app.config import settings
 from app.db import SessionPrincipal
 from app.products.zhaoxi.application import CompanionWorldVisitService, VisitError
 from app.platform.quota.rate_limiter import RateLimiter
+from app.platform.media.access import visit_scope, visitor_ttl_seconds
+from app.platform.media.persistence import list_media_assets_unscoped
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,
     _decode_feed_cursor,
     _no_store,
     _require_world_session,
+    build_feed_content,
 )
 from app.time_utils import beijing_naive_now
 
@@ -117,8 +120,28 @@ def _visit_data(row: dict, platform_user_id: str) -> dict:
     }
 
 
-def _feed_data(row: dict) -> dict:
-    """复用 M3 Feed 公开形状，不返回 owner/world/runtime/fingerprint。"""
+def _visit_remaining_seconds(expires_at: Optional[str]) -> Optional[int]:
+    """visit 剩余秒数；``expires_at`` 缺失时返回 None（TTL 取配置值）。
+
+    与真人聊天侧同款：即便这里算宽了，``GET /v1/media/{id}`` 仍会独立复查 visit 状态与
+    剩余时长，多签出来的几分钟换不到访问权。
+    """
+    if not expires_at:
+        return None
+    try:
+        deadline = datetime.strptime(str(expires_at), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+    return int((deadline - _now()).total_seconds())
+
+
+def _feed_data(row: dict, *, assets: dict, scope: str, ttl_seconds: int) -> dict:
+    """复用 M3 Feed 公开形状，不返回 owner/world/runtime/fingerprint。
+
+    图文动态的图恒属于世界主人、从不属于访客（``list_feed`` 只对访客开放），所以 URL 一律
+    用 ``visit:<visit_id>`` scope 现签：visit 一结束地址立刻失效（§3.3 隐私红线）。
+    """
+    media_ids = row.get("media_ids") or ()
     return {
         "post_id": row["id"],
         "author": {
@@ -127,7 +150,18 @@ def _feed_data(row: dict) -> dict:
             "name": row.get("author_name"),
             "avatar_ref": row.get("author_avatar_ref"),
         },
-        "content": {"type": "text", "text": row.get("text")},
+        "content": (
+            build_feed_content(
+                text=row.get("text"),
+                media_ids=media_ids,
+                assets=assets,
+                scope=scope,
+                ttl_seconds=ttl_seconds,
+            )
+            if media_ids
+            # 无图动态保持 v1 形状原样（``text`` 允许为 null，不改成空串）。
+            else {"type": "text", "text": row.get("text")}
+        ),
         "post_type": row.get("post_type") or "normal",
         "source": row["source_type"],
         "published_at": _public_time(row.get("published_at")),
@@ -394,7 +428,7 @@ def list_visited_world_feed(
     platform_user: SessionPrincipal = Depends(_require_visit_session),
 ) -> dict:
     cursor_published_at, cursor_post_id = _decode_feed_cursor(cursor)
-    rows = _call(
+    visit_expires_at, rows = _call(
         lambda: _service().list_feed(
             platform_user.platform_user_id,
             visit_id=visit_id,
@@ -405,12 +439,27 @@ def list_visited_world_feed(
         )
     )
     page = rows[:limit]
+    # 一次批量取本页所有图；访客看到的每张图都按 visit 维度现签，TTL 不超过 visit 剩余时长。
+    assets = list_media_assets_unscoped(
+        media_ids=[media_id for row in page for media_id in (row.get("media_ids") or ())]
+    )
+    ttl_seconds = visitor_ttl_seconds(
+        visit_remaining_seconds=_visit_remaining_seconds(visit_expires_at)
+    )
     _no_store(response)
     return _envelope(
         request,
         code="ok",
         data={
-            "items": [_feed_data(row) for row in page],
+            "items": [
+                _feed_data(
+                    row,
+                    assets=assets,
+                    scope=visit_scope(visit_id),
+                    ttl_seconds=ttl_seconds,
+                )
+                for row in page
+            ],
             "next_cursor": (
                 _encode_feed_cursor(page[-1]) if len(rows) > limit and page else None
             ),

@@ -1753,6 +1753,22 @@ def process_referral_message_for_account(
         invitee_platform_user_id = owner["platform_user_id"]
         app_id = registry.require_enabled(str(owner["app_id"])).app_id
 
+        # 候选消息 metadata 是 read-modify-write；必须从读取开始持 relationship 锁，
+        # 否则多节点并发处理不同消息时会互相覆盖 candidate_message_ids。
+        # 上锁必须发生在**任何写入之前**：`_mark_referral_relationship_bound_in_conn` 会
+        # UPDATE 这一行，若先拿行锁再抢 advisory lock，就会和已持 advisory lock、正等这一
+        # 行的并发节点形成 PG 死锁（两把锁的获取顺序相反）。这里只读 id，不写库。
+        bound = conn.execute(
+            """
+            SELECT id FROM referral_relationships
+            WHERE invitee_platform_user_id = ? AND app_id = ?
+            """,
+            (invitee_platform_user_id, app_id),
+        ).fetchone()
+        if bound is None:
+            return None
+        _lock_referral_relationship_in_conn(conn, str(bound["id"]))
+
         relationship = _mark_referral_relationship_bound_in_conn(
             conn,
             invitee_platform_user_id=invitee_platform_user_id,
@@ -1761,9 +1777,6 @@ def process_referral_message_for_account(
         if relationship is None:
             return None
 
-        # 候选消息 metadata 是 read-modify-write；必须从读取开始持 relationship 锁，
-        # 否则多节点并发处理不同消息时会互相覆盖 candidate_message_ids。
-        _lock_referral_relationship_in_conn(conn, str(relationship["id"]))
         relationship = conn.execute(
             "SELECT * FROM referral_relationships WHERE id = ? AND app_id = ?",
             (relationship["id"], app_id),

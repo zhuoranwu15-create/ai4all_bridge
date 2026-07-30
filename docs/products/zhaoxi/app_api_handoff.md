@@ -3,6 +3,8 @@
 > 面向：朝夕相伴移动端 App 开发者。
 > 服务端状态：Companion World 3.0 已在生产全量激活（aliyun1 中心节点），本文档描述的所有能力均线上可用。
 > 最后核对：2026-07-23，对着生产 `https://ai4company.top` 实测。
+> **v1.5（会话与动态媒体 + 许愿创建居民）服务端已开发完成**，契约见 §6.5 / §6.6；但**尚未上线、四个能力位默认关闭**，
+> 客户端可按契约先行开发，联调前置条件见 §9.1。
 
 ---
 
@@ -22,7 +24,7 @@
 | 公网 Base URL | `https://ai4company.top/api/v1/` |
 | 交互式 API 文档（Swagger） | **未对外暴露**（2026-07-26 实测 `/api/docs` 返回官网 SPA）；契约以仓库提交的 [`openapi/app_v1.json`](openapi/app_v1.json) 为准（见 §2.3），或本地起服务访问 `/docs` |
 | 鉴权方式 | 手机号 OTP 登录 → 30 天 session token（`Authorization: Bearer <access_token>`） |
-| 内容长度上限 | 文本 4000 字符；音频 10 MB / 60s（见 `/app/config` `limits`） |
+| 内容长度上限 | 文本 4000 字符；语音转写音频 10 MB / 60s；v1.5 媒体：图片 8 MB（JPEG/PNG，单条动态 ≤4 张）、聊天语音 500 KB / 60s（全部见 `/app/config` `limits`，不要硬编码） |
 | 时区 | 服务端统一 Asia/Shanghai（+08:00），所有时间字段带 `+08:00` 偏移 |
 
 ### 2.1 nginx 前缀说明
@@ -54,11 +56,11 @@
 
 ### 2.3 OpenAPI 契约 snapshot
 
-仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（53 条 `/v1` 路径 / 57 个操作）。
+仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（58 条 `/v1` 路径 / 62 个操作，含 v1.5 媒体与许愿）。
 
 - 服务端 CI 断言「实时导出 == 提交的 snapshot」，所以**改响应字段必须同步更新 snapshot**，否则后端 CI 直接红。客户端可以拿它做 breaking-change 检查或生成 DTO。
 - 后端重新导出：`.venv/bin/python scripts/export_openapi.py`（`--check` 只校验）。
-- **当前有主链路 21 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)，世界 Feed 的 `worlds/home/feed`(GET)、`worlds/home/feed/posts`(POST)、`worlds/home/feed/posts/{id}`(DELETE)、`worlds/home/feed/posts/{id}/hide`(POST)，以及真人会话的 `human-conversations`(GET)、`human-conversations/report-options`(GET)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
+- **当前有主链路 24 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)，世界 Feed 的 `worlds/home/feed`(GET)、`worlds/home/feed/posts`(POST)、`worlds/home/feed/posts/{id}`(DELETE)、`worlds/home/feed/posts/{id}/hide`(POST)，真人会话的 `human-conversations`(GET)、`human-conversations/report-options`(GET)，以及 v1.5 新增的 `media/uploads`(POST)、`media/{media_id}`(GET)、`worlds/home/resident-drafts/preview`(POST)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
 - 生成的 DTO 不替代客户端领域模型；本文档仍是落地口径与流程约定。
 
 ---
@@ -76,7 +78,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 
 ### 3.1 `GET /v1/app/config`（无需鉴权）
 
-线上实测返回：
+线上实测返回（v1.5 的四个能力位与媒体/许愿限额是 2026-07-30 契约新增字段，线上开关尚未打开，故为 `false`）：
 
 ```json
 {
@@ -89,10 +91,19 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "resident_lifecycle": true,
     "mailbox": true,
     "world_visits": true,
-    "human_chat_send": true
+    "human_chat_send": true,
+    "chat_image_message": false,
+    "chat_voice_message": false,
+    "feed_image_post": false,
+    "resident_wish_create": false
   },
-  "limits": { "message_chars": 4000, "audio_bytes": 10485760, "audio_duration_ms": 60000 },
-  "client_contract_version": "2026-07-26",
+  "limits": {
+    "message_chars": 4000, "audio_bytes": 10485760, "audio_duration_ms": 60000,
+    "image_bytes_max": 8388608, "image_count_max": 4,
+    "voice_bytes_max": 512000, "voice_duration_ms_max": 60000,
+    "wish_text_chars": 500, "wish_daily_max": 10
+  },
+  "client_contract_version": "2026-07-30",
   "server_time": "2026-07-26T12:00:00+08:00",
   "minimum_supported_version": "0.1.0",
   "minimum_supported_version_by_platform": { "ios": "0.0.0", "android": "0.0.0" }
@@ -108,6 +119,13 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   - `voice_input`（CHAT-04）：M1 产品口径是**打开**，但该位由生产 ASR 配置驱动，上面这份
     实测响应是配置生效前抓的。客户端按位渲染即可，不要硬编码——服务端配好 key 后它会翻成
     `true`，无需客户端发版。
+  - v1.5 四位（`chat_image_message` / `chat_voice_message` / `feed_image_post` /
+    `resident_wish_create`）：**分别独立门控**，可以只开图不开语音。为 `false` 时对应入口
+    必须隐藏或置灰；硬发会拿到 `media_disabled`(404) 或 `feature_disabled`(404)。
+    它们同样受 `resident_world` 总闸约束（总闸关时恒为 `false`）。
+- `limits.*`：**恒下发，与能力位无关**——客户端拿它做上传前本地校验，不要硬编码常量。
+  `image_count_max` 是单条动态的图片张数上限（聊天图片恒为单张）。
+  `wish_daily_max` ≤ 0 表示服务端不设日额度。
 - `client_contract_version`：服务端 App 契约版本，改契约时上调。
 - `minimum_supported_version` / `minimum_supported_version_by_platform`：低于此版本应提示强制升级；分平台字段先按 `0.0.0`（不拦）上线。
 - 响应带 `Cache-Control: no-store`。
@@ -479,8 +497,12 @@ POST /v1/ai-conversations/{conversation_id}/read     → 标记已读到某条�
 `POST .../turn` 请求体：
 
 ```json
-{ "client_message_id": "<客户端幂等键>", "text": "你好" }
+{ "client_message_id": "<客户端幂等键>", "text": "你好", "media_ref": null }
 ```
+
+- **`media_ref`（v1.5 新增，可选）**：先走 `POST /v1/media/uploads` 拿到的 `media_id`，发图片或语音时带上，
+  `text` 此时是 caption（可空）。契约与红线见 §6.5。
+- `/messages` 的每条消息除老字段外还有 **`content` 判别联合**（`text` / `image` / `audio`），新客户端只读 `content`，见 §6.5.3。
 
 `data`（2026-07-26 起形状冻结）：
 
@@ -508,7 +530,17 @@ POST   /v1/worlds/home/feed/posts/{post_id}/hide          → 主人隐藏 AI �
 
 `data`：`{ "items": [ /* Feed 项 */ ], "next_cursor": "<游标或 null>" }`。用 `next_cursor` 向后翻页，为 `null` 表示到底。
 
-Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{type:"text",text} / post_type / source / published_at`。这四个操作的响应形状均已进 OpenAPI snapshot，可直接生成 DTO。
+Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content / post_type / source / published_at`。这四个操作的响应形状均已进 OpenAPI snapshot，可直接生成 DTO。
+
+`content` 是按 `type` 判别的联合，**v1.5 起有两支**：
+
+```json
+{ "type": "text",  "text": "……" }
+{ "type": "image", "text": "正文（可空）", "images": [ { "media_id": "med_…", "url": "https://…", "width": 1080, "height": 1440 } ] }
+```
+
+正文属于整条动态而不属于某张图；`images` 是有序列表（主人发布时的排版顺序，≤4 张）。
+发图文动态见 §6.5.4，`url` 的语义与占位规则见 §6.5.2。
 
 **Feed 生成时间窗（Asia/Shanghai）**：早间 `07:00–11:00`、晚间 `18:00–23:00`。居民自动发帖由中心调度器在窗口内产生；窗口外一般无新 AI Feed。
 
@@ -600,6 +632,142 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 - `details_required=true` 的码，`POST /report` 不带 `details`（或只给空白）会返回 **422 `invalid_request`** —— 契约与服务端校验是同一份表，不存在「说必填却不校验」。
 - 该端点随**读**门控开放：`human_chat_send=false` 时仍可拉取并举报，只有发送被关闭。
 
+### 6.5 会话与动态媒体（v1.5 新增）
+
+图片与语音**一律两步**：先上传拿 `media_id`，再把它挂到消息或动态上。没有"一次请求带文件发消息"的接口——
+上传是三条写入路径（AI 会话、真人会话、图文动态）共用的地基。
+
+```
+POST /v1/media/uploads                 → 上传，拿 media_id + 一条短 TTL 读 URL
+GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authorization，签名即凭据）
+```
+
+#### 6.5.1 上传
+
+`multipart/form-data`：
+
+| 字段 | 必填 | 说明 |
+|---|---|---|
+| `file` | 是 | 二进制内容 |
+| `kind` | 是 | `image` \| `voice` |
+| `duration_ms` | 语音必传 | 客户端声明的时长（与 `/audio/transcriptions` 同口径），服务端只做上限校验 |
+
+`data`：
+
+```json
+{
+  "media_id": "med_…", "kind": "image", "mime": "image/jpeg",
+  "bytes": 204800, "width": 1080, "height": 1440, "duration_ms": null,
+  "transcript": null,
+  "url": "https://ai4company.top/api/v1/media/med_…?scope=pu:…&exp=…&sig=…",
+  "url_expires_at": "2026-07-30T14:20:00+08:00",
+  "expires_at": "2026-07-30T16:05:00+08:00"
+}
+```
+
+- **格式白名单**：图片只收 **JPEG / PNG**，HEIC / GIF / WEBP 一律 `media_kind_unsupported`(415)。
+  iOS 拍照默认 HEIC，**客户端必须先本地转码**。语音收 aac / m4a / mp3 / wav / ogg / webm。
+- **服务端不信任客户端声明**：图片一律重编码并剥离 EXIF/GPS，语音按魔数复核容器。
+  因此**宽高、`mime`、`bytes` 一律以响应为准**，不要用本地读到的值。
+- **`url` 与 `expires_at` 是两件事**：`url_expires_at` 是这条签名地址什么时候失效（默认 15 分钟），
+  `expires_at` 是这份**还没被引用**的媒体什么时候被回收（默认 2 小时）。
+- **两小时内必须用掉**：超时后引用会拿到 `media_ref_expired`(409)，需要重新上传。
+  草稿箱久放、退后台再回来发图，都要考虑重传。
+- `transcript` 只在 `kind=voice` 且同步转写成功时非空；**转写失败不阻塞上传与发送**，为 `null` 就当没有。
+- 上传限流 30 次/分钟（超出 `rate_limited` 429）。
+- 门控：图片上传只要 `chat_image_message` 或 `feed_image_post` 任一为 `true` 就可用；语音上传看 `chat_voice_message`。
+  都关时返回 `media_disabled`(404)。
+
+#### 6.5.2 读 URL 的规则（最容易踩的一节）
+
+- 所有返回媒体的接口（上传、消息列表、Feed、访客 Feed）都**现签**一条短 TTL URL。
+- **不要持久化、不要跨会话复用、不要写进本地库**。过期就重新拉一次列表/详情拿新签名。
+- `GET /v1/media/{media_id}` **不读 `Authorization`**，签名三元组（`scope` / `exp` / `sig`）就是唯一凭据；
+  原样使用返回的 URL，不要自己拼参数。
+- **`url` 为 `null` 表示服务端此刻签不出**（部署缺 secret，或访客的拜访已结束）：
+  **按占位图渲染，不要降级成文本、不要当成消息损坏**。
+- 访客视角（`GET /v1/visits/{visit_id}/feed`）拿到的是按 visit scope 签的 URL，**拜访一结束立即失效**。
+- 任何读取失败（签名不符、过期、scope 失效、资源缺失）统一收敛成 `media_access_denied`(403)，不区分原因（防枚举）。
+
+#### 6.5.3 会话里的媒体消息
+
+发送（AI 会话与真人会话同形，只差路径）：
+
+```
+POST /v1/ai-conversations/{conversation_id}/turn
+POST /v1/human-conversations/{conversation_id}/messages
+{ "client_message_id": "<幂等键>", "text": "（可空的 caption）", "media_ref": "med_…" }
+```
+
+- 单条消息**最多一份媒体**；`text` 与 `media_ref` 不能同时为空（都空是 `media_content_required` 422）。
+- 幂等键语义不变：重放返回与首次相同的消息，不要新建气泡。
+
+读取时每条消息新增 `content` 判别联合（`GET .../messages`，AI 与真人会话同一套形状）：
+
+```json
+{ "type": "text",  "text": "……" }
+{ "type": "image", "media_id": "med_…", "url": "https://…", "width": 1080, "height": 1440, "text": "caption" }
+{ "type": "audio", "media_id": "med_…", "url": "https://…", "duration_ms": 4200, "transcript": "转写文本或 null", "text": "" }
+```
+
+- **老字段 `message_type` / `text` 已 deprecated**：服务端保证 `message_type == content.type`
+  （历史库内的 `voice` 统一投影成 `audio`）、`text == content.text`。**新客户端只读 `content`。**
+- v1.5 之前的存量消息全部投影成 `text` 支，不需要客户端做版本分支。
+- `content.text` 只包含**用户自己写的 caption**，绝不含服务端生成的图片描述。
+- `audio.transcript` 供"长按转文字"，为 `null` 时隐藏该入口即可。
+- **AI 会话里的图片会真的被居民"看到"、语音会被转写后进上下文**，所以回复会针对内容本身，
+  不是"收到一张图"的套话。
+
+#### 6.5.4 图文动态
+
+```
+POST /v1/worlds/home/feed/posts
+{ "client_request_id": "<幂等键>", "text": "正文（可空）", "media_refs": ["med_a", "med_b"] }
+```
+
+- `media_refs` 有序、**最多 4 张**（以 `limits.image_count_max` 为准），只支持图片。
+- `text` 与 `media_refs` 不能同时为空；**超 4 张或图文全空在参数层就是 422 `invalid_request`**，
+  不会返回 `media_count_exceeded` / `media_content_required`（那两个码只在服务端领域层做防御）。
+- 动态发布路径上需要分支的码只有：`media_disabled`(404) / `media_ref_invalid`(409) /
+  `media_ref_expired`(409) / `invalid_request`(422) / `idempotency_conflict`(409)。
+- 读回见 §6.2 的 `content.image` 支。
+
+#### 6.5.5 审核口径：先发后审、仅红线
+
+- 图片发出去**立即可见**，机审在后台补做，客户端**不需要**做"审核中"状态。
+- 命中红线时：**图文动态会被终态下架**（主人与所有访客的 Feed 里都读不到，与主人自己删除同效果）；
+  **会话图片只落审核结论、当前不撤回消息**（撤回能力排在 v1.6）。
+- 机审能力未配置时图片一律放过，不影响任何客户端可见行为。
+
+#### 6.5.6 与注销的关系
+
+`POST /v1/me/account/deletion` 现在会连带删除该用户的媒体库行与磁盘文件、以及自己世界的全部动态。
+客户端若缓存过图片或动态，**注销成功后要一并清本地缓存**，否则会残留已删内容。
+
+### 6.6 许愿创建居民（v1.5 新增）
+
+自建角色的**第三条入口**：用户用一句自然语言许愿，服务端把它翻译成受控取值，再走既有的
+「预览 → 确认」两步。能力位 `resident_wish_create`，关闭时 `feature_disabled`(404)。
+
+```
+POST /v1/worlds/home/resident-drafts/preview   { "wish_text": "…", "client_request_id": "…" }
+POST /v1/worlds/home/residents                 { "draft_token": "…", "client_request_id": "…" }
+```
+
+- **与表单路径互斥**：带了 `wish_text` 就不能再带 `name` / `relationship_type` / `personality_traits`
+  等结构化字段（否则 422）；许愿路径的 `client_request_id` **必填**，表单路径**不接受**该字段。
+- **出参与表单路径逐字段同形**（`ResidentDraftPreviewData`：`draft_id / draft_token / expires_at /
+  name / relationship_display / tags / normalized_summary / ai_identity_notice / avatar_ref`），
+  所以**预览卡片 UI 零改动**，只需多一个"写愿望"的输入入口。
+- **所见即所存**：预览里的字段就是最终落进居民人设的值；自由文本原文不落库、不直通人设。
+- `wish_text` ≤ `limits.wish_text_chars`（500 字）；日额度 `limits.wish_daily_max`（默认 10，≤0 表示不限）。
+- **幂等**：同一 `client_request_id` 重放预览返回逐字段等值的同一份草稿，不会重复消耗额度、也不会重复调模型。
+- 第二步确认与既有自建路径完全一致：`draft_token` 一次性、30 分钟过期
+  （`resident_draft_expired` / `resident_draft_consumed` 见 §7）。
+- 专有错误码：`wish_text_rejected`(422，愿望命中安全护栏，提示换一种写法)、
+  `wish_rate_limited`(429，超日额度)、`wish_generation_failed`(503，模型不可用，**可重试**)。
+  额度与幂等都在调模型**之前**判，重试和超额不会白花一次生成。
+
 ---
 
 ## 7. 错误码（B 类信封 `code` → HTTP 状态）
@@ -628,6 +796,21 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 | `post_not_hideable` | 409 | 该动态不允许隐藏（当前只有离别动态 `post_type='farewell'`） |
 | `letter_not_found` / `letter_not_open` / `letter_expired` | 404 / 409 / 409 | 信箱来信状态 |
 | `invalid_invite_code` / `invite_expired` / `visit_*` | 400 / 409 / … | 邀请与访问相关 |
+| `idempotency_conflict` | 409 | 同一幂等键配不同内容（客户端复用了幂等键） |
+| `media_disabled` | 404 | 对应媒体能力位关闭（先看 `/app/config` `features`） |
+| `media_ref_invalid` | 409 | `media_ref` 不存在、不属于你，或已被别的消息引用 |
+| `media_ref_expired` | 409 | 未被引用的媒体超 2 小时已回收，需重新上传 |
+| `media_kind_unsupported` | 415 | `kind` 非法，或格式不在白名单（HEIC/GIF/WEBP） |
+| `media_decode_failed` | 422 | 文件打不开（含伪装扩展名） |
+| `media_too_large` | 413 | 超 `image_bytes_max` / `voice_bytes_max` |
+| `media_duration_exceeded` | 413 | 超 `voice_duration_ms_max` |
+| `media_content_required` | 422 | 消息的 `text` 与 `media_ref` 都为空；或上传了空文件 |
+| `media_count_exceeded` | 422 | 媒体张数超限（动态路径由参数层拦成 `invalid_request`，客户端一般见不到） |
+| `media_access_denied` | 403 | 读媒体的签名无效/过期，或 scope 已失效（拜访结束）。统一码，不区分原因 |
+| `media_signing_unavailable` | 503 | 服务端签名密钥未配置（部署问题），**可重试** |
+| `wish_text_rejected` | 422 | 愿望文本命中安全护栏，提示换一种写法 |
+| `wish_rate_limited` | 429 | 许愿超日额度（`limits.wish_daily_max`） |
+| `wish_generation_failed` | 503 | 愿望翻译所用模型暂不可用，**可重试**，不消耗额度 |
 
 > 完整表见 `app/products/zhaoxi/api/companion_world.py` 的 `_ERROR_STATUS`。App 应基于 `code`（而非文案）做分支，未知 `code` 按对应 HTTP 状态兜底。
 
@@ -636,7 +819,7 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 ---
 
-## 8. `/v1` 全量端点清单（60 条）
+## 8. `/v1` 全量端点清单（62 条）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
@@ -682,6 +865,10 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 - `POST /v1/notifications/{id}/read`、`POST /v1/notifications/read-all`
 - `GET /v1/notifications/preferences`、`PATCH /v1/notifications/preferences`
 
+**媒体（v1.5）**
+- `POST /v1/media/uploads`（图片 / 语音上传，multipart）
+- `GET /v1/media/{media_id}?scope=&exp=&sig=`（签名读，不带 `Authorization`）
+
 **真人会话**
 - `GET /v1/human-conversations`
 - `GET /v1/human-conversations/report-options`
@@ -707,6 +894,24 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 
 > 若某功能返回 `not_found`(404)，先确认对应 flag 是否被临时收回——功能门控以服务端 flag 为准。
 
+### 9.1 v1.5 能力的联调前置（媒体 + 许愿）
+
+服务端代码已完成，但**尚未上线，四个 flag 默认关闭**，所以现在 `/app/config` 里这四位是 `false`：
+
+| flag | 能力位 | 状态 |
+|---|---|---|
+| `COMPANION_WORLD_CHAT_IMAGE_ENABLED` | `chat_image_message` | 待打开 |
+| `COMPANION_WORLD_CHAT_VOICE_ENABLED` | `chat_voice_message` | 待打开 |
+| `COMPANION_WORLD_FEED_IMAGE_ENABLED` | `feed_image_post` | 待打开 |
+| `COMPANION_WORLD_RESIDENT_WISH_ENABLED` | `resident_wish_create` | 待打开 |
+
+联调需要服务端侧依次完成：**合入 main 并部署中心节点 → 配好媒体签名密钥与公网媒体基址 →
+逐个打开上述 flag**。图片机审是独立的运维配置（见
+[`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），
+**未配置不阻塞任何客户端功能**，只是图片一律放过不送审。
+
+客户端在此之前可以按 §6.5 / §6.6 的契约先行开发，并保证四位为 `false` 时入口不出现。
+
 ---
 
 ## 10. 联调建议
@@ -718,3 +923,6 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content{
 5. 遇到 4xx，按 §7 的 `code` 做分支，不要依赖文案。
 6. 机器可读契约用仓库里的 [`openapi/app_v1.json`](openapi/app_v1.json)（见 §2.3，线上未开放 Swagger）；本文档为落地口径与流程约定。
 7. 正式版客户端开发的精简入口见 [`app_client_brief.md`](app_client_brief.md)。
+8. 媒体链路分三步验：`POST /media/uploads` → 直接 `GET` 返回的 `url`（**不带 `Authorization`**，
+   期望拿到字节流）→ 再把 `media_id` 挂到 turn / 动态上回读。重点回归两件事：URL 过期后重新拉列表
+   能拿到新签名，以及 `url=null` 时渲染成占位而不是空白或报错。

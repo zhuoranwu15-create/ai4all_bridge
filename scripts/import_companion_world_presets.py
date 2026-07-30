@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""导入/预检 Companion World 四位首发模板；默认可用 ``--dry-run`` 只读规划。
+"""导入/预检 Companion World 首发模板目录；默认可用 ``--dry-run`` 只读规划。
 
-manifest 不包含代码内置人设，必须显式提供四条 rank 1..4。已存在 template_id 的已发布
+manifest 不包含代码内置人设，必须显式提供连续的 rank 1..N（N ≥
+``MIN_INITIAL_CANDIDATES``，与运行时 ``_validate_initial_catalog`` 同一口径，
+故加一位预设是纯数据操作、不需要改代码）。已存在 template_id 的已发布
 字段必须逐项相同；内容变更须换新 template_id，脚本会在同一事务退休旧目录并插入新版本。
 
 **运营元数据是可原地更新的例外**（m0049 / NAME-001、CAND-001）：``name_pool``、
@@ -22,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.products.zhaoxi.domain.companion_world.naming import (  # noqa: E402
     NamePoolError,
     normalize_name_pool,
+)
+from app.products.zhaoxi.domain.companion_world.service import (  # noqa: E402
+    MIN_INITIAL_CANDIDATES,
 )
 
 _TEMPLATE_ID_RE = re.compile(r"^tmpl_[A-Za-z0-9_-]{1,120}$")
@@ -91,10 +96,12 @@ def _name_pool(template_id: str, item: Dict[str, Any]) -> Tuple[str, ...]:
 
 
 def validate_manifest(payload: Any) -> Tuple[PresetRecord, ...]:
-    """校验 manifest 恰含 rank 1..4，返回按 rank 排序的不可变记录。"""
+    """校验 manifest 含连续 rank 1..N（N ≥ 下限），返回按 rank 排序的不可变记录。"""
     items = payload.get("templates") if isinstance(payload, dict) else payload
-    if not isinstance(items, list) or len(items) != 4:
-        raise ValueError("manifest must contain exactly four templates")
+    if not isinstance(items, list) or len(items) < MIN_INITIAL_CANDIDATES:
+        raise ValueError(
+            f"manifest must contain at least {MIN_INITIAL_CANDIDATES} templates"
+        )
     records: List[PresetRecord] = []
     for item in items:
         if not isinstance(item, dict):
@@ -138,9 +145,13 @@ def validate_manifest(payload: Any) -> Tuple[PresetRecord, ...]:
             )
         )
     records.sort(key=lambda record: record.rank)
-    if [record.rank for record in records] != [1, 2, 3, 4]:
-        raise ValueError("initial_candidate_rank must be exactly 1,2,3,4")
-    if len({record.template_id for record in records}) != 4:
+    expected = list(range(1, len(records) + 1))
+    if [record.rank for record in records] != expected:
+        raise ValueError(
+            "initial_candidate_rank must be a contiguous 1.."
+            f"{len(records)} sequence"
+        )
+    if len({record.template_id for record in records}) != len(records):
         raise ValueError("template_id values must be unique")
     return tuple(records)
 
@@ -196,8 +207,11 @@ def _operational_updates(row: dict, record: PresetRecord) -> Dict[str, Any]:
 def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> ImportReport:
     """只读计算 create/keep/update/retire 与 immutable 冲突。"""
     desired = {record.template_id: record for record in records}
+    # 占位符按 manifest 条数生成：写死四个会在候选池扩容时静默漏读已存在模板，
+    # 把「幂等重放」变成「重复创建 → 唯一索引冲突」。
+    placeholders = ",".join("?" for _ in desired)
     rows = conn.execute(
-        "SELECT * FROM character_templates WHERE id IN (?,?,?,?)",
+        f"SELECT * FROM character_templates WHERE id IN ({placeholders})",
         tuple(desired),
     ).fetchall()
     existing = {str(row["id"]): dict(row) for row in rows}
@@ -339,7 +353,7 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="导入/预检 Companion World 四模板目录")
+    parser = argparse.ArgumentParser(description="导入/预检 Companion World 初始候选模板目录")
     parser.add_argument("manifest", help="受控 JSON manifest 路径")
     parser.add_argument("--dry-run", action="store_true", help="只读规划，不写数据库")
     parser.add_argument("--database-url", default=None, help="可选覆盖 DATABASE_URL")

@@ -46,7 +46,10 @@ from app.db import (
     upsert_channel_binding,
 )
 from app.platform.auth.identity import ResolvedIdentity, identity_response_metadata, resolve_openclaw_identity
+from app.platform.media.assets import MediaRefInvalidError
 from app.platform.media.image_understanding import describe_image
+from app.platform.media.moderation import media_moderation_ready
+from app.platform.media.persistence import mark_media_assets_referenced
 from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
 from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
 from app.agent_runtime.llm.providers import LLMProviderConfig
@@ -708,6 +711,8 @@ class _InboundResult:
     image_understanding_failed: bool
     inbound_screen: Any
     inbound_blocked: bool
+    # App 语音消息上传时转写失败且无 caption：本轮没有任何可理解内容，与图片没看清同构处理。
+    voice_understanding_failed: bool = False
     # D-09 下半刀：本轮的配额预占 token（阶段B 预占，阶段D 按计费谓词 confirm/rollback）。
     # None = 未预占（不应发生，因阶段B 预占失败会早返回 rate_limited）。
     quota_reservation_id: Optional[str] = None
@@ -1011,6 +1016,7 @@ def _persist_and_screen_inbound(
     # 再走主链路按人设接话；VL 失败/总开关关闭则走兜底，跳过主模型（红线：不瞎猜）。
     image_described = False
     image_understanding_failed = False
+    voice_understanding_failed = False
     if ctx.message_type == "image":
         image_started = time.monotonic()
         caption = text
@@ -1035,6 +1041,9 @@ def _persist_and_screen_inbound(
         _record_timing(timings, "image_understanding_ms", image_started)
     elif not text and ctx.message_type == "voice":
         text = "[voice message]"
+        # App 语音（带资产）转写失败且无 caption ⇒ 无可理解内容，走兜底不调主模型。
+        # 微信侧 bridge 恒把转写文本当 text 传进来，走不到这里，行为保持不变。
+        voice_understanding_failed = bool(ctx.media_asset_id)
 
     inbound_db_started = time.monotonic()
     quota_reservation_id: Optional[str] = None
@@ -1059,8 +1068,24 @@ def _persist_and_screen_inbound(
                     "message_type": ctx.message_type,
                 },
             ),
+            content_json=ctx.display_content,
+            media_id=ctx.media_asset_id,
             conn=conn,
         )
+        if inserted_id is not None and ctx.media_asset_id:
+            # 与入站消息插入同一事务：认领失败则整条消息一起回滚，不留 referenced 孤儿。
+            try:
+                mark_media_assets_referenced(
+                    media_ids=[ctx.media_asset_id],
+                    owner_platform_user_id=str(ctx.media_asset_owner_id or ""),
+                    conn=conn,
+                    # AI 会话图与 Feed / 真人会话图同样入图片机审队列（S4）：这条是用户上传图片
+                    # 最大的一条路径，旧的同步审核对非文本恒 skip，不入队就等于完全没有审核结论。
+                    # 微信形态无媒体资产（media_asset_id 恒空），走不到这里。
+                    queue_moderation=media_moderation_ready(),
+                )
+            except ValueError as err:
+                raise MediaRefInvalidError(str(err)) from err
         if inserted_id is not None:
             # D-09 下半刀：去重(insert_message)先于预占、同一 conn（重试不吃配额）。原子预占取代
             # 旧的「入站即 +1」——仅真正成功计费的 turn 在阶段D confirm 计入 message_count，
@@ -1191,6 +1216,7 @@ def _persist_and_screen_inbound(
         inserted_id=int(inserted_id),
         image_described=image_described,
         image_understanding_failed=image_understanding_failed,
+        voice_understanding_failed=voice_understanding_failed,
         inbound_screen=inbound_screen,
         inbound_blocked=inbound_blocked,
         quota_reservation_id=quota_reservation_id,
@@ -1278,6 +1304,9 @@ def _resolve_turn_reply(
     elif image_understanding_failed:
         # 图片没看清/未开启理解：走兜底话术，不调主模型（禁止无描述瞎猜）。
         reply = settings.image_understanding_fallback_text
+    elif inbound.voice_understanding_failed:
+        # 语音没听清：与图片同构，走兜底话术不调主模型。
+        reply = settings.voice_message_fallback_text
     else:
         # TDAI recall：注入 query-time L1 记忆（prepend_context）和 L3 persona（context）。
         # 同步调用，严格 200 ms 超时，失败时 tdai_extra_blocks 为空继续正常回复。
@@ -1991,6 +2020,14 @@ class ChannelTurnInput:
     extra_blocks: List[ContextBlock] = field(default_factory=list)
     # 可选 typed memory 出向接缝；form-A 默认 None，Companion World App 由组合根注入。
     memory_sink: Optional["MemorySink"] = None
+    # v1.5 媒体消息（App 专用，微信链路恒为 None）。三者要么同时给、要么同时不给：
+    # ``display_content`` 落 ``messages.content_json``（展示载荷，与 LLM 上下文文本 ``text``
+    # 口径不同，见 D-2）；``media_asset_id``/``media_asset_owner_id`` 用于在**入站消息插入
+    # 的同一事务内**把资产从 pending 翻成 referenced——放到事务外会在 turn 抛错时留下永不
+    # 回收的 referenced 孤儿。
+    display_content: Optional[Dict[str, Any]] = None
+    media_asset_id: Optional[str] = None
+    media_asset_owner_id: Optional[str] = None
 
 
 def run_product_turn(

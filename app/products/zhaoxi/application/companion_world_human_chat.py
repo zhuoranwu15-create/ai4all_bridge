@@ -24,6 +24,9 @@ from app.db import (
 )
 from app.db._backend import is_postgres
 from app.db._core import connect
+from app.platform.media.moderation import media_moderation_ready
+from app.platform.media.persistence import mark_media_assets_referenced
+from app.platform.media.view import media_preview_text
 from app.products.zhaoxi.domain.companion_world.human_chat import (
     HUMAN_REPORT_REASONS,
     HUMAN_REPORT_REASONS_VERSION,
@@ -73,10 +76,15 @@ def _read_only_reason(row: Dict[str, Any], *, write_enabled: bool) -> Optional[s
     return None
 
 
-def _preview_text(value: Optional[str]) -> Optional[str]:
-    """列表预览：折叠换行与连续空白，让单行渲染不被正文排版撑破。"""
-    if value is None:
+def _preview_text(value: Optional[str], media_kind: Optional[str] = None) -> Optional[str]:
+    """列表预览：折叠换行与连续空白，让单行渲染不被正文排版撑破。
+
+    最后一条是媒体消息时正文常为空，落 ``[图片]``/``[语音]`` 占位而不是空白气泡。
+    """
+    if value is None and not media_kind:
         return None
+    if media_kind:
+        return media_preview_text(caption=value, kind=media_kind) or None
     collapsed = " ".join(str(value).split())
     return collapsed or None
 
@@ -98,7 +106,9 @@ def _conversation_public(
             "owner_last_read_at" if is_owner else "visitor_last_read_at"
         ),
         "created_at": row["created_at"],
-        "last_preview": _preview_text(row.get("last_preview")),
+        "last_preview": _preview_text(
+            row.get("last_preview"), row.get("last_media_kind")
+        ),
         "unread_count": int(row.get("unread_count") or 0),
         "can_send": reason is None,
         "read_only_reason": reason,
@@ -137,8 +147,12 @@ class CompanionWorldHumanChatService:
         cursor_sequence_no: Optional[int],
         cursor_message_id: Optional[str],
         limit: int,
-    ) -> Sequence[Dict[str, Any]]:
-        """active/read_only 均可读取；self-hidden 与第三方统一 not found。"""
+    ) -> tuple[Dict[str, Any], Sequence[Dict[str, Any]]]:
+        """active/read_only 均可读取；self-hidden 与第三方统一 not found。
+
+        返回 ``(conversation, rows)``：媒体消息要按 ``visit`` 维度签读 URL（对方发来的图不
+        属于自己，只能用 ``visit:<id>`` scope），调用方需要会话行上的 visit_id 与到期时间。
+        """
         conversation = get_human_conversation_for_participant(
             conversation_id=conversation_id, platform_user_id=platform_user_id
         )
@@ -147,8 +161,13 @@ class CompanionWorldHumanChatService:
         CompanionWorldVisitService().list_visits_current(
             platform_user_id, now=now
         )
+        # visit 到期时间不在 human_conversations 上，但访客 TTL 要取 min(配置, visit 剩余)；
+        # 放在 expiry 处理之后读，拿到的一定是最新状态。
+        visit = get_universe_visit(visit_id=conversation["visit_id"])
+        conversation = dict(conversation)
+        conversation["visit_expires_at"] = (visit or {}).get("expires_at")
         try:
-            return tuple(
+            rows = tuple(
                 list_human_messages_for_participant(
                     conversation_id=conversation_id,
                     platform_user_id=platform_user_id,
@@ -159,6 +178,7 @@ class CompanionWorldHumanChatService:
             )
         except ValueError as err:
             raise HumanChatError("invalid_cursor") from err
+        return conversation, rows
 
     def send(
         self,
@@ -169,10 +189,18 @@ class CompanionWorldHumanChatService:
         body_text: str,
         now: datetime,
         write_enabled: bool,
+        media_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """在 visitor→world→visit→conversation 锁序下原子发送真人文字。"""
+        """在 visitor→world→visit→conversation 锁序下原子发送真人文字或媒体。
+
+        ``media_id`` 由调用方在 API 层完成 owner 锚定与门控校验；这里只负责在**同一事务**
+        内把资产从 ``pending`` 翻成 ``referenced``，保证「消息已存但媒体已被回收」不可能发生。
+        """
         try:
-            clean_body = normalize_human_message_body(body_text)
+            # 媒体消息允许空 caption（图片不带文字是常态），长度上限仍然生效。
+            clean_body = normalize_human_message_body(
+                body_text, allow_empty=media_id is not None
+            )
         except ValueError as err:
             raise HumanChatError("invalid_request") from err
         preview = get_human_conversation_for_participant(
@@ -221,7 +249,11 @@ class CompanionWorldHumanChatService:
                 conn=conn,
             )
             if replay is not None:
-                if replay["body_text"] != clean_body:
+                # 同一个 client_message_id 换正文或换图都算冲突，不允许悄悄改写已发出的消息。
+                if (
+                    replay["body_text"] != clean_body
+                    or replay.get("media_id") != media_id
+                ):
                     raise HumanChatError("idempotency_conflict")
                 message = replay
                 created = False
@@ -257,12 +289,27 @@ class CompanionWorldHumanChatService:
                 )
                 blocked = True
             else:
+                if media_id:
+                    # 与消息插入同一事务：认领失败整条消息一起回滚，不留 referenced 孤儿。
+                    try:
+                        mark_media_assets_referenced(
+                            media_ids=[media_id],
+                            owner_platform_user_id=platform_user_id,
+                            conn=conn,
+                            # 机审整链可跑才入队（谓词与批处理同一个，见 media_moderation_ready）；
+                            # 会话图命中红线只记录不撤回（D-7 已知敞口），但审核结论仍要落库，
+                            # 供事后人工处置与 v1.6 撤回补做。
+                            queue_moderation=media_moderation_ready(),
+                        )
+                    except ValueError as err:
+                        raise HumanChatError("media_ref_invalid") from err
                 try:
                     message, created = insert_human_message(
                         conversation_id=conversation_id,
                         sender_platform_user_id=platform_user_id,
                         client_message_id=client_message_id,
                         body_text=clean_body,
+                        media_id=media_id,
                         created_at=_db_time(now),
                         conn=conn,
                     )

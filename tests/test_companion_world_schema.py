@@ -24,6 +24,11 @@ from app.db._core import (
     _migration_0050_ai_conversation_read_cursor,
     _migration_0051_app_me_tab,
     _migration_0052_human_conversation_read_cursor,
+    _migration_0053_resident_intro_post,
+    _migration_0054_media_assets,
+    _migration_0055_universe_post_media,
+    _migration_0056_media_moderation_scan_index,
+    _migration_0057_resident_wish_drafts,
 )
 
 _P1_TABLES = (
@@ -77,14 +82,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        52,
-        _migration_0052_human_conversation_read_cursor,
+        57,
+        _migration_0057_resident_wish_drafts,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 52
+        assert int(version) == 57
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -504,6 +509,93 @@ def test_m0052_human_read_cursor_schema_and_idempotency(fresh_db):
         conn.execute(
             "SELECT owner_last_read_sequence, visitor_last_read_sequence "
             "FROM human_conversations WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_m0053_resident_intro_index_and_idempotency(fresh_db):
+    """m0053：自我介绍动态的偏唯一索引可用，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0053_resident_intro_post(conn)
+        _migration_0053_resident_intro_post(conn)
+
+    pu = _pu("19911110053")
+    universe = db.get_or_create_home_universe(platform_user_id=pu)
+    template = db.create_character_template(
+        source_type="operations", name="人设", persona_version="v1"
+    )
+    resident = db.create_resident(
+        universe_id=universe["id"],
+        character_template_id=template["id"],
+        template_version="v1",
+        origin="preset",
+        status="active",
+        runtime_account_id=_runtime_account(),
+    )
+    with db.connect() as conn:
+        rows = [
+            db.publish_resident_intro_post_with_outbox(
+                universe_id=universe["id"],
+                author_resident_id=resident["id"],
+                text=f"介绍 {index}",
+                published_at="2026-07-29 10:00:00",
+                conn=conn,
+            )
+            for index in range(2)
+        ]
+    # 同一居民只允许一条 resident_intro：第二次落到既有行、created=False。
+    assert rows[0][1] is True and rows[1][1] is False
+    assert rows[0][0]["id"] == rows[1][0]["id"]
+    assert rows[1][0]["text"] == "介绍 0"
+
+
+def test_m0054_media_assets_and_idempotency(fresh_db):
+    """m0054：媒体表与三个消息侧列可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0054_media_assets(conn)
+        _migration_0054_media_assets(conn)
+        # 后端中立：空结果查询覆盖全部列名，缺列即抛错。
+        conn.execute(
+            "SELECT id, owner_platform_user_id, kind, mime, bytes, width, height, "
+            "duration_ms, sha256, storage_path, transcript, status, moderation_status, "
+            "moderation_task_id, expires_at, created_at FROM media_assets WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT content_json, media_id FROM messages WHERE 1 = 0"
+        ).fetchall()
+        conn.execute("SELECT media_id FROM human_messages WHERE 1 = 0").fetchall()
+
+
+def test_m0055_universe_post_media_and_idempotency(fresh_db):
+    """m0055：图文动态关联表可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0055_universe_post_media(conn)
+        _migration_0055_universe_post_media(conn)
+        conn.execute(
+            "SELECT post_id, media_id, position, created_at "
+            "FROM universe_post_media WHERE 1 = 0"
+        ).fetchall()
+
+
+def test_m0056_media_moderation_scan_index_and_idempotency(fresh_db):
+    """m0056：待审资产扫描路径与重试计数列可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0056_media_moderation_scan_index(conn)
+        _migration_0056_media_moderation_scan_index(conn)
+        conn.execute(
+            "SELECT id, moderation_attempts FROM media_assets "
+            "WHERE moderation_status = 'pending' ORDER BY created_at ASC"
+        ).fetchall()
+
+
+def test_m0057_wish_draft_columns_and_idempotency(fresh_db):
+    """m0057：许愿来源与许愿幂等键可查询，重复执行迁移不报错。"""
+    with db.connect() as conn:
+        _migration_0057_resident_wish_drafts(conn)
+        _migration_0057_resident_wish_drafts(conn)
+        conn.execute(
+            "SELECT id, source, wish_request_id FROM resident_drafts "
+            "WHERE platform_user_id = 'nobody' AND source = 'wish' "
+            "ORDER BY created_at ASC"
         ).fetchall()
 
 

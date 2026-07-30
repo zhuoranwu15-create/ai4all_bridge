@@ -13,12 +13,21 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.config import settings
 from app.db import SessionPrincipal
+from app.platform.media.access import (
+    owner_scope,
+    owner_ttl_seconds,
+    visit_scope,
+    visitor_ttl_seconds,
+)
+from app.platform.media.persistence import list_media_assets_unscoped
+from app.platform.media.view import build_media_content, text_content
 from app.products.zhaoxi.application import CompanionWorldHumanChatService, HumanChatError
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,
     _no_store,
     _require_world_session,
+    resolve_chat_media,
 )
 from app.products.zhaoxi.api.contracts import (
     WORLD_ERROR_RESPONSES,
@@ -40,12 +49,16 @@ class EmptyPayload(BaseModel):
 
 
 class SendHumanMessagePayload(BaseModel):
-    """真人纯文字发送 payload。"""
+    """真人消息发送 payload：文字、媒体，或带 caption 的媒体。"""
 
     model_config = ConfigDict(extra="forbid")
 
     client_message_id: str = Field(min_length=8, max_length=64)
-    text: str = Field(min_length=1, max_length=4000)
+    # v1.5：``text`` 与 ``media_ref`` 至少给一个（图片不带 caption 是常态）。
+    # 「两个都空」刻意不在这里拦，而是由端点抛 ``media_content_required``——校验错误统一
+    # 收敛成 ``invalid_request``，客户端分不出是格式错还是内容缺失。
+    text: str = Field(default="", max_length=4000)
+    media_ref: Optional[str] = Field(default=None, max_length=64)
 
     @field_validator("client_message_id")
     @classmethod
@@ -57,10 +70,12 @@ class SendHumanMessagePayload(BaseModel):
     @field_validator("text")
     @classmethod
     def _clean_text(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("text is required")
-        return cleaned
+        return value.strip()
+
+    @field_validator("media_ref")
+    @classmethod
+    def _clean_media_ref(cls, value: Optional[str]) -> Optional[str]:
+        return (value or "").strip() or None
 
 
 class HumanReportPayload(BaseModel):
@@ -117,7 +132,52 @@ def _conversation_data(row: dict) -> dict:
     }
 
 
-def _message_data(row: dict, platform_user_id: str) -> dict:
+def _visit_remaining_seconds(expires_at: Optional[str]) -> Optional[int]:
+    """visit 剩余秒数；``expires_at`` 缺失时返回 None（TTL 取配置值）。
+
+    即便这里给宽了，``GET /v1/media/{id}`` 仍会独立复查 visit 状态与剩余时长，
+    多签出来的几分钟换不到访问权。
+    """
+    if not expires_at:
+        return None
+    try:
+        deadline = datetime.strptime(str(expires_at), "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return 0
+    return int((deadline - _now()).total_seconds())
+
+
+def _message_content(
+    row: dict, platform_user_id: str, *, assets: dict, conversation: dict
+) -> dict:
+    """按 D-1 输出判别联合；媒体 URL 逐条现签。
+
+    scope 取决于**看的人是不是这条媒体的主人**：自己上传的用 ``pu:<自己>``（TTL 长、可缓存），
+    对方发来的只能用 ``visit:<visit_id>``——visit 一结束 URL 立刻失效（§3.3 隐私红线）。
+    真人消息的 ``body_text`` 恒为用户自己写的正文（不经 LLM），可直接当 caption。
+    """
+    caption = row.get("body_text") or ""
+    asset = assets.get(str(row.get("media_id") or ""))
+    if asset is None:
+        return text_content(caption)
+    if str(asset.get("owner_platform_user_id") or "") == platform_user_id:
+        scope = owner_scope(platform_user_id)
+        ttl_seconds = owner_ttl_seconds()
+    else:
+        scope = visit_scope(str(conversation["visit_id"]))
+        ttl_seconds = visitor_ttl_seconds(
+            visit_remaining_seconds=_visit_remaining_seconds(
+                conversation.get("visit_expires_at")
+            )
+        )
+    return build_media_content(
+        asset=asset, caption=caption, scope=scope, ttl_seconds=ttl_seconds
+    )
+
+
+def _message_data(
+    row: dict, platform_user_id: str, *, assets: dict, conversation: dict
+) -> dict:
     """消息 sender 只公开 self/counterpart，不返回内部 user id。"""
     return {
         "message_id": row["id"],
@@ -126,7 +186,9 @@ def _message_data(row: dict, platform_user_id: str) -> dict:
             if row["sender_platform_user_id"] == platform_user_id
             else "counterpart"
         ),
-        "content": {"type": "text", "text": row["body_text"]},
+        "content": _message_content(
+            row, platform_user_id, assets=assets, conversation=conversation
+        ),
         "sequence": int(row["sequence_no"]),
         "created_at": _public_time(row["created_at"]),
     }
@@ -218,7 +280,7 @@ def list_human_messages(
     platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
     cursor_sequence_no, cursor_message_id = _decode_cursor(cursor)
-    rows = _call(
+    conversation, rows = _call(
         lambda: _service().list_messages(
             platform_user.platform_user_id,
             conversation_id=conversation_id,
@@ -229,13 +291,23 @@ def list_human_messages(
         )
     )
     page = rows[:limit]
+    # 一次批量取本页涉及的资产，避免逐条查库。
+    assets = list_media_assets_unscoped(
+        media_ids=[str(row["media_id"]) for row in page if row.get("media_id")]
+    )
     _no_store(response)
     return _envelope(
         request,
         code="ok",
         data={
             "items": [
-                _message_data(row, platform_user.platform_user_id) for row in page
+                _message_data(
+                    row,
+                    platform_user.platform_user_id,
+                    assets=assets,
+                    conversation=conversation,
+                )
+                for row in page
             ],
             "next_cursor": (
                 _encode_cursor(page[-1]) if len(rows) > limit and page else None
@@ -252,6 +324,16 @@ def send_human_message(
     response: Response,
     platform_user: SessionPrincipal = Depends(_require_human_session),
 ) -> dict:
+    if payload.media_ref:
+        # owner 锚定与门控在这里完成；service 只负责在发送事务内认领资产。
+        asset = resolve_chat_media(
+            media_ref=payload.media_ref,
+            platform_user_id=platform_user.platform_user_id,
+        )
+    elif not payload.text:
+        raise CompanionWorldApiError("media_content_required")
+    else:
+        asset = None
     result = _call(
         lambda: _service().send(
             platform_user.platform_user_id,
@@ -260,15 +342,22 @@ def send_human_message(
             body_text=payload.text,
             now=_now(),
             write_enabled=_write_enabled(),
+            media_id=None if asset is None else str(asset["id"]),
         )
     )
     _no_store(response)
+    message = result["message"]
+    # 回执里的媒体恒属于发送者本人，直接用 owner scope 签；无需再查 visit。
+    assets = {} if asset is None else {str(asset["id"]): asset}
     return _envelope(
         request,
         code="ok",
         data={
             "message": _message_data(
-                result["message"], platform_user.platform_user_id
+                message,
+                platform_user.platform_user_id,
+                assets=assets,
+                conversation={"visit_id": "", "visit_expires_at": None},
             ),
             "created": bool(result["created"]),
         },

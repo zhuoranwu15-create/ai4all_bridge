@@ -122,6 +122,18 @@
             "title": "App Notifications",
             "type": "boolean"
           },
+          "chat_image_message": {
+            "title": "Chat Image Message",
+            "type": "boolean"
+          },
+          "chat_voice_message": {
+            "title": "Chat Voice Message",
+            "type": "boolean"
+          },
+          "feed_image_post": {
+            "title": "Feed Image Post",
+            "type": "boolean"
+          },
           "human_chat_send": {
             "title": "Human Chat Send",
             "type": "boolean"
@@ -132,6 +144,10 @@
           },
           "resident_lifecycle": {
             "title": "Resident Lifecycle",
+            "type": "boolean"
+          },
+          "resident_wish_create": {
+            "title": "Resident Wish Create",
             "type": "boolean"
           },
           "resident_world": {
@@ -159,7 +175,11 @@
           "resident_lifecycle",
           "mailbox",
           "world_visits",
-          "human_chat_send"
+          "human_chat_send",
+          "chat_image_message",
+          "chat_voice_message",
+          "feed_image_post",
+          "resident_wish_create"
         ],
         "title": "AppConfigFeatures",
         "type": "object"
@@ -174,15 +194,45 @@
             "title": "Audio Duration Ms",
             "type": "integer"
           },
+          "image_bytes_max": {
+            "title": "Image Bytes Max",
+            "type": "integer"
+          },
+          "image_count_max": {
+            "title": "Image Count Max",
+            "type": "integer"
+          },
           "message_chars": {
             "title": "Message Chars",
+            "type": "integer"
+          },
+          "voice_bytes_max": {
+            "title": "Voice Bytes Max",
+            "type": "integer"
+          },
+          "voice_duration_ms_max": {
+            "title": "Voice Duration Ms Max",
+            "type": "integer"
+          },
+          "wish_daily_max": {
+            "title": "Wish Daily Max",
+            "type": "integer"
+          },
+          "wish_text_chars": {
+            "title": "Wish Text Chars",
             "type": "integer"
           }
         },
         "required": [
           "message_chars",
           "audio_bytes",
-          "audio_duration_ms"
+          "audio_duration_ms",
+          "image_bytes_max",
+          "image_count_max",
+          "voice_bytes_max",
+          "voice_duration_ms_max",
+          "wish_text_chars",
+          "wish_daily_max"
         ],
         "title": "AppConfigLimits",
         "type": "object"
@@ -310,6 +360,64 @@
         "title": "AppTurnRequest",
         "type": "object"
       },
+      "AudioMessageContent": {
+        "description": "语音消息。``transcript`` 是上传时同步转写的结果，供\"长按转文字\"；转写失败为 null。",
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript"
+          },
+          "type": {
+            "const": "audio",
+            "default": "audio",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "AudioMessageContent",
+        "type": "object"
+      },
       "Body_app_transcription_v1_audio_transcriptions_post": {
         "properties": {
           "audio": {
@@ -333,6 +441,38 @@
           "duration_ms"
         ],
         "title": "Body_app_transcription_v1_audio_transcriptions_post",
+        "type": "object"
+      },
+      "Body_upload_media_v1_media_uploads_post": {
+        "properties": {
+          "duration_ms": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "file": {
+            "format": "binary",
+            "title": "File",
+            "type": "string"
+          },
+          "kind": {
+            "description": "image | voice",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file",
+          "kind"
+        ],
+        "title": "Body_upload_media_v1_media_uploads_post",
         "type": "object"
       },
       "BootstrapData": {
@@ -615,7 +755,30 @@
         "type": "object"
       },
       "ConversationMessageItem": {
+        "description": "``message_type`` 与 ``text`` 是 v1.5 之前的老字段，服务端保证与 ``content`` 一致：\n\n- ``message_type`` **deprecated**，恒等于 ``content.type``（``audio`` 除外——历史上\n  库内 ``message_type`` 用 ``voice``，这里统一投影成 ``content.type`` 的取值）；\n- ``text`` 恒等于 ``content.text``，即用户自己写的正文/caption。\n\n新客户端只读 ``content``。",
         "properties": {
+          "content": {
+            "discriminator": {
+              "mapping": {
+                "audio": "#/components/schemas/AudioMessageContent",
+                "image": "#/components/schemas/ImageMessageContent",
+                "text": "#/components/schemas/TextMessageContent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextMessageContent"
+              },
+              {
+                "$ref": "#/components/schemas/ImageMessageContent"
+              },
+              {
+                "$ref": "#/components/schemas/AudioMessageContent"
+              }
+            ],
+            "title": "Content"
+          },
           "created_at": {
             "anyOf": [
               {
@@ -665,7 +828,8 @@
         "required": [
           "id",
           "role",
-          "message_type"
+          "message_type",
+          "content"
         ],
         "title": "ConversationMessageItem",
         "type": "object"
@@ -789,16 +953,27 @@
             "title": "Client Message Id",
             "type": "string"
           },
+          "media_ref": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Ref"
+          },
           "text": {
+            "default": "",
             "maxLength": 4000,
-            "minLength": 1,
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_message_id",
-          "text"
+          "client_message_id"
         ],
         "title": "ConversationTurnPayload",
         "type": "object"
@@ -904,9 +1079,25 @@
         "title": "FeedAuthor",
         "type": "object"
       },
-      "FeedContent": {
+      "FeedImage": {
+        "description": "图文动态里的一张图；``url`` 语义同 :class:`ImageMessageContent`（短 TTL 现签，可为 null）。",
         "properties": {
-          "text": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "url": {
             "anyOf": [
               {
                 "type": "string"
@@ -915,17 +1106,52 @@
                 "type": "null"
               }
             ],
-            "title": "Text"
+            "title": "Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "FeedImage",
+        "type": "object"
+      },
+      "FeedImageContent": {
+        "description": "图文动态（v1.5）。\n\n正文属于整条动态而不属于某张图，所以 ``text`` 在这一层、``images`` 是有序列表\n（按主人发布时的排版顺序，最多 4 张）。只发图时 ``text`` 是空串。",
+        "properties": {
+          "images": {
+            "items": {
+              "$ref": "#/components/schemas/FeedImage"
+            },
+            "title": "Images",
+            "type": "array"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
           },
           "type": {
+            "const": "image",
+            "default": "image",
             "title": "Type",
             "type": "string"
           }
         },
         "required": [
-          "type"
+          "images"
         ],
-        "title": "FeedContent",
+        "title": "FeedImageContent",
         "type": "object"
       },
       "FeedItem": {
@@ -934,7 +1160,22 @@
             "$ref": "#/components/schemas/FeedAuthor"
           },
           "content": {
-            "$ref": "#/components/schemas/FeedContent"
+            "discriminator": {
+              "mapping": {
+                "image": "#/components/schemas/FeedImageContent",
+                "text": "#/components/schemas/FeedTextContent"
+              },
+              "propertyName": "type"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/FeedTextContent"
+              },
+              {
+                "$ref": "#/components/schemas/FeedImageContent"
+              }
+            ],
+            "title": "Content"
           },
           "post_id": {
             "title": "Post Id",
@@ -1018,14 +1259,22 @@
             "title": "Client Request Id",
             "type": "string"
           },
+          "media_refs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Media Refs",
+            "type": "array"
+          },
           "text": {
+            "default": "",
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_request_id",
-          "text"
+          "client_request_id"
         ],
         "title": "FeedPostPayload",
         "type": "object"
@@ -1052,6 +1301,30 @@
           "replayed"
         ],
         "title": "FeedRetireData",
+        "type": "object"
+      },
+      "FeedTextContent": {
+        "description": "纯文字动态。AI 居民动态与 v1.5 之前的全部动态都投影成这一支。",
+        "properties": {
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "FeedTextContent",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1281,6 +1554,64 @@
         "title": "HumanReportPayload",
         "type": "object"
       },
+      "ImageMessageContent": {
+        "description": "图片消息。\n\n``url`` 是**短 TTL 签名地址**，每次读接口现签，不要持久化或跨会话复用。为 null 表示\n服务端此刻签不出（部署缺 secret，或访客拜访已结束）——按占位渲染，不要降级成文本。\n``text`` 是用户自己写的 caption，**不含**服务端生成的图片描述（D-2 红线）。",
+        "properties": {
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "image",
+            "default": "image",
+            "title": "Type",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id"
+        ],
+        "title": "ImageMessageContent",
+        "type": "object"
+      },
       "MePlatformUser": {
         "description": "真人公开身份。``display_name``/``avatar_key`` 未设置时为 null，客户端自行兜底展示。",
         "properties": {
@@ -1397,6 +1728,100 @@
           "onboarding_state"
         ],
         "title": "MeWorld",
+        "type": "object"
+      },
+      "MediaUploadData": {
+        "description": "上传结果。\n\n``url`` 是**短 TTL 签名地址**（D-3），客户端可直接加载但不要持久化：过期后重新读列表/详情\n会拿到新签名。``expires_at`` 是\"这份未被引用的媒体什么时候被回收\"，与 URL 过期是两件事。\n``transcript`` 只在语音且转写成功时非空——转写失败不阻塞发送。",
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "media_id": {
+            "title": "Media Id",
+            "type": "string"
+          },
+          "mime": {
+            "title": "Mime",
+            "type": "string"
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "url_expires_at": {
+            "title": "Url Expires At",
+            "type": "string"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          }
+        },
+        "required": [
+          "media_id",
+          "kind",
+          "mime",
+          "bytes",
+          "url",
+          "url_expires_at"
+        ],
+        "title": "MediaUploadData",
         "type": "object"
       },
       "NotificationPreferencesData": {
@@ -1603,6 +2028,11 @@
             ],
             "title": "Conversation State"
           },
+          "mission_display": {
+            "default": "countable",
+            "title": "Mission Display",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1629,30 +2059,124 @@
         "title": "ResidentData",
         "type": "object"
       },
-      "ResidentDraftPreviewPayload": {
-        "additionalProperties": false,
-        "description": "自建角色第一步：结构化设定 + 自由文本，服务端清洗后渲染出可预览的人设。",
+      "ResidentDraftPreviewData": {
+        "description": "草稿预览回显（表单与许愿两条路径同形）。\n\n这些字段就是最终会落进居民人设的值——「所见即所存」；``draft_token`` 一次性，\n在 ``expires_at`` 前拿去确认创建。许愿路径重放同一 ``client_request_id`` 时逐字段等值。",
         "properties": {
-          "avatar_key": {
-            "maxLength": 64,
-            "minLength": 1,
-            "title": "Avatar Key",
+          "ai_identity_notice": {
+            "title": "Ai Identity Notice",
+            "type": "string"
+          },
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "draft_token": {
+            "title": "Draft Token",
+            "type": "string"
+          },
+          "expires_at": {
+            "title": "Expires At",
             "type": "string"
           },
           "name": {
-            "maxLength": 20,
-            "minLength": 1,
             "title": "Name",
             "type": "string"
           },
-          "personality_traits": {
+          "normalized_summary": {
+            "title": "Normalized Summary",
+            "type": "string"
+          },
+          "relationship_display": {
+            "title": "Relationship Display",
+            "type": "string"
+          },
+          "tags": {
             "items": {
               "type": "string"
             },
-            "maxItems": 3,
-            "minItems": 1,
-            "title": "Personality Traits",
+            "title": "Tags",
             "type": "array"
+          }
+        },
+        "required": [
+          "draft_id",
+          "draft_token",
+          "expires_at",
+          "name",
+          "relationship_display",
+          "tags",
+          "normalized_summary",
+          "ai_identity_notice"
+        ],
+        "title": "ResidentDraftPreviewData",
+        "type": "object"
+      },
+      "ResidentDraftPreviewPayload": {
+        "additionalProperties": false,
+        "description": "自建角色第一步。两条**互斥**路径，出参形状完全一致（客户端预览卡片零改动）：\n\n- **表单**（M1 起的既有路径）：结构化设定 + 可选自由文本，服务端清洗后渲染人设；\n- **许愿**（v1.5 WISH-001）：只给 ``wish_text`` + ``client_request_id``，服务端先清洗，\n  再由 LLM 翻译成同一套受控取值，交给同一个渲染函数。\n\n结构化字段在此声明为可选**只是**为了让两条路径共用一个模型；表单路径的必填性由\n校验器保证，缺字段仍然是 422，与 v1.5 之前逐字节相同。",
+        "properties": {
+          "avatar_key": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Key"
+          },
+          "client_request_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 8,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Request Id"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 20,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "personality_traits": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Personality Traits"
           },
           "relationship_label": {
             "anyOf": [
@@ -1667,10 +2191,16 @@
             "title": "Relationship Label"
           },
           "relationship_type": {
-            "maxLength": 32,
-            "minLength": 1,
-            "title": "Relationship Type",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationship Type"
           },
           "style_note": {
             "anyOf": [
@@ -1683,14 +2213,20 @@
               }
             ],
             "title": "Style Note"
+          },
+          "wish_text": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wish Text"
           }
         },
-        "required": [
-          "name",
-          "avatar_key",
-          "relationship_type",
-          "personality_traits"
-        ],
         "title": "ResidentDraftPreviewPayload",
         "type": "object"
       },
@@ -1741,7 +2277,7 @@
       },
       "SendHumanMessagePayload": {
         "additionalProperties": false,
-        "description": "真人纯文字发送 payload。",
+        "description": "真人消息发送 payload：文字、媒体，或带 caption 的媒体。",
         "properties": {
           "client_message_id": {
             "maxLength": 64,
@@ -1749,16 +2285,27 @@
             "title": "Client Message Id",
             "type": "string"
           },
+          "media_ref": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Media Ref"
+          },
           "text": {
+            "default": "",
             "maxLength": 4000,
-            "minLength": 1,
             "title": "Text",
             "type": "string"
           }
         },
         "required": [
-          "client_message_id",
-          "text"
+          "client_message_id"
         ],
         "title": "SendHumanMessagePayload",
         "type": "object"
@@ -1779,6 +2326,24 @@
           "captcha_verify_param"
         ],
         "title": "SendOtpRequest",
+        "type": "object"
+      },
+      "TextMessageContent": {
+        "description": "纯文本消息。存量消息（v1.5 之前的全部消息）都投影成这一支。",
+        "properties": {
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "default": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "title": "TextMessageContent",
         "type": "object"
       },
       "TurnData": {
@@ -2218,6 +2783,36 @@
         "title": "WorldEnvelope[HumanReportOptionsData]",
         "type": "object"
       },
+      "WorldEnvelope_MediaUploadData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MediaUploadData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MediaUploadData]",
+        "type": "object"
+      },
       "WorldEnvelope_NotificationPreferencesData_": {
         "properties": {
           "code": {
@@ -2246,6 +2841,36 @@
           "data"
         ],
         "title": "WorldEnvelope[NotificationPreferencesData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ResidentDraftPreviewData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentDraftPreviewData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentDraftPreviewData]",
         "type": "object"
       },
       "WorldEnvelope_ResidentListData_": {
@@ -4682,6 +5307,244 @@
         ]
       }
     },
+    "/v1/media/uploads": {
+      "post": {
+        "description": "上传一份媒体资产，返回 ``media_ref`` 与一条短 TTL 的主人读 URL。\n\n服务端不信任客户端声明：图片一律重编码并剥离 EXIF/GPS（D-4），语音容器按魔数复核。\n``duration_ms`` 由客户端声明（与 ``/audio/transcriptions`` 同口径），仅做上限校验。",
+        "operationId": "upload_media_v1_media_uploads_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_media_v1_media_uploads_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_MediaUploadData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "413": {
+            "description": "超出字节或时长上限（media_too_large / media_duration_exceeded）"
+          },
+          "415": {
+            "description": "格式不在白名单（media_kind_unsupported）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Upload Media",
+        "tags": [
+          "companion-world-media"
+        ]
+      }
+    },
+    "/v1/media/{media_id}": {
+      "get": {
+        "description": "按签名下发媒体字节流。**不读 ``Authorization``**，签名 URL 是唯一凭据（D-3）。\n\n任何失败（签名不符、过期、scope 失效、行或文件缺失）统一收敛到 ``media_access_denied``，\n不给资源枚举信号。",
+        "operationId": "read_media_v1_media__media_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "media_id",
+            "required": true,
+            "schema": {
+              "title": "Media Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "签名过期时间（unix 秒）",
+            "in": "query",
+            "name": "exp",
+            "required": true,
+            "schema": {
+              "description": "签名过期时间（unix 秒）",
+              "title": "Exp",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "minLength": 1,
+              "title": "Scope",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sig",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 16,
+              "title": "Sig",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "媒体字节流"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          }
+        },
+        "summary": "Read Media",
+        "tags": [
+          "companion-world-media"
+        ]
+      }
+    },
     "/v1/notifications": {
       "get": {
         "operationId": "list_notifications_v1_notifications_get",
@@ -6589,7 +7452,7 @@
     },
     "/v1/worlds/home/resident-drafts/preview": {
       "post": {
-        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。",
+        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。\n许愿路径（``wish_text``）在清洗之后多一步「LLM 翻译成受控取值」，此后与表单路径\n完全同源——自由文本仍然不直通人设。",
         "operationId": "preview_resident_draft_v1_worlds_home_resident_drafts_preview_post",
         "parameters": [
           {
@@ -6624,23 +7487,71 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Preview Resident Draft V1 Worlds Home Resident Drafts Preview Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentDraftPreviewData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
           }
         },
         "summary": "Preview Resident Draft",

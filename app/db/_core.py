@@ -209,7 +209,14 @@ def _savepoint(conn: Connection, name: str = "sp") -> Iterator[None]:
     PG 在任一语句报错后会中止整个事务，后续语句一律 InFailedSqlTransaction；因此
     「INSERT 失败 → 捕获 IntegrityError → 同一连接继续重试/查询」的模式在 PG 必须靠
     SAVEPOINT 才能继续（SQLite 同样支持 SAVEPOINT，两后端行为一致）。
+
+    SQLite 上必须先显式开事务：Python sqlite3 只在 DML 前隐式 BEGIN，``SAVEPOINT`` 不算
+    DML，于是它成为**最外层**保存点，对应的 ``RELEASE`` 会直接提交——外层 ``connect()``
+    之后再 rollback 就什么也回滚不掉（表现为「认领失败了但消息还在」）。PG 侧连接恒为
+    ``autocommit=False``，事务一直开着，不需要也不能再 BEGIN。
     """
+    if not is_postgres() and not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
@@ -4225,6 +4232,175 @@ def _migration_0052_human_conversation_read_cursor(conn: Connection) -> None:
     )
 
 
+def _migration_0053_resident_intro_post(conn: Connection) -> None:
+    """CONTENT-002：一位居民最多一条自我介绍动态。
+
+    只加一个部分唯一索引，不加表不加列。``resident_intro`` 与既有 ``ai_feed`` /
+    ``user_post`` 的两个部分唯一索引互不相交（各自带 ``WHERE source_type=...``），
+    所以新 source_type 不会撞上 AI 每日双档位的槽位唯一约束。
+
+    幂等锚落在库上而不是应用层：确认候选是一次性操作，重放/并发只应有一条介绍动态，
+    而 ``client_request_id`` 那条索引限定 ``source_type='user_post'``，管不到这里。
+    """
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_resident_intro
+            ON universe_posts(universe_id, author_resident_id)
+            WHERE source_type = 'resident_intro';
+        """
+    )
+
+
+def _migration_0054_media_assets(conn: Connection) -> None:
+    """v1.5 媒体地基：一张 ``media_assets`` + 消息侧三个可空列（MEDIA-* 系列）。
+
+    ``media_assets`` 是**上传与消息解耦**的中间态：客户端先传拿到 ``media_ref``，之后才在
+    发消息/发动态时引用它。因此 ``status`` 只有两态——``pending``（已上传未引用，
+    ``expires_at`` 到点连行带文件一起回收）与 ``referenced``（已被引用，不再过期）。
+    刻意不做反向扫描（"有没有消息指向我"）：引用与状态翻转在同一事务内完成，
+    状态位就是唯一真相，比每小时 JOIN 三张表便宜得多。
+
+    ``storage_path`` 存相对路径（``<sha256[0:2]>/<sha256[2:4]>/<media_id>``），
+    不存绝对路径也不存 URL——存储根由 ``settings.media_storage_dir`` 决定，将来换对象存储
+    只需换解析函数，库里的数据不用动。
+
+    ``owner_platform_user_id`` 是账号隔离的锚：读端点除了验签名，还要复核 scope 与 owner
+    的关系，任何不带 owner 约束的媒体查询都是 bug。
+
+    消息侧只加列不改约束：
+    - ``messages.content_json`` 存 D-1 判别联合的**可持久化部分**（``messages.content``
+      继续存 LLM 上下文用的纯文本，两者口径不同，刻意不合并）。S2 定稿只落
+      ``{"type", "text"}``：URL 是短 TTL 签名的、宽高/时长/转写在 ``media_assets`` 里，
+      存第二份必然漂移，所以库里只留不可再生的 caption，其余读时现取；
+    - ``messages.media_id`` / ``human_messages.media_id`` 单列引用，**不加 FK**——
+      SQLite 无法用 ALTER 补 FK，为一个可空列重建带 2 个 UNIQUE + 2 个 FK 的
+      ``human_messages`` 表不值当，完整性由应用层与回收 job 的状态位保证；
+    - ``human_messages.body_text`` 保持 ``NOT NULL``（同上，重建风险 > 收益），
+      纯媒体消息写空串，"文本或媒体至少有一个"在 API 层校验。
+
+    纯加表 + 加列，无回填、无锁表风险，两后端幂等。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS media_assets (
+            id TEXT PRIMARY KEY,                             -- mda_<token_urlsafe(24)>，不透明
+            owner_platform_user_id TEXT NOT NULL,            -- 账号隔离锚，读写都必须带上
+            kind TEXT NOT NULL,                              -- image | voice
+            mime TEXT NOT NULL,                              -- 重编码后的真实 mime，非客户端声明
+            bytes INTEGER NOT NULL,                           -- 落盘字节数（重编码后）
+            width INTEGER,                                   -- 图片；语音为 NULL
+            height INTEGER,
+            duration_ms INTEGER,                             -- 语音；图片为 NULL
+            sha256 TEXT NOT NULL,                            -- 落盘内容摘要，也是分片目录来源
+            storage_path TEXT NOT NULL,                      -- 相对 media_storage_dir 的路径
+            transcript TEXT,                                 -- 语音同步转写结果；失败或图片为 NULL
+            status TEXT NOT NULL DEFAULT 'pending',          -- pending | referenced
+            -- D-7 定稿口径：默认 skipped=本资产没有过审流程（S4 接阿里云前恒为此值）；
+            -- S4 上线后入队时才置 pending，终态 passed / rejected。
+            moderation_status TEXT NOT NULL DEFAULT 'skipped',  -- skipped | pending | passed | rejected
+            moderation_task_id TEXT,                         -- S4 接阿里云内容安全后回填
+            expires_at TEXT,                                 -- pending 的回收截止；referenced 置 NULL
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_media_assets_owner
+            ON media_assets(owner_platform_user_id, created_at);
+        -- 回收 job 的唯一扫描路径：status='pending' AND expires_at <= now。
+        CREATE INDEX IF NOT EXISTS ix_media_assets_reclaim
+            ON media_assets(status, expires_at);
+        """
+    )
+    _ensure_column(conn, "messages", "content_json", "TEXT")
+    _ensure_column(conn, "messages", "media_id", "TEXT")
+    _ensure_column(conn, "human_messages", "media_id", "TEXT")
+
+
+def _migration_0055_universe_post_media(conn: Connection) -> None:
+    """v1.5 图文动态：一条动态最多挂 4 张图（``universe_post_media``）。
+
+    为什么另开一张表而不是在 ``universe_posts`` 上加 4 个列：顺序是产品可见的（客户端按
+    ``position`` 排版），而"第 N 张"这种列名做不出稳定的插入/删除语义；多对一独立成行后
+    回收 job 与引用计数也只需扫一张窄表。
+
+    两条唯一约束各管一件事：
+    - ``PRIMARY KEY(post_id, position)`` —— 同一条动态里位次不重复（发布是一次性写入，
+      重放靠 ``ON CONFLICT DO NOTHING`` 收敛）；
+    - ``ux_universe_post_media_media`` —— **一份资产全局只能挂一条动态**，与聊天侧
+      ``media_assets.status`` 的一次性语义同构。跨 post 复用会在这里撞唯一键，
+      连同发布事务一起回滚，对外收敛成 ``media_ref_invalid``。
+
+    ``media_id`` 不加 FK（同 m0054 的理由）：完整性由发布事务内的原子认领与状态位保证。
+    纯加表，无回填。
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS universe_post_media (
+            post_id TEXT NOT NULL,
+            media_id TEXT NOT NULL,
+            position INTEGER NOT NULL,               -- 0..3，客户端按此排版
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY (post_id, position),
+            FOREIGN KEY(post_id) REFERENCES universe_posts(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_post_media_media
+            ON universe_post_media(media_id);
+        """
+    )
+
+
+def _migration_0056_media_moderation_scan_index(conn: Connection) -> None:
+    """v1.5 图片机审：待审资产的扫描索引 + 重试次数列。
+
+    索引：m0054 建表时只索引了 owner 与回收路径；S4 的批处理按 ``moderation_status`` 取待审
+    资产，没有索引就是全表扫。绝大多数行恒为 ``skipped``（未开机审时全部如此），因此索引前导列
+    选择性很低——但查询恒带等值条件 ``= 'pending'``，两个后端都能走索引只扫这一小段。
+    刻意不用 partial index：谓词一旦与查询不完全匹配就静默退化成全表扫，收益不值这个脆弱性。
+
+    ``moderation_attempts``：云调用失败的资产会留在 ``pending`` 等下一轮，没有计数就会对着
+    一个坏配置无限重试。达到上限后按**先发后审的 fail-open 口径**记 ``skipped`` 放过，
+    而不是当成命中红线误删用户内容。
+
+    纯加索引 + 带默认值加列，无回填、无锁表风险，两后端幂等。
+    """
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_media_assets_moderation
+            ON media_assets(moderation_status, created_at);
+        """
+    )
+    _ensure_column(conn, "media_assets", "moderation_attempts", "INTEGER NOT NULL DEFAULT 0")
+
+
+def _migration_0057_resident_wish_drafts(conn: Connection) -> None:
+    """v1.5 许愿创建（WISH-001/005）：草稿加来源与许愿幂等键。
+
+    ``source``：``form``（结构化表单，m0048 起的既有路径）| ``wish``（一句话许愿，LLM 生成）。
+    存量行按 ``form`` 回落——它们全部来自表单路径，语义准确。
+
+    ``wish_request_id``：**preview 阶段**的幂等键，与既有 ``client_request_id``（消费阶段的
+    IDEM-001 键）刻意分列两列。合用一列会让"预览重试"与"确认创建"抢同一个唯一约束：
+    preview 先占了 (user, id)，随后 create 再往同一行写同一个 id 就分不清是重放还是新请求。
+    分列之后语义清晰——同一个 ``wish_request_id`` 恒等于同一份草稿，重试不会产生第二份草稿、
+    也不会产生第二次 LLM 计费。
+
+    ``ix_resident_drafts_wish_window`` 服务于日额度计数（按 owner + source 数时间窗内的许愿
+    次数）。计数恒带 ``platform_user_id`` 等值条件，账号隔离由查询与索引共同保证。
+
+    纯加列 + 加索引，无回填、无锁表风险，两后端幂等。
+    """
+    _ensure_column(conn, "resident_drafts", "source", "TEXT NOT NULL DEFAULT 'form'")
+    _ensure_column(conn, "resident_drafts", "wish_request_id", "TEXT")
+    conn.executescript(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_drafts_wish_request
+            ON resident_drafts(platform_user_id, wish_request_id)
+            WHERE wish_request_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_resident_drafts_wish_window
+            ON resident_drafts(platform_user_id, source, created_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4273,6 +4449,11 @@ _MIGRATIONS = [
     (50, _migration_0050_ai_conversation_read_cursor),
     (51, _migration_0051_app_me_tab),
     (52, _migration_0052_human_conversation_read_cursor),
+    (53, _migration_0053_resident_intro_post),
+    (54, _migration_0054_media_assets),
+    (55, _migration_0055_universe_post_media),
+    (56, _migration_0056_media_moderation_scan_index),
+    (57, _migration_0057_resident_wish_drafts),
 ]
 
 

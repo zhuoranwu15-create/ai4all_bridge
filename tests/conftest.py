@@ -367,6 +367,31 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_outbox_max_attempts = 5
     s.companion_world_visits_enabled = False
     s.companion_world_human_chat_enabled = False
+    # v1.5 媒体与许愿四位（FLAG-001）：与其余能力位同样显式置 False——MagicMock 的自动属性
+    # 是 truthy，漏一个就会让所有开了 p1 的用例误以为该能力已灰度开启。
+    s.companion_world_chat_image_enabled = False
+    s.companion_world_chat_voice_enabled = False
+    s.companion_world_feed_image_enabled = False
+    s.companion_world_resident_wish_enabled = False
+    s.companion_world_wish_daily_max = 10
+    # v1.5 媒体地基：数值必须显式给，MagicMock 的 __int__ 恒为 1，否则 /app/config 的限额
+    # 会静默变成 1 字节、契约测试也失去意义。签名密钥给固定测试值，与生产的"留空即报错"无关。
+    s.media_storage_dir = str(tmp_path / "media")
+    s.media_url_signing_secret = "test-media-signing-secret"
+    s.media_url_owner_ttl_seconds = 900
+    s.media_url_visitor_ttl_seconds = 600
+    s.media_pending_ttl_hours = 2
+    s.media_reclaim_interval_seconds = 3600.0
+    # v1.5 S4 图片机审：公网基址默认留空 = 机审不可用（批处理直接返回 disabled，不读库）。
+    # 两个数值同样必须显式给，否则 MagicMock 的 __int__/__float__ 会让批量恒为 1。
+    s.media_public_base_url = ""
+    s.media_moderation_interval_seconds = 60.0
+    s.media_moderation_batch_size = 50
+    s.media_image_max_bytes = 8_388_608
+    s.media_image_count_max = 4
+    s.media_voice_max_bytes = 512_000
+    s.media_voice_max_duration_ms = 60_000
+    s.voice_message_fallback_text = "这段语音我没听清，你可以打字告诉我，或者再发一次～"
     # 多机接入(默认 standalone:default_node_id 留空 → 出站不写 node_id,行为不变)
     s.ai4all_role = "standalone"
     s.node_id = ""
@@ -449,6 +474,12 @@ def fresh_db(test_settings):
         patch("app.products.zhaoxi.proactive.contract.common.settings", test_settings),
         patch("app.products.zhaoxi.proactive.delivery.outbound.settings", test_settings),
         patch("app.platform.media.asr.settings", test_settings),
+        # v1.5 媒体：assets 决定落盘根目录（不 patch 会往仓库 data/media 写测试文件），
+        # access 决定签名密钥与 TTL。
+        patch("app.platform.media.assets.settings", test_settings),
+        patch("app.platform.media.access.settings", test_settings),
+        # S4 图片机审批处理：节流间隔、批量与公网基址都从这里读。
+        patch("app.platform.media.moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.debug.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_proactive.settings", test_settings),

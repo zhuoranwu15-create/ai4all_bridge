@@ -229,7 +229,8 @@ class Settings(BaseSettings):
 
     # ===== 图片理解（DashScope qwen3-vl-plus）=====
     # 总开关：关闭时图片轮直接走兜底，不调 VL、不扣图片费。
-    image_understanding_enabled: bool = False
+    # 默认开（v1.5）：DashScope key 缺失时 describe_image 返回 None 自动落兜底，不会因缺配置 500。
+    image_understanding_enabled: bool = True
     image_understanding_model: str = "qwen3-vl-plus"
     image_understanding_timeout_seconds: float = 30.0
     # 单张图片读取上限，超过则放弃理解（防止超大文件拖垮请求）。
@@ -372,6 +373,46 @@ class Settings(BaseSettings):
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
     companion_world_visits_enabled: bool = False
     companion_world_human_chat_enabled: bool = False
+    # v1.5 媒体与许愿：四个能力位各自 default-off，逐个灰度（FLAG-001）。
+    # 三个媒体开关共用同一套上传/签名链路，但分别门控「会话图片」「会话语音」「动态图文」，
+    # 便于先开图片再开语音。开任何一个之前须确认客户端已是含 v1.5-0 的构建（MEDIA-COMPAT-002）。
+    companion_world_chat_image_enabled: bool = False
+    companion_world_chat_voice_enabled: bool = False
+    companion_world_feed_image_enabled: bool = False
+    companion_world_resident_wish_enabled: bool = False
+    # 每人每日许愿预览次数上限（每次预览要跑一次清洗 + 一次生成，故按预览计而非按创建计）。
+    # 同一 client_request_id 的重放不计次；<=0 表示不限制。
+    companion_world_wish_daily_max: int = 10
+
+    # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
+    # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。
+    media_storage_dir: str = "data/media"
+    # 访客/主人读 URL 的 HMAC 签名密钥。**不给弱默认值**：留空且任一媒体开关为开时启动即报错，
+    # 避免"忘配 secret 却签得出 URL"。生成方式：python -c "import secrets;print(secrets.token_urlsafe(32))"
+    media_url_signing_secret: str = ""
+    # 签名 URL 有效期：主人 15 分钟；访客取 min(本值, visit 剩余时长)，visit 一结束立即失效。
+    media_url_owner_ttl_seconds: int = 900
+    media_url_visitor_ttl_seconds: int = 600
+    # 已上传未被任何消息/动态引用的资产保留时长，到点连行带文件回收；被引用后不再过期。
+    media_pending_ttl_hours: int = 2
+    media_reclaim_interval_seconds: float = 3600.0
+    # 单张图片上传上限（重编码前）。与 asr_max_audio_bytes 无关，后者是 ASR 转写口径。
+    media_image_max_bytes: int = 8_388_608
+    # 动态单条最多几张图；聊天图片消息恒为 1 张。
+    media_image_count_max: int = 4
+    # 单条语音消息上限。AAC-LC 32kbps 60 秒约 240KB，留 2 倍余量；刻意远小于 ASR 的 10MB。
+    media_voice_max_bytes: int = 512_000
+    media_voice_max_duration_ms: int = 60_000
+    # 语音转写失败时写进 LLM 上下文的兜底话术（红线：禁止让主模型瞎猜语音内容）。
+    voice_message_fallback_text: str = "这段语音我没听清，你可以打字告诉我，或者再发一次～"
+    # 媒体读端点的**公网**绝对基址（如 https://api.example.com），供阿里云图片审核回源取图。
+    # 阿里云 ImageModeration 只接受 imageUrl/OSS 对象、不收字节流，因此不填 = 图片机审不可用
+    # （链路整体不入队，moderation_status 恒为 skipped）。详见 docs/ops/platform/image_moderation_setup.md。
+    media_public_base_url: str = ""
+    # 图片机审批处理的扫描间隔（秒）。先发后审，延迟以分钟计即可，不必贴着发布时刻。
+    media_moderation_interval_seconds: float = 60.0
+    # 单轮扫描处理的资产数上限，避免一次占满 scheduler 线程。
+    media_moderation_batch_size: int = 50
 
     # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
