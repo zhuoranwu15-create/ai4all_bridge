@@ -160,7 +160,7 @@ media_storage_dir/<sha256[0:2]>/<sha256[2:4]>/<media_id>       # 默认 data/med
 **访客可见 URL（隐私红线）**：不下发长期 URL，改为**每次读接口逐条重签**。
 
 ```text
-GET /v1/media/{media_id}?exp=<unix>&scope=<scope_id>&sig=<hmac_sha256>
+GET /api/v1/media/{media_id}?exp=<unix>&scope=<scope_id>&sig=<hmac_sha256>
 ```
 
 - `sig = HMAC-SHA256(media_url_signing_secret, f"{media_id}|{scope}|{exp}")`；
@@ -210,12 +210,17 @@ GET /v1/media/{media_id}?exp=<unix>&scope=<scope_id>&sig=<hmac_sha256>
 
 **语音：上传时同步转写，transcript 存库、可选下发。**
 
-- 复用 `/v1/audio/transcriptions` 背后的 ASR provider，不新增 provider。
+- 两个入口继续复用同一 ASR 抽象；生产 provider 定为豆包大模型录音文件识别极速版
+  `volcengine_flash`（Resource ID `volc.bigasr.auc_turbo`），原 OpenAI-compatible 实现保留兼容。
+- 客户端 M4A/AAC 保持原样存储和播放；服务端只在 ASR 调用期间用内置 ffmpeg 转成
+  16kHz/16-bit/单声道 PCM WAV，临时目录随调用销毁。HTTP 与转码都有限时，且在线程池执行，
+  不阻塞 FastAPI event loop。
 - `media_assets.transcript` 存结果；发消息时 `messages.content`（LLM 上下文）写
   `caption + transcript`，`content_json.transcript` 可选下发供"长按转文字"。
 - 转写失败**不阻塞发送**：语音消息照常发出，transcript 为空，LLM 上下文写
   `settings.voice_message_fallback_text`（新增，与图片兜底对齐）。
 - 计费：现有 ASR 无独立费目，语音消息**不新增计费**；成本记在 ops 观察项里。
+- 部署与授权见 `docs/ops/products/zhaoxi/asr_setup.md`。
 
 **链路改动点**：`app/products/zhaoxi/application/companion_world_turn.py:29
 run_companion_world_turn(...)` 目前硬编码 `message_type="text", media=None`，必须解除。
@@ -508,7 +513,7 @@ m0055**，下文编号已同步。
     在 API 层校验即可。
 - `POST /v1/media/uploads`（multipart，参照 `/v1/audio/transcriptions` 既有写法）
   + D-4 的 EXIF 重编码 + 尺寸/时长提取 + 语音同步转写 + 落盘。
-- `GET /v1/media/{media_id}`（D-3 签名读端点）。
+- `GET /api/v1/media/{media_id}`（D-3 公网 canonical 签名读端点；`/v1/media` 仅兼容旧地址）。
 - `AppConfigLimits` 新增 4 字段（D-6）；`requirements.txt` 显式 pin Pillow。
 - 未引用资产回收 job。
 

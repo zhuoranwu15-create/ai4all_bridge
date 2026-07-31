@@ -13,9 +13,9 @@ FastAPI startup 事件——`init_db()` 挂在 `app/bootstrap/lifecycle.py` 的 
 
 范围与口径：
 
-* 只导出客户端真正调用的 ``/v1/...``。规范前缀 ``/v1/products/zhaoxi`` 与
+* 只导出内部客户端契约的 ``/v1/...``。规范前缀 ``/v1/products/zhaoxi`` 与
   ``/api/v1/products/zhaoxi`` 是同一批路由的另外两个挂载点，导出会产生重复条目，
-  故一并排除；公网 ``/api/v1/xxx`` 经 nginx 剥 ``/api`` 后正是这里的 ``/v1/xxx``。
+  故一并排除；公网 ``/api/v1/xxx`` 由 nginx 原 URI 透传到同一套路由。
 * 输出是**确定性**的（键排序 + 固定缩进），否则 CI 的 snapshot 比对会因字典顺序抖动而红。
 * 只有补了 ``response_model`` 的主链路端点才有真实响应 schema；其余端点当前只冻结路径与
   请求体，这是 CONTRACT-001 的既定分步（见 M1 服务端计划 §2.15）。
@@ -44,7 +44,7 @@ SNAPSHOT_INFO = {
     "version": "v1",
     "description": (
         "朝夕相伴移动端 App 对接的 /v1 契约。公网入口 https://ai4company.top/api/v1/，"
-        "nginx 剥掉 /api 前缀后即本文档的路径。落地口径见 "
+        "服务端同时挂载对应公网路径；nginx 原 URI 透传。落地口径见 "
         "docs/products/zhaoxi/app_api_handoff.md。"
     ),
 }

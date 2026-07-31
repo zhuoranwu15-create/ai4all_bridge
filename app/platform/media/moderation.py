@@ -89,7 +89,12 @@ def _public_media_url(asset: Dict[str, Any]) -> str:
         scope=owner_scope(str(asset.get("owner_platform_user_id") or "")),
         ttl_seconds=owner_ttl_seconds(),
     )
-    return f"{public_base_url()}{grant.url}"
+    # sign_media_url 在配置公网基址时已经返回绝对地址；兼容测试/旧配置下的相对地址。
+    return (
+        grant.url
+        if grant.url.startswith(("https://", "http://"))
+        else f"{public_base_url()}{grant.url}"
+    )
 
 
 def review_pending_media_batch(

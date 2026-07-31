@@ -640,7 +640,8 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content 
 
 ```
 POST /v1/media/uploads                 → 上传，拿 media_id + 一条短 TTL 读 URL
-GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authorization，签名即凭据）
+GET  https://ai4company.top/api/v1/media/{media_id}?scope=&exp=&sig=
+                                             → 取字节流（不带 Authorization，签名即凭据）
 ```
 
 #### 6.5.1 上传
@@ -660,7 +661,7 @@ GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authoriza
   "media_id": "med_…", "kind": "image", "mime": "image/jpeg",
   "bytes": 204800, "width": 1080, "height": 1440, "duration_ms": null,
   "transcript": null,
-  "url": "/v1/media/med_…?scope=pu:…&exp=…&sig=…",
+  "url": "https://ai4company.top/api/v1/media/med_…?scope=pu:…&exp=…&sig=…",
   "url_expires_at": "2026-07-30T14:20:00+08:00",
   "expires_at": "2026-07-30T16:05:00+08:00"
 }
@@ -670,6 +671,9 @@ GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authoriza
   iOS 拍照默认 HEIC，**客户端必须先本地转码**。语音收 aac / m4a / mp3 / wav / ogg / webm。
 - **服务端不信任客户端声明**：图片一律重编码并剥离 EXIF/GPS，语音按魔数复核容器。
   因此**宽高、`mime`、`bytes` 一律以响应为准**，不要用本地读到的值。
+- 语音原文件不会为 ASR 改格式：M4A/AAC 仍按原字节存储和播放。生产使用豆包大模型录音文件
+  识别极速版时，服务端仅生成一次临时 16kHz 单声道 WAV；成功则 `transcript` 为文本，供应商、
+  鉴权、转码或超时失败则为 `null`，但上传仍返回成功。
 - **`url` 与 `expires_at` 是两件事**：`url_expires_at` 是这条签名地址什么时候失效（默认 15 分钟），
   `expires_at` 是这份**还没被引用**的媒体什么时候被回收（默认 2 小时）。
 - **两小时内必须用掉**：超时后引用会拿到 `media_ref_expired`(409)，需要重新上传。
@@ -682,16 +686,17 @@ GET  /v1/media/{media_id}?scope=&exp=&sig=   → 取字节流（不带 Authoriza
 #### 6.5.2 读 URL 的规则（最容易踩的一节）
 
 - 所有返回媒体的接口（上传、消息列表、Feed、访客 Feed）都**现签**一条短 TTL URL。
-- **`url` 是 origin 相对路径**（形如 `/v1/media/med_…?scope=…&exp=…&sig=…`），不是绝对地址：
-  拼 **origin**（生产 `https://ai4company.top`）即可，**不要**拼 `{base}`——`{base}` 带
-  `/api/v1/products/zhaoxi` 前缀，拼出来是错的。生产已放开 `/v1/media/` 这条公网路径。
+- **`url` 是客户端可直接加载的完整 HTTPS URL**，生产 canonical path 为
+  `/api/v1/media/{media_id}`；客户端不要再拼 origin、API base 或产品 namespace。
+- 旧版已经下发的 `/v1/media/{media_id}` 相对地址仍可访问，但只作兼容，不再作为新响应契约。
 - **不要持久化、不要跨会话复用、不要写进本地库**。过期就重新拉一次列表/详情拿新签名。
-- `GET /v1/media/{media_id}` **不读 `Authorization`**，签名三元组（`scope` / `exp` / `sig`）就是唯一凭据；
+- `GET /api/v1/media/{media_id}` **不读 `Authorization`**，签名三元组（`scope` / `exp` / `sig`）就是唯一凭据；
   原样使用返回的 URL，不要自己拼参数。
 - **`url` 为 `null` 表示服务端此刻签不出**（部署缺 secret，或访客的拜访已结束）：
   **按占位图渲染，不要降级成文本、不要当成消息损坏**。
 - 访客视角（`GET /v1/visits/{visit_id}/feed`）拿到的是按 visit scope 签的 URL，**拜访一结束立即失效**。
-- 任何读取失败（签名不符、过期、scope 失效、资源缺失）统一收敛成 `media_access_denied`(403)，不区分原因（防枚举）。
+- 任何读取失败（签名参数缺失/格式错误、签名不符、过期、scope 失效、资源缺失）统一收敛成
+  `media_access_denied`(403)，不区分原因（防枚举）。
 
 #### 6.5.3 会话里的媒体消息
 
@@ -835,7 +840,7 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 
 **主聊天（默认账号，非世界）**
 - `GET /v1/chat/messages`、`POST /v1/chat/turn`
-- `POST /v1/audio/transcriptions`（语音转写，功能开关当前关闭）
+- `POST /v1/audio/transcriptions`（语音转写；能力位由所选 ASR provider 的完整凭据决定）
 
 > 2026-07-26 起这两个 legacy 端点与世界端对齐：`/chat/messages` 的 `created_at` 显式带
 > `+08:00`（此前是无时区的裸时间串，客户端如按本地时区解析过需回归一次）；`/chat/turn` 的
@@ -871,7 +876,7 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 
 **媒体（v1.5）**
 - `POST /v1/media/uploads`（图片 / 语音上传，multipart）
-- `GET /v1/media/{media_id}?scope=&exp=&sig=`（签名读，不带 `Authorization`）
+- `GET /api/v1/media/{media_id}?scope=&exp=&sig=`（公网签名读，不带 `Authorization`）
 
 **真人会话**
 - `GET /v1/human-conversations`

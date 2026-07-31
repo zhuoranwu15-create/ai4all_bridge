@@ -92,7 +92,7 @@ def test_upload_image_strips_exif_and_creates_pending_asset(
     assert data["duration_ms"] is None and data["transcript"] is None
     # 未被引用的资产必须带回收截止时间；URL 过期是另一个更短的口径。
     assert data["expires_at"] and data["url_expires_at"]
-    assert data["url"].startswith(f"/v1/media/{data['media_id']}?exp=")
+    assert data["url"].startswith(f"/api/v1/media/{data['media_id']}?exp=")
     # 签名密钥属于凭证，任何响应体里都不能出现。
     assert test_settings.media_url_signing_secret not in response.text
 

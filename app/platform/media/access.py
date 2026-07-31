@@ -4,7 +4,7 @@
 逐条重签一个短 TTL、窄 scope 的签名 URL。
 
 ```text
-GET /v1/media/{media_id}?exp=<unix>&scope=<scope>&sig=<hex>
+GET /api/v1/media/{media_id}?exp=<unix>&scope=<scope>&sig=<hex>
 sig = HMAC-SHA256(media_url_signing_secret, f"{media_id}|{scope}|{exp}")
 ```
 
@@ -50,7 +50,7 @@ class MediaSigningNotConfiguredError(RuntimeError):
 
 @dataclass(frozen=True)
 class MediaAccessGrant:
-    """一次签名下发的结果；``url`` 是客户端直接可用的相对路径。"""
+    """一次签名下发的结果；``url`` 是客户端可直接访问的签名地址。"""
 
     media_id: str
     scope: str
@@ -128,9 +128,14 @@ def sign_media_url(
     scope: str,
     ttl_seconds: int,
     now: Optional[int] = None,
-    path_prefix: str = "/v1/media",
+    path_prefix: str = "/api/v1/media",
 ) -> MediaAccessGrant:
-    """签发一个短 TTL 读 URL。``ttl_seconds`` 由调用方按 owner/visitor 口径算好传进来。"""
+    """签发一个短 TTL 读 URL。``ttl_seconds`` 由调用方按 owner/visitor 口径算好传进来。
+
+    配置 ``MEDIA_PUBLIC_BASE_URL`` 时返回完整 HTTPS URL，供移动端组件直接加载；留空仍返回
+    origin 相对路径，保留本地开发与既有部署兼容。公网 canonical path 固定为
+    ``/api/v1/media``，旧 ``/v1/media`` 挂载继续负责兼容已经下发的地址。
+    """
     cleaned_id = str(media_id or "").strip()
     cleaned_scope = str(scope or "").strip()
     if not cleaned_id or not cleaned_scope:
@@ -142,10 +147,14 @@ def sign_media_url(
         raise MediaAccessDeniedError("media url ttl is not positive")
     expires_at = int(now if now is not None else time.time()) + ttl
     signature = _sign(media_id=cleaned_id, scope=cleaned_scope, expires_at=expires_at)
-    url = (
+    relative_url = (
         f"{path_prefix}/{cleaned_id}"
         f"?exp={expires_at}&scope={cleaned_scope}&sig={signature}"
     )
+    public_base = (
+        str(getattr(settings, "media_public_base_url", "") or "").strip().rstrip("/")
+    )
+    url = f"{public_base}{relative_url}" if public_base else relative_url
     return MediaAccessGrant(
         media_id=cleaned_id,
         scope=cleaned_scope,

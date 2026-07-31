@@ -5,3 +5,4 @@
 
 - [后台管理说明](admin_guide.md)
 - [调试指南](debugging.md)
+- [豆包大模型 ASR 极速版配置](asr_setup.md)

@@ -190,7 +190,7 @@ def test_ai_image_turn_keeps_vl_description_out_of_display_payload(
     assert content["text"] == "这是哪"
     assert content["media_id"] == media_id
     assert (content["width"], content["height"]) == (12, 8)
-    assert content["url"].startswith(f"/v1/media/{media_id}?exp=")
+    assert content["url"].startswith(f"/api/v1/media/{media_id}?exp=")
     assert f"scope=pu:{platform_user_id}" in content["url"]
     # 老字段是 content 的镜像，不是另一份口径。
     assert (user_item["message_type"], user_item["text"]) == ("image", "这是哪")
