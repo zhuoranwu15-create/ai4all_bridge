@@ -37,9 +37,10 @@ TASK_PROACTIVE_RECALL = "proactive_recall"
 TASK_WEB_COMPLETION = "web_completion"
 TASK_WORLD_CONTENT = "world_content"
 
-# 默认路由：主对话用 pro，后台任务用 flash。可被 settings.llm_task_tiers(JSON) 逐项覆盖。
+# 默认路由：主对话与后台任务均用 flash；需要更强模型的任务可通过
+# settings.llm_task_tiers(JSON) 显式切到 pro。
 _TASK_TIER_DEFAULTS: Dict[str, str] = {
-    TASK_MAIN_REPLY: TIER_PRO,
+    TASK_MAIN_REPLY: TIER_FLASH,
     TASK_ONBOARDING_EXTRACTION: TIER_FLASH,
     TASK_MODERATION: TIER_FLASH,
     TASK_ROLLING_SUMMARY: TIER_FLASH,
@@ -444,7 +445,7 @@ def _parse_task_tiers(settings_obj: Any) -> Dict[str, str]:
 
 
 def tier_for_task(task_kind: str, *, settings_obj: Any = settings) -> str:
-    """Map a task kind to a tier: default table (main_reply=pro, 其余=flash) overridden by LLM_TASK_TIERS."""
+    """Map a task kind to a tier; defaults to flash and allows LLM_TASK_TIERS overrides."""
     default = _TASK_TIER_DEFAULTS.get(task_kind)
     if default is None:
         logger.warning("tier_for_task unknown task kind=%s; defaulting to flash", task_kind)

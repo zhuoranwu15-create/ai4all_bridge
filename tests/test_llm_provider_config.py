@@ -301,7 +301,7 @@ def test_tier_for_task_defaults():
     )
 
     settings = _settings()
-    assert tier_for_task(TASK_MAIN_REPLY, settings_obj=settings) == "pro"
+    assert tier_for_task(TASK_MAIN_REPLY, settings_obj=settings) == "flash"
     assert tier_for_task(TASK_MODERATION, settings_obj=settings) == "flash"
     assert tier_for_task(TASK_ONBOARDING_EXTRACTION, settings_obj=settings) == "flash"
 

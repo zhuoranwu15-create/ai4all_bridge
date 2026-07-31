@@ -1,8 +1,9 @@
 # LLM family×tier 选型技术设计
 
-更新时间：2026-07-12
+更新时间：2026-07-31
 
-> 事实源：`app/llm_providers.py`、`app/llm.py`、`app/db/llm_config.py`、`app/routers/admin_llm.py`、`.env.example`。
+> 事实源：`app/agent_runtime/llm/providers.py`、`app/agent_runtime/llm/service.py`、
+> `app/db/llm_config.py`、`app/routers/admin_llm.py`、`.env.example`。
 > 本文描述当前生效的 LLM 选型模型。**旧的 `LLM_MODEL` / `LLM_DEFAULT_PROVIDER_ID` / `settings.llm_model` 已删除，不再使用**——凡文档仍引用这些名字的都应改为本文口径。
 
 ## 1. 为什么是两层
@@ -10,17 +11,18 @@
 早期只有一个「默认 model / 默认 provider id」，换厂商要同时改多处，且分不清「主对话要强模型、后台任务用快模型」。重构后把选型拆成两个正交维度：
 
 - **family（厂商家族）**：`deepseek` | `openai` | `anthropic`。一次切换 family，主对话和所有后台任务一起换厂商。
-- **tier（档位）**：`pro`（综合强，主对话）| `flash`（快/省，后台任务）。
+- **tier（档位）**：`pro`（综合强）| `flash`（快/省，当前默认）。
 
 调用点不写死具体模型，只声明「我是什么任务」，由 `tier_for_task(task)` 映射到档位，再由 `resolve_provider_for_tier(tier, family, override)` 解析出具体 provider。这样换模型 = 改矩阵，换厂商 = 改一个 family，调整某类任务的档位 = 改一条 task→tier 路由。
 
 ## 2. task → tier 路由
 
-`app/llm_providers.py::tier_for_task(task_kind)`。默认表 `_TASK_TIER_DEFAULTS`：主对话走 pro，其余后台任务走 flash。
+`app/agent_runtime/llm/providers.py::tier_for_task(task_kind)`。默认表 `_TASK_TIER_DEFAULTS` 当前让
+主对话与后台任务都走 flash；需要更强模型的任务通过 `LLM_TASK_TIERS` 显式切到 pro。
 
 | task kind 常量 | 默认 tier |
 |---|---|
-| `main_reply` | **pro** |
+| `main_reply` | **flash** |
 | `onboarding_extraction` | flash |
 | `moderation` | flash |
 | `rolling_summary` | flash |
@@ -67,7 +69,9 @@ deepseek 内置 pro+flash 两档；openai/anthropic 只内置 pro 一档，flash
 
 active family 来源优先级：显式传入 > 运行时绑定 `active_family` > `LLM_ACTIVE_FAMILY` env > `_DEFAULT_FAMILY`（deepseek）。
 
-`app/llm.py` 是唯一读运行时绑定的地方：它从 `get_llm_runtime_bindings()` 取 `active_family` 和该 tier 的 `override_provider_id`，传给 `resolve_provider_for_tier`；`llm_providers.py` 本身无 DB 依赖。
+`app/agent_runtime/llm/service.py` 是唯一读运行时绑定的地方：它从
+`get_llm_runtime_bindings()` 取 `active_family` 和该 tier 的 `override_provider_id`，传给
+`resolve_provider_for_tier`；`providers.py` 本身无 DB 依赖。
 
 ## 5. 运行时切换（无需重启）
 

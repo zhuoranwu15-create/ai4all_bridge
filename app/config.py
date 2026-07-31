@@ -44,10 +44,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"
     # 两层模型选择（family × tier）。family=厂商家族(deepseek/openai/anthropic)，tier=pro(综合强)/flash(快)。
-    # llm_active_family: 默认生效家族；主对话走该家族 pro、后台任务走 flash（可被下方 task 路由改写）。
+    # llm_active_family: 默认生效家族；主对话和后台任务默认走 flash（可被下方 task 路由改写）。
     llm_active_family: str = "deepseek"
-    # llm_task_tiers: 可选 JSON，覆盖 task→tier 默认表（默认 main_reply=pro、后台任务=flash）。
-    # 例：{"moderation":"pro"} 把审核改回 pro，其余不变。见 app/llm_providers.py::tier_for_task。
+    # llm_task_tiers: 可选 JSON，覆盖 task→tier 默认表（当前全部默认 flash）。
+    # 例：{"main_reply":"pro"} 把主对话改回 pro，其余不变。见
+    # app/agent_runtime/llm/providers.py::tier_for_task。
     llm_task_tiers: str = ""
     llm_providers_json: str = ""
     llm_openai_base_url: str = "https://api.openai.com"
