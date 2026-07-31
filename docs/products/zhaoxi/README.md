@@ -1,6 +1,6 @@
 # 朝夕相伴产品文档
 
-更新时间：2026-07-25
+更新时间：2026-07-31
 
 ## 产品 manifest
 
@@ -19,6 +19,20 @@
 代码由 `app/products/zhaoxi/manifest.py` 组合产品 API 与 lifecycle；turn 产品实现位于
 `app/products/zhaoxi/application/turn_services.py`，专属工具策略位于
 `app/products/zhaoxi/tools/registry.py`。共享 Runtime 与 Platform 不反向依赖这些实现。
+
+## 体验与接入文档
+
+| 类型 | 回答的问题 | 入口 |
+| --- | --- | --- |
+| 产品体验 | 用户从哪个入口进入、该形态能做什么、有哪些限制 | [体验文档](experiences/README.md) |
+| 客户端/通道接入 | Base URL、鉴权、协议、错误码和机器契约 | [接入与契约](integrations/README.md) |
+| 产品能力 | 为什么做、具体业务规则、策略和验收标准 | 下方 `capabilities/` 专题 |
+
+当前微信端用户说明已独立为[微信端使用说明](experiences/wechat.md)。Native App 的开发联调文档与
+未来面向普通用户的 App 使用指南分开维护。
+
+未排期的朝夕产品事项统一进入[朝夕产品 Backlog](../../backlog/products/zhaoxi/README.md)；进入实施后
+再转为 [`docs/plans/products/zhaoxi/`](../../plans/products/zhaoxi/README.md) 中带验收条件的计划。
 
 ## 能力专题
 

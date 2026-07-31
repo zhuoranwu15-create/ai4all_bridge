@@ -1,8 +1,12 @@
-# AI4ALL Weixin Bot
+# AI4ALL Backend
 
-AI4ALL Weixin Bot 面向普通用户提供微信里的个人 AI 陪伴与轻量助理服务。用户通过手机号验证和微信扫码接入微信 OpenClawBot 通道，后续在微信私聊中使用由 AI4ALL Backend 驱动的个人 AI bot。
+AI4ALL Backend 是面向多个 AI 聊天产品的模块化后端。当前唯一启用产品是朝夕相伴
+（`app_id=zhaoxi`），已同时服务微信私聊、Web/H5 和朝夕 Native App；未来产品通过独立
+`app_id`、产品领域和固定 API 命名空间接入。
 
-产品第一定位是聊天陪伴，同时逐步补齐明确提醒、信息搜索、每日新闻、搞笑内容等轻量个人助理能力。OpenClaw / `openclaw-weixin` 在这里是微信通道基础设施，AI4ALL Backend 承担用户注册、账号隔离、Soul、记忆、提醒、模型调用和运营管理。
+底层核心是形态无关的 Agent Runtime，负责对话、Prompt、工具、上下文和记忆；身份、鉴权、
+配额、钱包、审核、媒体和观测属于共享 Platform；Companion World 等产品语义留在朝夕领域。
+OpenClaw / `openclaw-weixin` 只是微信通道基础设施。
 
 ## 文档
 
@@ -10,7 +14,8 @@ AI4ALL Weixin Bot 面向普通用户提供微信里的个人 AI 陪伴与轻量�
 - [项目启动文档](start.md)
 - [产品需求文档](docs/products/zhaoxi/prd.md)
 - [产品专题 PRD](docs/products/zhaoxi/README.md)
-- [用户使用说明](docs/products/zhaoxi/user_guide.md)
+- [朝夕微信端使用说明](docs/products/zhaoxi/experiences/wechat.md)
+- [朝夕 App 客户端接入](docs/products/zhaoxi/integrations/README.md)
 - [后台管理说明](docs/ops/products/zhaoxi/admin_guide.md)
 - [后续规划](docs/roadmap.md)
 - [总体架构 / 框架设计](docs/architecture/overview.md)

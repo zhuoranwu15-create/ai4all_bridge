@@ -4,7 +4,7 @@
 单条超长先截断再计预算。token 估算用粗近似（``len/1.5``），仅用于预算裁剪，**不用于计费**
 （真值走 LLM usage）。本模块只负责"喂给 LLM 的历史副本"的形状，不触达 DB、不改落库内容。
 
-设计与取舍见 docs/tech_design/context_window_token_budget_design.md。
+设计与取舍见 docs/architecture/agent-runtime/context_window_token_budget_design.md。
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def compute_floor_count(
     rows 为正序（最旧→最新）。从最新往旧走，取两条件的交集（连续尾块）：一旦某条早于时间窗、
     或再纳入就会超过轮数上限（一个 user 消息计一轮），即停止。至少返回 1（当前消息永远保留）。
     floor_minutes/floor_turns ≤ 0 表示该维度不设限。now 可为 aware/naive，统一按 naive 比较。
-    见 docs/tech_design/context_orchestration_unified_design.md §5.1。
+    见 docs/architecture/agent-runtime/context_orchestration_unified_design.md §5.1。
     """
     if not rows:
         return 1

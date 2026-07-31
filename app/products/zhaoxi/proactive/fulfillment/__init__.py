@@ -4,7 +4,7 @@
 工具集，跑与普通对话同一套 tool loop，产出一条消息再发。工具集是策略参数而非写死单工具，
 v1 默认 web_search + 首轮强制，后续放开只改配置。
 
-见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。
+见 docs/architecture/products/zhaoxi/dynamic_reminder_scheduled_content_design.md。
 """
 
 from app.products.zhaoxi.proactive.fulfillment.dynamic_reminder import (

@@ -268,4 +268,5 @@ Phase 2(按需,Q2 已决定本次提前落 app_id 列):
 
 - 顺序:先 DB 迁移(m0022→m0023→m0024,`init_db` 顺序应用)→ 部署代码。迁移与代码同一次发布内完成;唯一索引在 A1 之后、A4 代码之前生效不影响正常登录链路(`get_or_create` 不新建)。
 - 回滚:代码回滚即可(唯一索引/新列对旧代码兼容——旧代码不读 `app_id`、不受 `native` 影响,因线上 `'app'` 仅 1 行已迁走)。迁移不做 down(项目惯例:仅前向)。
-- 双机:aliyun1 + aliyun2,按 [[deploy-restart-model]] 免 sudo 重启;aliyun2 为瘦接入 node-only,不碰本地 DB,迁移只在中心 PG 生效一次。
+- 双机：aliyun1 + aliyun2；aliyun2 当前为厚 node，直连中心 PG 并本地执行 turn，但 migration
+  仍只由 central 执行一次。

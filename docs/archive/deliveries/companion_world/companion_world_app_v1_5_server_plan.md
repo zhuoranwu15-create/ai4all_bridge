@@ -1,8 +1,11 @@
 # Companion World App v1.5 服务端开发计划
 
-更新时间：2026-07-30
-状态：**S0–S5 全部已实现，待 PR 合并**。
-分支：S0 在 `feat/companion-world-v1-5-s0`，S1–S5 在 `feat/companion-world-v1-5-s1`。
+更新时间：2026-07-31
+状态：**已完成并归档。S0–S5 已通过 PR #59 合入主干并上线，生产能力位已开启。** 当前能力以
+[`companion_world_app_prd.md`](../../../products/zhaoxi/capabilities/companion_world_app_prd.md) 和
+[`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md) 为准；媒体撤回、任务章节、契约债和
+司辰头像 CDN 同步等剩余项已转入
+[`companion_world_app_followups.md`](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World v1.5 服务端需求清单 V0.3》（`/home/jack/companion_world_v1_5_server_requirements.md`）。

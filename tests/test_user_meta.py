@@ -814,7 +814,7 @@ def test_admin_user_meta_run_once_requires_admin(client, fresh_db):
 
 
 # ---------------------------------------------------------------------------
-# 关系状态结构化字段（Phase A：见 relationship_state_implementation_plan_tmp.md）
+# 关系状态结构化字段（Phase A：见 docs/architecture/products/zhaoxi/relationship_state_design.md）
 # ---------------------------------------------------------------------------
 
 REL_FIELDS = (

@@ -25,7 +25,7 @@ __all__ = [
     "upsert_account_user_meta",
 ]
 
-# 关系状态枚举与默认值（见 relationship_state_implementation_plan_tmp.md §3）。
+# 关系状态枚举与默认值（见 docs/architecture/products/zhaoxi/relationship_state_design.md §3）。
 # 非法值在写入入口回退默认，避免脏值入库。
 RELATIONSHIP_STAGE_VALUES = {"icebreaking", "acquainted", "deep_bond"}
 SURVIVAL_STATUS_VALUES = {"healthy", "cooling", "inactive", "resource_risk"}

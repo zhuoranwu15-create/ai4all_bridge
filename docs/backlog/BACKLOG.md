@@ -5,7 +5,7 @@
 > 阻塞性/线上正确性问题不进这里——直接修并在对应 runbook/design 记录。
 >
 > 状态图例:🔴 待排期 · 🟡 进行中 · ✅ 已完成(完成后保留一行存档,定期清理)
-> 最后更新:2026-06-30(SEC-1/2/4、BUG-1 已修并移入 §4 存档)
+> 最后更新:2026-07-31（增加朝夕 Companion World App 后续项索引）
 >
 > 范围约定：跨产品和平台事项放在本文；朝夕专属事项放在
 > [`products/zhaoxi/`](products/zhaoxi/)，共享分析和规模化评估放在
@@ -78,7 +78,8 @@
 
 | ID | 优先级 | 状态 | 条目 | 来源 |
 |---|---|---|---|---|
-| OB-1 | P2 | 🔴 | 绑定后 bot 主动问候(Path A)常失效(拿不到用户 wxid);调研 wxid 回填能否实现「绑定即主动问候」,当前退化为用户先开口(Path B) | `backlog/onboarding_welcome_wxid_followup.md` |
+| OB-1 | P2 | 🔴 | 绑定后 bot 主动问候(Path A)常失效(拿不到用户 wxid);调研 wxid 回填能否实现「绑定即主动问候」,当前退化为用户先开口(Path B) | [`products/zhaoxi/onboarding_welcome_wxid_followup.md`](products/zhaoxi/onboarding_welcome_wxid_followup.md) |
+| CW-1 | 待分级 | 🔴 | Companion World M1/M2/v1.5 上线后的产品决策、契约债与运维闭环 | [`products/zhaoxi/companion_world_app_followups.md`](products/zhaoxi/companion_world_app_followups.md) |
 
 ## 5. 已完成存档
 

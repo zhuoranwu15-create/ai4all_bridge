@@ -8,6 +8,10 @@ from urllib.parse import unquote
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
+DEPRECATED_DOC_REFERENCES = (
+    "docs/tech_design/",
+    "relationship_state_implementation_plan_tmp.md",
+)
 
 
 def _markdown_files() -> list[Path]:
@@ -63,3 +67,22 @@ def test_markdown_local_links_resolve():
                     f"{match.group(1)}"
                 )
     assert not broken, "失效的 Markdown 本地链接：\n" + "\n".join(broken)
+
+
+def test_python_sources_do_not_reference_retired_document_paths():
+    """代码说明必须引用当前文档 owner，不能重新引入已删除的旧目录。"""
+
+    stale: list[str] = []
+    this_file = Path(__file__).resolve()
+    for root_name in ("app", "scripts", "tests", "nearline"):
+        root = REPO_ROOT / root_name
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*.py"):
+            if path.resolve() == this_file:
+                continue
+            content = path.read_text(encoding="utf-8")
+            for marker in DEPRECATED_DOC_REFERENCES:
+                if marker in content:
+                    stale.append(f"{path.relative_to(REPO_ROOT)} -> {marker}")
+    assert not stale, "仍在引用已退役文档路径：\n" + "\n".join(stale)

@@ -1,6 +1,6 @@
 """app.products.zhaoxi.infrastructure.persistence.campaign — 营销活码配置与注册归因快照。
 
-见 docs/tech_design/campaign_codes_technical_design.md §1/§2。活码与个人邀请码
+见 docs/architecture/products/zhaoxi/campaign_codes_technical_design.md §1/§2。活码与个人邀请码
 （referral_codes）是两套独立业务，不共表、不触发拉新奖励逻辑。
 
 account_campaign_attribution 是注册时刻的策略快照：活码后续被编辑/下线不影响已归因

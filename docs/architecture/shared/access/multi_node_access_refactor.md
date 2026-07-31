@@ -1,5 +1,10 @@
 # 接入端多机重构落地设计（中心大脑 + 瘦接入节点，aliyun1/aliyun2 双机 MVP）
 
+> 状态：**历史阶段设计**。本文记录 2026-06-14 上线的瘦节点一期，不代表当前生产拓扑；
+> 2026-06-21 起已由[厚节点 + 共享 PostgreSQL 设计](../data/thick_node_postgres_refactor.md)取代。
+> 当前事实以[总体架构](../../overview.md)和
+> [两机部署差异](../../../ops/platform/aliyun1_aliyun2_deployment_diff.md)为准。
+
 > 状态：设计稿（待评审 → 落地）
 > 最后更新：2026-06-11
 > 适用范围：AI4ALL 微信个人 AI 陪伴项目（bridge + OpenClaw）

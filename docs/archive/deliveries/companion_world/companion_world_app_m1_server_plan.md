@@ -1,11 +1,15 @@
 # Companion World App M1 服务端需求评审与开发计划
 
-更新时间：2026-07-26
-状态：**S1–S5 全部已交付（2026-07-26）**，待合入 `main`（受保护，需 PR + 双档 CI）
+更新时间：2026-07-31
+状态：**已完成并归档。S1–S6 已合入 `main` 并上线。** 当前能力以
+[`companion_world_app_prd.md`](../../../products/zhaoxi/capabilities/companion_world_app_prd.md) 和
+[`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md) 为准；第三方数据处置、
+`sample_dialogue` 与灰度能力等剩余项已转入
+[`companion_world_app_followups.md`](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World M1 服务端需求积压 V0.2》与《AI 陪伴 App 私人平行世界 PRD V1.1》
-> （原件冻结在 [`archive/alignments/`](../../../archive/alignments/companion_world_m1_server_requirements_v0_2_client.md)）。
+> （原件冻结在 [`archive/alignments/`](../../alignments/companion_world_m1_server_requirements_v0_2_client.md)）。
 > 产品口径：[朝夕相伴 App 端 PRD](../../../products/zhaoxi/capabilities/companion_world_app_prd.md)。
 > 技术权威：[Companion World 3.0 ADR](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)。
 > 评审基线：`main@7d0943d`，当前最大迁移号 `m0046`。

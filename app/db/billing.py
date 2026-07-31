@@ -2036,7 +2036,7 @@ def get_platform_user_id_for_account(*, account_id: str) -> Optional[str]:
     统一收口到 accounts.resolve_owner_platform_user_id：形态 A（微信接入）经 owner_binding，
     形态 B（朝夕相伴居民 runtime account）经世界归属（universe owner），都无则 None。
     owner_binding 是微信接入独有的产物、非通用「用户账号」，居民不发 binding——详见
-    docs/tech_design/companion_world_account_model_reconciliation.md。
+    docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md。
     """
     from app.db.accounts import resolve_owner_platform_user_id
     with connect() as conn:
@@ -2732,7 +2732,7 @@ def create_resident_runtime_account(
 
     账号行创建（id 生成重试 + accounts/profiles 插入）与 create_ai4all_account_for_user 同款；世界映射
     委托 companion_world.create_resident（同连接/事务，原子）。详见
-    docs/tech_design/companion_world_account_model_reconciliation.md（冻结 = B）。
+    docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md（冻结 = B）。
     """
     from app.db.accounts import get_account, get_profile_for_account
     from app.products.zhaoxi.infrastructure.persistence.companion_world import create_resident

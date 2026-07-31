@@ -1,9 +1,10 @@
 # PG 备份 → aliyun2 & aliyun1 故障切换 — 工作追踪
 
-> 临时追踪文件（未提交 git）。负责人 Jack + Claude。创建 2026-07-05。
+> 状态：Phase 0 异地 `pg_dump` 与 Phase 1 流复制热备已于 2026-07-05 上线；Phase 2 手工切换/
+> 回切尚未完成低峰演练。本文保留当日实测基线和执行记录，最新状态以进度日志及对应勾选项为准。
 > 目标：① PG 有异地备份落在 aliyun2；② aliyun1 挂时 aliyun2 能顶上服务（至少保住数据与 aliyun2 本机账号）。
 
-## 0. 现状基线（2026-07-05 实测）
+## 0. 切换前基线（2026-07-05 实测）
 
 | 项 | 值 |
 |---|---|
@@ -68,7 +69,8 @@ aliyun2 起一个 PG13 standby，持续从 aliyun1 流式同步。db 仅 73MB，
   2. 改 aliyun2 backend `.env`：`DATABASE_URL` 的 host `172.24.16.141` → `127.0.0.1`
   3. `systemctl --user restart ai4all-weixin-backend` → `/health` 200 验证
   - 说明：只恢复 aliyun2 自身 14 账号 + 保住数据；aliyun1 的 61 账号入站在 aliyun1 恢复前仍不可用
-- [ ] **2.3** 轻量兜底（连 standby 都不可用时）：aliyun2 注释 `DATABASE_URL` 回 SQLite（用最近 Phase0 dump 恢复或 nearline 快照），数据回退到快照点
+- [ ] **2.3** standby 也不可用时：从最近异机 `pg_dump` 恢复到新的 PostgreSQL 实例，核对
+  schema、关键表计数与账本后再切应用连接。禁止清空 `DATABASE_URL` 回落历史 SQLite 快照。
 - [ ] **2.4** **回切（failback）**：aliyun1 恢复后，避免脑裂的次序——先确认旧主不再被写、以新主为准重建复制方向（旧主转 standby 或 pg_rewind），再把 backend 指回。**演练前务必细化，双写是最大风险**
 - [ ] **2.5** 低峰演练一次，实测 RTO
 - [ ] **2.6**（可选）复制延迟 + 主库可达性监控告警（配合前述"运维缺监控"项一起做）

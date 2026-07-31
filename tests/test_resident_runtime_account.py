@@ -1,6 +1,6 @@
 """B-② 居民内部建号原语（M1-5）契约测试：create_resident_runtime_account。
 
-冻结账号模型决策 B（docs/tech_design/companion_world_account_model_reconciliation.md）：
+冻结账号模型决策 B（docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md）：
 居民 runtime account 走「世界归属」解析到真人，**不发 owner_binding、不赠新客贝壳、
 不建独立钱包/subscription、不占用户账号容量**。owner_binding 是微信接入独有的产物。
 """

@@ -2,7 +2,7 @@
 
 > 面向：App 正式版客户端开发者。本文只讲「必须先知道的」；
 > 完整端点清单、字段结构、错误码表见 [`app_api_handoff.md`](app_api_handoff.md)。
-> 最后对生产 `https://ai4company.top` 实测核对：2026-07-26。
+> 最后对生产 `https://ai4company.top` 实测核对：2026-07-31。
 
 ## 1. 接入基础
 
@@ -20,9 +20,9 @@
 
 > Swagger/OpenAPI **未对外暴露**（`/api/docs` 返回的是官网 SPA）。机器可读契约用后端仓库
 > 提交的 [`openapi/app_v1.json`](openapi/app_v1.json)：服务端 CI 断言它与实现一致，可以拿来
-> 生成 DTO 或做 breaking-change 检查。注意目前只有**主链路 10 个端点**有真实响应 schema
-> （`/app/config`、`/me`、bootstrap、候选、居民、confirm、会话列表、messages/turn/read），
-> 其余端点只冻结了路径与请求体，响应形状仍以 [`app_api_handoff.md`](app_api_handoff.md) 为准。
+> 生成 DTO 或做 breaking-change 检查。响应 schema 覆盖会随契约批次扩展，不在本简版手工维护
+> 数量或端点清单；当前覆盖边界以 [`app_api_handoff.md` §2.3](app_api_handoff.md#23-openapi-契约-snapshot)
+> 和 CI 契约测试为准。
 
 ## 2. 登录链路
 
@@ -92,14 +92,13 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 `can_send=false` 时禁用输入框、按 `read_only_reason` 出文案。未读用 `unread`，读完调
 `POST {base}/ai-conversations/{id}/read` 上报 `last_message_id`（幂等，只前进）。
 
-## 6. 其余能力
+## 6. 其余能力只保留接入红线
 
-信箱 `/mailbox/*`、访问与邀请 `/visits/*` `/world/invites`、站内通知 `/notifications`、
-真人会话 `/human-conversations/*` 均已在生产开启，端点清单与字段见
-[`app_api_handoff.md`](app_api_handoff.md) §6–§8。家园 Feed 的 AI 内容只在
-早 07:00–11:00、晚 18:00–23:00 窗口生成，窗口外无新内容属正常。
+信箱、访问/邀请、站内通知、真人会话、媒体、图文 Feed、许愿创建与「我的」Tab 均已在生产开启，
+但客户端仍必须按 `/app/config` 的能力位渲染。端点、字段、状态机和错误码只在
+[`app_api_handoff.md`](app_api_handoff.md) §3、§6–§9 维护，本简版不再复制清单。
 
-## 6.0 v1.5：会话/动态媒体与许愿创建（2026-07-30 上线）
+接入时额外记住三条红线：
 
 - 图片与语音**一律两步**：`POST {base}/media/uploads` 拿 `media_id` → 再挂到
   `ai-conversations/{id}/turn`、`human-conversations/{id}/messages` 的 `media_ref`
@@ -107,28 +106,9 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 - 读媒体用返回的**短 TTL 签名 URL**，**不带 `Authorization`、不要持久化**；`url=null` 渲染占位。
   该 URL 是 **origin 相对路径**（`/v1/media/…?scope=&exp=&sig=`）：拼 `https://ai4company.top` 即可，
   **不要拼 base URL**（base 带 `/api/v1/products/zhaoxi` 前缀，拼出来取不到图）。
-- 图片只收 JPEG/PNG（**iOS 的 HEIC 必须客户端先转码**），未被引用的上传 2 小时后失效需重传。
-- 消息新增 `content` 判别联合（`text`/`image`/`audio`），老字段 `message_type`/`text` 已 deprecated。
-- 许愿创建居民：`resident-drafts/preview` 传 `wish_text` + `client_request_id`，出参与表单路径同形，
-  预览卡片零改动。
-- 四个能力位 `chat_image_message` / `chat_voice_message` / `feed_image_post` / `resident_wish_create`
-  **生产已全部为 `true`**（签名密钥 2026-07-31 配置完成）。**仍要一律按能力位渲染，
-  为假时入口必须隐藏**——服务端可能临时收回。完整契约与红线见
-  [`app_api_handoff.md`](app_api_handoff.md) §6.5 / §6.6，联调前置见 §9.1。
-
-## 6.1 「我的」Tab（2026-07-26 新增）
-
-- Profile：`GET /me/profile-options` 拿受控头像表与昵称限额（**不要硬编码枚举**），
-  `PATCH /me/profile` 改昵称/头像。省略字段 = 本次不改，不是清空；全省略 → 422。
-  昵称过内容审查，可能返回 `content_rejected`(422) 或 `content_review_unavailable`(503，可重试)。
-- 注销：只有 `POST /me/account/deletion`，body 必带 `{"confirm": true}`。**立即删除聊天记录
-  与相关记忆、不可撤销**，没有冷静期也没有撤销接口，所以**二次确认弹窗必须由客户端做**。
-  返回后全部设备登录态失效：就地清 token 回登录页，旧 token 会拿 401。同一手机号可以重新
-  注册，登录后得到的是全新空世界。v1.5 起注销还会连带删除已上传的媒体文件与自己世界的全部动态，
-  **客户端本地缓存需一并清**。
-- 通知偏好：`GET/PATCH /notifications/preferences`，`standard` / `quiet`。`quiet` 只压制
-  将来的 AI 主动通知，**已在箱内的不回收**，切回来即恢复。
-- 字段与错误码全表见 [`app_api_handoff.md`](app_api_handoff.md) §3.6。
+- 图片只收 JPEG/PNG，iOS HEIC 必须先转码；消息按 `content` 判别联合渲染，老字段只作兼容。
+- 账号注销立即生效且不可撤销，客户端必须二次确认、清空本地缓存并回登录页；通知 `quiet` 只影响
+  将来的 AI 主动通知，不覆盖真人会话。
 
 ## 7. 已知约束
 

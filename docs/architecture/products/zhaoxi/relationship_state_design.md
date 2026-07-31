@@ -17,7 +17,7 @@
 
 ## 2. 当前 DB 现状
 
-标准数据库 `data/ai4all.sqlite3` 当前已有 `account_user_meta` 表。
+双后端 schema 当前已有 `account_user_meta` 表；本地/测试默认 SQLite，生产以 PostgreSQL 为准。
 
 当前字段：
 

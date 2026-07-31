@@ -594,7 +594,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
 
         -- owner_binding = 微信接入（形态 A）独有的产物：记录「微信渠道把某 account 绑到某真人」，
         -- 非通用「用户账号」机制。朝夕相伴居民（form-B runtime account）不发 binding，经世界归属解析到
-        -- 真人（accounts.resolve_owner_platform_user_id）。详见 companion_world_account_model_reconciliation.md。
+        -- 真人（accounts.resolve_owner_platform_user_id）。详见 docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md。
         CREATE TABLE IF NOT EXISTS account_owner_bindings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             platform_user_id TEXT NOT NULL,
@@ -1859,7 +1859,7 @@ def _migration_0007_merge_reactivation_settings_keys(conn: Connection) -> None:
 
 
 def _migration_0008_relationship_state(conn: Connection) -> None:
-    """关系阶段与 Agent 需求满足状态字段落库（见 relationship_state_implementation_plan_tmp.md §3/§4）。
+    """关系阶段与 Agent 需求满足状态字段落库（见 docs/architecture/products/zhaoxi/relationship_state_design.md §3/§4）。
 
     给 account_user_meta（当前快照）和 account_user_meta_daily（每日历史）同步补四列。
     仅落结构与默认值，确定性/LLM 更新由后续阶段接入。各列均为 NOT NULL + 常量默认，
@@ -1890,7 +1890,7 @@ def _migration_0010_sessions_rolling_summary(conn: Connection) -> None:
 
     rolling_summary：本会话已滑出窗口的头部消息的滚动摘要文本。
     rolling_summary_upto_id：水位线，标记摘要已覆盖到哪条 message.id，避免重复摘要 / 与 kept
-    window 重叠。见 docs/tech_design/context_window_token_budget_design.md §6。
+    window 重叠。见 docs/architecture/agent-runtime/context_window_token_budget_design.md §6。
     """
     _ensure_column(conn, "sessions", "rolling_summary", "TEXT")
     _ensure_column(conn, "sessions", "rolling_summary_upto_id", "INTEGER")
@@ -1975,7 +1975,7 @@ def _migration_0012_agent_mission(conn: Connection) -> None:
 def _migration_0013_campaign_codes(conn: Connection) -> None:
     """内容创意营销活码：campaign_codes（可编辑配置）+ account_campaign_attribution（注册时策略快照）。
 
-    见 docs/tech_design/campaign_codes_technical_design.md §1。account_campaign_attribution
+    见 docs/architecture/products/zhaoxi/campaign_codes_technical_design.md §1。account_campaign_attribution
     存的是注册时刻解析出的策略快照，不实时 join campaign_codes——活码后续被编辑/下线不影响
     已归因账号，只影响新注册；这与 account_mission「一经分配不可更改」的不可变语义不同，
     这里可变的是 campaign_codes 本身，不可变的只是归因快照这张表。
@@ -2033,7 +2033,7 @@ def _migration_0019_campaign_ai_name_preset(conn: Connection) -> None:
 def _migration_0020_campaign_visits(conn: Connection) -> None:
     """营销活码落地页曝光埋点：campaign_visits（匿名 PV/UV，账号创建之前）。
 
-    见 docs/tech_design/campaign_funnel_analytics_technical_design.md §3.1。这是漏斗 S0
+    见 docs/architecture/products/zhaoxi/campaign_funnel_analytics_technical_design.md §3.1。这是漏斗 S0
     曝光层：用户点营销链接进落地页时，前端上报 campaign_code + 匿名 visitor_token。
     刻意 campaign-scoped、无 account_id——曝光发生在注册建号之前，此时没有账号；表内不含
     任何用户正文/PII，故不违反账号隔离不变量（该不变量约束的是账号级用户数据）。
@@ -2061,7 +2061,7 @@ def _migration_0020_campaign_visits(conn: Connection) -> None:
 def _migration_0021_dynamic_reminders(conn: Connection) -> None:
     """动态提醒（例行简报）：提醒新增履约方式 + 履约留痕表。
 
-    见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。提醒分两种履约：
+    见 docs/architecture/products/zhaoxi/dynamic_reminder_scheduled_content_design.md。提醒分两种履约：
     - fulfillment='fixed'（默认，现状零回归）：到点发 reminders.text 固定文案；
     - fulfillment='dynamic'：到点跑一次「无用户输入的合成轮次」（专用 prompt + 可配工具集），
       检索并生成一条带来源的内容再发。dynamic 专属参数（topic/max_items/tool_policy/上次成功
@@ -2107,7 +2107,7 @@ def _migration_0021_dynamic_reminders(conn: Connection) -> None:
 def _migration_0022_account_app_id(conn: Connection) -> None:
     """App(产品)层身份打底:accounts / account_owner_bindings 落 app_id 列。
 
-    见 docs/tech_design/app_account_convergence_and_channel_persona.md §9。App 是"分组单元"
+    见 docs/plans/products/zhaoxi/app_account_convergence_and_channel_persona.md §9。App 是"分组单元"
     (一手机号 × 一 App = 一 account);当前全部资产属唯一 App「朝夕相伴」,故存量 backfill 为
     'zhaoxi'。app_id 是账号不可变属性(账号一旦属于某 App 永不改),因此把它冗余到
     account_owner_bindings 是安全的(创建时写入、永不漂移),使"每 (platform_user, app) 一个
@@ -2163,7 +2163,7 @@ def _migration_0024_rename_channel_app_to_native(conn: Connection) -> None:
 def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
     """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
 
-    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
+    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
     上线前，把 entitlement_wallets 的「一 account 一钱包」上迁为「一真人一钱包、全部居民共用
     一份余额」。本迁移刻意**保留** UNIQUE(account_id)：billing 改按 platform_user
     get-or-create 后永不会为同一真人插入第二个钱包行，account_id 事实上仍唯一、保留无害，据此
@@ -2265,7 +2265,7 @@ def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
 def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
     """D-09 M1-3/M1-4：daily 配额计数键从 account_id 上迁到 platform_user（一真人一套配额）。
 
-    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
+    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
     上线前，把 daily_usage 的「一 account 一套额度」上迁为「一真人一套、全部居民共享」。同 D-14
     钱包上迁刻意**保留** UNIQUE(account_id,date)：daily 三函数改按 platform_user get-or-create
     后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开 SQLite 表重建 /
@@ -2349,7 +2349,7 @@ def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
 def _migration_0027_daily_quota_reservations(conn: Connection) -> None:
     """D-09 下半刀：daily 配额原子预占的存储载体（每 reservation 一行 + TTL）。
 
-    见 ADR docs/tech_design/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
+    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
     P1 §2.7（锁序 L3 = pg_advisory_xact_lock('quota:'||platform_user_id)）。多居民聚合到真人后，
     turn_service 的「读—处理—+1」有 TOCTOU；本表承载「预占（reserve）→确认(confirm)/回滚(rollback)」：
     reserve 在 advisory 锁下按 message_count + 活跃 reservation 数校验 cap 后插一行；confirm/rollback/

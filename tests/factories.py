@@ -68,7 +68,7 @@ def create_route(account_id: str, *, session_key: Optional[str] = None) -> None:
 def make_resident_account(platform_user_id: str, display_name: str) -> str:
     """为一个真人建「第 2..N 个账号」= 一个居民 runtime account（form-B），返回 account_id。
 
-    账号模型决策 B（docs/tech_design/companion_world_account_model_reconciliation.md）：main #42
+    账号模型决策 B（docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md）：main #42
     收敛后「一手机号 × 一 App = 一个用户账号」，用 create_ai4all_account_for_user 建同一真人的第二号
     会撞软检查 existing_count>=1。真人的多个 agent = 世界里的居民（form-B runtime account），经
     「世界归属」解析共享真人钱包/配额、**不发 owner_binding**（owner_binding 是微信接入独有的产物）。

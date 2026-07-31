@@ -1,6 +1,6 @@
 """app.products.zhaoxi.infrastructure.persistence.mission — 账号级使命分配与记录的瞬间。
 
-见 docs/tech_design/agent_mission_and_orchestration_design.md §3/§5。
+见 docs/architecture/products/zhaoxi/agent_mission_and_orchestration_design.md §3/§5。
 
 不可变性保证：本模块**不提供**任何改写 `mission_id` 的函数——`assign_mission`
 只在账号尚无分配时插入一行（`ON CONFLICT DO NOTHING` 兜底），没有 update 路径，
