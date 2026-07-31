@@ -9,6 +9,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# replay 在历史 token 裁剪后注入，需另设累计硬顶避免绕过历史预算。
+_WEB_SEARCH_REPLAY_TOTAL_MAX_CHARS = 3000
+
 
 def inject_tool_evidence_replay(
     history: List[Dict[str, Any]],
@@ -63,6 +66,7 @@ def inject_tool_evidence_replay(
     # 重建 history，在 user 消息后 splice tool wire
     # (invocations 来自 WHERE message_id IN (...)，by_mid 必非空；下方 zip 循环对无匹配也安全)
     result: List[Dict[str, Any]] = []
+    web_search_projected_chars = 0
     for msg, row in zip(history, history_rows):
         result.append(msg)
         mid = row.get("message_id") or ""
@@ -71,10 +75,26 @@ def inject_tool_evidence_replay(
                 tool_call_id = inv.get("tool_call_id") or f"replay_{inv.get('id', 0)}"
                 tool_name = inv.get("tool_name") or "unknown"
                 args_json = json.dumps(inv.get("args") or {}, ensure_ascii=False)
-                result_raw = json.dumps(inv.get("result") or {}, ensure_ascii=False)
-                result_content = result_raw[:max_result_chars]
-                if len(result_raw) > max_result_chars:
-                    result_content += "…[截断]"
+                if tool_name == "web_search":
+                    remaining_chars = max(
+                        _WEB_SEARCH_REPLAY_TOTAL_MAX_CHARS - web_search_projected_chars,
+                        0,
+                    )
+                    if remaining_chars == 0:
+                        continue
+                    from app.tools.external_content import project_tool_result_for_llm
+
+                    result_content = project_tool_result_for_llm(
+                        tool_name,
+                        inv.get("result") or {},
+                        max_chars=min(max_result_chars, remaining_chars),
+                    )
+                    web_search_projected_chars += len(result_content)
+                else:
+                    result_raw = json.dumps(inv.get("result") or {}, ensure_ascii=False)
+                    result_content = result_raw[:max_result_chars]
+                    if len(result_raw) > max_result_chars:
+                        result_content += "…[截断]"
 
                 result.append({
                     "role": "assistant",

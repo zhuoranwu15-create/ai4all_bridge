@@ -649,6 +649,64 @@ def test_external_tool_result_gets_untrusted_wrapper():
     assert tool_content["externalContent"]["source"] == "web_search"
 
 
+def test_web_search_tool_results_share_turn_level_projection_budget():
+    """多轮 web_search 的 LLM 可见内容累计受 turn 级硬上限约束。"""
+    from app.agent_runtime.llm.service import generate_reply_with_tools
+    from app.tools.external_content import (
+        WEB_SEARCH_RESULT_MAX_CHARS,
+        WEB_SEARCH_TURN_MAX_CHARS,
+    )
+
+    settings_mock = _settings_mock_for_tool_thinking()
+    settings_mock.llm_max_tool_rounds = 8
+    settings_mock.llm_external_content_wrapper_enabled = True
+    tool_responses = [
+        _tool_call_response("web_search", {"query": f"query-{index}"})
+        for index in range(5)
+    ]
+    http_mock = MagicMock(
+        side_effect=[*tool_responses, _direct_text_response("综合结果")]
+    )
+    search_result = {
+        "status": "succeeded",
+        "provider": "aliyun",
+        "query": "large query",
+        "results": [
+            {
+                "title": f"result-{index}",
+                "url": f"https://example.com/{index}",
+                "site_name": "example.com",
+                "snippet": "证据" * 1000,
+            }
+            for index in range(10)
+        ],
+    }
+
+    with patch("app.agent_runtime.llm.service.settings", settings_mock):
+        with patch("app.agent_runtime.llm.service._http_chat_with_tools", http_mock):
+            with patch("app.tools.executor.execute_tool_call", return_value=search_result):
+                reply, err = generate_reply_with_tools(
+                    user_text="搜索并汇总",
+                    history=[],
+                    system_prompt="你是助手",
+                    tools=[{"type": "function", "function": {"name": "web_search"}}],
+                    ctx=_make_ctx(),
+                )
+
+    assert err is None
+    assert reply == "综合结果"
+    final_messages = http_mock.call_args_list[-1].args[0]
+    contents = [
+        message["content"]
+        for message in final_messages
+        if message.get("role") == "tool"
+    ]
+    assert len(contents) == 5
+    assert all(len(content) <= WEB_SEARCH_RESULT_MAX_CHARS for content in contents)
+    assert sum(len(content) for content in contents) <= WEB_SEARCH_TURN_MAX_CHARS
+    assert all(json.loads(content) for content in contents if content)
+
+
 def test_internal_tool_result_has_no_wrapper():
     """create_reminder 等内部工具结果投喂给 LLM 时不加 externalContent 标记。"""
     settings_mock = MagicMock()
