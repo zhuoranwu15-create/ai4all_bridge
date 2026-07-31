@@ -15,7 +15,11 @@ from app.agent_runtime.llm.providers import (
     resolve_provider_for_tier,
     tier_for_task,
 )
-from app.tools.external_content import project_tool_result_for_llm
+from app.tools.external_content import (
+    WEB_SEARCH_RESULT_MAX_CHARS,
+    WEB_SEARCH_TURN_MAX_CHARS,
+    project_tool_result_for_llm,
+)
 
 
 logger = logging.getLogger("ai4all.llm")
@@ -428,6 +432,7 @@ def generate_reply_with_tools(
             first_round_tool_choice = "auto"
 
     _tool_notified = False
+    web_search_projected_chars = 0
 
     for round_index in range(max_tool_rounds + 1):
         tc = first_round_tool_choice if round_index == 0 else "auto"
@@ -491,7 +496,31 @@ def generate_reply_with_tools(
             for tool_call in tool_calls:
                 tool_name = (tool_call.get("function") or {}).get("name", "")
                 tool_result = _execute_and_record_tool_call(tool_call, ctx)
-                if getattr(settings, "llm_external_content_wrapper_enabled", True):
+                if tool_name == "web_search":
+                    remaining_chars = max(
+                        WEB_SEARCH_TURN_MAX_CHARS - web_search_projected_chars,
+                        0,
+                    )
+                    content = project_tool_result_for_llm(
+                        tool_name,
+                        tool_result,
+                        max_chars=min(WEB_SEARCH_RESULT_MAX_CHARS, remaining_chars),
+                        external_wrapper_enabled=bool(
+                            getattr(settings, "llm_external_content_wrapper_enabled", True)
+                        ),
+                    )
+                    web_search_projected_chars += len(content)
+                    raw_chars = len(json.dumps(tool_result, ensure_ascii=False))
+                    if len(content) < raw_chars:
+                        logger.info(
+                            "web_search LLM projection truncated raw_chars=%s projected_chars=%s "
+                            "turn_projected_chars=%s turn_budget=%s",
+                            raw_chars,
+                            len(content),
+                            web_search_projected_chars,
+                            WEB_SEARCH_TURN_MAX_CHARS,
+                        )
+                elif getattr(settings, "llm_external_content_wrapper_enabled", True):
                     content = project_tool_result_for_llm(tool_name, tool_result)
                 else:
                     content = json.dumps(tool_result, ensure_ascii=False)

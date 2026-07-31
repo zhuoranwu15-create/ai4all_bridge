@@ -73,11 +73,76 @@ class TestProjectToolResultForLlm:
         out = project_tool_result_for_llm("web_search", big, max_chars=500)
         # Should be parseable JSON and under limit
         parsed = json.loads(out)
+        assert len(out) <= 500
         assert parsed["externalContent"]["wrapped"] is True
 
     def test_web_search_original_data_accessible(self):
         result = {"status": "succeeded", "results": [{"title": "Test", "url": "https://example.com"}]}
         out = project_tool_result_for_llm("web_search", result)
-        # Within max_chars, original result keys are preserved alongside externalContent
         parsed = json.loads(out)
-        assert parsed.get("status") == "succeeded" or "data" in parsed
+        assert parsed["status"] == "succeeded"
+        assert parsed["results"][0]["url"] == "https://example.com"
+
+    def test_web_search_uses_field_allowlist_and_bounds_snippet(self):
+        result = {
+            "status": "succeeded",
+            "provider": "aliyun",
+            "query": "AI 新闻",
+            "latency_ms": 123,
+            "citations": [{"title": "duplicate", "url": "https://example.com"}],
+            "answer": "provider generated answer",
+            "raw_response": {"large": "secret debug payload"},
+            "results": [{
+                "title": "结果",
+                "url": "https://example.com/result",
+                "site_name": "example.com",
+                "published_at": "2026-07-31",
+                "snippet": "中" * 1000,
+                "score": 0.99,
+                "retrieved_at": "2026-07-31T00:00:00Z",
+            }],
+        }
+
+        parsed = json.loads(project_tool_result_for_llm("web_search", result))
+
+        assert set(parsed) == {
+            "externalContent", "status", "provider", "query", "results", "truncation",
+        }
+        assert set(parsed["results"][0]) == {
+            "title", "url", "site_name", "published_at", "snippet",
+        }
+        assert len(parsed["results"][0]["snippet"]) == 400
+        assert parsed["truncation"]["truncated_snippets"] == 1
+        assert parsed["truncation"]["omitted_results"] == 0
+
+    def test_web_search_projection_does_not_mutate_raw_result(self):
+        result = {
+            "status": "succeeded",
+            "results": [{"title": "t", "url": "u", "snippet": "x" * 1000}],
+        }
+        original = json.loads(json.dumps(result))
+
+        project_tool_result_for_llm("web_search", result, max_chars=500)
+
+        assert result == original
+
+    def test_web_search_budget_stays_active_when_wrapper_disabled(self):
+        result = {
+            "status": "succeeded",
+            "results": [
+                {"title": f"result-{index}", "url": f"https://example.com/{index}", "snippet": "x" * 1000}
+                for index in range(10)
+            ],
+        }
+
+        out = project_tool_result_for_llm(
+            "web_search",
+            result,
+            max_chars=500,
+            external_wrapper_enabled=False,
+        )
+        parsed = json.loads(out)
+
+        assert len(out) <= 500
+        assert "externalContent" not in parsed
+        assert parsed["truncation"]["truncated"] is True

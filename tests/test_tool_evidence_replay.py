@@ -128,6 +128,45 @@ def test_result_truncated_to_max_result_chars():
     assert "截断" in tool_content
 
 
+def test_web_search_replay_has_structured_aggregate_budget():
+    history, rows = _make_history([
+        ("user", "搜索", "mid-search"),
+        ("assistant", "汇总", None),
+    ])
+    search_result = {
+        "status": "succeeded",
+        "provider": "aliyun",
+        "results": [
+            {
+                "title": f"result-{index}",
+                "url": f"https://example.com/{index}",
+                "snippet": "证据" * 1000,
+            }
+            for index in range(10)
+        ],
+    }
+    invocations = [
+        {
+            "message_id": "mid-search",
+            "tool_call_id": f"search-{index}",
+            "tool_name": "web_search",
+            "args": {"query": f"query-{index}"},
+            "result": search_result,
+            "status": "succeeded",
+        }
+        for index in range(5)
+    ]
+
+    with _invoke(invocations):
+        from app.agent_runtime.context.evidence_replay import inject_tool_evidence_replay
+        result = inject_tool_evidence_replay(history, rows, "acc-1", max_result_chars=1500)
+
+    contents = [message["content"] for message in result if message.get("role") == "tool"]
+    assert sum(len(content) for content in contents) <= 3000
+    assert all(isinstance(json.loads(content), dict) for content in contents)
+    assert all("raw_response" not in content for content in contents)
+
+
 # ---------- max_turns ----------
 
 def test_only_recent_max_turns_spliced():
