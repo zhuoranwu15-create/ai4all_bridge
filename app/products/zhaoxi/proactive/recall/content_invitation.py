@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.time_utils import beijing_naive_now
 from app.db import (
@@ -172,7 +172,7 @@ def generate_content_invitation_candidate(
         )
     }
     tools = get_content_invitation_generation_tools()
-    web_search_enabled = bool(getattr(settings, "web_search_enabled", False))
+    web_search_enabled = WEB_SEARCH_ENABLED
     if web_search_enabled:
         tools = [*get_web_search_tools(), *tools]
     ctx = TurnContext(

@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 from app.agent_runtime.turns.contracts import ProductAfterTurnContext, ProductTurnServices
 from app.platform.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     clear_session_messages,
@@ -1265,7 +1265,7 @@ def _resolve_turn_reply(
     web_search_enabled_for_turn = (
         bool(force_web_search_enabled)
         if force_web_search_enabled is not None
-        else bool(getattr(settings, "web_search_enabled", False))
+        else WEB_SEARCH_ENABLED
     )
     debug_metadata = {
         "trace_kind": "ai4all_turn",

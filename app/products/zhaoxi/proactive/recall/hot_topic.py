@@ -19,7 +19,7 @@
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.time_utils import beijing_naive_now
 from app.db import (
     get_account,
@@ -113,7 +113,7 @@ def refresh_hot_topic_pool(*, now: Optional[datetime] = None) -> Dict[str, Any]:
     # 数据来源门控：热榜或 web search 至少配置一个
     hot_topic_sources_raw = _clean_text(getattr(settings, "hot_topic_sources", "")) or ""
     configured_sources = [s.strip() for s in hot_topic_sources_raw.split(",") if s.strip()]
-    web_search_ok = bool(getattr(settings, "web_search_enabled", False))
+    web_search_ok = WEB_SEARCH_ENABLED
     if not configured_sources and not web_search_ok:
         return _no_op(account_id="", reason="hot_topic_no_data_source", now=current)
 
