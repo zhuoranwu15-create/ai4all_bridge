@@ -1,8 +1,10 @@
 # 生产稳定性 Runbook
 
-更新时间：2026-06-11
+更新时间：2026-07-31
 
-适用范围：阿里云单机或少量 ECS 外测环境，FastAPI Backend、SQLite、OpenClaw Gateway、独立 proactive scheduler。
+适用范围：当前 aliyun1 `central,node` + aliyun2 厚 `node` 生产环境，包括 FastAPI Backend、
+中心 PostgreSQL、OpenClaw Gateway、node agent 与 central-only scheduler。本地 SQLite 操作不属于
+本文的生产恢复路径。
 
 ## 基础信息
 
@@ -10,14 +12,17 @@
 - Proactive scheduler：`ai4all-weixin-proactive-scheduler.service`
 - Health monitor timer：`ai4all-monitor-health.timer`
 - Backend 本机地址：`http://127.0.0.1:8180`
-- 标准数据库：`data/ai4all.sqlite3`
+- 生产数据库：aliyun1 中心 PostgreSQL；aliyun2 通过内网直连同一 PG
+- 开发/测试默认数据库：`data/ai4all.sqlite3`（不是生产退路）
 - Admin 状态页：`/ui/ops.html`
 
 不要在日志、文档或飞书群中粘贴用户聊天正文、完整 webhook、API key、验证码或 Authorization header。
 
 ## 规模化运维红线（必读）
 
-> 背景：当前形态是「N 个登录态个人微信号挂在单台机器的单个 OpenClaw daemon、单一出口 IP 上」。账号数越多，以下三条违规的代价越大——可能直接触发微信侧风控（同 IP 账号聚集异常、集中上线）。详见 [`docs/architecture/shared/access/single-host-multi-openclaw-scale.md`](../architecture/shared/access/single-host-multi-openclaw-scale.md)。
+> 背景：当前已按 aliyun1/aliyun2 拆分出口，但每个节点仍可能挂多个登录态个人微信号。单节点
+> 集中重连仍可能触发微信侧风控。详见
+> [`single-host-multi-openclaw-scale.md`](../architecture/shared/access/single-host-multi-openclaw-scale.md)。
 
 1. **禁止把全局 `openclaw gateway restart` 当日常操作。**
    - 一次全局重启 = 该 daemon 上**全部**微信账号在同一秒、从同一 IP 重新拉起 iLink 长轮询，是教科书级风控触发点。
@@ -109,7 +114,7 @@ MONITOR_SCHEDULERS=proactive_scheduler:90 .venv/bin/python scripts/monitor_healt
 - heartbeat stale：确认 scheduler 没有卡在 LLM、OpenClaw 或 DB 调用。
 - 不要同时开启多个 proactive scheduler，也不要在多 worker FastAPI 内启用 `PROACTIVE_SCHEDULER_ENABLED=true`。
 
-## 磁盘或 SQLite 风险
+## 磁盘或 PostgreSQL 风险
 
 确认：
 
@@ -117,14 +122,16 @@ MONITOR_SCHEDULERS=proactive_scheduler:90 .venv/bin/python scripts/monitor_healt
 df -h
 df -i
 du -sh data data/backups logs 2>/dev/null
-sqlite3 data/ai4all.sqlite3 "PRAGMA integrity_check;"
+pg_isready
+psql "$DATABASE_URL" -Atc "SELECT 1"
 ```
 
 处理：
 
 - 磁盘超过 80%：清理旧日志、旧备份或扩容。
 - 磁盘超过 90%：先停止大写入任务，释放空间后再恢复服务。
-- SQLite integrity check 非 `ok`：停止写入，保留现场，使用最近备份恢复到临时库验证。
+- PG readiness 或只读查询失败：先区分 PG 服务、连接数、磁盘与网络问题；不要通过清空
+  `DATABASE_URL` 回落 SQLite。需要恢复时按下方 PG 备份/主备流程处理。
 
 > 自动监控：`ai4all-monitor-health.timer` 内置 `disk` 检查（默认开，盯 `/var/log` 卷，使用率 ≥ 85% 经飞书告警）。可用 `MONITOR_DISK_PATH` / `MONITOR_DISK_MAX_USED_PERCENT` / `MONITOR_DISK_MIN_FREE_BYTES` 调整，`MONITOR_CHECK_DISK=false` 关闭。nginx 日志留存延长后磁盘是主要增长项，详见下一节。
 
@@ -156,22 +163,22 @@ sudo logrotate -d /etc/logrotate.d/nginx; echo "exit=$?"
 
 ## 备份与恢复
 
-备份：
+生产备份统一使用仓库脚本，它会在 PG 模式执行 `pg_dump -Fc`、`pg_restore --list` 完整性检查，
+并归档 system context、存量 profile 视图和加密权限受限的 `.env` 副本：
 
 ```bash
-mkdir -p data/backups
-sqlite3 data/ai4all.sqlite3 ".backup 'data/backups/ai4all_$(date +%Y%m%d_%H%M%S).sqlite3'"
-tar -czf "data/backups/user_profiles_$(date +%Y%m%d_%H%M%S).tar.gz" data/user_profiles data/system
+.venv/bin/python scripts/backup_data.py --dry-run
+.venv/bin/python scripts/backup_data.py
 ```
 
-恢复前先停服务：
+当前另外有两层异机保护：aliyun2 每日 `pg_dump` 冷备和 PostgreSQL 流复制热备。状态、演练和
+故障切换步骤见 [PG 备份与切换跟踪](pg_backup_failover_tracking.md)。
 
-```bash
-sudo systemctl stop ai4all-weixin-proactive-scheduler
-sudo systemctl stop ai4all-weixin-backend
-```
+生产恢复前必须先停止所有写入面，而不只是 aliyun1 的两个进程；至少包括 aliyun1/aliyun2
+backend 和 central-only schedulers。恢复目标必须是 PostgreSQL。`scripts/restore_data.py` 当前只支持
+SQLite 开发档，禁止用于生产 PG 恢复。
 
-恢复后启动：
+完成 `pg_restore`/主备切换并核对 schema、关键表计数和账本后，再按角色恢复服务并验证：
 
 ```bash
 sudo systemctl start ai4all-weixin-backend
@@ -237,4 +244,5 @@ git checkout <known-good-commit>
 scripts/restart_runtime.sh
 ```
 
-如需回滚数据库，必须先备份当前现场，再按“备份与恢复”执行。
+代码回滚不等于 schema/data 回滚。确需恢复数据时，必须先保留当前 PG 现场，再按“备份与恢复”
+执行；禁止清空 `DATABASE_URL` 回落到历史 SQLite 快照。

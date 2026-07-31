@@ -8,7 +8,7 @@
 > 上位文档：[朝夕总 PRD](../prd.md)（产品定位与总验收）。
 > 技术权威：[Companion World 3.0 重构 ADR](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)。
 > 客户端交接：[App API 交接](../app_api_handoff.md)、[客户端精简入口](../app_client_brief.md)。
-> M1 服务端评审与开发计划：[Companion World App M1 服务端计划](../../../plans/products/zhaoxi/companion_world_app_m1_server_plan.md)。
+> M1 服务端交付记录：[Companion World App M1 服务端计划](../../../archive/deliveries/companion_world/companion_world_app_m1_server_plan.md)。
 >
 > 本文吸收客户端仓库的《AI 陪伴 App「私人平行世界」PRD V1.1》与《Companion World M1 服务端需求积压 V0.2》，
 > 并以本仓库代码为事实基线校准了「后端已实现 / 契约缺口」两列。原始材料冻结在
@@ -311,10 +311,10 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | UNI-01 | 专属抽象图标 + 非颜色选中态 + 「世界」无障碍名 | P0 | 客户端 |
 | UNI-02 | 主人与居民共同发布的动态流，默认打开自己的世界 | P0 | 已实现 `GET /worlds/home/feed` |
 | UNI-03 | 首版每条动态展示作者头像/名称/时间/文字正文 | P0 | 已实现（时间已带 `+08:00`）|
-| UNI-04 | 主人可发布、隐藏、删除自己的动态，并从居民动态进私聊 | P0 | 发布已实现；**删除/隐藏无 HTTP 路由**（FEED-201）|
+| UNI-04 | 主人可发布、隐藏、删除自己的动态，并从居民动态进私聊 | P0 | 已实现：主人可删除自己的文字动态、隐藏 AI 居民动态；farewell 不可隐藏，当前不支持取消隐藏 |
 | UNI-05/06 | 内容与人设、关系连续性一致，服务端生成并持久化 | P0 | 已实现（生成窗口 + outbox）|
 | UNI-07 | 按自然时间组织，有明确结束位置，不做无限推荐流 | P0 | 已实现（cursor 分页）|
-| UNI-08 | 用户文字动态 P0；图片/媒体为后续增量 | P0/P1 | 文字已实现；媒体 P2+（MEDIA-201）|
+| UNI-08 | 用户文字动态 P0；图片/媒体为后续增量 | P0/P1 | 已实现文字与图片动态；图片能力仍按 `/app/config` 渲染 |
 | UNI-09/10 | 有效访客只读全部已发布动态，不能写入 | P0 | 已实现 `GET /visits/{id}/feed` |
 | UNI-11 | 新访客可表现为仅主人可见的低打扰事件 | P1 | 通知底座已实现 |
 | UNI-12 | 支持安静的「今天没有新事情发生」状态 | P0 | 客户端 |
@@ -347,7 +347,7 @@ A 在「我的」生成 24h 单次邀请码（生成前校验 3 slot）→ B 在
 | ID | 需求 | 优先级 | 服务端 |
 | --- | --- | --- | --- |
 | ROLE-01 | 初始 ≥1、在场 ≤10，三类来源合并计数 | P0 | 已实现（world row lock）|
-| ROLE-02/03 | 角色差异化；具备名称、头像、一句话身份、摘要、标签、欢迎语与安全边界 | P0 | 已实现；`long_summary` 于 2026-07-26 S3 随候选 DTO 公开（CAND-001）；示例对话进 P2 |
+| ROLE-02/03 | 角色差异化；具备名称、头像、一句话身份、摘要、标签、欢迎语与安全边界 | P0 | 已实现；`long_summary` 于 2026-07-26 S3 随候选 DTO 公开（CAND-001）；示例对话是否继续建设见 [App 后续项](../../../backlog/products/zhaoxi/companion_world_app_followups.md) |
 | ROLE-04 | 集合页、私聊与动态作者引用同一份角色源数据 | P0 | 已实现 |
 | ROLE-05/06 | 预设更新有版本管理；下线角色保留既有历史 | P0/P1 | 已实现（`template_version` 钉住）|
 | ROLE-09/10/11 | 模板 ≠ 实例；实例不共享记忆/使命/身份 ID；模板 key、实例 ID 与展示名分离 | P0 | 已实现（2026-07-26 S3 补齐 NAME-001）：运营名池 + 首次快照确定性选名，`persona_key` 跨模板版本稳定；未配名池时 `naming_status=unavailable` 且不阻断 bootstrap |
@@ -402,7 +402,7 @@ capability 只表达「当前公网 App API 可用性」，不泄露内部 sched
 | --- | --- | --- |
 | M0 | 三 Tab 导航底座、设计 token、API/query/session 分层，现有单 Agent 主链路不回归 | legacy 基线可用；原型不得伪造服务端数据 |
 | M1 | 4 位候选（≥1）、可自建 1 个、无主角色多会话列表、按 `conversation_id` 私聊、legacy 兼容 | 发布门 CAP-001 / BOOT-001 / BOOT-003 / ERR-002 **已交付（S1）**、CUSTOM-001 / SEC-001 / IDEM-001 **已交付（S2）**、NAME-001 / CAND-001 **已交付（S3）**、CONV-001/002 / TURN-001 / TIME-001 **已交付（S4）**、CONTRACT-001 **已交付（S5，主链路 10 端点 `response_model` + 提交 OpenAPI snapshot + CI 一致性门禁）**；M1 服务端支持已全部完成 |
-| P2 | 世界动态闭环：发布、时间流、删除/隐藏、从动态进私聊 | **发布门：FEED-201**（删除/隐藏正式路由）；媒体 MEDIA-201 单独评审 |
+| P2 | 世界动态闭环：发布、时间流、删除/隐藏、从动态进私聊 | 已交付并上线；图片动态随 v1.5 交付，当前能力位由 `/app/config` 控制 |
 | P3 | 关系生命周期：不可逆离开、唯一离别动态、只读历史、信箱 | 后端已实现；客户端需处理 legacy 豁免、只读态与信箱状态 |
 | P4 | 限时来访闭环 | 后端已实现；客户端缓存清理、no-store 与终态竞态测试是发布门 |
 | P5 | 限时真人聊天 | 后端已实现；先接历史/只读，再灰度开放发送 |
@@ -505,4 +505,4 @@ initial_residents_confirmed → tabs_entered → first_ai_chat_started → first
 7. 主人是否保留对居民动态的私下回应/收藏。
 8. 主人是否需要一次性提前结束全部 active visit。
 9. 真人会话服务端副本的用户侧删除权与举报证据保留策略。
-10. 注销时**第三方相关数据**的处置：真人会话服务端副本、来访与邀请记录、以及被这些会话引用的自发媒体当前刻意保留（删我方副本等于删对方的聊天记录，删媒体等于在对方记录里留一张加载不出来的图），与第 9 条同一议题，需法务与产品一并给口径。
+10. 注销时**第三方相关数据**的处置：真人会话服务端副本、来访与邀请记录、以及被这些会话引用的自发媒体当前刻意保留（删我方副本等于删对方的聊天记录，删媒体等于在对方记录里留一张加载不出来的图）。法务与产品待冻结项已转入 [APP-LEGAL-001](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。

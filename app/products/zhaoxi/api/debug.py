@@ -16,7 +16,7 @@ from app.routers.serializers import _audit_plaintext_access, _can_bypass_redacti
 from app.routers.models import ProfileUpdateRequest
 from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
 from app.agent_runtime.llm.service import generate_completion, get_active_llm_model, resolve_active_llm_provider
-from app.agent_runtime.llm.providers import get_llm_provider
+from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, get_llm_provider, tier_for_task
 from app.products.zhaoxi.application.onboarding import is_onboarding_active
 from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
@@ -484,7 +484,7 @@ def debug_prompt_lab_build(
         "source": "build",
         "session": _session_for_view(session),
         "today": today,
-        "llm_model": get_active_llm_model(),
+        "llm_model": get_active_llm_model(tier_for_task(TASK_MAIN_REPLY)),
         "metadata": llm_input["metadata"],
         "prompt_blocks": llm_input.get("prompt_blocks") or {},
         "tooling": tooling,
@@ -517,7 +517,7 @@ def debug_prompt_lab_replay(
         llm_provider = (
             get_llm_provider(selected_provider_id, settings_obj=settings)
             if selected_provider_id
-            else resolve_active_llm_provider()
+            else resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY))
         )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err

@@ -3,7 +3,7 @@
 只做状态**渲染消费**，不做状态**计算**（关系阶段/需求计算见 application/relationship.py，
 使命分配见 missions/assignment.py，使命解析见 missions/state.py；本模块只读，不写）。
 
-设计见 docs/tech_design/agent_mission_and_orchestration_design.md §4。
+设计见 docs/architecture/products/zhaoxi/agent_mission_and_orchestration_design.md §4。
 
 - 使命进度：trust/growth 两个分支都渲染（agent_self_prd.md §6.2.3，进度是环境感知，
   不区分主导需求都该可见）；survival 分支不渲染——关系脆弱时只谈关系本身，不分散注意力。
@@ -24,7 +24,7 @@ _UNRESOLVED = object()
 
 # 阶段标签刻意保持"关系类型无关"（初识/熟络/亲近），只表达关系推进程度，不预设
 # 朋友/恋人——关系基调由 SOUL 决定。这样恋爱人设、宝妈人设与通用陪伴共用同一套渲染
-# 而不互相违和（见 docs/tech_design/campaign_persona_v1_technical_design.md §3）。
+# 而不互相违和（见 docs/architecture/products/zhaoxi/campaign_persona_v1_technical_design.md §3）。
 _STAGE_LABELS = {
     "icebreaking": "初识",
     "acquainted": "熟络",
@@ -36,7 +36,7 @@ def compute_dominant_need(*, survival_status: str, relationship_stage: str) -> D
     """主导需求硬规则（agent_self_prd.md §7.3）：survival 是否决位，压过阶段判断。
 
     resource_risk 在数据层与 cooling/inactive 共用同一个 survival_status 列
-    （见 relationship_state_implementation_plan_tmp.md §8.1，三者互斥地写同一
+    （见 docs/architecture/products/zhaoxi/relationship_state_design.md §8.1，三者互斥地写同一
     个字段），此处一律落到 survival 分支；下方渲染文案刻意保持中性、不假设
     "对方一直没回复"这个具体成因，避免在纯资源风险场景下叙事失真。
     """

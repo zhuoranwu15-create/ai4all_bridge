@@ -3,8 +3,8 @@
 
 背景：使命子系统上线后，只有 onboarding 完成时才会自动分配使命
 （app/turn_service.py 的 ONBOARDING_COMPLETE 转移点）。已绑定的存量账号
-不会自动补上，需要本脚本一次性回填——主要为方便内部测试（见 docs/tech_design/
-agent_mission_and_orchestration_design.md §5.1/§11 的存量账号回填决定）。
+不会自动补上，需要本脚本一次性回填——主要为方便内部测试（见
+docs/architecture/products/zhaoxi/agent_mission_and_orchestration_design.md §5.1/§11 的存量账号回填决定）。
 
 幂等：复用 app.products.zhaoxi.application.missions.assignment.assign_mission_if_absent，已分配使命的
 账号会被直接跳过，可安全重复运行。

@@ -2,7 +2,7 @@
 
 目的：把 SQLite 与 PostgreSQL 的方言差异收敛到本文件，让上层 app/db/*.py 的
 `?` 占位符、`sqlite3.*` 引用无需逐处手改即可在两套后端运行。
-设计依据见 docs/tech_design/thick_node_postgres_refactor.md §4.2。
+设计依据见 docs/architecture/shared/data/thick_node_postgres_refactor.md §4.2。
 
 后端由 settings.database_url 选择：
 - 空字符串（默认）→ SQLite。connect_raw() 直接返回原生 sqlite3 连接，

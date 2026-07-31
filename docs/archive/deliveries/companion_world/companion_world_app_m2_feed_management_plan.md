@@ -1,12 +1,14 @@
 # Companion World App M2 主人 Feed 管理 服务端开发计划（P0 + P1）
 
-更新时间：2026-07-28
-状态：**P0 + P1（M5-REPORT-001 / M5-CONV-001）代码、文档、双档全量测试均已完成，PG 档全绿，
-待开 PR**。分支 `feat/companion-world-m2-feed-management`。
+更新时间：2026-07-31
+状态：**已完成并归档。P0 + P1（M5-REPORT-001 / M5-CONV-001）已通过 PR #57 合入主干并上线。**
+当前能力以 [`companion_world_app_prd.md`](../../../products/zhaoxi/capabilities/companion_world_app_prd.md)
+和 [`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md) 为准；§8 中仍成立的事项已转入
+[`companion_world_app_followups.md`](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World 客户端后续服务端需求清单（M2–M5）V0.3》
-> （原件冻结在 [`archive/alignments/`](../../../archive/alignments/companion_world_m2_m5_server_requirements_v0_3_client.md)）。
+> （原件冻结在 [`archive/alignments/`](../../alignments/companion_world_m2_m5_server_requirements_v0_3_client.md)）。
 > 产品口径：[朝夕相伴 App 端 PRD](../../../products/zhaoxi/capabilities/companion_world_app_prd.md)。
 > 技术权威：[Companion World 3.0 ADR](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)。
 > 前序计划：[Companion World App M1 服务端](companion_world_app_m1_server_plan.md)（S1–S6 已交付）。
@@ -315,7 +317,8 @@ Q1 未拍板不阻塞开工：先按「拒绝」实现，改判只是放开一�
    走既有的 400 `account_id_not_accepted`，其余多余字段才是 422 `invalid_request`。
    测试与交接文档均按这个既有口径写，未改动该 handler。
 
-**未完成：测试一次都没跑完整。** 恢复工作时按顺序：
+**以下是合入前的中间执行记录，不是归档时的最终状态。** 当时曾记录“测试一次都没跑完整”，
+随后已得到本节末尾所列的完整结果。执行顺序为：
 
 ```bash
 .venv/bin/pytest tests/test_companion_world_feed_api.py tests/test_companion_world_m3_storage.py \

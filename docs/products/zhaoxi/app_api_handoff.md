@@ -11,8 +11,11 @@
 
 ## 1. 一句话架构（App 开发必读）
 
-- **App 只对接中心节点 aliyun1 的 `/v1` API**，公网入口 `https://ai4company.top/api/v1/`。
-- Companion World 全部功能（世界、居民、Feed、信箱、访问、真人会话）**只经 `/v1` 客户端 API 暴露**，且只在中心节点挂载。
+- **App 只对接中心节点 aliyun1 的产品 API**，新客户端规范公网入口为
+  `https://ai4company.top/api/v1/products/zhaoxi/`；既有 `https://ai4company.top/api/v1/`
+  继续兼容并固定为朝夕 audience。
+- Companion World 全部功能（世界、居民、Feed、信箱、访问、真人会话）只经朝夕客户端 API
+  暴露，且只在中心节点挂载。
 - **单节点约束（v1 重构现状，已知并接受）**：`/v1` 目前仅由 aliyun1 提供服务；aliyun2 是「厚节点」，只本地处理它归属微信账号的入站 turn，不服务 `/v1`。App 无需关心节点归属，永远只打中心域名。多节点接入 App 是后续「小重构」的事，当前不影响 App 开发。
 - 微信渠道与 App 渠道是两条独立入站路径；App 的会话走 `/v1`，与微信 turn 互不干扰。
 
@@ -22,7 +25,8 @@
 
 | 项 | 值 |
 |---|---|
-| 公网 Base URL | `https://ai4company.top/api/v1/` |
+| 公网 Base URL（新客户端推荐） | `https://ai4company.top/api/v1/products/zhaoxi/` |
+| 兼容 Base URL | `https://ai4company.top/api/v1/` |
 | 交互式 API 文档（Swagger） | **未对外暴露**（2026-07-26 实测 `/api/docs` 返回官网 SPA）；契约以仓库提交的 [`openapi/app_v1.json`](openapi/app_v1.json) 为准（见 §2.3），或本地起服务访问 `/docs` |
 | 鉴权方式 | 手机号 OTP 登录 → 30 天 session token（`Authorization: Bearer <access_token>`） |
 | 内容长度上限 | 文本 4000 字符；语音转写音频 10 MB / 60s；v1.5 媒体：图片 8 MB（JPEG/PNG，单条动态 ≤4 张）、聊天语音 500 KB / 60s（全部见 `/app/config` `limits`，不要硬编码） |
@@ -30,7 +34,9 @@
 
 ### 2.1 nginx 前缀说明
 
-公网 `/api/v1/...` 会原样转发到后端，后端中间件剥掉 `/api` 前缀后匹配路由的 `/v1` 前缀。**App 请求路径一律带 `/api/v1`**，例如 `POST https://ai4company.top/api/v1/auth/otp/send`。
+服务端将同一组朝夕路由挂到规范产品命名空间与 legacy `/v1`。新客户端一律使用规范前缀，
+例如 `POST https://ai4company.top/api/v1/products/zhaoxi/auth/otp/send`；存量客户端可继续使用
+`POST https://ai4company.top/api/v1/auth/otp/send`。Base URL 必须集中配置，不能在业务代码中散落硬编码。
 
 ### 2.2 两种响应约定（重要）
 
@@ -79,13 +85,13 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 
 ### 3.1 `GET /v1/app/config`（无需鉴权）
 
-线上实测返回（v1.5 的四个能力位与媒体/许愿限额是 2026-07-30 契约新增字段，线上开关尚未打开，故为 `false`）：
+线上实测返回（2026-07-31 只读核验；以下仅截取能力位与限额结构，客户端仍必须逐次按真实响应渲染）：
 
 ```json
 {
   "captcha": { "provider": "aliyun", "scene_id": "6ez3x2ne", "prefix": "18if8u", "configured": true },
   "features": {
-    "voice_input": false,
+    "voice_input": true,
     "resident_world": true,
     "world_feed": true,
     "app_notifications": true,
@@ -93,10 +99,10 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "mailbox": true,
     "world_visits": true,
     "human_chat_send": true,
-    "chat_image_message": false,
-    "chat_voice_message": false,
-    "feed_image_post": false,
-    "resident_wish_create": false
+    "chat_image_message": true,
+    "chat_voice_message": true,
+    "feed_image_post": true,
+    "resident_wish_create": true
   },
   "limits": {
     "message_chars": 4000, "audio_bytes": 10485760, "audio_duration_ms": 60000,
@@ -246,8 +252,9 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 - 与 `/v1/notifications` 一样需要 `COMPANION_WORLD_APP_INBOX_ENABLED`，否则 `404 feature_disabled`。
 - **作用域仅限 AI 主动通知，不覆盖真人会话**（M5-NOTIFY-001）。服务端目前既没有真人消息
   Push 通道，也没有会话级静音字段/端点，因此 `quiet_level` 不能被解释成「真人会话免打扰」。
-  真人会话的通知口径是**尚未冻结的产品决策**，不在当前 M5 发布范围内；在它冻结前，请不要
-  提供只在单设备生效的本地静音开关。
+  产品已选择[方案 1：明确后置](../../backlog/products/zhaoxi/companion_world_app_followups.md)：
+  在投递面、默认策略、红点和免打扰范围冻结前，不提供只在单设备生效的本地静音开关，也不增加
+  没有服务端行为的静音 DTO。
 
 
 ---
@@ -333,7 +340,8 @@ POST /v1/worlds/home/residents                   → 用 draft_token 落地
 - `naming_version` 是名池版本号，仅供排查；客户端不应据此重新选名。
 - `persona_key` 跨模板版本稳定，用于客户端在模板换版后仍认出「同一个人设」；
   `template_id` / `template_version` 会随内容变更而更换，`persona_key` 不会。
-- `long_summary` 为角色预览页的长介绍，运营未录入时为 `null`（`sample_dialogue` 在 P2）。
+- `long_summary` 为角色预览页的长介绍，运营未录入时为 `null`；是否增加
+  `sample_dialogue` 仍是[产品后续项](../../backlog/products/zhaoxi/companion_world_app_followups.md)，客户端当前不得依赖该字段。
 
 **首发 4 位官方候选**（生产 preset v1）：
 
@@ -925,13 +933,13 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 [`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），
 **未配置不阻塞任何客户端功能**，只是图片一律放过不送审。
 
-客户端在此之前可以按 §6.5 / §6.6 的契约先行开发，并保证四位为 `false` 时入口不出现。
+即使生产后续临时回收任一能力位，客户端也必须保证对应值为 `false` 时入口不出现。
 
 ---
 
 ## 10. 联调建议
 
-1. 先打 `GET /api/v1/app/config` 确认连通与 captcha 参数。
+1. 先打 `GET /api/v1/products/zhaoxi/app/config` 确认连通与 captcha 参数。
 2. 走完整登录链路拿到 `access_token`，之后所有请求带 `Authorization: Bearer <token>`。
 3. 新号验证 `account == null` → bootstrap → confirm → 用返回的 `conversation_id` 发 turn。
 4. 所有写操作（turn、发帖等）带客户端幂等键，验证断网重试不产生重复。

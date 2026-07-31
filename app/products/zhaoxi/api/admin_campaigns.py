@@ -1,6 +1,6 @@
 """Admin campaign codes 路由（/admin/campaign-codes）。
 
-营销活码后台管理：创建/列表/编辑。见 docs/tech_design/campaign_codes_technical_design.md §5.1。
+营销活码后台管理：创建/列表/编辑。见 docs/architecture/products/zhaoxi/campaign_codes_technical_design.md §5.1。
 admin + staff 均可读写（Depends(verify_admin_auth)）——运营 staff 应能自主建活码，不必每次找 admin。
 本模块不直接引用 settings，故 tests/conftest.py 无需追加 per-module patch。
 """

@@ -44,7 +44,7 @@ def test_debug_trace_records_only_configured_accounts(client, fresh_db):
     trace = res.json()["trace"]
     assert trace["account_id"] == "sk-acc-debug-a"
     assert trace["source"] == "ai4all"
-    assert trace["llm_model"] == "deepseek-v4-pro"
+    assert trace["llm_model"] == "deepseek-v4-flash"
     assert trace["reply_redacted"] is True
     assert trace["reply_chars"] == len("debug reply")
     assert trace["messages_redacted"] is True
@@ -103,18 +103,18 @@ def test_turn_debug_trace_uses_provider_snapshot_when_active_provider_changes(cl
             }
         ]
     )
-    pro_override = {"value": "chatgpt"}
+    flash_override = {"value": "chatgpt"}
 
     def fake_generate(**kwargs):
         assert kwargs["provider"].id == "chatgpt"
-        pro_override["value"] = "deepseek"
+        flash_override["value"] = "deepseek"
         return "snapshot reply", None
 
     def fake_bindings():
         return {
             "active_family": "deepseek",
-            "pro_provider_id": pro_override["value"],
-            "flash_provider_id": None,
+            "pro_provider_id": None,
+            "flash_provider_id": flash_override["value"],
         }
 
     with patch("app.agent_runtime.llm.service._runtime_bindings", side_effect=fake_bindings):

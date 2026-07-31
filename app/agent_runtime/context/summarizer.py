@@ -1,7 +1,7 @@
 """Token 压力滚动摘要（P3，灰度默认关）。
 
 后台维护「本会话已滑出短期窗口的头部消息」的滚动摘要，供下一轮 prompt 注入，避免长 session
-旧消息滑出 100/token 窗口后静默丢失。设计见 docs/tech_design/context_window_token_budget_design.md §6。
+旧消息滑出 100/token 窗口后静默丢失。设计见 docs/architecture/agent-runtime/context_window_token_budget_design.md §6。
 
 与 carryover_summary（跨 session，session 轮转时由 dreaming 生成）语义不同：本摘要是 session **内**
 的滚动压缩，按 token 压力 / 溢出条数触发，并存不互斥。

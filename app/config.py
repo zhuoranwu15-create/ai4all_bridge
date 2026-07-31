@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 
-    # ===== 数据库后端（厚节点改造，见 docs/tech_design/thick_node_postgres_refactor.md）=====
+    # ===== 数据库后端（厚节点改造，见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。
     database_url: str = ""
     db_pool_min_size: int = 1            # PG 连接池下限(仅 database_url 为 PG 时生效)
@@ -44,10 +44,11 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = "https://api.deepseek.com"
     # 两层模型选择（family × tier）。family=厂商家族(deepseek/openai/anthropic)，tier=pro(综合强)/flash(快)。
-    # llm_active_family: 默认生效家族；主对话走该家族 pro、后台任务走 flash（可被下方 task 路由改写）。
+    # llm_active_family: 默认生效家族；主对话和后台任务默认走 flash（可被下方 task 路由改写）。
     llm_active_family: str = "deepseek"
-    # llm_task_tiers: 可选 JSON，覆盖 task→tier 默认表（默认 main_reply=pro、后台任务=flash）。
-    # 例：{"moderation":"pro"} 把审核改回 pro，其余不变。见 app/llm_providers.py::tier_for_task。
+    # llm_task_tiers: 可选 JSON，覆盖 task→tier 默认表（当前全部默认 flash）。
+    # 例：{"main_reply":"pro"} 把主对话改回 pro，其余不变。见
+    # app/agent_runtime/llm/providers.py::tier_for_task。
     llm_task_tiers: str = ""
     llm_providers_json: str = ""
     llm_openai_base_url: str = "https://api.openai.com"
@@ -63,7 +64,7 @@ class Settings(BaseSettings):
     llm_force_ipv4: bool = True
     llm_context_messages: int = 100
     # 短期对话历史裁剪（仅作用于对话 history，不含 system prompt；详见
-    # docs/tech_design/context_window_token_budget_design.md）。
+    # docs/architecture/agent-runtime/context_window_token_budget_design.md）。
     # 历史 token 预算：>0 时在条数窗口基础上再按 token 从最旧端裁剪、保留尾部最近；0=关闭（退回纯条数）。
     llm_context_token_budget: int = 3000
     # 单条历史消息字符硬上限：>0 时超长单条截断加 ...[已截断]（只改喂 LLM 副本，不改落库）；0=关闭。
@@ -78,7 +79,7 @@ class Settings(BaseSettings):
     # 一次压 max(chunk, 溢出量)，压完留出 headroom，避免每轮都调摘要 LLM。见统一编排设计 §5.2。
     rolling_summary_chunk_tokens: int = 1500
     # 最近「硬底」：距 now ≤ N 分钟 且 ≤ M 轮 的原文永不被摘要/丢弃（硬底优先于 token 预算，
-    # kept 可能短暂超预算）。见 docs/tech_design/context_orchestration_unified_design.md §5.1。
+    # kept 可能短暂超预算）。见 docs/architecture/agent-runtime/context_orchestration_unified_design.md §5.1。
     llm_context_floor_minutes: int = 15
     llm_context_floor_turns: int = 10
     llm_request_dump_enabled: bool = False
@@ -437,7 +438,8 @@ class Settings(BaseSettings):
     # 单轮扫描处理的资产数上限，避免一次占满 scheduler 线程。
     media_moderation_batch_size: int = 50
 
-    # ===== 多机接入(central 大脑 + 瘦 node;见 docs/tech_design/multi_node_access_refactor.md)=====
+    # ===== 多机角色（当前生产为 central,node + 厚 node；一期演进见
+    # docs/architecture/shared/access/multi_node_access_refactor.md）=====
     # 角色 standalone(默认,=今天单机) | central | node | "central,node"(同机共存)。
     # standalone 下所有新路径不触发,行为逐字节不变。
     ai4all_role: str = "standalone"
@@ -453,7 +455,7 @@ class Settings(BaseSettings):
     outbound_claim_timeout_seconds: int = 60        # sending 卡死回收阈值(节点崩溃安全网)
     local_node_inline_dispatch: bool = False        # true: central 同机 node 出站同进程即时发(迁移期降延迟)
 
-    # ===== TDAI 长期记忆 sidecar（docs/tech_design/tdai_multitenant_design.md）=====
+    # ===== TDAI 长期记忆 sidecar（docs/architecture/agent-runtime/tdai_multitenant_design.md）=====
     # 总开关：默认 false；生产启用时显式设 true。capture/recall 均受此控制。
     tdai_enabled: bool = False
     tdai_gateway_url: str = "http://127.0.0.1:8420"
@@ -484,7 +486,7 @@ class Settings(BaseSettings):
     tdai_memory_min_messages: int = 50
 
     # ----- 动态提醒 / 例行简报（dynamic reminder）-----
-    # 见 docs/tech_design/dynamic_reminder_scheduled_content_design.md。
+    # 见 docs/architecture/products/zhaoxi/dynamic_reminder_scheduled_content_design.md。
     # 总开关：为假时到期履约不走 dynamic 分支、创建工具不接受 fulfillment=dynamic。
     dynamic_reminder_enabled: bool = False
     # 每账号活跃（pending）dynamic 提醒数量上限，创建时校验。

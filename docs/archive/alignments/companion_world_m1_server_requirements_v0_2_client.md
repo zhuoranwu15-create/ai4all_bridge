@@ -2,7 +2,7 @@
 
 > **归档说明（2026-07-26）**：本文是**客户端仓库**提出的服务端需求清单 V0.2，作为跨仓库对齐
 > 材料冻结于此，不作为当前决策依据。服务端逐条评审结论与开发计划见
-> [Companion World App M1 服务端计划](../../plans/products/zhaoxi/companion_world_app_m1_server_plan.md)，
+> [Companion World App M1 服务端计划](../deliveries/companion_world/companion_world_app_m1_server_plan.md)，
 > 其中包含对本文若干条目的**改判**（COMPAT-001、NAME-001、CONTRACT-001）与
 > **本文未覆盖的新增阻断**（BOOT-003、SEC-001、IDEM-001、ERR-002）。
 > 正文中指向客户端仓库的相对链接已改为纯文本。

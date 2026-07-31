@@ -1587,7 +1587,7 @@ def resolve_owner_platform_user_id(cursor, account_id: str) -> Optional[str]:
     """把 account_id 解析为它归属的真人 platform_user_id（canonical，两形态统一收口）。
 
     ⚠️ 「account」一词两义（历史命名债，详见
-    docs/tech_design/companion_world_account_model_reconciliation.md §1）：
+    docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md §1）：
       - 形态 A（微信接入）：account 经 account_owner_bindings 绑到真人。**owner_binding 是
         微信接入独有的产物**，记录「微信渠道把某 account 绑到某真人」，不是通用「用户账号」机制。
       - 形态 B（朝夕相伴 App）：真人的世界里每个 AI 居民 = 一行 runtime account

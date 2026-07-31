@@ -418,8 +418,8 @@ def checkpoint_wal(*, mode: str = "TRUNCATE") -> Dict[str, Any]:
 def get_account_water_level(*, active_windows_minutes=(15, 60, 1440)) -> Dict[str, Any]:
     """账号挂载水位快照：已绑定账号总数 + 各时间窗内仍活跃（有入站）的去重账号数。
 
-    用途：规模化前建立「当前实测水位」基线（见 docs/tech_design/
-    single-host-multi-openclaw-scale.md §7）。`channel_bindings.last_seen_at`
+    用途：规模化前建立「当前实测水位」基线（见
+    docs/architecture/shared/access/single-host-multi-openclaw-scale.md §7）。`channel_bindings.last_seen_at`
     在每条入站消息 upsert 时刷新，因此「窗口内 last_seen_at 命中的去重 account_id」
     是账号在线/活跃的可靠 proxy——真正的长轮询在线态在 OpenClaw 侧，此处刻意只用
     bridge 自有数据，避免盲解析不可控的 openclaw CLI 文本。重复采样即得在线率/掉线率趋势。

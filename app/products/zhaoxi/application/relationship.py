@@ -1,6 +1,6 @@
 """朝夕关系状态确定性更新：turn 级与天级共用的纯函数 + 编排入口。
 
-见 docs/tech_design/relationship_state_implementation_plan_tmp.md §7/§8.1。
+见 docs/architecture/products/zhaoxi/relationship_state_design.md §7/§8.1。
 本模块只做**确定性**更新（消息阈值、连续天数、资源风险）；relationship_stage 的
 acquainted→deep_bond 以及 trust/growth 由天级 LLM 负责（Phase C），不在此处。
 所有写入统一走 app.db.update_account_user_meta_relationship，不碰 companion 字段。

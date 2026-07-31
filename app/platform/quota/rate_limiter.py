@@ -1,4 +1,4 @@
-"""账号级滑动窗口限流（厚节点改造 P3，见 docs/tech_design/thick_node_postgres_refactor.md §5）。
+"""账号级滑动窗口限流（厚节点改造 P3，见 docs/architecture/shared/data/thick_node_postgres_refactor.md §5）。
 
 check_rpm 在单一 DB 事务内：清过期命中行、计数、未达限则插入。
 无进程内状态，多节点共享同一 PG 库时天然跨进程隔离正确。

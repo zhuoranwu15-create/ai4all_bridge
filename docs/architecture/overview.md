@@ -1,6 +1,6 @@
 # AI4ALL 多产品服务总体架构
 
-更新时间：2026-07-23
+更新时间：2026-07-31
 
 ## 一句话理解
 
@@ -42,12 +42,12 @@ flowchart TB
         bridge["ai4all-openclaw-bridge + node agent<br/>入站转发、同步回复、登录 push、出站 pull"]
     end
 
-    subgraph central["Central 模块化单体（唯一业务写入面）"]
+    subgraph central["AI4ALL 模块化单体（同一代码按 central / node 角色部署）"]
         api["API adapters / composition root<br/>WeChat · Web · App · Admin"]
         world["Companion World 产品领域层<br/>universe · resident · L3 · Feed · lifecycle/mailbox<br/>visit ACL · human chat"]
         runtime["Agent Runtime（form-agnostic）<br/>runtime account · L1/L2 · session/messages<br/>prompt/turn/tools · Memory/Dreaming · AI moderation"]
         platform["平台服务<br/>platform user/auth · wallet/quota · binding/routing<br/>outbox/notification · audit/observability"]
-        schedulers["Central single-writer schedulers<br/>proactive + Dreaming/L3 compact<br/>world content + lifecycle/mailbox/visit expiry"]
+        schedulers["Central-only single-writer schedulers<br/>proactive + Dreaming/L3 compact<br/>world content + lifecycle/mailbox/visit expiry"]
 
         api --> world
         api --> runtime
@@ -91,7 +91,7 @@ flowchart TB
 - **通道层薄**：OpenClaw / Bridge 只持有微信运行态，不保存 AI4ALL 长期业务状态。
 - **隔离锚点显式**：真人级权益/配额锚 `platform_user_id`；世界共享状态锚 `universe_id`；每位 Agent 的 L1/L2、session/messages 锚 runtime `account_id`。任何未带正确作用域的查询都是 bug。
 - **Runtime 形态无关**：Companion World 只能通过 `AgentRuntimePort` 和加性 context/memory 接缝调用 Runtime；Runtime 不反向依赖 World，真人聊天不进入 AI `messages`/prompt/Dreaming。
-- **模块化单体 + 中心单 writer**：当前正确性依赖中心 PostgreSQL 的事务、行锁/advisory lock/唯一约束，以及指定 central scheduler 的单 writer 纪律；进入 active-active 或分片前必须先设计 lease/fencing。
+- **模块化单体 + 共享 PG + central scheduler 单 writer**：aliyun1/aliyun2 厚节点都会执行各自账号的 turn 并读写同一中心 PostgreSQL；DDL migration 与全局 scheduler 只由 central 执行。并发正确性依赖 PG 事务、行锁/advisory lock、唯一约束与幂等键；进入 active-active 或分片前必须先设计 lease/fencing。
 - **同步链路短**：普通聊天和普通 Web Search 尽量在当前 turn 同步返回；长耗时搜索、复杂整理或后台报告请求直接返回失败/不支持说明，不创建后台任务。语音当前依赖上游转写后进入普通文本链路。
 - **主动触达受控**：所有主动消息经过 outbound ledger 和类型化策略；用户提醒按用户设定时间发送，陪伴跟进和内容推送受 quiet hours、日上限和偏好约束。
 - **运营可见**：账号、绑定、会话、消息、提醒/主动发送、用量、权益、错误都需要能被 Admin 追踪。
@@ -105,7 +105,7 @@ flowchart TB
 | Companion World 产品领域 | universe/resident、L3、Feed/通知、lifecycle/mailbox、visit/human chat | 可调用 `AgentRuntimePort` 和平台服务；不得把 World 概念下沉 Runtime |
 | Agent Runtime | runtime account、L1/L2、session/messages、prompt/turn/tool、Memory/Dreaming、AI moderation | 形态无关；不得反向 import Companion World；human chat 永不进入 AI 路径 |
 | 平台服务 | platform user/auth、binding/routing、wallet/quota、DB/repository、outbox、审计观测 | 真人级共享能力锚 `platform_user_id`；为上层提供事务与基础设施 |
-| 状态与基础设施 | PostgreSQL/SQLite、system context、OpenClaw 节点状态、外部 provider | 中心业务状态只进 AI4ALL DB；节点永不直连中心 DB |
+| 状态与基础设施 | PostgreSQL/SQLite、system context、OpenClaw 节点状态、外部 provider | 生产业务状态只进中心 PG；厚 node 可直连 PG 执行业务读写，但只有 central 执行 schema migration |
 
 依赖方向固定为 `API adapter → product domain → AgentRuntimePort → runtime implementation`，产品域旁挂平台服务。形态 A（微信）可由 API 直接调用 Runtime；形态 B（朝夕相伴）必须先经过 Companion World 解析 owner/ACL/shared context。
 
@@ -251,71 +251,60 @@ OpenClaw Gateway + ai4all-openclaw-bridge local process
 single-worker 时可启用 in-process scheduler；推荐独立 scheduler 进程
 ```
 
-适合开发、双后端测试和真实微信链路验证。SQLite 是 dev/test 默认与生产回滚通道，属于刻意保留的受支持路径；它不是当前生产主后端。
+适合开发、双后端测试和真实微信链路验证。SQLite 是 dev/test 默认档，不是生产后端或生产
+回滚通道；生产故障恢复必须在 PostgreSQL 的备份、主备和恢复体系内完成。
 
-### 当前生产形态（aliyun1 中心 + aliyun1/aliyun2 接入）
+### 当前生产形态（aliyun1 central+node + aliyun2 厚 node）
 
 ```text
 Nginx / HTTPS
         │
         ▼
-aliyun1 Central FastAPI + central schedulers
-        │
-        ├── PostgreSQL（唯一业务写入库）
-        ├── aliyun1 OpenClaw / node agent
-        └── aliyun2 OpenClaw / node agent（HTTP 接入中心，不直连 DB）
+aliyun1 central,node                     aliyun2 node
+├── Web/App/Admin 控制面                 ├── 本地 /openclaw/turn
+├── 本机微信账号的 /openclaw/turn        ├── 本地 OpenClaw / node agent
+├── central-only schedulers              └── 直连 aliyun1 PostgreSQL
+├── 本地 OpenClaw / node agent                         │
+└── PostgreSQL（生产唯一 source of truth）◀─────────────┘
 ```
 
 当前拓扑不变量：
 
-- 中心 FastAPI 是业务读写入口，生产 PostgreSQL 是唯一业务 source of truth；接入节点永不直连 DB。
+- 生产 PostgreSQL 是唯一业务 source of truth。aliyun1 和 aliyun2 都运行完整 turn 栈，分别本地
+  处理归属本节点的微信账号，并直接读写同一中心 PG。
+- `AI4ALL_ROLE=node` 不挂 Web/App/Admin 控制面，也不执行 `init_db()`；启动时只验证 PG 可用。
+  DDL migration 只能由带 central 角色且显式通过 migration interlock 的进程执行。
 - proactive/Dreaming、world content、lifecycle/mailbox/visit expiry 等 scheduler 必须指定 central 单例运行，避免重复扫描。
 - reminder、outbound、Feed slot、visit/chat 等竞争路径依赖 PG 原子 claim、行锁/advisory lock、唯一约束和幂等键。
 - OpenClaw 插件/Gateway 能力必须做版本固定和补丁检查；微信凭据只留在账号所属接入节点。
 - Redis、消息队列、对象存储和 active-active 不是当前正确性的前提；只有出现明确扩缩容信号后再引入，且不得绕过现有状态所有权。
 
-### 多机接入形态（中心大脑 + 瘦接入节点）
+### 角色职责
 
-为突破「单一出口 IP 挂大量微信号」触发风控的瓶颈，接入层可横向扩展到多机。一套代码按 `AI4ALL_ROLE` 选能力，**central（中心大脑）与 node（瘦接入节点）可独立、也可同机共存**：
+一套代码按 `AI4ALL_ROLE` 选择能力。`central` 与 `node` 可独立部署，也可像 aliyun1 一样同机共存：
 
 | 角色 | 跑什么 | 碰中心 DB? |
 | --- | --- | --- |
-| `standalone`（默认） | = 今天单机形态，全部 + openclaw 本机直发 | 是（本机） |
-| `central` | FastAPI 大脑、中心 DB（唯一写者）、画像、三调度器、审核台、admin、节点面向 API | 是（本机） |
-| `node` | openclaw + 微信会话、节点 agent（入站转发 + 出站轮询 + 登录 exec） | **否，一律走 HTTP 与中心通信** |
+| `standalone`（默认） | 本地开发的一体化 Web/App/Admin、turn 与可选 scheduler | 是；默认 SQLite，也可显式使用 PG |
+| `central` | Web/App/Admin 控制面、schema migration、central-only scheduler 与节点编排 | 是；生产使用 PG |
+| `node` | 归属账号的本地 turn、OpenClaw bridge、微信会话与 node agent | **是；生产直连中心 PG，但不跑 migration** |
+| `central,node` | central 与 node 能力同机组合；当前 aliyun1 形态 | 是；生产本机连接中心 PG |
 
-生产落地（aliyun1+aliyun2 双机 MVP）：
+微信账号注册/登录时确定 `assigned_node_id`，后续由归属节点本地处理 turn；`node_id` 是路由与
+调度分片属性，不代替 `account_id`、`platform_user_id` 或 `app_id` 的隔离判断。中心发起的登录/
+登出操作通过 node agent push；跨节点主动消息经 durable outbound claim/pull 投递。
 
-```text
-                         微信用户
-        ┌───────────────────┴───────────────────┐
-┌───────┴────────┐                      ┌────────┴────────────┐
-│ aliyun2 (node) │                      │ aliyun1             │
-│ openclaw+会话   │                      │ central + node 同机  │
-│ node-agent     │  ① 入站转发(HTTP→中心) │ openclaw+会话         │
-│                │  ② 登录 push(中心拨节点)│ FastAPI 大脑 + 调度   │
-│                │  ③ 出站 pull 认领       │ PostgreSQL(唯一写者)  │
-└────────────────┘  ④ 结果回报            └─────────────────────┘
-```
-
-> **中心存储后端**：2026-06-21 起 aliyun1 中心库由 SQLite 切换为本机 **PostgreSQL**（厚节点改造 P1，见 [`shared/data/thick_node_postgres_refactor.md`](shared/data/thick_node_postgres_refactor.md) 与切换记忆 [[pg-migration-cutover-state]]）。**这对节点与拓扑完全透明**：节点本就永不直连 DB，无论中心是 SQLite 还是 PG，节点只经 HTTP `/openclaw/turn`、`/node/*` 与中心通信，路由/归属/账号隔离逻辑一字未改。
-
-- **不变量**：只有 central 进程读写中心库（现为 aliyun1 本机 PostgreSQL，仅监听 localhost）；节点永不直连 DB。`node_id` 只是路由属性，不参与账号隔离判定。
-- **核心业务在哪台机器处理（重要）**：**openclaw 通道层固定**——账号注册/登录时定在 aliyun1 或 aliyun2 的 openclaw 上，此后不迁移、不切换。但通道之后的**全部核心业务（turn 处理：prompt 组装、LLM、记忆、计费、DB 读写）一律在 aliyun1 中心进程执行**。因此**归属 aliyun2 的微信用户，其每条消息都会被转发到 aliyun1 后端处理**（见下「入站」）。这一集中式形态自 2026-06-14 多机上线即如此，**PG 切换没有改变它**——PG 只是把 aliyun1 中心进程的存储从 SQLite 换成了 PG。aliyun2 上没有 turn 处理后端（node-agent 仅暴露 `exec/*`+`outbound/claim`+`heartbeat`+`health`，无 `/openclaw/turn`）。
-- **入站**：节点 openclaw 把 `/openclaw/turn` POST 到中心（aliyun2 的 bridge 插件 `AI4ALL_BACKEND_URL=http://aliyun1`）；**被动回复内联在 HTTP 响应里原路返回**由本节点 openclaw 发出，零跨机。
-- **出站混合**：登录/登出/扫码走 **push**（中心按 `access_nodes.base_url` 直拨目标节点 agent，二维码低延迟同步回传）；主动消息走 **pull**（节点轮询 `/node/outbound/claim` 认领，复用 `outbound_messages` 抢占式 claim，节点掉线消息留队列可续传）。
-- **节点 → 中心**走「稳定指纹地址」`CENTRAL_URL`（MVP=内网 hosts 别名），切换中心只改该指向，节点零改配。
-- **中心可切换 aliyun1↔aliyun2**：中心状态 = 中心库（现为 PostgreSQL，含 `account_profile_files` 画像表，P2 起画像已入库）+ system 目录；切换需迁移 PG 数据（`scripts/migrate_sqlite_to_pg.py` 同类思路）+ rsync system 目录；切换后原中心机降为 node，**微信会话不重扫码**。一键化/热备留二期。
-
-`standalone` 等价于「central+node 同机 + 出站本机即时直发」，保证本地开发与现有测试零回归。详细落地、迁移 Runbook 与切换流程见 [`docs/architecture/shared/access/multi_node_access_refactor.md`](shared/access/multi_node_access_refactor.md)。
+当前厚节点设计见 [`shared/data/thick_node_postgres_refactor.md`](shared/data/thick_node_postgres_refactor.md)，
+生产差异以 [`../ops/platform/aliyun1_aliyun2_deployment_diff.md`](../ops/platform/aliyun1_aliyun2_deployment_diff.md)
+为准。早期“中心大脑 + 瘦节点”只保留为演进背景，不再作为当前拓扑。
 
 ## 8. 当前架构状态与下一阶段边界
 
 1. 微信形态 A 继续复用既有 Agent Runtime，保持 1 真人 ↔ 1 Agent 的兼容行为；Web/native channel 由 `ChannelCapability` 显式声明会话、投递、onboarding、proactive 和 TDAI 能力。
 2. Companion World 形态 B 的 M2–M5 后端闭环已合入主干：多居民、L3、Feed/通知、lifecycle/mailbox、visit 和 human chat 均已实现并由 AST 分层门禁保护。
 3. 真人级 wallet/quota/override 已上迁 `platform_user`；每位居民仍以独立 runtime account 持有 L1/L2、session/messages，World 只通过端口组合 Runtime。
-4. 当前生产为中心 PostgreSQL + 多 OpenClaw 接入节点；SQLite 继续承担开发、测试和回滚。竞态正确性以 PostgreSQL 测试为权威。
-5. Companion World P1/M3/M4/M5 flag 仍默认关闭。代码就绪不代表生产已迁移或开量；客户端口径、模板/backfill、钱包与 override 对账、evidence retention 和只读发布核验仍是开旗门槛。
-6. 当前模块化单体与 central single-writer 拓扑是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
+4. 当前生产为中心 PostgreSQL + 两个厚节点本地 turn；SQLite 只承担开发与测试，竞态正确性以 PostgreSQL 测试为权威。
+5. Companion World 主能力、语音输入与 v1.5 媒体/许愿能力已在生产配置启用；客户端仍必须以 `/app/config` 返回的能力位为准，不能把当前开量状态硬编码进客户端。
+6. 当前模块化单体、共享 PG 与 central-only scheduler 单 writer 是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
 
 详细数据模型和历史工作包摘要见 `docs/architecture/system_design.md`；3.0 冻结决策与代码地图见 `docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。

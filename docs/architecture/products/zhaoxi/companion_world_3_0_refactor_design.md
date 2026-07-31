@@ -1,7 +1,11 @@
 # 技术设计：系统 3.0 — Agent Runtime 分层与 Companion World 产品领域层（架构决策记录）
 
 更新时间：2026-07-23
-状态：**M0/M1/M2-C、M3、M4 与 M5 均已完成并合入 `main`；M5-0…M5-5 已归档。** M2-C PR #45、M3 PR #46、M4 PR #47 与 M5 PR #48 均已合并；PR #48 的 SQLite/PostgreSQL 全量 CI 均通过。P1/M3/M4/M5 flag 均默认关闭且尚未生产启用。3.0 后端重构开发闭环已完成，后续重点转为客户端口径同步、手工回归与生产发布门。含主动消息子系统改造（D-13 / §11）。本文继续作为后续开发的权威接手入口；冻结口径与当前实现偏差均以本文为准。
+状态：**M0/M1/M2-C、M3、M4 与 M5 均已完成并合入 `main`；Companion World 主能力及
+v1.5 媒体/许愿已在生产启用。** 本文保留各里程碑交付时的 default-off 灰度记录，它们是历史
+发布门，不代表当前生产能力位；现网开量以 `GET /app/config` 与
+[`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md)为准。3.0 后端重构开发闭环已完成，
+本文继续作为架构决策与代码接缝入口。
 核查基线：`origin/main@3403380`（PR #48 merge commit）。M5-0=`1c981be`、M5-1=`99dd92b`、M5-2=`c372479`、M5-3=`82073ad`、M5-4=`c19c6b8`、M5-5=`b1e8911`；最终门禁为 unit `571 passed / 978 deselected`、SQLite `1521 passed / 30 skipped`、PostgreSQL `1546 passed / 5 skipped`。
 
 关联产品 PRD（客户端仓库）：
@@ -79,7 +83,7 @@
 - 默认建号会重复赠权、拆散余额；M1 钱包已上迁真人，M2 resident runtime 使用 no-binding/no-grant 原语。
 - binding 容量与 resident 容量混杂；M2 已以 world row lock + `universe_residents.status='active'` 作为容量真相。
 - 旧 App turn single-flight 仍是进程内锁；M2-C World turn 已使用 PG advisory single-flight，legacy 端点未强制迁移。
-- P1 universe/resident/conversation/L3 与 M3 世界动态/通知、M4 生命周期/信箱、M5 访客/真人会话均已落地；全部新增产品入口仍按里程碑 flag default-off。
+- P1 universe/resident/conversation/L3 与 M3 世界动态/通知、M4 生命周期/信箱、M5 访客/真人会话均已落地并已生产启用；下文的 default-off 表述记录各里程碑交付时的发布策略。
 
 ---
 
@@ -435,7 +439,7 @@ def create_resident_with_runtime(        # *
 
 **双后端与迁移**：SQLite 聚焦 + PG 真实事务均过；backfill 可重复运行、不重复建 world/resident/grant；关 P1 flag 可退回 legacy API/auth 入口但不删除 world 数据，L3 后台与 proactive safety 分别由独立开关控制。
 
-**PG 保真门禁（硬，2026-07-19；基础设施已就位）**：凡涉及**锁 / 事务 / 钱包扣款 / 容量 / 配额预占**的 3.0 新逻辑，**必须有 PG lane 测试**，**SQLite 档通过不作数**。理由：SQLite 无法复现 `FOR UPDATE`/advisory lock/真事务隔离语义（D-12）。**注（核对 2026-07-19）：PG lane 与阻塞式 CI 已存在**——`Makefile:31` `test-pg`、`.github/workflows/tests.yml:35` `pg-tests`（无 `continue-on-error`，push/PR 到 main 强制）。故 M0 **无需**「转阻塞式」动作，只需**为 M1/M2 新逻辑补 PG 用例**。SQLite 仅保留 dev 秒级反馈（`make test-unit`）+ 生产回滚通道；**是否彻底删除 SQLite 为独立清爽性任务、不阻断本重构**（后端分歧现仅 `_backend.py` 545 行 + `is_postgres()` 13 处，删除收益有限而代价是每日测试速度/本地零配置，条件成熟再单独评估）。
+**PG 保真门禁（硬，2026-07-19；基础设施已就位）**：凡涉及**锁 / 事务 / 钱包扣款 / 容量 / 配额预占**的 3.0 新逻辑，**必须有 PG lane 测试**，**SQLite 档通过不作数**。理由：SQLite 无法复现 `FOR UPDATE`/advisory lock/真事务隔离语义（D-12）。**注（核对 2026-07-19）：PG lane 与阻塞式 CI 已存在**——`Makefile:31` `test-pg`、`.github/workflows/tests.yml:35` `pg-tests`（无 `continue-on-error`，push/PR 到 main 强制）。故 M0 **无需**「转阻塞式」动作，只需**为 M1/M2 新逻辑补 PG 用例**。SQLite 仅保留 dev/test 秒级反馈；它不是生产回滚通道。**是否彻底删除 SQLite 为独立清爽性任务、不阻断本重构**（后端分歧现仅 `_backend.py` 545 行 + `is_postgres()` 13 处，删除收益有限而代价是每日测试速度/本地零配置，条件成熟再单独评估）。
 
 ---
 

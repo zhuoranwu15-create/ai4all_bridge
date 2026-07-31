@@ -291,37 +291,26 @@ UPDATE accounts SET assigned_node_id = 'aliyun2' WHERE id = '<account_id>';
 
 ---
 
-## 9. 回滚方案
+## 9. 历史回滚方案（均已失效，禁止执行）
 
-### 回滚节点（aliyun2）→ 一期瘦节点形态
+本节只记录 2026-06-21 切换窗口当时的 expand/contract 思路。当前节点启动路径会在本机执行
+turn 并连接业务数据库，已经不能通过删除 `DATABASE_URL` 回到一期“瘦节点转发中心”形态；这样做
+只会让节点误连本地 SQLite 开发库。
 
-```bash
-# aliyun2 .env：恢复一期配置
-AI4ALL_ROLE=node   # 或一期的配置值
-# 去掉 DATABASE_URL（回用一期转发到中心的方式）
-sudo systemctl restart ai4all
-```
-
-### 回滚 aliyun1 → SQLite（⚠️ 2026-07-26 起已作废，仅存档）
+### aliyun1 → SQLite（2026-07-26 起已作废，仅存档）
 
 **不要再执行这一节。** PG 已承载一个多月的真实数据，回落只会拿到切换当天的 SQLite 快照，
 等于静默丢掉这期间的全部消息与记忆。生产遇险请走 PG 备份/主备（§10），不要走后端回落。
-以下命令保留仅为记录当时的操作形态。
-
-```bash
-# aliyun1 .env：注释掉 DATABASE_URL
-# DATABASE_URL=
-sudo systemctl restart ai4all
-```
-
-SQLite 数据库 `data/ai4all.sqlite3` 未被删除或修改，直接回落即可。  
-迁移后 PG 上的数据（新增消息等）不会自动同步回 SQLite——如需保留，需手动导出相关记录。
+当时保留的 `data/ai4all.sqlite3` 只是切换时快照，不得用于任何生产启动或恢复。
 
 ---
 
-## 10. PG 主备（参考设计文档 §8）
+## 10. PG 主备（已落地，切换演练待完成）
 
-当 aliyun1 PG 稳定运行后，参考 [`thick_node_postgres_refactor.md §8`](../../architecture/shared/data/thick_node_postgres_refactor.md#8-pg-部署与切换) 配置流复制热备 + pg_dump PITR 备份，进一步降低单点风险。节点 `DATABASE_URL` 使用多主机连接串：
+aliyun2 的流复制热备与每日 `pg_dump` 已于 2026-07-05 落地；手工 promote/failback 尚未完成
+低峰演练，不能按“自动切换”承诺。现状和操作步骤以
+[PG 备份与切换跟踪](../pg_backup_failover_tracking.md)为准。下列多主机连接串仍是参考目标，当前应用
+切换方式以实测 Runbook 为准：
 
 ```
 postgresql://ai4all:pwd@aliyun1-internal:5432,standby-internal:5432/ai4all?target_session_attrs=read-write

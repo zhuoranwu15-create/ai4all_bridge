@@ -1,6 +1,6 @@
 """app.products.zhaoxi.infrastructure.persistence.campaign_analytics — 营销活码漏斗埋点的只读/只追加分析层。
 
-见 docs/tech_design/campaign_funnel_analytics_technical_design.md §3/§7。
+见 docs/architecture/products/zhaoxi/campaign_funnel_analytics_technical_design.md §3/§7。
 
 分两层数据：
 - S0 曝光：campaign_visits（本模块 record_campaign_visit 写入；账号创建之前的匿名 PV/UV）。

@@ -3,6 +3,7 @@
 本目录只承载当前有效的技术事实，并按 owner 分层。
 
 - [总体架构](overview.md)：系统边界、依赖方向、关键链路和部署拓扑。
+- [核心模型与术语](core-model.md)：平台、产品、形态、渠道、身份作用域与代码所有权。
 - [技术总平面](system_design.md)：状态所有权、数据模型和横切技术平面。
 - [`shared/`](shared/README.md)：跨产品的平台、数据与接入能力。
 - [`agent-runtime/`](agent-runtime/README.md)：形态与产品无关的 Agent Runtime。
