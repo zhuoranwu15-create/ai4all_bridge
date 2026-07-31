@@ -3,7 +3,8 @@
 > 面向：朝夕相伴移动端 App 开发者。
 > 服务端状态：Companion World 3.0 已在生产全量激活（aliyun1 中心节点），本文档描述的所有能力均线上可用。
 > 最后核对：2026-07-23，对着生产 `https://ai4company.top` 实测。
-> **v1.5（会话与动态媒体 + 许愿创建居民）服务端已上线**（2026-07-30），契约见 §6.5 / §6.6。
+> **v1.5（会话与动态媒体 + 异步许愿）契约已实现**（2026-07-31），异步许愿默认关闭，
+> 完成生产迁移与 worker 联调后再显式开启；契约见 §6.5 / §6.6。
 > 生产已于 **2026-07-31** 配好 `MEDIA_URL_SIGNING_SECRET`，四个能力位现在全部下发 `true`，
 > 媒体链路可直接联调。仍请一律以 `/app/config` 的能力位渲染入口，细节见 §9.1。
 
@@ -63,11 +64,14 @@
 
 ### 2.3 OpenAPI 契约 snapshot
 
-仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（58 条 `/v1` 路径 / 62 个操作，含 v1.5 媒体与许愿）。
+仓库提交了客户端契约的 OpenAPI 快照：[`openapi/app_v1.json`](openapi/app_v1.json)（61 条 `/v1` 路径 / 65 个操作，含 v1.5 媒体与异步许愿）。
 
 - 服务端 CI 断言「实时导出 == 提交的 snapshot」，所以**改响应字段必须同步更新 snapshot**，否则后端 CI 直接红。客户端可以拿它做 breaking-change 检查或生成 DTO。
 - 后端重新导出：`.venv/bin/python scripts/export_openapi.py`（`--check` 只校验）。
-- **当前有主链路 24 个操作有真实响应 schema**：`/app/config`、`/me`、`worlds/home/bootstrap`、`resident-candidates`、`residents`、`residents/confirm`、`conversations`、`ai-conversations/{id}/messages|turn|read`，「我的」Tab 的 `me/profile-options`、`me/profile`、`me/account/deletion`、`notifications/preferences`(GET/PATCH)，世界 Feed 的 `worlds/home/feed`(GET)、`worlds/home/feed/posts`(POST)、`worlds/home/feed/posts/{id}`(DELETE)、`worlds/home/feed/posts/{id}/hide`(POST)，真人会话的 `human-conversations`(GET)、`human-conversations/report-options`(GET)，以及 v1.5 新增的 `media/uploads`(POST)、`media/{media_id}`(GET)、`worlds/home/resident-drafts/preview`(POST)。其余端点只冻结了路径与请求体，响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
+- **当前有主链路 34 个操作有真实响应 schema**：既有 24 个操作不变，另新增异步许愿的
+  提交/恢复/收回三个操作，以及信箱列表、未读数、详情、read/defer/decline/accept 七个操作
+  （`MailboxLetterData` 正式包含 `source` / `wish_id`）。其余端点只冻结了路径与请求体，
+  响应形状以本文档为准——这是分步交付的既定范围，不是遗漏。
 - 生成的 DTO 不替代客户端领域模型；本文档仍是落地口径与流程约定。
 
 ---
@@ -763,27 +767,32 @@ POST /v1/worlds/home/feed/posts
 
 ### 6.6 许愿创建居民（v1.5 新增）
 
-自建角色的**第三条入口**：用户用一句自然语言许愿，服务端把它翻译成受控取值，再走既有的
-「预览 → 确认」两步。能力位 `resident_wish_create`，关闭时 `feature_disabled`(404)。
+许愿是独立异步链路，不再返回人设预览，也不会直接创建居民。能力位
+`resident_wish_create` 关闭时三个端点统一返回 `feature_disabled`(404)；客户端还必须要求
+`client_contract_version >= 2026-08-01` 才展示入口。
 
 ```
-POST /v1/worlds/home/resident-drafts/preview   { "wish_text": "…", "client_request_id": "…" }
-POST /v1/worlds/home/residents                 { "draft_token": "…", "client_request_id": "…" }
+POST /v1/worlds/home/resident-wishes             { "wish_text": "…", "client_request_id": "…" }
+GET  /v1/worlds/home/resident-wishes/current
+POST /v1/resident-wishes/{wish_id}/withdraw      {}
 ```
 
-- **与表单路径互斥**：带了 `wish_text` 就不能再带 `name` / `relationship_type` / `personality_traits`
-  等结构化字段（否则 422）；许愿路径的 `client_request_id` **必填**，表单路径**不接受**该字段。
-- **出参与表单路径逐字段同形**（`ResidentDraftPreviewData`：`draft_id / draft_token / expires_at /
-  name / relationship_display / tags / normalized_summary / ai_identity_notice / avatar_ref`），
-  所以**预览卡片 UI 零改动**，只需多一个"写愿望"的输入入口。
-- **所见即所存**：预览里的字段就是最终落进居民人设的值；自由文本原文不落库、不直通人设。
-- `wish_text` ≤ `limits.wish_text_chars`（500 字）；日额度 `limits.wish_daily_max`（默认 10，≤0 表示不限）。
-- **幂等**：同一 `client_request_id` 重放预览返回逐字段等值的同一份草稿，不会重复消耗额度、也不会重复调模型。
-- 第二步确认与既有自建路径完全一致：`draft_token` 一次性、30 分钟过期
-  （`resident_draft_expired` / `resident_draft_consumed` 见 §7）。
-- 专有错误码：`wish_text_rejected`(422，愿望命中安全护栏，提示换一种写法)、
-  `wish_rate_limited`(429，超日额度)、`wish_generation_failed`(503，模型不可用，**可重试**)。
-  额度与幂等都在调模型**之前**判，重试和超额不会白花一次生成。
+- 提交成功为 HTTP 202，`wish.status=pending`，并返回固定的
+  `expected_delivery_from=提交+24h` / `expected_delivery_to=提交+72h`。响应不含名字、头像、
+  `draft_token`、居民或会话 ID。
+- 服务端在同一事务写入 wish 与持久 job；worker 可跨重启恢复，生成后做第二次安全/质量复核，
+  到最早时间才投递。72 小时内没有合格候选则转 `unfulfilled`。
+- `GET current` 返回最近一笔 `WishData | null`。公开状态只有 `pending / delivered /
+  withdrawn / unfulfilled`；内部任务进度不会下发。
+- 只有 `pending` 可收回。收回与投递用同一 wish CAS 串行化：成功收回后任务失效，已投递则
+  `wish_not_withdrawable`。
+- 投递生成普通信箱来信，`source=wish`、`wish_id`；接受/拒绝/过期前愿望保持 open。只有接受来信
+  才创建 active 居民和会话，接受时仍重新检查 10 人容量。
+- `wish_text` ≤ `limits.wish_text_chars`；滚动 24 小时额度仍由 `wish_daily_max` 下发。
+- 同 owner、同 `client_request_id`、同文本重放返回相同 ID/时间窗且 `replayed=true`；同 ID
+  不同文本为 `idempotency_conflict`，已有未闭环愿望为 `wish_already_pending`。
+- 旧 `POST /worlds/home/resident-drafts/preview` 只保留结构化表单；携带 `wish_text` 返回
+  `invalid_request`，不会再生成愿望草稿。
 
 ---
 
@@ -827,16 +836,20 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 | `media_signing_unavailable` | 503 | 服务端签名密钥未配置（部署问题），**可重试** |
 | `wish_text_rejected` | 422 | 愿望文本命中安全护栏，提示换一种写法 |
 | `wish_rate_limited` | 429 | 许愿超日额度（`limits.wish_daily_max`） |
-| `wish_generation_failed` | 503 | 愿望翻译所用模型暂不可用，**可重试**，不消耗额度 |
+| `wish_review_unavailable` | 503 | 提交前安全复核不可用，未受理，可同幂等键重试 |
+| `wish_service_unavailable` | 503 | wish/job 无法同事务持久化，未受理，可重试 |
+| `wish_already_pending` | 409 | 已有未闭环愿望，读取 `current` 恢复 |
+| `wish_not_found` | 404 | 愿望不存在或不属于当前用户 |
+| `wish_not_withdrawable` | 409 | 已投递或已闭环，刷新 `current` |
 
 > 完整表见 `app/products/zhaoxi/api/companion_world.py` 的 `_ERROR_STATUS`。App 应基于 `code`（而非文案）做分支，未知 `code` 按对应 HTTP 状态兜底。
 
-主链路 21 个操作的 401/403/404/409/422/429 已在 OpenAPI snapshot 里声明为错误信封
+主链路操作的 401/403/404/409/422/429/503 已在 OpenAPI snapshot 里声明为错误信封
 （`WorldErrorEnvelope`），可直接据此生成错误分支；具体 `code` 取值仍以上表为准。
 
 ---
 
-## 8. `/v1` 全量端点清单（62 条）
+## 8. `/v1` 全量端点清单（61 条路径 / 65 个操作）
 
 **鉴权 / 账户**
 - `GET /v1/app/config`
@@ -858,6 +871,8 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 - `POST /v1/worlds/home/bootstrap`
 - `GET /v1/worlds/home/resident-candidates`、`GET /v1/worlds/home/resident-options`
 - `POST /v1/worlds/home/resident-drafts/preview`
+- `POST /v1/worlds/home/resident-wishes`、`GET /v1/worlds/home/resident-wishes/current`
+- `POST /v1/resident-wishes/{wish_id}/withdraw`
 - `GET /v1/worlds/home/residents`、`POST /v1/worlds/home/residents`、`POST /v1/worlds/home/residents/confirm`
 - `GET /v1/worlds/home/feed`、`POST /v1/worlds/home/feed/posts`
 - `DELETE /v1/worlds/home/feed/posts/{id}`、`POST /v1/worlds/home/feed/posts/{id}/hide`
@@ -913,21 +928,22 @@ POST /v1/worlds/home/residents                 { "draft_token": "…", "client_r
 
 ### 9.1 v1.5 能力的联调前置（媒体 + 许愿）
 
-服务端代码已上线，四个 flag **默认打开**（2026-07-30 起改为「代码默认开、`.env` 显式写
-`false` 才关」）。真正决定媒体三位可见性的是**签名密钥是否配置**：
+三个媒体 flag 默认打开；异步许愿代码默认关闭，必须在 m0058、中心 worker、信箱闭环与客户端
+契约联合验收通过后显式打开。真正决定媒体三位可见性的是**签名密钥是否配置**：
 
-| flag（默认 true） | 能力位 | 还需要什么 |
+| flag | 能力位 | 还需要什么 |
 |---|---|---|
 | `COMPANION_WORLD_CHAT_IMAGE_ENABLED` | `chat_image_message` | `MEDIA_URL_SIGNING_SECRET` |
 | `COMPANION_WORLD_CHAT_VOICE_ENABLED` | `chat_voice_message` | `MEDIA_URL_SIGNING_SECRET` |
 | `COMPANION_WORLD_FEED_IMAGE_ENABLED` | `feed_image_post` | `MEDIA_URL_SIGNING_SECRET` |
-| `COMPANION_WORLD_RESIDENT_WISH_ENABLED` | `resident_wish_create` | 无（已可用） |
+| `COMPANION_WORLD_RESIDENT_WISH_ENABLED`（默认 false） | `resident_wish_create` | `MAILBOX_ENABLED` + m0058 + central worker + contract ≥ 2026-08-01 |
 
 `MEDIA_URL_SIGNING_SECRET` 留空时媒体链路整体视为未就绪：三个媒体能力位一律下发 `false`，
 `POST /media/uploads` 返回 `media_disabled`——**不会**出现「能力位是 `true` 却拿不到读 URL」的
 半开状态，客户端照能力位渲染即可。配好密钥并重启后三位自动转 `true`，客户端无需发版。
 
-**生产状态（2026-07-31）**：密钥已配置，四位全部为 `true`，媒体上传与读取均可用。
+**发布口径（2026-07-31）**：媒体密钥已配置；旧同步许愿 flag 先关闭，异步链路联合验收完成后
+才重新开启同一能力位。
 
 图片机审是独立的运维配置（见
 [`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），

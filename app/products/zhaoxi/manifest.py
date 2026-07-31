@@ -46,6 +46,7 @@ def install_public_routes(app: FastAPI) -> None:
     from app.products.zhaoxi.api import companion_world
     from app.products.zhaoxi.api import companion_world_human_chat
     from app.products.zhaoxi.api import companion_world_mailbox
+    from app.products.zhaoxi.api import companion_world_resident_wishes
     from app.products.zhaoxi.api import companion_world_visits
     from app.products.zhaoxi.api import media as media_api
 
@@ -56,6 +57,7 @@ def install_public_routes(app: FastAPI) -> None:
     for product_router in (
         app_api.router,
         companion_world.router,
+        companion_world_resident_wishes.router,
         companion_world_mailbox.router,
         companion_world_visits.router,
         companion_world_human_chat.router,

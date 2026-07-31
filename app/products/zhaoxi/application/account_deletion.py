@@ -28,6 +28,8 @@
    `expires_at` 是 NULL，孤儿回收（D-10）永远抓不到它们，所以必须在这里删——否则
    「聊天记录已删除」之后 AI 会话图、语音和 Feed 图仍永久留在库和磁盘上。
    例外见下方保留清单第一条。
+9. `resident_wishes` / `resident_wish_jobs` 与 `source='wish'` 来信：先取消持久任务，再清理
+   愿望和专属生成物；已 claim 的旧 worker 因 wish CAS 锚消失，不能在注销后写回来。
 
 **新增任何按真人/账号存数据的表，都必须在本模块的清除清单或下方保留清单里显式登记一次。**
 这两份清单是注销口径的唯一来源，只靠"下次记得"必然漏（`media_assets` 就是这么漏的：
@@ -200,6 +202,38 @@ def execute_account_deletion(
             wiped[key] += int(stats.get(key) or 0)
 
     with connect() as conn:
+        # 异步许愿任务先停再删；任何已 claim 的 worker 后续 CAS 都会因 wish 行消失而失效。
+        resident_wish_jobs = conn.execute(
+            "DELETE FROM resident_wish_jobs WHERE wish_id IN "
+            "(SELECT id FROM resident_wishes WHERE owner_platform_user_id = ?)",
+            (platform_user_id,),
+        ).rowcount
+        conn.execute(
+            "UPDATE resident_wishes SET letter_id = NULL "
+            "WHERE owner_platform_user_id = ?",
+            (platform_user_id,),
+        )
+        resident_wish_letters = conn.execute(
+            "DELETE FROM character_letters "
+            "WHERE owner_platform_user_id = ? AND source = 'wish'",
+            (platform_user_id,),
+        ).rowcount
+        resident_wishes = conn.execute(
+            "DELETE FROM resident_wishes WHERE owner_platform_user_id = ?",
+            (platform_user_id,),
+        ).rowcount
+        conn.execute(
+            "DELETE FROM character_letter_catalog WHERE source = 'wish' "
+            "AND character_template_id IN (SELECT id FROM character_templates "
+            "WHERE owner_platform_user_id = ? AND source_type = 'generated')",
+            (platform_user_id,),
+        )
+        conn.execute(
+            "DELETE FROM character_templates WHERE owner_platform_user_id = ? "
+            "AND source_type = 'generated' AND NOT EXISTS ("
+            "SELECT 1 FROM universe_residents r WHERE r.character_template_id = character_templates.id)",
+            (platform_user_id,),
+        )
         universe = conn.execute(
             "SELECT id FROM universes WHERE owner_platform_user_id = ?",
             (platform_user_id,),
@@ -283,6 +317,9 @@ def execute_account_deletion(
         "universe_posts_deleted": int(universe_posts or 0),
         "companion_world_outbox_deleted": int(outbox_deleted or 0),
         "resident_lifecycle_events_deleted": int(lifecycle_events or 0),
+        "resident_wish_jobs_deleted": int(resident_wish_jobs or 0),
+        "resident_wishes_deleted": int(resident_wishes or 0),
+        "resident_wish_letters_deleted": int(resident_wish_letters or 0),
         "app_notifications_deleted": int(app_notifications or 0),
         "sessions_revoked": int(sessions_revoked or 0),
     }

@@ -93,12 +93,6 @@ from app.products.zhaoxi.application import (
     SqlCompanionWorldRepository,
     run_companion_world_turn,
 )
-from app.products.zhaoxi.application.companion_world_wish import (
-    MAX_WISH_TEXT_CHARS,
-    WishGenerationFailed,
-    WishTextRejected,
-    generate_wish_persona,
-)
 from app.schemas import MediaPayload
 from app.time_utils import beijing_now
 from app.routers.deps import _resolve_legacy_session_principal
@@ -187,12 +181,14 @@ _ERROR_STATUS = {
     "media_access_denied": 403,
     # 部署错误（MEDIA_URL_SIGNING_SECRET 未配置）：可重试，不是客户端的问题。
     "media_signing_unavailable": 503,
-    # v1.5 许愿创建（WISH-001，plan §6）。清洗器不可用仍复用既有的
-    # content_review_unavailable——同一个子系统同一个码；wish_generation_failed 专指
-    # 「翻译成受控取值」那一步的模型不可用。两者对客户端都是"稍后重试"。
+    # v1.5 异步许愿的公开错误；生成/二审发生在受理后的 worker 内，不作为提交响应。
     "wish_text_rejected": 422,
     "wish_rate_limited": 429,
-    "wish_generation_failed": 503,
+    "wish_review_unavailable": 503,
+    "wish_service_unavailable": 503,
+    "wish_already_pending": 409,
+    "wish_not_found": 404,
+    "wish_not_withdrawable": 409,
     "invalid_request": 422,
 }
 
@@ -206,6 +202,7 @@ RESIDENT_DRAFT_TTL_MINUTES = 30
 # 世界端点在剥掉挂载前缀后的路径。用于给 422 套上统一错误信封。
 _COMPANION_WORLD_ROUTES = (
     "/worlds/",
+    "/resident-wishes/",
     "/conversations",
     "/ai-conversations/",
     "/notifications",
@@ -248,15 +245,7 @@ class ConfirmResidentsPayload(BaseModel):
 
 
 class ResidentDraftPreviewPayload(BaseModel):
-    """自建角色第一步。两条**互斥**路径，出参形状完全一致（客户端预览卡片零改动）：
-
-    - **表单**（M1 起的既有路径）：结构化设定 + 可选自由文本，服务端清洗后渲染人设；
-    - **许愿**（v1.5 WISH-001）：只给 ``wish_text`` + ``client_request_id``，服务端先清洗，
-      再由 LLM 翻译成同一套受控取值，交给同一个渲染函数。
-
-    结构化字段在此声明为可选**只是**为了让两条路径共用一个模型；表单路径的必填性由
-    校验器保证，缺字段仍然是 422，与 v1.5 之前逐字节相同。
-    """
+    """自建角色结构化预览；异步许愿已迁移到独立 resident-wishes 端点。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -270,11 +259,6 @@ class ResidentDraftPreviewPayload(BaseModel):
         default=None, max_length=MAX_PERSONALITY_TRAITS
     )
     style_note: Optional[str] = Field(default=None, max_length=MAX_STYLE_NOTE_CHARS)
-    # 许愿路径。``client_request_id`` 是 preview 阶段的幂等键（WISH-005）：重试不产生
-    # 第二份草稿、也不产生第二次 LLM 计费。它只对许愿路径有意义。
-    wish_text: Optional[str] = Field(default=None, max_length=MAX_WISH_TEXT_CHARS)
-    client_request_id: Optional[str] = Field(default=None, min_length=8, max_length=128)
-
     @model_validator(mode="after")
     def _clean_draft(self) -> "ResidentDraftPreviewPayload":
         self.name = (self.name or "").strip() or None
@@ -282,31 +266,6 @@ class ResidentDraftPreviewPayload(BaseModel):
         self.relationship_type = (self.relationship_type or "").strip() or None
         self.relationship_label = (self.relationship_label or "").strip() or None
         self.style_note = (self.style_note or "").strip() or None
-        self.wish_text = (self.wish_text or "").strip() or None
-        self.client_request_id = (self.client_request_id or "").strip() or None
-
-        has_structured = any(
-            value is not None
-            for value in (
-                self.name,
-                self.avatar_key,
-                self.relationship_type,
-                self.relationship_label,
-                self.personality_traits,
-                self.style_note,
-            )
-        )
-        if self.wish_text:
-            if has_structured:
-                raise ValueError("wish_text is exclusive with structured fields")
-            if not self.client_request_id:
-                raise ValueError("wish_text requires client_request_id")
-            if not _FEED_CLIENT_REQUEST_ID_RE.fullmatch(self.client_request_id):
-                raise ValueError("invalid client_request_id")
-            return self
-
-        if self.client_request_id:
-            raise ValueError("client_request_id only applies to wish_text")
         if not self.name:
             raise ValueError("name is required")
         if not self.avatar_key:
@@ -1000,82 +959,6 @@ def _draft_preview_data(draft, rendered) -> dict:
     }
 
 
-def _wish_daily_max() -> int:
-    """许愿日额度；<=0 视为不限制。"""
-    try:
-        return int(getattr(settings, "companion_world_wish_daily_max", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _preview_from_wish(
-    payload: ResidentDraftPreviewPayload,
-    *,
-    platform_user_id: str,
-    now: datetime,
-) -> dict:
-    """许愿路径：幂等重放 → 额度 → 清洗 → LLM 翻译成受控取值 → 落草稿。
-
-    顺序刻意如此：重放与额度都在生成**之前**判，重试和超额都不会白花一次模型调用。
-    """
-    if not bool(getattr(settings, "companion_world_resident_wish_enabled", False)):
-        raise CompanionWorldApiError("feature_disabled", 404)
-    wish_request_id = payload.client_request_id or ""
-    service = _service()
-    replay = _run_domain(
-        lambda: service.begin_wish_preview(
-            platform_user_id,
-            wish_request_id=wish_request_id,
-            window_start=_db_time(now - timedelta(days=1)),
-            daily_max=_wish_daily_max(),
-        )
-    )
-    if replay is not None:
-        return _draft_preview_data(*replay)
-
-    try:
-        persona, safety = generate_wish_persona(payload.wish_text or "")
-    except WishTextRejected as err:
-        logger.info("wish.rejected categories=%s", ",".join(err.categories))
-        raise CompanionWorldApiError("wish_text_rejected") from err
-    except TextSanitizerUnavailable as err:
-        raise CompanionWorldApiError("content_review_unavailable") from err
-    except WishGenerationFailed as err:
-        raise CompanionWorldApiError("wish_generation_failed") from err
-
-    try:
-        draft, rendered = _run_domain(
-            lambda: service.preview_resident_draft(
-                platform_user_id,
-                persona,
-                draft_token=secrets.token_urlsafe(32),
-                expires_at=_db_time(
-                    now + timedelta(minutes=RESIDENT_DRAFT_TTL_MINUTES)
-                ),
-                safety_json=json.dumps(safety, ensure_ascii=False),
-                source="wish",
-                wish_request_id=wish_request_id,
-            )
-        )
-    except CompanionWorldApiError:
-        raise
-    except Exception:
-        # 同一 wish_request_id 并发预览：唯一索引挡下第二笔，回读先到的那份草稿即可，
-        # 客户端两次请求拿到同一个 draft_token（而不是一个 500）。
-        existing = _run_domain(
-            lambda: service.begin_wish_preview(
-                platform_user_id,
-                wish_request_id=wish_request_id,
-                window_start=_db_time(now - timedelta(days=1)),
-                daily_max=0,
-            )
-        )
-        if existing is None:
-            raise
-        return _draft_preview_data(*existing)
-    return _draft_preview_data(draft, rendered)
-
-
 @router.post(
     "/worlds/home/resident-drafts/preview",
     response_model=ResidentDraftPreviewResponse,
@@ -1090,20 +973,9 @@ def preview_resident_draft(
     """自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。
 
     清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。
-    许愿路径（``wish_text``）在清洗之后多一步「LLM 翻译成受控取值」，此后与表单路径
-    完全同源——自由文本仍然不直通人设。
+    ``wish_text`` 已不再属于本模型，旧客户端调用会得到稳定 ``invalid_request``。
     """
     now = beijing_now()
-    if payload.wish_text:
-        _no_store(response)
-        return _envelope(
-            request,
-            code="ok",
-            data=_preview_from_wish(
-                payload, platform_user_id=principal.platform_user_id, now=now
-            ),
-        )
-
     safety: Dict[str, dict] = {}
     persona = PersonaInput(
         name=_sanitize_required(

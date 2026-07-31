@@ -87,7 +87,7 @@ router = APIRouter(tags=["app-v1"])
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 
 # App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
-CLIENT_CONTRACT_VERSION = "2026-07-30"
+CLIENT_CONTRACT_VERSION = "2026-08-01"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))
@@ -307,7 +307,10 @@ def _companion_world_capabilities() -> dict:
         "chat_image_message": _media_gated("companion_world_chat_image_enabled"),
         "chat_voice_message": _media_gated("companion_world_chat_voice_enabled"),
         "feed_image_post": _media_gated("companion_world_feed_image_enabled"),
-        "resident_wish_create": _gated("companion_world_resident_wish_enabled"),
+        "resident_wish_create": (
+            _gated("companion_world_resident_wish_enabled")
+            and bool(getattr(settings, "companion_world_mailbox_enabled", False))
+        ),
     }
 
 

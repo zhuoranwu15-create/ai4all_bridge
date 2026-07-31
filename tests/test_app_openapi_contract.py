@@ -42,6 +42,8 @@ MAIN_CHAIN_OPERATIONS = [
     # M5 真人聊天：会话列表读模型与举报原因契约（M5-CONV-001 / M5-REPORT-001）。
     ("/v1/human-conversations", "get"),
     ("/v1/human-conversations/report-options", "get"),
+    ("/v1/worlds/home/resident-wishes/current", "get"),
+    ("/v1/resident-wishes/{wish_id}/withdraw", "post"),
 ]
 
 
@@ -191,6 +193,26 @@ def test_world_endpoints_declare_error_envelope():
             "server_time",
             "message",
         }
+
+
+def test_async_wish_submit_declares_202_and_service_unavailable_envelopes():
+    """受理成功是 202；输入复核/队列不可用的 503 也必须进入正式契约。"""
+    spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    operation = spec["paths"]["/v1/worlds/home/resident-wishes"]["post"]
+    assert _resolve(
+        operation["responses"]["202"]["content"]["application/json"]["schema"], spec
+    )["properties"]
+    assert _resolve(
+        operation["responses"]["503"]["content"]["application/json"]["schema"], spec
+    )["properties"]
+
+
+def test_mailbox_contract_exposes_optional_wish_link():
+    """wish 来信关联必须进入正式 OpenAPI，而不是只存在于运行时裸 dict。"""
+    spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    letter = spec["components"]["schemas"]["MailboxLetterData"]
+    assert letter["properties"].keys() >= {"source", "wish_id"}
+    assert "source" in letter["required"]
 
 
 # --- 门禁 3：真实响应与契约不漂移 -------------------------------------------

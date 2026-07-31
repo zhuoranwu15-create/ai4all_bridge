@@ -1,8 +1,11 @@
-"""四模板运营导入：dry-run、幂等、不可变与换版退休。"""
+"""连续 rank 运营目录导入：dry-run、幂等、不可变、换版退休与当前五人 manifest。"""
 import copy
+from pathlib import Path
 
 import app.db as db
-from scripts.import_companion_world_presets import import_presets, validate_manifest
+from scripts.import_companion_world_presets import import_presets, load_manifest, validate_manifest
+
+SHIPPED_MANIFEST = Path(__file__).resolve().parents[1] / "data/companion_world/presets_v1.json"
 
 
 def _manifest(version: str = "v1") -> list[dict]:
@@ -22,6 +25,22 @@ def _manifest(version: str = "v1") -> list[dict]:
         }
         for rank in range(1, 5)
     ]
+
+
+def test_shipped_manifest_contains_five_ranked_personas_with_sichen():
+    records = load_manifest(str(SHIPPED_MANIFEST))
+    assert [item.rank for item in records] == [1, 2, 3, 4, 5]
+    assert [item.persona_key for item in records] == [
+        "linxiaoman",
+        "luxingye",
+        "shenchuan",
+        "atang",
+        "sichen",
+    ]
+    sichen = records[-1]
+    assert sichen.name == "司辰"
+    assert sichen.name_pool == ("司辰", "辰叔", "老辰", "司叔", "辰生")
+    assert "用户主动提排盘" in sichen.persona_seed_json
 
 
 def test_preset_import_dry_run_apply_and_replay(fresh_db):

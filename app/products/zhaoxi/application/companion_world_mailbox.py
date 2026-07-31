@@ -104,6 +104,8 @@ def _letter_record(row: Mapping[str, Any]) -> CharacterLetterRecord:
         avatar_ref=row.get("avatar_ref"),
         summary=row.get("summary"),
         tags=_tags(row.get("tags_json")),
+        source=str(row.get("source") or "organic"),
+        wish_id=row.get("wish_id"),
     )
 
 
@@ -380,10 +382,9 @@ class CompanionWorldMailboxService:
             elif status not in {"unread", "read", "deferred"}:
                 raise MailboxError("letter_not_open")
             else:
-                available = (
+                common_available = (
                     letter["catalog_status"] == "active"
                     and letter["template_status"] == "active"
-                    and letter["template_source_type"] in {"official", "operations"}
                     and str(letter["catalog_character_key"])
                     == str(letter["character_key"])
                     and str(letter["catalog_character_template_id"])
@@ -393,6 +394,19 @@ class CompanionWorldMailboxService:
                     and str(letter["current_template_version"])
                     == str(letter["template_version"])
                 )
+                organic_available = (
+                    str(letter.get("source") or "organic") == "organic"
+                    and str(letter.get("catalog_source") or "organic") == "organic"
+                    and letter["template_source_type"] in {"official", "operations"}
+                )
+                wish_available = (
+                    letter.get("source") == "wish"
+                    and letter.get("catalog_source") == "wish"
+                    and letter["template_source_type"] == "generated"
+                    and letter.get("template_owner_platform_user_id")
+                    == platform_user_id
+                )
+                available = common_available and (organic_available or wish_available)
                 if not available or has_nonlegacy_resident_for_template(
                     universe_id=str(letter["universe_id"]),
                     character_template_id=str(letter["character_template_id"]),

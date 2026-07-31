@@ -4437,6 +4437,84 @@ def _migration_0057_resident_wish_drafts(conn: Connection) -> None:
     )
 
 
+def _migration_0058_async_resident_wishes(conn: Connection) -> None:
+    """v1.5 异步许愿：独立 wish/job 状态、持久任务与 mailbox 关联。
+
+    愿望原文只在尚需生成时保留；投递、收回或最终无法满足后由应用层置空。job 只保存
+    受控角色生成物，不复用 Feed outbox，避免两种重试/投递语义互相污染。
+    """
+    _ensure_column(
+        conn, "character_letter_catalog", "source", "TEXT NOT NULL DEFAULT 'organic'"
+    )
+    _ensure_column(
+        conn, "character_letters", "source", "TEXT NOT NULL DEFAULT 'organic'"
+    )
+    _ensure_column(conn, "character_letters", "wish_id", "TEXT")
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS ux_character_letters_open_world;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_letters_open_world
+            ON character_letters(universe_id)
+            WHERE status IN ('unread', 'read', 'deferred') AND source = 'organic';
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_letters_wish
+            ON character_letters(wish_id)
+            WHERE wish_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_letter_catalog_source_selection
+            ON character_letter_catalog(source, status, priority DESC, id);
+
+        CREATE TABLE IF NOT EXISTS resident_wishes (
+            id TEXT PRIMARY KEY,
+            owner_platform_user_id TEXT NOT NULL,
+            universe_id TEXT NOT NULL,
+            client_request_id TEXT NOT NULL,
+            request_fingerprint TEXT NOT NULL,
+            wish_text TEXT,
+            input_safety_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'pending',
+            submitted_at TEXT NOT NULL,
+            deliver_not_before TEXT NOT NULL,
+            deliver_by TEXT NOT NULL,
+            letter_id TEXT,
+            closed_at TEXT,
+            terminal_reason TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(universe_id) REFERENCES universes(id),
+            FOREIGN KEY(letter_id) REFERENCES character_letters(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_wishes_owner_request
+            ON resident_wishes(owner_platform_user_id, client_request_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_wishes_owner_open
+            ON resident_wishes(owner_platform_user_id)
+            WHERE closed_at IS NULL;
+        CREATE INDEX IF NOT EXISTS ix_resident_wishes_owner_current
+            ON resident_wishes(owner_platform_user_id, submitted_at DESC, id DESC);
+        CREATE INDEX IF NOT EXISTS ix_resident_wishes_window
+            ON resident_wishes(owner_platform_user_id, submitted_at);
+
+        CREATE TABLE IF NOT EXISTS resident_wish_jobs (
+            id TEXT PRIMARY KEY,
+            wish_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at TEXT NOT NULL,
+            claim_token TEXT,
+            lease_expires_at TEXT,
+            generation_json TEXT,
+            safety_json TEXT,
+            last_error_code TEXT,
+            completed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(wish_id) REFERENCES resident_wishes(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_resident_wish_jobs_claim
+            ON resident_wish_jobs(status, next_attempt_at, lease_expires_at, id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4490,6 +4568,7 @@ _MIGRATIONS = [
     (55, _migration_0055_universe_post_media),
     (56, _migration_0056_media_moderation_scan_index),
     (57, _migration_0057_resident_wish_drafts),
+    (58, _migration_0058_async_resident_wishes),
 ]
 
 

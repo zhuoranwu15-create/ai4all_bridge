@@ -2,7 +2,7 @@
 
 更新时间：2026-07-23
 状态：**M0/M1/M2-C、M3、M4 与 M5 均已完成并合入 `main`；Companion World 主能力及
-v1.5 媒体/许愿已在生产启用。** 本文保留各里程碑交付时的 default-off 灰度记录，它们是历史
+v1.5 媒体已在生产启用；旧同步许愿已收口，异步许愿待 m0058/worker 联调后开启。** 本文保留各里程碑交付时的 default-off 灰度记录，它们是历史
 发布门，不代表当前生产能力位；现网开量以 `GET /app/config` 与
 [`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md)为准。3.0 后端重构开发闭环已完成，
 本文继续作为架构决策与代码接缝入口。

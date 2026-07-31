@@ -12,6 +12,9 @@ from app.products.zhaoxi.application.companion_world_lifecycle import (
     build_lifecycle_policy,
 )
 from app.products.zhaoxi.application.companion_world_mailbox import CompanionWorldMailboxService
+from app.products.zhaoxi.application.companion_world_resident_wishes import (
+    CompanionWorldResidentWishService,
+)
 from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
 from app.time_utils import BEIJING_TZ, beijing_naive_now
 
@@ -19,7 +22,7 @@ logger = logging.getLogger("ai4all.world_lifecycle.scheduler")
 
 
 class WorldLifecycleScheduler:
-    """运行 lifecycle/mailbox/visit expiry 三个独立、可关闭的有界步骤。"""
+    """运行 lifecycle/mailbox/visit expiry/wish 四个独立、可关闭的有界步骤。"""
 
     def __init__(
         self,
@@ -32,10 +35,13 @@ class WorldLifecycleScheduler:
         mailbox_service: Optional[CompanionWorldMailboxService] = None,
         visits_enabled: bool = False,
         visits_service: Optional[CompanionWorldVisitService] = None,
+        wishes_enabled: bool = False,
+        wish_service: Optional[CompanionWorldResidentWishService] = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.mailbox_enabled = bool(mailbox_enabled)
         self.visits_enabled = bool(visits_enabled)
+        self.wishes_enabled = bool(wishes_enabled)
         self.interval_seconds = max(1.0, float(interval_seconds))
         self.batch_size = max(1, min(int(batch_size), 500))
         self.service = service or (
@@ -48,6 +54,9 @@ class WorldLifecycleScheduler:
         )
         self.visits_service = visits_service or (
             CompanionWorldVisitService() if self.visits_enabled else None
+        )
+        self.wish_service = wish_service or (
+            CompanionWorldResidentWishService() if self.wishes_enabled else None
         )
         self._after_resident_id: Optional[str] = None
         self._after_universe_id: Optional[str] = None
@@ -64,12 +73,18 @@ class WorldLifecycleScheduler:
         current = now or beijing_naive_now()
         if current.tzinfo is not None:
             current = current.astimezone(BEIJING_TZ).replace(tzinfo=None)
-        if not self.enabled and not self.mailbox_enabled and not self.visits_enabled:
+        if (
+            not self.enabled
+            and not self.mailbox_enabled
+            and not self.visits_enabled
+            and not self.wishes_enabled
+        ):
             result = {
                 "status": "disabled",
                 "metrics": None,
                 "mailbox_metrics": None,
                 "visit_metrics": None,
+                "wish_metrics": None,
                 "next_after_resident_id": None,
                 "next_after_universe_id": None,
             }
@@ -106,13 +121,24 @@ class WorldLifecycleScheduler:
                 now=current,
                 batch_size=self.batch_size,
             )
+        wishes = None
+        if self.wishes_enabled:
+            if self.wish_service is None:
+                raise RuntimeError("resident wish service is unavailable")
+            wishes = await asyncio.to_thread(
+                self.wish_service.maintain_batch,
+                now=current,
+                batch_size=self.batch_size,
+            )
         result = {
             "status": "ok",
             "metrics": evaluation.get("metrics") if evaluation else None,
             "mailbox_metrics": mailbox.get("metrics") if mailbox else None,
             "visit_metrics": visits.get("metrics") if visits else None,
+            "wish_metrics": wishes.get("metrics") if wishes else None,
             "results": evaluation.get("results") if evaluation else [],
             "mailbox_results": mailbox.get("results") if mailbox else [],
+            "wish_results": wishes.get("results") if wishes else [],
             "next_after_resident_id": self._after_resident_id,
             "next_after_universe_id": self._after_universe_id,
         }
@@ -176,6 +202,7 @@ class WorldLifecycleScheduler:
                     "enabled": self.enabled,
                     "mailbox_enabled": self.mailbox_enabled,
                     "visits_enabled": self.visits_enabled,
+                    "wishes_enabled": self.wishes_enabled,
                     "interval_seconds": self.interval_seconds,
                     "batch_size": self.batch_size,
                     "last_run_metrics": (
@@ -190,6 +217,9 @@ class WorldLifecycleScheduler:
                         self.last_run.get("visit_metrics")
                         if self.last_run
                         else None
+                    ),
+                    "last_run_wish_metrics": (
+                        self.last_run.get("wish_metrics") if self.last_run else None
                     ),
                 },
             )

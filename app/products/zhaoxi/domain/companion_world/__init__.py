@@ -77,6 +77,11 @@ from app.products.zhaoxi.domain.companion_world.mailbox import (  # noqa: F401
     letter_is_open,
     letter_transition_allowed,
 )
+from app.products.zhaoxi.domain.companion_world.resident_wishes import (  # noqa: F401
+    ResidentWishProjection,
+    ResidentWishRecord,
+    project_resident_wish,
+)
 
 __all__ = [
     "BootstrapResult",

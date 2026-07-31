@@ -373,7 +373,7 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 
 ## Companion World P1 发布运行手册
 
-本节只适用于 M2-C。发布原则是：**先以 flag=false 部署和迁移，再导入模板、按固定截点 backfill、对账，最后才允许小流量开 flag**。正式四位角色内容和客户端最低版本必须由产品/客户端团队提供，运维不得临时编造。
+本节只适用于 M2-C。发布原则是：**先以 flag=false 部署和迁移，再导入模板、按固定截点 backfill、对账，最后才允许小流量开 flag**。正式五位角色内容和客户端最低版本必须由产品/客户端团队提供，运维不得临时编造。
 
 注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
 
@@ -381,7 +381,7 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 
 必须具备：
 
-- 经运营签字的 UTF-8 JSON manifest，恰含 rank 1..4 四条模板；每条有稳定 `template_id`、名称、头像引用、简介、三个标签、非空 SOUL/IDENTITY persona 与 `persona_version`。
+- 经运营签字的 UTF-8 JSON manifest，恰含 rank 1..5 五条模板；每条有稳定 `template_id`、名称、头像引用、简介、三个标签、非空 SOUL/IDENTITY persona 与 `persona_version`。
 - 已确认支持 `/v1/auth/session` 返回 `account:null` 并立即进入 world bootstrap 的客户端最低版本。
 - 客户端 PRD/技术说明已同步 D-05“同世界共享用户沉淀记忆”与 D-08“legacy resident 离开豁免”，不再保留相反口径。
 - 生产 PG 备份和可恢复点；记录发布人、时间、代码 SHA。
@@ -419,7 +419,7 @@ curl -fsS http://127.0.0.1:8180/health/ready
 
 此时 `/v1/worlds/*`、`/v1/conversations`、`/v1/ai-conversations/*` 应以 404 `not_found` 隐藏；旧 auth 与 legacy turn 路径保持原入口。完成 backfill 后，secondary legacy resident 的真人级 proactive 会被安全阀拦截；L3 因独立开关为 false 不读、不写、不 compact。不要在迁移后立刻开 API flag。
 
-### 3. 导入四模板目录
+### 3. 导入五模板目录
 
 脚本不会内置或打印 persona 正文；已发布 `template_id` 的内容不可原地修改，换版必须使用新 ID 并退休旧行。
 
@@ -435,7 +435,7 @@ curl -fsS http://127.0.0.1:8180/health/ready
 
 **运营名池（m0049 / NAME-001，2026-07-26 起）**：每条模板可选带 `name_pool`（3–5 个已审核
 实例名，去重、不含表情/控制字符）、`name_pool_version`（两者必须成对出现）、`long_summary`、
-`persona_key`。这四项是**可原地更新的运营元数据**，不参与人设内容的不可变判定——生产四模板
+`persona_key`。这四项是**可原地更新的运营元数据**，不参与人设内容的不可变判定——生产前四模板
 早已上线、`template_id` 不能换，所以名池只能这样补配；被原地更新的模板会出现在报告的
 `update_ids` 里。规则：
 
@@ -444,6 +444,25 @@ curl -fsS http://127.0.0.1:8180/health/ready
 - manifest 未提供的字段一律不动，重放一份不含名池的老 manifest 不会抹掉已配好的名池。
 - `persona_key` 允许从空补上，但一旦非空就不许改值，否则报 `persona_key is immutable once assigned`。
 - 不配名池不阻断任何流程：候选 `naming_status=unavailable`，客户端回落本地兜底名池。
+
+### v1.5 异步许愿发布（m0058，默认关闭）
+
+异步许愿依赖 mailbox 和独立中心 `world-lifecycle` scheduler。发布时严格按顺序执行：
+
+1. 保持 `COMPANION_WORLD_RESIDENT_WISH_ENABLED=false` 部署并完成 m0058；确认
+   `resident_wishes`、`resident_wish_jobs` 可查询，生产旧同步许愿入口已隐藏。
+2. 确认 `COMPANION_WORLD_MAILBOX_ENABLED=true`，且中心进程运行
+   `scripts/run_world_lifecycle_scheduler.py`；多节点不得各自启动 worker。
+3. 联调提交幂等、24 小时前不投递、72 小时终态、收回/投递竞争、wish 来信接受/拒绝/过期，
+   并确认 `/app/config` 的契约版本不低于 `2026-08-01`。
+4. 最后把 backend 与中心 scheduler 共同读取的配置改为
+   `COMPANION_WORLD_RESIDENT_WISH_ENABLED=true`，重启二者；只重启 backend 会出现能受理但
+   worker 不消费的半开状态。
+
+事故回滚只需把该 flag 恢复为 `false` 并重启 backend + scheduler。持久 job 不丢失；恢复后
+超过 `deliver_by` 的任务会收敛到 `unfulfilled`，不会迟到伪装成按时来信。监控
+`world_lifecycle_scheduler` heartbeat 的 `wishes_enabled` 与 `last_run_wish_metrics`，指标与日志
+不得包含愿望正文。
 
 ### M4 Mailbox 签名 catalog（默认关闭）
 
@@ -571,7 +590,7 @@ WHERE (p.daily_limit IS NOT NULL AND (a.daily_limit IS NULL OR a.daily_limit <> 
    OR (p.rpm_limit IS NOT NULL AND (a.rpm_limit IS NULL OR a.rpm_limit <> p.rpm_limit));
 ```
 
-模板目录还须恰好四条 active rank 1..4，且元数据非空；最稳妥的复核是再次运行模板脚本 `--dry-run`，报告应无错误且四个 ID 全部为 keep。m0031 后新增 resident 直接读取真人 canonical override；遗留 account 副本只作兼容和对账，不再决定 turn 上限。
+模板目录还须恰好五条 active rank 1..5，且元数据非空；最稳妥的复核是再次运行模板脚本 `--dry-run`，报告应无错误且五个 ID 全部为 keep。m0031 后新增 resident 直接读取真人 canonical override；遗留 account 副本只作兼容和对账，不再决定 turn 上限。
 
 ### 6. 开 flag 与冒烟
 

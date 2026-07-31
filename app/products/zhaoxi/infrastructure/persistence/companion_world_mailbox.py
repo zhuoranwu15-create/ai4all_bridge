@@ -305,6 +305,27 @@ def expire_due_character_letters(
             """,
             (clean_now, clean_now, *filter_params, clean_now),
         )
+        wish_letter_clauses = ["source = 'wish'", "status = 'expired'"]
+        wish_letter_params: List[Any] = []
+        if owner_platform_user_id is not None:
+            wish_letter_clauses.append("owner_platform_user_id = ?")
+            wish_letter_params.append(owner_platform_user_id)
+        if universe_id is not None:
+            wish_letter_clauses.append("universe_id = ?")
+            wish_letter_params.append(universe_id)
+        tx.execute(
+            f"""
+            UPDATE resident_wishes
+            SET closed_at = COALESCE(closed_at, ?),
+                terminal_reason = COALESCE(terminal_reason, 'letter_expired'),
+                wish_text = NULL, updated_at = ?
+            WHERE closed_at IS NULL AND letter_id IN (
+                SELECT id FROM character_letters
+                WHERE {' AND '.join(wish_letter_clauses)}
+            )
+            """,
+            (clean_now, clean_now, *wish_letter_params),
+        )
     return int(cursor.rowcount or 0)
 
 
@@ -349,13 +370,13 @@ def prepare_character_letter_delivery(
         return {**base, "status": "blocked_capacity"}
     open_row = conn.execute(
         "SELECT id FROM character_letters WHERE universe_id = ? "
-        "AND status IN ('unread', 'read', 'deferred') LIMIT 1",
+        "AND source = 'organic' AND status IN ('unread', 'read', 'deferred') LIMIT 1",
         (universe_id,),
     ).fetchone()
     if open_row is not None:
         return {**base, "status": "blocked_open"}
     last_row = conn.execute(
-        "SELECT delivered_at FROM character_letters WHERE universe_id = ? "
+        "SELECT delivered_at FROM character_letters WHERE universe_id = ? AND source = 'organic' "
         "ORDER BY delivered_at DESC, id DESC LIMIT 1",
         (universe_id,),
     ).fetchone()
@@ -372,6 +393,7 @@ def prepare_character_letter_delivery(
         FROM character_letter_catalog c
         JOIN character_templates t ON t.id = c.character_template_id
         WHERE c.status = 'active'
+          AND c.source = 'organic'
           AND (c.available_from IS NULL OR c.available_from <= ?)
           AND (c.available_until IS NULL OR c.available_until > ?)
           AND t.status = 'active'
@@ -415,6 +437,8 @@ def insert_character_letter(
     policy_version: str,
     delivered_at: str,
     expires_at: str,
+    source: str = "organic",
+    wish_id: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> Tuple[Dict[str, Any], bool]:
     """写入一封快照 letter；容量/cooldown eligibility 由 M4-4 服务在同 world 锁内编排。"""
@@ -425,6 +449,11 @@ def insert_character_letter(
     cleaned_fingerprint = _clean_required(request_fingerprint, "request_fingerprint")
     delivered = _clean_required(delivered_at, "delivered_at")
     expires = _clean_required(expires_at, "expires_at")
+    clean_source = str(source or "organic").strip()
+    if clean_source not in {"organic", "wish"}:
+        raise ValueError("invalid letter source")
+    if (clean_source == "wish") != bool(wish_id):
+        raise ValueError("wish letter source/id mismatch")
     if expires <= delivered:
         raise ValueError("letter expires_at must be after delivered_at")
     letter_id = _new_id("letter")
@@ -446,6 +475,8 @@ def insert_character_letter(
                 or result["universe_id"] != cleaned_universe
                 or result["catalog_id"] != cleaned_catalog
                 or result["request_fingerprint"] != cleaned_fingerprint
+                or str(result.get("source") or "organic") != clean_source
+                or result.get("wish_id") != wish_id
             ):
                 raise ValueError("letter idempotency conflict")
             return result, False
@@ -456,6 +487,8 @@ def insert_character_letter(
         ).fetchone()
         if catalog is None:
             raise ValueError("letter catalog unavailable")
+        if str(catalog["source"] or "organic") != clean_source:
+            raise ValueError("letter/catalog source mismatch")
         if catalog["available_from"] and str(catalog["available_from"]) > delivered:
             raise ValueError("letter catalog not started")
         if catalog["available_until"] and str(catalog["available_until"]) <= delivered:
@@ -467,8 +500,9 @@ def insert_character_letter(
                 id, owner_platform_user_id, universe_id, catalog_id,
                 character_key, character_template_id, template_version,
                 body_text, status, idempotency_key, request_fingerprint,
-                eligibility_snapshot_json, policy_version, delivered_at, expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unread', ?, ?, ?, ?, ?, ?)
+                eligibility_snapshot_json, policy_version, delivered_at, expires_at,
+                source, wish_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'unread', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 letter_id,
@@ -490,6 +524,8 @@ def insert_character_letter(
                 _clean_required(policy_version, "policy_version"),
                 delivered,
                 expires,
+                clean_source,
+                wish_id,
             ),
         )
         row = tx.execute(
@@ -543,10 +579,12 @@ def lock_character_letter_accept_scope(
                c.character_key AS catalog_character_key,
                c.character_template_id AS catalog_character_template_id,
                c.template_version AS catalog_template_version,
+               c.source AS catalog_source,
                t.status AS template_status,
                t.source_type AS template_source_type,
                t.persona_version AS current_template_version,
                t.persona_seed_json,
+               t.owner_platform_user_id AS template_owner_platform_user_id,
                t.name AS character_name,
                t.avatar_ref,
                t.summary,
@@ -588,7 +626,18 @@ def mark_locked_character_letter_expired(
         """,
         (now, now, letter_id, owner_platform_user_id, now),
     )
-    return int(cursor.rowcount or 0) == 1
+    changed = int(cursor.rowcount or 0) == 1
+    if changed:
+        conn.execute(
+            """
+            UPDATE resident_wishes
+            SET closed_at = COALESCE(closed_at, ?), terminal_reason = 'letter_expired',
+                wish_text = NULL, updated_at = ?
+            WHERE letter_id = ? AND closed_at IS NULL
+            """,
+            (now, now, letter_id),
+        )
+    return changed
 
 
 def mark_locked_character_letter_accepted(
@@ -610,7 +659,18 @@ def mark_locked_character_letter_accepted(
         """,
         (resident_id, now, now, letter_id, owner_platform_user_id, now),
     )
-    return int(cursor.rowcount or 0) == 1
+    changed = int(cursor.rowcount or 0) == 1
+    if changed:
+        conn.execute(
+            """
+            UPDATE resident_wishes
+            SET closed_at = COALESCE(closed_at, ?), terminal_reason = 'letter_accepted',
+                wish_text = NULL, updated_at = ?
+            WHERE letter_id = ? AND closed_at IS NULL
+            """,
+            (now, now, letter_id),
+        )
+    return changed
 
 
 def get_accepted_character_letter_resident(
@@ -752,6 +812,21 @@ def transition_open_character_letter(
         )
         if int(cursor.rowcount or 0) != 1:
             return None
+        if target in {"declined", "expired"}:
+            tx.execute(
+                """
+                UPDATE resident_wishes
+                SET closed_at = COALESCE(closed_at, ?), terminal_reason = ?,
+                    wish_text = NULL, updated_at = ?
+                WHERE letter_id = ? AND closed_at IS NULL
+                """,
+                (
+                    now,
+                    "letter_declined" if target == "declined" else "letter_expired",
+                    now,
+                    letter_id,
+                ),
+            )
         row = tx.execute(
             "SELECT * FROM character_letters WHERE id = ? AND owner_platform_user_id = ?",
             (letter_id, owner_platform_user_id),
