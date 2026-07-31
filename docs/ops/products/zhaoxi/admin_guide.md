@@ -445,22 +445,21 @@ curl -fsS http://127.0.0.1:8180/health/ready
 - `persona_key` 允许从空补上，但一旦非空就不许改值，否则报 `persona_key is immutable once assigned`。
 - 不配名池不阻断任何流程：候选 `naming_status=unavailable`，客户端回落本地兜底名池。
 
-### v1.5 异步许愿发布（m0058，默认关闭）
+### v1.5 异步许愿发布（m0058，无独立开关）
 
-异步许愿依赖 mailbox 和独立中心 `world-lifecycle` scheduler。发布时严格按顺序执行：
+异步许愿依赖 mailbox 和独立中心 `world-lifecycle` scheduler；不提供 wish-only 开关。
+发布前严格按顺序确认：
 
-1. 保持 `COMPANION_WORLD_RESIDENT_WISH_ENABLED=false` 部署并完成 m0058；确认
-   `resident_wishes`、`resident_wish_jobs` 可查询，生产旧同步许愿入口已隐藏。
+1. 完成 m0058；确认 `resident_wishes`、`resident_wish_jobs` 可查询，生产旧同步许愿入口已隐藏。
 2. 确认 `COMPANION_WORLD_MAILBOX_ENABLED=true`，且中心进程运行
    `scripts/run_world_lifecycle_scheduler.py`；多节点不得各自启动 worker。
 3. 联调提交幂等、24 小时前不投递、72 小时终态、收回/投递竞争、wish 来信接受/拒绝/过期，
    并确认 `/app/config` 的契约版本不低于 `2026-08-01`。
-4. 最后把 backend 与中心 scheduler 共同读取的配置改为
-   `COMPANION_WORLD_RESIDENT_WISH_ENABLED=true`，重启二者；只重启 backend 会出现能受理但
-   worker 不消费的半开状态。
+4. 部署后共同重启 backend 与中心 scheduler；只重启 backend 会出现能受理但 worker 未加载
+   新代码的半开状态。
 
-事故回滚只需把该 flag 恢复为 `false` 并重启 backend + scheduler。持久 job 不丢失；恢复后
-超过 `deliver_by` 的任务会收敛到 `unfulfilled`，不会迟到伪装成按时来信。监控
+异步许愿的可用性继承 resident world + mailbox，不提供独立回滚开关。持久 job 不丢失；服务
+恢复后超过 `deliver_by` 的任务会收敛到 `unfulfilled`，不会迟到伪装成按时来信。监控
 `world_lifecycle_scheduler` heartbeat 的 `wishes_enabled` 与 `last_run_wish_metrics`，指标与日志
 不得包含愿望正文。
 

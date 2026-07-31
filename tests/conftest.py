@@ -384,7 +384,6 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_chat_image_enabled = False
     s.companion_world_chat_voice_enabled = False
     s.companion_world_feed_image_enabled = False
-    s.companion_world_resident_wish_enabled = False
     s.companion_world_wish_daily_max = 10
     s.companion_world_wish_job_lease_seconds = 600
     s.companion_world_wish_retry_seconds = 3600

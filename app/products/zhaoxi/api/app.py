@@ -307,10 +307,7 @@ def _companion_world_capabilities() -> dict:
         "chat_image_message": _media_gated("companion_world_chat_image_enabled"),
         "chat_voice_message": _media_gated("companion_world_chat_voice_enabled"),
         "feed_image_post": _media_gated("companion_world_feed_image_enabled"),
-        "resident_wish_create": (
-            _gated("companion_world_resident_wish_enabled")
-            and bool(getattr(settings, "companion_world_mailbox_enabled", False))
-        ),
+        "resident_wish_create": _gated("companion_world_mailbox_enabled"),
     }
 
 

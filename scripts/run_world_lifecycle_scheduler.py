@@ -22,10 +22,7 @@ async def main() -> None:
     lifecycle_enabled = settings.companion_world_lifecycle_evaluation_enabled
     mailbox_enabled = settings.companion_world_mailbox_enabled
     visits_enabled = settings.companion_world_visits_enabled
-    wishes_enabled = (
-        settings.companion_world_resident_wish_enabled
-        and settings.companion_world_mailbox_enabled
-    )
+    wishes_enabled = mailbox_enabled
     if not lifecycle_enabled and not mailbox_enabled and not visits_enabled and not wishes_enabled:
         logger.warning(
             "world-lifecycle scheduler disabled: lifecycle, mailbox, visits and wishes false"

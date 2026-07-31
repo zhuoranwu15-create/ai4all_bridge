@@ -393,14 +393,13 @@ class Settings(BaseSettings):
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
     companion_world_visits_enabled: bool = False
     companion_world_human_chat_enabled: bool = False
-    # v1.5 媒体默认打开；异步许愿在 schema/API/worker 联调完成前默认关闭。
+    # v1.5 媒体默认打开；异步许愿随 resident world + mailbox 可用，不设独立开关。
     # 注意：媒体三位对客户端是否可见还取决于 MEDIA_URL_SIGNING_SECRET 是否配置——密钥留空时
     # 能力位一律下发 false、上传返回 media_disabled（见 app/platform/media/access.py），
     # 不会出现「能力位为 true 却签不出读 URL」的半开状态。
     companion_world_chat_image_enabled: bool = True
     companion_world_chat_voice_enabled: bool = True
     companion_world_feed_image_enabled: bool = True
-    companion_world_resident_wish_enabled: bool = False
     # 每人滚动 24 小时受理上限；同一 client_request_id 重放不计次，<=0 表示不限制。
     companion_world_wish_daily_max: int = 10
     companion_world_wish_job_lease_seconds: int = 600

@@ -3,8 +3,8 @@
 > 面向：朝夕相伴移动端 App 开发者。
 > 服务端状态：Companion World 3.0 已在生产全量激活（aliyun1 中心节点），本文档描述的所有能力均线上可用。
 > 最后核对：2026-07-23，对着生产 `https://ai4company.top` 实测。
-> **v1.5（会话与动态媒体 + 异步许愿）契约已实现**（2026-07-31），异步许愿默认关闭，
-> 完成生产迁移与 worker 联调后再显式开启；契约见 §6.5 / §6.6。
+> **v1.5（会话与动态媒体 + 异步许愿）契约已实现并启用**（2026-08-01）；异步许愿不设
+> 独立开关，随 resident world + mailbox 可用，契约见 §6.5 / §6.6。
 > 生产已于 **2026-07-31** 配好 `MEDIA_URL_SIGNING_SECRET`，四个能力位现在全部下发 `true`，
 > 媒体链路可直接联调。仍请一律以 `/app/config` 的能力位渲染入口，细节见 §9.1。
 
@@ -106,7 +106,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "chat_image_message": true,
     "chat_voice_message": true,
     "feed_image_post": true,
-    "resident_wish_create": false
+    "resident_wish_create": true
   },
   "limits": {
     "message_chars": 4000, "audio_bytes": 10485760, "audio_duration_ms": 60000,
@@ -130,10 +130,10 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   - `voice_input`（CHAT-04）：M1 产品口径是**打开**，但该位由生产 ASR 配置驱动，上面这份
     实测响应是配置生效前抓的。客户端按位渲染即可，不要硬编码——服务端配好 key 后它会翻成
     `true`，无需客户端发版。
-  - v1.5 四位（`chat_image_message` / `chat_voice_message` / `feed_image_post` /
-    `resident_wish_create`）：**分别独立门控**，可以只开图不开语音。为 `false` 时对应入口
-    必须隐藏或置灰；硬发会拿到 `media_disabled`(404) 或 `feature_disabled`(404)。
-    它们同样受 `resident_world` 总闸约束（总闸关时恒为 `false`）。
+  - v1.5 媒体三位（`chat_image_message` / `chat_voice_message` / `feed_image_post`）分别独立
+    门控，可以只开图不开语音；`resident_wish_create` 不设独立开关，随 mailbox 可用。
+    任一能力为 `false` 时对应入口必须隐藏或置灰；硬发会拿到 `media_disabled`(404) 或
+    `feature_disabled`(404)。它们同样受 `resident_world` 总闸约束。
 - `limits.*`：**恒下发，与能力位无关**——客户端拿它做上传前本地校验，不要硬编码常量。
   `image_count_max` 是单条动态的图片张数上限（聊天图片恒为单张）。
   `wish_daily_max` ≤ 0 表示服务端不设日额度。
@@ -767,9 +767,9 @@ POST /v1/worlds/home/feed/posts
 
 ### 6.6 许愿创建居民（v1.5 新增）
 
-许愿是独立异步链路，不再返回人设预览，也不会直接创建居民。能力位
-`resident_wish_create` 关闭时三个端点统一返回 `feature_disabled`(404)；客户端还必须要求
-`client_contract_version >= 2026-08-01` 才展示入口。
+许愿是独立异步链路，不再返回人设预览，也不会直接创建居民。它不设独立服务端开关；
+`resident_world` 或 mailbox 关闭时能力位 `resident_wish_create=false`，三个端点统一返回
+`feature_disabled`(404)。客户端还必须要求 `client_contract_version >= 2026-08-01` 才展示入口。
 
 ```
 POST /v1/worlds/home/resident-wishes             { "wish_text": "…", "client_request_id": "…" }
@@ -928,22 +928,22 @@ POST /v1/resident-wishes/{wish_id}/withdraw      {}
 
 ### 9.1 v1.5 能力的联调前置（媒体 + 许愿）
 
-三个媒体 flag 默认打开；异步许愿代码默认关闭，必须在 m0058、中心 worker、信箱闭环与客户端
-契约联合验收通过后显式打开。真正决定媒体三位可见性的是**签名密钥是否配置**：
+三个媒体 flag 默认打开；异步许愿不设独立 flag，随 resident world + mailbox 可用。真正决定
+媒体三位可见性的是**签名密钥是否配置**：
 
 | flag | 能力位 | 还需要什么 |
 |---|---|---|
 | `COMPANION_WORLD_CHAT_IMAGE_ENABLED` | `chat_image_message` | `MEDIA_URL_SIGNING_SECRET` |
 | `COMPANION_WORLD_CHAT_VOICE_ENABLED` | `chat_voice_message` | `MEDIA_URL_SIGNING_SECRET` |
 | `COMPANION_WORLD_FEED_IMAGE_ENABLED` | `feed_image_post` | `MEDIA_URL_SIGNING_SECRET` |
-| `COMPANION_WORLD_RESIDENT_WISH_ENABLED`（默认 false） | `resident_wish_create` | `MAILBOX_ENABLED` + m0058 + central worker + contract ≥ 2026-08-01 |
+| （无独立 flag） | `resident_wish_create` | `MAILBOX_ENABLED` + m0058 + central worker + contract ≥ 2026-08-01 |
 
 `MEDIA_URL_SIGNING_SECRET` 留空时媒体链路整体视为未就绪：三个媒体能力位一律下发 `false`，
 `POST /media/uploads` 返回 `media_disabled`——**不会**出现「能力位是 `true` 却拿不到读 URL」的
 半开状态，客户端照能力位渲染即可。配好密钥并重启后三位自动转 `true`，客户端无需发版。
 
-**发布口径（2026-07-31）**：媒体密钥已配置；旧同步许愿 flag 先关闭，异步链路联合验收完成后
-才重新开启同一能力位。
+**发布口径（2026-08-01）**：媒体密钥已配置；旧同步许愿分支已关闭，异步许愿无独立开关并已
+随 mailbox 上线。
 
 图片机审是独立的运维配置（见
 [`ops/platform/image_moderation_setup.md`](../../ops/platform/image_moderation_setup.md)），
