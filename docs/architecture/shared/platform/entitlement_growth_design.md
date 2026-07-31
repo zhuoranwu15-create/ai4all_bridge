@@ -71,8 +71,9 @@ Phase 1 的目标是形成最小可信闭环：用户有余额，系统能扣减
 
 | 概念 | 含义 |
 | --- | --- |
-| `entitlement_wallet` | 某个 AI4ALL Account 的贝壳钱包 |
+| `entitlement_wallet` | 某个真人在某个产品内共享的贝壳钱包 |
 | `entitlement_ledger` | 所有影响余额的发放、扣减、补偿和回滚流水；未来支付生效也必须进入 ledger |
+| `admin_access_event` | Admin/脚本运营动作审计；手工发放记录操作者、原因、入口和 ledger 关联 |
 | `cost_event` | LLM、Search、outbound 等资源消耗记录，可映射为用户扣减或平台成本 |
 | `model_price_rule` | 模型相对基准模型的价格倍率 |
 | `registration_access_policy` | 全局注册准入策略，控制新手机号是否允许无邀请码注册 |
@@ -128,7 +129,8 @@ shell_micros = ceil(billable_tokens * model_price_multiplier * 1_000_000 / 1000)
 entitlement_wallets
 - id
 - platform_user_id
-- ai4all_account_id
+- app_id
+- account_id（创建钱包的来源账号）
 - balance_shell_micros
 - status: active | frozen | closed
 - created_at
@@ -137,8 +139,8 @@ entitlement_wallets
 
 约束：
 
-- Phase 1 不允许一个产品用户拥有多个 AI4ALL Account，因此默认一个 `platform_user_id` 对一个 active wallet。
-- 如果未来支持多 account，wallet 仍按 `ai4all_account_id` 隔离。
+- 当前钱包按 `(platform_user_id, app_id)` 聚合；同一真人在同一产品的多个 Account 共享一个 active wallet。
+- 不同产品的钱包、流水、幂等键作用域互相隔离。
 - 余额更新必须和 ledger insert 在同一个数据库事务中完成。
 
 ### 6.2 entitlement_ledger
@@ -148,23 +150,26 @@ entitlement_ledger
 - id
 - wallet_id
 - platform_user_id
-- ai4all_account_id
-- direction: credit | debit
+- app_id
+- account_id（本次流水的来源账号）
+- entry_type: credit | debit
 - amount_shell_micros
 - balance_after_shell_micros
-- reason
 - source_type
 - source_id
 - idempotency_key
-- operator_admin_user_id
-- related_ledger_id
 - metadata_json
 - created_at
 ```
 
+`entitlement_ledger` 是余额变化的唯一事实源。运营发放的 `reason`、操作者及发放前后余额同时写入
+`admin_access_events`，并通过 `resource_type=entitlement_ledger`、`resource_id=ledger.id` 关联；
+ledger 的 `metadata_json` 保留原因、操作者和金额等必要副本，便于独立财务核对。无需另建运营赠送表。操作方法见
+[贝壳运营发放 Runbook](../../../ops/platform/wallet_grants.md)。
+
 常见 `source_type`：
 
-| source_type | direction | 说明 |
+| source_type | entry_type | 说明 |
 | --- | --- | --- |
 | `new_user_grant` | credit | 新用户注册赠送 |
 | `manual_grant` | credit | 运营手工发放 |

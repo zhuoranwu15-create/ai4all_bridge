@@ -6,4 +6,5 @@
 - [多产品 Phase 1 发布与回滚](multi_product_phase1_release_runbook.md)
 - [P5 厚节点升级](p5_production_upgrade_runbook.md)
 - [图片机审开通（阿里云内容安全）](image_moderation_setup.md)
+- [贝壳运营发放](wallet_grants.md)
 - [微信/OpenClaw 排障](troubleshooting/)
