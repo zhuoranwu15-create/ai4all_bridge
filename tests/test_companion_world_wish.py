@@ -70,7 +70,6 @@ def _bootstrapped(client, phone: str) -> dict:
 def _enabled(fresh_db) -> None:
     fresh_db.companion_world_p1_enabled = True
     fresh_db.companion_world_mailbox_enabled = True
-    fresh_db.companion_world_resident_wish_enabled = True
     fresh_db.companion_world_wish_daily_max = 10
 
 
@@ -126,11 +125,11 @@ def _parse(value: str) -> datetime:
     return datetime.fromisoformat(value).replace(tzinfo=None)
 
 
-def test_flag_defaults_off_and_old_preview_wish_branch_is_closed(
+def test_mailbox_gate_and_old_preview_wish_branch_is_closed(
     client, fresh_db, monkeypatch
 ):
     fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_resident_wish_enabled = False
+    fresh_db.companion_world_mailbox_enabled = False
     headers = _bootstrapped(client, "19930005001")
 
     hidden = _submit(client, headers, "wish-off-0001")
@@ -340,9 +339,11 @@ def test_failed_second_review_retries_then_becomes_unfulfilled(
 
 def test_app_config_publishes_async_wish_contract(client, fresh_db):
     fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_resident_wish_enabled = False
+    fresh_db.companion_world_mailbox_enabled = False
     body = client.get("/v1/app/config").json()
 
     assert body["features"]["resident_wish_create"] is False
+    fresh_db.companion_world_mailbox_enabled = True
+    assert client.get("/v1/app/config").json()["features"]["resident_wish_create"] is True
     assert body["limits"]["wish_text_chars"] == 500
     assert body["client_contract_version"] == "2026-08-01"

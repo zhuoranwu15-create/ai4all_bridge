@@ -49,10 +49,7 @@ class EmptyPayload(BaseModel):
 def _require_wish_session(
     authorization: Optional[str] = Header(default=None),
 ) -> SessionPrincipal:
-    if not (
-        bool(getattr(settings, "companion_world_resident_wish_enabled", False))
-        and bool(getattr(settings, "companion_world_mailbox_enabled", False))
-    ):
+    if not bool(getattr(settings, "companion_world_mailbox_enabled", False)):
         raise CompanionWorldApiError("feature_disabled", 404)
     return _require_world_session(authorization)
 

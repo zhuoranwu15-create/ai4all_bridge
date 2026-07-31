@@ -236,44 +236,46 @@ def test_app_config_publishes_world_capabilities_tracking_flags(client, fresh_db
     assert on["human_chat_send"] is False
 
 
-# v1.5 媒体与许愿四位（FLAG-001）：能力位名 → settings flag 名。
-V1_5_CAPABILITY_FLAGS = {
+# v1.5 媒体三位（FLAG-001）：能力位名 → settings flag 名。
+V1_5_MEDIA_CAPABILITY_FLAGS = {
     "chat_image_message": "companion_world_chat_image_enabled",
     "chat_voice_message": "companion_world_chat_voice_enabled",
     "feed_image_post": "companion_world_feed_image_enabled",
-    "resident_wish_create": "companion_world_resident_wish_enabled",
 }
 
 
-def test_v1_5_capabilities_are_registered_and_follow_their_flags(client, fresh_db):
-    """四位新能力必须**出现**在响应里，并逐个跟随自己的 settings 开关。
+def test_v1_5_capabilities_are_registered_and_follow_prerequisites(client, fresh_db):
+    """四位新能力必须出现；媒体跟独立开关，异步许愿跟 mailbox。
 
     只加 settings 不在 ``AppConfigFeatures`` 登记，会被 response_model 静默过滤掉，
     客户端读到 undefined——测试盯的正是这条静默失败。
     """
     fresh_db.companion_world_p1_enabled = True
     features = client.get("/v1/app/config").json()["features"]
-    for capability in V1_5_CAPABILITY_FLAGS:
+    for capability in V1_5_MEDIA_CAPABILITY_FLAGS:
         assert features[capability] is False, capability
+    assert features["resident_wish_create"] is False
 
-    # 逐个打开：媒体三位互不牵连；异步许愿额外依赖 mailbox。
-    for capability, flag in V1_5_CAPABILITY_FLAGS.items():
-        if capability == "resident_wish_create":
-            fresh_db.companion_world_mailbox_enabled = True
+    # 逐个打开：媒体三位互不牵连。
+    for capability, flag in V1_5_MEDIA_CAPABILITY_FLAGS.items():
         setattr(fresh_db, flag, True)
         features = client.get("/v1/app/config").json()["features"]
         assert features[capability] is True, capability
         setattr(fresh_db, flag, False)
         assert client.get("/v1/app/config").json()["features"][capability] is False
-        fresh_db.companion_world_mailbox_enabled = False
+
+    # 异步许愿不设独立开关，随 mailbox 可用。
+    fresh_db.companion_world_mailbox_enabled = True
+    assert client.get("/v1/app/config").json()["features"]["resident_wish_create"] is True
+    fresh_db.companion_world_mailbox_enabled = False
+    assert client.get("/v1/app/config").json()["features"]["resident_wish_create"] is False
 
 
 def test_v1_5_flag_declared_defaults_match_release_safety():
-    """媒体默认开；异步许愿在迁移/worker 联调前必须默认关。
+    """媒体默认开；异步许愿不保留独立 settings 开关。
 
-    新开关一律代码里默认打开、由 ``.env`` 显式写 false 关停，避免「功能上线了却因为忘了
-    开开关而看不到」这类误判。媒体三位是否真正对客户端可见另由签名密钥是否配置决定，
-    见 ``test_media_capabilities_require_signing_secret``。
+    三个媒体开关在代码里默认打开；是否真正对客户端可见另由签名密钥是否配置决定，见
+    ``test_media_capabilities_require_signing_secret``。异步许愿只继承 world + mailbox。
 
     读 ``model_fields`` 的声明默认值而不是实例化 ``Settings()``——后者会吃开发机/生产机的
     ``.env``，让「默认是什么」这条断言随环境漂移。
@@ -286,7 +288,7 @@ def test_v1_5_flag_declared_defaults_match_release_safety():
         "companion_world_feed_image_enabled",
     ):
         assert Settings.model_fields[flag].default is True, flag
-    assert Settings.model_fields["companion_world_resident_wish_enabled"].default is False
+    assert "companion_world_resident_wish_enabled" not in Settings.model_fields
     # 图片理解同理：默认开，缺 DashScope key 时由 describe_image 落兜底文案。
     assert Settings.model_fields["image_understanding_enabled"].default is True
 
@@ -295,10 +297,10 @@ def test_media_capabilities_require_signing_secret(client, fresh_db):
     """未配 MEDIA_URL_SIGNING_SECRET 时媒体三位必须报 false，许愿不受影响。
 
     开关默认打开后，「密钥没配」成了常态；此时上传与读 URL 整条链路都不可用，能力位若还
-    报 true，客户端就会画出必然 503 的入口。许愿不依赖签名，只跟自己的开关。
+    报 true，客户端就会画出必然 503 的入口。许愿不依赖签名，只跟 world + mailbox。
     """
     fresh_db.companion_world_p1_enabled = True
-    for flag in V1_5_CAPABILITY_FLAGS.values():
+    for flag in V1_5_MEDIA_CAPABILITY_FLAGS.values():
         setattr(fresh_db, flag, True)
     fresh_db.companion_world_mailbox_enabled = True
 
@@ -321,13 +323,14 @@ def test_world_capabilities_are_false_when_parent_flag_is_off(client, fresh_db):
     fresh_db.companion_world_p1_enabled = False
     fresh_db.companion_world_feed_enabled = True
     fresh_db.companion_world_mailbox_enabled = True
-    for flag in V1_5_CAPABILITY_FLAGS.values():
+    for flag in V1_5_MEDIA_CAPABILITY_FLAGS.values():
         setattr(fresh_db, flag, True)
     features = client.get("/v1/app/config").json()["features"]
     assert features["world_feed"] is False
     assert features["mailbox"] is False
-    for capability in V1_5_CAPABILITY_FLAGS:
+    for capability in V1_5_MEDIA_CAPABILITY_FLAGS:
         assert features[capability] is False, capability
+    assert features["resident_wish_create"] is False
 
 
 def test_me_recovers_selecting_session_without_account(client, fresh_db):
