@@ -9,7 +9,7 @@ import re
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.bootstrap.runtime import get_background_loop
 from app.routers.deps import get_admin_user, verify_admin_auth
 from app.routers.serializers import _audit_plaintext_access, _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _normalize_ts, _profile_for_view, _prompt_lab_messages_for_view, _prompt_lab_session_for_account, _redact_raw_payload, _redacted_flag_for_account, _require_plaintext_access, _session_for_view, _trace_for_view, _validate_prompt_lab_messages
@@ -106,7 +106,7 @@ def _build_prompt_lab_envelope(
         current_time=current.strftime("%H:%M"),
         onboarding_state=onboarding_state,
         onboarding_active=is_onboarding_active(onboarding_state),
-        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        web_search_enabled=WEB_SEARCH_ENABLED,
         include_tool_instructions=include_tool_instructions,
         debug_dry_run=debug_dry_run,
     )
@@ -952,8 +952,8 @@ def _web_search_debug_capabilities() -> dict:
     }
     return {
         "tool_schema_defined": True,
-        "model_exposure_configured": bool(getattr(settings, "web_search_enabled", False)),
-        "currently_in_turn_tools": bool(getattr(settings, "web_search_enabled", False)),
+        "model_exposure_configured": WEB_SEARCH_ENABLED,
+        "currently_in_turn_tools": WEB_SEARCH_ENABLED,
         "debug_chat_forces_tool_exposure": True,
         "provider_adapter_ready": any(configured_providers.get(provider, False) for provider in provider_order),
         "default_provider": default_provider,

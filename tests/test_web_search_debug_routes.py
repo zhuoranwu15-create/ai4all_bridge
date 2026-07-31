@@ -27,7 +27,8 @@ def test_debug_get_web_search_empty(client, fresh_db):
     assert data["tool_invocations"] == []
     assert data["provider_runs"] == []
     assert data["capabilities"]["tool_schema_defined"] is True
-    assert data["capabilities"]["currently_in_turn_tools"] is False
+    # web_search 已转正为默认能力（app.config.WEB_SEARCH_ENABLED 常开）。
+    assert data["capabilities"]["currently_in_turn_tools"] is True
 
 
 def test_debug_simulate_web_search_records_trace(client, fresh_db):

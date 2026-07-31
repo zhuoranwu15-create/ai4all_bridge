@@ -5,6 +5,12 @@ from pydantic_settings import BaseSettings
 # 非生产环境集合：这些环境允许使用 dev 默认密钥，不触发启动 fail-fast。
 _NON_PRODUCTION_ENVS = {"local", "development", "test"}
 
+# web_search 已转正为默认能力：不再从 .env 读取总开关，常量常开。
+# 注意这里只关掉"能力开关"这一层；provider 选路与凭据（aliyun_web_search_enabled、
+# web_search_provider_order 等）仍走 Settings，因为那是外部供应商可用性，不是产品开关。
+# 单轮仍可被显式覆盖：debug chat 的 force_web_search_enabled、履约链路的显式入参。
+WEB_SEARCH_ENABLED = True
+
 
 class Settings(BaseSettings):
     app_env: str = "local"
@@ -201,7 +207,7 @@ class Settings(BaseSettings):
     # 全部过期/用完才重新生成（1 次排序 + 1 次批量改写，共 2 次 LLM 调用）。
     hot_topic_account_reserve_ttl_hours: int = 6
     # 热榜数据来源（逗号分隔，按顺序抓取合并）；支持 toutiao / zhihu。
-    # 非空时优先用热榜，全部失败才降级 web search（需 web_search_enabled=true）。
+    # 非空时优先用热榜，全部失败才降级 web search（WEB_SEARCH_ENABLED 常开）。
     hot_topic_sources: str = "toutiao,zhihu"
     hot_topic_toutiao_url: str = "https://60s.viki.moe/v2/toutiao"
     hot_topic_zhihu_url: str = "https://60s.viki.moe/v2/zhihu"
@@ -217,7 +223,7 @@ class Settings(BaseSettings):
     proactive_commitment_min_confidence: float = 0.9
     proactive_commitment_max_days: int = 14
 
-    web_search_enabled: bool = False
+    # web_search 能力总开关已上移为模块常量 WEB_SEARCH_ENABLED（常开），此处不再配置。
     web_search_default_provider: str = "duckduckgo"
     web_search_provider_order: str = "duckduckgo,bing"
     web_search_provider_failover: bool = True

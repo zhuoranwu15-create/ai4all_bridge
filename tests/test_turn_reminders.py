@@ -104,8 +104,8 @@ def test_turn_tool_generation_error_returns_friendly_reply(client, fresh_db, cap
     assert "LLM API key is missing" in fallback_alerts[0].getMessage()
 
 
-def test_turn_gates_web_search_tool_registration(client, fresh_db):
-    """Main turn only exposes web_search tools when the feature flag is enabled."""
+def test_turn_always_exposes_web_search_tool(client, fresh_db):
+    """web_search 已转正为默认能力（app.config.WEB_SEARCH_ENABLED 常开），主 turn 恒暴露该工具。"""
     from unittest.mock import patch as _patch
     from app.db import get_or_create_session, set_account_onboarding_state
 
@@ -136,14 +136,6 @@ def test_turn_gates_web_search_tool_registration(client, fresh_db):
             },
         )
 
-    fresh_db.web_search_enabled = False
-    with patch("app.turn_service.generate_reply_with_tools", return_value=("mock reply", None)) as mock_llm:
-        resp = post_turn()
-    assert resp.status_code == 200
-    tool_names = {t["function"]["name"] for t in mock_llm.call_args.kwargs["tools"]}
-    assert "web_search" not in tool_names
-
-    fresh_db.web_search_enabled = True
     with patch("app.turn_service.generate_reply_with_tools", return_value=("mock reply", None)) as mock_llm:
         resp = post_turn()
     assert resp.status_code == 200

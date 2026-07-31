@@ -278,7 +278,7 @@ def test_settings(tmp_path, db_dsn):
     s.proactive_commitment_context_messages = 8
     s.proactive_commitment_min_confidence = 0.9
     s.proactive_commitment_max_days = 14
-    s.web_search_enabled = False
+    # web_search 能力总开关已改为常量 WEB_SEARCH_ENABLED（常开），不再有可 patch 的 settings 字段。
     s.web_search_default_provider = "duckduckgo"
     s.web_search_provider_order = "duckduckgo,bing"
     s.web_search_provider_failover = True

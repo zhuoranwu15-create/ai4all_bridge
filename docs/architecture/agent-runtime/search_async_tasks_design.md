@@ -277,7 +277,9 @@ Scheduler / due dispatcher 属于提醒、陪伴跟进、内容邀请等主动�
 > **实现现状（2026-06-15）：** 搜索 5 贝壳扣减**尚未接线**。当前 `web_search` 只写
 > `search_provider_runs` / `tool_invocations` trace,不调用任何扣费(无 `record_*_search_charge`);
 > 仅聊天 token 和图片理解有计费(`record_chat_usage_charge`/`record_image_understanding_charge`)。
-> 且 `web_search` 默认关闭(`web_search_enabled=False`)。下述为暂定规则,接线时再落地。
+> 能力开关方面:`web_search` 已于 2026-07-28 转正为默认能力,总开关上移为模块常量
+> `app.config.WEB_SEARCH_ENABLED = True`(不再从 `.env` 读取);原「默认关闭」的表述已作废。
+> 下述扣费为暂定规则,接线时再落地。
 
 Phase 1 暂定扣减规则：
 
