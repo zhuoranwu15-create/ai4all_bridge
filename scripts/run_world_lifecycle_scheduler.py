@@ -22,9 +22,13 @@ async def main() -> None:
     lifecycle_enabled = settings.companion_world_lifecycle_evaluation_enabled
     mailbox_enabled = settings.companion_world_mailbox_enabled
     visits_enabled = settings.companion_world_visits_enabled
-    if not lifecycle_enabled and not mailbox_enabled and not visits_enabled:
+    wishes_enabled = (
+        settings.companion_world_resident_wish_enabled
+        and settings.companion_world_mailbox_enabled
+    )
+    if not lifecycle_enabled and not mailbox_enabled and not visits_enabled and not wishes_enabled:
         logger.warning(
-            "world-lifecycle scheduler disabled: lifecycle, mailbox and visits false"
+            "world-lifecycle scheduler disabled: lifecycle, mailbox, visits and wishes false"
         )
         return
     if not settings.has_central_role:
@@ -36,6 +40,7 @@ async def main() -> None:
         enabled=lifecycle_enabled,
         mailbox_enabled=mailbox_enabled,
         visits_enabled=visits_enabled,
+        wishes_enabled=wishes_enabled,
         interval_seconds=(
             settings.companion_world_lifecycle_scheduler_interval_seconds
         ),

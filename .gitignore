@@ -19,6 +19,9 @@ data/*
 !data/moderation/
 data/moderation/*
 !data/moderation/sensitive_terms.json
+!data/companion_world/
+data/companion_world/*
+!data/companion_world/presets_v1.json
 !data/system/
 !data/system/**
 ai4all.db

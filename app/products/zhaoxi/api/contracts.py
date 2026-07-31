@@ -446,6 +446,93 @@ class ResidentDraftPreviewData(BaseModel):
     ai_identity_notice: str
 
 
+# --- B 类 data：异步许愿 --------------------------------------------------
+
+
+class ResidentWishData(BaseModel):
+    wish_id: str
+    status: str
+    submitted_at: str
+    expected_delivery_from: str
+    expected_delivery_to: str
+    letter_id: Optional[str] = None
+    is_open: bool
+    can_withdraw: bool
+    terminal_reason: Optional[str] = None
+
+
+class ResidentWishSubmitData(BaseModel):
+    wish: ResidentWishData
+    replayed: bool
+
+
+class ResidentWishCurrentData(BaseModel):
+    wish: Optional[ResidentWishData] = None
+
+
+class ResidentWishWithdrawData(BaseModel):
+    wish: ResidentWishData
+    replayed: bool
+
+
+# --- B 类 data：信箱 ------------------------------------------------------
+
+
+class MailboxCharacterData(BaseModel):
+    name: Optional[str] = None
+    avatar_ref: Optional[str] = None
+    summary: Optional[str] = None
+    tags: List[str]
+
+
+class MailboxTextBody(BaseModel):
+    type: Literal["text"]
+    text: str
+
+
+class MailboxLetterData(BaseModel):
+    letter_id: str
+    character: MailboxCharacterData
+    body: MailboxTextBody
+    status: str
+    delivered_at: Optional[str] = None
+    read_at: Optional[str] = None
+    deferred_at: Optional[str] = None
+    handled_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    source: str
+    wish_id: Optional[str] = None
+
+
+class MailboxLetterListData(BaseModel):
+    items: List[MailboxLetterData]
+    next_cursor: Optional[str] = None
+
+
+class MailboxLetterDetailData(BaseModel):
+    letter: MailboxLetterData
+
+
+class MailboxUnreadCountData(BaseModel):
+    unread_count: int
+
+
+class MailboxAcceptedResidentData(BaseModel):
+    resident_id: str
+    name: str
+    avatar_ref: Optional[str] = None
+    status: str
+    origin: str
+    conversation_id: str
+    conversation_state: str
+
+
+class MailboxLetterAcceptData(BaseModel):
+    letter: MailboxLetterData
+    resident: MailboxAcceptedResidentData
+    replayed: bool
+
+
 # --- B 类 data：媒体上传（v1.5 S1）-----------------------------------------
 
 
@@ -536,6 +623,13 @@ FeedListResponse = WorldEnvelope[FeedListData]
 FeedPostResponse = WorldEnvelope[FeedPostData]
 FeedRetireResponse = WorldEnvelope[FeedRetireData]
 ResidentDraftPreviewResponse = WorldEnvelope[ResidentDraftPreviewData]
+ResidentWishSubmitResponse = WorldEnvelope[ResidentWishSubmitData]
+ResidentWishCurrentResponse = WorldEnvelope[ResidentWishCurrentData]
+ResidentWishWithdrawResponse = WorldEnvelope[ResidentWishWithdrawData]
+MailboxLetterListResponse = WorldEnvelope[MailboxLetterListData]
+MailboxLetterDetailResponse = WorldEnvelope[MailboxLetterDetailData]
+MailboxUnreadCountResponse = WorldEnvelope[MailboxUnreadCountData]
+MailboxLetterAcceptResponse = WorldEnvelope[MailboxLetterAcceptData]
 HumanConversationListResponse = WorldEnvelope[HumanConversationListData]
 MediaUploadResponse = WorldEnvelope[MediaUploadData]
 HumanReportOptionsResponse = WorldEnvelope[HumanReportOptionsData]
@@ -549,6 +643,7 @@ WORLD_ERROR_RESPONSES = {
     409: {"model": WorldErrorEnvelope, "description": "状态冲突（只读、并发、容量）"},
     422: {"model": WorldErrorEnvelope, "description": "参数校验失败"},
     429: {"model": WorldErrorEnvelope, "description": "触发限流"},
+    503: {"model": WorldErrorEnvelope, "description": "安全复核或异步任务暂不可用"},
 }
 
 __all__ = [
@@ -565,11 +660,18 @@ __all__ = [
     "HumanConversationListResponse",
     "HumanReportOptionsResponse",
     "MeResponse",
+    "MailboxLetterAcceptResponse",
+    "MailboxLetterDetailResponse",
+    "MailboxLetterListResponse",
+    "MailboxUnreadCountResponse",
     "MediaUploadResponse",
     "NotificationPreferencesResponse",
     "ProfileOptionsResponse",
     "ProfileUpdateResponse",
     "ResidentDraftPreviewResponse",
+    "ResidentWishCurrentResponse",
+    "ResidentWishSubmitResponse",
+    "ResidentWishWithdrawResponse",
     "ResidentListResponse",
     "TurnResponse",
     "WORLD_ERROR_RESPONSES",

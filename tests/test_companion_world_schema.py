@@ -29,6 +29,7 @@ from app.db._core import (
     _migration_0055_universe_post_media,
     _migration_0056_media_moderation_scan_index,
     _migration_0057_resident_wish_drafts,
+    _migration_0058_async_resident_wishes,
 )
 
 _P1_TABLES = (
@@ -82,14 +83,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        57,
-        _migration_0057_resident_wish_drafts,
+        58,
+        _migration_0058_async_resident_wishes,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 57
+        assert int(version) == 58
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -596,6 +597,24 @@ def test_m0057_wish_draft_columns_and_idempotency(fresh_db):
             "SELECT id, source, wish_request_id FROM resident_drafts "
             "WHERE platform_user_id = 'nobody' AND source = 'wish' "
             "ORDER BY created_at ASC"
+        ).fetchall()
+
+
+def test_m0058_async_wish_tables_and_mailbox_link_are_idempotent(fresh_db):
+    """m0058：独立 wish/job 与可选 mailbox 来源字段两后端均可重复执行。"""
+    with db.connect() as conn:
+        _migration_0058_async_resident_wishes(conn)
+        _migration_0058_async_resident_wishes(conn)
+        conn.execute(
+            "SELECT id, owner_platform_user_id, status, deliver_not_before, deliver_by "
+            "FROM resident_wishes WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT id, wish_id, status, next_attempt_at, lease_expires_at "
+            "FROM resident_wish_jobs WHERE 1 = 0"
+        ).fetchall()
+        conn.execute(
+            "SELECT source, wish_id FROM character_letters WHERE 1 = 0"
         ).fetchall()
 
 

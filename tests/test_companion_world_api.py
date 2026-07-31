@@ -256,17 +256,20 @@ def test_v1_5_capabilities_are_registered_and_follow_their_flags(client, fresh_d
     for capability in V1_5_CAPABILITY_FLAGS:
         assert features[capability] is False, capability
 
-    # 逐个打开：四位之间互不牵连，媒体先开图片不会顺手把语音和许愿也放出去。
+    # 逐个打开：媒体三位互不牵连；异步许愿额外依赖 mailbox。
     for capability, flag in V1_5_CAPABILITY_FLAGS.items():
+        if capability == "resident_wish_create":
+            fresh_db.companion_world_mailbox_enabled = True
         setattr(fresh_db, flag, True)
         features = client.get("/v1/app/config").json()["features"]
         assert features[capability] is True, capability
         setattr(fresh_db, flag, False)
         assert client.get("/v1/app/config").json()["features"][capability] is False
+        fresh_db.companion_world_mailbox_enabled = False
 
 
-def test_v1_5_flag_declared_defaults_are_on():
-    """代码声明的默认值必须是 on（开关默认极性约定，2026-07-30）。
+def test_v1_5_flag_declared_defaults_match_release_safety():
+    """媒体默认开；异步许愿在迁移/worker 联调前必须默认关。
 
     新开关一律代码里默认打开、由 ``.env`` 显式写 false 关停，避免「功能上线了却因为忘了
     开开关而看不到」这类误判。媒体三位是否真正对客户端可见另由签名密钥是否配置决定，
@@ -277,8 +280,13 @@ def test_v1_5_flag_declared_defaults_are_on():
     """
     from app.config import Settings
 
-    for flag in V1_5_CAPABILITY_FLAGS.values():
+    for flag in (
+        "companion_world_chat_image_enabled",
+        "companion_world_chat_voice_enabled",
+        "companion_world_feed_image_enabled",
+    ):
         assert Settings.model_fields[flag].default is True, flag
+    assert Settings.model_fields["companion_world_resident_wish_enabled"].default is False
     # 图片理解同理：默认开，缺 DashScope key 时由 describe_image 落兜底文案。
     assert Settings.model_fields["image_understanding_enabled"].default is True
 
@@ -292,6 +300,7 @@ def test_media_capabilities_require_signing_secret(client, fresh_db):
     fresh_db.companion_world_p1_enabled = True
     for flag in V1_5_CAPABILITY_FLAGS.values():
         setattr(fresh_db, flag, True)
+    fresh_db.companion_world_mailbox_enabled = True
 
     fresh_db.media_url_signing_secret = ""
     features = client.get("/v1/app/config").json()["features"]

@@ -63,6 +63,8 @@ class CharacterLetterRecord:
     avatar_ref: Optional[str] = None
     summary: Optional[str] = None
     tags: Tuple[str, ...] = ()
+    source: str = "organic"
+    wish_id: Optional[str] = None
 
 
 def letter_is_open(status: str) -> bool:

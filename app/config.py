@@ -348,7 +348,7 @@ class Settings(BaseSettings):
     asr_mock_transcript: str = ""
 
     # ===== 朝夕相伴 Companion World P1 =====
-    # 默认关闭；只有四模板预检、存量 backfill 与支持 account:null 的客户端均就绪后才可开启。
+    # 默认关闭；只有五模板预检、存量 backfill 与支持 account:null 的客户端均就绪后才可开启。
     companion_world_p1_enabled: bool = False
     # 自建角色受控头像的公网前缀；留空则下发相对路径（本地/测试）。生产填站点根域。
     companion_world_asset_base_url: str = ""
@@ -393,19 +393,18 @@ class Settings(BaseSettings):
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
     companion_world_visits_enabled: bool = False
     companion_world_human_chat_enabled: bool = False
-    # v1.5 媒体与许愿：四个能力位**默认打开**，需要停用时在 .env 显式写 false（开关默认极性
-    # 约定，2026-07-30）。三个媒体开关共用同一套上传/签名链路，但分别门控「会话图片」
-    # 「会话语音」「动态图文」，仍可单独关掉其中一个。
+    # v1.5 媒体默认打开；异步许愿在 schema/API/worker 联调完成前默认关闭。
     # 注意：媒体三位对客户端是否可见还取决于 MEDIA_URL_SIGNING_SECRET 是否配置——密钥留空时
     # 能力位一律下发 false、上传返回 media_disabled（见 app/platform/media/access.py），
     # 不会出现「能力位为 true 却签不出读 URL」的半开状态。
     companion_world_chat_image_enabled: bool = True
     companion_world_chat_voice_enabled: bool = True
     companion_world_feed_image_enabled: bool = True
-    companion_world_resident_wish_enabled: bool = True
-    # 每人每日许愿预览次数上限（每次预览要跑一次清洗 + 一次生成，故按预览计而非按创建计）。
-    # 同一 client_request_id 的重放不计次；<=0 表示不限制。
+    companion_world_resident_wish_enabled: bool = False
+    # 每人滚动 24 小时受理上限；同一 client_request_id 重放不计次，<=0 表示不限制。
     companion_world_wish_daily_max: int = 10
+    companion_world_wish_job_lease_seconds: int = 600
+    companion_world_wish_retry_seconds: int = 3600
 
     # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
     # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。

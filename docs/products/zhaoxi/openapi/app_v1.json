@@ -1612,6 +1612,293 @@
         "title": "ImageMessageContent",
         "type": "object"
       },
+      "MailboxAcceptedResidentData": {
+        "properties": {
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "conversation_state": {
+            "title": "Conversation State",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "resident_id": {
+            "title": "Resident Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "resident_id",
+          "name",
+          "status",
+          "origin",
+          "conversation_id",
+          "conversation_state"
+        ],
+        "title": "MailboxAcceptedResidentData",
+        "type": "object"
+      },
+      "MailboxCharacterData": {
+        "properties": {
+          "avatar_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avatar Ref"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags"
+        ],
+        "title": "MailboxCharacterData",
+        "type": "object"
+      },
+      "MailboxLetterAcceptData": {
+        "properties": {
+          "letter": {
+            "$ref": "#/components/schemas/MailboxLetterData"
+          },
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "resident": {
+            "$ref": "#/components/schemas/MailboxAcceptedResidentData"
+          }
+        },
+        "required": [
+          "letter",
+          "resident",
+          "replayed"
+        ],
+        "title": "MailboxLetterAcceptData",
+        "type": "object"
+      },
+      "MailboxLetterData": {
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/MailboxTextBody"
+          },
+          "character": {
+            "$ref": "#/components/schemas/MailboxCharacterData"
+          },
+          "deferred_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deferred At"
+          },
+          "delivered_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivered At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "handled_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handled At"
+          },
+          "letter_id": {
+            "title": "Letter Id",
+            "type": "string"
+          },
+          "read_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Read At"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "wish_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wish Id"
+          }
+        },
+        "required": [
+          "letter_id",
+          "character",
+          "body",
+          "status",
+          "source"
+        ],
+        "title": "MailboxLetterData",
+        "type": "object"
+      },
+      "MailboxLetterDetailData": {
+        "properties": {
+          "letter": {
+            "$ref": "#/components/schemas/MailboxLetterData"
+          }
+        },
+        "required": [
+          "letter"
+        ],
+        "title": "MailboxLetterDetailData",
+        "type": "object"
+      },
+      "MailboxLetterListData": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MailboxLetterData"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "MailboxLetterListData",
+        "type": "object"
+      },
+      "MailboxTextBody": {
+        "properties": {
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "type": {
+            "const": "text",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "title": "MailboxTextBody",
+        "type": "object"
+      },
+      "MailboxUnreadCountData": {
+        "properties": {
+          "unread_count": {
+            "title": "Unread Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "unread_count"
+        ],
+        "title": "MailboxUnreadCountData",
+        "type": "object"
+      },
       "MePlatformUser": {
         "description": "真人公开身份。``display_name``/``avatar_key`` 未设置时为 null，客户端自行兜底展示。",
         "properties": {
@@ -2124,7 +2411,7 @@
       },
       "ResidentDraftPreviewPayload": {
         "additionalProperties": false,
-        "description": "自建角色第一步。两条**互斥**路径，出参形状完全一致（客户端预览卡片零改动）：\n\n- **表单**（M1 起的既有路径）：结构化设定 + 可选自由文本，服务端清洗后渲染人设；\n- **许愿**（v1.5 WISH-001）：只给 ``wish_text`` + ``client_request_id``，服务端先清洗，\n  再由 LLM 翻译成同一套受控取值，交给同一个渲染函数。\n\n结构化字段在此声明为可选**只是**为了让两条路径共用一个模型；表单路径的必填性由\n校验器保证，缺字段仍然是 422，与 v1.5 之前逐字节相同。",
+        "description": "自建角色结构化预览；异步许愿已迁移到独立 resident-wishes 端点。",
         "properties": {
           "avatar_key": {
             "anyOf": [
@@ -2137,19 +2424,6 @@
               }
             ],
             "title": "Avatar Key"
-          },
-          "client_request_id": {
-            "anyOf": [
-              {
-                "maxLength": 128,
-                "minLength": 8,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Client Request Id"
           },
           "name": {
             "anyOf": [
@@ -2213,18 +2487,6 @@
               }
             ],
             "title": "Style Note"
-          },
-          "wish_text": {
-            "anyOf": [
-              {
-                "maxLength": 500,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Wish Text"
           }
         },
         "title": "ResidentDraftPreviewPayload",
@@ -2244,6 +2506,121 @@
           "residents"
         ],
         "title": "ResidentListData",
+        "type": "object"
+      },
+      "ResidentWishCurrentData": {
+        "properties": {
+          "wish": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResidentWishData"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ResidentWishCurrentData",
+        "type": "object"
+      },
+      "ResidentWishData": {
+        "properties": {
+          "can_withdraw": {
+            "title": "Can Withdraw",
+            "type": "boolean"
+          },
+          "expected_delivery_from": {
+            "title": "Expected Delivery From",
+            "type": "string"
+          },
+          "expected_delivery_to": {
+            "title": "Expected Delivery To",
+            "type": "string"
+          },
+          "is_open": {
+            "title": "Is Open",
+            "type": "boolean"
+          },
+          "letter_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Letter Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "submitted_at": {
+            "title": "Submitted At",
+            "type": "string"
+          },
+          "terminal_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Reason"
+          },
+          "wish_id": {
+            "title": "Wish Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wish_id",
+          "status",
+          "submitted_at",
+          "expected_delivery_from",
+          "expected_delivery_to",
+          "is_open",
+          "can_withdraw"
+        ],
+        "title": "ResidentWishData",
+        "type": "object"
+      },
+      "ResidentWishSubmitData": {
+        "properties": {
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "wish": {
+            "$ref": "#/components/schemas/ResidentWishData"
+          }
+        },
+        "required": [
+          "wish",
+          "replayed"
+        ],
+        "title": "ResidentWishSubmitData",
+        "type": "object"
+      },
+      "ResidentWishWithdrawData": {
+        "properties": {
+          "replayed": {
+            "title": "Replayed",
+            "type": "boolean"
+          },
+          "wish": {
+            "$ref": "#/components/schemas/ResidentWishData"
+          }
+        },
+        "required": [
+          "wish",
+          "replayed"
+        ],
+        "title": "ResidentWishWithdrawData",
         "type": "object"
       },
       "SelectionPayload": {
@@ -2326,6 +2703,30 @@
           "captcha_verify_param"
         ],
         "title": "SendOtpRequest",
+        "type": "object"
+      },
+      "SubmitResidentWishPayload": {
+        "additionalProperties": false,
+        "properties": {
+          "client_request_id": {
+            "maxLength": 128,
+            "minLength": 8,
+            "pattern": "^[A-Za-z0-9_-]{8,128}$",
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "wish_text": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Wish Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wish_text",
+          "client_request_id"
+        ],
+        "title": "SubmitResidentWishPayload",
         "type": "object"
       },
       "TextMessageContent": {
@@ -2783,6 +3184,126 @@
         "title": "WorldEnvelope[HumanReportOptionsData]",
         "type": "object"
       },
+      "WorldEnvelope_MailboxLetterAcceptData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MailboxLetterAcceptData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MailboxLetterAcceptData]",
+        "type": "object"
+      },
+      "WorldEnvelope_MailboxLetterDetailData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MailboxLetterDetailData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MailboxLetterDetailData]",
+        "type": "object"
+      },
+      "WorldEnvelope_MailboxLetterListData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MailboxLetterListData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MailboxLetterListData]",
+        "type": "object"
+      },
+      "WorldEnvelope_MailboxUnreadCountData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MailboxUnreadCountData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[MailboxUnreadCountData]",
+        "type": "object"
+      },
       "WorldEnvelope_MediaUploadData_": {
         "properties": {
           "code": {
@@ -2903,6 +3424,96 @@
         "title": "WorldEnvelope[ResidentListData]",
         "type": "object"
       },
+      "WorldEnvelope_ResidentWishCurrentData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentWishCurrentData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentWishCurrentData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ResidentWishSubmitData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentWishSubmitData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentWishSubmitData]",
+        "type": "object"
+      },
+      "WorldEnvelope_ResidentWishWithdrawData_": {
+        "properties": {
+          "code": {
+            "examples": [
+              "ok"
+            ],
+            "title": "Code",
+            "type": "string"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ResidentWishWithdrawData"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "request_id",
+          "server_time",
+          "data"
+        ],
+        "title": "WorldEnvelope[ResidentWishWithdrawData]",
+        "type": "object"
+      },
       "WorldEnvelope_TurnData_": {
         "properties": {
           "code": {
@@ -3008,6 +3619,12 @@
       "app__products__zhaoxi__api__companion_world_mailbox__EmptyPayload": {
         "additionalProperties": false,
         "description": "拒绝 owner/account/universe 注入字段。",
+        "properties": {},
+        "title": "EmptyPayload",
+        "type": "object"
+      },
+      "app__products__zhaoxi__api__companion_world_resident_wishes__EmptyPayload": {
+        "additionalProperties": false,
         "properties": {},
         "title": "EmptyPayload",
         "type": "object"
@@ -3157,6 +3774,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Conversation Messages",
@@ -3276,6 +3903,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Mark Conversation Read",
@@ -3394,6 +4031,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Conversation Turn",
@@ -3925,6 +4572,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Conversations",
@@ -4024,6 +4681,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Human Conversations",
@@ -4124,6 +4791,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Human Report Options",
@@ -4644,23 +5321,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Mailbox Letters V1 Mailbox Letters Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterListData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Mailbox Letters",
@@ -4704,23 +5439,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Mailbox Letter Detail V1 Mailbox Letters  Letter Id  Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterDetailData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Mailbox Letter Detail",
@@ -4781,23 +5574,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Accept Mailbox Letter V1 Mailbox Letters  Letter Id  Accept Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterAcceptData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Accept Mailbox Letter",
@@ -4858,23 +5709,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Decline Mailbox Letter V1 Mailbox Letters  Letter Id  Decline Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterDetailData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Decline Mailbox Letter",
@@ -4935,23 +5844,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Defer Mailbox Letter V1 Mailbox Letters  Letter Id  Defer Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterDetailData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Defer Mailbox Letter",
@@ -5012,23 +5979,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Read Mailbox Letter V1 Mailbox Letters  Letter Id  Read Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxLetterDetailData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Read Mailbox Letter",
@@ -5063,23 +6088,81 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Mailbox Unread Count V1 Mailbox Unread Count Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/WorldEnvelope_MailboxUnreadCountData_"
                 }
               }
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Mailbox Unread Count",
@@ -5415,6 +6498,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Upload Media",
@@ -5537,6 +6630,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Read Media",
@@ -5937,6 +7040,141 @@
         "summary": "Mark Read",
         "tags": [
           "app-notifications"
+        ]
+      }
+    },
+    "/v1/resident-wishes/{wish_id}/withdraw": {
+      "post": {
+        "operationId": "withdraw_resident_wish_endpoint_v1_resident_wishes__wish_id__withdraw_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wish_id",
+            "required": true,
+            "schema": {
+              "title": "Wish Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/app__products__zhaoxi__api__companion_world_resident_wishes__EmptyPayload"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentWishWithdrawData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
+          }
+        },
+        "summary": "Withdraw Resident Wish Endpoint",
+        "tags": [
+          "companion-world-resident-wishes"
         ]
       }
     },
@@ -6871,6 +8109,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Bootstrap Home",
@@ -6999,6 +8247,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Home Feed",
@@ -7108,6 +8366,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Publish Home Feed Post",
@@ -7217,6 +8485,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Delete Home Feed Post",
@@ -7343,6 +8621,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Hide Home Feed Post",
@@ -7442,6 +8730,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Candidates",
@@ -7452,7 +8750,7 @@
     },
     "/v1/worlds/home/resident-drafts/preview": {
       "post": {
-        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。\n许愿路径（``wish_text``）在清洗之后多一步「LLM 翻译成受控取值」，此后与表单路径\n完全同源——自由文本仍然不直通人设。",
+        "description": "自建角色第一步：清洗自由文本 → 渲染人设 → 返回可预览摘要与一次性 draft_token。\n\n清洗在**入口一次**完成，落库与后续渲染只用清洗结果；原文不落库（SEC-001 / D-B）。\n``wish_text`` 已不再属于本模型，旧客户端调用会得到稳定 ``invalid_request``。",
         "operationId": "preview_resident_draft_v1_worlds_home_resident_drafts_preview_post",
         "parameters": [
           {
@@ -7552,6 +8850,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Preview Resident Draft",
@@ -7609,6 +8917,234 @@
         "summary": "Resident Options",
         "tags": [
           "companion-world"
+        ]
+      }
+    },
+    "/v1/worlds/home/resident-wishes": {
+      "post": {
+        "operationId": "submit_resident_wish_v1_worlds_home_resident_wishes_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitResidentWishPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentWishSubmitData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
+          }
+        },
+        "summary": "Submit Resident Wish",
+        "tags": [
+          "companion-world-resident-wishes"
+        ]
+      }
+    },
+    "/v1/worlds/home/resident-wishes/current": {
+      "get": {
+        "operationId": "current_resident_wish_v1_worlds_home_resident_wishes_current_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldEnvelope_ResidentWishCurrentData_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "未登录或 token 失效"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "账号或世界被停用"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "资源不存在或能力被关闭"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "状态冲突（只读、并发、容量）"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "参数校验失败"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
+          }
+        },
+        "summary": "Current Resident Wish",
+        "tags": [
+          "companion-world-resident-wishes"
         ]
       }
     },
@@ -7703,6 +9239,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "List Residents",
@@ -7871,6 +9417,16 @@
               }
             },
             "description": "触发限流"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldErrorEnvelope"
+                }
+              }
+            },
+            "description": "安全复核或异步任务暂不可用"
           }
         },
         "summary": "Confirm Residents",

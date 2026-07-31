@@ -72,6 +72,10 @@ def admin_ops_status(
                     "lifecycle_enabled": settings.companion_world_lifecycle_evaluation_enabled,
                     "mailbox_enabled": settings.companion_world_mailbox_enabled,
                     "visits_enabled": settings.companion_world_visits_enabled,
+                    "wishes_enabled": (
+                        settings.companion_world_resident_wish_enabled
+                        and settings.companion_world_mailbox_enabled
+                    ),
                     "interval_seconds": settings.companion_world_lifecycle_scheduler_interval_seconds,
                     "batch_size": settings.companion_world_lifecycle_scheduler_batch_size,
                 },

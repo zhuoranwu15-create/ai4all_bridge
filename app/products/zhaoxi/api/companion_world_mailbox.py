@@ -20,6 +20,13 @@ from app.products.zhaoxi.api.companion_world import (
     _no_store,
     _require_world_session,
 )
+from app.products.zhaoxi.api.contracts import (
+    WORLD_ERROR_RESPONSES,
+    MailboxLetterAcceptResponse,
+    MailboxLetterDetailResponse,
+    MailboxLetterListResponse,
+    MailboxUnreadCountResponse,
+)
 from app.time_utils import beijing_naive_now
 
 router = APIRouter(tags=["companion-world-mailbox"])
@@ -74,6 +81,8 @@ def _item_data(item) -> dict:
         "deferred_at": _public_time(item.deferred_at),
         "handled_at": _public_time(item.handled_at),
         "expires_at": _public_time(item.expires_at),
+        "source": item.source,
+        "wish_id": item.wish_id,
     }
 
 
@@ -133,7 +142,11 @@ def _mailbox_call(action):
         raise CompanionWorldApiError(err.code) from err
 
 
-@router.get("/mailbox/letters")
+@router.get(
+    "/mailbox/letters",
+    response_model=MailboxLetterListResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def list_mailbox_letters(
     request: Request,
     response: Response,
@@ -172,7 +185,11 @@ def list_mailbox_letters(
     )
 
 
-@router.get("/mailbox/unread-count")
+@router.get(
+    "/mailbox/unread-count",
+    response_model=MailboxUnreadCountResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def mailbox_unread_count(
     request: Request,
     response: Response,
@@ -183,7 +200,11 @@ def mailbox_unread_count(
     return _envelope(request, code="ok", data={"unread_count": count})
 
 
-@router.get("/mailbox/letters/{letter_id}")
+@router.get(
+    "/mailbox/letters/{letter_id}",
+    response_model=MailboxLetterDetailResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def mailbox_letter_detail(
     letter_id: str,
     request: Request,
@@ -219,7 +240,11 @@ def _transition_response(
     return _envelope(request, code="ok", data={"letter": _item_data(item)})
 
 
-@router.post("/mailbox/letters/{letter_id}/read")
+@router.post(
+    "/mailbox/letters/{letter_id}/read",
+    response_model=MailboxLetterDetailResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def read_mailbox_letter(
     letter_id: str,
     request: Request,
@@ -236,7 +261,11 @@ def read_mailbox_letter(
     )
 
 
-@router.post("/mailbox/letters/{letter_id}/defer")
+@router.post(
+    "/mailbox/letters/{letter_id}/defer",
+    response_model=MailboxLetterDetailResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def defer_mailbox_letter(
     letter_id: str,
     request: Request,
@@ -253,7 +282,11 @@ def defer_mailbox_letter(
     )
 
 
-@router.post("/mailbox/letters/{letter_id}/decline")
+@router.post(
+    "/mailbox/letters/{letter_id}/decline",
+    response_model=MailboxLetterDetailResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def decline_mailbox_letter(
     letter_id: str,
     request: Request,
@@ -270,7 +303,11 @@ def decline_mailbox_letter(
     )
 
 
-@router.post("/mailbox/letters/{letter_id}/accept")
+@router.post(
+    "/mailbox/letters/{letter_id}/accept",
+    response_model=MailboxLetterAcceptResponse,
+    responses=WORLD_ERROR_RESPONSES,
+)
 def accept_mailbox_letter(
     letter_id: str,
     request: Request,

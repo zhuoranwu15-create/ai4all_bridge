@@ -386,6 +386,8 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_feed_image_enabled = False
     s.companion_world_resident_wish_enabled = False
     s.companion_world_wish_daily_max = 10
+    s.companion_world_wish_job_lease_seconds = 600
+    s.companion_world_wish_retry_seconds = 3600
     # v1.5 媒体地基：数值必须显式给，MagicMock 的 __int__ 恒为 1，否则 /app/config 的限额
     # 会静默变成 1 字节、契约测试也失去意义。签名密钥给固定测试值，与生产的"留空即报错"无关。
     s.media_storage_dir = str(tmp_path / "media")
@@ -476,6 +478,12 @@ def fresh_db(test_settings):
         patch("app.routers.web.settings", test_settings),
         patch("app.products.zhaoxi.api.app.settings", test_settings),
         patch("app.products.zhaoxi.api.companion_world.settings", test_settings),
+        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", test_settings),
+        patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", test_settings),
+        patch(
+            "app.products.zhaoxi.application.companion_world_resident_wishes.settings",
+            test_settings,
+        ),
         # admin 侧 world 路由此前漏登记：它 from app.config import settings，未 patch 时读真实
         # settings，开发/生产机 .env 的 COMPANION_WORLD_LIFECYCLE_COMMIT_ENABLED=true 会泄漏进来，
         # 绕过 503 commit 门控使 approve 走到真实提交路径（本机 409、CI 无 .env 则 503 通过）。
@@ -569,6 +577,12 @@ def client(fresh_db):
         patch("app.routers.web.settings", fresh_db),
         patch("app.products.zhaoxi.api.app.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
+        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", fresh_db),
+        patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", fresh_db),
+        patch(
+            "app.products.zhaoxi.application.companion_world_resident_wishes.settings",
+            fresh_db,
+        ),
         patch("app.products.zhaoxi.api.admin_companion_world.settings", fresh_db),
         patch("app.platform.media.asr.settings", fresh_db),
         patch("app.products.zhaoxi.api.debug.settings", fresh_db),
