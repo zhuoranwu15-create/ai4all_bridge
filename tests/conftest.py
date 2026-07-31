@@ -478,6 +478,7 @@ def fresh_db(test_settings):
         patch("app.routers.web.settings", test_settings),
         patch("app.products.zhaoxi.api.app.settings", test_settings),
         patch("app.products.zhaoxi.api.companion_world.settings", test_settings),
+        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", test_settings),
         patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", test_settings),
         patch(
             "app.products.zhaoxi.application.companion_world_resident_wishes.settings",
@@ -576,6 +577,7 @@ def client(fresh_db):
         patch("app.routers.web.settings", fresh_db),
         patch("app.products.zhaoxi.api.app.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
+        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", fresh_db),
         patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", fresh_db),
         patch(
             "app.products.zhaoxi.application.companion_world_resident_wishes.settings",

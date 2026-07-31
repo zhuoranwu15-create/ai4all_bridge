@@ -300,6 +300,7 @@ def test_media_capabilities_require_signing_secret(client, fresh_db):
     fresh_db.companion_world_p1_enabled = True
     for flag in V1_5_CAPABILITY_FLAGS.values():
         setattr(fresh_db, flag, True)
+    fresh_db.companion_world_mailbox_enabled = True
 
     fresh_db.media_url_signing_secret = ""
     features = client.get("/v1/app/config").json()["features"]
