@@ -1,6 +1,6 @@
 """图片理解模块：调用 DashScope qwen3-vl-plus 产出多维描述文本。
 
-设计要点（见 docs/tech_design/image_understanding_design.md）：
+设计要点（见 docs/architecture/shared/platform/image_understanding_design.md）：
 - 两段式架构的第一段，stateless，对 app/llm.py 零侵入。
 - 读取本机本地图片（仅限 settings.image_inbound_dir 内）或远程 URL，
   调用 DashScope OpenAI 兼容接口产出【内容/OCR/品牌/场景/情绪】多维描述。

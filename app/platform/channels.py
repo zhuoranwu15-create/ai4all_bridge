@@ -1,6 +1,6 @@
 """渠道常量与渠道能力表（纯声明层，不引业务依赖）。
 
-设计依据：``docs/tech_design/web_app_channel_access_design.md`` §4.1。
+设计依据：``docs/architecture/shared/access/web_app_channel_access_design.md`` §4.1。
 
 把接入层从「隐式假设微信」改成「渠道无关 + 渠道能力声明」。每个渠道用一个
 ``ChannelCapability`` 声明其短期会话隔离键、onboarding 开关、回复投递方式、是否可被

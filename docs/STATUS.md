@@ -1,6 +1,6 @@
 # 项目现状与近期方向
 
-更新时间：2026-07-26
+更新时间：2026-07-31
 
 > 本文是**持续更新**的项目状态入口，回答"我们现在在哪、当前重点是什么、还剩哪些大块"。它取代了原 `phase1/next_dev_steps.md`，并承载原 Phase 1 收尾总结里"还剩什么"的活的部分。
 >
@@ -22,7 +22,15 @@
    （central/node）已上线，继续硬化部署与观测。
 2. **新功能补充** — 拉新送贝壳闭环已落地，继续补运营复核体验；权益扣减收口、图片理解转正等（见 §3）。
 3. **效果调优** — 主动消息/内容邀请/陪伴跟进在真实数据上调 prompt、阈值与风控；陪伴质量回归集；默认 prompt 与人设。
-4. **朝夕相伴 App 客户端 M1 服务端支持** — Companion World 3.0 后端已全量上线，客户端正式版正在做 M0→M1。产品口径见 [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)；服务端需求评审与 S1–S6 批次见 [M1 服务端计划](plans/products/zhaoxi/companion_world_app_m1_server_plan.md)。**S1（发布门底座 + D-A 老用户带入）、S2（结构化自建角色 + D-B 自由文本安全收口）、S3（NAME-001 运营名池确定性选名快照 + CAND-001 候选稳定身份）、S4（会话 DTO 时间/可发送性 + read cursor 未读 + turn 响应形状与幂等 message_id 冻结）、S5（CONTRACT-001 OpenAPI snapshot 契约门禁）与 S6（「我的」Tab 收尾：ME-01 可编辑 Profile、ME-06/07 账号注销、ME-10 通知安静模式）已于 2026-07-26 全部交付**，M1 服务端支持开发完成、进入客户端联调 ready 状态，待合入 main（受保护分支，需 PR + 双档 CI）。S6 的两项待拍板已于 2026-07-26 落定（见计划 §4.3）：注销改为**立即清除聊天记录与相关记忆**（冷静期设计已同批重做，只保留 `POST /me/account/deletion`），`voice_input` **打开**——后者无代码缺口，需运营在生产 `.env` 配 `ASR_API_KEY` 后重启，是本批次唯一未完成的落地动作。客户端机器可读契约为仓库提交的 [`openapi/app_v1.json`](products/zhaoxi/openapi/app_v1.json)。
+4. **朝夕相伴 App 客户端支持** — Companion World 3.0、M1「我的」Tab、M2 Feed 管理与
+   v1.5 媒体/许愿服务端能力已进入主干并上线。2026-07-31 生产 `/app/config` 只读核验显示：
+   `voice_input`、Companion World 主能力、图片/语音聊天、图文动态和许愿创建能力位均为 `true`；
+   客户端仍必须按能力位渲染，不能硬编码当前开量状态。产品口径见
+   [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)，客户端契约入口见
+   [App 简要说明](products/zhaoxi/app_client_brief.md)，机器可读契约为仓库提交的
+   [`openapi/app_v1.json`](products/zhaoxi/openapi/app_v1.json)。M1/M2/v1.5 交付计划已经归档；
+   未排期的产品、契约与运营项集中在
+   [Companion World App 后续项](backlog/products/zhaoxi/companion_world_app_followups.md)。
 
 ## 3. 已知大缺口（按建议起点排序）
 
@@ -33,6 +41,9 @@
 3. **图片理解转正** — 能力已提前交付并上线。部署脚本已去硬编码（`deploy_image_understanding.sh` 按内容自发现 bundle/dist/node，2026-06-13 修复），两份文档也已去掉"草稿"标注。**仍在的缺口**：生产依赖手术式改运行中 OpenClaw dist（升级仍有静默退回空文本风险，回归清单待补）+ 真图质量回归。见 [图片理解设计](architecture/shared/platform/image_understanding_design.md)、[OpenClaw 补丁与部署机制](architecture/shared/access/openclaw_patches_maintenance.md)。
 4. **主动消息观察期收口** — 周期提醒基础版已实现（`recur_rule` daily/weekly/monthly，含每周期独立幂等键修复）；自然语言取消/更新已有工具（`cancel_reminder`/`update_reminder` 已注册，直接执行，仍缺二次确认交互）；仍剩用户级 timezone 真正接线（列已建但调度未消费）、多实例 scheduler lease、真实端到端调参。**关键约束（2026-07-08）**：微信对沉默联系人有一个我方无法绕过的送达窗口（官方口径 24 小时，超窗静默拒收），详见 [`proactive_prd.md` §9](products/zhaoxi/capabilities/proactive_prd.md) 与 [`weixin_context_token_send_semantics.md`](ops/platform/troubleshooting/weixin_context_token_send_semantics.md)。已落地 `get_account_touch_state()` 并接入全部主动消息触发点：陪伴跟进/内容邀请/拉活在候选生成前阻断，**用户提醒/承诺在触发前阻断（2026-07-08 追加，反转此前"提醒必达、仍照常尝试发送"的决策）**——一次性提醒/承诺过期直接终态 `cancelled`，周期提醒跳过本次正常推进到下一周期；剩余缺口是事后告知（用户下次开口时知会"之前有条提醒因为太久没聊天没发出去"），跟踪在临时文档 P3。对应的可观测性修复（假成功→显式失败）已手术式打在 aliyun1 但未固化为正式补丁、aliyun2 未确认，见 [`openclaw_patches_maintenance.md` §2.7](architecture/shared/access/openclaw_patches_maintenance.md)。已确认的应对方案与开发跟进见 [`主动消息送达窗口对齐.md`](plans/products/zhaoxi/主动消息送达窗口对齐.md)。
 5. **内测部署硬化** — **已落地**：PostgreSQL 迁移（aliyun1+aliyun2 自 2026-06-21 全量切 PG，`app/db/_backend.py` 双后端垫片）、独立 scheduler worker（`scripts/run_proactive_scheduler.py`，含 dreaming 编排与时区校验）、飞书告警体系（`app/platform/observability/alerting.py`，ERROR 日志脱敏+冷却，main 与 scheduler 双处挂载）、per-turn trace_id 与计时结构化行。**仍在的缺口**：Redis 迁移（当前无 redis 依赖）、全局结构化日志框架、用户级 timezone 真正接线、多实例 scheduler lease（现仅行级 `claim_due_*` 幂等、无调度器租约）。
+6. **司辰头像 CDN 同步** — 本仓 512×512 头像资产已存在，但 2026-07-31 对生产头像 URL 的只读
+   核验返回 `200 text/html` 而非图片，候选卡片可能收到站点 fallback。同步与验收口径见
+   [APP-OPS-001](backlog/products/zhaoxi/companion_world_app_followups.md)。
 
 ## 4. 待跟进的架构设计
 

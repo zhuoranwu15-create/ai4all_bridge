@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SQLite → PostgreSQL 数据迁移（厚节点改造 Phase 1，见 docs/tech_design/thick_node_postgres_refactor.md §4.5）。
+"""SQLite → PostgreSQL 数据迁移（厚节点改造 Phase 1，见 docs/architecture/shared/data/thick_node_postgres_refactor.md §4.5）。
 
 流程：
 1. 在目标空 PG 上按 `_MIGRATIONS` 建好全量 schema（复用 app.db.init_db，含 json_patch 函数）。

@@ -1,7 +1,10 @@
 # 接入端多机重构 · 复盘与后续工作指南（面向后续接手者）
 
-> 状态：**复盘文档（活文档，随后续工作更新）**　最后更新：2026-06-14
-> 定位：本文是多机接入重构「一期 MVP 上线后」的**单一入口复盘**。后续要继续这条线（运维耐久化、二期架构优化、新机扩容）的人，**先读本文**，再按需深入下面的关联文档。
+> 状态：**历史阶段复盘**　最后更新：2026-07-31
+> 定位：本文复盘 2026-06-14 的瘦节点一期；当前生产已升级为厚节点直连共享 PG，现行入口是
+> [厚节点设计](../data/thick_node_postgres_refactor.md)、[总体架构](../../overview.md)与
+> [两机部署差异](../../../ops/platform/aliyun1_aliyun2_deployment_diff.md)。本文中的 SQLite、瘦节点和
+> 入站转发描述只用于理解演进过程，不参与当前运维决策。
 > 关联文档：
 > - 设计与落地计划 + 踩坑速查：[`multi_node_access_refactor.md`](multi_node_access_refactor.md)（含「附录 C 落地踩坑记录」）
 > - OpenClaw 4 个补丁与升级必查：[`openclaw_patches_maintenance.md`](openclaw_patches_maintenance.md)

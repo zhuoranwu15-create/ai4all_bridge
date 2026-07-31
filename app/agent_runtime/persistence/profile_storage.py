@@ -1,4 +1,4 @@
-"""账号级 profile 文件存储层（厚节点改造 P2，见 docs/tech_design/thick_node_postgres_refactor.md §5）。
+"""账号级 profile 文件存储层（厚节点改造 P2，见 docs/architecture/shared/data/thick_node_postgres_refactor.md §5）。
 
 把 SOUL/IDENTITY/USER/MEMORY/legacy user_profile.md 以及 memory/YYYY-MM-DD.md daily notes
 的内容收敛进 account_profile_files 表，作为唯一真相（不再裸文件 I/O），供多节点直连共享读取。

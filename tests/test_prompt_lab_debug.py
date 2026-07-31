@@ -63,13 +63,13 @@ def test_prompt_lab_build_and_replay_are_side_effect_free(client, fresh_db):
     assert built["messages"][0]["role"] == "system"
     assert "### SOUL.md" in built["system_prompt"]
     assert built["messages"][-1] == {"role": "user", "content": "second dry run"}
+    assert built["llm_model"] == "deepseek-v4-flash"
     assert built["metadata"]["debug_dry_run"] is True
     assert built["prompt_blocks"]["project_context"]["included"] is True
     assert "create_reminder" in built["tooling"]["available_tool_names"]
-    assert any(
-        item["name"] == "web_search" and item["reason"] == "web_search_disabled"
-        for item in built["tooling"]["disabled_tools"]
-    )
+    # web_search 已转正为默认能力（app.config.WEB_SEARCH_ENABLED 常开），不再进 disabled_tools。
+    assert "web_search" in built["tooling"]["available_tool_names"]
+    assert all(item["name"] != "web_search" for item in built["tooling"]["disabled_tools"])
     assert built["history_metadata"]["count"] >= 1
     assert built["carryover"]["included"] is False
 

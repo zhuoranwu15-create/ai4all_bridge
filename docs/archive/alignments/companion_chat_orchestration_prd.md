@@ -1,9 +1,9 @@
 # 陪伴式聊天子 PRD：对话编排与动态加载
 
-> ⚠️ **本文档暂未订正，不可作为参考。**
-> 其中的关系阶段 / 需求满足状态口径、字段命名与编排规则可能与现行实现及
-> [`docs/architecture/products/zhaoxi/relationship_state_design.md`](../../../architecture/products/zhaoxi/relationship_state_design.md)
-> 不一致。订正完成前，请勿据此开发或评审。
+> 状态：**已归档，不作为当前产品或技术依据。** 本文中的关系阶段、需求状态、字段命名与
+> 编排规则已被[Conversation Orchestrator](../../architecture/agent-runtime/conversation_orchestrator_design.md)、
+> [关系状态设计](../../architecture/products/zhaoxi/relationship_state_design.md)和
+> [AI 自我 PRD](../../products/zhaoxi/capabilities/agent_self_prd.md)取代。
 
 更新时间：2026-06-22
 
@@ -11,7 +11,8 @@
 
 定义陪伴式聊天每一轮如何根据账号状态、关系阶段、当前意图、风险等级和可用能力动态加载上下文，并选择合适的回复策略。
 
-本子文档是 [陪伴式聊天 PRD](companion_chat_prd.md) 的编排补充。它关注产品层规则：什么时候加载什么、什么时候不加载什么、状态如何影响回复，而不是具体代码实现细节。
+本文原为[陪伴式聊天 PRD](../../products/zhaoxi/capabilities/companion_chat_prd.md)的编排补充，
+现仅保留用于理解早期方案。
 
 ## 2. 编排原则
 

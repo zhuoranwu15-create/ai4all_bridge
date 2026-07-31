@@ -1,6 +1,6 @@
 """Handlers for mission_status / record_mission_moment.
 
-见 docs/tech_design/agent_mission_and_orchestration_design.md §6。服务端只做确定性
+见 docs/architecture/products/zhaoxi/agent_mission_and_orchestration_design.md §6。服务端只做确定性
 校验（有无使命、名额是否用尽、content 是否非空），不重新评判"这个瞬间够不够格"——够不够
 格是 LLM 在决定调用 record_mission_moment 那一刻已完成的语义判断，服务端二次审查等于
 把主观判断又塞回业务逻辑，违背"主流程不写业务逻辑"的架构原则（与 create_content_

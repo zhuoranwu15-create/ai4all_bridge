@@ -10,7 +10,10 @@
 
 ## 1. 一句话结论
 
-当前架构是**单机外测形态**（FastAPI 同步链路 + 单文件 SQLite + 本地账号文件 + 单进程 scheduler + 子进程 outbound），**不能直接支撑 10 万 DAU**。
+> 基线说明：下述“单机 + SQLite”是本次评审开展时的历史起点，不是当前生产拓扑。生产现已升级
+> 为两厚节点 + 共享 PostgreSQL；本文尚未按新拓扑重算容量结论，继续作为前瞻 backlog 使用。
+
+评审起点是**单机外测形态**（FastAPI 同步链路 + 单文件 SQLite + 本地账号文件 + 单进程 scheduler + 子进程 outbound），**不能直接支撑 10 万 DAU**。
 
 但好消息是：10 万 DAU ≠ 10 万 QPS。基准估算下峰值约 **110 RPS**，真正的硬约束集中在少数几个点。只要按本文路线分阶段改造，单集群完全可以承载。**最大的近期变量不是机器数量，而是同步链路天花板**——这一项决定了你是用 6 台机器还是 30 台机器。
 
@@ -79,7 +82,11 @@
 - 峰值 110 RPS：约 **36 万 tokens/s** ≈ 2,180 万 tokens/min
 - 若上下文膨胀到 5,000 tokens/轮，峰值接近 **3,300 万 tokens/min**
 
-必须提前与 LLM provider 锁定：TPM/RPM 配额、并发连接上限、高峰价格、降级模型。注意当前**实际生效模型是 DeepSeek**（`.env`：`LLM_MODEL=deepseek-chat`、`LLM_BASE_URL=https://api.deepseek.com`；`config.py:23` 的 `gpt-4o-mini` 只是 env 未设置时的代码 fallback），`llm.py:14-33` 的 DSML 兼容代码也正是为 DeepSeek 的 tool call 格式而写。`llm_max_retries=1`（`config.py:26`）——配额不足触发 429 后只重试一次就 fail。规模化时需按 DeepSeek 的 TPM/RPM 配额与并发上限做容量规划。
+必须提前与 LLM provider 锁定：TPM/RPM 配额、并发连接上限、高峰价格、降级模型。当前默认
+`LLM_ACTIVE_FAMILY=deepseek`，`main_reply` 走 flash 档，对应 `deepseek-v4-flash`；模型由
+family×tier 矩阵解析，不再读取旧 `LLM_MODEL`。`llm_max_retries=1`，配额不足触发 429 后只重试
+一次就失败。规模化时需按 DeepSeek Flash 的 TPM/RPM 配额与并发上限做容量规划，并保留显式切回
+pro 档的降级/提质预案。
 
 ### 3.3 LLM 并发需求
 

@@ -1,16 +1,20 @@
 # 阿里云部署说明
 
-更新时间：2026-06-02
+更新时间：2026-07-31
 
-本文档描述 AI4ALL Weixin Bot 当前内测形态的阿里云部署方式。目标是先稳定运行单机版本：FastAPI Backend、OpenClaw Gateway / `openclaw-weixin`、可选独立 proactive scheduler。
+本文档描述 AI4ALL 当前阿里云部署基线：aliyun1 以 `central,node` 承担控制面、中心 PG、
+本机微信 turn 和 central-only scheduler；aliyun2 以厚 `node` 本地处理归属微信账号的 turn，并通过
+内网直连 aliyun1 PG。详细机器差异见
+[aliyun1 / aliyun2 部署差异](platform/aliyun1_aliyun2_deployment_diff.md)。
 
 ## 部署前提
 
 - 服务器开放 HTTPS 入口，公网只暴露 Web onboarding 和 OpenClaw Bridge 需要访问的 Backend 地址。
 - `/admin/*` 和 `/debug/*` 应通过 nginx IP allowlist、VPN 或内网访问限制保护；应用层 token 不是唯一边界。
 - 生产 `.env` 必须从 `.env.example` 复制后在服务器本地填写，不能提交真实密钥。
-- 当前标准数据库仍是 SQLite：`data/ai4all.sqlite3`。单机内测可以继续使用；不要多实例同时写同一个 SQLite 文件。
-- OpenClaw、`openclaw-weixin` 和 Backend 建议部署在同一台机器上，Bridge 通过 `http://127.0.0.1:<port>` 访问 Backend，公网入口由 nginx 转发。
+- 生产必须配置 PostgreSQL `DATABASE_URL`。SQLite 只用于本地开发/测试，不是生产回滚路径。
+- 每个微信接入节点上的 OpenClaw、`openclaw-weixin` 与 Backend 同机部署，Bridge 通过
+  `http://127.0.0.1:8180` 调本节点 Backend；只有 central 节点挂 Web/App/Admin 公网入口。
 
 ## 服务器初始化
 
@@ -109,8 +113,8 @@ curl http://127.0.0.1:8180/health/ready
 ```
 
 `/health/ready` 在非 local 环境会检查生产关键配置：`LLM_API_KEY`、
-`AI4ALL_BRIDGE_SECRET`、`ADMIN_TOKEN`，并验证 SQLite、`data/user_profiles`
-和 `data/system` 可写。首次部署如果这里返回 503，先修 `.env` 或目录权限，
+`AI4ALL_BRIDGE_SECRET`、`ADMIN_TOKEN`，并验证当前数据库连接、`data/user_profiles`
+和 `data/system` 可用。首次部署如果这里返回 503，先修 `.env`、PG 连接或目录权限，
 不要继续接入公网流量。
 
 查看日志：
@@ -559,25 +563,27 @@ systemctl --user restart openclaw-gateway.service
 
 ## 数据备份
 
-发布、重启或迁移前先备份：
+发布、重启或迁移前使用统一脚本备份。生产 PG 分支会执行 `pg_dump -Fc` 并校验 dump 目录；
+不要再手工复制历史 SQLite 文件：
 
 ```bash
 cd /opt/ai4all-weixin-bot
-mkdir -p data/backups
-sqlite3 data/ai4all.sqlite3 ".backup 'data/backups/ai4all_$(date +%Y%m%d_%H%M%S).sqlite3'"
-tar -czf "data/backups/user_profiles_$(date +%Y%m%d_%H%M%S).tar.gz" data/user_profiles data/system
+.venv/bin/python scripts/backup_data.py --dry-run
+.venv/bin/python scripts/backup_data.py
 ```
 
-建议加 cron 定时备份，并定期把 `data/backups` 同步到阿里云 OSS 或另一台机器。
+生产已使用定时备份；异机 `pg_dump`、流复制与恢复演练状态见
+[PG 备份与切换跟踪](pg_backup_failover_tracking.md)。
 
-恢复时先停止写入进程：
+恢复时必须停止两台机器上的业务写入和 central-only scheduler，再恢复到 PostgreSQL 并完成一致性
+核对。`scripts/restore_data.py` 仅支持 SQLite 开发档，不得用于生产恢复。
 
 ```bash
 sudo systemctl stop ai4all-weixin-proactive-scheduler
 sudo systemctl stop ai4all-weixin-backend
 ```
 
-恢复数据库和用户上下文后再启动服务。
+恢复数据库和 system context 后再按 central/node 角色启动服务。
 
 ## 发布检查
 
@@ -618,4 +624,5 @@ sudo systemctl restart ai4all-weixin-backend
 sudo systemctl restart ai4all-weixin-proactive-scheduler
 ```
 
-数据回滚必须先停止 Backend 和 scheduler，再恢复 SQLite 与 `data/user_profiles` / `data/system` 备份。
+数据回滚必须先停止所有 Backend 和 scheduler，保留当前 PG 现场，再按 PostgreSQL 备份/主备流程
+恢复。禁止删除 `DATABASE_URL` 回落历史 SQLite 快照。

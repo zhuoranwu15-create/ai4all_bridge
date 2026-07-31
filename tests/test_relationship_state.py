@@ -1,6 +1,6 @@
 """Phase B：关系状态确定性更新（helpers + 纯函数 + turn/天级编排）。
 
-见 docs/tech_design/relationship_state_implementation_plan_tmp.md §6/§7/§8.1。
+见 docs/architecture/products/zhaoxi/relationship_state_design.md §6/§7/§8.1。
 """
 import asyncio
 import itertools

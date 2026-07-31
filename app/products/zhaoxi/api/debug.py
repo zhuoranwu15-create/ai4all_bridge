@@ -9,14 +9,14 @@ import re
 import logging
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.bootstrap.runtime import get_background_loop
 from app.routers.deps import get_admin_user, verify_admin_auth
 from app.routers.serializers import _audit_plaintext_access, _can_bypass_redaction_for_account, _debug_redaction_payload, _message_for_view, _normalize_ts, _profile_for_view, _prompt_lab_messages_for_view, _prompt_lab_session_for_account, _redact_raw_payload, _redacted_flag_for_account, _require_plaintext_access, _session_for_view, _trace_for_view, _validate_prompt_lab_messages
 from app.routers.models import ProfileUpdateRequest
 from app.db import ACCOUNT_ACTIVE_SESSION_KEY, cancel_reminder, clear_all_messages_for_account, clear_session_messages, create_search_provider_run, create_tool_invocation, get_account, get_account_onboarding_state, get_debug_trace, get_message_raw, get_or_create_session, get_profile_for_account, get_profile_for_session, get_reminder, get_session, get_tool_invocation, insert_debug_trace, list_debug_traces, list_recent_message_raw, list_reminders_for_account, list_search_provider_runs, list_session_messages, list_sessions, list_sessions_for_account, list_tool_invocations, set_account_debug_flag, set_account_onboarding_state, update_profile_for_session, update_reminder, update_tool_invocation
 from app.agent_runtime.llm.service import generate_completion, get_active_llm_model, resolve_active_llm_provider
-from app.agent_runtime.llm.providers import get_llm_provider
+from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, get_llm_provider, tier_for_task
 from app.products.zhaoxi.application.onboarding import is_onboarding_active
 from app.schemas import OpenClawTurnRequest
 from app.time_utils import beijing_now
@@ -106,7 +106,7 @@ def _build_prompt_lab_envelope(
         current_time=current.strftime("%H:%M"),
         onboarding_state=onboarding_state,
         onboarding_active=is_onboarding_active(onboarding_state),
-        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        web_search_enabled=WEB_SEARCH_ENABLED,
         include_tool_instructions=include_tool_instructions,
         debug_dry_run=debug_dry_run,
     )
@@ -484,7 +484,7 @@ def debug_prompt_lab_build(
         "source": "build",
         "session": _session_for_view(session),
         "today": today,
-        "llm_model": get_active_llm_model(),
+        "llm_model": get_active_llm_model(tier_for_task(TASK_MAIN_REPLY)),
         "metadata": llm_input["metadata"],
         "prompt_blocks": llm_input.get("prompt_blocks") or {},
         "tooling": tooling,
@@ -517,7 +517,7 @@ def debug_prompt_lab_replay(
         llm_provider = (
             get_llm_provider(selected_provider_id, settings_obj=settings)
             if selected_provider_id
-            else resolve_active_llm_provider()
+            else resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY))
         )
     except ValueError as err:
         raise HTTPException(status_code=400, detail=str(err)) from err
@@ -952,8 +952,8 @@ def _web_search_debug_capabilities() -> dict:
     }
     return {
         "tool_schema_defined": True,
-        "model_exposure_configured": bool(getattr(settings, "web_search_enabled", False)),
-        "currently_in_turn_tools": bool(getattr(settings, "web_search_enabled", False)),
+        "model_exposure_configured": WEB_SEARCH_ENABLED,
+        "currently_in_turn_tools": WEB_SEARCH_ENABLED,
         "debug_chat_forces_tool_exposure": True,
         "provider_adapter_ready": any(configured_providers.get(provider, False) for provider in provider_order),
         "default_provider": default_provider,

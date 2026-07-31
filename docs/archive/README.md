@@ -12,4 +12,7 @@
 | `superpowers/` | 旧 agent 工作流生成的一次性 specs/plans |
 | `backlog/` | 已被当前 backlog 取代的讨论稿 |
 
+Companion World 的连续交付记录集中在
+[`deliveries/companion_world/`](deliveries/companion_world/README.md)。
+
 归档内容原则上冻结；允许修复失效链接、补充“已被什么替代”的说明，不回写当前状态。

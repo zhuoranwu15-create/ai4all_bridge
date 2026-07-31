@@ -2,7 +2,8 @@
 
 > 状态：设计定稿（本轮不改代码）。
 > 需求：用户在对话里说「每周一三五早上 8 点给我推 AI 热点/技术进展」，系统到点自主检索并生成一条带来源的简报推送。
-> 目标账号（灰度起点）：`aid_554754198`（归属 aliyun2，node-only 瘦节点）。
+> 目标账号（历史灰度起点）：`aid_554754198`（归属 aliyun2；当时仍处于 node-only 瘦节点阶段，
+> 当前已升级为厚节点）。
 
 ## 0. 一句话结论
 
@@ -163,7 +164,8 @@ CREATE INDEX IF NOT EXISTS ix_rcr_account ON reminder_content_runs(account_id, c
 > 为什么远程 bug 会真实触发：目标账号在 aliyun2，对中心调度器是「远程」，`dispatch_proactive_text` → `enqueue_proactive_text` 返回 `status="pending"`，照现状会被判 failed。dynamic 分支必须新增 enqueued 态 + 对账。
 
 ### 6.3 调度归属（已定：aliyun1 统一调度）
-**aliyun1 统一调度所有账号（含 aliyun2 归属账号）**；aliyun2 是 node-only 瘦节点，不跑 DB 调度器。由此：
+**aliyun1 统一调度所有账号（含 aliyun2 归属账号）**；aliyun2 当前是厚 node，会本地处理 turn
+并直连中心 PG，但不运行 central-only scheduler。由此：
 
 - dynamic 提醒的到期扫描**必须跨节点覆盖目标账号**：`list_due_reminders` 传 `node_id=None`（不按 `assigned_node_id` 分片到 aliyun1），否则 aliyun2 归属账号（如 `aid_554754198`）永远扫不到。
 - 出站侧由 `dispatch_proactive_text` 按账号归属自动分流：aliyun1 账号 inline 直发；aliyun2 账号 `enqueue`（返回 pending）→ 走 §6.2-6/7 的 enqueued→对账。

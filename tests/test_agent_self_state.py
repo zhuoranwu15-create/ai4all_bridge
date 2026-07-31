@@ -1,6 +1,6 @@
 """编排注入层（agent_self_state）：主导需求纯函数 + block 渲染。
 
-见 docs/tech_design/agent_mission_and_orchestration_design.md §4 / §8.3-8.4。
+见 docs/architecture/products/zhaoxi/agent_mission_and_orchestration_design.md §4 / §8.3-8.4。
 """
 from app.products.zhaoxi.application.missions.self_state import build_agent_self_state_block, compute_dominant_need
 

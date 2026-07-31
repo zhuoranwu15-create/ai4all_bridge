@@ -207,7 +207,7 @@ def dispatch_due_reminders(
 
 # ---------------------------------------------------------------------------
 # 动态提醒（例行简报）：到期履约合成轮次 + run 状态机 + 远程对账
-# 见 docs/tech_design/dynamic_reminder_scheduled_content_design.md §6。
+# 见 docs/architecture/products/zhaoxi/dynamic_reminder_scheduled_content_design.md §6。
 # ---------------------------------------------------------------------------
 
 def _next_due_at_for(reminder: Dict[str, Any], scheduled_for: str) -> Optional[str]:

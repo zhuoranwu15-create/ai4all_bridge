@@ -8,7 +8,7 @@
 
 import sys
 
-from app.config import settings
+from app.config import WEB_SEARCH_ENABLED, settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     get_account,
@@ -61,7 +61,7 @@ def main() -> int:
         current_time=now.strftime("%H:%M"),
         onboarding_state=onboarding_state,
         onboarding_active=is_onboarding_active(onboarding_state),
-        web_search_enabled=bool(getattr(settings, "web_search_enabled", False)),
+        web_search_enabled=WEB_SEARCH_ENABLED,
         include_tool_instructions=True,
         debug_dry_run=True,  # 把 user_text 拼进 messages,且无持久化
     )

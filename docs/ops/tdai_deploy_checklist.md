@@ -40,7 +40,7 @@
 **两节点相对本手册的偏差（实测）：**
 - **进程托管**：两机**都是 `systemctl --user`**（用户级，无 sudo），非手册默认的系统级 systemd。aliyun1 经本次实测确认为用户级，**与 `deployment_diff.md` S7「sudo 系统级」的说法不符——以实测为准**（memory `llm-timeout-and-aliyun1-svc` 同此）。gateway 单元随之放 `~/.config/systemd/user/`，并 `loginctl ... Linger=yes`。
 - **数据目录**：两机 `/var/lib` 均不可写、无免密 sudo → 都用 `~/.local/share/ai4all/tdai`。
-- **密钥来源**：DeepSeek key = AI4ALL `.env` 的 `LLM_API_KEY`（base=`api.deepseek.com`）；DashScope key = AI4ALL `.env` 的 `DASHSCOPE_API_KEY`。直接 shell 内同步，不另找。注意 TDAI 侧 `TDAI_LLM_MODEL` 固定 `deepseek-chat`，不跟随 AI4ALL 主对话模型（AI4ALL 已改 family×tier，active family=deepseek 的 pro 档在 aliyun1 是 `deepseek-v4-pro`；见 [LLM family×tier 设计](../architecture/agent-runtime/llm_family_tier_design.md)）。
+- **密钥来源**：DeepSeek key = AI4ALL `.env` 的 `LLM_API_KEY`（base=`api.deepseek.com`）；DashScope key = AI4ALL `.env` 的 `DASHSCOPE_API_KEY`。直接 shell 内同步，不另找。注意 TDAI 侧 `TDAI_LLM_MODEL` 固定 `deepseek-chat`，不跟随 AI4ALL 主对话模型（AI4ALL 按 family×tier 路由，`main_reply` 当前默认 flash；active family=deepseek 时对应 `deepseek-v4-flash`；见 [LLM family×tier 设计](../architecture/agent-runtime/llm_family_tier_design.md)）。
 - **出网（两机相反，务必实测）**：
   - **aliyun2**：DeepSeek 直连不通 → gateway 单元带 `HTTP(S)_PROXY=http://127.0.0.1:7890` + `NO_PROXY=…,.aliyuncs.com`（DeepSeek 走 clash、DashScope 直连）。
   - **aliyun1**：DeepSeek+DashScope **都能直连且更快**（实测 DeepSeek 直连 0.30s vs 代理 1.55s）→ gateway 单元**不放任何代理行**，systemd user 环境也无 proxy，直连。

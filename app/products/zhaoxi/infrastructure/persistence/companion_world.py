@@ -2,7 +2,7 @@
 
 承载 universe / character_template / universe_resident / ai_conversation /
 universe_memory_facts（L3）五张 P1 表的底层 repo 原语。见
-docs/tech_design/companion_world_p1_backend_spec.md §2 与 ADR §6/§7.3/D-05/D-06。
+docs/archive/deliveries/companion_world/companion_world_p1_backend_spec.md §2 与 ADR §6/§7.3/D-05/D-06。
 
 分层归属：本模块是**数据层**（app.db.*），非领域层——领域层
 （app.products.zhaoxi.domain.companion_world）受 tests/test_layer_boundaries.py 门禁约束不得直接

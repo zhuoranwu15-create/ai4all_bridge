@@ -1,6 +1,11 @@
 # 产品专题 PRD：记忆与上下文
 
-更新时间：2026-05-27
+更新时间：2026-07-31
+
+> 作用域：本文中的“账号”指隔离 AI 关系状态的 Runtime Account（`account_id`），不是
+> `platform_user_id`。Companion World 每位居民都有独立 Runtime Account，因此 Soul、会话和记忆
+> 互不共享；同一真人或同一世界不构成跨居民读取记忆的授权。身份与作用域见
+> [核心模型与术语](../../../architecture/core-model.md)。
 
 ## 1. 目标
 
@@ -21,7 +26,7 @@ Phase 1 至少支持：
 - `MEMORY.md` 为主体的长期精简记忆。
 - `SOUL.md`、`USER.md`、`IDENTITY.md` 等账号上下文中与用户/AI 设定相关的稳定信息。
 - Dream/Dreaming 风格的 session 压缩和长期记忆蒸馏。
-- 超长 session 的压缩与新 session 延续。
+- 长 session 的滚动摘要与跨业务日 session 延续。
 - 运营侧查看、重置、禁用记忆。
 - 用户明确纠正或拒绝记忆时，能更新、删除或降权。
 
@@ -48,9 +53,11 @@ Phase 1 可选支持：
 - 默认从当前 active session 的用户/AI 对话中提取。
 - 默认可认为短期上下文存在运行内存中，同时底层消息记录仍会落库或进入对应记录链路，便于恢复和审计。
 - 主要服务当前聊天，不等同长期记忆。
-- AI4ALL Account 创建后，开启该账号的第一个 session。
-- Phase 1 只有两类 session 结束触发：每日凌晨 4 点 Dreaming，以及当前 session 超过 500 轮。
-- Phase 1 不设置长时间未聊天等其他 session 结束逻辑。
+- Runtime Account 首次进入某个聊天形态时，开启该形态自己的 active session。
+- 微信、Web 与 App 使用各自的 active session scope，同一 Runtime Account 下也不能把不同形态的
+  短期会话直接混成一条历史。
+- 当前 session 以凌晨 4 点业务日边界轮转；长会话在 session 内用滚动摘要控制上下文，不再以固定
+  500 轮作为结束条件。
 
 ### 3.2 长期但精简的常驻记忆
 
@@ -74,7 +81,7 @@ Phase 1 可选支持：
 - 写入必须保守、精简、可追溯、可回滚。
 - 用户明确设置的称呼、AI 名字、回复偏好优先进入对应 Context Files。
 - Dreaming 可以把特别重要的信息写入 `MEMORY.md`。
-- 超长 session 压缩不直接更新 `MEMORY.md`，只把重要信息延续到新 session。
+- session 内滚动摘要不直接更新 `MEMORY.md`；跨业务日延续由 Dreaming carryover 负责。
 
 ### 3.3 需要检索和提取的历史记忆
 
@@ -158,21 +165,21 @@ daily notes 内容边界：
 - 保持长期记忆精简。
 - 让新一天的聊天不背负过长历史，但保留必要连续性。
 
-### 5.3 超长 session 压缩
+### 5.3 长 session 滚动摘要
 
-当前 session 超过 500 轮时，触发超长 session 压缩。
+当当前 session 的可直接装载历史超过上下文预算时，异步更新滚动摘要。
 
 处理规则：
 
-- 当前 session 被压缩总结并结束。
-- 提取重要信息延续到新 session。
-- 不更新 `MEMORY.md`，避免仅因 session 太长就污染长期精简记忆。
-- 老 session 的对话记录仍保存在对应 daily notes 中，可供后续检索。
+- 已离开直接上下文窗口的较早消息合并进当前 session 的 `rolling_summary`，水位只向前推进。
+- session 继续保持 active，不因达到固定轮数而结束；凌晨 4 点跨业务日时才按日轮转。
+- 滚动摘要不直接更新 `MEMORY.md`，避免仅因对话变长就污染长期精简记忆。
+- 原始文字化记录仍保存在消息记录与对应 daily notes 中，可供审计、Dreaming 或后续检索。
 
 说明：
 
-- “500 轮”默认指 500 个用户/AI 往返轮次，后续技术实现可进一步精确定义。
-- 超长压缩服务于上下文窗口和对话连续性，不等同 Dreaming 的长期记忆晋升。
+- 滚动摘要服务于上下文窗口和对话连续性，不等同 Dreaming 的长期记忆晋升。
+- 跨业务日创建的新 session 可以继承上一段 Dreaming carryover，但各形态的 session scope 继续隔离。
 
 ### 5.4 长期记忆 Dreaming
 
@@ -209,11 +216,13 @@ daily notes 内容边界：
 
 ## 6. 写入原则
 
-- 所有记忆必须绑定 AI4ALL Account，严格账号隔离。
+- 所有记忆必须绑定 Runtime Account，数据库和文件写入都严格按 `account_id` 隔离。
+- Companion World 的 universe/resident 状态若要参与对话，只能经产品层生成受控投影注入；Runtime
+  不能反向读取整个世界或其他居民的私有记忆。
 - 普通聊天成功后默认沉淀到 daily notes，不能阻塞用户回复。
 - daily notes 是历史材料，不应未经筛选直接变成长期常驻记忆。
 - Dreaming 写入 `MEMORY.md` 必须保守、可追溯、可回滚。
-- 超长 session 压缩只延续新 session 上下文，不直接更新 `MEMORY.md`。
+- session 内滚动摘要只维护短期连续性，不直接更新 `MEMORY.md`。
 - 不把调试消息、一次性测试、失败回复或低价值寒暄晋升为长期记忆。
 - 用户明确纠正时，应优先覆盖旧记忆、删除相关记忆或降低其权重。
 
@@ -256,14 +265,14 @@ daily notes 内容边界：
 ## 10. 验收标准
 
 - 不同账号记忆不串线。
-- AI4ALL Account 创建后能开启第一个 session。
+- Runtime Account 首次进入对应聊天形态后能开启该形态自己的 session。
 - 普通聊天后 daily notes 可按凌晨 4 点业务日边界沉淀。
 - daily notes 只保存文字化历史材料：文本原文、语音转写文本、图片 AI 识别描述，不保存原始图片。
 - 每日凌晨 4 点 Dreaming 能结束旧 session，并开启新 session。
 - Dreaming 能将特别重要的信息写入或更新 `MEMORY.md`。
 - Dreaming 能将特别重要和比较重要的信息延续到新 session。
-- 超过 500 轮的 session 会触发压缩，旧 session 结束，新 session 获得必要延续上下文。
-- 超长 session 压缩不会直接更新 `MEMORY.md`。
+- 长 session 超出直接上下文预算后会滚动压缩较早消息，水位单调推进且不重复摘要。
+- 滚动摘要不会直接更新 `MEMORY.md`，也不会把微信、Web、App 的短期 session 混写。
 - 记忆禁用、重置和查看至少在运营侧可用；涉及原始聊天材料或正文内容的查看必须具备管理员最高权限，或具备管理员审批后的 2 小时临时明文权限。
 - 用户明确纠正某条记忆后，后续对话不继续使用旧错误记忆。
 - 如果 Phase 1 启用检索式记忆，需要能基于历史 daily notes 找到与当前上下文相关的内容，并动态装载。

@@ -2,6 +2,10 @@
 
 更新时间：2026-06-22
 
+> 文档关系：本文保留陪伴 Agent 的基础定位和早期关系框架。人格、使命、需求状态、关系阶段及
+> Prompt 注入的当前完整口径以 [AI 自我 PRD](agent_self_prd.md)为准；冲突时以后者及
+> [关系状态设计](../../../architecture/products/zhaoxi/relationship_state_design.md)为准。
+
 ## 1. 目标
 
 定义陪伴式聊天中的 AI Agent 是谁、它如何拥有相对稳定的自我、它和用户之间是什么关系，以及这段关系如何逐步进展。
