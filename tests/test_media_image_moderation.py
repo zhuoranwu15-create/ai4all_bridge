@@ -180,7 +180,7 @@ def test_pass_writes_terminal_status_and_signs_absolute_owner_url(fresh_db, monk
     assert get_media_asset_unscoped(media_id="media_pass")["moderation_status"] == "passed"
     assert len(calls) == 1
     url = calls[0]["image_url"]
-    assert url.startswith(f"{BASE_URL}/v1/media/media_pass?")
+    assert url.startswith(f"{BASE_URL}/api/v1/media/media_pass?")
     assert f"scope=pu:{owner}" in url and "sig=" in url
     assert calls[0]["data_id"] == "media_pass"
     # 结案后不再重复送审。

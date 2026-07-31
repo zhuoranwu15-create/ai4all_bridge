@@ -94,10 +94,31 @@ def test_tampered_or_missing_signature_is_denied(client, fresh_db):
     assert stretched.status_code == 403
     assert stretched.json()["code"] == "media_access_denied"
 
-    # 缺参数走统一 422 信封，不是裸 FastAPI detail。
+    # 缺失或形状错误也属于媒体访问失败，不能被参数层泄漏成 invalid_request。
     bare = client.get(f"/v1/media/{asset['id']}")
-    assert bare.status_code == 422
-    assert bare.json()["code"] == "invalid_request"
+    assert bare.status_code == 403
+    assert bare.json()["code"] == "media_access_denied"
+
+    malformed = client.get(
+        f"/api/v1/media/{asset['id']}?exp=not-an-int&scope=x&sig=short"
+    )
+    assert malformed.status_code == 403
+    assert malformed.json()["code"] == "media_access_denied"
+
+
+def test_configured_public_base_returns_absolute_canonical_url(client, fresh_db):
+    owner = _user("19965401017")
+    asset = _store_asset(owner, media_id="mda_absolute_url")
+    fresh_db.media_public_base_url = "https://media.example/"
+
+    grant = sign_media_url(
+        media_id=asset["id"], scope=owner_scope(owner), ttl_seconds=900
+    )
+
+    assert grant.url.startswith(
+        "https://media.example/api/v1/media/mda_absolute_url?exp="
+    )
+    assert _get(client, grant).status_code == 200
 
 
 def test_expired_signature_is_denied(client, fresh_db):

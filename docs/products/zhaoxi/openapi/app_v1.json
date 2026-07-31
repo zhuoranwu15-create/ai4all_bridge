@@ -3022,7 +3022,7 @@
     }
   },
   "info": {
-    "description": "朝夕相伴移动端 App 对接的 /v1 契约。公网入口 https://ai4company.top/api/v1/，nginx 剥掉 /api 前缀后即本文档的路径。落地口径见 docs/products/zhaoxi/app_api_handoff.md。",
+    "description": "朝夕相伴移动端 App 对接的 /v1 契约。公网入口 https://ai4company.top/api/v1/，服务端同时挂载对应公网路径；nginx 原 URI 透传。落地口径见 docs/products/zhaoxi/app_api_handoff.md。",
     "title": "朝夕相伴 App 客户端 API",
     "version": "v1"
   },

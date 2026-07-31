@@ -317,12 +317,25 @@ class Settings(BaseSettings):
     otp_expires_minutes: int = 10
     otp_token_expires_minutes: int = 10
 
-    # App V1 batch ASR. The provider must expose an OpenAI-compatible
-    # POST {base_url}/audio/transcriptions endpoint.
+    # App V1 batch ASR. ``openai_compatible`` keeps the original integration;
+    # ``volcengine_flash`` uses Doubao large-model recording recognition turbo.
+    asr_provider: str = "openai_compatible"
     asr_base_url: str = "https://api.openai.com/v1"
     asr_api_key: str = ""
     asr_model: str = "whisper-1"
     asr_timeout_seconds: float = 30.0
+    # Volcengine turbo accepts WAV/MP3/OGG_OPUS but not the App's M4A/AAC recording.
+    # Keep the original media unchanged and transcode an ephemeral 16k mono WAV for ASR.
+    volcengine_asr_endpoint: str = (
+        "https://openspeech.bytedance.com/api/v3/auc/bigmodel/recognize/flash"
+    )
+    volcengine_asr_resource_id: str = "volc.bigasr.auc_turbo"
+    volcengine_asr_app_id: str = ""
+    volcengine_asr_access_token: str = ""
+    volcengine_asr_api_key: str = ""
+    # 留空时使用 imageio-ffmpeg wheel 内置二进制；也可填系统 ffmpeg 绝对路径覆盖。
+    asr_ffmpeg_path: str = ""
+    asr_transcode_timeout_seconds: float = 15.0
     asr_max_audio_bytes: int = 10 * 1024 * 1024
     asr_max_duration_ms: int = 60_000
     asr_mock_transcript: str = ""
@@ -409,9 +422,9 @@ class Settings(BaseSettings):
     media_voice_max_duration_ms: int = 60_000
     # 语音转写失败时写进 LLM 上下文的兜底话术（红线：禁止让主模型瞎猜语音内容）。
     voice_message_fallback_text: str = "这段语音我没听清，你可以打字告诉我，或者再发一次～"
-    # 媒体读端点的**公网**绝对基址（如 https://api.example.com），供阿里云图片审核回源取图。
-    # 阿里云 ImageModeration 只接受 imageUrl/OSS 对象、不收字节流，因此不填 = 图片机审不可用
-    # （链路整体不入队，moderation_status 恒为 skipped）。详见 docs/ops/platform/image_moderation_setup.md。
+    # 媒体读端点的公网 origin（如 https://api.example.com）：配置后客户端拿完整 HTTPS URL，
+    # 同时供阿里云图片审核回源取图。留空只适合本地开发（下发相对路径），图片机审也不可用。
+    # 详见 docs/ops/platform/image_moderation_setup.md。
     media_public_base_url: str = ""
     # 图片机审批处理的扫描间隔（秒）。先发后审，延迟以分钟计即可，不必贴着发布时刻。
     media_moderation_interval_seconds: float = 60.0

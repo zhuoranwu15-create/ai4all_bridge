@@ -16,7 +16,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.config import settings
 from app.db import SessionPrincipal
@@ -80,6 +81,44 @@ _UPLOAD_ERROR_RESPONSES = {
     415: {"description": "格式不在白名单（media_kind_unsupported）"},
 }
 
+# 运行时必须自行读取 query，才能把「缺参数/类型错误」也统一映射成 media_access_denied；
+# OpenAPI 仍需如实声明三项必填，避免客户端生成器误以为它们可省略。
+_MEDIA_ACCESS_QUERY_PARAMETERS = [
+    {
+        "name": "exp",
+        "in": "query",
+        "required": True,
+        "description": "签名过期时间（unix 秒）",
+        "schema": {
+            "type": "integer",
+            "title": "Exp",
+            "description": "签名过期时间（unix 秒）",
+        },
+    },
+    {
+        "name": "scope",
+        "in": "query",
+        "required": True,
+        "schema": {
+            "type": "string",
+            "title": "Scope",
+            "minLength": 1,
+            "maxLength": 200,
+        },
+    },
+    {
+        "name": "sig",
+        "in": "query",
+        "required": True,
+        "schema": {
+            "type": "string",
+            "title": "Sig",
+            "minLength": 16,
+            "maxLength": 128,
+        },
+    },
+]
+
 
 def _public_time(value: Optional[str]) -> Optional[str]:
     """DB 北京 naive 串 → 带 +08:00 的公开 ISO 时间（TIME-001）。"""
@@ -134,13 +173,21 @@ def _sign_owner_url(*, media_id: str, platform_user_id: str):
         raise CompanionWorldApiError("media_signing_unavailable") from err
 
 
-def _transcribe_voice_best_effort(
+async def _transcribe_voice_best_effort(
     *, content: bytes, mime: str, filename: Optional[str]
 ) -> Optional[str]:
-    """语音同步转写；失败一律吞掉（D-5：转写失败不阻塞发送）。"""
+    """在线程池同步等待转写；失败一律吞掉（D-5：不阻塞发送结果）。"""
     safe_name = filename or f"recording{voice_extension(mime)}"
     try:
-        return transcribe_audio(content=content, filename=safe_name, content_type=mime) or None
+        return (
+            await run_in_threadpool(
+                transcribe_audio,
+                content=content,
+                filename=safe_name,
+                content_type=mime,
+            )
+            or None
+        )
     except ASRError as err:
         logger.warning("media_voice_transcribe_failed error_type=%s", type(err).__name__)
         return None
@@ -218,7 +265,7 @@ async def upload_media(
     write_media_file(storage_path=storage_path, data=payload)
     transcript: Optional[str] = None
     if cleaned_kind == MEDIA_KIND_VOICE:
-        transcript = _transcribe_voice_best_effort(
+        transcript = await _transcribe_voice_best_effort(
             content=payload, mime=mime, filename=file.filename
         )
     try:
@@ -307,12 +354,11 @@ def _authorize_scope(*, asset: dict, scope: str) -> bool:
         200: {"description": "媒体字节流", "content": {"application/octet-stream": {}}},
         **WORLD_ERROR_RESPONSES,
     },
+    openapi_extra={"parameters": _MEDIA_ACCESS_QUERY_PARAMETERS},
 )
 def read_media(
     media_id: str,
-    exp: int = Query(..., description="签名过期时间（unix 秒）"),
-    scope: str = Query(..., min_length=1, max_length=200),
-    sig: str = Query(..., min_length=16, max_length=128),
+    request: Request,
 ) -> Response:
     """按签名下发媒体字节流。**不读 ``Authorization``**，签名 URL 是唯一凭据（D-3）。
 
@@ -320,15 +366,32 @@ def read_media(
     不给资源枚举信号。
     """
     try:
-        verify_media_signature(media_id=media_id, scope=scope, expires_at=exp, signature=sig)
-    except MediaAccessDeniedError as err:
+        # 访问凭据的任何形状错误都必须与验签失败同码，不能让 FastAPI 参数校验提前泄漏成
+        # 422 invalid_request。这里收口缺失、非整数 exp、空 scope/sig 与长度异常。
+        exp = request.query_params.get("exp")
+        cleaned_scope = str(request.query_params.get("scope") or "").strip()
+        cleaned_sig = str(request.query_params.get("sig") or "").strip()
+        if (
+            not cleaned_scope
+            or len(cleaned_scope) > 200
+            or not (16 <= len(cleaned_sig) <= 128)
+        ):
+            raise MediaAccessDeniedError("invalid media access parameters")
+        expires_at = int(str(exp or "").strip())
+        verify_media_signature(
+            media_id=media_id,
+            scope=cleaned_scope,
+            expires_at=expires_at,
+            signature=cleaned_sig,
+        )
+    except (MediaAccessDeniedError, TypeError, ValueError) as err:
         raise CompanionWorldApiError("media_access_denied") from err
     except MediaSigningNotConfiguredError as err:
         logger.error("media_signing_secret_missing")
         raise CompanionWorldApiError("media_signing_unavailable") from err
 
     asset = get_media_asset_unscoped(media_id=media_id)
-    if asset is None or not _authorize_scope(asset=asset, scope=scope):
+    if asset is None or not _authorize_scope(asset=asset, scope=cleaned_scope):
         raise CompanionWorldApiError("media_access_denied")
     try:
         payload = read_media_file(str(asset["storage_path"]))
@@ -337,7 +400,7 @@ def read_media(
         logger.warning("media_file_missing media_id=%s", media_id)
         raise CompanionWorldApiError("media_access_denied")
 
-    is_owner_scope = scope.startswith(SCOPE_OWNER_PREFIX)
+    is_owner_scope = cleaned_scope.startswith(SCOPE_OWNER_PREFIX)
     headers = {
         # 主人可短时缓存；访客一律 no-store——visit 结束后连本地缓存都不该留（§3.3 隐私红线）。
         "Cache-Control": "private, max-age=600" if is_owner_scope else "no-store, private",
