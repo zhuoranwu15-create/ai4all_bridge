@@ -106,7 +106,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "chat_image_message": true,
     "chat_voice_message": true,
     "feed_image_post": true,
-    "resident_wish_create": true
+    "resident_wish_create": false
   },
   "limits": {
     "message_chars": 4000, "audio_bytes": 10485760, "audio_duration_ms": 60000,
@@ -114,7 +114,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "voice_bytes_max": 512000, "voice_duration_ms_max": 60000,
     "wish_text_chars": 500, "wish_daily_max": 10
   },
-  "client_contract_version": "2026-07-30",
+  "client_contract_version": "2026-08-01",
   "server_time": "2026-07-26T12:00:00+08:00",
   "minimum_supported_version": "0.1.0",
   "minimum_supported_version_by_platform": { "ios": "0.0.0", "android": "0.0.0" }
