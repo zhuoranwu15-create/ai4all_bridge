@@ -8,6 +8,9 @@
   注册=account_campaign_attribution、扫码=binding_intents、激活=channel_bindings、
   onboarding=analytics_events('onboarding_state_changed')。
 
+运营活码与 ``urt_`` 用户角色模板共用以上锚点；本模块不 join 任一 source 配置表，
+因此相同 code/日期范围天然得到同一套聚合口径。
+
 所有查询均以 campaign_code 约束，只出聚合计数、不返回单账号明细。按天分桶统一用
 substr(col,1,10)（SQLite/PG 通用，列存北京墙钟裸串 'YYYY-MM-DD HH:MM:SS'）。
 """

@@ -14,11 +14,15 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.db._core import _clean_text, connect
+from app.products.zhaoxi.domain.creator_role_templates import (
+    CREATOR_ROLE_TEMPLATE_CODE_PREFIX,
+)
 from app.time_utils import beijing_now_str
 
 logger = logging.getLogger("ai4all")
 
 __all__ = [
+    "campaign_code_exists",
     "create_campaign_code",
     "get_campaign_code",
     "list_campaign_codes",
@@ -28,6 +32,7 @@ __all__ = [
     "write_campaign_attribution",
     "get_campaign_attribution",
     "apply_campaign_code_attribution",
+    "resolve_campaign_source",
 ]
 
 _EDITABLE_FIELDS = (
@@ -56,6 +61,8 @@ def _new_campaign_code_id() -> str:
 def _validate_code_format(code: str) -> None:
     if not _CODE_PATTERN.match(code):
         raise ValueError("code must match ^[A-Za-z0-9_-]{1,64}$")
+    if code.lower().startswith(CREATOR_ROLE_TEMPLATE_CODE_PREFIX):
+        raise ValueError("reserved_campaign_code_prefix")
 
 
 def _validate_status(status: Optional[str]) -> None:
@@ -130,6 +137,33 @@ def _normalize_ai_name_preset(ai_name_preset: Optional[str]) -> Optional[str]:
 
 def _row_to_dict(row) -> Dict[str, Any]:
     return dict(row)
+
+
+def resolve_campaign_source(code: Optional[str]) -> str:
+    """仅按保留前缀确定 code 来源，避免跨两张表竞速猜测归属。"""
+    cleaned_code = _clean_text(code)
+    if cleaned_code and cleaned_code.lower().startswith(
+        CREATOR_ROLE_TEMPLATE_CODE_PREFIX
+    ):
+        return "creator_role_template"
+    return "operator_campaign"
+
+
+def campaign_code_exists(*, code: str) -> bool:
+    """判断匿名曝光 code 是否存在；状态和有效期不影响 S0 记录。"""
+    cleaned_code = _clean_text(code)
+    if not cleaned_code:
+        return False
+    if resolve_campaign_source(cleaned_code) == "creator_role_template":
+        from app.products.zhaoxi.infrastructure.persistence.creator_role_templates import (  # noqa: PLC0415
+            get_creator_role_template_by_campaign_code,
+        )
+
+        return (
+            get_creator_role_template_by_campaign_code(campaign_code=cleaned_code)
+            is not None
+        )
+    return get_campaign_code(code=cleaned_code) is not None
 
 
 def create_campaign_code(
@@ -351,15 +385,19 @@ def apply_campaign_code_attribution(
     account_id: str,
     campaign_code: Optional[str],
     increment_usage: bool = True,
+    expected_creator_platform_user_id: Optional[str] = None,
+    is_new_membership: bool = False,
+    creator_role_templates_enabled: bool = True,
 ) -> Dict[str, Any]:
     """校验营销活码并落地其注册效果：写归因快照 + 应用强制 AI 名字（IDENTITY.md）与强制 SOUL 人设。
 
     生产注册（app/db/billing.py，increment_usage=True）与 onboarding 调试建号
-    （app/products/zhaoxi/api/debug.py，increment_usage=False，调试流量不进活码转化统计）共用此函数，
-    确保调试面板忠实复现真实注册效果，避免两处逻辑抄写漂移。
+    （app/products/zhaoxi/api/debug.py，increment_usage=False）共用此函数。普通运营活码继续允许
+    调试复现且不计转化；``urt_`` 模板必须另有首建 membership + 可信 referral owner，
+    因此 debug/Native/重复登录默认拒绝消费。
 
-    返回 {applied: bool, reason?: str, campaign_code?, mission_id?, onboarding_script_variant?,
-    soul_preset_key?}。语义：
+    返回 {applied: bool, reason?: str, source?, campaign_code?, mission_id?,
+    onboarding_script_variant?, soul_preset_key?}。语义：
     - 空 code → applied=False, reason=empty，不处理。
     - 账号已归因过 → applied=False, reason=already_attributed，直接跳过（写入即定型，
       不重复写快照、不覆盖 SOUL）。
@@ -370,6 +408,57 @@ def apply_campaign_code_attribution(
     cleaned_campaign_code = _clean_text(campaign_code)
     if not cleaned_campaign_code:
         return {"applied": False, "reason": "empty"}
+    if resolve_campaign_source(cleaned_campaign_code) == "creator_role_template":
+        if not creator_role_templates_enabled:
+            return {
+                "applied": False,
+                "reason": "capability_disabled",
+                "source": "creator_role_template",
+            }
+        if not is_new_membership:
+            return {
+                "applied": False,
+                "reason": "not_new_membership",
+                "source": "creator_role_template",
+            }
+        expected_creator_id = _clean_text(expected_creator_platform_user_id)
+        if not expected_creator_id:
+            return {
+                "applied": False,
+                "reason": "creator_required",
+                "source": "creator_role_template",
+            }
+        try:
+            from app.products.zhaoxi.infrastructure.persistence.creator_role_templates import (  # noqa: PLC0415
+                apply_creator_role_template_attribution,
+            )
+
+            result = apply_creator_role_template_attribution(
+                account_id=account_id,
+                campaign_code=cleaned_campaign_code,
+                expected_creator_platform_user_id=expected_creator_id,
+            )
+            result["source"] = "creator_role_template"
+            if not result.get("applied"):
+                logger.warning(
+                    "creator role template attribution skipped account=%s code=%s reason=%s",
+                    account_id,
+                    cleaned_campaign_code,
+                    result.get("reason"),
+                )
+            return result
+        except Exception as err:
+            logger.error(
+                "creator role template attribution failed account=%s code=%s error=%s",
+                account_id,
+                cleaned_campaign_code,
+                err,
+            )
+            return {
+                "applied": False,
+                "reason": "error",
+                "source": "creator_role_template",
+            }
     # 幂等/写入即定型：已归因账号不重复应用，避免二次不同活码覆盖 SOUL 与快照漂移。
     if get_campaign_attribution(account_id=account_id) is not None:
         return {"applied": False, "reason": "already_attributed"}

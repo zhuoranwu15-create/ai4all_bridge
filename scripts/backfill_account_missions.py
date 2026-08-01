@@ -29,7 +29,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.config import settings
 from app.db import get_account_mission, list_accounts
-from app.products.zhaoxi.application.missions.assignment import _pick_mission_id, assign_mission_if_absent
+from app.products.zhaoxi.application.missions.assignment import (
+    assign_mission_if_absent,
+    resolve_mission_assignment_candidate,
+)
 from app.products.zhaoxi.domain.missions.registry import get_mission_template
 
 
@@ -50,6 +53,7 @@ def main() -> int:
 
     assigned = 0
     already = 0
+    skipped_freeform = 0
     for account in accounts:
         account_id = account["id"]
         existing = get_account_mission(account_id=account_id)
@@ -58,7 +62,11 @@ def main() -> int:
             print(f"· 已分配  {account_id}  mission_id={existing['mission_id']}")
             continue
 
-        would_be = _pick_mission_id(account_id)
+        would_be = resolve_mission_assignment_candidate(account_id=account_id)
+        if would_be is None:
+            skipped_freeform += 1
+            print(f"· 自由使命  {account_id}  跳过量化使命分配")
+            continue
         template = get_mission_template(would_be)
         if args.apply:
             mission_id = assign_mission_if_absent(account_id=account_id)
@@ -70,6 +78,7 @@ def main() -> int:
     print("\n===== 汇总 =====")
     print(f"账号总数: {len(accounts)}")
     print(f"已分配（跳过）: {already}")
+    print(f"自由使命（跳过）: {skipped_freeform}")
     print(f"{'新分配' if args.apply else '将分配'}: {assigned}")
     if not args.apply and assigned:
         print("\n未加 --apply，未写入任何内容。确认无误后加 --apply 重新运行。")

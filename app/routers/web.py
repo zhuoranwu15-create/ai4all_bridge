@@ -18,9 +18,10 @@ from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.routers.deps import _require_session
 from app.platform.gateways import node_gateway
 from app.platform.auth.captcha import verify_captcha
-from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, get_campaign_code, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
+from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
 from app.agent_runtime.llm.service import generate_completion
 from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
+from app.products.zhaoxi.infrastructure.persistence.campaign import campaign_code_exists
 from app.platform.quota.rate_limiter import RateLimiter
 from app.platform.auth.sms import generate_otp, send_otp
 from typing import Any, Optional
@@ -855,6 +856,26 @@ def _register_platform_user_with_otp(
     )["platform_user"]
 
 
+def _trusted_creator_id_from_registration(registration: dict) -> Optional[str]:
+    """仅从本次首建 membership 已落库的 referral relationship 提取模板 owner。"""
+    if not registration.get("is_new_membership"):
+        return None
+    relationship = registration.get("referral_relationship") or {}
+    creator_id = str(relationship.get("inviter_platform_user_id") or "").strip()
+    return creator_id or None
+
+
+def _public_role_template_link_result(account_result: dict) -> Optional[dict]:
+    """只向 Web 返回是否应用及回退原因，不暴露模板/version 内部主键。"""
+    result = account_result.get("role_template_link_result")
+    if not result:
+        return None
+    public = {"applied": bool(result.get("applied"))}
+    if result.get("reason"):
+        public["reason"] = str(result["reason"])
+    return public
+
+
 @router.post("/web/register")
 def web_register(payload: WebRegisterRequest) -> dict:
     platform_user = _register_platform_user_with_otp(
@@ -876,18 +897,22 @@ def web_register(payload: WebRegisterRequest) -> dict:
 def web_register_and_binding_intent(
     payload: WebRegisterAndBindingIntentRequest,
 ) -> dict:
-    platform_user = _register_platform_user_with_otp(
+    registration = _register_platform_user_with_otp_result(
         phone=payload.phone,
         display_name=payload.display_name,
         otp_token=payload.otp_token,
         invite_code=payload.invite_code,
     )
+    platform_user = registration["platform_user"]
+    expected_creator_id = _trusted_creator_id_from_registration(registration)
     try:
         account_result = get_or_create_default_ai4all_account_for_user(
             platform_user_id=platform_user["id"],
             display_name=None,
             plan="free",
             campaign_code=payload.campaign_code,
+            expected_creator_platform_user_id=expected_creator_id,
+            is_new_membership=bool(registration.get("is_new_membership")),
         )
         wallet = get_wallet_summary(
             account_id=account_result["account"]["id"],
@@ -916,6 +941,9 @@ def web_register_and_binding_intent(
         "binding_intent": binding_intent,
         "binding_mode": "openclaw_gateway_qr",
         "next_step": "scan_qr_and_wait_for_completion",
+        "role_template_link_result": _public_role_template_link_result(
+            account_result
+        ),
     }
 
 
@@ -943,7 +971,7 @@ def web_campaign_visit(payload: WebCampaignVisitRequest, request: Request) -> di
             f"campaign-visit:{client_host}", _CAMPAIGN_VISIT_RPM, window_seconds=60.0
         ):
             return {"status": "ok"}
-        if get_campaign_code(code=code) is None:
+        if not campaign_code_exists(code=code):
             return {"status": "ignored"}
         referrer = request.headers.get("referer")
         user_agent = request.headers.get("user-agent")
@@ -1021,18 +1049,22 @@ def web_login(payload: WebLoginRequest) -> dict:
     - If no active WeChat binding exists, also starts a new binding intent (QR).
     - Returns has_active_binding so the frontend can decide to show QR or go to dashboard.
     """
-    platform_user = _register_platform_user_with_otp(
+    registration = _register_platform_user_with_otp_result(
         phone=payload.phone,
         display_name=None,
         otp_token=payload.verified_token,
         invite_code=payload.invite_code,
         invalid_otp_detail="验证凭证无效或已过期",
     )
+    platform_user = registration["platform_user"]
+    expected_creator_id = _trusted_creator_id_from_registration(registration)
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
         display_name=None,
         plan="free",
         campaign_code=payload.campaign_code,
+        expected_creator_platform_user_id=expected_creator_id,
+        is_new_membership=bool(registration.get("is_new_membership")),
     )
     wallet = get_wallet_summary(
         account_id=account_result["account"]["id"],
@@ -1067,6 +1099,9 @@ def web_login(payload: WebLoginRequest) -> dict:
         "has_active_binding": has_active_binding,
         "binding_intent": binding_intent,
         "binding_mode": "openclaw_gateway_qr",
+        "role_template_link_result": _public_role_template_link_result(
+            account_result
+        ),
     }
 
 
