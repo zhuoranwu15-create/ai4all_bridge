@@ -5,7 +5,6 @@ admin + staff 均可读写（Depends(verify_admin_auth)）——运营 staff 应
 本模块不直接引用 settings，故 tests/conftest.py 无需追加 per-module patch。
 """
 import logging
-from datetime import datetime, timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -18,17 +17,14 @@ from app.db import (
     update_campaign_code,
 )
 from app.routers.deps import require_admin_or_staff_user
-from app.time_utils import beijing_now
+from app.products.zhaoxi.application.campaign_stats import (
+    resolve_campaign_stats_range,
+)
 
 logger = logging.getLogger("ai4all")
 router = APIRouter()
 
 CampaignCodeStatus = Literal["active", "disabled"]
-
-# 漏斗统计查询窗口约束（北京自然日）。
-_DEFAULT_STATS_WINDOW_DAYS = 14
-_MAX_STATS_WINDOW_DAYS = 92
-
 
 class CampaignCodeCreateRequest(BaseModel):
     code: str
@@ -106,26 +102,11 @@ def admin_update_campaign_code(
 
 
 def _resolve_stats_range(date_from: Optional[str], date_to: Optional[str]) -> tuple[str, str]:
-    """解析/校验统计日期区间（北京自然日）；缺省给最近 14 天，上限 92 天。"""
-    today = beijing_now().date()
-
-    def _parse(value: Optional[str], default):
-        if value is None:
-            return default
-        try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
-
-    to_d = _parse(date_to, today)
-    from_d = _parse(date_from, to_d - timedelta(days=_DEFAULT_STATS_WINDOW_DAYS - 1))
-    if from_d > to_d:
-        raise HTTPException(status_code=400, detail="from must be <= to")
-    if (to_d - from_d).days > _MAX_STATS_WINDOW_DAYS:
-        raise HTTPException(
-            status_code=400, detail=f"range must be <= {_MAX_STATS_WINDOW_DAYS} days"
-        )
-    return from_d.isoformat(), to_d.isoformat()
+    """兼容既有私有 helper；日期事实源已提取到 application 层。"""
+    try:
+        return resolve_campaign_stats_range(date_from, date_to)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/admin/campaign-codes/{code}/stats")

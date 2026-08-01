@@ -30,6 +30,13 @@
             <input type="text" id="invite-code" class="mono-input" autocomplete="off" placeholder="可选">
             <span id="st-invite-code" class="status-msg"></span>
           </div>
+          <div id="role-template-preview" class="binding-result" style="display:none">
+            <strong id="role-preview-name"></strong>
+            <div id="role-preview-personality" class="wrap" style="margin-top:8px;white-space:pre-wrap"></div>
+            <div id="role-preview-mission" class="wrap" style="margin-top:8px;white-space:pre-wrap"></div>
+            <div id="role-preview-expiry" style="margin-top:8px;opacity:.7"></div>
+          </div>
+          <div id="role-template-fallback" class="status-msg" style="display:none"></div>
           <!-- 验证码 SDK 渲染容器（SDK 自动填充，保持空） -->
           <div id="captcha-element"></div>
           <div class="form-actions">
@@ -177,6 +184,56 @@
     function initCampaignCodeFromUrl() {
       state.campaignCode = (new URLSearchParams(location.search).get('campaign_code') || '').trim();
       reportCampaignVisit(state.campaignCode, 'onboarding', '/web/campaign-visit');
+      previewCreatorRoleTemplate();
+    }
+
+    function isCreatorRoleTemplateCode(code) {
+      return String(code || '').toLowerCase().indexOf('urt_') === 0;
+    }
+
+    function clearCreatorRoleTemplateCode() {
+      state.campaignCode = '';
+      var params = new URLSearchParams(location.search);
+      params.delete('campaign_code');
+      var query = params.toString();
+      history.replaceState({}, '', location.pathname + (query ? '?' + query : '') + location.hash);
+      hide('role-template-preview');
+      var fallback = document.getElementById('role-template-fallback');
+      fallback.textContent = '角色模板已不可用，将按普通流程创建朝夕伙伴；有效邀请码仍会保留。';
+      show('role-template-fallback');
+    }
+
+    async function previewCreatorRoleTemplate() {
+      var campaignCode = normalizedCampaignCode();
+      if (!isCreatorRoleTemplateCode(campaignCode)) return;
+      try {
+        var data = await webFetch(
+          '/web/creator-role-template-links/' + encodeURIComponent(campaignCode)
+          + '/preview?invite_code=' + encodeURIComponent(normalizedInviteCode())
+        );
+        if (!data.valid) {
+          if (data.reason === 'rate_limited') {
+            var temporary = document.getElementById('role-template-fallback');
+            temporary.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+            show('role-template-fallback');
+            return;
+          }
+          clearCreatorRoleTemplateCode();
+          return;
+        }
+        var role = data.role || {};
+        document.getElementById('role-preview-name').textContent = '将创建角色：' + (role.name || '朝夕伙伴');
+        document.getElementById('role-preview-personality').textContent = '性格 / 底色：' + (role.personality_preview || '—');
+        document.getElementById('role-preview-mission').textContent = '使命：' + (role.mission_preview || '—');
+        document.getElementById('role-preview-expiry').textContent = '模板有效期至：' + (role.expires_at || '—');
+        hide('role-template-fallback');
+        show('role-template-preview');
+      } catch (error) {
+        // 预览失败不阻塞正式注册；后端会再次验证双参数。
+        var fallback = document.getElementById('role-template-fallback');
+        fallback.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+        show('role-template-fallback');
+      }
     }
 
     // 落地页曝光 beacon（漏斗 S0）：匿名 visitor_token + campaign_code 上报，静默失败，绝不阻塞页面。
@@ -310,6 +367,10 @@
     window.addEventListener('load', function() {
       initInviteCodeFromUrl();
       initCampaignCodeFromUrl();
+      document.getElementById('invite-code').addEventListener('change', function() {
+        previewInviteCode(normalizedInviteCode());
+        previewCreatorRoleTemplate();
+      });
       loadWebConfig()
         .then(initCaptcha)
         .catch(function(e) {
