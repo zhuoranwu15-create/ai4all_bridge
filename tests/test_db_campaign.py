@@ -110,6 +110,12 @@ def test_create_accepts_url_safe_code_charset(fresh_db):
     assert created["code"] == "Valid_Code-1"
 
 
+@pytest.mark.parametrize("code", ["urt_operator", "URT_operator", "UrT_operator"])
+def test_operator_campaign_rejects_creator_role_template_prefix(fresh_db, code):
+    with pytest.raises(ValueError, match="reserved_campaign_code_prefix"):
+        create_campaign_code(code=code, campaign_key="operator")
+
+
 def test_create_rejects_unknown_status(fresh_db):
     with pytest.raises(ValueError):
         create_campaign_code(code="BADSTAT", campaign_key="a", status="not_a_status")

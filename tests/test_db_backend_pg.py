@@ -185,7 +185,11 @@ def test_pg_init_db_builds_full_schema(pg_settings):
         # 关键表都建出来了，含 baseline 中"被先定义的表引用"的 tool_invocations
         for table in ("accounts", "messages", "sessions", "tool_invocations",
                       "entitlement_ledger", "content_invitations", "account_user_meta",
-                      "account_profile_files", "rpm_hits"):
+                      "account_profile_files", "rpm_hits", "creator_role_templates",
+                      "creator_role_template_versions",
+                      "creator_role_template_review_runs",
+                      "account_creator_role_template_attribution",
+                      "creator_role_template_events"):
             row = conn.execute("SELECT to_regclass(?) AS r", (table,)).fetchone()
             assert row["r"] is not None, f"表未建出: {table}"
 

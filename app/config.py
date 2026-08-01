@@ -125,6 +125,9 @@ class Settings(BaseSettings):
     user_meta_scheduler_page_size: int = 100
     user_meta_scheduler_inter_account_sleep: float = 0.5
 
+    # 用户自建角色模板与邀请链接总闸；关闭时禁止模板变更和新的 urt_ 实例化。
+    creator_role_templates_enabled: bool = False
+
     openclaw_login_auto_start: bool = True
     openclaw_login_start_timeout_ms: int = 35000
     openclaw_login_wait_timeout_ms: int = 480000

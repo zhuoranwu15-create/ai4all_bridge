@@ -30,6 +30,8 @@
    例外见下方保留清单第一条。
 9. `resident_wishes` / `resident_wish_jobs` 与 `source='wish'` 来信：先取消持久任务，再清理
    愿望和专属生成物；已 claim 的旧 worker 因 wish CAS 锚消失，不能在注销后写回来。
+10. 创建者持有的角色模板全部 soft delete，使分享链接立即停止服务；被邀请账号自己的
+    不可变快照不受影响。逐账号 wipe 同时删除该账号的模板归因快照和 profile 文件。
 
 **新增任何按真人/账号存数据的表，都必须在本模块的清除清单或下方保留清单里显式登记一次。**
 这两份清单是注销口径的唯一来源，只靠"下次记得"必然漏（`media_assets` 就是这么漏的：
@@ -202,6 +204,16 @@ def execute_account_deletion(
             wiped[key] += int(stats.get(key) or 0)
 
     with connect() as conn:
+        from app.products.zhaoxi.infrastructure.persistence.creator_role_templates import (  # noqa: PLC0415
+            soft_delete_all_creator_role_templates,
+        )
+
+        creator_role_templates_deleted = soft_delete_all_creator_role_templates(
+            creator_platform_user_id=platform_user_id,
+            app_id=app_id,
+            changed_at=current,
+            conn=conn,
+        )
         # 异步许愿任务先停再删；任何已 claim 的 worker 后续 CAS 都会因 wish 行消失而失效。
         resident_wish_jobs = conn.execute(
             "DELETE FROM resident_wish_jobs WHERE wish_id IN "
@@ -322,6 +334,9 @@ def execute_account_deletion(
         "resident_wish_letters_deleted": int(resident_wish_letters or 0),
         "app_notifications_deleted": int(app_notifications or 0),
         "sessions_revoked": int(sessions_revoked or 0),
+        "creator_role_templates_deleted": int(
+            creator_role_templates_deleted or 0
+        ),
     }
 
 

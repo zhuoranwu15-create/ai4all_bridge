@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>角色模板邀请链接 — 朝夕相伴</title>
+  <link rel="stylesheet" href="site.css">
+  <style>
+    .role-page { max-width: 980px; margin: 0 auto; padding: 28px 18px 52px; }
+    .role-page-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }
+    .role-page-head h1 { margin:0 0 8px; font-size:1.55rem; }
+    .role-page-head p { margin:0; color:var(--text-sub); line-height:1.65; }
+    .role-form-grid { display:grid; gap:14px; }
+    .role-form-grid label { display:block; font-weight:600; margin-bottom:6px; }
+    .role-form-grid input, .role-form-grid textarea { width:100%; box-sizing:border-box; }
+    .role-form-grid textarea { min-height:112px; resize:vertical; }
+    .role-card { margin-top:16px; }
+    .role-card-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
+    .role-card-head h3 { margin:0 0 5px; }
+    .role-status { display:inline-block; border-radius:999px; padding:3px 9px; background:rgba(90,100,120,.1); font-size:.78rem; }
+    .role-fields { display:grid; grid-template-columns:120px minmax(0,1fr); gap:10px 16px; margin:16px 0; }
+    .role-fields dt { color:var(--text-sub); }
+    .role-fields dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+    .role-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .role-note { padding:12px 14px; border-radius:10px; background:rgba(80,120,220,.08); color:var(--text-sub); line-height:1.6; }
+    .role-msg { min-height:22px; margin-top:10px; font-size:.88rem; }
+    .role-msg.error { color:#c0392b; }
+    .role-msg.success { color:#23834a; }
+    .role-link { overflow-wrap:anywhere; color:var(--text-sub); font-size:.84rem; margin-top:8px; }
+    .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(100px,1fr)); gap:8px; margin-top:12px; }
+    .stats-cell { padding:10px; border-radius:8px; background:rgba(90,100,120,.07); text-align:center; }
+    .stats-num { font-size:1.2rem; font-weight:700; }
+    .stats-label { color:var(--text-sub); font-size:.78rem; margin-top:3px; }
+    @media (max-width:640px) {
+      .role-page-head, .role-card-head { display:block; }
+      .role-page-head .btn { margin-top:12px; }
+      .role-fields { grid-template-columns:1fr; gap:5px; }
+      .role-fields dd { margin-bottom:8px; }
+    }
+  </style>
+</head>
+<body>
+<nav class="site-nav">
+  <div class="brand-group">
+    <a class="brand-logo" href="/">
+      <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
+    </a>
+    <span class="beta-badge">Beta 测试版</span>
+  </div>
+  <div class="nav-actions">
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">返回用户中心</a>
+    <button class="btn btn-ghost btn-sm" onclick="logout()">退出登录</button>
+  </div>
+</nav>
+
+<main class="role-page">
+  <div class="role-page-head">
+    <div>
+      <h1>角色模板邀请链接</h1>
+      <p>创建姓名、性格/底色和使命三字段模板。审核通过并发布后，系统会生成同时带有你的邀请码和角色模板码的注册链接。</p>
+    </div>
+    <button id="btn-new" class="btn btn-primary" onclick="openCreateForm()">新建角色模板</button>
+  </div>
+
+  <div class="role-note">
+    当前暂不支持在线试玩。若需验证角色实际效果，请复制发布后的注册链接，使用一个尚未加入朝夕的新账号完成注册测试。测试账号是正式账号，不会自动清理，也不能替换你当前的 AI。
+  </div>
+
+  <div id="page-msg" class="role-msg"></div>
+
+  <section id="editor-card" class="card" style="display:none;margin-top:16px">
+    <div class="card-header">
+      <h3 id="editor-title">新建角色模板</h3>
+    </div>
+    <form id="role-form" class="role-form-grid">
+      <div>
+        <label for="role-name">姓名</label>
+        <input class="input" id="role-name" maxlength="24" required placeholder="例如：小满">
+      </div>
+      <div>
+        <label for="role-personality">性格 / 底色</label>
+        <textarea class="input" id="role-personality" maxlength="800" required placeholder="描述这个 AI 如何理解世界、如何与你相处、表达风格和边界。"></textarea>
+      </div>
+      <div>
+        <label for="role-mission">使命</label>
+        <textarea class="input" id="role-mission" maxlength="500" required placeholder="描述它希望长期为用户带来什么，不需要填写量化指标。"></textarea>
+      </div>
+      <div class="role-actions">
+        <button id="btn-submit" type="submit" class="btn btn-primary">提交并审核</button>
+        <button type="button" class="btn btn-ghost" onclick="closeEditor()">取消</button>
+      </div>
+      <div id="form-msg" class="role-msg"></div>
+    </form>
+  </section>
+
+  <div id="loading" style="text-align:center;padding:42px;color:var(--text-hint)">加载中…</div>
+  <section id="template-list"></section>
+</main>
+
+<footer class="site-footer">
+  © 2026 朝夕相伴 · <a href="mailto:support@ai4company.top" style="color:inherit">support@ai4company.top</a>
+</footer>
+
+<script>
+var S = {
+  sessionToken: null,
+  templates: [],
+  editingId: null,
+};
+
+function node(tag, className, text) {
+  var value = document.createElement(tag);
+  if (className) value.className = className;
+  if (text != null) value.textContent = String(text);
+  return value;
+}
+
+function showMessage(id, text, isError) {
+  var target = document.getElementById(id);
+  target.textContent = text || '';
+  target.className = 'role-msg ' + (text ? (isError ? 'error' : 'success') : '');
+}
+
+async function apiFetch(path, options) {
+  options = options || {};
+  var headers = {};
+  if (options.body) headers['Content-Type'] = 'application/json';
+  if (S.sessionToken) headers.Authorization = 'Bearer ' + S.sessionToken;
+  var resolvedPath = path.indexOf('/web/') === 0 ? '/api' + path : path;
+  var response = await fetch(resolvedPath, Object.assign({}, options, {
+    headers: Object.assign(headers, options.headers || {}),
+  }));
+  if (!response.ok) {
+    var body = await response.json().catch(function() { return { detail: response.statusText }; });
+    var error = new Error(body.detail || ('请求失败 ' + response.status));
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+function logout() {
+  localStorage.removeItem('chaochao_session');
+  window.location.href = '/';
+}
+
+function statusLabel(status) {
+  return {
+    pending_review: '等待审核 / 可重试',
+    approved: '审核通过，待发布',
+    active: '已发布',
+    rejected: '审核未通过',
+    disabled_creator: '已由你停用',
+    disabled_admin: '已由平台停用',
+    expired: '已过期',
+    deleted: '已删除',
+  }[status] || status;
+}
+
+function appendField(list, label, value) {
+  list.appendChild(node('dt', '', label));
+  list.appendChild(node('dd', '', value || '—'));
+}
+
+function actionButton(label, className, handler) {
+  var button = node('button', 'btn btn-sm ' + (className || 'btn-ghost'), label);
+  button.type = 'button';
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function renderTemplate(template) {
+  var card = node('article', 'card role-card');
+  var head = node('div', 'role-card-head');
+  var heading = node('div');
+  var latest = template.latest_version || {};
+  heading.appendChild(node('h3', '', latest.ai_name || '未命名模板'));
+  heading.appendChild(node('span', 'role-status', statusLabel(template.effective_status)));
+  head.appendChild(heading);
+  head.appendChild(node('div', '', '槽位 ' + template.slot_no + ' · 已实例化 ' + template.used_count + ' 次'));
+  card.appendChild(head);
+
+  var fields = node('dl', 'role-fields');
+  appendField(fields, '姓名', latest.ai_name);
+  appendField(fields, '性格 / 底色', latest.personality_text);
+  appendField(fields, '使命', latest.mission_text);
+  appendField(fields, '最新审核', latest.review_status ? statusLabel(template.effective_status) + ' · ' + latest.review_status : '—');
+  appendField(fields, '审核说明', latest.review_reason);
+  appendField(fields, '首次激活', template.activated_at);
+  appendField(fields, '有效期至', template.expires_at);
+  card.appendChild(fields);
+
+  if (template.published_version && latest.id !== template.published_version.id) {
+    card.appendChild(node('p', 'role-note', '当前注册链接仍使用已发布的 v' + template.published_version.version_no + '；上面的 v' + latest.version_no + ' 需要审核通过并主动发布后才会生效。'));
+  }
+
+  if (template.registration_url) {
+    card.appendChild(node('div', 'role-link', new URL(template.registration_url, window.location.origin).href));
+  }
+
+  var actions = node('div', 'role-actions');
+  if (!['disabled_admin', 'expired', 'deleted'].includes(template.effective_status)) {
+    actions.appendChild(actionButton('编辑三字段', 'btn-ghost', function() { openEditForm(template); }));
+  }
+  if (latest.review_status === 'pending') {
+    actions.appendChild(actionButton('重试审核', 'btn-secondary', function() { mutate(template.id, 'review'); }));
+  }
+  if (latest.review_status === 'passed' && !latest.is_published && template.effective_status !== 'disabled_admin') {
+    actions.appendChild(actionButton('发布此版本', 'btn-primary', function() { publishVersion(template.id, latest.id); }));
+  }
+  if (template.effective_status === 'active') {
+    actions.appendChild(actionButton('停用链接', 'btn-ghost', function() { mutate(template.id, 'disable'); }));
+  }
+  if (template.effective_status === 'disabled_creator') {
+    actions.appendChild(actionButton('恢复链接', 'btn-primary', function() { mutate(template.id, 'enable'); }));
+  }
+  if (template.registration_url) {
+    actions.appendChild(actionButton('复制注册链接', 'btn-secondary', function() {
+      copyRegistrationUrl(template.registration_url);
+    }));
+  }
+  actions.appendChild(actionButton('查看统计', 'btn-ghost', function() { toggleStats(card, template); }));
+  if (template.effective_status !== 'deleted') {
+    actions.appendChild(actionButton('删除', 'btn-ghost', function() { deleteTemplate(template); }));
+  }
+  card.appendChild(actions);
+  card.appendChild(node('div', 'role-msg'));
+  return card;
+}
+
+function renderList() {
+  var list = document.getElementById('template-list');
+  list.replaceChildren();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('btn-new').disabled = S.templates.length >= 3;
+  if (!S.templates.length) {
+    var empty = node('div', 'card role-card');
+    empty.appendChild(node('p', '', '你还没有角色模板。可以创建最多 3 个未删除模板。'));
+    list.appendChild(empty);
+    return;
+  }
+  S.templates.forEach(function(template) { list.appendChild(renderTemplate(template)); });
+}
+
+async function loadTemplates() {
+  try {
+    var data = await apiFetch('/web/me/creator-role-templates');
+    S.templates = data.creator_role_templates || [];
+    renderList();
+  } catch (error) {
+    if (error.status === 401) {
+      logout();
+      return;
+    }
+    document.getElementById('loading').style.display = 'none';
+    showMessage('page-msg', '角色模板加载失败：' + error.message, true);
+  }
+}
+
+function openCreateForm() {
+  if (S.templates.length >= 3) {
+    showMessage('page-msg', '每位用户最多同时持有 3 个未删除角色模板。', true);
+    return;
+  }
+  S.editingId = null;
+  document.getElementById('editor-title').textContent = '新建角色模板';
+  document.getElementById('role-name').value = '';
+  document.getElementById('role-personality').value = '';
+  document.getElementById('role-mission').value = '';
+  showMessage('form-msg', '', false);
+  document.getElementById('editor-card').style.display = '';
+  document.getElementById('editor-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+function openEditForm(template) {
+  var latest = template.latest_version || {};
+  S.editingId = template.id;
+  document.getElementById('editor-title').textContent = '编辑角色模板';
+  document.getElementById('role-name').value = latest.ai_name || '';
+  document.getElementById('role-personality').value = latest.personality_text || '';
+  document.getElementById('role-mission').value = latest.mission_text || '';
+  showMessage('form-msg', '', false);
+  document.getElementById('editor-card').style.display = '';
+  document.getElementById('editor-card').scrollIntoView({ behavior: 'smooth' });
+}
+
+function closeEditor() {
+  S.editingId = null;
+  document.getElementById('editor-card').style.display = 'none';
+}
+
+document.getElementById('role-form').addEventListener('submit', async function(event) {
+  event.preventDefault();
+  var payload = {
+    ai_name: document.getElementById('role-name').value.trim(),
+    personality_text: document.getElementById('role-personality').value.trim(),
+    mission_text: document.getElementById('role-mission').value.trim(),
+  };
+  if (!payload.ai_name || !payload.personality_text || !payload.mission_text) {
+    showMessage('form-msg', '姓名、性格/底色和使命都必须填写。', true);
+    return;
+  }
+  var submit = document.getElementById('btn-submit');
+  submit.disabled = true;
+  submit.textContent = '提交审核中…';
+  try {
+    var path = S.editingId
+      ? '/web/me/creator-role-templates/' + encodeURIComponent(S.editingId)
+      : '/web/me/creator-role-templates';
+    await apiFetch(path, { method: S.editingId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
+    closeEditor();
+    showMessage('page-msg', '已提交并完成本次审核尝试。', false);
+    await loadTemplates();
+  } catch (error) {
+    showMessage('form-msg', '提交失败：' + error.message, true);
+  } finally {
+    submit.disabled = false;
+    submit.textContent = '提交并审核';
+  }
+});
+
+async function mutate(templateId, action) {
+  try {
+    await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(templateId) + '/' + action, { method: 'POST' });
+    showMessage('page-msg', '操作成功。', false);
+    await loadTemplates();
+  } catch (error) {
+    showMessage('page-msg', '操作失败：' + error.message, true);
+  }
+}
+
+async function publishVersion(templateId, versionId) {
+  try {
+    await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(templateId) + '/publish', {
+      method: 'POST', body: JSON.stringify({ version_id: versionId }),
+    });
+    showMessage('page-msg', '发布成功，360 天有效期从首次激活时间起算。', false);
+    await loadTemplates();
+  } catch (error) {
+    showMessage('page-msg', '发布失败：' + error.message, true);
+  }
+}
+
+async function deleteTemplate(template) {
+  if (!confirm('确认删除角色模板“' + ((template.latest_version || {}).ai_name || '') + '”？删除后链接立即失效，且不能恢复。')) return;
+  try {
+    await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(template.id), { method: 'DELETE' });
+    closeEditor();
+    showMessage('page-msg', '模板已删除。', false);
+    await loadTemplates();
+  } catch (error) {
+    showMessage('page-msg', '删除失败：' + error.message, true);
+  }
+}
+
+async function copyRegistrationUrl(relativeUrl) {
+  var absolute = new URL(relativeUrl, window.location.origin).href;
+  try {
+    await navigator.clipboard.writeText(absolute);
+    showMessage('page-msg', '注册链接已复制。', false);
+  } catch (error) {
+    showMessage('page-msg', '复制失败，请手动选择卡片中的链接。', true);
+  }
+}
+
+async function toggleStats(card, template) {
+  var old = card.querySelector('.role-stats');
+  if (old) {
+    old.remove();
+    return;
+  }
+  var panel = node('div', 'role-stats');
+  panel.appendChild(node('p', '', '统计加载中…'));
+  card.appendChild(panel);
+  try {
+    var data = await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(template.id) + '/stats');
+    panel.replaceChildren();
+    panel.appendChild(node('h4', '', '最近 14 个北京自然日漏斗'));
+    var grid = node('div', 'stats-grid');
+    [
+      ['曝光 PV', data.totals.pv], ['曝光 UV', data.totals.uv],
+      ['注册', data.totals.registered], ['扫码', data.totals.scanned],
+      ['激活', data.totals.activated], ['Onboarding 完成', data.totals.completed],
+    ].forEach(function(item) {
+      var cell = node('div', 'stats-cell');
+      cell.appendChild(node('div', 'stats-num', item[1]));
+      cell.appendChild(node('div', 'stats-label', item[0]));
+      grid.appendChild(cell);
+    });
+    panel.appendChild(grid);
+  } catch (error) {
+    panel.replaceChildren(node('p', 'role-msg error', '统计加载失败：' + error.message));
+  }
+}
+
+window.addEventListener('load', function() {
+  S.sessionToken = localStorage.getItem('chaochao_session');
+  if (!S.sessionToken) {
+    window.location.href = '/';
+    return;
+  }
+  loadTemplates();
+});
+</script>
+</body>
+</html>

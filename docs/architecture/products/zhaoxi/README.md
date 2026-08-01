@@ -12,3 +12,4 @@
 - [主动消息与提醒](proactive_messaging_design.md)
 - [关系状态](relationship_state_design.md)
 - [使命与自我状态编排](agent_mission_and_orchestration_design.md)
+- [用户自建角色模板与邀请链接](creator_role_template_referral_link_technical_design.md)

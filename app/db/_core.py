@@ -4515,6 +4515,163 @@ def _migration_0058_async_resident_wishes(conn: Connection) -> None:
     )
 
 
+def _migration_0059_creator_role_templates(conn: Connection) -> None:
+    """建立用户角色模板、版本审核、注册快照与审计事件表。
+
+    ``urt_`` 是用户模板活动码的保留命名空间。迁移前先检查运营活码存量，避免两类
+    code 在统一 ``campaign_code`` 参数中出现无法确定来源的冲突。
+    """
+    reserved = conn.execute(
+        "SELECT code FROM campaign_codes "
+        "WHERE substr(lower(code), 1, 4) = 'urt_' LIMIT 1"
+    ).fetchone()
+    if reserved is not None:
+        raise RuntimeError(
+            "migration 59 blocked: campaign_codes contains reserved urt_ prefix"
+        )
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS creator_role_templates (
+            id TEXT PRIMARY KEY,
+            app_id TEXT NOT NULL DEFAULT 'zhaoxi' CHECK (app_id = 'zhaoxi'),
+            creator_platform_user_id TEXT NOT NULL,
+            slot_no INTEGER NOT NULL CHECK (slot_no BETWEEN 1 AND 3),
+            campaign_code TEXT NOT NULL
+                CHECK (
+                    substr(campaign_code, 1, 4) = 'urt_'
+                    AND length(campaign_code) BETWEEN 26 AND 64
+                ),
+            status TEXT NOT NULL DEFAULT 'pending_review'
+                CHECK (status IN (
+                    'pending_review', 'approved', 'active', 'rejected',
+                    'disabled_creator', 'disabled_admin', 'deleted'
+                )),
+            used_count INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+            activated_at TEXT,
+            expires_at TEXT,
+            disabled_by_admin_user_id TEXT,
+            disabled_reason TEXT,
+            status_before_admin_disable TEXT CHECK (
+                status_before_admin_disable IS NULL OR status_before_admin_disable IN (
+                    'pending_review', 'approved', 'active', 'rejected', 'disabled_creator'
+                )
+            ),
+            deleted_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(creator_platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(disabled_by_admin_user_id) REFERENCES admin_users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_templates_owner_slot_live
+            ON creator_role_templates(creator_platform_user_id, app_id, slot_no)
+            WHERE deleted_at IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_templates_campaign_code
+            ON creator_role_templates(campaign_code);
+        CREATE INDEX IF NOT EXISTS ix_creator_role_templates_owner_list
+            ON creator_role_templates(
+                creator_platform_user_id, app_id, deleted_at, updated_at DESC
+            );
+
+        CREATE TABLE IF NOT EXISTS creator_role_template_versions (
+            id TEXT PRIMARY KEY,
+            creator_role_template_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL CHECK (version_no >= 1),
+            ai_name TEXT NOT NULL,
+            personality_text TEXT NOT NULL,
+            mission_text TEXT NOT NULL,
+            review_status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (review_status IN ('pending', 'reviewing', 'passed', 'rejected')),
+            is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+            review_categories_json TEXT NOT NULL DEFAULT '[]',
+            review_reason TEXT,
+            reviewed_at TEXT,
+            published_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
+            UNIQUE(creator_role_template_id, version_no)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_template_versions_published
+            ON creator_role_template_versions(creator_role_template_id)
+            WHERE is_published = 1;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_template_versions_open_review
+            ON creator_role_template_versions(creator_role_template_id)
+            WHERE review_status IN ('pending', 'reviewing');
+        CREATE INDEX IF NOT EXISTS ix_creator_role_template_versions_history
+            ON creator_role_template_versions(creator_role_template_id, version_no DESC);
+
+        CREATE TABLE IF NOT EXISTS creator_role_template_review_runs (
+            id TEXT PRIMARY KEY,
+            creator_role_template_version_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
+            status TEXT NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'passed', 'rejected', 'error')),
+            model TEXT,
+            provider TEXT,
+            latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+            categories_json TEXT NOT NULL DEFAULT '[]',
+            reason TEXT,
+            error_code TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            FOREIGN KEY(creator_role_template_version_id)
+                REFERENCES creator_role_template_versions(id),
+            UNIQUE(creator_role_template_version_id, attempt_no)
+        );
+        CREATE INDEX IF NOT EXISTS ix_creator_role_template_review_runs_version
+            ON creator_role_template_review_runs(
+                creator_role_template_version_id, attempt_no DESC
+            );
+
+        CREATE TABLE IF NOT EXISTS account_creator_role_template_attribution (
+            account_id TEXT PRIMARY KEY,
+            creator_role_template_id TEXT NOT NULL,
+            creator_role_template_version_id TEXT NOT NULL,
+            creator_platform_user_id TEXT NOT NULL,
+            campaign_code TEXT NOT NULL,
+            ai_name_snapshot TEXT NOT NULL,
+            personality_snapshot TEXT NOT NULL,
+            mission_snapshot TEXT NOT NULL,
+            attributed_at TEXT NOT NULL,
+            FOREIGN KEY(account_id) REFERENCES accounts(id),
+            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
+            FOREIGN KEY(creator_role_template_version_id)
+                REFERENCES creator_role_template_versions(id),
+            FOREIGN KEY(creator_platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_account_creator_role_template_source
+            ON account_creator_role_template_attribution(
+                creator_role_template_id, attributed_at
+            );
+        CREATE INDEX IF NOT EXISTS ix_account_creator_role_template_campaign
+            ON account_creator_role_template_attribution(campaign_code);
+
+        CREATE TABLE IF NOT EXISTS creator_role_template_events (
+            id TEXT PRIMARY KEY,
+            creator_role_template_id TEXT NOT NULL,
+            creator_role_template_version_id TEXT,
+            event_type TEXT NOT NULL CHECK (event_type IN (
+                'created', 'review_started', 'review_passed', 'review_rejected',
+                'review_error', 'version_activated', 'disabled_by_creator',
+                'enabled', 'disabled_by_admin', 'deleted', 'attribution_applied'
+            )),
+            actor_type TEXT NOT NULL CHECK (actor_type IN ('creator', 'admin', 'system')),
+            actor_id TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
+            FOREIGN KEY(creator_role_template_version_id)
+                REFERENCES creator_role_template_versions(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_creator_role_template_events_history
+            ON creator_role_template_events(
+                creator_role_template_id, created_at DESC, id DESC
+            );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4569,6 +4726,7 @@ _MIGRATIONS = [
     (56, _migration_0056_media_moderation_scan_index),
     (57, _migration_0057_resident_wish_drafts),
     (58, _migration_0058_async_resident_wishes),
+    (59, _migration_0059_creator_role_templates),
 ]
 
 

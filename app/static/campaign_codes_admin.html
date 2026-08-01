@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>营销活码后台 – AI4ALL</title>
+  <title>链接与活码后台 – AI4ALL</title>
   <link rel="stylesheet" href="style.css">
   <style>
     /* 漏斗汇总条：阶段计数 + 阶段间转化率，横向排列、窄屏可换行。 */
@@ -13,17 +13,30 @@
     .funnel-label { font-size: 12px; opacity: .7; margin-top: 2px; }
     .funnel-arrow { text-align: center; font-size: 13px; opacity: .55; align-self: center; }
     .funnel-rate { font-size: 12px; font-weight: 600; opacity: .85; }
+    .view-tabs { display: flex; gap: 8px; margin: 16px 0; }
+    .view-tabs button.active { background: var(--primary, #4568dc); color: #fff; }
+    .role-content { white-space: pre-wrap; max-width: 420px; }
+    .role-detail-grid { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(260px, 2fr); gap: 10px 20px; }
+    .role-detail-grid dt { opacity: .7; }
+    .role-detail-grid dd { margin: 0; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
   <a class="back-link" href="index.html">← 返回后台入口</a>
   <header class="admin-header">
     <div>
-      <h1>营销活码后台</h1>
-      <p class="page-subtitle">创建/编辑内容创意营销活码，配置使命分配、onboarding 话术、SOUL 人设、AI 名字四项独立策略。与个人邀请码是两套独立体系。</p>
+      <h1>链接与活码后台</h1>
+      <p class="page-subtitle">运营活码与用户角色模板链接是两类独立资产；用户模板只能查看和处置，不能在后台代建或编辑。</p>
     </div>
     <span id="admin-user" class="pill">—</span>
   </header>
+
+  <div class="view-tabs" aria-label="管理视图">
+    <button id="operator-tab" class="active" onclick="switchAdminView('operator')">运营活码</button>
+    <button id="role-template-tab" onclick="switchAdminView('role-template')">用户角色模板链接</button>
+  </div>
+
+  <div id="operator-view">
 
   <div class="card" id="create-card">
     <h2>新建活码</h2>
@@ -174,12 +187,106 @@
       </tbody>
     </table>
   </div>
+  </div>
+
+  <div id="role-template-view" style="display:none">
+    <div class="card">
+      <div class="card-title-row">
+        <div>
+          <h2>用户角色模板链接</h2>
+          <p class="card-note">仅支持查看、统计、平台停用和恢复。三字段由创建者提交并经 LLM 审核，后台不可改写。</p>
+        </div>
+      </div>
+      <div class="filter-grid">
+        <div>
+          <label for="rt-creator">创建者 Platform User ID</label>
+          <input id="rt-creator" type="text" class="mono-input" placeholder="留空查看全部">
+        </div>
+        <div>
+          <label for="rt-status">有效状态</label>
+          <select id="rt-status">
+            <option value="">全部</option>
+            <option value="active">active</option>
+            <option value="approved">approved</option>
+            <option value="pending_review">pending_review</option>
+            <option value="rejected">rejected</option>
+            <option value="disabled_creator">disabled_creator</option>
+            <option value="disabled_admin">disabled_admin</option>
+            <option value="expired">expired</option>
+            <option value="deleted">deleted</option>
+          </select>
+        </div>
+        <div>
+          <label for="rt-review-status">最新版本审核状态</label>
+          <select id="rt-review-status">
+            <option value="">全部</option>
+            <option value="pending">pending</option>
+            <option value="reviewing">reviewing</option>
+            <option value="passed">passed</option>
+            <option value="rejected">rejected</option>
+          </select>
+        </div>
+        <div>
+          <label for="rt-from">创建起始日</label>
+          <input id="rt-from" type="text" class="mono-input" placeholder="YYYY-MM-DD">
+        </div>
+        <div>
+          <label for="rt-to">创建结束日</label>
+          <input id="rt-to" type="text" class="mono-input" placeholder="YYYY-MM-DD">
+        </div>
+        <div style="align-self:end">
+          <button class="primary" onclick="resetRoleTemplateSearch()">查询</button>
+          <span id="rt-list-status" class="status-msg"></span>
+        </div>
+      </div>
+      <table style="margin-top:12px">
+        <thead>
+          <tr>
+            <th>角色名</th><th>创建者</th><th>链接码</th><th>状态</th><th>最新审核</th>
+            <th>已实例化</th><th>有效期至</th><th>创建时间</th><th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="rt-tbody"><tr><td colspan="9">切换到本视图后加载</td></tr></tbody>
+      </table>
+      <div class="toolbar" style="margin-top:10px">
+        <button id="rt-prev" onclick="changeRoleTemplatePage(-1)">上一页</button>
+        <span id="rt-page-note" class="card-note">—</span>
+        <button id="rt-next" onclick="changeRoleTemplatePage(1)">下一页</button>
+      </div>
+    </div>
+
+    <div class="card" id="rt-detail-card" style="display:none">
+      <div class="card-title-row">
+        <h2>模板详情 <span id="rt-detail-name"></span></h2>
+        <button onclick="hide('rt-detail-card')">关闭</button>
+      </div>
+      <div id="rt-detail-summary"></div>
+      <div class="toolbar" id="rt-actions" style="margin-top:12px"></div>
+
+      <h3>同口径漏斗（最近 14 个北京自然日）</h3>
+      <div id="rt-stats-totals" class="funnel-row"></div>
+
+      <h3>版本与三字段</h3>
+      <div id="rt-versions"></div>
+
+      <h3>LLM 审核调用</h3>
+      <div id="rt-review-runs"></div>
+
+      <h3>审计事件</h3>
+      <div id="rt-events"></div>
+    </div>
+  </div>
 
   <script src="admin.js"></script>
   <script>
     // 当前列表数据，供"编辑"按钮回填表单用——不把 code 拼进内联 onclick/HTML 属性值，
     // 按钮只带 data-code，实际数据从这里按 code 查（安全 + 简洁，见 admin 活码 XSS 修复）。
     var currentCodes = [];
+    var currentRoleTemplates = [];
+    var roleTemplateOffset = 0;
+    var roleTemplateLimit = 50;
+    var roleTemplateTotal = 0;
+    var roleTemplateLoaded = false;
 
     function show(id) { document.getElementById(id).style.display = ''; }
     function hide(id) { document.getElementById(id).style.display = 'none'; }
@@ -188,6 +295,15 @@
       await loadAdminMe();
       loadCampaignCodes();
     })();
+
+    function switchAdminView(view) {
+      var roleView = view === 'role-template';
+      document.getElementById('operator-view').style.display = roleView ? 'none' : '';
+      document.getElementById('role-template-view').style.display = roleView ? '' : 'none';
+      document.getElementById('operator-tab').classList.toggle('active', !roleView);
+      document.getElementById('role-template-tab').classList.toggle('active', roleView);
+      if (roleView && !roleTemplateLoaded) loadRoleTemplates();
+    }
 
     document.getElementById('tbody').addEventListener('click', function(e) {
       var btn = e.target.closest('button[data-code]');
@@ -200,6 +316,12 @@
       } else if (btn.dataset.action === 'toggle') {
         toggleStatus(code, btn.getAttribute('data-next-status'));
       }
+    });
+
+    document.getElementById('rt-tbody').addEventListener('click', function(e) {
+      var btn = e.target.closest('button[data-template-id]');
+      if (!btn) return;
+      openRoleTemplateDetail(btn.getAttribute('data-template-id'));
     });
 
     async function createCampaignCode() {
@@ -413,6 +535,186 @@
         showStatus(statusEl, '', false);
       } catch (e) {
         showStatus(statusEl, e.message, true);
+      }
+    }
+
+    // ===== 用户角色模板链接（与运营活码 API/操作完全分离） =====
+    function roleTemplateQuery() {
+      var qs = [];
+      var creator = document.getElementById('rt-creator').value.trim();
+      var status = document.getElementById('rt-status').value;
+      var reviewStatus = document.getElementById('rt-review-status').value;
+      var from = document.getElementById('rt-from').value.trim();
+      var to = document.getElementById('rt-to').value.trim();
+      if (creator) qs.push('creator=' + encodeURIComponent(creator));
+      if (status) qs.push('status=' + encodeURIComponent(status));
+      if (reviewStatus) qs.push('review_status=' + encodeURIComponent(reviewStatus));
+      if (from) qs.push('from=' + encodeURIComponent(from));
+      if (to) qs.push('to=' + encodeURIComponent(to));
+      qs.push('limit=' + roleTemplateLimit);
+      qs.push('offset=' + roleTemplateOffset);
+      return '?' + qs.join('&');
+    }
+
+    function resetRoleTemplateSearch() {
+      roleTemplateOffset = 0;
+      loadRoleTemplates();
+    }
+
+    function changeRoleTemplatePage(direction) {
+      var next = roleTemplateOffset + direction * roleTemplateLimit;
+      if (next < 0 || next >= roleTemplateTotal) return;
+      roleTemplateOffset = next;
+      loadRoleTemplates();
+    }
+
+    async function loadRoleTemplates() {
+      var tbody = document.getElementById('rt-tbody');
+      var statusEl = document.getElementById('rt-list-status');
+      try {
+        showStatus(statusEl, '加载中…', false);
+        var data = await apiFetch('/admin/creator-role-templates' + roleTemplateQuery());
+        currentRoleTemplates = data.creator_role_templates || [];
+        roleTemplateTotal = (data.pagination && data.pagination.total) || 0;
+        roleTemplateLoaded = true;
+        if (!currentRoleTemplates.length) {
+          tbody.innerHTML = '<tr><td colspan="9">暂无匹配模板</td></tr>';
+        } else {
+          tbody.innerHTML = currentRoleTemplates.map(function(t) {
+            var latest = t.latest_version || {};
+            return '<tr>'
+              + '<td>' + esc(latest.ai_name || '—') + '</td>'
+              + '<td class="mono">' + esc(t.creator_platform_user_id) + '</td>'
+              + '<td class="mono">' + esc(t.campaign_code) + '</td>'
+              + '<td class="status-' + esc(t.effective_status) + '">' + esc(t.effective_status) + '</td>'
+              + '<td>' + esc(latest.review_status || '—') + '</td>'
+              + '<td>' + esc(String(t.used_count || 0)) + '</td>'
+              + '<td>' + esc(t.expires_at || '—') + '</td>'
+              + '<td>' + esc(t.created_at) + '</td>'
+              + '<td><button data-template-id="' + esc(t.id) + '">查看/处置</button></td>'
+              + '</tr>';
+          }).join('');
+        }
+        var first = roleTemplateTotal ? roleTemplateOffset + 1 : 0;
+        var last = Math.min(roleTemplateOffset + currentRoleTemplates.length, roleTemplateTotal);
+        document.getElementById('rt-page-note').textContent = first + '–' + last + ' / ' + roleTemplateTotal;
+        document.getElementById('rt-prev').disabled = roleTemplateOffset === 0;
+        document.getElementById('rt-next').disabled = roleTemplateOffset + roleTemplateLimit >= roleTemplateTotal;
+        showStatus(statusEl, '', false);
+      } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="9" class="status-msg error">' + esc(e.message) + '</td></tr>';
+        showStatus(statusEl, e.message, true);
+      }
+    }
+
+    function renderRoleTemplateVersions(versions) {
+      if (!versions.length) return '<p>暂无版本</p>';
+      return versions.map(function(v) {
+        return '<div class="card" style="margin-top:8px">'
+          + '<div><strong>v' + esc(String(v.version_no)) + '</strong> · '
+          + esc(v.review_status) + (v.is_published ? ' · published' : '') + '</div>'
+          + '<dl class="role-detail-grid">'
+          + '<dt>姓名</dt><dd>' + esc(v.ai_name) + '</dd>'
+          + '<dt>性格/底色</dt><dd class="role-content">' + esc(v.personality_text) + '</dd>'
+          + '<dt>使命</dt><dd class="role-content">' + esc(v.mission_text) + '</dd>'
+          + '<dt>审核结论</dt><dd class="role-content">' + esc(v.review_reason || '—') + '</dd>'
+          + '<dt>审核类别</dt><dd class="mono">' + esc(v.review_categories_json || '[]') + '</dd>'
+          + '</dl></div>';
+      }).join('');
+    }
+
+    function renderRoleTemplateReviewRuns(runs) {
+      if (!runs.length) return '<p>暂无审核调用记录</p>';
+      return '<table><thead><tr><th>时间</th><th>状态</th><th>模型/Provider</th><th>耗时</th><th>类别/原因</th><th>错误码</th></tr></thead><tbody>'
+        + runs.map(function(r) {
+          return '<tr><td>' + esc(r.started_at) + '</td><td>' + esc(r.status) + '</td>'
+            + '<td>' + esc((r.model || '—') + ' / ' + (r.provider || '—')) + '</td>'
+            + '<td>' + esc(r.latency_ms == null ? '—' : String(r.latency_ms) + ' ms') + '</td>'
+            + '<td class="role-content">' + esc((r.categories_json || '[]') + ' ' + (r.reason || '')) + '</td>'
+            + '<td class="mono">' + esc(r.error_code || '—') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    function renderRoleTemplateEvents(events) {
+      if (!events.length) return '<p>暂无审计事件</p>';
+      return '<table><thead><tr><th>时间</th><th>事件</th><th>Actor</th><th>元数据</th></tr></thead><tbody>'
+        + events.map(function(e) {
+          return '<tr><td>' + esc(e.created_at) + '</td><td>' + esc(e.event_type) + '</td>'
+            + '<td>' + esc(e.actor_type + ' · ' + (e.actor_id || '—')) + '</td>'
+            + '<td class="role-content mono">' + esc(e.metadata_json || '{}') + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    async function openRoleTemplateDetail(templateId) {
+      try {
+        var data = await apiFetch('/admin/creator-role-templates/' + encodeURIComponent(templateId));
+        var t = data.creator_role_template;
+        var latest = t.latest_version || {};
+        document.getElementById('rt-detail-name').textContent = latest.ai_name || t.id;
+        document.getElementById('rt-detail-summary').innerHTML = '<dl class="role-detail-grid">'
+          + '<dt>模板 ID</dt><dd class="mono">' + esc(t.id) + '</dd>'
+          + '<dt>创建者</dt><dd class="mono">' + esc(t.creator_platform_user_id) + '</dd>'
+          + '<dt>注册链接活动码</dt><dd class="mono">' + esc(t.campaign_code) + '</dd>'
+          + '<dt>状态</dt><dd>' + esc(t.effective_status) + '（存储：' + esc(t.status) + '）</dd>'
+          + '<dt>有效期</dt><dd>' + esc(t.activated_at || '—') + ' ～ ' + esc(t.expires_at || '—') + '</dd>'
+          + '<dt>累计实例化</dt><dd>' + esc(String(t.used_count || 0)) + '</dd>'
+          + '<dt>平台停用原因</dt><dd class="role-content">' + esc(t.disabled_reason || '—') + '</dd>'
+          + '</dl>';
+        var actions = document.getElementById('rt-actions');
+        actions.innerHTML = '';
+        if (t.effective_status === 'disabled_admin') {
+          var enableButton = document.createElement('button');
+          enableButton.className = 'primary';
+          enableButton.textContent = '恢复模板链接';
+          enableButton.addEventListener('click', function() { enableRoleTemplate(t.id); });
+          actions.appendChild(enableButton);
+        } else if (t.effective_status !== 'deleted') {
+          var disableButton = document.createElement('button');
+          disableButton.className = 'danger';
+          disableButton.textContent = '平台停用';
+          disableButton.addEventListener('click', function() { disableRoleTemplate(t.id); });
+          actions.appendChild(disableButton);
+        }
+        document.getElementById('rt-stats-totals').innerHTML = renderFunnel(data.stats.totals, data.stats.rates);
+        document.getElementById('rt-versions').innerHTML = renderRoleTemplateVersions(t.versions || []);
+        document.getElementById('rt-review-runs').innerHTML = renderRoleTemplateReviewRuns(data.review_runs || []);
+        document.getElementById('rt-events').innerHTML = renderRoleTemplateEvents(data.events || []);
+        show('rt-detail-card');
+        document.getElementById('rt-detail-card').scrollIntoView({ behavior: 'smooth' });
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function disableRoleTemplate(templateId) {
+      var reason = prompt('请输入平台停用原因（必填，将写入审计记录）：');
+      if (reason == null) return;
+      reason = reason.trim();
+      if (!reason) {
+        alert('停用原因不能为空');
+        return;
+      }
+      try {
+        await apiFetch('/admin/creator-role-templates/' + encodeURIComponent(templateId) + '/disable', {
+          method: 'POST', body: JSON.stringify({ reason: reason }),
+        });
+        await loadRoleTemplates();
+        openRoleTemplateDetail(templateId);
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function enableRoleTemplate(templateId) {
+      if (!confirm('确认恢复该用户角色模板链接？恢复不会延长 360 天有效期。')) return;
+      try {
+        await apiFetch('/admin/creator-role-templates/' + encodeURIComponent(templateId) + '/enable', {
+          method: 'POST',
+        });
+        await loadRoleTemplates();
+        openRoleTemplateDetail(templateId);
+      } catch (e) {
+        alert(e.message);
       }
     }
   </script>

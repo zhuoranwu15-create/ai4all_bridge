@@ -48,11 +48,13 @@ def install_public_routes(app: FastAPI) -> None:
     from app.products.zhaoxi.api import companion_world_mailbox
     from app.products.zhaoxi.api import companion_world_resident_wishes
     from app.products.zhaoxi.api import companion_world_visits
+    from app.products.zhaoxi.api import creator_role_templates
     from app.products.zhaoxi.api import media as media_api
 
     from app.routers import web
 
     app.include_router(web.router)
+    app.include_router(creator_role_templates.router)
     # /v1 保持朝夕既有客户端行为；新产品统一使用固定产品命名空间。
     for product_router in (
         app_api.router,
@@ -89,10 +91,12 @@ def install_admin_routes(app: FastAPI) -> None:
 
     from app.products.zhaoxi.api import admin_campaigns
     from app.products.zhaoxi.api import admin_companion_world
+    from app.products.zhaoxi.api import admin_creator_role_templates
     from app.products.zhaoxi.api import admin_security
 
     app.include_router(admin_security.router)
     app.include_router(admin_campaigns.router)
+    app.include_router(admin_creator_role_templates.router)
     app.include_router(admin_companion_world.router)
 
 

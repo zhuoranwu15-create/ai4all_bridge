@@ -47,6 +47,13 @@
     <p class="card-title" id="card-title">手机号注册 / 登录</p>
     <p class="beta-note">如果你正在手机浏览器中打开，请长按二维码完成绑定，或截图保存后，再到微信中识别二维码完成绑定。</p>
     <div class="invite-hint" id="invite-hint" style="display:none"></div>
+    <div class="invite-hint" id="role-template-preview" style="display:none">
+      <strong id="role-preview-name"></strong>
+      <div id="role-preview-personality" style="margin-top:6px;white-space:pre-wrap"></div>
+      <div id="role-preview-mission" style="margin-top:6px;white-space:pre-wrap"></div>
+      <div id="role-preview-expiry" style="margin-top:6px;font-size:.82rem;opacity:.75"></div>
+    </div>
+    <div class="invite-hint" id="role-template-fallback" style="display:none"></div>
 
     <!-- 步骤指示器 -->
     <div class="step-indicator" id="step-indicator">
@@ -173,6 +180,56 @@ function initCampaignCode() {
   var params = new URLSearchParams(window.location.search);
   S.campaignCode = (params.get('campaign_code') || '').trim();
   reportCampaignVisit(S.campaignCode, 'home', '/api/web/campaign-visit');
+  previewCreatorRoleTemplate();
+}
+
+function isCreatorRoleTemplateCode(code) {
+  return String(code || '').toLowerCase().indexOf('urt_') === 0;
+}
+
+function clearCreatorRoleTemplateCode(reason) {
+  S.campaignCode = '';
+  var params = new URLSearchParams(window.location.search);
+  params.delete('campaign_code');
+  var query = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
+  var fallback = document.getElementById('role-template-fallback');
+  fallback.textContent = reason || '角色模板已不可用，将按普通流程创建朝夕伙伴；有效邀请码仍会保留。';
+  show('role-template-fallback');
+  hide('role-template-preview');
+}
+
+async function previewCreatorRoleTemplate() {
+  var campaignCode = normalizedCampaignCode();
+  if (!isCreatorRoleTemplateCode(campaignCode)) return;
+  var inviteCode = normalizedInviteCode();
+  try {
+    var path = '/web/creator-role-template-links/' + encodeURIComponent(campaignCode)
+      + '/preview?invite_code=' + encodeURIComponent(inviteCode);
+    var data = await apiFetch(path);
+    if (!data.valid) {
+      if (data.reason === 'rate_limited') {
+        var temporary = document.getElementById('role-template-fallback');
+        temporary.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+        show('role-template-fallback');
+        return;
+      }
+      clearCreatorRoleTemplateCode();
+      return;
+    }
+    var role = data.role || {};
+    document.getElementById('role-preview-name').textContent = '将创建角色：' + (role.name || '朝夕伙伴');
+    document.getElementById('role-preview-personality').textContent = '性格 / 底色：' + (role.personality_preview || '—');
+    document.getElementById('role-preview-mission').textContent = '使命：' + (role.mission_preview || '—');
+    document.getElementById('role-preview-expiry').textContent = '模板有效期至：' + (role.expires_at || '—');
+    hide('role-template-fallback');
+    show('role-template-preview');
+  } catch (error) {
+    // preview 只改善展示；网络故障时保留双参数，让注册服务端作最终校验。
+    var fallback = document.getElementById('role-template-fallback');
+    fallback.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+    show('role-template-fallback');
+  }
 }
 
 // 落地页曝光 beacon（漏斗 S0）：匿名 visitor_token + campaign_code 上报，静默失败，绝不阻塞页面。

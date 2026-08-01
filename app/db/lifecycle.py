@@ -210,6 +210,10 @@ def wipe_account_data(
             "DELETE FROM account_user_meta WHERE account_id = ?",
             (account_id,),
         ).rowcount
+        creator_role_template_attribution = conn.execute(
+            "DELETE FROM account_creator_role_template_attribution WHERE account_id = ?",
+            (account_id,),
+        ).rowcount
         outbound = conn.execute(
             "DELETE FROM outbound_messages WHERE account_id = ?",
             (account_id,),
@@ -393,6 +397,9 @@ def wipe_account_data(
         "moderation_risk_state_deleted": moderation_risk_state,
         "account_user_meta_deleted": account_user_meta,
         "account_user_meta_daily_deleted": account_user_meta_daily,
+        "account_creator_role_template_attribution_deleted": (
+            creator_role_template_attribution
+        ),
         "cost_events_deleted": cost_events,
         "entitlement_ledger_deleted": ledger,
         "entitlement_wallets_deleted": wallets,

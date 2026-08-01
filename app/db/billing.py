@@ -2496,6 +2496,8 @@ def create_ai4all_account_for_user(
     plan: str = "free",
     require_display_name: bool = True,
     campaign_code: Optional[str] = None,
+    expected_creator_platform_user_id: Optional[str] = None,
+    is_new_membership: bool = False,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
     app_id: str = DEFAULT_APP_ID,
@@ -2602,22 +2604,29 @@ def create_ai4all_account_for_user(
         registry=registry,
     )
 
-    # 营销活码归因：校验 → 写快照 → 计数 → 应用强制 SOUL 人设。与 onboarding 调试建号
-    # 共用 apply_campaign_code_attribution（后者 increment_usage=False），确保调试忠实复现
-    # 真实注册效果。校验失败/异常 fail-open，不阻断注册（campaign_codes_technical_design.md §3）。
+    # 注册 campaign 归因：运营码保持原校验/快照/人设链路；urt_ 仅在 Web 透传首建
+    # membership 和已落库 referral owner 时实例化。两类失败均 fail-open，不阻断真实注册。
     from app.products.zhaoxi.infrastructure.persistence.campaign import apply_campaign_code_attribution
-    apply_campaign_code_attribution(
+    campaign_attribution = apply_campaign_code_attribution(
         account_id=account_id,
         campaign_code=campaign_code,
         increment_usage=True,
+        expected_creator_platform_user_id=expected_creator_platform_user_id,
+        is_new_membership=is_new_membership,
+        creator_role_templates_enabled=bool(
+            getattr(settings, "creator_role_templates_enabled", False)
+        ),
     )
 
-    return {
+    result = {
         "account": get_account(account_id=account_id),
         "profile": get_profile_for_account(account_id=account_id),
         "owner_binding": get_account_owner_binding(owner_binding_id=owner_binding_id),
         "subscription": subscription,
     }
+    if campaign_attribution.get("source") == "creator_role_template":
+        result["role_template_link_result"] = campaign_attribution
+    return result
 
 
 def insert_resident_runtime_account(
@@ -2859,6 +2868,8 @@ def get_or_create_default_ai4all_account_for_user(
     display_name: Optional[str] = None,
     plan: str = "free",
     campaign_code: Optional[str] = None,
+    expected_creator_platform_user_id: Optional[str] = None,
+    is_new_membership: bool = False,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
     app_id: str = DEFAULT_APP_ID,
@@ -2877,6 +2888,8 @@ def get_or_create_default_ai4all_account_for_user(
         system_prompt=None,
         plan=plan,
         campaign_code=campaign_code,
+        expected_creator_platform_user_id=expected_creator_platform_user_id,
+        is_new_membership=is_new_membership,
         require_display_name=False,
         initial_channel=initial_channel,
         binding_method=binding_method,

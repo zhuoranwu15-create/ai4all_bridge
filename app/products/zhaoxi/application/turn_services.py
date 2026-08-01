@@ -42,8 +42,10 @@ from app.products.zhaoxi.application.onboarding import (
     is_onboarding_active,
     next_onboarding_state,
 )
+from app.products.zhaoxi.application.onboarding_overrides import (
+    resolve_onboarding_identity_overrides,
+)
 from app.products.zhaoxi.application.relationship import maybe_update_relationship_state_after_turn
-from app.products.zhaoxi.infrastructure.persistence.campaign import get_campaign_attribution
 from app.products.zhaoxi.infrastructure.profiles import (
     ensure_agent_context_files,
     ensure_user_profile,
@@ -177,13 +179,13 @@ class ZhaoxiTurnServices:
     ) -> dict:
         """按朝夕活码预设规则写入 onboarding 信息。"""
 
-        attribution = get_campaign_attribution(account_id=account_id)
+        overrides = resolve_onboarding_identity_overrides(account_id)
         return apply_extracted_onboarding_info(
             account_id=account_id,
             extracted=extracted,
             current_state=current_state,
-            has_forced_soul_preset=bool((attribution or {}).get("soul_preset_key")),
-            has_forced_ai_name=bool((attribution or {}).get("ai_name_preset")),
+            has_forced_soul_preset=overrides.forced_personality,
+            has_forced_ai_name=overrides.forced_ai_name,
         )
 
     def load_prompt_context(
@@ -222,7 +224,7 @@ class ZhaoxiTurnServices:
         )
         onboarding_context = ""
         if onboarding_active:
-            attribution = get_campaign_attribution(account_id=account_id)
+            overrides = resolve_onboarding_identity_overrides(account_id)
             onboarding_context = build_onboarding_prompt_context(
                 state=onboarding_state,
                 user_name=_context_value(agent_context.blocks, "USER", "用户称呼"),
@@ -238,11 +240,9 @@ class ZhaoxiTurnServices:
                 needs_confirmation=bool(
                     (onboarding_pre_extracted or {}).get("needs_confirmation")
                 ),
-                onboarding_script_override=(attribution or {}).get(
-                    "onboarding_script_variant"
-                ),
-                has_forced_soul_preset=bool((attribution or {}).get("soul_preset_key")),
-                has_forced_ai_name=bool((attribution or {}).get("ai_name_preset")),
+                onboarding_script_override=overrides.script_override,
+                has_forced_soul_preset=overrides.forced_personality,
+                has_forced_ai_name=overrides.forced_ai_name,
             )
         tool_instructions = None
         if active_invitation is not None:
@@ -302,15 +302,15 @@ class ZhaoxiTurnServices:
             if current_state == ONBOARDING_STEP2_SENT
             else 0
         )
-        attribution = get_campaign_attribution(account_id=account_id)
+        overrides = resolve_onboarding_identity_overrides(account_id)
         new_state = next_onboarding_state(
             current_state=current_state,
             extracted=extracted,
             user_name_ask_count=0,
             persona_ask_count=0,
             confirmation_ask_count=confirmation_ask_count,
-            has_forced_soul_preset=bool((attribution or {}).get("soul_preset_key")),
-            has_forced_ai_name=bool((attribution or {}).get("ai_name_preset")),
+            has_forced_soul_preset=overrides.forced_personality,
+            has_forced_ai_name=overrides.forced_ai_name,
         )
         if new_state == current_state:
             return None
