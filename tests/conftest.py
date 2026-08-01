@@ -206,6 +206,7 @@ def test_settings(tmp_path, db_dsn):
     s.user_meta_scheduler_hour = 3
     s.user_meta_scheduler_page_size = 100
     s.user_meta_scheduler_inter_account_sleep = 0.0
+    s.creator_role_templates_enabled = False
     s.openclaw_login_auto_start = False
     s.openclaw_login_start_timeout_ms = 5000
     s.openclaw_login_wait_timeout_ms = 5000
@@ -466,6 +467,7 @@ def fresh_db(test_settings):
     """Patch settings modules to use a temp SQLite/profile workspace."""
     patches = [
         patch("app.db.settings", test_settings),
+        patch("app.db.billing.settings", test_settings),
         patch("app.bootstrap.application.settings", test_settings),
         patch("app.bootstrap.lifecycle.settings", test_settings),
         patch("app.products.zhaoxi.lifecycle.settings", test_settings),
@@ -488,6 +490,7 @@ def fresh_db(test_settings):
         # 绕过 503 commit 门控使 approve 走到真实提交路径（本机 409、CI 无 .env 则 503 通过）。
         patch("app.products.zhaoxi.api.admin_companion_world.settings", test_settings),
         patch("app.products.zhaoxi.api.app_notifications.settings", test_settings),
+        patch("app.products.zhaoxi.api.creator_role_templates.settings", test_settings),
         patch("app.products.zhaoxi.infrastructure.app_inbox.settings", test_settings),
         patch("app.products.zhaoxi.infrastructure.repositories.companion_world.settings", test_settings),
         patch("app.products.zhaoxi.proactive.contract.common.settings", test_settings),

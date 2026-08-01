@@ -46,6 +46,7 @@
 | [主动消息与提醒](capabilities/proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | [主动消息与提醒设计](../../architecture/products/zhaoxi/proactive_messaging_design.md) |
 | [用户标签与元属性建设](capabilities/user_meta_attributes_prd.md) | 生命周期、活跃强度、陪伴类型、安全风险、主动触达反馈、权益增长画像 | 待补充 |
 | [AI 自我：人格、使命、需求与关系成长](capabilities/agent_self_prd.md) | AI 自我模型：人格 × 使命组合、马斯洛三层需求、关系阶段成长、自我状态注入 prompt | [使命子系统 + 自我状态编排注入层](../../architecture/products/zhaoxi/agent_mission_and_orchestration_design.md) |
+| [用户自建角色模板与邀请链接](capabilities/creator_role_template_referral_link_prd.md) | 用户创建名字/性格/使命模板，用一条链接同时完成拉新归因与新用户角色实例化；P0 无试玩，需用全新账号真实测试 | [技术设计](../../architecture/products/zhaoxi/creator_role_template_referral_link_technical_design.md) |
 | [Web Search 同步工具调用](capabilities/search_and_async_tasks_prd.md) | Web Search 同步工具调用、失败和复杂任务不支持说明 | [Web Search 同步工具调用技术设计](../../architecture/agent-runtime/search_async_tasks_design.md) |
 | [语音输入](capabilities/voice_prd.md) | 微信语音、上游转写后文本回复 | [语音输入技术设计](../../architecture/products/zhaoxi/voice_input_design.md) |
 | [内容审核与人工复核](capabilities/content_moderation_prd.md) | 文本/图片审核、异步机器审核、人工复核、导出材料、角色权限 | [内容审核与人工复核技术设计](../../architecture/shared/platform/content_moderation_design.md) |

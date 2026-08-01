@@ -4,6 +4,11 @@
 
 对应 PRD：[`docs/products/zhaoxi/capabilities/campaign_codes_prd.md`](../../../products/zhaoxi/capabilities/campaign_codes_prd.md)
 
+> 后续扩展：用户在个人中心创建自由角色模板，并生成“个人邀请码 + 模板活动码”组合链接的技术方案见
+> [用户自建角色模板与邀请链接技术设计](creator_role_template_referral_link_technical_design.md)。该方案复用本设计的
+> `campaign_code` 参数、失效回退、通用归因和漏斗，但使用独立 owner-aware 角色资产，避免改变本文
+> 运营活码的 Admin 权限、手工 code、3 个月默认期和静态 preset 语义。
+
 ## 0. 范围确认
 
 活码归因只发生在 **web 注册路径**（`create_ai4all_account_for_user`），与个人邀请码（`referral_codes`/`invite_code`）范围一致。`get_or_create_session`（纯微信消息入站、账号 upsert）不改动——它服务的是"账号已存在，确保 session 存在"，账号本身的首次创建走的是 web 注册流程。

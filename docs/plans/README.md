@@ -11,6 +11,7 @@
 | [Analytics 工程实施](shared/analytics_foundation_implementation_plan.md) | Nearline facts/marts 与 ETL 建设 |
 | [基线优化](products/zhaoxi/baseline_optimization_alignment.md) | 尚未排期的 P1/P2 项 |
 | [App 账号收敛与渠道人设](products/zhaoxi/app_account_convergence_and_channel_persona.md) | 以文首状态与验收表为准 |
+| [用户自建角色模板与邀请链接](products/zhaoxi/creator_role_template_referral_link_implementation_plan.md) | P0 模板、审核、组合注册链接、真实新账号实例化、聚合统计与后台管理；不含试玩 |
 
 计划完成时应把稳定结论回写 `../architecture/` 或 `../products/<app_id>/`，再归档计划本身。
 尚未进入实施排期的产品事项统一从
