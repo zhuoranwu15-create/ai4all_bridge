@@ -111,6 +111,10 @@ def test_web_config_exposes_campaign_code_param(client, fresh_db):
     res = client.get("/web/config")
     assert res.status_code == 200
     assert res.json()["registration"]["campaign_code_param"] == "campaign_code"
+    assert res.json()["product"] == {
+        "app_id": "zhaoxi",
+        "default_language": "zh-CN",
+    }
 
 
 def test_register_and_binding_intent_applies_campaign_attribution(client, fresh_db):

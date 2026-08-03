@@ -5,6 +5,7 @@ from app.db import create_proactive_commitment, get_account, get_proactive_accou
 from app.products.zhaoxi.proactive.contract.common import _select_route
 from app.products.zhaoxi.proactive.obligations.commitments import _commitment_max_days, _parse_due_at
 from app.time_utils import beijing_naive_now
+from app.tools.errors import tool_error
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -15,11 +16,11 @@ def handle_create_commitment(args: dict, ctx: "TurnContext") -> dict:
     due_at_raw = str(args.get("due_at") or "").strip()
     reason = str(args.get("reason") or "").strip() or "tool_use"
     if not text:
-        return {"error": "跟进内容不能为空"}
+        return tool_error(ctx, "commitment_text_required", fallback="跟进内容不能为空")
 
     account = get_account(account_id=ctx.account_id)
     if account is None or account.get("status") != "active":
-        return {"error": "账号不可用，无法记录"}
+        return tool_error(ctx, "commitment_account_unavailable", fallback="账号不可用，无法记录")
     state = get_proactive_account_state(account_id=ctx.account_id)
     if state is None or not state.get("enabled"):
         return {"status": "skipped", "reason": "proactive_disabled"}
@@ -29,10 +30,21 @@ def handle_create_commitment(args: dict, ctx: "TurnContext") -> dict:
     due_dt = _parse_due_at(due_at_raw)
     now = beijing_naive_now()
     if due_dt is None or due_dt <= now:
-        return {"error": "due_at 必须是未来时间，格式 YYYY-MM-DD HH:MM:SS"}
+        return tool_error(
+            ctx,
+            "commitment_due_at_invalid",
+            fallback="due_at 必须是未来时间，格式 YYYY-MM-DD HH:MM:SS",
+        )
     max_days = _commitment_max_days()
     if due_dt > now + timedelta(days=max(max_days, 1)):
-        return {"error": f"due_at 不能超过 {max_days} 天后"}
+        return {
+            **tool_error(
+                ctx,
+                "commitment_due_at_too_far",
+                fallback="due_at 超出允许范围",
+            ),
+            "max_days": max_days,
+        }
 
     item = create_proactive_commitment(
         account_id=ctx.account_id,

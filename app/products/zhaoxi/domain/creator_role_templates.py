@@ -21,8 +21,26 @@ PERSONALITY_MIN_CHARS = 1
 PERSONALITY_MAX_CHARS = 800
 MISSION_MIN_CHARS = 1
 MISSION_MAX_CHARS = 500
+OPENING_LINE_MIN_CHARS = 1
+OPENING_LINE_MAX_CHARS = 300
+PUBLIC_SUMMARY_MIN_CHARS = 1
+PUBLIC_SUMMARY_MAX_CHARS = 60
 REVIEW_REASON_MAX_CHARS = 1000
 REVIEW_CATEGORIES_JSON_MAX_CHARS = 2000
+CREATOR_ROLE_TEMPLATE_REVIEW_CATEGORIES = frozenset(
+    {
+        "prompt_injection",
+        "real_person_impersonation",
+        "minor_persona",
+        "illegal_or_dangerous",
+        "self_harm",
+        "hate_or_abuse",
+        "sexual_content",
+        "professional_deception",
+        "unsafe_companion_role",
+        "other_unsafe_content",
+    }
+)
 EVENT_METADATA_JSON_MAX_CHARS = 2000
 DISABLED_REASON_MAX_CHARS = 500
 DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -60,6 +78,16 @@ class CreatorRoleTemplateReviewRunStatus(str, Enum):
     ERROR = "error"
 
 
+class CreatorRoleTemplateSummaryEditStatus(str, Enum):
+    """一个版本的一次性公开简介编辑状态。"""
+
+    UNAVAILABLE = "unavailable"
+    AVAILABLE = "available"
+    REVIEWING = "reviewing"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+
 class CreatorRoleTemplateEventType(str, Enum):
     """模板生命周期审计事件类型。"""
 
@@ -94,11 +122,12 @@ class CreatorRoleTemplateError(ValueError):
 
 @dataclass(frozen=True)
 class CreatorRoleTemplateContent:
-    """一次需要整体审核和版本化的三字段角色模板内容。"""
+    """一次需要整体审核和版本化的四字段角色模板内容。"""
 
     ai_name: str
     personality_text: str
     mission_text: str
+    opening_line: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -153,6 +182,10 @@ class CreatorRoleTemplateVersion:
     ai_name: str
     personality_text: str
     mission_text: str
+    opening_line: Optional[str]
+    generated_summary: Optional[str]
+    public_summary: Optional[str]
+    summary_edit_status: str
     review_status: str
     is_published: bool
     review_categories_json: str
@@ -172,6 +205,10 @@ class CreatorRoleTemplateVersion:
             ai_name=row["ai_name"],
             personality_text=row["personality_text"],
             mission_text=row["mission_text"],
+            opening_line=row["opening_line"],
+            generated_summary=row["generated_summary"],
+            public_summary=row["public_summary"],
+            summary_edit_status=str(row["summary_edit_status"] or "unavailable"),
             review_status=row["review_status"],
             is_published=bool(row["is_published"]),
             review_categories_json=row["review_categories_json"],
@@ -193,12 +230,13 @@ class CreatedCreatorRoleTemplate:
 
 @dataclass(frozen=True)
 class CreatorRoleTemplateReview:
-    """一次三字段整体审核的规范化结果；不包含原始模型输出。"""
+    """一次四字段整体审核及默认简介生成结果；不包含原始模型输出。"""
 
     decision: str
     field_results: Dict[str, str]
     categories: Tuple[str, ...]
     reason: str
+    generated_summary: Optional[str] = None
     model: Optional[str] = None
     provider: Optional[str] = None
     latency_ms: int = 0
@@ -238,6 +276,45 @@ class CreatorRoleTemplateReviewOutcome:
     mutation: CreatorRoleTemplateMutation
 
 
+@dataclass(frozen=True)
+class CreatorRoleTemplateSummaryReview:
+    """创建者一次简介修改的安全审核结果。"""
+
+    decision: str
+    categories: Tuple[str, ...]
+    reason: str
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    latency_ms: int = 0
+    error_code: Optional[str] = None
+    failure_code: Optional[str] = None
+
+    @property
+    def available(self) -> bool:
+        """是否得到会消耗编辑机会的明确 pass/reject 结论。"""
+        return self.decision in {"pass", "reject"} and self.error_code is None
+
+
+@dataclass(frozen=True)
+class CreatorRoleTemplateSummaryReviewClaim:
+    """已 CAS claim 的简介修改审核及其上下文。"""
+
+    run_id: str
+    attempt_no: int
+    template: CreatorRoleTemplate
+    version: CreatorRoleTemplateVersion
+    submitted_summary: str
+
+
+@dataclass(frozen=True)
+class CreatorRoleTemplateSummaryReviewOutcome:
+    """一次简介修改审核完成后的版本投影。"""
+
+    run_id: str
+    review: CreatorRoleTemplateSummaryReview
+    mutation: CreatorRoleTemplateMutation
+
+
 def _normalize_field(
     value: str,
     *,
@@ -260,9 +337,10 @@ def _normalize_field(
 
 
 def normalize_creator_role_template_content(
-    *, ai_name: str, personality_text: str, mission_text: str
+    *, ai_name: str, personality_text: str, mission_text: str,
+    opening_line: Optional[str]
 ) -> CreatorRoleTemplateContent:
-    """机械校验并规范化三字段；语义安全仍由后续 LLM 整体审核。"""
+    """机械校验并规范化四字段；``None`` 仅用于兼容历史已发布版本。"""
     return CreatorRoleTemplateContent(
         ai_name=_normalize_field(
             ai_name,
@@ -285,7 +363,39 @@ def normalize_creator_role_template_content(
             max_chars=MISSION_MAX_CHARS,
             allow_newlines=True,
         ),
+        opening_line=(
+            None
+            if opening_line is None
+            else _normalize_field(
+                opening_line,
+                field_name="opening_line",
+                min_chars=OPENING_LINE_MIN_CHARS,
+                max_chars=OPENING_LINE_MAX_CHARS,
+                allow_newlines=True,
+            )
+        ),
     )
+
+
+def normalize_creator_role_template_summary(*, summary: str, ai_name: str) -> str:
+    """校验公开简介的单行、长度与必须包含角色名字约束。"""
+    cleaned = _normalize_field(
+        summary,
+        field_name="public_summary",
+        min_chars=PUBLIC_SUMMARY_MIN_CHARS,
+        max_chars=PUBLIC_SUMMARY_MAX_CHARS,
+        allow_newlines=False,
+    )
+    normalized_name = _normalize_field(
+        ai_name,
+        field_name="ai_name",
+        min_chars=AI_NAME_MIN_CHARS,
+        max_chars=AI_NAME_MAX_CHARS,
+        allow_newlines=False,
+    )
+    if normalized_name not in cleaned:
+        raise CreatorRoleTemplateError("public_summary_must_include_ai_name")
+    return cleaned
 
 
 def new_creator_role_template_campaign_code() -> str:
@@ -306,6 +416,7 @@ def is_creator_role_template_campaign_code(code: str) -> bool:
 
 __all__ = [
     "AI_NAME_MAX_CHARS",
+    "CREATOR_ROLE_TEMPLATE_REVIEW_CATEGORIES",
     "CREATOR_ROLE_TEMPLATE_CODE_GENERATION_RETRIES",
     "CREATOR_ROLE_TEMPLATE_CODE_PREFIX",
     "CREATOR_ROLE_TEMPLATE_MAX_SLOTS",
@@ -313,7 +424,9 @@ __all__ = [
     "DISABLED_REASON_MAX_CHARS",
     "EVENT_METADATA_JSON_MAX_CHARS",
     "MISSION_MAX_CHARS",
+    "OPENING_LINE_MAX_CHARS",
     "PERSONALITY_MAX_CHARS",
+    "PUBLIC_SUMMARY_MAX_CHARS",
     "REVIEW_CATEGORIES_JSON_MAX_CHARS",
     "REVIEW_REASON_MAX_CHARS",
     "ZHAOXI_APP_ID",
@@ -325,13 +438,18 @@ __all__ = [
     "CreatorRoleTemplateEventType",
     "CreatorRoleTemplateReviewRunStatus",
     "CreatorRoleTemplateReviewStatus",
+    "CreatorRoleTemplateSummaryEditStatus",
     "CreatorRoleTemplateReview",
     "CreatorRoleTemplateReviewClaim",
     "CreatorRoleTemplateReviewOutcome",
     "CreatorRoleTemplateStatus",
     "CreatorRoleTemplateVersion",
     "CreatorRoleTemplateMutation",
+    "CreatorRoleTemplateSummaryReview",
+    "CreatorRoleTemplateSummaryReviewClaim",
+    "CreatorRoleTemplateSummaryReviewOutcome",
     "is_creator_role_template_campaign_code",
     "new_creator_role_template_campaign_code",
     "normalize_creator_role_template_content",
+    "normalize_creator_role_template_summary",
 ]

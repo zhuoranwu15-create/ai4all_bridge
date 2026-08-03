@@ -41,7 +41,7 @@ from app.db import (
     revoke_platform_user_session,
     update_platform_user_profile,
 )
-from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.bootstrap.product_registry import PRODUCTION_PRODUCT_REGISTRY, ZHAOXI_APP_ID
 from app.products.zhaoxi.api.contracts import (
     AccountDeletionResponse,
     AppConfigResponse,
@@ -51,6 +51,7 @@ from app.products.zhaoxi.api.contracts import (
 )
 from app.products.zhaoxi.application.account_deletion import delete_account_now
 from app.products.zhaoxi.application.companion_world_wish import MAX_WISH_TEXT_CHARS
+from app.products.zhaoxi.application.product_localization import product_message
 from app.products.zhaoxi.domain.user_profile import (
     MAX_NICKNAME_CHARS,
     UserProfileError,
@@ -87,7 +88,7 @@ router = APIRouter(tags=["app-v1"])
 _ZHAOXI_DEFAULT_AI_NAME = "朝夕"
 
 # App 端契约版本。客户端用它判断服务端是否已交付某一轮字段；改契约时必须同步上调。
-CLIENT_CONTRACT_VERSION = "2026-08-01"
+CLIENT_CONTRACT_VERSION = "2026-08-02"
 
 _CLIENT_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _BEIJING_TZ = timezone(timedelta(hours=8))
@@ -315,8 +316,13 @@ def _companion_world_capabilities() -> dict:
 def app_config(response: Response) -> dict:
     scene_id = str(settings.aliyun_captcha_scene_id or "").strip()
     prefix = str(settings.aliyun_captcha_prefix or "").strip()
+    product = PRODUCTION_PRODUCT_REGISTRY.require_enabled(ZHAOXI_APP_ID)
     _no_store(response)
     return {
+        "product": {
+            "app_id": product.app_id,
+            "default_language": product.default_language,
+        },
         "captcha": {
             "provider": "aliyun",
             "scene_id": scene_id,
@@ -404,7 +410,7 @@ def app_create_session(payload: AppSessionRequest, response: Response) -> dict:
         },
         "account": _public_account(account_result) if account_result else None,
         "welcome_message": (
-            f"你好，我是{_ZHAOXI_DEFAULT_AI_NAME}。想聊聊此刻的心情，还是随便说点什么？"
+            product_message("app_auth_welcome", name=_ZHAOXI_DEFAULT_AI_NAME)
             if account_result
             else None
         ),

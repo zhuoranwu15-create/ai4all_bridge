@@ -9,6 +9,7 @@ from typing import Any, Dict, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.bootstrap.product_registry import PRODUCTION_PRODUCT_REGISTRY
 from app.db import get_campaign_funnel
 from app.products.zhaoxi.application.campaign_stats import (
     resolve_campaign_stats_range,
@@ -17,6 +18,12 @@ from app.products.zhaoxi.application.creator_role_template_links import (
     admin_disable_creator_role_template,
     admin_enable_creator_role_template,
     effective_creator_role_template_status,
+)
+from app.products.zhaoxi.application.creator_role_template_localization import (
+    creator_role_template_review_reason_display,
+    creator_role_template_review_run_status_display,
+    creator_role_template_review_status_display,
+    creator_role_template_status_display,
 )
 from app.products.zhaoxi.domain.creator_role_templates import (
     DISABLED_REASON_MAX_CHARS,
@@ -28,6 +35,7 @@ from app.products.zhaoxi.infrastructure.persistence.creator_role_templates impor
     get_creator_role_template_for_admin,
     list_creator_role_template_events,
     list_creator_role_template_review_runs,
+    list_creator_role_template_summary_review_runs,
     list_creator_role_template_versions,
     list_creator_role_templates_for_admin,
 )
@@ -79,9 +87,17 @@ def _admin_template(template_id: str) -> CreatorRoleTemplate:
     return template
 
 
-def _version_dict(version) -> Dict[str, Any]:
+def _version_dict(version, *, language: str) -> Dict[str, Any]:
     value = asdict(version)
     value["is_published"] = bool(value["is_published"])
+    value["review_status_display"] = creator_role_template_review_status_display(
+        value["review_status"], language
+    )
+    value["review_reason_display"] = creator_role_template_review_reason_display(
+        value["review_categories_json"],
+        review_status=value["review_status"],
+        language=language,
+    )
     return value
 
 
@@ -117,14 +133,28 @@ def _template_dict(
     )
     latest = versions[0] if versions else None
     published = next((version for version in versions if version.is_published), None)
+    language = PRODUCTION_PRODUCT_REGISTRY.require_enabled(
+        template.app_id
+    ).default_language
+    effective_status = effective_creator_role_template_status(template)
     result: Dict[str, Any] = {
         **asdict(template),
-        "effective_status": effective_creator_role_template_status(template),
-        "latest_version": _version_dict(latest) if latest else None,
-        "published_version": _version_dict(published) if published else None,
+        "status_display": creator_role_template_status_display(
+            template.status, language
+        ),
+        "effective_status": effective_status,
+        "effective_status_display": creator_role_template_status_display(
+            effective_status, language
+        ),
+        "latest_version": _version_dict(latest, language=language) if latest else None,
+        "published_version": (
+            _version_dict(published, language=language) if published else None
+        ),
     }
     if include_versions:
-        result["versions"] = [_version_dict(version) for version in versions]
+        result["versions"] = [
+            _version_dict(version, language=language) for version in versions
+        ]
     return result
 
 
@@ -195,16 +225,60 @@ def admin_creator_role_template_detail(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     template_data = _template_dict(template, include_versions=True)
+    language = PRODUCTION_PRODUCT_REGISTRY.require_enabled(
+        template.app_id
+    ).default_language
     review_runs = []
+    summary_review_runs = []
     for version in template_data["versions"]:
-        review_runs.extend(
-            list_creator_role_template_review_runs(
-                creator_platform_user_id=template.creator_platform_user_id,
-                app_id=template.app_id,
-                template_id=template.id,
-                version_id=version["id"],
+        for review_run in list_creator_role_template_review_runs(
+            creator_platform_user_id=template.creator_platform_user_id,
+            app_id=template.app_id,
+            template_id=template.id,
+            version_id=version["id"],
+        ):
+            localized_run = dict(review_run)
+            localized_run["status_display"] = (
+                creator_role_template_review_run_status_display(
+                    localized_run["status"], language
+                )
             )
-        )
+            localized_run["reason_display"] = (
+                creator_role_template_review_reason_display(
+                    localized_run.get("categories_json"),
+                    review_status=(
+                        "rejected"
+                        if localized_run.get("status") == "rejected"
+                        else ""
+                    ),
+                    language=language,
+                )
+            )
+            review_runs.append(localized_run)
+        for summary_run in list_creator_role_template_summary_review_runs(
+            creator_platform_user_id=template.creator_platform_user_id,
+            app_id=template.app_id,
+            template_id=template.id,
+            version_id=version["id"],
+        ):
+            localized_summary_run = dict(summary_run)
+            localized_summary_run["status_display"] = (
+                creator_role_template_review_run_status_display(
+                    localized_summary_run["status"], language
+                )
+            )
+            localized_summary_run["reason_display"] = (
+                creator_role_template_review_reason_display(
+                    localized_summary_run.get("categories_json"),
+                    review_status=(
+                        "rejected"
+                        if localized_summary_run.get("status") == "rejected"
+                        else ""
+                    ),
+                    language=language,
+                )
+            )
+            summary_review_runs.append(localized_summary_run)
     events = [
         _safe_event_dict(event)
         for event in list_creator_role_template_events(
@@ -218,6 +292,7 @@ def admin_creator_role_template_detail(
     return {
         "creator_role_template": template_data,
         "review_runs": review_runs,
+        "summary_review_runs": summary_review_runs,
         "events": events,
         "stats": get_campaign_funnel(
             campaign_code=template.campaign_code,

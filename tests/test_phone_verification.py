@@ -180,9 +180,10 @@ def test_send_otp_rejects_invalid_phone(client):
         res = client.post("/web/sms/send-otp", json={
             "phone": "123",
             "captcha_verify_param": "fake-param",
-        })
+    })
     assert res.status_code == 400
-    assert "phone" in res.json()["detail"]
+    assert res.json()["detail"] == "invalid_phone"
+    assert "手机号码" in res.json()["message"]
 
 
 def test_send_otp_rejects_failed_captcha(client):
@@ -194,7 +195,8 @@ def test_send_otp_rejects_failed_captcha(client):
             "captcha_verify_param": "bad-param",
         })
     assert res.status_code == 400
-    assert "验证码" in res.json()["detail"]
+    assert res.json()["detail"] == "captcha_failed"
+    assert "验证码" in res.json()["message"]
 
 
 def test_send_otp_returns_ok_and_creates_record(client):
@@ -229,7 +231,8 @@ def test_send_otp_rate_limits_per_hour(client):
             "captcha_verify_param": "ok-param",
         })
     assert res.status_code == 429
-    assert "频率" in res.json()["detail"]
+    assert res.json()["detail"] == "sms_rate_limited"
+    assert "频繁" in res.json()["message"]
 
 
 def test_send_otp_invalidates_previous_record(client):
@@ -386,7 +389,8 @@ def test_verify_otp_wrong_code_returns_400(client):
         "code": "000000",
     })
     assert res.status_code == 400
-    assert "验证码错误" in res.json()["detail"]
+    assert res.json()["detail"] == "otp_invalid"
+    assert "验证码错误" in res.json()["message"]
 
 
 def test_verify_otp_wrong_code_increments_attempts(client):
@@ -405,7 +409,8 @@ def test_verify_otp_too_many_attempts_returns_400(client):
         increment_verify_attempts(record["id"])
     res = client.post("/web/sms/verify-otp", json={"phone": "13800000022", "code": "000000"})
     assert res.status_code == 400
-    assert "尝试次数" in res.json()["detail"]
+    assert res.json()["detail"] == "otp_attempts_exceeded"
+    assert "尝试次数" in res.json()["message"]
 
 
 def test_verify_otp_no_active_record_returns_400(client):
@@ -414,7 +419,8 @@ def test_verify_otp_no_active_record_returns_400(client):
         "code": "123456",
     })
     assert res.status_code == 400
-    assert "过期" in res.json()["detail"]
+    assert res.json()["detail"] == "otp_not_found_or_expired"
+    assert "过期" in res.json()["message"]
 
 
 def test_verify_otp_correct_code_returns_token(client):
@@ -472,7 +478,8 @@ def test_register_rejects_unknown_token(client):
         "otp_token": "00000000-0000-0000-0000-000000000000",
     })
     assert res.status_code == 400
-    assert "凭证" in res.json()["detail"]
+    assert res.json()["detail"] == "verification_token_invalid"
+    assert "凭证" in res.json()["message"]
 
 
 def test_register_rejects_wrong_phone_for_token(client):
@@ -482,7 +489,8 @@ def test_register_rejects_wrong_phone_for_token(client):
         "otp_token": token,
     })
     assert res.status_code == 400
-    assert "凭证" in res.json()["detail"]
+    assert res.json()["detail"] == "verification_token_invalid"
+    assert "凭证" in res.json()["message"]
 
 
 def test_register_rejects_expired_token(client):
@@ -505,7 +513,8 @@ def test_register_rejects_expired_token(client):
         "otp_token": result["verified_token"],
     })
     assert res.status_code == 400
-    assert "凭证" in res.json()["detail"]
+    assert res.json()["detail"] == "verification_token_invalid"
+    assert "凭证" in res.json()["message"]
 
 
 def test_register_rejects_consumed_token(client):
@@ -520,7 +529,8 @@ def test_register_rejects_consumed_token(client):
         "otp_token": token,
     })
     assert res.status_code == 400
-    assert "凭证" in res.json()["detail"]
+    assert res.json()["detail"] == "verification_token_invalid"
+    assert "凭证" in res.json()["message"]
 
 
 def test_register_succeeds_with_valid_token(client):

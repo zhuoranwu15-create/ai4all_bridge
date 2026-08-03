@@ -12,6 +12,7 @@ from app.db._core import (
     _MIGRATIONS,
     _migration_0013_campaign_codes,
     _migration_0059_creator_role_templates,
+    _migration_0060_creator_role_template_opening_and_summary,
 )
 from app.products.zhaoxi.domain.creator_role_templates import (
     AI_NAME_MAX_CHARS,
@@ -37,6 +38,7 @@ _TABLES = (
     "creator_role_template_review_runs",
     "account_creator_role_template_attribution",
     "creator_role_template_events",
+    "creator_role_template_summary_review_runs",
 )
 
 _INDEXES = {
@@ -44,6 +46,7 @@ _INDEXES = {
     "ux_creator_role_templates_campaign_code",
     "ux_creator_role_template_versions_published",
     "ux_creator_role_template_versions_open_review",
+    "ix_creator_role_template_summary_runs_version",
 }
 
 
@@ -61,16 +64,20 @@ def _create(owner_id: str, suffix: str = ""):
         ai_name=f"朝朝{suffix}",
         personality_text="温柔、坦诚，也会在重要时刻提醒边界。",
         mission_text="陪伴用户更清楚地看见自己，并把想法落实到生活里。",
+        opening_line="我是朝朝，很高兴认识你。以后想聊什么都可以告诉我。",
     )
 
 
-def test_migration_59_schema_indexes_head_and_idempotency(fresh_db):
-    assert _MIGRATIONS[-1] == (59, _migration_0059_creator_role_templates)
+def test_migration_60_schema_indexes_head_and_idempotency(fresh_db):
+    assert _MIGRATIONS[-1] == (
+        60,
+        _migration_0060_creator_role_template_opening_and_summary,
+    )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 59
+        assert int(version) == 60
         for table in _TABLES:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 
@@ -86,6 +93,8 @@ def test_migration_59_schema_indexes_head_and_idempotency(fresh_db):
 
         _migration_0059_creator_role_templates(conn)
         _migration_0059_creator_role_templates(conn)
+        _migration_0060_creator_role_template_opening_and_summary(conn)
+        _migration_0060_creator_role_template_opening_and_summary(conn)
 
 
 def test_migration_59_fails_closed_for_existing_reserved_operator_code():
@@ -106,11 +115,62 @@ def test_migration_59_fails_closed_for_existing_reserved_operator_code():
         conn.close()
 
 
-def test_domain_validates_all_three_fields_and_generated_code_entropy():
+def test_migration_60_upgrades_existing_migration_59_rows_compatibly():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE creator_role_template_versions (
+                id TEXT PRIMARY KEY,
+                creator_role_template_id TEXT NOT NULL,
+                ai_name TEXT NOT NULL
+            );
+            CREATE TABLE account_creator_role_template_attribution (
+                account_id TEXT PRIMARY KEY,
+                creator_role_template_version_id TEXT NOT NULL
+            );
+            INSERT INTO creator_role_template_versions(
+                id, creator_role_template_id, ai_name
+            ) VALUES ('v-old', 't-old', '旧角色');
+            INSERT INTO account_creator_role_template_attribution(
+                account_id, creator_role_template_version_id
+            ) VALUES ('a-old', 'v-old');
+            """
+        )
+        _migration_0060_creator_role_template_opening_and_summary(conn)
+        _migration_0060_creator_role_template_opening_and_summary(conn)
+
+        version = conn.execute(
+            "SELECT opening_line, generated_summary, public_summary, "
+            "summary_edit_status FROM creator_role_template_versions "
+            "WHERE id = 'v-old'"
+        ).fetchone()
+        assert dict(version) == {
+            "opening_line": None,
+            "generated_summary": None,
+            "public_summary": None,
+            "summary_edit_status": "unavailable",
+        }
+        attribution = conn.execute(
+            "SELECT opening_line_snapshot "
+            "FROM account_creator_role_template_attribution "
+            "WHERE account_id = 'a-old'"
+        ).fetchone()
+        assert attribution["opening_line_snapshot"] is None
+        conn.execute(
+            "SELECT 1 FROM creator_role_template_summary_review_runs WHERE 1 = 0"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def test_domain_validates_all_four_fields_and_generated_code_entropy():
     content = normalize_creator_role_template_content(
         ai_name=" 朝朝 ",
         personality_text="第一层底色\n第二层底色",
         mission_text="陪用户找到自己的节奏",
+        opening_line="我是朝朝，很高兴认识你。",
     )
     assert content.ai_name == "朝朝"
     assert "\n" in content.personality_text
@@ -137,7 +197,10 @@ def test_domain_validates_all_three_fields_and_generated_code_entropy():
     )
     for fields in invalid_cases:
         with pytest.raises(CreatorRoleTemplateError):
-            normalize_creator_role_template_content(**fields)
+            normalize_creator_role_template_content(
+                opening_line="我是朝朝，很高兴认识你。",
+                **fields,
+            )
 
     codes = {new_creator_role_template_campaign_code() for _ in range(200)}
     assert len(codes) == 200

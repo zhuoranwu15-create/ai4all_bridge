@@ -58,9 +58,11 @@ def _pass_review(monkeypatch) -> None:
                     "ai_name": "pass",
                     "personality_text": "pass",
                     "mission_text": "pass",
+                    "opening_line": "pass",
                 },
                 "categories": [],
                 "reason": "",
+                "public_summary": "朝朝，温柔坦诚的陪伴者",
             }
         ),
     )
@@ -81,6 +83,7 @@ def _create_template(principal: SessionPrincipal) -> dict:
             ai_name="朝朝",
             personality_text="温柔坦诚，能尊重边界，也会提供清晰建议。",
             mission_text="陪伴用户更清楚地认识自己，并逐步找到适合自己的生活节奏。",
+            opening_line="我是朝朝，很高兴认识你。以后想聊什么都可以告诉我。",
         ),
         principal,
     )["creator_role_template"]
@@ -130,6 +133,13 @@ def test_admin_staff_list_detail_disable_enable_and_creator_lock(
     assert listed["pagination"]["total"] == 1
     assert listed["creator_role_templates"][0]["id"] == active["id"]
     assert listed["creator_role_templates"][0]["latest_version"]["ai_name"] == "朝朝"
+    assert listed["creator_role_templates"][0]["effective_status_display"] == "已发布"
+    assert (
+        listed["creator_role_templates"][0]["latest_version"][
+            "review_status_display"
+        ]
+        == "审核通过"
+    )
 
     detail = admin_api.admin_creator_role_template_detail(
         active["id"], None, None, admin
@@ -137,6 +147,7 @@ def test_admin_staff_list_detail_disable_enable_and_creator_lock(
     assert detail["creator_role_template"]["creator_platform_user_id"] == owner.platform_user_id
     assert len(detail["creator_role_template"]["versions"]) == 1
     assert len(detail["review_runs"]) == 1
+    assert detail["review_runs"][0]["status_display"] == "审核通过"
     assert set(detail["stats"]) == {"campaign_code", "range", "totals", "rates", "by_day"}
     attribution_event = next(
         event
@@ -325,8 +336,17 @@ def test_admin_ui_separates_operator_campaigns_and_user_templates():
         "/admin/creator-role-templates",
         "仅支持查看、统计、平台停用和恢复",
         "后台不可改写",
+        "t.effective_status_display",
+        "latest.review_status_display",
+        "v.review_reason_display",
+        "r.status_display",
+        "r.reason_display",
     ):
         assert marker in html
+    assert "+ esc(v.review_status)" not in html
+    assert "+ esc(r.status)" not in html
+    assert "v.review_reason ||" not in html
+    assert "内部状态码" not in html
     assert "createRoleTemplate" not in html
     assert "editRoleTemplate" not in html
     assert "trial" not in html.lower()

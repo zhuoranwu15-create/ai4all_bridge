@@ -42,6 +42,10 @@ from app.products.zhaoxi.application.onboarding import (
     is_onboarding_active,
     next_onboarding_state,
 )
+from app.products.zhaoxi.application.product_localization import (
+    product_default_language,
+    product_message,
+)
 from app.products.zhaoxi.application.onboarding_overrides import (
     resolve_onboarding_identity_overrides,
 )
@@ -105,7 +109,25 @@ class ZhaoxiTurnServices:
     onboarding_step2_sent = ONBOARDING_STEP2_SENT
     onboarding_step3_sent = ONBOARDING_STEP3_SENT
     onboarding_complete = ONBOARDING_COMPLETE
-    onboarding_welcome_text = ONBOARDING_WELCOME_TEXT
+    onboarding_welcome_text = product_message("onboarding_welcome")
+
+    def localized_message(
+        self,
+        key: str,
+        *,
+        fallback: Optional[str] = None,
+        **params: Any,
+    ) -> str:
+        """返回朝夕默认语言文案，并安全插值命名参数。"""
+
+        language = product_default_language(self.app_id)
+        if fallback and language == "zh-CN":
+            message = str(fallback)
+            try:
+                return message.format(**params)
+            except (KeyError, ValueError, IndexError):
+                return message
+        return product_message(key, app_id=self.app_id, language=language, **params)
 
     def prepare_session(
         self,
@@ -241,6 +263,7 @@ class ZhaoxiTurnServices:
                     (onboarding_pre_extracted or {}).get("needs_confirmation")
                 ),
                 onboarding_script_override=overrides.script_override,
+                creator_opening_line=overrides.creator_opening_line,
                 has_forced_soul_preset=overrides.forced_personality,
                 has_forced_ai_name=overrides.forced_ai_name,
             )

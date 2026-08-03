@@ -35,6 +35,7 @@ def _seed_creator_role_account(
     ai_name: str = "朝朝",
     personality_text: str = "温柔但坦诚，会尊重用户的现实边界。",
     mission_text: str = "陪用户更清楚地看见自己，并把重要想法带回生活。",
+    opening_line: str = "我是朝朝，很高兴认识你。以后想聊什么都可以告诉我。",
 ):
     create_account(account_id)
     with db.connect() as conn:
@@ -48,11 +49,13 @@ def _seed_creator_role_account(
         ai_name=ai_name,
         personality_text=personality_text,
         mission_text=mission_text,
+        opening_line=opening_line,
     )
     snapshot = CreatorRoleTemplateContent(
         ai_name=ai_name,
         personality_text=personality_text,
         mission_text=mission_text,
+        opening_line=opening_line,
     )
     with db.connect() as conn:
         conn.execute(
@@ -61,8 +64,8 @@ def _seed_creator_role_account(
                 account_id, creator_role_template_id,
                 creator_role_template_version_id, creator_platform_user_id,
                 campaign_code, ai_name_snapshot, personality_snapshot,
-                mission_snapshot, attributed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-01 12:00:00')
+                mission_snapshot, opening_line_snapshot, attributed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-08-01 12:00:00')
             """,
             (
                 account_id,
@@ -73,6 +76,7 @@ def _seed_creator_role_account(
                 ai_name,
                 personality_text,
                 mission_text,
+                opening_line,
             ),
         )
         write_creator_role_template_snapshot(
@@ -118,6 +122,7 @@ def test_snapshot_writes_three_profiles_in_callers_transaction(fresh_db):
         ai_name="小满",
         personality_text="安静、敏锐。",
         mission_text="陪用户找到自己的节奏。",
+        opening_line=None,
     )
 
     with pytest.raises(RuntimeError, match="rollback"):
@@ -199,7 +204,9 @@ def test_creator_role_onboarding_completes_after_user_name_and_has_no_quantified
     )
     assert "怎么称呼你（AI）" not in onboarding_context.onboarding_context
     assert "人设候选" not in onboarding_context.onboarding_context
-    assert "自我介绍" in onboarding_context.onboarding_context
+    assert snapshot.opening_line in onboarding_context.onboarding_context
+    assert "四个选项含义分别是" not in onboarding_context.onboarding_context
+    assert "第一次用这个角色开口说话" not in onboarding_context.onboarding_context
 
     new_state = ZHAOXI_TURN_SERVICES.advance_onboarding(
         account_id=account_id,

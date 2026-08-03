@@ -50,6 +50,7 @@ def install_public_routes(app: FastAPI) -> None:
     from app.products.zhaoxi.api import companion_world_visits
     from app.products.zhaoxi.api import creator_role_templates
     from app.products.zhaoxi.api import media as media_api
+    from app.products.zhaoxi.api import product_errors
 
     from app.routers import web
 
@@ -67,6 +68,7 @@ def install_public_routes(app: FastAPI) -> None:
         app_notifications.router,
     ):
         _install_versioned_product_router(app, product_router)
+    product_errors.install_product_error_handlers(app)
     companion_world.install_exception_handlers(app)
 
 

@@ -15,7 +15,9 @@ def test_dashboard_keeps_plain_invite_and_adds_template_entry():
         "copyInviteCode()",
         "copyInviteLink()",
         'href="/user/creator-role-templates.html"',
-        "管理角色模板",
+        "自定义角色模板管理",
+        "可以自定义创建AI角色模板，可分享给好友或他人使用",
+        ">进入</a>",
     ):
         assert marker in html
 
@@ -27,6 +29,7 @@ def test_creator_role_template_page_has_full_p0_lifecycle_and_no_runtime_surface
         'id="role-name"',
         'id="role-personality"',
         'id="role-mission"',
+        'id="role-opening-line"',
         "/web/me/creator-role-templates",
         "mutate(template.id, 'review')",
         "+ '/publish'",
@@ -35,10 +38,32 @@ def test_creator_role_template_page_has_full_p0_lifecycle_and_no_runtime_surface
         "method: 'DELETE'",
         "+ '/stats'",
         "复制注册链接",
+        "t('creator_used_count'",
+        "编辑模板内容",
+        "template.effective_status_display",
+        "latest.review_status_display",
+        "latest.review_reason_display",
+        "latest.public_summary",
+        "latest.summary_edit_status === 'available'",
+        "+ '/summary-edit'",
+        "version_id: version.id, summary: summary",
+        'id="role-test-note"',
+        'style="display:none"',
+        "document.getElementById('role-test-note').style.display = S.templates.length ? '' : 'none'",
         "当前暂不支持在线试玩",
         "尚未加入朝夕的新账号",
+        "最多可以拥有 3 个有效模板。",
+        "body.message || t('generic_error')",
+        "config.messages || {}",
     ):
         assert marker in html
+    assert "'槽位 ' + template.slot_no" not in html
+    assert "编辑三字段" not in html
+    assert "function statusLabel(" not in html
+    assert "+ ' · ' + latest.review_status" not in html
+    assert "appendField(fields, '审核说明', latest.review_reason)" not in html
+    assert "intent.error" not in html
+    assert "可以创建最多 3 个未删除模板。" not in html
     assert ".innerHTML" not in html
     for forbidden in (
         "/trial",
@@ -60,11 +85,10 @@ def test_home_preserves_both_codes_and_fails_template_only_to_normal_onboarding(
     assert "/web/creator-role-template-links/" in html
     assert "params.delete('campaign_code')" in html
     assert "params.delete('invite_code')" not in html
-    assert "角色模板已不可用，将按普通流程创建朝夕伙伴" in html
+    assert "t('role_template_unavailable')" in html
     for target in (
         "role-preview-name",
-        "role-preview-personality",
-        "role-preview-mission",
+        "role-preview-summary",
         "role-preview-expiry",
     ):
         assert f"getElementById('{target}').textContent" in html
@@ -80,11 +104,15 @@ def test_legacy_onboarding_preserves_both_codes_and_uses_public_preview():
     assert "/web/creator-role-template-links/" in html
     assert "params.delete('campaign_code')" in html
     assert "params.delete('invite_code')" not in html
-    assert "角色模板已不可用，将按普通流程创建朝夕伙伴" in html
+    assert "body.message || t('generic_error')" in html
+    assert "intent.error_message" not in html
+    assert "t('binding_failed')" in html
+    assert "intent.error ||" not in html
+    assert "await res.text()" not in html
+    assert "t('role_template_unavailable')" in html
     for target in (
         "role-preview-name",
-        "role-preview-personality",
-        "role-preview-mission",
+        "role-preview-summary",
         "role-preview-expiry",
     ):
         assert f"getElementById('{target}').textContent" in html

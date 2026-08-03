@@ -131,7 +131,10 @@ def test_record_moment_no_mission_returns_error(fresh_db):
 
     result = handle_record_mission_moment({"content": "一些内容"}, ctx)
 
-    assert result == {"error": "尚未分配使命"}
+    assert result == {
+        "error_code": "mission_not_assigned",
+        "error": "尚未分配使命",
+    }
 
 
 def test_record_moment_empty_content_returns_error(fresh_db):
@@ -143,7 +146,10 @@ def test_record_moment_empty_content_returns_error(fresh_db):
 
     result = handle_record_mission_moment({"content": "   "}, ctx)
 
-    assert result == {"error": "content 不能为空"}
+    assert result == {
+        "error_code": "mission_content_required",
+        "error": "content 不能为空",
+    }
 
 
 def test_record_moment_already_complete_does_not_insert(fresh_db):

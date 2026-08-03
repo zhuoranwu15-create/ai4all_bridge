@@ -898,6 +898,7 @@ def write_creator_role_template_snapshot(
         ai_name=snapshot.ai_name,
         personality_text=snapshot.personality_text,
         mission_text=snapshot.mission_text,
+        opening_line=snapshot.opening_line,
     )
     profile_storage.write_file(
         cleaned_account_id,

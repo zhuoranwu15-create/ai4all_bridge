@@ -6,6 +6,7 @@ from app.tools.registry import (
     CALL_INVOCATION,
     CALL_WEB_SEARCH,
 )
+from app.tools.errors import tool_error
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -33,7 +34,10 @@ def execute_tool_call(
             getattr(ctx, "account_id", None),
             getattr(ctx, "app_id", None),
         )
-        return {"status": "failed", "error": "tool policy is required"}
+        return {
+            "status": "failed",
+            **tool_error(ctx, "tool_policy_required", fallback="tool policy is required"),
+        }
     if getattr(ctx, "app_id", None) != policy.app_id:
         logger.error(
             "execute_tool_call ToolPolicy scope mismatch account=%s context_app=%s policy_app=%s",
@@ -41,12 +45,18 @@ def execute_tool_call(
             getattr(ctx, "app_id", None),
             policy.app_id,
         )
-        return {"status": "failed", "error": "tool policy scope mismatch"}
+        return {
+            "status": "failed",
+            **tool_error(ctx, "tool_policy_scope_mismatch", fallback="tool policy scope mismatch"),
+        }
 
     known_spec = policy.catalog.get_spec(name)
     if known_spec is None:
         logger.warning("execute_tool_call unknown tool: %s", name)
-        return {"error": f"未知工具: {name}"}
+        return {
+            **tool_error(ctx, "tool_unknown", fallback="未知工具"),
+            "tool_name": name,
+        }
     spec = policy.get_spec(name)
     if spec is None:
         logger.warning(
@@ -55,14 +65,22 @@ def execute_tool_call(
             getattr(ctx, "account_id", None),
             getattr(ctx, "app_id", None),
         )
-        return {"status": "failed", "error": f"{name} is not allowed for this product"}
+        return {
+            "status": "failed",
+            **tool_error(ctx, "tool_not_allowed", fallback="tool is not allowed for this product"),
+            "tool_name": name,
+        }
 
     # 运行时开关：如 web_search 被禁用，拒绝执行并返回固定失败结果。
     if spec.runtime_requires_flag and not bool(getattr(ctx, spec.runtime_requires_flag, False)):
         logger.warning(
             "%s tool called while disabled account=%s", name, getattr(ctx, "account_id", None)
         )
-        return {"status": "failed", "error": f"{name} is disabled"}
+        return {
+            "status": "failed",
+            **tool_error(ctx, "tool_disabled", fallback="tool is disabled"),
+            "tool_name": name,
+        }
 
     try:
         handler = getattr(import_module(spec.handler_module), spec.handler_attr)
@@ -78,4 +96,7 @@ def execute_tool_call(
         return handler(args, ctx)
     except Exception as err:
         logger.exception("tool handler failed tool=%s error=%s", name, err)
-        return {"error": str(err)}
+        return {
+            **tool_error(ctx, "tool_execution_failed", fallback="tool execution failed"),
+            "tool_name": name,
+        }

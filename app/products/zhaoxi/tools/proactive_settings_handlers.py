@@ -13,6 +13,7 @@ from app.products.zhaoxi.proactive.preferences import (
     apply_proactive_message_settings_patch,
     get_effective_proactive_message_settings,
 )
+from app.tools.errors import tool_error
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -105,7 +106,10 @@ def handle_update_proactive_message_settings(
     """校验并应用一次主动消息偏好变更，写审计。校验失败返回 {"error": ...}。"""
     unknown_keys = sorted(str(key) for key in args.keys() if key not in _UPDATE_ARG_KEYS)
     if unknown_keys:
-        return {"error": "不支持的设置字段: " + "、".join(unknown_keys)}
+        return {
+            **tool_error(ctx, "proactive_fields_unsupported", fallback="包含不支持的设置字段"),
+            "unsupported_fields": unknown_keys,
+        }
 
     patch = {
         key: args[key]
@@ -125,7 +129,7 @@ def handle_update_proactive_message_settings(
         freq["total_per_day"] = args["total_per_day"]
         patch["frequency"] = freq
     if not patch:
-        return {"error": "没有可更新的设置字段"}
+        return tool_error(ctx, "proactive_update_empty", fallback="没有可更新的设置字段")
 
     try:
         result = apply_proactive_message_settings_patch(
@@ -135,8 +139,8 @@ def handle_update_proactive_message_settings(
             tool_invocation_id=tool_invocation_id,
             reason=str(args.get("reason") or "").strip() or None,
         )
-    except ValueError as err:
-        return {"error": str(err)}
+    except ValueError:
+        return tool_error(ctx, "proactive_settings_invalid", fallback="主动消息设置无效")
 
     effective = result["settings"]
     return {

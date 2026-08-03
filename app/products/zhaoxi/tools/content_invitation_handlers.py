@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from app.config import settings
 from app.time_utils import beijing_naive_now
+from app.tools.errors import tool_error
 from app.db import (
     create_content_invitation,
     get_active_content_invitation,
@@ -80,13 +81,13 @@ def handle_create_content_invitation_candidate(args: dict, ctx: "TurnContext") -
     reason = _clean_text(args.get("reason"))
 
     if not topic:
-        return {"error": "topic 不能为空"}
+        return tool_error(ctx, "content_topic_required", fallback="topic 不能为空")
     if not invitation_text:
-        return {"error": "invitation_text 不能为空"}
+        return tool_error(ctx, "invitation_text_required", fallback="invitation_text 不能为空")
     if _has_url(invitation_text):
-        return {"error": "主动邀请文本不能包含 URL"}
+        return tool_error(ctx, "invitation_url_forbidden", fallback="主动邀请文本不能包含 URL")
     if len(title_items) < 3:
-        return {"error": "title_items 至少需要 3 条标题"}
+        return tool_error(ctx, "invitation_titles_insufficient", fallback="title_items 至少需要 3 条标题")
 
     current = beijing_naive_now()
     expire_hours = int(getattr(settings, "content_invitation_expire_hours", 24) or 24)
@@ -131,15 +132,18 @@ def handle_send_content_invitation_titles(
 ) -> dict:
     invitation = _active_invitation_for_args(args, ctx)
     if invitation is None:
-        return {"error": "内容邀请不存在或无权操作"}
+        return tool_error(ctx, "invitation_not_found", fallback="内容邀请不存在或无权操作")
     if invitation["status"] == "titles_sent":
         return {"status": "already_sent", "invitation_id": invitation["id"], "titles": []}
     if invitation["status"] != "invited":
-        return {"error": f"该内容邀请状态为 {invitation['status']}，无法发送标题"}
+        return {
+            **tool_error(ctx, "invitation_state_invalid", fallback="当前内容邀请状态无法发送标题"),
+            "invitation_status": invitation["status"],
+        }
     expires_at = _clean_text(invitation.get("expires_at"))
     now = beijing_naive_now()
     if expires_at and datetime.fromisoformat(expires_at.replace(" ", "T")) <= now:
-        return {"error": "内容邀请已过期"}
+        return tool_error(ctx, "invitation_expired", fallback="内容邀请已过期")
 
     try:
         max_titles = int(args.get("max_titles") or 10)
@@ -158,7 +162,7 @@ def handle_send_content_invitation_titles(
         responded_at=_format_time(now),
     )
     if updated is None or updated["status"] != "titles_sent":
-        return {"error": "内容邀请状态更新失败"}
+        return tool_error(ctx, "invitation_update_failed", fallback="内容邀请状态更新失败")
     return {
         "status": "titles_sent",
         "invitation_id": invitation["id"],
@@ -175,12 +179,12 @@ def handle_record_content_invitation_feedback(
 ) -> dict:
     feedback_type = _clean_text(args.get("feedback_type"))
     if feedback_type not in FEEDBACK_TYPES:
-        return {"error": "feedback_type 无效"}
+        return tool_error(ctx, "feedback_type_invalid", fallback="feedback_type 无效")
 
     invitation = _active_invitation_for_args(args, ctx)
     topic = _clean_text(args.get("topic")) or (invitation or {}).get("topic")
     if not topic:
-        return {"error": "topic 不能为空"}
+        return tool_error(ctx, "content_topic_required", fallback="topic 不能为空")
     note = _clean_text(args.get("note"))
     now = beijing_naive_now()
 

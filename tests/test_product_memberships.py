@@ -7,17 +7,31 @@ import pytest
 import app.db as db
 from app.bootstrap.product_registry import (
     PRODUCTION_PRODUCT_REGISTRY,
+    ProductRegistration,
+    ProductRegistry,
     build_test_product_registry,
 )
 from app.db._backend import is_postgres
 
 
 def test_production_registry_only_enables_zhaoxi():
-    assert [
-        product.app_id for product in PRODUCTION_PRODUCT_REGISTRY.registrations()
-    ] == ["zhaoxi"]
+    registrations = PRODUCTION_PRODUCT_REGISTRY.registrations()
+    assert [product.app_id for product in registrations] == ["zhaoxi"]
+    assert registrations[0].default_language == "zh-CN"
     with pytest.raises(ValueError, match="unregistered app_id"):
         PRODUCTION_PRODUCT_REGISTRY.require_enabled("test_product")
+
+
+def test_product_registry_validates_default_language():
+    registry = ProductRegistry(
+        [ProductRegistration(app_id="english_product", default_language="en-US")]
+    )
+    assert registry.require_enabled("english_product").default_language == "en-US"
+
+    with pytest.raises(ValueError, match="unsupported default_language"):
+        ProductRegistry(
+            [ProductRegistration(app_id="bad_language", default_language="fr-FR")]
+        )
 
 
 def test_platform_user_upsert_ensures_zhaoxi_membership_idempotently(fresh_db):

@@ -50,6 +50,11 @@ class AppConfigCaptcha(BaseModel):
     configured: bool
 
 
+class AppConfigProduct(BaseModel):
+    app_id: str
+    default_language: str
+
+
 class AppConfigFeatures(BaseModel):
     """公开能力位。新增 capability 必须在此登记，否则响应里会被过滤掉。"""
 
@@ -91,6 +96,7 @@ class AppConfigMinimumVersionByPlatform(BaseModel):
 
 
 class AppConfigResponse(BaseModel):
+    product: AppConfigProduct
     captcha: AppConfigCaptcha
     features: AppConfigFeatures
     limits: AppConfigLimits

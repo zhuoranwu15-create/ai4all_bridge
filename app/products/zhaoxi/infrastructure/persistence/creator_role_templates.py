@@ -26,10 +26,13 @@ from app.products.zhaoxi.domain.creator_role_templates import (
     CreatorRoleTemplateReviewRunStatus,
     CreatorRoleTemplateReviewStatus,
     CreatorRoleTemplateStatus,
+    CreatorRoleTemplateSummaryEditStatus,
+    CreatorRoleTemplateSummaryReviewClaim,
     CreatorRoleTemplateVersion,
     is_creator_role_template_campaign_code,
     new_creator_role_template_campaign_code,
     normalize_creator_role_template_content,
+    normalize_creator_role_template_summary,
 )
 from app.products.zhaoxi.infrastructure.profiles import (
     write_creator_role_template_snapshot,
@@ -165,6 +168,7 @@ def create_creator_role_template(
     ai_name: str,
     personality_text: str,
     mission_text: str,
+    opening_line: str,
     conn: Optional[Connection] = None,
 ) -> CreatedCreatorRoleTemplate:
     """原子申请 1–3 的空闲槽位，并创建模板、v1 pending 版本和 created 事件。
@@ -181,6 +185,7 @@ def create_creator_role_template(
         ai_name=ai_name,
         personality_text=personality_text,
         mission_text=mission_text,
+        opening_line=opening_line,
     )
 
     with _tx(conn) as tx:
@@ -237,9 +242,9 @@ def create_creator_role_template(
                     """
                     INSERT INTO creator_role_template_versions(
                         id, creator_role_template_id, version_no,
-                        ai_name, personality_text, mission_text,
+                        ai_name, personality_text, mission_text, opening_line,
                         review_status, is_published, created_at, updated_at
-                    ) VALUES (?, ?, 1, ?, ?, ?, ?, 0, ?, ?)
+                    ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, 0, ?, ?)
                     """,
                     (
                         version_id,
@@ -247,6 +252,7 @@ def create_creator_role_template(
                         content.ai_name,
                         content.personality_text,
                         content.mission_text,
+                        content.opening_line,
                         CreatorRoleTemplateReviewStatus.PENDING.value,
                         now,
                         now,
@@ -513,6 +519,8 @@ def get_creator_role_template_by_campaign_code(
                 v.ai_name AS published_ai_name,
                 v.personality_text AS published_personality_text,
                 v.mission_text AS published_mission_text,
+                v.opening_line AS published_opening_line,
+                v.public_summary AS published_public_summary,
                 v.review_status AS published_review_status,
                 v.published_at AS version_published_at
             FROM creator_role_templates AS t
@@ -571,6 +579,7 @@ def apply_creator_role_template_attribution(
                 v.ai_name AS published_ai_name,
                 v.personality_text AS published_personality_text,
                 v.mission_text AS published_mission_text,
+                v.opening_line AS published_opening_line,
                 v.review_status AS published_review_status
             FROM creator_role_templates AS t
             LEFT JOIN creator_role_template_versions AS v
@@ -621,6 +630,7 @@ def apply_creator_role_template_attribution(
             ai_name=source["published_ai_name"],
             personality_text=source["published_personality_text"],
             mission_text=source["published_mission_text"],
+            opening_line=source["published_opening_line"],
         )
         tx.execute(
             """
@@ -637,8 +647,8 @@ def apply_creator_role_template_attribution(
                 account_id, creator_role_template_id,
                 creator_role_template_version_id, creator_platform_user_id,
                 campaign_code, ai_name_snapshot, personality_snapshot,
-                mission_snapshot, attributed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                mission_snapshot, opening_line_snapshot, attributed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cleaned_account_id,
@@ -649,6 +659,7 @@ def apply_creator_role_template_attribution(
                 content.ai_name,
                 content.personality_text,
                 content.mission_text,
+                content.opening_line,
                 now,
             ),
         )
@@ -719,13 +730,17 @@ def create_creator_role_template_candidate_version(
     ai_name: Optional[str] = None,
     personality_text: Optional[str] = None,
     mission_text: Optional[str] = None,
+    opening_line: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> CreatorRoleTemplateVersion:
     """基于 published（未发布模板则 latest）快照合并字段并创建 pending 新版本。"""
     owner_id, cleaned_app_id = _require_scope(
         creator_platform_user_id=creator_platform_user_id, app_id=app_id
     )
-    if all(value is None for value in (ai_name, personality_text, mission_text)):
+    if all(
+        value is None
+        for value in (ai_name, personality_text, mission_text, opening_line)
+    ):
         raise CreatorRoleTemplateError("creator_role_template_no_changes")
     with _tx(conn) as tx:
         template_row = _lock_template_row(
@@ -773,6 +788,9 @@ def create_creator_role_template_candidate_version(
             mission_text=(
                 baseline["mission_text"] if mission_text is None else mission_text
             ),
+            opening_line=(
+                baseline["opening_line"] if opening_line is None else opening_line
+            ),
         )
         next_version_no = int(
             tx.execute(
@@ -790,9 +808,9 @@ def create_creator_role_template_candidate_version(
             """
             INSERT INTO creator_role_template_versions(
                 id, creator_role_template_id, version_no, ai_name,
-                personality_text, mission_text, review_status,
+                personality_text, mission_text, opening_line, review_status,
                 is_published, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)
             """,
             (
                 version_id,
@@ -801,6 +819,7 @@ def create_creator_role_template_candidate_version(
                 content.ai_name,
                 content.personality_text,
                 content.mission_text,
+                content.opening_line,
                 now,
                 now,
             ),
@@ -914,6 +933,7 @@ def complete_creator_role_template_review(
     model: Optional[str],
     provider: Optional[str],
     latency_ms: int,
+    generated_summary: Optional[str] = None,
     failure_code: Optional[str] = None,
     conn: Optional[Connection] = None,
 ) -> CreatorRoleTemplateMutation:
@@ -927,6 +947,21 @@ def complete_creator_role_template_review(
     clean_reason = str(reason or "")
     if len(clean_reason) > REVIEW_REASON_MAX_CHARS:
         raise CreatorRoleTemplateError("role_review_reason_too_long")
+    clean_generated_summary: Optional[str] = None
+    if decision == "pass":
+        version_for_summary = get_creator_role_template_version(
+            creator_platform_user_id=owner_id,
+            app_id=cleaned_app_id,
+            template_id=template_id,
+            version_id=version_id,
+            conn=conn,
+        )
+        if version_for_summary is None:
+            raise CreatorRoleTemplateError("creator_role_template_version_not_found")
+        clean_generated_summary = normalize_creator_role_template_summary(
+            summary=str(generated_summary or ""),
+            ai_name=version_for_summary.ai_name,
+        )
     now = beijing_now_str()
     run_status = {
         "pass": CreatorRoleTemplateReviewRunStatus.PASSED.value,
@@ -990,6 +1025,7 @@ def complete_creator_role_template_review(
             """
             UPDATE creator_role_template_versions
             SET review_status = ?, review_categories_json = ?, review_reason = ?,
+                generated_summary = ?, public_summary = ?, summary_edit_status = ?,
                 reviewed_at = ?, updated_at = ?
             WHERE id = ? AND creator_role_template_id = ? AND review_status = 'reviewing'
             """,
@@ -997,6 +1033,13 @@ def complete_creator_role_template_review(
                 version_status,
                 categories_json,
                 clean_reason,
+                clean_generated_summary,
+                clean_generated_summary,
+                (
+                    CreatorRoleTemplateSummaryEditStatus.AVAILABLE.value
+                    if decision == "pass"
+                    else CreatorRoleTemplateSummaryEditStatus.UNAVAILABLE.value
+                ),
                 None if decision == "error" else now,
                 now,
                 version_id,
@@ -1045,6 +1088,192 @@ def complete_creator_role_template_review(
     )
 
 
+def claim_creator_role_template_summary_review(
+    *,
+    creator_platform_user_id: str,
+    app_id: str,
+    template_id: str,
+    version_id: str,
+    submitted_summary: str,
+    conn: Optional[Connection] = None,
+) -> CreatorRoleTemplateSummaryReviewClaim:
+    """CAS claim 一个未发布版本的唯一简介编辑机会；并发只有一个进入审核。"""
+    owner_id, cleaned_app_id = _require_scope(
+        creator_platform_user_id=creator_platform_user_id, app_id=app_id
+    )
+    with _tx(conn) as tx:
+        template_row = _lock_template_row(
+            tx,
+            creator_platform_user_id=owner_id,
+            app_id=cleaned_app_id,
+            template_id=template_id,
+        )
+        version_row = _version_row(tx, template_id=template_id, version_id=version_id)
+        if version_row is None:
+            raise CreatorRoleTemplateError("creator_role_template_version_not_found")
+        if version_row["review_status"] != CreatorRoleTemplateReviewStatus.PASSED.value:
+            raise CreatorRoleTemplateError("creator_role_template_version_not_approved")
+        if bool(version_row["is_published"]):
+            raise CreatorRoleTemplateError("creator_role_template_summary_edit_unavailable")
+        clean_summary = normalize_creator_role_template_summary(
+            summary=submitted_summary,
+            ai_name=version_row["ai_name"],
+        )
+        status = str(version_row["summary_edit_status"] or "unavailable")
+        if status == CreatorRoleTemplateSummaryEditStatus.REVIEWING.value:
+            raise CreatorRoleTemplateError("creator_role_template_summary_review_in_progress")
+        if status != CreatorRoleTemplateSummaryEditStatus.AVAILABLE.value:
+            raise CreatorRoleTemplateError("creator_role_template_summary_edit_unavailable")
+        now = beijing_now_str()
+        claimed = tx.execute(
+            """
+            UPDATE creator_role_template_versions
+            SET summary_edit_status = 'reviewing', updated_at = ?
+            WHERE id = ? AND creator_role_template_id = ?
+              AND summary_edit_status = 'available' AND is_published = 0
+            """,
+            (now, version_id, template_id),
+        )
+        if claimed.rowcount != 1:
+            raise CreatorRoleTemplateError("creator_role_template_summary_review_in_progress")
+        attempt_no = int(
+            tx.execute(
+                """
+                SELECT COALESCE(MAX(attempt_no), 0) + 1 AS next_no
+                FROM creator_role_template_summary_review_runs
+                WHERE creator_role_template_version_id = ?
+                """,
+                (version_id,),
+            ).fetchone()["next_no"]
+        )
+        run_id = _new_id("crtsumrun")
+        tx.execute(
+            """
+            INSERT INTO creator_role_template_summary_review_runs(
+                id, creator_role_template_version_id, attempt_no,
+                submitted_summary, status, started_at
+            ) VALUES (?, ?, ?, ?, 'running', ?)
+            """,
+            (run_id, version_id, attempt_no, clean_summary, now),
+        )
+        version_row = _version_row(tx, template_id=template_id, version_id=version_id)
+    return CreatorRoleTemplateSummaryReviewClaim(
+        run_id=run_id,
+        attempt_no=attempt_no,
+        template=CreatorRoleTemplate.from_row(template_row),
+        version=CreatorRoleTemplateVersion.from_row(version_row),
+        submitted_summary=clean_summary,
+    )
+
+
+def complete_creator_role_template_summary_review(
+    *,
+    creator_platform_user_id: str,
+    app_id: str,
+    template_id: str,
+    version_id: str,
+    run_id: str,
+    decision: str,
+    categories: List[str],
+    reason: str,
+    model: Optional[str],
+    provider: Optional[str],
+    latency_ms: int,
+    failure_code: Optional[str] = None,
+    conn: Optional[Connection] = None,
+) -> CreatorRoleTemplateMutation:
+    """完成简介审核；pass/reject 消耗机会，error 恢复 available。"""
+    if decision not in {"pass", "reject", "error"}:
+        raise CreatorRoleTemplateError("creator_role_template_summary_decision_invalid")
+    owner_id, cleaned_app_id = _require_scope(
+        creator_platform_user_id=creator_platform_user_id, app_id=app_id
+    )
+    categories_json = _encode_categories(categories)
+    clean_reason = str(reason or "")
+    if len(clean_reason) > REVIEW_REASON_MAX_CHARS:
+        raise CreatorRoleTemplateError("role_review_reason_too_long")
+    now = beijing_now_str()
+    run_status = {
+        "pass": CreatorRoleTemplateReviewRunStatus.PASSED.value,
+        "reject": CreatorRoleTemplateReviewRunStatus.REJECTED.value,
+        "error": CreatorRoleTemplateReviewRunStatus.ERROR.value,
+    }[decision]
+    summary_status = {
+        "pass": CreatorRoleTemplateSummaryEditStatus.ACCEPTED.value,
+        "reject": CreatorRoleTemplateSummaryEditStatus.REJECTED.value,
+        "error": CreatorRoleTemplateSummaryEditStatus.AVAILABLE.value,
+    }[decision]
+    with _tx(conn) as tx:
+        template_row = _lock_template_row(
+            tx,
+            creator_platform_user_id=owner_id,
+            app_id=cleaned_app_id,
+            template_id=template_id,
+        )
+        run_row = tx.execute(
+            """
+            SELECT r.status, r.submitted_summary
+            FROM creator_role_template_summary_review_runs AS r
+            JOIN creator_role_template_versions AS v
+              ON v.id = r.creator_role_template_version_id
+            WHERE r.id = ? AND r.creator_role_template_version_id = ?
+              AND v.creator_role_template_id = ?
+              AND v.summary_edit_status = 'reviewing' AND v.is_published = 0
+            """,
+            (run_id, version_id, template_id),
+        ).fetchone()
+        if run_row is None or run_row["status"] != "running":
+            raise CreatorRoleTemplateError("creator_role_template_summary_result_stale")
+        updated_run = tx.execute(
+            """
+            UPDATE creator_role_template_summary_review_runs
+            SET status = ?, model = ?, provider = ?, latency_ms = ?,
+                categories_json = ?, reason = ?, error_code = ?, finished_at = ?
+            WHERE id = ? AND status = 'running'
+            """,
+            (
+                run_status,
+                model,
+                provider,
+                max(0, int(latency_ms)),
+                categories_json,
+                clean_reason,
+                failure_code,
+                now,
+                run_id,
+            ),
+        )
+        if decision == "pass":
+            public_summary_sql = ", public_summary = ?"
+            version_values: Tuple[Any, ...] = (
+                summary_status,
+                now,
+                run_row["submitted_summary"],
+                version_id,
+                template_id,
+            )
+        else:
+            public_summary_sql = ""
+            version_values = (summary_status, now, version_id, template_id)
+        updated_version = tx.execute(
+            """
+            UPDATE creator_role_template_versions
+            SET summary_edit_status = ?, updated_at = ?
+            """
+            + public_summary_sql
+            + " WHERE id = ? AND creator_role_template_id = ? "
+            "AND summary_edit_status = 'reviewing' AND is_published = 0",
+            version_values,
+        )
+        if updated_run.rowcount != 1 or updated_version.rowcount != 1:
+            raise CreatorRoleTemplateError("creator_role_template_summary_result_stale")
+        version_row = _version_row(tx, template_id=template_id, version_id=version_id)
+    return CreatorRoleTemplateMutation(
+        template=CreatorRoleTemplate.from_row(template_row),
+        version=CreatorRoleTemplateVersion.from_row(version_row),
+    )
+
+
 def publish_creator_role_template_version(
     *,
     creator_platform_user_id: str,
@@ -1073,6 +1302,13 @@ def publish_creator_role_template_version(
             raise CreatorRoleTemplateError("creator_role_template_version_not_found")
         if version_row["review_status"] != CreatorRoleTemplateReviewStatus.PASSED.value:
             raise CreatorRoleTemplateError("creator_role_template_version_not_approved")
+        if (
+            version_row["opening_line"] is not None
+            and version_row["public_summary"] is None
+        ):
+            raise CreatorRoleTemplateError("creator_role_template_summary_unavailable")
+        if version_row["summary_edit_status"] == "reviewing":
+            raise CreatorRoleTemplateError("creator_role_template_summary_review_in_progress")
         if bool(version_row["is_published"]):
             return CreatorRoleTemplateMutation(
                 template=CreatorRoleTemplate.from_row(template_row),
@@ -1353,6 +1589,34 @@ def list_creator_role_template_review_runs(
     return [dict(row) for row in rows]
 
 
+def list_creator_role_template_summary_review_runs(
+    *,
+    creator_platform_user_id: str,
+    app_id: str,
+    template_id: str,
+    version_id: str,
+    conn: Optional[Connection] = None,
+) -> List[Dict[str, Any]]:
+    """owner-scoped 读取简介修改审核历史，供 Admin 审计。"""
+    owner_id, cleaned_app_id = _require_scope(
+        creator_platform_user_id=creator_platform_user_id, app_id=app_id
+    )
+    with _tx(conn) as tx:
+        rows = tx.execute(
+            """
+            SELECT r.* FROM creator_role_template_summary_review_runs AS r
+            JOIN creator_role_template_versions AS v
+              ON v.id = r.creator_role_template_version_id
+            JOIN creator_role_templates AS t ON t.id = v.creator_role_template_id
+            WHERE t.id = ? AND t.creator_platform_user_id = ? AND t.app_id = ?
+              AND v.id = ?
+            ORDER BY r.attempt_no DESC
+            """,
+            (template_id, owner_id, cleaned_app_id, version_id),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def soft_delete_creator_role_template(
     *,
     creator_platform_user_id: str,
@@ -1490,7 +1754,9 @@ def list_creator_role_template_events(
 __all__ = [
     "apply_creator_role_template_attribution",
     "claim_creator_role_template_review",
+    "claim_creator_role_template_summary_review",
     "complete_creator_role_template_review",
+    "complete_creator_role_template_summary_review",
     "create_creator_role_template",
     "create_creator_role_template_candidate_version",
     "disable_creator_role_template_by_admin",
@@ -1503,6 +1769,7 @@ __all__ = [
     "list_creator_role_template_events",
     "list_creator_role_templates_for_admin",
     "list_creator_role_template_review_runs",
+    "list_creator_role_template_summary_review_runs",
     "list_creator_role_template_versions",
     "list_creator_role_templates",
     "publish_creator_role_template_version",

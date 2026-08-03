@@ -14,13 +14,23 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from app.config import settings
 from app.bootstrap.runtime import get_background_loop
-from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.bootstrap.product_registry import PRODUCTION_PRODUCT_REGISTRY, ZHAOXI_APP_ID
 from app.routers.deps import _require_session
 from app.platform.gateways import node_gateway
 from app.platform.auth.captcha import verify_captcha
 from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
 from app.agent_runtime.llm.service import generate_completion
-from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT, ONBOARDING_WELCOME_TEXT
+from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT
+from app.products.zhaoxi.application.product_localization import (
+    normalize_public_error_code,
+    product_message,
+    public_error_message,
+    public_web_messages,
+)
+from app.products.zhaoxi.application.web_ui_localization import (
+    faq_groups,
+    web_ui_messages,
+)
 from app.products.zhaoxi.infrastructure.persistence.campaign import campaign_code_exists
 from app.platform.quota.rate_limiter import RateLimiter
 from app.platform.auth.sms import generate_otp, send_otp
@@ -39,6 +49,23 @@ _REFERRAL_PREVIEW_RPM = 60
 # 落地页曝光 beacon 限流器：单 IP 每分钟上限，超限静默丢弃（不返回 429，不给刷量者信号）。
 _campaign_visit_rate_limiter = RateLimiter()
 _CAMPAIGN_VISIT_RPM = 120
+
+
+def _binding_intent_for_public(intent: Optional[dict]) -> Optional[dict]:
+    """返回用户绑定 DTO；上游原始结果只留审计，不直接暴露。"""
+
+    if intent is None:
+        return None
+    item = dict(intent)
+    item.pop("raw_result", None)
+    raw_error = item.get("error")
+    if raw_error:
+        code = normalize_public_error_code(raw_error, status_code=502)
+        item["error"] = code
+        item["error_message"] = public_error_message(code, status_code=502)
+    else:
+        item["error_message"] = None
+    return item
 
 
 class WebRegisterRequest(BaseModel):
@@ -270,7 +297,7 @@ def _complete_binding_intent_from_wait_result(binding_intent: dict, result: dict
     set_binding_intent_error(
         binding_intent_id=binding_intent["id"],
         status=status,
-        error=str(result.get("message") or status),
+        error=("binding_already_connected" if status == "already_connected" else "binding_failed"),
         raw_result=raw_result,
     )
 
@@ -293,7 +320,7 @@ async def _wait_for_binding_intent(binding_intent_id: str) -> None:
         set_binding_intent_error(
             binding_intent_id=binding_intent_id,
             status="failed",
-            error=str(err),
+            error="binding_gateway_unavailable",
         )
         return
     latest = get_binding_intent(binding_intent_id=binding_intent_id)
@@ -323,7 +350,7 @@ async def _wait_for_binding_intent(binding_intent_id: str) -> None:
         )
 
 
-_ONBOARDING_WELCOME_TEXT = ONBOARDING_WELCOME_TEXT
+_ONBOARDING_WELCOME_TEXT = product_message("onboarding_welcome")
 
 
 async def _send_onboarding_welcome_if_pending(
@@ -428,7 +455,7 @@ def _start_openclaw_qr_for_binding(binding_intent: dict) -> dict:
         failed = set_binding_intent_error(
             binding_intent_id=binding_intent["id"],
             status="failed",
-            error=str(err),
+            error="binding_gateway_unavailable",
         )
         return failed or binding_intent
 
@@ -443,7 +470,7 @@ def _start_openclaw_qr_for_binding(binding_intent: dict) -> dict:
             "binding_intent_id": binding_intent["id"],
             "openclaw_login_session_key": session_key,
         },
-        error=None if start_result.get("qrDataUrl") else str(start_result.get("message") or "QR not returned"),
+        error=None if start_result.get("qrDataUrl") else "binding_qr_unavailable",
     )
     updated = updated or binding_intent
     if updated.get("qr_data_url"):
@@ -634,7 +661,22 @@ def web_config() -> dict:
     """Return public frontend configuration; never include server secrets."""
     captcha_scene_id = str(getattr(settings, "aliyun_captcha_scene_id", "") or "").strip()
     captcha_prefix = str(getattr(settings, "aliyun_captcha_prefix", "") or "").strip()
+    product = PRODUCTION_PRODUCT_REGISTRY.require_enabled(ZHAOXI_APP_ID)
     return {
+        "product": {
+            "app_id": product.app_id,
+            "default_language": product.default_language,
+        },
+        "messages": {
+            **public_web_messages(
+                app_id=product.app_id,
+                language=product.default_language,
+            ),
+            **web_ui_messages(
+                app_id=product.app_id,
+                language=product.default_language,
+            ),
+        },
         "captcha": {
             "provider": "aliyun",
             "scene_id": captcha_scene_id,
@@ -647,6 +689,23 @@ def web_config() -> dict:
             "invite_code_param": "invite_code",
             "campaign_code_param": "campaign_code",
         },
+    }
+
+
+@router.get("/web/faq/content")
+def web_faq_content() -> dict:
+    """返回与产品默认语言一致的公开 FAQ 内容。"""
+
+    product = PRODUCTION_PRODUCT_REGISTRY.require_enabled(ZHAOXI_APP_ID)
+    return {
+        "product": {
+            "app_id": product.app_id,
+            "default_language": product.default_language,
+        },
+        "groups": faq_groups(
+            app_id=product.app_id,
+            language=product.default_language,
+        ),
     }
 
 
@@ -938,7 +997,7 @@ def web_register_and_binding_intent(
         "owner_binding": account_result["owner_binding"],
         "subscription": account_result["subscription"],
         "wallet": wallet,
-        "binding_intent": binding_intent,
+        "binding_intent": _binding_intent_for_public(binding_intent),
         "binding_mode": "openclaw_gateway_qr",
         "next_step": "scan_qr_and_wait_for_completion",
         "role_template_link_result": _public_role_template_link_result(
@@ -1009,7 +1068,7 @@ def web_create_binding_intent(
         raise HTTPException(status_code=400, detail=str(err))
     return {
         "status": "ok",
-        "binding_intent": binding_intent,
+        "binding_intent": _binding_intent_for_public(binding_intent),
         "binding_mode": "openclaw_gateway_qr",
         "next_step": "scan_qr_and_wait_for_completion",
     }
@@ -1029,7 +1088,7 @@ def web_get_binding_intent(
         or binding_intent.get("platform_user_id") != principal.platform_user_id
     ):
         raise HTTPException(status_code=404, detail="binding_intent not found")
-    return {"binding_intent": binding_intent}
+    return {"binding_intent": _binding_intent_for_public(binding_intent)}
 
 
 class WebLoginRequest(BaseModel):
@@ -1097,7 +1156,7 @@ def web_login(payload: WebLoginRequest) -> dict:
         "subscription": account_result["subscription"],
         "wallet": wallet,
         "has_active_binding": has_active_binding,
-        "binding_intent": binding_intent,
+        "binding_intent": _binding_intent_for_public(binding_intent),
         "binding_mode": "openclaw_gateway_qr",
         "role_template_link_result": _public_role_template_link_result(
             account_result

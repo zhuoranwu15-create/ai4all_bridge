@@ -49,6 +49,10 @@
 { "status": "ok", "...业务字段...": "..." }
 ```
 
+失败时（A 类）返回 `{"detail":"stable_english_code","message":"用户可见消息"}`。
+客户端只按稳定英文 `detail` 分支，并展示按 `app/config.product.default_language` 生成的 `message`；
+不要把 `detail` 当作用户文案。
+
 **B. 世界类（`/worlds/*`、`/conversations`、`/ai-conversations/*`、`/mailbox/*`、`/visits/*`、`/world/invites`、`/notifications`、`/human-conversations/*`）** — 统一信封：
 
 ```json
@@ -79,7 +83,7 @@
 ## 3. 登录鉴权流程
 
 ```
-GET  /v1/app/config                → 拿 captcha 配置 + 功能开关 + 限额
+GET  /v1/app/config                → 拿产品默认语言 + captcha 配置 + 功能开关 + 限额
 POST /v1/auth/otp/send             → 发送短信验证码（需先过阿里云行为验证码）
 POST /v1/auth/otp/verify           → 校验 OTP，拿一次性 verified_token
 POST /v1/auth/session              → 用 verified_token 建立 30 天 session
@@ -93,6 +97,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
 
 ```json
 {
+  "product": { "app_id": "zhaoxi", "default_language": "zh-CN" },
   "captcha": { "provider": "aliyun", "scene_id": "6ez3x2ne", "prefix": "18if8u", "configured": true },
   "features": {
     "voice_input": true,
@@ -114,7 +119,7 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
     "voice_bytes_max": 512000, "voice_duration_ms_max": 60000,
     "wish_text_chars": 500, "wish_daily_max": 10
   },
-  "client_contract_version": "2026-08-01",
+  "client_contract_version": "2026-08-02",
   "server_time": "2026-07-26T12:00:00+08:00",
   "minimum_supported_version": "0.1.0",
   "minimum_supported_version_by_platform": { "ios": "0.0.0", "android": "0.0.0" }
@@ -138,6 +143,9 @@ DELETE /v1/auth/session/current    → 登出（吊销当前 token）
   `image_count_max` 是单条动态的图片张数上限（聊天图片恒为单张）。
   `wish_daily_max` ≤ 0 表示服务端不设日额度。
 - `client_contract_version`：服务端 App 契约版本，改契约时上调。
+- `product.default_language`：服务端用户文案的权威语言（当前支持 `zh-CN`、`en-US`、`ja-JP`）；
+  审核理由、错误 `message`、服务端选项 `label` 与固定降级话术均以此为准，机器错误码不随语言变化。
+  这是产品级默认语言，不是用户偏好；客户端不应再对服务端 `label` 做二次翻译。
 - `minimum_supported_version` / `minimum_supported_version_by_platform`：低于此版本应提示强制升级；分平台字段先按 `0.0.0`（不拦）上线。
 - 响应带 `Cache-Control: no-store`。
 
@@ -409,6 +417,10 @@ POST /v1/worlds/home/residents                   → 用 draft_token 落地
 }
 ```
 
+`relationship_types[].key`、`personality_traits[].key` 与头像 `key` 是稳定英文协议值；两个 `label`
+字段会随 `app/config.product.default_language` 返回中文、英文或日文。切换语言不会修改已经生成的
+自建角色摘要或人设正文。
+
 **第 1 步 `POST /v1/worlds/home/resident-drafts/preview`**：
 
 ```json
@@ -640,7 +652,8 @@ Feed 项结构含 `post_id / author{type,resident_id,name,avatar_ref} / content 
 ]}}
 ```
 
-- `options` 顺序即展示顺序，兜底的 `other` 永远在最后。客户端**直接用 `label`**，不要自行翻译或发明分类。
+- `options` 顺序即展示顺序，兜底的 `other` 永远在最后。`reason_code` 是稳定英文协议值，`label`
+  随产品默认语言变化；客户端**直接用 `label`**，不要自行翻译或发明分类。
 - `version` 只在码集合或语义变化时递增，可据此缓存；纯文案微调不动它。
 - `details_required=true` 的码，`POST /report` 不带 `details`（或只给空白）会返回 **422 `invalid_request`** —— 契约与服务端校验是同一份表，不存在「说必填却不校验」。
 - 该端点随**读**门控开放：`human_chat_send=false` 时仍可拉取并举报，只有发送被关闭。

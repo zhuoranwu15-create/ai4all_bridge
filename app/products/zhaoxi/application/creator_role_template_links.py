@@ -122,6 +122,7 @@ def create_creator_role_template_version(
     ai_name: Optional[str] = None,
     personality_text: Optional[str] = None,
     mission_text: Optional[str] = None,
+    opening_line: Optional[str] = None,
 ) -> CreatorRoleTemplateVersion:
     """合并部分字段并创建需要整体重审的完整候选版本。"""
     return create_creator_role_template_candidate_version(
@@ -131,6 +132,7 @@ def create_creator_role_template_version(
         ai_name=ai_name,
         personality_text=personality_text,
         mission_text=mission_text,
+        opening_line=opening_line,
     )
 
 

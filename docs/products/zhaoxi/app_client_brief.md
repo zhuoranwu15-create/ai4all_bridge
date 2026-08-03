@@ -58,7 +58,9 @@ GET    {base}/me                      # 复活会话时校验 token 并拿账号
 ## 4. 两套响应外壳（必须分别处理）
 
 **A 类** — `/app/config`、`/auth/*`、`/me`、`/chat/*`、`/audio/*`：扁平结构，
-成功 `{"status":"ok", ...}`，失败 `{"detail":"..."}` + HTTP 状态码。
+成功 `{"status":"ok", ...}`，失败
+`{"detail":"stable_english_code","message":"按产品默认语言展示的消息"}` + HTTP 状态码。
+客户端按 `detail` 分支、向用户展示 `message`，不要展示或匹配 `detail`。
 
 **B 类** — 世界相关（`/worlds/*`、`/conversations`、`/ai-conversations/*`、`/mailbox/*`、
 `/visits/*`、`/world/invites`、`/notifications`、`/human-conversations/*`）：统一信封
