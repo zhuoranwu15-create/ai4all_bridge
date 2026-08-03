@@ -75,8 +75,11 @@ Promise.all([
   fetch('/api/web/config').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
   fetch('/api/web/faq/content').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
 ]).then(function(results) {
-  window.CXProductI18n.setConfig(results[0]);
-  window.CXProductI18n.apply();
+  // 静态资源缺失时不能让整个初始化链中断（否则 FAQ 列表也渲染不出来）。
+  if (window.CXProductI18n) {
+    window.CXProductI18n.setConfig(results[0]);
+    window.CXProductI18n.apply();
+  }
   renderFaqList(results[1].groups || []);
 }).catch(function() {
   renderFaqList();
