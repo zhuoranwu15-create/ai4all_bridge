@@ -12,13 +12,13 @@
 
 <nav class="site-nav">
   <div class="brand-group">
-    <a class="brand-logo" href="/ui/home.html">
+    <a class="brand-logo" href="/">
       <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
     </a>
     <span class="beta-badge" data-i18n="beta_label">Beta 测试版</span>
   </div>
   <div class="nav-actions">
-    <a class="btn btn-ghost btn-sm" href="/ui/home.html" data-i18n="nav_home">首页</a>
+    <a class="btn btn-ghost btn-sm" href="/" data-i18n="nav_home">首页</a>
     <a class="btn btn-ghost btn-sm" href="/user/dashboard.html" data-i18n="nav_dashboard">用户中心</a>
   </div>
 </nav>
@@ -75,8 +75,11 @@ Promise.all([
   fetch('/api/web/config').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
   fetch('/api/web/faq/content').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
 ]).then(function(results) {
-  window.CXProductI18n.setConfig(results[0]);
-  window.CXProductI18n.apply();
+  // 静态资源缺失时不能让整个初始化链中断（否则 FAQ 列表也渲染不出来）。
+  if (window.CXProductI18n) {
+    window.CXProductI18n.setConfig(results[0]);
+    window.CXProductI18n.apply();
+  }
   renderFaqList(results[1].groups || []);
 }).catch(function() {
   renderFaqList();

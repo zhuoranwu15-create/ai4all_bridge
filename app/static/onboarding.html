@@ -148,9 +148,12 @@
 
     function t(key, fallback) {
       var params = arguments.length > 2 ? arguments[2] : {};
-      return window.CXProductI18n
-        ? window.CXProductI18n.t(key, fallback || '操作失败，请稍后重试。', params)
-        : ((state.messages && state.messages[key]) || fallback || '操作失败，请稍后重试。');
+      if (window.CXProductI18n) return window.CXProductI18n.t(key, fallback || '操作失败，请稍后重试。', params);
+      // product-i18n.js 未加载时的兜底：仍要做占位符插值，否则 {code}/{name} 会原样上屏。
+      var template = (state.messages && state.messages[key]) || fallback || '操作失败，请稍后重试。';
+      return String(template).replace(/\{([a-zA-Z0-9_]+)\}/g, function(_, name) {
+        return Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : '{' + name + '}';
+      });
     }
 
     var terminalBindingStatuses = {
@@ -382,8 +385,11 @@
       loadWebConfig()
         .then(function(config) {
           state.messages = config.messages || {};
-          window.CXProductI18n.setConfig(config);
-          window.CXProductI18n.apply();
+          // 静态资源缺失时不能让整个初始化链中断（会禁用发送验证码按钮）。
+          if (window.CXProductI18n) {
+            window.CXProductI18n.setConfig(config);
+            window.CXProductI18n.apply();
+          }
           initInviteCodeFromUrl();
           initCampaignCodeFromUrl();
           initCaptcha(config);

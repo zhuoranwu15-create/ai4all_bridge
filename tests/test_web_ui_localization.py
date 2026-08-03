@@ -1,3 +1,6 @@
+import re
+from pathlib import Path
+
 from app.products.zhaoxi.application.web_ui_localization import (
     faq_groups,
     web_ui_messages,
@@ -61,3 +64,62 @@ def test_captcha_language_follows_the_supported_product_language_mapping():
         source = open(path, encoding="utf-8").read()
         assert "'zh-CN':'cn','en-US':'en','ja-JP':'ja'" in source
         assert "language: 'cn'" not in source
+
+
+# ── product-i18n.js 交付契约 ──────────────────────────────────────────────
+# 2026-08-03 线上故障：product-i18n.js 随本能力新增，但官网 nginx 是逐文件白名单代理，
+# 漏加后 /product-i18n.js 落到 SPA catch-all 返回 200 HTML；浏览器把 HTML 当 JS 执行，
+# window.CXProductI18n 缺失导致落地页初始化链中断并禁用发送验证码按钮，Web 注册全断。
+
+#: 引用 product-i18n.js 的页面 → 该页面在官网上的相对解析路径。
+I18N_ASSET_PAGES = {
+    "app/static/home.html": "/product-i18n.js",
+    "app/static/dashboard.html": "/user/product-i18n.js",
+    "app/static/creator_role_templates.html": "/user/product-i18n.js",
+    "app/static/faq.html": "/product-i18n.js",
+}
+
+
+def _read(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8")
+
+
+def test_pages_referencing_product_i18n_are_whitelisted_by_nginx():
+    nginx = _read("deploy/nginx/ai4company.top.conf")
+
+    for page, url in sorted(set(I18N_ASSET_PAGES.items())):
+        assert 'src="product-i18n.js"' in _read(page), page
+        location = f"location = {url} {{"
+        assert location in nginx, f"{page} 依赖 {url}，nginx 未放行"
+        block = nginx.split(location, 1)[1].split("}", 1)[0]
+        assert "proxy_pass http://127.0.0.1:8180/ui/product-i18n.js;" in block
+
+
+def test_pages_never_call_product_i18n_without_a_guard():
+    """静态资源缺失只能降级展示，不能打断页面初始化链。"""
+    pages = sorted(set(I18N_ASSET_PAGES) | {"app/static/onboarding.html"})
+    for page in pages:
+        guard_indent = None
+        for line in _read(page).splitlines():
+            stripped = line.strip()
+            indent = len(line) - len(line.lstrip())
+            if stripped.startswith("if (window.CXProductI18n)") and stripped.endswith("{"):
+                guard_indent = indent
+                continue
+            if guard_indent is not None and stripped == "}" and indent == guard_indent:
+                guard_indent = None
+                continue
+            if "window.CXProductI18n.setConfig(" in stripped or "window.CXProductI18n.apply(" in stripped:
+                assert guard_indent is not None, f"{page}: 无保护调用 {stripped}"
+
+
+def test_public_pages_never_link_to_nginx_blocked_paths():
+    """官网 nginx 对 /ui/ /web/ /admin/ /debug/ /openclaw/ 显式返回 404。
+
+    2026-08-03 实测：faq.html 的 brand logo 与「首页」按钮都指向 /ui/home.html，
+    公网点击直接 404。公网页面之间只能用官网对外路径互链。
+    """
+    blocked = ("/ui/", "/web/", "/admin/", "/debug/", "/openclaw/")
+    for page in sorted(I18N_ASSET_PAGES):
+        for ref in re.findall(r'href="([^"]*)"', _read(page)):
+            assert not ref.startswith(blocked), f"{page}: {ref} 在官网上是 404"
