@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from app.products.zhaoxi.application.web_ui_localization import (
@@ -110,3 +111,15 @@ def test_pages_never_call_product_i18n_without_a_guard():
                 continue
             if "window.CXProductI18n.setConfig(" in stripped or "window.CXProductI18n.apply(" in stripped:
                 assert guard_indent is not None, f"{page}: 无保护调用 {stripped}"
+
+
+def test_public_pages_never_link_to_nginx_blocked_paths():
+    """官网 nginx 对 /ui/ /web/ /admin/ /debug/ /openclaw/ 显式返回 404。
+
+    2026-08-03 实测：faq.html 的 brand logo 与「首页」按钮都指向 /ui/home.html，
+    公网点击直接 404。公网页面之间只能用官网对外路径互链。
+    """
+    blocked = ("/ui/", "/web/", "/admin/", "/debug/", "/openclaw/")
+    for page in sorted(I18N_ASSET_PAGES):
+        for ref in re.findall(r'href="([^"]*)"', _read(page)):
+            assert not ref.startswith(blocked), f"{page}: {ref} 在官网上是 404"
