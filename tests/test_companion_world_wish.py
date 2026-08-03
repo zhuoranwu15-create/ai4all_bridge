@@ -346,4 +346,4 @@ def test_app_config_publishes_async_wish_contract(client, fresh_db):
     fresh_db.companion_world_mailbox_enabled = True
     assert client.get("/v1/app/config").json()["features"]["resident_wish_create"] is True
     assert body["limits"]["wish_text_chars"] == 500
-    assert body["client_contract_version"] == "2026-08-01"
+    assert body["client_contract_version"] == "2026-08-02"

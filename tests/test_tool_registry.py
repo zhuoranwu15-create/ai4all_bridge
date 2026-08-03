@@ -81,7 +81,11 @@ def test_execute_unknown_tool_returns_error():
         web_search_enabled=False,
     )
     out = execute_tool_call("definitely_not_a_tool", {}, ctx)
-    assert out == {"error": "未知工具: definitely_not_a_tool"}
+    assert out == {
+        "error_code": "tool_unknown",
+        "error": "未知工具",
+        "tool_name": "definitely_not_a_tool",
+    }
 
 
 def test_execute_web_search_disabled_runtime_guard():
@@ -92,7 +96,12 @@ def test_execute_web_search_disabled_runtime_guard():
         web_search_enabled=False,
     )
     out = execute_tool_call("web_search", {"query": "x"}, ctx)
-    assert out == {"status": "failed", "error": "web_search is disabled"}
+    assert out == {
+        "status": "failed",
+        "error_code": "tool_disabled",
+        "error": "tool is disabled",
+        "tool_name": "web_search",
+    }
 
 
 def test_test_product_cannot_see_or_execute_zhaoxi_tools():
@@ -119,5 +128,7 @@ def test_test_product_cannot_see_or_execute_zhaoxi_tools():
     out = execute_tool_call("create_reminder", {}, ctx)
     assert out == {
         "status": "failed",
-        "error": "create_reminder is not allowed for this product",
+        "error_code": "tool_not_allowed",
+        "error": "tool is not allowed for this product",
+        "tool_name": "create_reminder",
     }

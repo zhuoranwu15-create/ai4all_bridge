@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>角色模板邀请链接 — 朝夕相伴</title>
+  <title data-i18n="creator_page_title">角色模板邀请链接 — 朝夕相伴</title>
   <link rel="stylesheet" href="site.css">
+  <script src="product-i18n.js"></script>
   <style>
     .role-page { max-width: 980px; margin: 0 auto; padding: 28px 18px 52px; }
     .role-page-head { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; margin-bottom:18px; }
@@ -22,6 +23,9 @@
     .role-fields dt { color:var(--text-sub); }
     .role-fields dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
     .role-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
+    .summary-editor { margin-top:14px; padding:14px; border-radius:10px; background:rgba(80,120,220,.08); }
+    .summary-editor label { display:block; font-weight:600; margin-bottom:7px; }
+    .summary-editor input { width:100%; box-sizing:border-box; }
     .role-note { padding:12px 14px; border-radius:10px; background:rgba(80,120,220,.08); color:var(--text-sub); line-height:1.6; }
     .role-msg { min-height:22px; margin-top:10px; font-size:.88rem; }
     .role-msg.error { color:#c0392b; }
@@ -45,24 +49,24 @@
     <a class="brand-logo" href="/">
       <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
     </a>
-    <span class="beta-badge">Beta 测试版</span>
+    <span class="beta-badge" data-i18n="beta_label">Beta 测试版</span>
   </div>
   <div class="nav-actions">
-    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">返回用户中心</a>
-    <button class="btn btn-ghost btn-sm" onclick="logout()">退出登录</button>
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html" data-i18n="nav_back_dashboard">返回用户中心</a>
+    <button class="btn btn-ghost btn-sm" onclick="logout()" data-i18n="logout">退出登录</button>
   </div>
 </nav>
 
 <main class="role-page">
   <div class="role-page-head">
     <div>
-      <h1>角色模板邀请链接</h1>
-      <p>创建姓名、性格/底色和使命三字段模板。审核通过并发布后，系统会生成同时带有你的邀请码和角色模板码的注册链接。</p>
+      <h1 data-i18n="creator_heading">角色模板邀请链接</h1>
+      <p data-i18n="creator_intro">创建角色的姓名、性格/底色、使命和开场白。审核通过后会生成一句话简介，发布后可分享注册链接。</p>
     </div>
-    <button id="btn-new" class="btn btn-primary" onclick="openCreateForm()">新建角色模板</button>
+    <button id="btn-new" class="btn btn-primary" onclick="openCreateForm()" data-i18n="creator_new">新建角色模板</button>
   </div>
 
-  <div class="role-note">
+  <div id="role-test-note" class="role-note" style="display:none">
     当前暂不支持在线试玩。若需验证角色实际效果，请复制发布后的注册链接，使用一个尚未加入朝夕的新账号完成注册测试。测试账号是正式账号，不会自动清理，也不能替换你当前的 AI。
   </div>
 
@@ -70,30 +74,34 @@
 
   <section id="editor-card" class="card" style="display:none;margin-top:16px">
     <div class="card-header">
-      <h3 id="editor-title">新建角色模板</h3>
+      <h3 id="editor-title" data-i18n="creator_new">新建角色模板</h3>
     </div>
     <form id="role-form" class="role-form-grid">
       <div>
-        <label for="role-name">姓名</label>
-        <input class="input" id="role-name" maxlength="24" required placeholder="例如：小满">
+        <label for="role-name" data-i18n="creator_name">姓名</label>
+        <input class="input" id="role-name" maxlength="24" required placeholder="例如：小满" data-i18n-placeholder="creator_name_placeholder">
       </div>
       <div>
-        <label for="role-personality">性格 / 底色</label>
-        <textarea class="input" id="role-personality" maxlength="800" required placeholder="描述这个 AI 如何理解世界、如何与你相处、表达风格和边界。"></textarea>
+        <label for="role-personality" data-i18n="creator_personality">性格 / 底色</label>
+        <textarea class="input" id="role-personality" maxlength="800" required placeholder="描述这个 AI 如何理解世界、如何与你相处、表达风格和边界。" data-i18n-placeholder="creator_personality_placeholder"></textarea>
       </div>
       <div>
-        <label for="role-mission">使命</label>
-        <textarea class="input" id="role-mission" maxlength="500" required placeholder="描述它希望长期为用户带来什么，不需要填写量化指标。"></textarea>
+        <label for="role-mission" data-i18n="creator_mission">使命</label>
+        <textarea class="input" id="role-mission" maxlength="500" required placeholder="描述它希望长期为用户带来什么，不需要填写量化指标。" data-i18n-placeholder="creator_mission_placeholder"></textarea>
+      </div>
+      <div>
+        <label for="role-opening-line" data-i18n="creator_opening_line">开场白</label>
+        <textarea class="input" id="role-opening-line" maxlength="300" required placeholder="用户告诉角色称呼后，角色第一次对用户说的话。" data-i18n-placeholder="creator_opening_line_placeholder"></textarea>
       </div>
       <div class="role-actions">
-        <button id="btn-submit" type="submit" class="btn btn-primary">提交并审核</button>
-        <button type="button" class="btn btn-ghost" onclick="closeEditor()">取消</button>
+        <button id="btn-submit" type="submit" class="btn btn-primary" data-i18n="creator_submit">提交并审核</button>
+        <button type="button" class="btn btn-ghost" onclick="closeEditor()" data-i18n="cancel">取消</button>
       </div>
       <div id="form-msg" class="role-msg"></div>
     </form>
   </section>
 
-  <div id="loading" style="text-align:center;padding:42px;color:var(--text-hint)">加载中…</div>
+  <div id="loading" style="text-align:center;padding:42px;color:var(--text-hint)" data-i18n="loading">加载中…</div>
   <section id="template-list"></section>
 </main>
 
@@ -106,7 +114,15 @@ var S = {
   sessionToken: null,
   templates: [],
   editingId: null,
+  messages: {},
 };
+
+function t(key, fallback) {
+  var params = arguments.length > 2 ? arguments[2] : {};
+  return window.CXProductI18n
+    ? window.CXProductI18n.t(key, fallback || '操作失败，请稍后重试。', params)
+    : ((S.messages && S.messages[key]) || fallback || '操作失败，请稍后重试。');
+}
 
 function node(tag, className, text) {
   var value = document.createElement(tag);
@@ -131,9 +147,10 @@ async function apiFetch(path, options) {
     headers: Object.assign(headers, options.headers || {}),
   }));
   if (!response.ok) {
-    var body = await response.json().catch(function() { return { detail: response.statusText }; });
-    var error = new Error(body.detail || ('请求失败 ' + response.status));
+    var body = await response.json().catch(function() { return {}; });
+    var error = new Error(body.message || t('generic_error'));
     error.status = response.status;
+    error.code = body.detail || 'generic_error';
     throw error;
   }
   return response.json();
@@ -142,19 +159,6 @@ async function apiFetch(path, options) {
 function logout() {
   localStorage.removeItem('chaochao_session');
   window.location.href = '/';
-}
-
-function statusLabel(status) {
-  return {
-    pending_review: '等待审核 / 可重试',
-    approved: '审核通过，待发布',
-    active: '已发布',
-    rejected: '审核未通过',
-    disabled_creator: '已由你停用',
-    disabled_admin: '已由平台停用',
-    expired: '已过期',
-    deleted: '已删除',
-  }[status] || status;
 }
 
 function appendField(list, label, value) {
@@ -174,24 +178,48 @@ function renderTemplate(template) {
   var head = node('div', 'role-card-head');
   var heading = node('div');
   var latest = template.latest_version || {};
-  heading.appendChild(node('h3', '', latest.ai_name || '未命名模板'));
-  heading.appendChild(node('span', 'role-status', statusLabel(template.effective_status)));
+  heading.appendChild(node('h3', '', latest.ai_name || t('creator_unnamed', '未命名模板')));
+  heading.appendChild(node('span', 'role-status', template.effective_status_display || t('creator_unknown_status', '状态未知')));
   head.appendChild(heading);
-  head.appendChild(node('div', '', '槽位 ' + template.slot_no + ' · 已实例化 ' + template.used_count + ' 次'));
+  head.appendChild(node('div', '', t('creator_used_count', '已实例化 {count} 次', {count: template.used_count})));
   card.appendChild(head);
 
   var fields = node('dl', 'role-fields');
-  appendField(fields, '姓名', latest.ai_name);
-  appendField(fields, '性格 / 底色', latest.personality_text);
-  appendField(fields, '使命', latest.mission_text);
-  appendField(fields, '最新审核', latest.review_status ? statusLabel(template.effective_status) + ' · ' + latest.review_status : '—');
-  appendField(fields, '审核说明', latest.review_reason);
-  appendField(fields, '首次激活', template.activated_at);
-  appendField(fields, '有效期至', template.expires_at);
+  appendField(fields, t('creator_name', '姓名'), latest.ai_name);
+  appendField(fields, t('creator_personality', '性格 / 底色'), latest.personality_text);
+  appendField(fields, t('creator_mission', '使命'), latest.mission_text);
+  appendField(fields, t('creator_opening_line', '开场白'), latest.opening_line);
+  appendField(fields, t('creator_public_summary', '一句话简介'), latest.public_summary);
+  appendField(fields, t('creator_latest_review', '最新审核'), latest.review_status_display);
+  appendField(fields, t('creator_review_reason', '审核理由'), latest.review_reason_display);
+  appendField(fields, t('creator_activated_at', '首次激活'), template.activated_at);
+  appendField(fields, t('creator_expires_at', '有效期至'), template.expires_at);
   card.appendChild(fields);
 
+  if (latest.summary_review_reason_display) {
+    card.appendChild(node('p', 'role-msg error', latest.summary_review_reason_display));
+  }
+  if (latest.review_status === 'passed' && !latest.is_published && latest.summary_edit_status === 'available') {
+    var summaryEditor = node('div', 'summary-editor');
+    var summaryLabel = node('label', '', t('creator_summary_edit_label', '修改一句话简介（仅有一次正式提交机会）'));
+    var summaryInput = node('input', 'input');
+    summaryInput.type = 'text';
+    summaryInput.maxLength = 60;
+    summaryInput.value = latest.public_summary || '';
+    summaryLabel.appendChild(summaryInput);
+    summaryEditor.appendChild(summaryLabel);
+    summaryEditor.appendChild(node('p', 'role-note', t('creator_summary_edit_note', '简介必须包含角色姓名。审核通过或拒绝后，本版本都不能再次修改；服务异常不会消耗机会。')));
+    var summaryButton = actionButton(t('creator_summary_submit', '提交简介修改'), 'btn-secondary', function() {
+      submitSummaryEdit(template, latest, summaryInput, summaryButton);
+    });
+    summaryEditor.appendChild(summaryButton);
+    card.appendChild(summaryEditor);
+  } else if (latest.summary_edit_status === 'reviewing') {
+    card.appendChild(node('p', 'role-note', t('creator_summary_reviewing', '一句话简介正在审核中，请稍后刷新。')));
+  }
+
   if (template.published_version && latest.id !== template.published_version.id) {
-    card.appendChild(node('p', 'role-note', '当前注册链接仍使用已发布的 v' + template.published_version.version_no + '；上面的 v' + latest.version_no + ' 需要审核通过并主动发布后才会生效。'));
+    card.appendChild(node('p', 'role-note', t('creator_version_note', '当前注册链接仍使用已发布的 v{published}；上面的 v{latest} 需要审核通过并主动发布后才会生效。', {published: template.published_version.version_no, latest: latest.version_no})));
   }
 
   if (template.registration_url) {
@@ -200,28 +228,28 @@ function renderTemplate(template) {
 
   var actions = node('div', 'role-actions');
   if (!['disabled_admin', 'expired', 'deleted'].includes(template.effective_status)) {
-    actions.appendChild(actionButton('编辑三字段', 'btn-ghost', function() { openEditForm(template); }));
+    actions.appendChild(actionButton(t('creator_edit_content', '编辑模板内容'), 'btn-ghost', function() { openEditForm(template); }));
   }
   if (latest.review_status === 'pending') {
-    actions.appendChild(actionButton('重试审核', 'btn-secondary', function() { mutate(template.id, 'review'); }));
+    actions.appendChild(actionButton(t('creator_retry_review', '重试审核'), 'btn-secondary', function() { mutate(template.id, 'review'); }));
   }
   if (latest.review_status === 'passed' && !latest.is_published && template.effective_status !== 'disabled_admin') {
-    actions.appendChild(actionButton('发布此版本', 'btn-primary', function() { publishVersion(template.id, latest.id); }));
+    actions.appendChild(actionButton(t('creator_publish_version', '发布此版本'), 'btn-primary', function() { publishVersion(template.id, latest.id); }));
   }
   if (template.effective_status === 'active') {
-    actions.appendChild(actionButton('停用链接', 'btn-ghost', function() { mutate(template.id, 'disable'); }));
+    actions.appendChild(actionButton(t('creator_disable_link', '停用链接'), 'btn-ghost', function() { mutate(template.id, 'disable'); }));
   }
   if (template.effective_status === 'disabled_creator') {
-    actions.appendChild(actionButton('恢复链接', 'btn-primary', function() { mutate(template.id, 'enable'); }));
+    actions.appendChild(actionButton(t('creator_enable_link', '恢复链接'), 'btn-primary', function() { mutate(template.id, 'enable'); }));
   }
   if (template.registration_url) {
-    actions.appendChild(actionButton('复制注册链接', 'btn-secondary', function() {
+    actions.appendChild(actionButton(t('creator_copy_link', '复制注册链接'), 'btn-secondary', function() {
       copyRegistrationUrl(template.registration_url);
     }));
   }
-  actions.appendChild(actionButton('查看统计', 'btn-ghost', function() { toggleStats(card, template); }));
+  actions.appendChild(actionButton(t('creator_view_stats', '查看统计'), 'btn-ghost', function() { toggleStats(card, template); }));
   if (template.effective_status !== 'deleted') {
-    actions.appendChild(actionButton('删除', 'btn-ghost', function() { deleteTemplate(template); }));
+    actions.appendChild(actionButton(t('creator_delete', '删除'), 'btn-ghost', function() { deleteTemplate(template); }));
   }
   card.appendChild(actions);
   card.appendChild(node('div', 'role-msg'));
@@ -233,9 +261,10 @@ function renderList() {
   list.replaceChildren();
   document.getElementById('loading').style.display = 'none';
   document.getElementById('btn-new').disabled = S.templates.length >= 3;
+  document.getElementById('role-test-note').style.display = S.templates.length ? '' : 'none';
   if (!S.templates.length) {
     var empty = node('div', 'card role-card');
-    empty.appendChild(node('p', '', '你还没有角色模板。可以创建最多 3 个未删除模板。'));
+    empty.appendChild(node('p', '', t('creator_empty', '你还没有角色模板。最多可以拥有 3 个有效模板。')));
     list.appendChild(empty);
     return;
   }
@@ -253,20 +282,21 @@ async function loadTemplates() {
       return;
     }
     document.getElementById('loading').style.display = 'none';
-    showMessage('page-msg', '角色模板加载失败：' + error.message, true);
+    showMessage('page-msg', error.message, true);
   }
 }
 
 function openCreateForm() {
   if (S.templates.length >= 3) {
-    showMessage('page-msg', '每位用户最多同时持有 3 个未删除角色模板。', true);
+    showMessage('page-msg', t('creator_role_template_limit_reached', '最多可以拥有 3 个有效模板。'), true);
     return;
   }
   S.editingId = null;
-  document.getElementById('editor-title').textContent = '新建角色模板';
+  document.getElementById('editor-title').textContent = t('creator_new', '新建角色模板');
   document.getElementById('role-name').value = '';
   document.getElementById('role-personality').value = '';
   document.getElementById('role-mission').value = '';
+  document.getElementById('role-opening-line').value = '';
   showMessage('form-msg', '', false);
   document.getElementById('editor-card').style.display = '';
   document.getElementById('editor-card').scrollIntoView({ behavior: 'smooth' });
@@ -275,10 +305,11 @@ function openCreateForm() {
 function openEditForm(template) {
   var latest = template.latest_version || {};
   S.editingId = template.id;
-  document.getElementById('editor-title').textContent = '编辑角色模板';
+  document.getElementById('editor-title').textContent = t('creator_edit', '编辑角色模板');
   document.getElementById('role-name').value = latest.ai_name || '';
   document.getElementById('role-personality').value = latest.personality_text || '';
   document.getElementById('role-mission').value = latest.mission_text || '';
+  document.getElementById('role-opening-line').value = latest.opening_line || '';
   showMessage('form-msg', '', false);
   document.getElementById('editor-card').style.display = '';
   document.getElementById('editor-card').scrollIntoView({ behavior: 'smooth' });
@@ -295,37 +326,61 @@ document.getElementById('role-form').addEventListener('submit', async function(e
     ai_name: document.getElementById('role-name').value.trim(),
     personality_text: document.getElementById('role-personality').value.trim(),
     mission_text: document.getElementById('role-mission').value.trim(),
+    opening_line: document.getElementById('role-opening-line').value.trim(),
   };
-  if (!payload.ai_name || !payload.personality_text || !payload.mission_text) {
-    showMessage('form-msg', '姓名、性格/底色和使命都必须填写。', true);
+  if (!payload.ai_name || !payload.personality_text || !payload.mission_text || !payload.opening_line) {
+    showMessage('form-msg', t('role_fields_required'), true);
     return;
   }
   var submit = document.getElementById('btn-submit');
   submit.disabled = true;
-  submit.textContent = '提交审核中…';
+  submit.textContent = t('creator_submitting', '提交审核中…');
   try {
     var path = S.editingId
       ? '/web/me/creator-role-templates/' + encodeURIComponent(S.editingId)
       : '/web/me/creator-role-templates';
     await apiFetch(path, { method: S.editingId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
     closeEditor();
-    showMessage('page-msg', '已提交并完成本次审核尝试。', false);
+    showMessage('page-msg', t('creator_submitted', '已提交并完成本次审核尝试。'), false);
     await loadTemplates();
   } catch (error) {
-    showMessage('form-msg', '提交失败：' + error.message, true);
+    showMessage('form-msg', error.message, true);
   } finally {
     submit.disabled = false;
-    submit.textContent = '提交并审核';
+    submit.textContent = t('creator_submit', '提交并审核');
   }
 });
+
+async function submitSummaryEdit(template, version, input, button) {
+  var summary = input.value.trim();
+  if (!summary) {
+    showMessage('page-msg', t('creator_summary_required', '请输入一句话简介。'), true);
+    return;
+  }
+  button.disabled = true;
+  button.textContent = t('creator_summary_submitting', '审核中…');
+  try {
+    var data = await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(template.id) + '/summary-edit', {
+      method: 'POST', body: JSON.stringify({ version_id: version.id, summary: summary }),
+    });
+    showMessage('page-msg', data.message || t('creator_summary_success', '修改成功'), false);
+    await loadTemplates();
+  } catch (error) {
+    showMessage('page-msg', error.message, true);
+    if (error.status === 422) await loadTemplates();
+  } finally {
+    button.disabled = false;
+    button.textContent = t('creator_summary_submit', '提交简介修改');
+  }
+}
 
 async function mutate(templateId, action) {
   try {
     await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(templateId) + '/' + action, { method: 'POST' });
-    showMessage('page-msg', '操作成功。', false);
+    showMessage('page-msg', t('creator_action_success', '操作成功。'), false);
     await loadTemplates();
   } catch (error) {
-    showMessage('page-msg', '操作失败：' + error.message, true);
+    showMessage('page-msg', error.message, true);
   }
 }
 
@@ -334,22 +389,22 @@ async function publishVersion(templateId, versionId) {
     await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(templateId) + '/publish', {
       method: 'POST', body: JSON.stringify({ version_id: versionId }),
     });
-    showMessage('page-msg', '发布成功，360 天有效期从首次激活时间起算。', false);
+    showMessage('page-msg', t('creator_publish_success', '发布成功，360 天有效期从首次激活时间起算。'), false);
     await loadTemplates();
   } catch (error) {
-    showMessage('page-msg', '发布失败：' + error.message, true);
+    showMessage('page-msg', error.message, true);
   }
 }
 
 async function deleteTemplate(template) {
-  if (!confirm('确认删除角色模板“' + ((template.latest_version || {}).ai_name || '') + '”？删除后链接立即失效，且不能恢复。')) return;
+  if (!confirm(t('creator_delete_confirm', '确认删除角色模板“{name}”？删除后链接立即失效，且不能恢复。', {name: (template.latest_version || {}).ai_name || ''}))) return;
   try {
     await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(template.id), { method: 'DELETE' });
     closeEditor();
-    showMessage('page-msg', '模板已删除。', false);
+    showMessage('page-msg', t('creator_deleted', '模板已删除。'), false);
     await loadTemplates();
   } catch (error) {
-    showMessage('page-msg', '删除失败：' + error.message, true);
+    showMessage('page-msg', error.message, true);
   }
 }
 
@@ -357,9 +412,9 @@ async function copyRegistrationUrl(relativeUrl) {
   var absolute = new URL(relativeUrl, window.location.origin).href;
   try {
     await navigator.clipboard.writeText(absolute);
-    showMessage('page-msg', '注册链接已复制。', false);
+    showMessage('page-msg', t('creator_link_copied', '注册链接已复制。'), false);
   } catch (error) {
-    showMessage('page-msg', '复制失败，请手动选择卡片中的链接。', true);
+    showMessage('page-msg', t('copy_failed'), true);
   }
 }
 
@@ -370,17 +425,17 @@ async function toggleStats(card, template) {
     return;
   }
   var panel = node('div', 'role-stats');
-  panel.appendChild(node('p', '', '统计加载中…'));
+  panel.appendChild(node('p', '', t('creator_stats_loading', '统计加载中…')));
   card.appendChild(panel);
   try {
     var data = await apiFetch('/web/me/creator-role-templates/' + encodeURIComponent(template.id) + '/stats');
     panel.replaceChildren();
-    panel.appendChild(node('h4', '', '最近 14 个北京自然日漏斗'));
+    panel.appendChild(node('h4', '', t('creator_stats_heading', '最近 14 个北京自然日漏斗')));
     var grid = node('div', 'stats-grid');
     [
-      ['曝光 PV', data.totals.pv], ['曝光 UV', data.totals.uv],
-      ['注册', data.totals.registered], ['扫码', data.totals.scanned],
-      ['激活', data.totals.activated], ['Onboarding 完成', data.totals.completed],
+      [t('creator_stats_pv', '曝光 PV'), data.totals.pv], [t('creator_stats_uv', '曝光 UV'), data.totals.uv],
+      [t('creator_stats_registered', '注册'), data.totals.registered], [t('creator_stats_scanned', '扫码'), data.totals.scanned],
+      [t('creator_stats_activated', '激活'), data.totals.activated], [t('creator_stats_completed', 'Onboarding 完成'), data.totals.completed],
     ].forEach(function(item) {
       var cell = node('div', 'stats-cell');
       cell.appendChild(node('div', 'stats-num', item[1]));
@@ -389,7 +444,7 @@ async function toggleStats(card, template) {
     });
     panel.appendChild(grid);
   } catch (error) {
-    panel.replaceChildren(node('p', 'role-msg error', '统计加载失败：' + error.message));
+    panel.replaceChildren(node('p', 'role-msg error', error.message));
   }
 }
 
@@ -399,7 +454,14 @@ window.addEventListener('load', function() {
     window.location.href = '/';
     return;
   }
-  loadTemplates();
+  apiFetch('/web/config')
+    .then(function(config) {
+      S.messages = config.messages || {};
+      window.CXProductI18n.setConfig(config);
+      window.CXProductI18n.apply();
+    })
+    .catch(function() {})
+    .then(loadTemplates);
 });
 </script>
 </body>

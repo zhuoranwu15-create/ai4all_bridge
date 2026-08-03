@@ -17,6 +17,7 @@ class OnboardingIdentityOverrides:
     forced_ai_name: bool = False
     forced_personality: bool = False
     script_override: Optional[str] = None
+    creator_opening_line: Optional[str] = None
     source: Optional[str] = None
 
 
@@ -32,6 +33,7 @@ def resolve_onboarding_identity_overrides(
             forced_ai_name=True,
             forced_personality=True,
             script_override=None,
+            creator_opening_line=creator_attribution.get("opening_line_snapshot"),
             source="creator_role_template",
         )
 

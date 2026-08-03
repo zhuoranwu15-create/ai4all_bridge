@@ -26,8 +26,9 @@ Fatetell、Nooki 或其他候选产品猜测领域契约。
   与兼容入口，并建立总 PRD。
 - 只为真实需求增加 `capabilities/`、`docs/architecture/products/<app_id>/`、
   `docs/plans/products/<app_id>/`；不复制朝夕文档结构。
-- 在 `app/bootstrap/product_registry.py` 增加明确的 `ProductRegistration`。生产注册表只包含
-  实际可用的产品，未知或 disabled 产品必须 fail closed。
+- 在 `app/bootstrap/product_registry.py` 增加明确的 `ProductRegistration`，并显式设置
+  `default_language`（当前支持 `zh-CN`、`en-US`、`ja-JP`）。生产注册表只包含实际可用的
+  产品，未知、disabled 或语言配置不受支持的产品必须 fail closed。
 - 在 `app/products/<app_id>/manifest.py` 集中暴露产品 routers、lifecycle 和 scheduler 组合点；
   `app/main.py` 不直接承载产品逻辑。
 
@@ -77,6 +78,14 @@ Fatetell、Nooki 或其他候选产品猜测领域契约。
 ## 6. 生命周期与主动任务
 
 - 产品 startup/shutdown 由 manifest 暴露，再由 `app/bootstrap/` composition root 组合。
+- 产品对用户暴露的审核理由、错误消息和固定降级话术必须从 `default_language` 对应的服务端文案目录
+  解析；HTTP `detail`、工具 `error_code`、领域 status/reason 等机器字段保持稳定英文，客户端和业务逻辑
+  不得匹配展示文案。新增用户文案时需同时补齐产品支持的语言并增加回落测试。
+- Web 页面标题、按钮、标签、占位符和动态状态也必须从产品语言目录解析；服务端下发选项时采用
+  `key/code + label` 结构，`key/code` 作为协议和持久化值，`label` 只负责展示。FAQ 等长文案应由
+  服务端按产品语言下发，静态文件只可保留默认语言降级内容。
+- 固定欢迎语等会写入用户历史的内容，在创建时按产品默认语言生成；切换默认语言不迁移既有记录。
+  Prompt、人设正文与用户提交内容不应为了 UI 翻译被机械替换，应单独评估生成语义。
 - scheduler 默认作为独立进程；多实例场景必须定义 claim/lease、幂等键和重放行为。
 - 不需要主动消息的产品不实现 scheduler、通知表或 `ProactiveDeliveryAdapter`。
 - 若需要主动消息，先按真实载荷泛化仍含 Companion World 语义的共享协议，再实现该产品

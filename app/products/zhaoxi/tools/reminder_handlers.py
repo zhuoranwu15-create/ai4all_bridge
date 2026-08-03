@@ -17,6 +17,7 @@ from app.products.zhaoxi.proactive.obligations.reminder_schedule import (
     validate_recur_rule,
 )
 from app.time_utils import beijing_naive_now
+from app.tools.errors import tool_error
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -31,14 +32,14 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
     recur_rule_raw = args.get("recur_rule") or args.get("repeat") or args.get("recurrence")
     fulfillment = str(args.get("fulfillment") or "fixed").strip().lower() or "fixed"
     if fulfillment not in ("fixed", "dynamic"):
-        return {"error": "fulfillment 只能是 fixed 或 dynamic"}
+        return tool_error(ctx, "reminder_fulfillment_invalid", fallback="fulfillment 只能是 fixed 或 dynamic")
 
     if not text:
-        return {"error": "提醒内容不能为空"}
+        return tool_error(ctx, "reminder_text_required", fallback="提醒内容不能为空")
     try:
         due_dt = validate_due_at(due_at_raw)
-    except ValueError as e:
-        return {"error": f"时间格式无效：{e}"}
+    except ValueError:
+        return tool_error(ctx, "reminder_time_invalid", fallback="提醒时间格式无效")
 
     recur_rule = None
     if recur_rule_raw:
@@ -50,22 +51,29 @@ def handle_create_reminder(args: dict, ctx: "TurnContext") -> dict:
             normalized_raw = f"monthly:{due_dt.day}"
         try:
             recur_rule = validate_recur_rule(normalized_raw)
-        except ValueError as e:
-            return {"error": f"周期规则无效：{e}"}
+        except ValueError:
+            return tool_error(ctx, "reminder_recurrence_invalid", fallback="提醒周期规则无效")
 
     to_user_id = ctx.binding.get("chat_id") or getattr(ctx.identity, "chat_id", None)
     if not to_user_id:
-        return {"error": "缺少发送目标，无法创建提醒"}
+        return tool_error(ctx, "reminder_route_missing", fallback="缺少发送目标，无法创建提醒")
 
     content_meta = None
     due_at_str = due_dt.strftime("%Y-%m-%d %H:%M:%S")
     if fulfillment == "dynamic":
         # 灰度准入 + 每账号活跃上限。
         if not is_dynamic_reminder_allowed(ctx.account_id):
-            return {"error": "例行简报（定时内容推送）功能当前未对你开放"}
+            return tool_error(ctx, "dynamic_reminder_unavailable", fallback="例行简报功能当前未开放")
         max_active = int(getattr(settings, "dynamic_reminder_max_active_per_account", 5) or 5)
         if count_active_dynamic_reminders_for_account(account_id=ctx.account_id) >= max_active:
-            return {"error": f"例行简报数量已达上限（{max_active} 个），请先取消一个再新建"}
+            return {
+                **tool_error(
+                    ctx,
+                    "dynamic_reminder_limit_reached",
+                    fallback="例行简报数量已达上限，请先取消一个再新建",
+                ),
+                "max_active": max_active,
+            }
         # 首次触发时间由后端按 recur_rule + 时刻重算，绝不采用模型提供的日期。
         if recur_rule and (recur_rule == "daily" or recur_rule.startswith("weekly:")):
             due_at_str = compute_first_due_at(
@@ -128,12 +136,15 @@ def handle_list_reminders(args: dict, ctx: "TurnContext") -> dict:
 def handle_cancel_reminder(args: dict, ctx: "TurnContext") -> dict:
     reminder_id = str(args.get("reminder_id", "")).strip()
     if not reminder_id:
-        return {"error": "reminder_id 不能为空"}
+        return tool_error(ctx, "reminder_id_required", fallback="reminder_id 不能为空")
     reminder = get_reminder(reminder_id=reminder_id)
     if not reminder or reminder["account_id"] != ctx.account_id:
-        return {"error": "提醒不存在或无权操作"}
+        return tool_error(ctx, "reminder_not_found", fallback="提醒不存在或无权操作")
     if reminder["status"] != "pending":
-        return {"error": f"该提醒状态为 {reminder['status']}，无法取消"}
+        return {
+            **tool_error(ctx, "reminder_state_invalid", fallback="当前提醒状态无法取消"),
+            "reminder_status": reminder["status"],
+        }
     cancel_reminder(reminder_id=reminder_id)
     return {"status": "cancelled", "reminder_id": reminder_id, "text": reminder["text"]}
 
@@ -141,12 +152,15 @@ def handle_cancel_reminder(args: dict, ctx: "TurnContext") -> dict:
 def handle_update_reminder(args: dict, ctx: "TurnContext") -> dict:
     reminder_id = str(args.get("reminder_id", "")).strip()
     if not reminder_id:
-        return {"error": "reminder_id 不能为空"}
+        return tool_error(ctx, "reminder_id_required", fallback="reminder_id 不能为空")
     reminder = get_reminder(reminder_id=reminder_id)
     if not reminder or reminder["account_id"] != ctx.account_id:
-        return {"error": "提醒不存在或无权操作"}
+        return tool_error(ctx, "reminder_not_found", fallback="提醒不存在或无权操作")
     if reminder["status"] != "pending":
-        return {"error": f"该提醒状态为 {reminder['status']}，无法修改"}
+        return {
+            **tool_error(ctx, "reminder_state_invalid", fallback="当前提醒状态无法修改"),
+            "reminder_status": reminder["status"],
+        }
 
     update_kwargs: dict = {}
     if "text" in args and args["text"] is not None:
@@ -155,23 +169,23 @@ def handle_update_reminder(args: dict, ctx: "TurnContext") -> dict:
         try:
             dt = validate_due_at(str(args["due_at"]))
             update_kwargs["due_at"] = dt.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError as e:
-            return {"error": f"时间格式无效：{e}"}
+        except ValueError:
+            return tool_error(ctx, "reminder_time_invalid", fallback="提醒时间格式无效")
     if "recur_rule" in args:
         if args["recur_rule"] is None:
             update_kwargs["clear_recur_rule"] = True
         else:
             try:
                 update_kwargs["recur_rule"] = validate_recur_rule(str(args["recur_rule"]))
-            except ValueError as e:
-                return {"error": f"周期规则无效：{e}"}
+            except ValueError:
+                return tool_error(ctx, "reminder_recurrence_invalid", fallback="提醒周期规则无效")
 
     if not update_kwargs:
-        return {"error": "没有提供要修改的字段"}
+        return tool_error(ctx, "reminder_update_empty", fallback="没有提供要修改的字段")
 
     updated = update_reminder(reminder_id=reminder_id, **update_kwargs)
     if not updated:
-        return {"error": "更新失败"}
+        return tool_error(ctx, "reminder_update_failed", fallback="提醒更新失败")
     return {
         "status": "updated",
         "reminder": {

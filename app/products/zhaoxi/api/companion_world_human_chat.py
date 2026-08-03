@@ -22,6 +22,9 @@ from app.platform.media.access import (
 from app.platform.media.persistence import list_media_assets_unscoped
 from app.platform.media.view import build_media_content, text_content
 from app.products.zhaoxi.application import CompanionWorldHumanChatService, HumanChatError
+from app.products.zhaoxi.application.app_display_localization import (
+    localized_report_options,
+)
 from app.products.zhaoxi.api.companion_world import (
     CompanionWorldApiError,
     _envelope,
@@ -267,7 +270,11 @@ def list_human_report_options(
 ) -> dict:
     """举报原因受控表；随读门控开放，`human_chat_send=false` 时仍可举报。"""
     _no_store(response)
-    return _envelope(request, code="ok", data=_service().report_options())
+    return _envelope(
+        request,
+        code="ok",
+        data=localized_report_options(_service().report_options()),
+    )
 
 
 @router.get("/human-conversations/{conversation_id}/messages")

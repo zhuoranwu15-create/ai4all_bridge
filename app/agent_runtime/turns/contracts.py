@@ -77,6 +77,15 @@ class ProductTurnServices(Protocol):
     onboarding_complete: str
     onboarding_welcome_text: str
 
+    def localized_message(
+        self,
+        key: str,
+        *,
+        fallback: Optional[str] = None,
+        **params: Any,
+    ) -> str:
+        """返回产品语言下的固定用户文案，并支持命名参数插值。"""
+
     def prepare_session(
         self,
         *,

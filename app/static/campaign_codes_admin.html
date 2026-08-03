@@ -206,24 +206,24 @@
           <label for="rt-status">有效状态</label>
           <select id="rt-status">
             <option value="">全部</option>
-            <option value="active">active</option>
-            <option value="approved">approved</option>
-            <option value="pending_review">pending_review</option>
-            <option value="rejected">rejected</option>
-            <option value="disabled_creator">disabled_creator</option>
-            <option value="disabled_admin">disabled_admin</option>
-            <option value="expired">expired</option>
-            <option value="deleted">deleted</option>
+            <option value="active">已发布</option>
+            <option value="approved">审核通过，待发布</option>
+            <option value="pending_review">等待审核 / 可重试</option>
+            <option value="rejected">审核未通过</option>
+            <option value="disabled_creator">已由创建者停用</option>
+            <option value="disabled_admin">已由平台停用</option>
+            <option value="expired">已过期</option>
+            <option value="deleted">已删除</option>
           </select>
         </div>
         <div>
           <label for="rt-review-status">最新版本审核状态</label>
           <select id="rt-review-status">
             <option value="">全部</option>
-            <option value="pending">pending</option>
-            <option value="reviewing">reviewing</option>
-            <option value="passed">passed</option>
-            <option value="rejected">rejected</option>
+            <option value="pending">等待审核</option>
+            <option value="reviewing">审核中</option>
+            <option value="passed">审核通过</option>
+            <option value="rejected">审核未通过</option>
           </select>
         </div>
         <div>
@@ -266,11 +266,14 @@
       <h3>同口径漏斗（最近 14 个北京自然日）</h3>
       <div id="rt-stats-totals" class="funnel-row"></div>
 
-      <h3>版本与三字段</h3>
+      <h3>版本与角色内容</h3>
       <div id="rt-versions"></div>
 
       <h3>LLM 审核调用</h3>
       <div id="rt-review-runs"></div>
+
+      <h3>一句话简介修改审核</h3>
+      <div id="rt-summary-review-runs"></div>
 
       <h3>审计事件</h3>
       <div id="rt-events"></div>
@@ -586,8 +589,8 @@
               + '<td>' + esc(latest.ai_name || '—') + '</td>'
               + '<td class="mono">' + esc(t.creator_platform_user_id) + '</td>'
               + '<td class="mono">' + esc(t.campaign_code) + '</td>'
-              + '<td class="status-' + esc(t.effective_status) + '">' + esc(t.effective_status) + '</td>'
-              + '<td>' + esc(latest.review_status || '—') + '</td>'
+              + '<td class="status-' + esc(t.effective_status) + '">' + esc(t.effective_status_display || '状态未知') + '</td>'
+              + '<td>' + esc(latest.review_status_display || '状态未知') + '</td>'
               + '<td>' + esc(String(t.used_count || 0)) + '</td>'
               + '<td>' + esc(t.expires_at || '—') + '</td>'
               + '<td>' + esc(t.created_at) + '</td>'
@@ -612,12 +615,16 @@
       return versions.map(function(v) {
         return '<div class="card" style="margin-top:8px">'
           + '<div><strong>v' + esc(String(v.version_no)) + '</strong> · '
-          + esc(v.review_status) + (v.is_published ? ' · published' : '') + '</div>'
+          + esc(v.review_status_display || '状态未知') + (v.is_published ? ' · 已发布' : '') + '</div>'
           + '<dl class="role-detail-grid">'
           + '<dt>姓名</dt><dd>' + esc(v.ai_name) + '</dd>'
           + '<dt>性格/底色</dt><dd class="role-content">' + esc(v.personality_text) + '</dd>'
           + '<dt>使命</dt><dd class="role-content">' + esc(v.mission_text) + '</dd>'
-          + '<dt>审核结论</dt><dd class="role-content">' + esc(v.review_reason || '—') + '</dd>'
+          + '<dt>开场白</dt><dd class="role-content">' + esc(v.opening_line || '—') + '</dd>'
+          + '<dt>LLM 默认简介</dt><dd class="role-content">' + esc(v.generated_summary || '—') + '</dd>'
+          + '<dt>公开简介</dt><dd class="role-content">' + esc(v.public_summary || '—') + '</dd>'
+          + '<dt>简介编辑状态</dt><dd>' + esc(v.summary_edit_status || 'unavailable') + '</dd>'
+          + '<dt>审核理由</dt><dd class="role-content">' + esc(v.review_reason_display || '—') + '</dd>'
           + '<dt>审核类别</dt><dd class="mono">' + esc(v.review_categories_json || '[]') + '</dd>'
           + '</dl></div>';
       }).join('');
@@ -625,12 +632,13 @@
 
     function renderRoleTemplateReviewRuns(runs) {
       if (!runs.length) return '<p>暂无审核调用记录</p>';
-      return '<table><thead><tr><th>时间</th><th>状态</th><th>模型/Provider</th><th>耗时</th><th>类别/原因</th><th>错误码</th></tr></thead><tbody>'
+      return '<table><thead><tr><th>时间</th><th>状态</th><th>提交内容</th><th>模型/Provider</th><th>耗时</th><th>类别/原因</th><th>错误码</th></tr></thead><tbody>'
         + runs.map(function(r) {
-          return '<tr><td>' + esc(r.started_at) + '</td><td>' + esc(r.status) + '</td>'
+          return '<tr><td>' + esc(r.started_at) + '</td><td>' + esc(r.status_display || '状态未知') + '</td>'
+            + '<td class="role-content">' + esc(r.submitted_summary || '—') + '</td>'
             + '<td>' + esc((r.model || '—') + ' / ' + (r.provider || '—')) + '</td>'
             + '<td>' + esc(r.latency_ms == null ? '—' : String(r.latency_ms) + ' ms') + '</td>'
-            + '<td class="role-content">' + esc((r.categories_json || '[]') + ' ' + (r.reason || '')) + '</td>'
+            + '<td class="role-content">' + esc((r.categories_json || '[]') + ' ' + (r.reason_display || '')) + '</td>'
             + '<td class="mono">' + esc(r.error_code || '—') + '</td></tr>';
         }).join('') + '</tbody></table>';
     }
@@ -655,7 +663,7 @@
           + '<dt>模板 ID</dt><dd class="mono">' + esc(t.id) + '</dd>'
           + '<dt>创建者</dt><dd class="mono">' + esc(t.creator_platform_user_id) + '</dd>'
           + '<dt>注册链接活动码</dt><dd class="mono">' + esc(t.campaign_code) + '</dd>'
-          + '<dt>状态</dt><dd>' + esc(t.effective_status) + '（存储：' + esc(t.status) + '）</dd>'
+          + '<dt>状态</dt><dd>' + esc(t.effective_status_display || '状态未知') + '</dd>'
           + '<dt>有效期</dt><dd>' + esc(t.activated_at || '—') + ' ～ ' + esc(t.expires_at || '—') + '</dd>'
           + '<dt>累计实例化</dt><dd>' + esc(String(t.used_count || 0)) + '</dd>'
           + '<dt>平台停用原因</dt><dd class="role-content">' + esc(t.disabled_reason || '—') + '</dd>'
@@ -678,6 +686,7 @@
         document.getElementById('rt-stats-totals').innerHTML = renderFunnel(data.stats.totals, data.stats.rates);
         document.getElementById('rt-versions').innerHTML = renderRoleTemplateVersions(t.versions || []);
         document.getElementById('rt-review-runs').innerHTML = renderRoleTemplateReviewRuns(data.review_runs || []);
+        document.getElementById('rt-summary-review-runs').innerHTML = renderRoleTemplateReviewRuns(data.summary_review_runs || []);
         document.getElementById('rt-events').innerHTML = renderRoleTemplateEvents(data.events || []);
         show('rt-detail-card');
         document.getElementById('rt-detail-card').scrollIntoView({ behavior: 'smooth' });

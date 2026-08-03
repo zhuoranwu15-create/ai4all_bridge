@@ -12,6 +12,7 @@ from typing import Iterable, Mapping
 
 ZHAOXI_APP_ID = "zhaoxi"
 _APP_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+SUPPORTED_PRODUCT_LANGUAGES = frozenset({"zh-CN", "en-US", "ja-JP"})
 
 
 @dataclass(frozen=True)
@@ -20,6 +21,7 @@ class ProductRegistration:
 
     app_id: str
     enabled: bool = True
+    default_language: str = "zh-CN"
 
 
 class ProductRegistry:
@@ -33,8 +35,16 @@ class ProductRegistry:
                 raise ValueError(f"invalid app_id: {app_id!r}")
             if app_id in entries:
                 raise ValueError(f"duplicate app_id: {app_id}")
+            default_language = str(product.default_language or "").strip()
+            if default_language not in SUPPORTED_PRODUCT_LANGUAGES:
+                raise ValueError(
+                    f"unsupported default_language for {app_id}: "
+                    f"{default_language or '<empty>'}"
+                )
             entries[app_id] = ProductRegistration(
-                app_id=app_id, enabled=bool(product.enabled)
+                app_id=app_id,
+                enabled=bool(product.enabled),
+                default_language=default_language,
             )
         if not entries:
             raise ValueError("product registry must not be empty")
@@ -58,7 +68,7 @@ class ProductRegistry:
 
 
 PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
-    [ProductRegistration(app_id=ZHAOXI_APP_ID)]
+    [ProductRegistration(app_id=ZHAOXI_APP_ID, default_language="zh-CN")]
 )
 
 

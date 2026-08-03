@@ -73,12 +73,15 @@ def _seed_creator(phone: str, suffix: str):
         ai_name=f"朝朝{suffix}",
         personality_text=f"温柔坦诚的底色{suffix}",
         mission_text=f"陪用户找到自己的生活节奏{suffix}",
+        opening_line=f"我是朝朝{suffix}，很高兴认识你。",
     )
     with db.connect() as conn:
         conn.execute(
             """
             UPDATE creator_role_template_versions
-            SET review_status = 'passed', reviewed_at = created_at
+            SET review_status = 'passed', reviewed_at = created_at,
+                generated_summary = ai_name, public_summary = ai_name,
+                summary_edit_status = 'available'
             WHERE id = ?
             """,
             (created.version.id,),

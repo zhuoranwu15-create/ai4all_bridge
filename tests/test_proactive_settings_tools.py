@@ -64,7 +64,8 @@ def test_update_handler_rejects_unknown_fields(fresh_db):
         SimpleNamespace(account_id="acc-unknown"),
     )
     assert "error" in out
-    assert "future_limit" in out["error"]
+    assert out["error_code"] == "proactive_fields_unsupported"
+    assert out["unsupported_fields"] == ["future_limit"]
     assert get_proactive_message_settings_row(account_id="acc-unknown") is None
 
 
@@ -87,7 +88,10 @@ def test_update_handler_rejects_zero_total_per_day(fresh_db):
         {"total_per_day": 0},
         SimpleNamespace(account_id="acc-zero"),
     )
-    assert out == {"error": "total_per_day 必须 >= 1"}
+    assert out == {
+        "error_code": "proactive_settings_invalid",
+        "error": "主动消息设置无效",
+    }
 
 
 def test_update_handler_empty_patch(fresh_db):

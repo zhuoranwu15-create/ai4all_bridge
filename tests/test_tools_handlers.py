@@ -130,7 +130,9 @@ def test_execute_tool_call_blocks_web_search_when_disabled():
     result = execute_tool_call("web_search", {"query": "OpenClaw"}, ctx)
 
     assert result["status"] == "failed"
-    assert result["error"] == "web_search is disabled"
+    assert result["error_code"] == "tool_disabled"
+    assert result["error"] == "tool is disabled"
+    assert result["tool_name"] == "web_search"
 
 
 def test_handle_create_reminder_recurring(fresh_db):

@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>用户中心 — 朝夕相伴</title>
+  <title data-i18n="dashboard_page_title">用户中心 — 朝夕相伴</title>
   <link rel="stylesheet" href="site.css">
+  <script src="product-i18n.js"></script>
 </head>
 <body>
 
@@ -14,11 +15,11 @@
     <a class="brand-logo" href="/">
       <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
     </a>
-    <span class="beta-badge">Beta 测试版</span>
+    <span class="beta-badge" data-i18n="beta_label">Beta 测试版</span>
   </div>
   <div class="nav-actions">
     <span id="nav-phone" style="font-size:.85rem;color:var(--text-sub)"></span>
-    <button class="btn btn-ghost btn-sm" onclick="logout()">退出登录</button>
+    <button class="btn btn-ghost btn-sm" onclick="logout()" data-i18n="logout">退出登录</button>
   </div>
 </nav>
 
@@ -27,7 +28,7 @@
 
   <!-- 加载中 -->
   <div id="loading" style="text-align:center;padding:60px;color:var(--text-hint)">
-    加载中…
+    <span data-i18n="loading">加载中…</span>
   </div>
 
   <!-- 内容区（加载后展示） -->
@@ -39,22 +40,22 @@
       <!-- 账号信息 -->
       <div class="card">
         <div class="card-header">
-          <h3>我的账号</h3>
+          <h3 data-i18n="dashboard_my_account">我的账号</h3>
         </div>
         <div class="card-row">
-          <div class="card-label">手机号</div>
+          <div class="card-label" data-i18n="phone_label">手机号</div>
           <div class="card-value" id="d-phone">—</div>
         </div>
         <div class="card-row">
-          <div class="card-label">Account ID</div>
+          <div class="card-label" data-i18n="dashboard_account_id">Account ID</div>
           <div class="card-value mono" id="d-account-id">—</div>
         </div>
         <div class="card-row">
-          <div class="card-label">套餐</div>
+          <div class="card-label" data-i18n="dashboard_plan">套餐</div>
           <div class="card-value" id="d-plan">—</div>
         </div>
         <div class="card-row">
-          <div class="card-label">注册时间</div>
+          <div class="card-label" data-i18n="dashboard_registered_at">注册时间</div>
           <div class="card-value" id="d-created">—</div>
         </div>
       </div>
@@ -62,17 +63,17 @@
       <!-- 贝壳余额 -->
       <div class="card">
         <div class="card-header">
-          <h3>贝壳余额</h3>
+          <h3 data-i18n="dashboard_wallet">贝壳余额</h3>
         </div>
         <div>
           <span class="wallet-amount" id="d-wallet-balance">0</span>
-          <span class="wallet-unit">贝壳</span>
+          <span class="wallet-unit" data-i18n="dashboard_shells">贝壳</span>
         </div>
         <div class="wallet-note" style="margin-top:12px">
-          内测期间赠送贝壳，充值套餐即将上线
+          <span data-i18n="dashboard_wallet_note">内测期间赠送贝壳，充值套餐即将上线</span>
         </div>
         <button class="btn btn-secondary btn-sm" style="margin-top:16px" disabled>
-          充值（敬请期待）
+          <span data-i18n="dashboard_top_up_soon">充值（敬请期待）</span>
         </button>
       </div>
 
@@ -81,43 +82,43 @@
     <!-- 第二行：邀请好友 -->
     <div class="card referral-card" style="margin-bottom:16px">
       <div class="card-header">
-        <h3>邀请好友</h3>
+        <h3 data-i18n="dashboard_invite_friends">邀请好友</h3>
         <span class="invite-count" id="d-invite-count">—</span>
       </div>
-      <p class="invite-copy">
+      <p class="invite-copy" data-i18n="dashboard_invite_intro">
         把专属注册链接发给朋友。朋友通过链接注册并绑定微信后，邀请关系会自动记录。
       </p>
 
       <div class="invite-field">
-        <div class="card-label">我的邀请码</div>
+        <div class="card-label" data-i18n="dashboard_my_invite_code">我的邀请码</div>
         <div class="invite-value-row">
-          <div class="invite-code-value mono" id="d-invite-code">加载中…</div>
-          <button class="btn btn-ghost btn-sm" id="btn-copy-invite-code" onclick="copyInviteCode()" disabled>复制邀请码</button>
+          <div class="invite-code-value mono" id="d-invite-code" data-i18n="loading">加载中…</div>
+          <button class="btn btn-ghost btn-sm" id="btn-copy-invite-code" onclick="copyInviteCode()" disabled data-i18n="dashboard_copy_invite_code">复制邀请码</button>
         </div>
       </div>
 
       <div class="invite-field">
-        <div class="card-label">注册链接</div>
+        <div class="card-label" data-i18n="dashboard_registration_link">注册链接</div>
         <div class="invite-value-row">
-          <div class="invite-link-value" id="d-invite-link">加载中…</div>
-          <button class="btn btn-secondary btn-sm" id="btn-copy-invite-link" onclick="copyInviteLink()" disabled>复制链接</button>
+          <div class="invite-link-value" id="d-invite-link" data-i18n="loading">加载中…</div>
+          <button class="btn btn-secondary btn-sm" id="btn-copy-invite-link" onclick="copyInviteLink()" disabled data-i18n="dashboard_copy_link">复制链接</button>
         </div>
       </div>
 
-      <div class="invite-share-text" id="d-invite-text">正在生成分享文案…</div>
+      <div class="invite-share-text" id="d-invite-text" data-i18n="dashboard_share_loading">正在生成分享文案…</div>
       <div class="invite-actions">
-        <button class="btn btn-primary btn-sm" id="btn-copy-invite-text" onclick="copyInviteText()" disabled>复制分享文案</button>
+        <button class="btn btn-primary btn-sm" id="btn-copy-invite-text" onclick="copyInviteText()" disabled data-i18n="dashboard_copy_share">复制分享文案</button>
       </div>
       <div id="d-invite-status" class="copy-status"></div>
       <div style="margin-top:18px;padding-top:16px;border-top:1px solid var(--border)">
         <div class="card-header" style="margin-bottom:8px">
           <div>
-            <strong>创建角色模板邀请链接</strong>
+            <strong data-i18n="dashboard_role_templates">自定义角色模板管理</strong>
             <p style="margin:6px 0 0;color:var(--text-sub);font-size:.86rem;line-height:1.55">
-              设计 AI 的姓名、性格/底色和使命。朋友通过专属链接注册时，既计入你的邀请，也会使用该角色模板。
+              <span data-i18n="dashboard_role_templates_intro">可以自定义创建AI角色模板，可分享给好友或他人使用</span>
             </p>
           </div>
-          <a class="btn btn-primary btn-sm" href="/user/creator-role-templates.html">管理角色模板</a>
+          <a class="btn btn-primary btn-sm" href="/user/creator-role-templates.html" data-i18n="enter">进入</a>
         </div>
       </div>
     </div>
@@ -125,20 +126,20 @@
     <!-- 第三行：微信绑定 -->
     <div class="card" style="margin-bottom:16px">
       <div class="card-header">
-        <h3>微信绑定</h3>
+        <h3 data-i18n="dashboard_wechat_binding">微信绑定</h3>
         <div style="display:flex;gap:8px">
-          <button class="btn btn-ghost btn-sm" id="btn-unbind" onclick="openUnbindModal()" style="color:var(--text-hint)">解绑</button>
+          <button class="btn btn-ghost btn-sm" id="btn-unbind" onclick="openUnbindModal()" style="color:var(--text-hint)" data-i18n="dashboard_unbind">解绑</button>
         </div>
       </div>
 
       <!-- 已绑定状态 -->
       <div id="binding-info">
         <div class="card-row">
-          <div class="card-label">绑定状态</div>
-          <div class="card-value" id="d-binding-status">检查中…</div>
+          <div class="card-label" data-i18n="dashboard_binding_status">绑定状态</div>
+          <div class="card-value" id="d-binding-status" data-i18n="dashboard_checking">检查中…</div>
         </div>
         <div class="card-row" id="row-last-seen" style="display:none">
-          <div class="card-label">最近活跃</div>
+          <div class="card-label" data-i18n="dashboard_last_active">最近活跃</div>
           <div class="card-value" id="d-last-seen">—</div>
         </div>
       </div>
@@ -149,14 +150,13 @@
       <div style="background:#fff;border-radius:14px;padding:28px 28px 24px;max-width:400px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18)">
 
         <!-- 确认解绑（解绑即永久清空记忆） -->
-        <h3 style="font-size:1rem;margin-bottom:10px">确认解绑</h3>
-        <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px">
-          解绑后，AI 将停止回复微信消息。<br>记忆、对话记录和 AI 设置将被永久删除，无法恢复。
-        </p>
+        <h3 style="font-size:1rem;margin-bottom:10px" data-i18n="dashboard_unbind_confirm_title">确认解绑</h3>
+        <p style="font-size:.88rem;color:var(--text-sub);line-height:1.6;margin-bottom:20px;white-space:pre-line" data-i18n="dashboard_unbind_warning">解绑后，AI 将停止回复微信消息。
+记忆、对话记录和 AI 设置将被永久删除，无法恢复。</p>
         <div id="unbind-err" style="display:none;color:#c0392b;font-size:.85rem;margin-bottom:12px"></div>
         <div style="display:flex;gap:10px">
-          <button class="btn btn-ghost btn-sm" onclick="closeUnbindModal()">取消</button>
-          <button class="btn btn-sm" id="unbind-confirm-btn" onclick="confirmUnbind()" style="flex:1;background:#c0392b;color:#fff">确认解绑</button>
+          <button class="btn btn-ghost btn-sm" onclick="closeUnbindModal()" data-i18n="cancel">取消</button>
+          <button class="btn btn-sm" id="unbind-confirm-btn" onclick="confirmUnbind()" style="flex:1;background:#c0392b;color:#fff" data-i18n="dashboard_unbind_confirm">确认解绑</button>
         </div>
 
       </div>
@@ -164,7 +164,7 @@
 
     <!-- 提示 -->
     <div style="text-align:center;font-size:.83rem;color:var(--text-hint);padding-bottom:32px">
-      更多功能（历史记录、通知设置）即将上线
+      <span data-i18n="dashboard_more_soon">更多功能（历史记录、通知设置）即将上线</span>
     </div>
 
   </div><!-- /content -->
@@ -184,7 +184,15 @@ var S = {
   referralLink: null,
   referralText: null,
   walletTimer: null,
+  messages: {},
 };
+
+function t(key, fallback) {
+  var params = arguments.length > 2 ? arguments[2] : {};
+  return window.CXProductI18n
+    ? window.CXProductI18n.t(key, fallback || '操作失败，请稍后重试。', params)
+    : ((S.messages && S.messages[key]) || fallback || '操作失败，请稍后重试。');
+}
 
 function show(id)  { document.getElementById(id).style.display = ''; }
 function hide(id)  { document.getElementById(id).style.display = 'none'; }
@@ -205,8 +213,11 @@ async function apiFetch(path, opts) {
     headers: Object.assign(headers, opts.headers || {}),
   }));
   if (!res.ok) {
-    var body = await res.json().catch(function() { return { detail: res.statusText }; });
-    throw new Error(body.detail || ('请求失败 ' + res.status));
+    var body = await res.json().catch(function() { return {}; });
+    var error = new Error(body.message || t('generic_error'));
+    error.status = res.status;
+    error.code = body.detail || 'generic_error';
+    throw error;
   }
   return res.json();
 }
@@ -251,8 +262,7 @@ function inviteRegistrationUrl(code) {
 }
 
 function inviteShareText(code, link) {
-  return '我在用朝夕相伴，注册时用我的邀请码 ' + code +
-    '，一起体验微信专属 AI 陪伴：' + link;
+  return t('dashboard_share_text', '我在用朝夕相伴，注册时用我的邀请码 {code}，一起体验微信专属 AI 陪伴：{link}', {code: code, link: link});
 }
 
 function setInviteButtons(disabled) {
@@ -288,7 +298,7 @@ function fallbackCopyText(text) {
 
 async function copyText(text, successText) {
   if (!text) {
-    showCopyStatus('邀请信息还在加载，请稍后再试', 'err');
+    showCopyStatus(t('invite_information_loading'), 'err');
     return;
   }
   var copied = false;
@@ -302,21 +312,21 @@ async function copyText(text, successText) {
   }
   if (!copied) copied = fallbackCopyText(text);
   showCopyStatus(
-    copied ? successText : '复制失败，请手动选择文本复制',
+    copied ? successText : t('copy_failed'),
     copied ? 'ok' : 'err'
   );
 }
 
 function copyInviteCode() {
-  copyText(S.referralCode, '邀请码已复制');
+  copyText(S.referralCode, t('dashboard_invite_code_copied', '邀请码已复制'));
 }
 
 function copyInviteLink() {
-  copyText(S.referralLink, '注册链接已复制');
+  copyText(S.referralLink, t('dashboard_link_copied', '注册链接已复制'));
 }
 
 function copyInviteText() {
-  copyText(S.referralText, '分享文案已复制');
+  copyText(S.referralText, t('dashboard_share_copied', '分享文案已复制'));
 }
 
 // ── 启动时鉴权 ────────────────────────────────
@@ -326,7 +336,14 @@ window.addEventListener('load', function() {
     window.location.href = '/';
     return;
   }
-  loadDashboard();
+  apiFetch('/web/config')
+    .then(function(config) {
+      S.messages = config.messages || {};
+      window.CXProductI18n.setConfig(config);
+      window.CXProductI18n.apply();
+    })
+    .catch(function() {})
+    .then(loadDashboard);
 });
 
 async function loadDashboard() {
@@ -353,11 +370,11 @@ async function loadDashboard() {
     if (S.walletTimer) clearInterval(S.walletTimer);
     S.walletTimer = setInterval(refreshWallet, 15000);
   } catch(e) {
-    if (e.message.indexOf('401') !== -1 || e.message.indexOf('登录') !== -1) {
+    if (e.status === 401) {
       localStorage.removeItem('chaochao_session');
       window.location.href = '/';
     } else {
-      document.getElementById('loading').textContent = '加载失败：' + e.message;
+      document.getElementById('loading').textContent = e.message;
     }
   }
 }
@@ -367,7 +384,7 @@ async function loadReferralCode() {
     var data = await apiFetch('/web/me/referral-code');
     var referral = data.referral_code || {};
     var code = referral.code || '';
-    if (!code) throw new Error('未获取到邀请码');
+    if (!code) throw new Error(t('invite_code_unavailable'));
     var link = inviteRegistrationUrl(code);
     var text = inviteShareText(code, link);
     S.referralCode = code;
@@ -377,15 +394,15 @@ async function loadReferralCode() {
     document.getElementById('d-invite-link').textContent = link;
     document.getElementById('d-invite-text').textContent = text;
     document.getElementById('d-invite-count').textContent =
-      '已邀请 ' + (referral.used_count || 0) + ' 人';
+      t('dashboard_invite_count', '已邀请 {count} 人', {count: referral.used_count || 0});
     setInviteButtons(false);
   } catch(e) {
-    document.getElementById('d-invite-code').textContent = '获取失败';
-    document.getElementById('d-invite-link').textContent = '请刷新后重试';
-    document.getElementById('d-invite-text').textContent = '暂时无法生成分享文案';
-    document.getElementById('d-invite-count').textContent = '不可用';
+    document.getElementById('d-invite-code').textContent = t('invite_code_unavailable');
+    document.getElementById('d-invite-link').textContent = '';
+    document.getElementById('d-invite-text').textContent = '';
+    document.getElementById('d-invite-count').textContent = '';
     setInviteButtons(true);
-    showCopyStatus('邀请码加载失败：' + e.message, 'err');
+    showCopyStatus(e.message, 'err');
   }
 }
 
@@ -398,15 +415,15 @@ async function loadBindings() {
     if (bindings.length > 0) {
       var b = bindings[0];
       statusEl.innerHTML =
-        '<span class="binding-status-badge bound">✓ 已绑定</span>';
+        '<span class="binding-status-badge bound">' + t('dashboard_bound', '✓ 已绑定') + '</span>';
       document.getElementById('d-last-seen').textContent = formatDate(b.last_seen_at);
       show('row-last-seen');
     } else {
       statusEl.innerHTML =
-        '<span class="binding-status-badge unbound">未绑定</span>';
+        '<span class="binding-status-badge unbound">' + t('dashboard_unbound', '未绑定') + '</span>';
     }
   } catch(e) {
-    document.getElementById('d-binding-status').textContent = '获取失败';
+    document.getElementById('d-binding-status').textContent = t('generic_error');
   }
 }
 
@@ -440,7 +457,7 @@ function closeUnbindModal() {
 async function confirmUnbind() {
   var btn = document.getElementById('unbind-confirm-btn');
   btn.disabled = true;
-  btn.textContent = '处理中…';
+  btn.textContent = t('processing', '处理中…');
   document.getElementById('unbind-err').style.display = 'none';
   try {
     await apiFetch('/web/me/unbind', {
@@ -455,7 +472,7 @@ async function confirmUnbind() {
     errEl.textContent = e.message;
     errEl.style.display = '';
     btn.disabled = false;
-    btn.textContent = '确认解绑';
+    btn.textContent = t('dashboard_unbind_confirm', '确认解绑');
   }
 }
 

@@ -1,8 +1,8 @@
 # 用户自建角色模板与邀请链接技术设计
 
-更新时间：2026-08-01
+更新时间：2026-08-02
 
-> 状态：P0 开发实现已完成，待合并与生产灰度；P0 不实现试玩/调试。数据基座、审核发布、Runtime/Web 注册双归因、创建者与 Admin/Staff API、公共预览、统计、前端及运营后台处置视图均已落地。
+> 状态：P0 与“自定义开场白 + 公开一句话简介”增量开发实现已完成，待合并与生产灰度；不实现试玩/调试。
 > 对应 PRD：
 > [用户自建角色模板与邀请链接](../../../products/zhaoxi/capabilities/creator_role_template_referral_link_prd.md)。
 > 关联设计：
@@ -21,7 +21,7 @@ P0 主流程使用“独立角色模板资产 + 注册时实例化 + 复用 camp
    `?campaign_code=`、`campaign_visits` 和 `account_campaign_attribution`。
 3. 模板 code 固定使用保留前缀 `urt_`；运营建码禁止该前缀，从规则上保证两个表不会产生同码。
 4. 每个创建者通过 1–3 的 `slot_no` 和数据库部分唯一索引获得最多 3 个未删除模板的并发硬约束。
-5. 三字段在一次 LLM 调用中整体审核；不静默改写。通过后只得到 approved version，不自动发布。
+5. 名字、性格、使命、开场白在一次 LLM 调用中整体审核；不静默改写。通过后生成默认公开简介，只得到 approved version，不自动发布。
 6. 创建者首次主动发布时设置 `expires_at = activated_at + 360 天`；发布新版、编辑、停用再启用不续期。
 7. 注册时先完成现有 referral 事务，再校验模板 code owner。owner 一致才原子写模板实例化快照、通用
    campaign 归因、三个 profile 文件和模板实例化次数；不一致或失效时保留拉新、回退普通 onboarding。
@@ -77,7 +77,7 @@ Native App auth、Companion World 居民创建、世界访问邀请码不消费�
 | 后台原生 HTML/JS、转义渲染、统计卡片 | 在同一活动码管理页增加“用户角色模板链接”视图并复用统计组件 | 直接复用 UI 技术栈 |
 | 运营手工输入可读 code | 用户 code 必须系统随机生成，防冲突和仿冒 | 明确分开 |
 | 默认有效期 3 个月，可运营修改 | 固定首次主动发布后 360 天，发布新版/编辑/启停不续期，用户不可改 | 明确分开 |
-| 静态 `soul_preset_key/mission_id` + 可选 onboarding 文本 | 自由三字段、版本化、LLM 审核、非量化使命 | 明确分开 |
+| 静态 `soul_preset_key/mission_id` + 可选 onboarding 文本 | 自由四字段、版本化、LLM 审核、非量化使命 | 明确分开 |
 | 无个人 creator owner、无数量上限 | owner-scoped、最多 3 个未删除模板 | 明确分开 |
 
 因此不复制一套新的“落地页→归因→统计”链路，也不直接把用户角色模板当成普通运营行。若把用户角色模板塞进
@@ -89,10 +89,10 @@ resolver 能保留成熟链路，同时把权限和生命周期隔离清楚。
 
 ```text
 创建者个人中心的模板创建主流程（创建模板本身不创建 AI account）
-  → POST /web/me/creator-role-templates（三字段）
+  → POST /web/me/creator-role-templates（名字、性格、使命、开场白）
   → DB 申请 slot 1..3 + 创建 pending version + urt_* code
-  → 单次 LLM 审核三字段
-      ├─ pass：version approved；可由创建者主动发布
+  → 单次 LLM 审核四字段并生成默认公开简介
+      ├─ pass：version approved；创建者可在发布前提交一次简介修改审核
       ├─ reject：version rejected；不提供有效注册链接
       └─ error：pending_review；创建者可重试
   → 创建者主动发布
@@ -109,14 +109,15 @@ resolver 能保留成熟链路，同时把权限和生命周期隔离清楚。
       ├─ 普通运营 code：现有逻辑不变
       └─ urt_*：校验 referral inviter == role creator
            → 同事务写通用 campaign attribution + template version snapshot
-           → 同事务写 IDENTITY.md + SOUL.md + MISSION.md + used_count
-  → onboarding 只问用户称呼，跳过 AI 名字/人设选择
+           → 同事务写 IDENTITY.md + SOUL.md + MISSION.md + opening_line 快照 + used_count
+  → onboarding 只问用户称呼，随后使用开场白，跳过 AI 名字/人设和默认 1–4 破冰菜单
   → complete 时检测 creator role template attribution，跳过默认量化使命分配
 ```
 
-## 3. 数据模型（migration 59）
+## 3. 数据模型（migration 59 + 60）
 
-当前开发分支的 schema head 已推进到 migration 59；该迁移只建立角色模板、版本、审核、归因和事件表。实际 DDL
+migration 59 建立角色模板、版本、主审核、归因和事件表；migration 60 为已有库增加开场白、默认/公开简介、
+简介编辑状态、账号开场白快照和简介审核 run 表。实际 DDL
 通过仓库现有 DB 适配层执行，SQLite 与 PostgreSQL 字段、索引和约束保持一致。
 
 ### 3.1 `creator_role_templates`
@@ -168,6 +169,9 @@ ON creator_role_templates(creator_platform_user_id, app_id, deleted_at, updated_
 | `ai_name` | 创建者填写的名字，1–24 字符、单行 |
 | `personality_text` | 性格/底色，1–800 字符 |
 | `mission_text` | 非量化使命 prose，1–500 字符 |
+| `opening_line` | onboarding 收尾开场白，1–300 字符；历史版本允许 NULL |
+| `generated_summary` / `public_summary` | LLM 默认简介与最终公开简介；必须包含角色名 |
+| `summary_edit_status` | `unavailable / available / reviewing / accepted / rejected`；控制每版本一次修改机会 |
 | `review_status` | `pending / reviewing / passed / rejected` |
 | `is_published` | 0/1；每个模板最多一个当前 published version；approved candidate 为 0 |
 | `review_categories_json` / `review_reason` | 结构化、限长审核结论；不保存审核 prompt |
@@ -186,7 +190,7 @@ ON creator_role_template_versions(creator_role_template_id)
 WHERE review_status IN ('pending', 'reviewing');
 ```
 
-编辑传部分字段时，服务端先与当前 published version 合并成完整三字段，再创建新版本并整体重审。
+编辑传部分字段时，服务端先与当前 published version 合并成完整四字段，再创建新版本并整体重审、重新生成默认简介。
 审核通过只产生 approved candidate；旧 published version 继续服务。创建者主动“发布新版”时，才在同一
 事务把旧版 `is_published=0`、新版 `is_published=1`。P0 不提供发布前试玩，创建者可使用发布后的链接和真实新账号
 验证当前 published version。
@@ -217,12 +221,19 @@ WHERE review_status IN ('pending', 'reviewing');
 | `ai_name_snapshot` | 通过审核的名字 |
 | `personality_snapshot` | 通过审核的性格/底色 |
 | `mission_snapshot` | 通过审核的非量化使命 prose |
+| `opening_line_snapshot` | 通过审核的开场白；按 `account_id` 隔离，历史归因允许 NULL |
 | `attributed_at` | 注册归因时间 |
 
 账号运行时只读取自己的 `account_id` 快照或已经写入的 profile 文件，不实时 join 创建者模板；创建者编辑、
 发布新版、停用、删除或注销都不能改变已有角色实例。
 
-### 3.5 `creator_role_template_events`
+### 3.5 `creator_role_template_summary_review_runs`
+
+记录创建者对未发布版本公开简介的一次性修改审核。包含 `submitted_summary`、版本内 `attempt_no`、
+`running/passed/rejected/error`、provider/model/latency、类别、原因和错误码。明确 pass/reject 消耗机会；
+provider、timeout 或 schema error 恢复为 `available`，机械校验失败不创建 run。
+
+### 3.6 `creator_role_template_events`
 
 记录 `created / review_started / review_passed / review_rejected / review_error / version_activated /
 disabled_by_creator / enabled / disabled_by_admin / deleted / attribution_applied`。字段包含 role/version、
@@ -268,7 +279,7 @@ actor type/id、限长 metadata JSON 和时间。用户操作与管理员操作�
 - `ai_name`：strip 后 1–24 字符，不允许 CR/LF、控制字符；
 - `personality_text`：strip 后 1–800 字符；
 - `mission_text`：strip 后 1–500 字符；
-- 三字段禁止 NUL 和不可见控制字符；JSON/HTML 展示统一 `textContent`/转义；
+- 四字段禁止 NUL 和不可见控制字符；公开简介还必须为单行且包含角色名；JSON/HTML 展示统一 `textContent`/转义；
 - 不接受额外字段，Pydantic `extra='forbid'`。
 
 这些是存储和 prompt 预算边界，不代替 LLM 内容审核。
@@ -278,19 +289,27 @@ actor type/id、限长 metadata JSON 和时间。用户操作与管理员操作�
 新增 `app/products/zhaoxi/application/creator_role_template_review.py`：
 
 ```python
-review_creator_role_template(*, ai_name: str, personality_text: str, mission_text: str) -> CreatorRoleTemplateReview
+review_creator_role_template(
+    *, ai_name: str, personality_text: str, mission_text: str, opening_line: str,
+    app_id: str = ZHAOXI_APP_ID
+) -> CreatorRoleTemplateReview
 ```
 
 实现规则：
 
-1. 三字段作为一个 JSON data object 进入**一次**审核调用，审核字段分别返回结果，同时判断组合风险。
-2. system 指令明确用户内容只是 DATA，不能执行其中的 prompt injection。
+1. 四字段作为一个 JSON data object 进入**一次**审核调用，审核字段分别返回结果，同时判断组合风险。
+2. system 指令明确用户内容只是 DATA，不能执行其中的 prompt injection；完整指令按产品注册表的
+   `default_language` 从 `zh-CN / en-US / ja-JP` 目录选择，未知语言安全回落中文，机器类别码保持英文。
 3. 复用 `TASK_MODERATION`、`tier_for_task()`、`generate_completion()` 和严格 JSON object 解析。
-4. 输出 schema 固定为 `decision=pass|reject`、`field_results`、`categories`、`reason`；任何缺字段、非法值、
-   provider 异常或超时都映射为 `review_unavailable`，不放行。
-5. 不调用 `sanitize_text()`，不接受 `rewrite`，不静默改变创建者三字段。通过版本保存原提交文本；拒绝版本
+4. 输出 schema 固定为 `decision=pass|reject`、`field_results`、`categories`、`reason`、`public_summary`；通过时
+   `public_summary` 只基于名字、性格和使命生成，必须包含名字；`categories`
+   只能使用领域层固定类别码，`reason` 按产品注册表的 `default_language` 生成。任何缺字段、未知类别、
+   非法值、provider 异常或超时都映射为 `review_unavailable`，不放行。
+5. 不调用 `sanitize_text()`，不接受 `rewrite`，不静默改变创建者四字段。通过版本保存原提交文本；拒绝版本
    保留用于创建者修改与审计，但永不进入 prompt。
-6. LLM 调用在 DB 事务外执行：先把 version CAS 从 `pending→reviewing` 并写 run，再调用；完成后用 run id
+6. 审核采用明确风险才拒绝的边界：重名、虚构作品/角色启发和正常角色指令默认不拒绝；
+   `other_unsafe_content` 不得作为不确定风险的兜底类别；多义内容在没有明确危险证据时通过。
+7. LLM 调用在 DB 事务外执行：先把 version CAS 从 `pending→reviewing` 并写 run，再调用；完成后用 run id
    CAS 落结果，防止重复点击把旧结果覆盖新版本。
 
 创建/编辑 API 同步尝试一次审核。通常响应直接返回 active/rejected；调用失败返回 `pending_review` 和稳定
@@ -324,6 +343,7 @@ review_creator_role_template(*, ai_name: str, personality_text: str, mission_tex
 | `GET` | `/web/me/creator-role-templates/{template_id}` | owner-scoped 详情；非 owner 统一 404 |
 | `PATCH` | `/web/me/creator-role-templates/{template_id}` | 合并字段后创建新版本并重审，不原地覆盖 published version |
 | `POST` | `/web/me/creator-role-templates/{template_id}/review` | 重试 pending review |
+| `POST` | `/web/me/creator-role-templates/{template_id}/summary-edit` | 对未发布版本提交唯一一次简介修改审核；明确拒绝也关闭机会，服务异常不消耗 |
 | `POST` | `/web/me/creator-role-templates/{template_id}/publish` | 发布 approved version；首次发布开始 360 天，发布新版不续期 |
 | `POST` | `/web/me/creator-role-templates/{template_id}/disable` | 创建者停用 |
 | `POST` | `/web/me/creator-role-templates/{template_id}/enable` | 仅到期前、非 admin disabled 时启用 |
@@ -333,6 +353,11 @@ review_creator_role_template(*, ai_name: str, personality_text: str, mission_tex
 模板响应只在 `effective_status=active` 且存在 published version 时返回 `registration_url`。URL 由服务端返回 code 与 personal invite
 code，前端使用 `location.origin + '/?invite_code=...&campaign_code=...'` 组装，避免再新增公网 origin 配置；
 生产仍得到 `https://ai4company.top/`。
+
+模板与版本响应保留 `status`、`effective_status`、`review_status` 等稳定机器码，并额外返回
+`*_display` 展示字段。用户 API 不返回原始 `review_reason`，只返回按产品默认语言确定性生成的
+`review_reason_display`；LLM 原始理由仅保留在数据库和管理审核接口中供审计。历史未知类别统一回落到
+对应语言的通用拒绝提示。
 
 稳定错误码：
 
@@ -360,14 +385,14 @@ GET /web/creator-role-template-links/{campaign_code}/preview?invite_code=<code>
   "valid": true,
   "role": {
     "name": "...",
-    "personality_preview": "...",
-    "mission_preview": "...",
+    "summary": "...",
     "expires_at": "..."
   }
 }
 ```
 
-预览文本服务端限长，前端只用 `textContent`。失败返回稳定 reason，不泄露 creator ID、手机号、使用次数或
+公开简介来自审核通过版本的 `public_summary`，历史版本缺失时只回退为角色名；接口不返回性格、使命或开场白。
+前端只用 `textContent`。失败返回稳定 reason，不泄露 creator ID、手机号、使用次数或
 审核细节。落地页失败时清除待提交的 template code、保留有效 invite code，并显示“角色模板已不可用，将按普通
 流程创建朝夕伙伴”。注册提交时仍重新校验，不能信任 preview。
 
@@ -379,7 +404,7 @@ GET /web/creator-role-template-links/{campaign_code}/preview?invite_code=<code>
 - `GET /admin/creator-role-templates/{id}`：模板、版本、审核 runs、聚合统计和事件；
 - `POST /admin/creator-role-templates/{id}/disable`：必填 reason，写 `disabled_admin`；
 - `POST /admin/creator-role-templates/{id}/enable`：仅未过期；按停用前状态恢复，未发布模板可恢复到原审核/approved 状态；
-- 不提供管理员直接改写三字段的 API，避免审计不清；运营只能处置状态。
+- 不提供管理员直接改写四字段或公开简介的 API，避免审计不清；运营只能查看审计并处置状态。
 
 鉴权使用 `require_admin_or_staff_user`。Reviewer P0 不新增入口；若后续增加人工复核，另行设计 reviewer
 最小权限和队列，不让 Reviewer 获得用户/增长管理权限。
@@ -387,8 +412,8 @@ GET /web/creator-role-template-links/{campaign_code}/preview?invite_code=<code>
 Admin UI 不另起孤立工具页：扩展现有 `app/static/campaign_codes_admin.html`，增加两个清楚分离的视图：
 
 - “运营活码”：现有创建、编辑、启停和统计功能逐字保留；
-- “用户角色模板链接”：列表/筛选 creator、模板三字段、版本/LLM 审核/发布摘要、状态、360 天有效期、used_count、
-  同口径统计以及 Admin/Staff 停用/恢复；不提供直接编辑用户三字段或代用户创建入口。
+- “用户角色模板链接”：列表/筛选 creator、模板四字段、默认/公开简介、版本/LLM 审核/发布摘要、状态、360 天有效期、used_count、
+  同口径统计以及 Admin/Staff 停用/恢复；不提供直接编辑用户内容或代用户创建入口。
 
 两个视图共用日期范围、漏斗渲染、HTML 转义和 API error 展示 helper，但使用不同 API 和操作按钮，避免
 运营误把用户角色模板按普通营销活码编辑。
@@ -483,14 +508,15 @@ Prompt 中更高优先级的 AGENTS、安全边界、实际 tool schema 不变�
 resolve_onboarding_identity_overrides(account_id) -> OnboardingIdentityOverrides
 ```
 
-返回 `forced_ai_name / forced_personality / script_override / source`：
+返回 `forced_ai_name / forced_personality / script_override / creator_opening_line / source`：
 
-- creator role template attribution：名字与性格均 forced，script 为空；
+- creator role template attribution：名字与性格均 forced，script 为空，读取该账号不可变的开场白快照；
 - 运营活码：映射现有 ai name / soul preset / script；
 - 无归因：全部 false/None。
 
 `apply_onboarding_info`、`load_prompt_context`、`advance_onboarding` 共用同一次语义，不让某一处漏判。creator
-role 与“运营同时强制名字+人设”一样：step1 收到用户称呼后直接 complete，不问 AI 名字或人设。
+role 在 step1 收到用户称呼后直接 complete，不问 AI 名字或人设；有开场白快照时使用该文本并禁止默认自我介绍和
+1–4 破冰菜单。历史快照没有开场白时保留原强制身份收尾逻辑。
 
 ### 7.3 非量化使命
 
@@ -541,7 +567,7 @@ creator role template attribution 存在时：
 ### 8.1 页面
 
 - `app/static/dashboard.html`：在现有邀请卡片增加“创建角色模板”入口，不改纯邀请码功能。
-- 新增 `app/static/creator_role_templates.html`：原生 HTML/CSS/JS，模板列表、三字段表单、审核/发布状态、
+- 新增 `app/static/creator_role_templates.html`：原生 HTML/CSS/JS，模板列表、四字段表单、默认/公开简介、一次性简介修改、审核/发布状态、
   发布、复制链接、启停/删除和统计；不引入框架或依赖。
 - approved/active 状态附近展示固定说明：“当前暂不支持在线试玩。若需验证角色实际效果，请发布并复制注册链接，
   使用一个尚未加入朝夕的新账号完成注册测试。”不展示试玩、调试、切换或临时账号按钮。
@@ -567,7 +593,7 @@ location = /user/creator-role-templates.html {
 
 | 文件 | 主要改动 |
 | --- | --- |
-| `app/db/_core.py` | migration 59、表/索引、跨后端 checkpoint |
+| `app/db/_core.py` | migration 59/60、表/增量列/索引、跨后端 checkpoint |
 | `app/products/zhaoxi/domain/creator_role_templates.py` | 状态、字段上限、code prefix、DTO/domain 校验 |
 | `app/products/zhaoxi/infrastructure/persistence/creator_role_templates.py` | owner-scoped CRUD、slot、版本、review run、快照、事件 |
 | `app/products/zhaoxi/application/creator_role_template_review.py` | LLM 审核与严格 schema |
@@ -615,7 +641,7 @@ location = /user/creator-role-templates.html {
 - owner mismatch、expired、slot limit、并发冲突次数
 - profile transaction rollback 次数
 
-日志不写三字段全文、手机号、session token、完整邀请码或完整活动码；可写 role/version id 和 code 的短 hash。
+日志不写四字段、公开简介全文、手机号、session token、完整邀请码或完整活动码；可写 role/version id 和 code 的短 hash。
 
 ### 10.3 隐私与授权
 
@@ -650,7 +676,7 @@ location = /user/creator-role-templates.html {
 
 新增建议：`tests/test_creator_role_templates.py`、`tests/test_creator_role_template_review.py`。
 
-- migration 59 SQLite/PG 建表、索引、幂等与 reserved prefix preflight；
+- migration 59/60 SQLite/PG 建表、增列、索引、幂等与 reserved prefix preflight；
 - slot 1–3 分配、第四个拒绝、并发创建不突破、soft delete 释放；
 - 非 owner CRUD 404、跨 app 拒绝；
 - 字段空值/长度/换行/额外字段；
@@ -684,7 +710,7 @@ location = /user/creator-role-templates.html {
 - preview 限流、字段最小化、失效和 mismatch reason；
 - 创建者统计与 Admin 对同 code、同日期区间返回完全相同的 `totals/rates/by_day`；
 - 默认 14 天、最大 92 天；
-- dashboard 入口、模板页三字段、审核/发布状态、复制链接；
+- dashboard 入口、模板页四字段、默认/公开简介、一次性简介编辑、审核/发布状态、复制链接；
 - 页面没有试玩/调试/切换入口，并展示“发布后使用全新账号通过链接测试”的说明；静态/API 路由断言不存在
   `creator-role-template-trials` 或等价隐藏入口；
 - home/onboarding 两参数跨刷新/OTP/登录/扫码不丢；失效提示并清除 template code；
@@ -716,7 +742,7 @@ AI4ALL_TEST_DB=postgres .venv/bin/pytest \
 
 ### Phase A：数据、审核与领域基座（已完成）
 
-- migration 59、code namespace、slot/版本/review/attribution/event persistence；
+- migration 59/60、code namespace、slot/版本/review/summary review/attribution/event persistence；
 - LLM reviewer 和纯 profile renderer；
 - 全部领域/双后端测试；feature flag 保持关闭。
 
@@ -734,7 +760,7 @@ AI4ALL_TEST_DB=postgres .venv/bin/pytest \
 
 ### Phase D：灰度
 
-1. 备份 PG，执行 migration 59 preflight 和迁移；
+1. 备份 PG，执行 migration 59 preflight，并依次完成 migration 59/60；
 2. 部署后端，开关关闭，跑运营活码/邀请码/普通 onboarding smoke；
 3. 部署静态页和 Nginx，`nginx -t`；
 4. 给内部账号开启模板主流程，真实创建→发布→复制链接→全新账号注册→onboarding；

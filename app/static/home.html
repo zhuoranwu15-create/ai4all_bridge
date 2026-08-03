@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>朝夕相伴 — 你的微信专属 AI 陪伴</title>
+  <title data-i18n="home_page_title">朝夕相伴 — 你的微信专属 AI 陪伴</title>
   <link rel="stylesheet" href="site.css">
+  <script src="product-i18n.js"></script>
   <script src="https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js"></script>
 </head>
 <body>
@@ -15,42 +16,40 @@
     <a class="brand-logo" href="/">
       <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
     </a>
-    <span class="beta-badge">Beta 测试版</span>
+    <span class="beta-badge" data-i18n="beta_label">Beta 测试版</span>
   </div>
   <div class="nav-actions">
-    <a class="btn btn-ghost btn-sm" href="faq.html">常见问题</a>
-    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">用户中心</a>
+    <a class="btn btn-ghost btn-sm" href="faq.html" data-i18n="nav_faq">常见问题</a>
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html" data-i18n="nav_dashboard">用户中心</a>
   </div>
 </nav>
 
 <!-- Hero -->
 <section class="hero">
   <div class="hero-text">
-    <p class="hero-kicker"><span class="beta-badge hero-beta">Beta 测试版</span> 当前处于小范围测试阶段</p>
+    <p class="hero-kicker"><span class="beta-badge hero-beta" data-i18n="beta_label">Beta 测试版</span> <span data-i18n="home_beta_stage">当前处于小范围测试阶段</span></p>
     <h1 class="hero-title">
       <span class="cx">朝夕</span><span class="xb">相伴</span>
     </h1>
-    <p class="hero-tagline">你的微信专属 AI 陪伴<br>陪聊、提醒、记录生活点滴</p>
-    <p class="hero-sub">
-      手机号验证 · 微信扫码接入 · 开箱即用<br>
-      每个用户独立 AI，完全属于你自己
-    </p>
+    <p class="hero-tagline" data-i18n="home_tagline" style="white-space:pre-line">你的微信专属 AI 陪伴
+陪聊、提醒、记录生活点滴</p>
+    <p class="hero-sub" data-i18n="home_subtitle" style="white-space:pre-line">手机号验证 · 微信扫码接入 · 开箱即用
+每个用户独立 AI，完全属于你自己</p>
   </div>
   <div class="hero-visual">
-    <img src="brand.png" alt="朝夕相伴" style="width:100%;height:100%;object-fit:contain;border-radius:16px;">
+    <img src="brand.png" alt="朝夕相伴" data-i18n-alt="page_brand" style="width:100%;height:100%;object-fit:contain;border-radius:16px;">
   </div>
 </section>
 
 <!-- 注册 / 登录 卡片 -->
 <section class="register-section">
   <div class="card">
-    <p class="card-title" id="card-title">手机号注册 / 登录</p>
-    <p class="beta-note">如果你正在手机浏览器中打开，请长按二维码完成绑定，或截图保存后，再到微信中识别二维码完成绑定。</p>
+    <p class="card-title" id="card-title" data-i18n="home_login_title">手机号注册 / 登录</p>
+    <p class="beta-note" data-i18n="home_mobile_qr_note">如果你正在手机浏览器中打开，请长按二维码完成绑定，或截图保存后，再到微信中识别二维码完成绑定。</p>
     <div class="invite-hint" id="invite-hint" style="display:none"></div>
     <div class="invite-hint" id="role-template-preview" style="display:none">
       <strong id="role-preview-name"></strong>
-      <div id="role-preview-personality" style="margin-top:6px;white-space:pre-wrap"></div>
-      <div id="role-preview-mission" style="margin-top:6px;white-space:pre-wrap"></div>
+      <div id="role-preview-summary" style="margin-top:6px;white-space:pre-wrap"></div>
       <div id="role-preview-expiry" style="margin-top:6px;font-size:.82rem;opacity:.75"></div>
     </div>
     <div class="invite-hint" id="role-template-fallback" style="display:none"></div>
@@ -65,46 +64,46 @@
     <!-- ── 步骤 1：手机号 + 验证码 ── -->
     <div id="step-phone">
       <div class="form-field">
-        <label>手机号</label>
+        <label data-i18n="phone_label">手机号</label>
         <div class="phone-row">
           <span class="phone-prefix">+86</span>
           <input class="input" type="tel" id="phone" inputmode="tel"
-                 autocomplete="tel" placeholder="请输入手机号">
+                 autocomplete="tel" placeholder="请输入手机号" data-i18n-placeholder="phone_placeholder">
         </div>
       </div>
       <!-- 阿里云验证码 SDK 容器 -->
       <div id="captcha-element"></div>
       <div id="msg-send" class="msg"></div>
       <button class="btn btn-primary btn-full" id="btn-send-otp" style="margin-top:14px">
-        获取验证码
+        <span data-i18n="get_otp">获取验证码</span>
       </button>
     </div>
 
     <!-- ── 步骤 1b：OTP 输入（发送后展开）── -->
     <div id="step-otp" style="display:none">
       <div class="form-field">
-        <label>验证码</label>
+        <label data-i18n="otp_label">验证码</label>
         <div class="otp-row">
           <input class="input" type="text" id="otp-code"
-                 inputmode="numeric" maxlength="6" placeholder="6 位验证码">
+                 inputmode="numeric" maxlength="6" placeholder="6 位验证码" data-i18n-placeholder="otp_placeholder">
           <button class="btn btn-ghost btn-sm" id="btn-resend"
                   onclick="resendOtp()" disabled>
-            重发 (<span id="resend-cd">60</span>s)
+            <span data-i18n="resend_otp">重发</span> (<span id="resend-cd">60</span>s)
           </button>
         </div>
       </div>
       <div id="msg-otp" class="msg"></div>
       <button class="btn btn-primary btn-full" onclick="verifyOtp()" style="margin-top:4px">
-        验证并继续
+        <span data-i18n="verify_continue">验证并继续</span>
       </button>
     </div>
 
     <!-- ── 步骤 2：微信扫码 ── -->
     <div id="step-qr" style="display:none">
       <div class="qr-wrap">
-        <img id="qr-img" src="" alt="微信扫码二维码">
-        <div class="qr-caption">请用要接入的微信号扫描二维码</div>
-        <div class="qr-status" id="qr-status">等待扫码中…</div>
+        <img id="qr-img" src="" alt="微信扫码二维码" data-i18n-alt="qr_alt">
+        <div class="qr-caption" data-i18n="qr_scan_caption">请用要接入的微信号扫描二维码</div>
+        <div class="qr-status" id="qr-status" data-i18n="qr_waiting">等待扫码中…</div>
       </div>
       <div id="msg-qr" class="msg"></div>
     </div>
@@ -112,8 +111,8 @@
     <!-- ── 已有绑定：直接进入用户中心 ── -->
     <div id="step-done" style="display:none; text-align:center; padding:16px 0">
       <div style="font-size:2rem;margin-bottom:12px">✅</div>
-      <p style="color:var(--text-sub);margin-bottom:20px">登录成功，正在跳转…</p>
-      <a class="btn btn-primary" href="/user/dashboard.html" id="btn-to-dashboard">进入用户中心</a>
+      <p style="color:var(--text-sub);margin-bottom:20px" data-i18n="login_redirecting">登录成功，正在跳转…</p>
+      <a class="btn btn-primary" href="/user/dashboard.html" id="btn-to-dashboard" data-i18n="enter_dashboard">进入用户中心</a>
     </div>
 
   </div>
@@ -134,7 +133,15 @@ var S = {
   campaignCode: '',
   pollTimer: null,
   resendTimer: null,
+  messages: {},
 };
+
+function t(key, fallback) {
+  var params = arguments.length > 2 ? arguments[2] : {};
+  return window.CXProductI18n
+    ? window.CXProductI18n.t(key, fallback || '操作失败，请稍后重试。', params)
+    : ((S.messages && S.messages[key]) || fallback || '操作失败，请稍后重试。');
+}
 
 var TERMINAL = { completed:1, failed:1, already_connected:1, expired:1, cancelled:1 };
 
@@ -155,7 +162,7 @@ function clearMsg(id) {
 function setSendOtpButton(disabled, text) {
   var btn = document.getElementById('btn-send-otp');
   btn.disabled = disabled;
-  btn.textContent = text || '获取验证码';
+  btn.textContent = text || t('get_otp', '获取验证码');
 }
 
 function normalizedInviteCode() {
@@ -171,7 +178,7 @@ function initInviteCode() {
   S.inviteCode = (params.get('invite_code') || '').trim();
   if (!S.inviteCode) return;
   var hint = document.getElementById('invite-hint');
-  hint.textContent = '已带入邀请码 ' + S.inviteCode.toUpperCase();
+  hint.textContent = t('invite_code_applied', '已带入邀请码 {code}', {code: S.inviteCode.toUpperCase()});
   show('invite-hint');
 }
 
@@ -194,7 +201,7 @@ function clearCreatorRoleTemplateCode(reason) {
   var query = params.toString();
   window.history.replaceState({}, '', window.location.pathname + (query ? '?' + query : '') + window.location.hash);
   var fallback = document.getElementById('role-template-fallback');
-  fallback.textContent = reason || '角色模板已不可用，将按普通流程创建朝夕伙伴；有效邀请码仍会保留。';
+  fallback.textContent = reason || t('role_template_unavailable');
   show('role-template-fallback');
   hide('role-template-preview');
 }
@@ -210,7 +217,7 @@ async function previewCreatorRoleTemplate() {
     if (!data.valid) {
       if (data.reason === 'rate_limited') {
         var temporary = document.getElementById('role-template-fallback');
-        temporary.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+        temporary.textContent = t('role_template_unavailable');
         show('role-template-fallback');
         return;
       }
@@ -218,16 +225,15 @@ async function previewCreatorRoleTemplate() {
       return;
     }
     var role = data.role || {};
-    document.getElementById('role-preview-name').textContent = '将创建角色：' + (role.name || '朝夕伙伴');
-    document.getElementById('role-preview-personality').textContent = '性格 / 底色：' + (role.personality_preview || '—');
-    document.getElementById('role-preview-mission').textContent = '使命：' + (role.mission_preview || '—');
-    document.getElementById('role-preview-expiry').textContent = '模板有效期至：' + (role.expires_at || '—');
+    document.getElementById('role-preview-name').textContent = t('role_will_create', '将创建角色：{name}', {name: role.name || t('role_default_name', '朝夕伙伴')});
+    document.getElementById('role-preview-summary').textContent = t('role_summary_preview', '简介：{value}', {value: role.summary || role.name || '—'});
+    document.getElementById('role-preview-expiry').textContent = t('role_expiry_preview', '模板有效期至：{value}', {value: role.expires_at || '—'});
     hide('role-template-fallback');
     show('role-template-preview');
   } catch (error) {
     // preview 只改善展示；网络故障时保留双参数，让注册服务端作最终校验。
     var fallback = document.getElementById('role-template-fallback');
-    fallback.textContent = '角色模板预览暂时不可用，注册时系统会重新校验。';
+    fallback.textContent = t('role_template_unavailable');
     show('role-template-fallback');
   }
 }
@@ -261,8 +267,11 @@ async function apiFetch(path, opts) {
     headers: Object.assign(headers, opts.headers || {}),
   }));
   if (!res.ok) {
-    var body = await res.json().catch(function() { return { detail: res.statusText }; });
-    throw new Error(body.detail || ('请求失败 ' + res.status));
+    var body = await res.json().catch(function() { return {}; });
+    var error = new Error(body.message || t('generic_error'));
+    error.status = res.status;
+    error.code = body.detail || 'generic_error';
+    throw error;
   }
   return res.json();
 }
@@ -278,7 +287,7 @@ function showBindingQr(intent) {
   hide('step-otp');
   hide('step-done');
   show('step-qr');
-  document.getElementById('card-title').textContent = '扫码绑定微信';
+  document.getElementById('card-title').textContent = t('bind_wechat_title', '扫码绑定微信');
   clearMsg('msg-send');
   clearMsg('msg-otp');
   if (S.bindingIntent) renderQr();
@@ -305,7 +314,7 @@ async function createBindingQrForSession() {
     sessionStorage.removeItem(BINDING_INTENT_CACHE_KEY);
   }
 
-  showMsg('msg-send', '检测到你已登录，正在生成微信绑定二维码…', 'info');
+  showMsg('msg-send', t('session_binding_qr_loading', '检测到你已登录，正在生成微信绑定二维码…'), 'info');
   var data = await apiFetch('/web/binding-intents', {
     method: 'POST',
     body: JSON.stringify({ channel: 'openclaw-weixin' }),
@@ -336,26 +345,26 @@ async function resumeExistingSession() {
       return;
     }
   } catch(e) {
-    showMsg('msg-send', '读取微信绑定状态失败：' + e.message, 'err');
+    showMsg('msg-send', e.message, 'err');
     return;
   }
 
   try {
     await createBindingQrForSession();
   } catch(e) {
-    showMsg('msg-send', '创建微信绑定二维码失败：' + e.message, 'err');
+    showMsg('msg-send', e.message, 'err');
   }
 }
 
 function initCaptcha(config) {
   var captcha = config && config.captcha;
   if (!captcha || !captcha.configured || !captcha.scene_id || !captcha.prefix) {
-    showMsg('msg-send', '验证码配置缺失，请联系管理员', 'err');
+    showMsg('msg-send', t('service_unavailable'), 'err');
     document.getElementById('btn-send-otp').disabled = true;
     return;
   }
   if (typeof window.initAliyunCaptcha !== 'function') {
-    showMsg('msg-send', '验证码 SDK 加载失败，请刷新后重试', 'err');
+    showMsg('msg-send', t('service_unavailable'), 'err');
     document.getElementById('btn-send-otp').disabled = true;
     return;
   }
@@ -369,22 +378,28 @@ function initCaptcha(config) {
     onBizResultCallback: onBizResultCallback,
     getInstance: function(inst) { window._captchaInst = inst; },
     slideStyle: { width: 300, height: 40 },
-    language: 'cn',
+    language: {'zh-CN':'cn','en-US':'en','ja-JP':'ja'}[((config.product || {}).default_language)] || 'cn',
   });
 }
 
 // ── 启动时检查已有 session ────────────────────
 window.addEventListener('load', function() {
-  initInviteCode();
-  initCampaignCode();
-
-  resumeExistingSession();
-
   // 初始化阿里云验证码
   apiFetch('/web/config')
-    .then(initCaptcha)
+    .then(function(config) {
+      S.messages = config.messages || {};
+      window.CXProductI18n.setConfig(config);
+      window.CXProductI18n.apply();
+      initInviteCode();
+      initCampaignCode();
+      initCaptcha(config);
+      resumeExistingSession();
+    })
     .catch(function(e) {
-      showMsg('msg-send', '读取验证码配置失败：' + e.message, 'err');
+      initInviteCode();
+      initCampaignCode();
+      resumeExistingSession();
+      showMsg('msg-send', e.message, 'err');
       document.getElementById('btn-send-otp').disabled = true;
     });
 });
@@ -393,7 +408,7 @@ window.addEventListener('load', function() {
 async function captchaVerifyCallback(captchaVerifyParam) {
   S.phone = document.getElementById('phone').value.trim();
   clearMsg('msg-send');
-  setSendOtpButton(true, '发送中…');
+  setSendOtpButton(true, t('sending', '发送中…'));
   try {
     await apiFetch('/web/sms/send-otp', {
       method: 'POST',
@@ -409,7 +424,7 @@ async function captchaVerifyCallback(captchaVerifyParam) {
 
 function onBizResultCallback(bizResult) {
   if (bizResult) {
-    showMsg('msg-send', '验证码已发送到 ' + S.phone, 'ok');
+    showMsg('msg-send', t('otp_sent_to', '验证码已发送到 {phone}', {phone: S.phone}), 'ok');
     show('step-otp');
     startCountdown();
     // 步骤高亮
@@ -428,7 +443,7 @@ function startCountdown() {
   function render() {
     el.textContent = secs;
     resendBtn.disabled = secs > 0;
-    setSendOtpButton(secs > 0, secs > 0 ? '获取验证码 (' + secs + 's)' : '获取验证码');
+    setSendOtpButton(secs > 0, secs > 0 ? t('get_otp_countdown', '获取验证码 ({seconds}s)', {seconds: secs}) : t('get_otp', '获取验证码'));
   }
   render();
   S.resendTimer = setInterval(function() {
@@ -451,8 +466,8 @@ function resendOtp() {
 async function verifyOtp() {
   clearMsg('msg-otp');
   var code = document.getElementById('otp-code').value.trim();
-  if (!code) { showMsg('msg-otp', '请输入验证码', 'err'); return; }
-  showMsg('msg-otp', '验证中…', 'info');
+  if (!code) { showMsg('msg-otp', t('otp_code_required'), 'err'); return; }
+  showMsg('msg-otp', t('verifying', '验证中…'), 'info');
   try {
     var data = await apiFetch('/web/sms/verify-otp', {
       method: 'POST',
@@ -468,7 +483,7 @@ async function verifyOtp() {
 
 // ── 登录（含自动扫码逻辑）──────────────────────
 async function doLogin() {
-  showMsg('msg-otp', '登录中…', 'info');
+  showMsg('msg-otp', t('logging_in', '登录中…'), 'info');
   try {
     var payload = { phone: S.phone, verified_token: S.verifiedToken };
     var inviteCode = normalizedInviteCode();
@@ -511,12 +526,12 @@ function updateQrStatus(intent) {
   var status = typeof intent === 'string' ? intent : intent.status;
   var el = document.getElementById('qr-status');
   var labels = {
-    created: '正在生成二维码…',
-    qr_created: '等待扫码中…',
-    completed: '绑定成功 ✓',
-    already_connected: '该微信已连接，请直接使用',
-    failed: (intent && intent.error) || '绑定失败，请刷新重试',
-    expired: '二维码已过期，请重新验证',
+    created: t('qr_generating', '正在生成二维码…'),
+    qr_created: t('qr_waiting', '等待扫码中…'),
+    completed: t('binding_success', '绑定成功 ✓'),
+    already_connected: t('binding_already_connected'),
+    failed: (intent && intent.error_message) || t('binding_failed'),
+    expired: t('binding_expired'),
   };
   el.textContent = labels[status] || status;
   el.className = 'qr-status' +

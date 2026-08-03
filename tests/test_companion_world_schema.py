@@ -31,6 +31,7 @@ from app.db._core import (
     _migration_0057_resident_wish_drafts,
     _migration_0058_async_resident_wishes,
     _migration_0059_creator_role_templates,
+    _migration_0060_creator_role_template_opening_and_summary,
 )
 
 _P1_TABLES = (
@@ -84,14 +85,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        59,
-        _migration_0059_creator_role_templates,
+        60,
+        _migration_0060_creator_role_template_opening_and_summary,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 59
+        assert int(version) == 60
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)

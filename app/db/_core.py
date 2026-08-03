@@ -4580,6 +4580,10 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             ai_name TEXT NOT NULL,
             personality_text TEXT NOT NULL,
             mission_text TEXT NOT NULL,
+            opening_line TEXT,
+            generated_summary TEXT,
+            public_summary TEXT,
+            summary_edit_status TEXT NOT NULL DEFAULT 'unavailable',
             review_status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (review_status IN ('pending', 'reviewing', 'passed', 'rejected')),
             is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
@@ -4633,6 +4637,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             ai_name_snapshot TEXT NOT NULL,
             personality_snapshot TEXT NOT NULL,
             mission_snapshot TEXT NOT NULL,
+            opening_line_snapshot TEXT,
             attributed_at TEXT NOT NULL,
             FOREIGN KEY(account_id) REFERENCES accounts(id),
             FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
@@ -4667,6 +4672,52 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
         CREATE INDEX IF NOT EXISTS ix_creator_role_template_events_history
             ON creator_role_template_events(
                 creator_role_template_id, created_at DESC, id DESC
+            );
+        """
+    )
+
+
+def _migration_0060_creator_role_template_opening_and_summary(conn: Connection) -> None:
+    """增加自定义开场白、公开简介和一次性简介审核审计。"""
+    _ensure_column(conn, "creator_role_template_versions", "opening_line", "TEXT")
+    _ensure_column(conn, "creator_role_template_versions", "generated_summary", "TEXT")
+    _ensure_column(conn, "creator_role_template_versions", "public_summary", "TEXT")
+    _ensure_column(
+        conn,
+        "creator_role_template_versions",
+        "summary_edit_status",
+        "TEXT NOT NULL DEFAULT 'unavailable'",
+    )
+    _ensure_column(
+        conn,
+        "account_creator_role_template_attribution",
+        "opening_line_snapshot",
+        "TEXT",
+    )
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS creator_role_template_summary_review_runs (
+            id TEXT PRIMARY KEY,
+            creator_role_template_version_id TEXT NOT NULL,
+            attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
+            submitted_summary TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'passed', 'rejected', 'error')),
+            model TEXT,
+            provider TEXT,
+            latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+            categories_json TEXT NOT NULL DEFAULT '[]',
+            reason TEXT,
+            error_code TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            FOREIGN KEY(creator_role_template_version_id)
+                REFERENCES creator_role_template_versions(id),
+            UNIQUE(creator_role_template_version_id, attempt_no)
+        );
+        CREATE INDEX IF NOT EXISTS ix_creator_role_template_summary_runs_version
+            ON creator_role_template_summary_review_runs(
+                creator_role_template_version_id, attempt_no DESC
             );
         """
     )
@@ -4727,6 +4778,7 @@ _MIGRATIONS = [
     (57, _migration_0057_resident_wish_drafts),
     (58, _migration_0058_async_resident_wishes),
     (59, _migration_0059_creator_role_templates),
+    (60, _migration_0060_creator_role_template_opening_and_summary),
 ]
 
 

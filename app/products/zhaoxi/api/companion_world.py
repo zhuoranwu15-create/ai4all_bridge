@@ -89,6 +89,10 @@ from app.products.zhaoxi.domain.companion_world.persona_catalog import (
     resolve_avatar_ref,
 )
 from app.products.zhaoxi.domain.missions.registry import mission_display_for_persona
+from app.products.zhaoxi.application.app_display_localization import (
+    localized_resident_options,
+)
+from app.products.zhaoxi.application.product_localization import product_default_language
 from app.products.zhaoxi.application import (
     SqlCompanionWorldRepository,
     run_companion_world_turn,
@@ -412,7 +416,10 @@ def _require_feed_session(
 
 
 def _service() -> CompanionWorldService:
-    return CompanionWorldService(SqlCompanionWorldRepository())
+    return CompanionWorldService(
+        SqlCompanionWorldRepository(),
+        language=product_default_language(),
+    )
 
 
 def _feed_service() -> CompanionWorldFeedService:
@@ -906,7 +913,11 @@ def resident_options(
 ) -> dict:
     """自建角色的受控取值表。客户端据此渲染选择器，**不得硬编码枚举**。"""
     _no_store(response)
-    return _envelope(request, code="ok", data=options_catalog())
+    return _envelope(
+        request,
+        code="ok",
+        data=localized_resident_options(options_catalog()),
+    )
 
 
 def _sanitize_optional(
@@ -1436,6 +1447,19 @@ async def _validation_error_handler(request: Request, exc: RequestValidationErro
         response = JSONResponse(
             status_code=400 if forbidden_account_id else 422,
             content=_envelope(request, code=code),
+        )
+        _no_store(response)
+        return response
+    from app.products.zhaoxi.api.product_errors import is_public_product_path
+    from app.products.zhaoxi.application.product_localization import product_message
+
+    if is_public_product_path(request.url.path):
+        response = JSONResponse(
+            status_code=422,
+            content={
+                "detail": "invalid_request",
+                "message": product_message("invalid_request"),
+            },
         )
         _no_store(response)
         return response

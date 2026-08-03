@@ -52,8 +52,9 @@ MIN_INITIAL_CANDIDATES = 4
 class CompanionWorldService:
     """按冻结规则编排 world；所有写操作都经 repository 单事务执行。"""
 
-    def __init__(self, repository: WorldRepository) -> None:
+    def __init__(self, repository: WorldRepository, *, language: str = "zh-CN") -> None:
         self._repository = repository
+        self._language = language
 
     @staticmethod
     def _ensure_world_available(world: WorldRecord) -> None:
@@ -336,8 +337,8 @@ class CompanionWorldService:
         self._seed_resident_intro(repo, resident, template.persona_key)
         return resident
 
-    @staticmethod
     def _seed_resident_intro(
+        self,
         repo: WorldRepository,
         resident: ResidentRecord,
         persona_key: Optional[str],
@@ -347,7 +348,7 @@ class CompanionWorldService:
         查不到该人设的文案就整体跳过、不写兜底句——自建角色（persona_key 恒 None）与运营
         新加但还没配文案的预设都走这条路径，宁可少两条内容也不让通用文案顶上。
         """
-        content = intro_content_for_persona(persona_key)
+        content = intro_content_for_persona(persona_key, language=self._language)
         if content is None:
             return
         repo.seed_resident_intro(

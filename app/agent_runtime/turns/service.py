@@ -86,6 +86,20 @@ _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再�
 _tdai_memory_eligible_accounts: set = set()
 
 
+def _localized_product_message(
+    product_services: ProductTurnServices,
+    key: str,
+    *,
+    fallback: str,
+) -> str:
+    """通过产品端口解析固定文案；旧测试产品安全回落到调用方默认值。"""
+
+    resolver = getattr(product_services, "localized_message", None)
+    if callable(resolver):
+        return str(resolver(key, fallback=fallback))
+    return str(fallback)
+
+
 def _tdai_memory_volume_eligible(account_id: str) -> bool:
     """账号累计 inbound 消息数是否达到 TDAI 记忆灰度阈值（含进程内 sticky 缓存）。
 
@@ -940,7 +954,11 @@ def _prepare_turn(
         )
         return OpenClawTurnResponse(
             status="rate_limited",
-            reply=settings.rate_limit_rpm_message,
+            reply=_localized_product_message(
+                product_services,
+                "rate_limit_rpm",
+                fallback=settings.rate_limit_rpm_message,
+            ),
             metadata={**identity_response_metadata(identity, account_id), "reason": "rpm"},
         )
 
@@ -952,7 +970,11 @@ def _prepare_turn(
             )
             return OpenClawTurnResponse(
                 status="rate_limited",
-                reply=settings.rate_limit_daily_message,
+                reply=_localized_product_message(
+                    product_services,
+                    "rate_limit_daily",
+                    fallback=settings.rate_limit_daily_message,
+                ),
                 metadata={
                     **identity_response_metadata(identity, account_id),
                     "reason": "daily",
@@ -1288,13 +1310,21 @@ def _resolve_turn_reply(
     }
     if inbound_blocked:
         # 入站命中风险：不调用主模型，返回固定安全话术；本轮不计费、不推进 onboarding。
-        reply = str(
-            getattr(settings, "moderation_inbound_blocked_reply_text", "")
-            or "这个话题我不太方便继续，我们换个轻松点的聊聊吧～"
+        reply = _localized_product_message(
+            product_services,
+            "moderation_inbound_blocked",
+            fallback=str(
+                getattr(settings, "moderation_inbound_blocked_reply_text", "")
+                or "这个话题我不太方便继续，我们换个轻松点的聊聊吧～"
+            ),
         )
     elif text == "#重置会话":
         clear_session_messages(session_id=session["id"])
-        reply = "已重置当前会话。"
+        reply = _localized_product_message(
+            product_services,
+            "session_reset",
+            fallback="已重置当前会话。",
+        )
     elif text == "#状态":
         reply = (
             f"当前会话正常。account_id={account_id}, "
@@ -1303,10 +1333,18 @@ def _resolve_turn_reply(
         )
     elif image_understanding_failed:
         # 图片没看清/未开启理解：走兜底话术，不调主模型（禁止无描述瞎猜）。
-        reply = settings.image_understanding_fallback_text
+        reply = _localized_product_message(
+            product_services,
+            "image_understanding_failed",
+            fallback=settings.image_understanding_fallback_text,
+        )
     elif inbound.voice_understanding_failed:
         # 语音没听清：与图片同构，走兜底话术不调主模型。
-        reply = settings.voice_message_fallback_text
+        reply = _localized_product_message(
+            product_services,
+            "voice_understanding_failed",
+            fallback=settings.voice_message_fallback_text,
+        )
     else:
         # TDAI recall：注入 query-time L1 记忆（prepend_context）和 L3 persona（context）。
         # 同步调用，严格 200 ms 超时，失败时 tdai_extra_blocks 为空继续正常回复。
@@ -1440,6 +1478,7 @@ def _resolve_turn_reply(
                 background_loop=background_loop,
                 web_search_enabled=web_search_enabled_for_turn,
                 tdai_search_enabled=tdai_search_enabled_for_turn,
+                localized_message=getattr(product_services, "localized_message", None),
             )
             _record_timing(timings, "prompt_build_ms", prompt_started)
 
@@ -1492,7 +1531,11 @@ def _resolve_turn_reply(
                 debug_metadata["rounds"] = _round_traces
                 debug_metadata["round_count"] = len(_round_traces)
             if generation_error and not reply:
-                reply = _GENERATION_ERROR_REPLY
+                reply = _localized_product_message(
+                    product_services,
+                    "generation_error",
+                    fallback=_GENERATION_ERROR_REPLY,
+                )
                 # 用户将真实收到「卡住了」兜底回复(生成失败且无可用回复)。ERROR 级 → 经 ai4all
                 # 命名空间的 Feishu handler 推送 FEISHU_ALERT_WEBHOOK_URL(同签名 5min 冷却+脱敏)。
                 # 这里补的是 generate_reply_with_tools 返回 error 字符串的静默路径(超时/空响应/
@@ -1508,7 +1551,11 @@ def _resolve_turn_reply(
         except Exception as err:
             logger.exception("reply generation failed: %s", err)
             generation_error = str(err)
-            reply = _GENERATION_ERROR_REPLY
+            reply = _localized_product_message(
+                product_services,
+                "generation_error",
+                fallback=_GENERATION_ERROR_REPLY,
+            )
 
     return _ReplyResult(
         reply=reply,
@@ -1687,7 +1734,14 @@ def _finalize_turn(
                 err,
             )
             blocked_task = None
-        reply = str(getattr(settings, "moderation_safe_fallback_text", "") or "这条内容我不能继续发送，我们换个安全的话题吧。")
+        reply = _localized_product_message(
+            product_services,
+            "moderation_outbound_blocked",
+            fallback=str(
+                getattr(settings, "moderation_safe_fallback_text", "")
+                or "这条内容我不能继续发送，我们换个安全的话题吧。"
+            ),
+        )
         moderation_reply_metadata = {
             "moderation_blocked": True,
             "moderation_task_id": blocked_task.get("id") if blocked_task else None,

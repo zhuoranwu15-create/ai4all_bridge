@@ -10,6 +10,8 @@ from typing import Optional, TYPE_CHECKING
 
 from app.db import count_mission_moments, record_mission_moment
 from app.products.zhaoxi.application.missions.state import resolve_account_mission, snapshot_account_mission
+from app.products.zhaoxi.application.app_display_localization import localized_mission_template
+from app.tools.errors import tool_error
 
 if TYPE_CHECKING:
     from app.agent_runtime.context.models import TurnContext
@@ -26,14 +28,15 @@ def handle_mission_status(args: dict, ctx: "TurnContext") -> dict:
 
     resolved, progress, recent = snapshot
     template = resolved.template
+    display = localized_mission_template(template, app_id=ctx.app_id)
     return {
         "status": "ok",
         "has_mission": True,
         "mission_id": template.id,
-        "display_name": template.display_name,
-        "statement": template.statement,
-        "bar": template.bar,
-        "inquiry": template.inquiry,
+        "display_name": display["display_name"],
+        "statement": display["statement"],
+        "bar": display["bar"],
+        "inquiry": display["inquiry"],
         "target_count": template.target_count,
         "progress": progress,
         "remaining": max(template.target_count - progress, 0),
@@ -54,7 +57,7 @@ def handle_record_mission_moment(
     """
     resolved = resolve_account_mission(account_id=ctx.account_id)
     if resolved is None:
-        return {"error": "尚未分配使命"}
+        return tool_error(ctx, "mission_not_assigned", fallback="尚未分配使命")
 
     template = resolved.template
     progress = count_mission_moments(account_id=ctx.account_id, mission_id=template.id)
@@ -67,7 +70,7 @@ def handle_record_mission_moment(
 
     content = str(args.get("content") or "").strip()
     if not content:
-        return {"error": "content 不能为空"}
+        return tool_error(ctx, "mission_content_required", fallback="content 不能为空")
 
     session_id = str(ctx.session.get("id")) if ctx.session and ctx.session.get("id") is not None else None
     moment_id = record_mission_moment(

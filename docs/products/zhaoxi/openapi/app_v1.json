@@ -255,6 +255,24 @@
         "title": "AppConfigMinimumVersionByPlatform",
         "type": "object"
       },
+      "AppConfigProduct": {
+        "properties": {
+          "app_id": {
+            "title": "App Id",
+            "type": "string"
+          },
+          "default_language": {
+            "title": "Default Language",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app_id",
+          "default_language"
+        ],
+        "title": "AppConfigProduct",
+        "type": "object"
+      },
       "AppConfigResponse": {
         "properties": {
           "captcha": {
@@ -277,12 +295,16 @@
           "minimum_supported_version_by_platform": {
             "$ref": "#/components/schemas/AppConfigMinimumVersionByPlatform"
           },
+          "product": {
+            "$ref": "#/components/schemas/AppConfigProduct"
+          },
           "server_time": {
             "title": "Server Time",
             "type": "string"
           }
         },
         "required": [
+          "product",
           "captcha",
           "features",
           "limits",

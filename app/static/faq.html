@@ -3,8 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>常见问题 - 朝夕相伴</title>
+  <title data-i18n="faq_page_title">常见问题 - 朝夕相伴</title>
   <link rel="stylesheet" href="site.css">
+  <script src="product-i18n.js"></script>
   <script src="faq-data.js"></script>
 </head>
 <body>
@@ -14,17 +15,17 @@
     <a class="brand-logo" href="/ui/home.html">
       <span class="brand-cx">朝夕</span><span class="brand-xb">相伴</span>
     </a>
-    <span class="beta-badge">Beta 测试版</span>
+    <span class="beta-badge" data-i18n="beta_label">Beta 测试版</span>
   </div>
   <div class="nav-actions">
-    <a class="btn btn-ghost btn-sm" href="/ui/home.html">首页</a>
-    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html">用户中心</a>
+    <a class="btn btn-ghost btn-sm" href="/ui/home.html" data-i18n="nav_home">首页</a>
+    <a class="btn btn-ghost btn-sm" href="/user/dashboard.html" data-i18n="nav_dashboard">用户中心</a>
   </div>
 </nav>
 
 <main class="faq-page">
   <section class="faq-hero">
-    <h1>常见问题</h1>
+    <h1 data-i18n="faq_heading">常见问题</h1>
   </section>
 
   <section class="faq-layout">
@@ -49,8 +50,8 @@ function escapeHtml(text) {
   });
 }
 
-function renderFaqList() {
-  var groups = window.CX_FAQ_GROUPS || [];
+function renderFaqList(groups) {
+  groups = groups || window.CX_FAQ_GROUPS || [];
   var html = groups.map(function(group) {
     var items = group.items.map(function(item, index) {
       return [
@@ -70,7 +71,16 @@ function renderFaqList() {
   document.getElementById('faq-list').innerHTML = html;
 }
 
-renderFaqList();
+Promise.all([
+  fetch('/api/web/config').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
+  fetch('/api/web/faq/content').then(function(response) { return response.ok ? response.json() : Promise.reject(); }),
+]).then(function(results) {
+  window.CXProductI18n.setConfig(results[0]);
+  window.CXProductI18n.apply();
+  renderFaqList(results[1].groups || []);
+}).catch(function() {
+  renderFaqList();
+});
 </script>
 
 </body>

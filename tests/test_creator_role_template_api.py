@@ -60,9 +60,32 @@ def _pass_review(monkeypatch) -> None:
                     "ai_name": "pass",
                     "personality_text": "pass",
                     "mission_text": "pass",
+                    "opening_line": "pass",
                 },
                 "categories": [],
                 "reason": "",
+                "public_summary": "朝朝，温柔坦诚的陪伴者",
+            }
+        ),
+    )
+
+
+def _reject_review(monkeypatch) -> None:
+    monkeypatch.setattr(
+        review_app,
+        "generate_completion",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "decision": "reject",
+                "field_results": {
+                    "ai_name": "pass",
+                    "personality_text": "reject",
+                    "mission_text": "pass",
+                    "opening_line": "pass",
+                },
+                "categories": ["prompt_injection"],
+                "reason": "tries to override platform rules",
+                "public_summary": "",
             }
         ),
     )
@@ -74,6 +97,7 @@ def _create(principal: SessionPrincipal):
             ai_name="朝朝",
             personality_text="温柔坦诚，也敢于提醒边界。",
             mission_text="陪用户更清楚地认识自己，并找到生活节奏。",
+            opening_line="我是朝朝，很高兴认识你。以后想聊什么都可以告诉我。",
         ),
         principal,
     )["creator_role_template"]
@@ -103,8 +127,11 @@ def test_creator_api_full_lifecycle_and_no_account_switch_surface(
 
     created = _create(principal)
     assert created["effective_status"] == "approved"
+    assert created["effective_status_display"] == "审核通过，待发布"
     assert created["registration_url"] is None
     assert created["latest_version"]["review_status"] == "passed"
+    assert created["latest_version"]["review_status_display"] == "审核通过"
+    assert created["latest_version"]["review_reason_display"] == ""
 
     published = api.creator_role_template_publish(
         created["id"],
@@ -160,6 +187,26 @@ def test_creator_api_full_lifecycle_and_no_account_switch_surface(
     )
 
 
+def test_rejected_review_hides_raw_audit_reason_and_returns_chinese_display(
+    fresh_db, monkeypatch
+):
+    principal, _, _ = _eligible_creator("13820001008")
+    fresh_db.creator_role_templates_enabled = True
+    _reject_review(monkeypatch)
+
+    created = _create(principal)
+
+    assert created["effective_status"] == "rejected"
+    assert created["effective_status_display"] == "审核未通过"
+    latest = created["latest_version"]
+    assert latest["review_status"] == "rejected"
+    assert latest["review_status_display"] == "审核未通过"
+    assert "review_reason" not in latest
+    assert latest["review_reason_display"] == (
+        "角色设定包含试图绕过或覆盖平台规则的内容，请删除相关指令后重试。"
+    )
+
+
 def test_owner_guard_feature_gate_eligibility_and_extra_fields(fresh_db, monkeypatch):
     owner, _, _ = _eligible_creator("13820001002")
     outsider, _, _ = _eligible_creator("13820001003")
@@ -191,6 +238,7 @@ def test_owner_guard_feature_gate_eligibility_and_extra_fields(fresh_db, monkeyp
             ai_name="朝朝",
             personality_text="性格",
             mission_text="使命",
+            opening_line="开场白",
             account_id="forbidden",
         )
 
@@ -217,10 +265,10 @@ def test_public_preview_minimal_fields_owner_match_and_expiry(fresh_db, monkeypa
     assert set(preview) == {"valid", "role"}
     assert set(preview["role"]) == {
         "name",
-        "personality_preview",
-        "mission_preview",
+        "summary",
         "expires_at",
     }
+    assert preview["role"]["summary"] == "朝朝，温柔坦诚的陪伴者"
     assert preview["role"]["name"] == "朝朝"
     mismatch = api.creator_role_template_public_preview(
         active["campaign_code"],
@@ -267,6 +315,49 @@ def test_public_preview_is_closed_by_feature_flag(fresh_db, monkeypatch):
         invite_code,
     )
     assert preview == {"valid": False, "reason": "capability_disabled"}
+
+
+def test_summary_edit_api_returns_specific_rejection_and_keeps_default(
+    fresh_db, monkeypatch
+):
+    owner, _, _ = _eligible_creator("13820001009")
+    fresh_db.creator_role_templates_enabled = True
+    _pass_review(monkeypatch)
+    created = _create(owner)
+    default_summary = created["latest_version"]["public_summary"]
+
+    monkeypatch.setattr(
+        review_app,
+        "generate_completion",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "decision": "reject",
+                "categories": ["professional_deception"],
+                "reason": "存在未经支持的专业能力声明",
+            },
+            ensure_ascii=False,
+        ),
+    )
+    response = api.creator_role_template_summary_edit(
+        created["id"],
+        api.CreatorRoleTemplateSummaryEditRequest(
+            version_id=created["latest_version"]["id"],
+            summary="朝朝，最专业的医生伙伴",
+        ),
+        owner,
+    )
+    assert response.status_code == 422
+    body = json.loads(response.body)
+    assert body["detail"] == "creator_role_template_summary_rejected"
+    assert body["reason_categories"] == ["professional_deception"]
+    assert "专业" in body["message"]
+    assert body["current_summary"] == default_summary
+    refreshed = api.creator_role_template_detail(created["id"], owner)[
+        "creator_role_template"
+    ]
+    assert refreshed["latest_version"]["public_summary"] == default_summary
+    assert refreshed["latest_version"]["summary_edit_status"] == "rejected"
+    assert "专业" in refreshed["latest_version"]["summary_review_reason_display"]
 
 
 def test_creator_and_admin_stats_share_exact_range_and_payload(fresh_db, monkeypatch):

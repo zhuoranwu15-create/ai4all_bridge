@@ -3,7 +3,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, List, Optional
 
 if TYPE_CHECKING:
     from app.tools.registry import ToolPolicy
@@ -34,3 +34,4 @@ class TurnContext:
     web_search_success_count: int = 0
     tdai_search_enabled: bool = False   # 运行时 gating：executor 据此放行两个 TDAI search 工具
     tdai_search_calls: int = 0          # per-turn 计数器：两工具合计调用次数（限流用）
+    localized_message: Optional[Callable[..., str]] = None

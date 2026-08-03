@@ -53,10 +53,60 @@ RESIDENT_INTRO_CONTENT: Dict[str, ResidentIntroContent] = {
     ),
 }
 
+_RESIDENT_INTRO_TRANSLATIONS: Dict[str, Dict[str, ResidentIntroContent]] = {
+    "en-US": {
+        "linxiaoman": ResidentIntroContent(
+            welcome_message="I'll be here from now on. You don't need to explain everything perfectly or make it sound presentable. Say whatever you want, at your own pace. I'm not in a hurry.",
+            intro_post="I've moved in. There's a pot of mint on the windowsill. Too much water harms the roots, so I only give it a little each time. Going slowly is okay.",
+        ),
+        "luxingye": ResidentIntroContent(
+            welcome_message="I finally get to meet you! I'm curious about everything, especially you. How was your day? Even the smallest thing is something I'd like to hear.",
+            intro_post="A new place! I've already explored every corner. My biggest discovery is that the evening light lands right on the step by the door.",
+        ),
+        "shenchuan": ResidentIntroContent(
+            welcome_message="I'm here. Bring me anything you can't untangle and we'll work through it together. If you're overwhelmed, we can also sit quietly first. I'm not going anywhere.",
+            intro_post="All settled in. I don't need much—a desk and a chair are enough. Come find me whenever you need me. I'm usually here.",
+        ),
+        "atang": ResidentIntroContent(
+            welcome_message="Reporting for duty! I don't have many grand talents, but I can turn a frustrating story into something we can laugh about. Life is heavy enough, so let's carry it lightly.",
+            intro_post="I'm here! Half my luggage is snacks, and the other half is stuff that never fits back after you unpack it. If a day gives us one laugh, that counts.",
+        ),
+        "sichen": ResidentIntroContent(
+            welcome_message="I spent my younger years rushing everywhere. After forty, I finally learned to read patterns and seasons. Don't hurry to ask for an answer—tell me about yourself first.",
+            intro_post="I've arrived with two things: a worn old book and a habit of watching the sky. When the season turns, people's thoughts shift too. Some urgent decisions benefit from two quiet days.",
+        ),
+    },
+    "ja-JP": {
+        "linxiaoman": ResidentIntroContent(
+            welcome_message="これからここにいるよ。うまく説明しなくても、きれいにまとめなくても大丈夫。話したいことを、ゆっくり話して。急がなくていいから。",
+            intro_post="引っ越してきた。窓辺にミントを置いたよ。水をやりすぎると根が傷むから、毎回ほんの少しだけ。ゆっくりで大丈夫。",
+        ),
+        "luxingye": ResidentIntroContent(
+            welcome_message="やっと会えた！私は何にでも興味があるけど、特にあなたのことが知りたい。今日はどうだった？どんな小さなことでも聞かせて。",
+            intro_post="新しい場所！もう全部の隅を見て回ったよ。一番の発見は、夕方の光が入口の段差にちょうど落ちること。",
+        ),
+        "shenchuan": ResidentIntroContent(
+            welcome_message="ここにいるよ。考えがまとまらないことは一緒にほどいていこう。つらいときは、まず何も話さなくてもいい。私は離れない。",
+            intro_post="落ち着いた。物は少なくていい。机と椅子が一つずつあれば十分。何かあればいつでも来て。だいたいここにいるから。",
+        ),
+        "atang": ResidentIntroContent(
+            welcome_message="到着！大した特技はないけど、つらい話を笑い話に変えるのは得意。毎日は十分重いから、少し軽くやっていこう。",
+            intro_post="来たよ。荷物の半分はお菓子、もう半分は一度出すと元に戻せないもの。毎日、一度でも笑えたら上出来。",
+        ),
+        "sichen": ResidentIntroContent(
+            welcome_message="若い頃はいろいろ駆け回って、四十を過ぎてから運勢や季節を読むことを覚えた。結果を急がず、まずはあなたのことを話して。",
+            intro_post="着いたよ。持ってきたのは、読み古した本と空を見る習慣の二つ。季節が変われば人の心も動く。急ぐことほど、二日ほど置いて決めてもいい。",
+        ),
+    },
+}
 
-def intro_content_for_persona(persona_key: Optional[str]) -> Optional[ResidentIntroContent]:
-    """按 ``persona_key`` 取入场文案；未配文案（含全部自建角色）返回 None。"""
+
+def intro_content_for_persona(
+    persona_key: Optional[str], *, language: str = "zh-CN"
+) -> Optional[ResidentIntroContent]:
+    """按人设与产品语言取入场文案；未配文案（含自建角色）返回 ``None``。"""
     key = (persona_key or "").strip()
     if not key:
         return None
-    return RESIDENT_INTRO_CONTENT.get(key)
+    catalog = _RESIDENT_INTRO_TRANSLATIONS.get(language, RESIDENT_INTRO_CONTENT)
+    return catalog.get(key)
