@@ -1,12 +1,12 @@
-from app.products.zhaoxi.application.app_display_localization import (
+from app.products.mingchan.application.app_display_localization import (
     localized_mission_template,
     localized_report_options,
     localized_resident_options,
 )
-from app.products.zhaoxi.domain.companion_world.onboarding_content import (
+from app.products.mingchan.domain.companion_world.onboarding_content import (
     intro_content_for_persona,
 )
-from app.products.zhaoxi.domain.companion_world.persona_catalog import options_catalog
+from app.products.mingchan.domain.companion_world.persona_catalog import options_catalog
 from app.products.zhaoxi.domain.missions.registry import get_mission_template
 
 

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 import app.db as db
 import pytest
 from app.db._backend import is_postgres
-from app.products.zhaoxi.domain.companion_world.lifecycle import (
+from app.products.mingchan.domain.companion_world.lifecycle import (
     LifecycleEvidenceRef,
     LifecyclePolicy,
     inactivity_is_due,
@@ -17,14 +17,14 @@ from app.products.zhaoxi.domain.companion_world.lifecycle import (
     lifecycle_event_fingerprint,
     value_misalignment_evidence,
 )
-from app.products.zhaoxi.application.companion_world_lifecycle import (
+from app.products.mingchan.application.lifecycle import (
     CompanionWorldLifecycleService,
     LifecycleCommitError,
     approve_lifecycle_event,
     build_lifecycle_policy,
 )
-from app.products.zhaoxi.infrastructure.repositories.companion_world import SqlCompanionWorldRepository
-from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.mingchan.infrastructure.world_repository import SqlCompanionWorldRepository
+from app.products.mingchan.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 STAFF_HEADERS = {"Authorization": "Bearer test-staff"}
@@ -58,6 +58,7 @@ def _resident(
         display_name=name,
         joined_at=joined_at,
         origin=origin,
+        app_id="zhaoxi",
     )
     resident = runtime["resident"]
     db.create_ai_conversation(
@@ -423,10 +424,10 @@ def test_admin_lifecycle_queue_is_redacted_and_commit_stays_blocked(client, fres
     assert event["resident_id"] == resident["id"]
 
     assert client.get(
-        "/admin/companion-world/lifecycle-events", headers=REVIEWER_HEADERS
+        "/admin/products/mingchan/world/lifecycle-events", headers=REVIEWER_HEADERS
     ).status_code == 403
     listed = client.get(
-        "/admin/companion-world/lifecycle-events?status=cooling_down",
+        "/admin/products/mingchan/world/lifecycle-events?status=cooling_down",
         headers=STAFF_HEADERS,
     )
     assert listed.status_code == 200
@@ -444,20 +445,20 @@ def test_admin_lifecycle_queue_is_redacted_and_commit_stays_blocked(client, fres
     }
 
     staff_approve = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/approve",
         headers=STAFF_HEADERS,
         json={"farewell_text": "再见", "reason": "review"},
     )
     assert staff_approve.status_code == 403
     admin_approve = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "再见", "reason": "review"},
     )
     assert admin_approve.status_code == 503
     assert admin_approve.json()["detail"]["code"] == "lifecycle_commit_disabled"
     rejected = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/reject",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/reject",
         headers=STAFF_HEADERS,
         json={"reason": "insufficient_context"},
     )
@@ -474,22 +475,22 @@ def test_admin_approve_atomically_offlines_and_correction_hides_farewell(
     )
     _resident(owner_id, world, "protector", joined_at="2026-07-01 10:00:00")
     event = _review_event(owner_id, world, target)
-    fresh_db.companion_world_lifecycle_commit_enabled = True
+    fresh_db.mingchan_lifecycle_commit_enabled = True
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
+        "app.products.mingchan.api.admin_world.settings.mingchan_lifecycle_commit_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.admin_companion_world.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.admin_world.beijing_naive_now", lambda: NOW
     )
 
     approved = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "愿你在自己的世界里，一直被温柔照亮。", "reason": "approved"},
     )
     replay = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "重试不会再发一条", "reason": "retry"},
     )
@@ -524,7 +525,7 @@ def test_admin_approve_atomically_offlines_and_correction_hides_farewell(
     assert posts[0]["source_type"] == "lifecycle_farewell"
 
     corrected = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/correct",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/correct",
         headers=ADMIN_HEADERS,
         json={"reason": "farewell wording correction", "hide_farewell": True},
     )
@@ -546,13 +547,13 @@ def test_admin_approve_atomically_offlines_and_correction_hides_farewell(
 def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
     client, fresh_db, monkeypatch
 ):
-    fresh_db.companion_world_lifecycle_commit_enabled = True
+    fresh_db.mingchan_lifecycle_commit_enabled = True
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.admin_companion_world.settings.companion_world_lifecycle_commit_enabled",
+        "app.products.mingchan.api.admin_world.settings.mingchan_lifecycle_commit_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.admin_companion_world.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.admin_world.beijing_naive_now", lambda: NOW
     )
     owner_id, world = _world("19965001009")
     target = _resident(owner_id, world, "ordinary", joined_at="2026-05-01 10:00:00")
@@ -565,7 +566,7 @@ def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
         category="self_harm",
     )
     crisis = client.post(
-        f"/admin/companion-world/lifecycle-events/{event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "再见", "reason": "test"},
     )
@@ -584,7 +585,7 @@ def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
             (legacy_target["id"],),
         )
     legacy = client.post(
-        f"/admin/companion-world/lifecycle-events/{legacy_event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{legacy_event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "再见", "reason": "test"},
     )
@@ -607,14 +608,14 @@ def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
         last_resident_exception_requested=True,
     )
     protected = client.post(
-        f"/admin/companion-world/lifecycle-events/{severe_event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{severe_event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "再见", "reason": "test"},
     )
     assert protected.status_code == 409
     assert protected.json()["detail"]["code"] == "last_resident_protected"
     exception = client.post(
-        f"/admin/companion-world/lifecycle-events/{severe_event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{severe_event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={
             "farewell_text": "这段同行到这里结束，愿你平安。",
@@ -651,7 +652,7 @@ def test_approve_revalidates_crisis_legacy_last_resident_and_evidence(
         recovered["runtime_account_id"], at="2026-07-23 09:30:00", key="recovered"
     )
     invalid = client.post(
-        f"/admin/companion-world/lifecycle-events/{recovery_event['id']}/approve",
+        f"/admin/products/mingchan/world/lifecycle-events/{recovery_event['id']}/approve",
         headers=ADMIN_HEADERS,
         json={"farewell_text": "再见", "reason": "test"},
     )
@@ -799,3 +800,6 @@ def test_pg_concurrent_candidate_creation_has_one_open_event(fresh_db):
     assert sum(created_counts) == 1
     events = db.list_resident_lifecycle_events_for_review(statuses=("cooling_down",))
     assert [item["resident_id"] for item in events].count(target["id"]) == 1
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

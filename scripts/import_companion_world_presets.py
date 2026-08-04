@@ -21,11 +21,11 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.products.zhaoxi.domain.companion_world.naming import (  # noqa: E402
+from app.products.mingchan.domain.companion_world.naming import (  # noqa: E402
     NamePoolError,
     normalize_name_pool,
 )
-from app.products.zhaoxi.domain.companion_world.service import (  # noqa: E402
+from app.products.mingchan.domain.companion_world.service import (  # noqa: E402
     MIN_INITIAL_CANDIDATES,
 )
 

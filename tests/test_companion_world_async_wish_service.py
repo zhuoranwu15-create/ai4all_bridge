@@ -9,25 +9,32 @@ from datetime import datetime, timedelta
 
 import app.db as db
 import pytest
+from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
 from app.db._backend import is_postgres
-from app.products.zhaoxi.application.companion_world_mailbox import (
+from app.products.mingchan.application.mailbox import (
     CompanionWorldMailboxService,
 )
-from app.products.zhaoxi.application.account_deletion import execute_account_deletion
-from app.products.zhaoxi.application.companion_world_resident_wishes import (
+from app.products.mingchan.application.account_deletion import execute_account_deletion
+from app.products.mingchan.application.resident_wishes import (
     CompanionWorldResidentWishService,
     ResidentWishError,
 )
-from app.products.zhaoxi.infrastructure.persistence.resident_wishes import (
+from app.products.mingchan.infrastructure.persistence.resident_wishes import (
     claim_resident_wish_job,
     complete_resident_wish_generation,
 )
 
 NOW = datetime(2026, 7, 31, 20, 0, 0)
+TEST_REGISTRY = build_test_product_registry()
 
 
 def _world(phone: str) -> tuple[str, dict]:
     owner = db.create_or_get_platform_user_by_phone(phone=phone, display_name="用户")["id"]
+    db.ensure_product_membership(
+        platform_user_id=owner,
+        app_id=MINGCHAN_APP_ID,
+        registry=TEST_REGISTRY,
+    )
     world = db.get_or_create_home_universe(platform_user_id=owner)
     with db.connect() as conn:
         conn.execute(
@@ -66,7 +73,7 @@ def _stub_worker(monkeypatch, *, review: str = "pass") -> None:
         )
 
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_wish.generate_completion",
+        "app.products.mingchan.application.wish.generate_completion",
         _generate,
     )
 
@@ -153,7 +160,7 @@ def test_worker_delivers_once_and_accept_closes_wish(fresh_db, monkeypatch):
             "SELECT COUNT(*) c FROM character_letters WHERE wish_id=?", (wish.wish_id,)
         ).fetchone()["c"] == 1
 
-    accepted = CompanionWorldMailboxService().accept_letter(
+    accepted = CompanionWorldMailboxService(registry=TEST_REGISTRY).accept_letter(
         owner,
         letter_id=current.letter_id,
         now="2026-08-01 20:01:00",
@@ -223,7 +230,7 @@ def test_worker_rechecks_account_before_generation(fresh_db, monkeypatch):
     with db.connect() as conn:
         conn.execute("UPDATE platform_users SET status='deactivated' WHERE id=?", (owner,))
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_wish.generate_completion",
+        "app.products.mingchan.application.wish.generate_completion",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             AssertionError("disabled account must not generate")
         ),
@@ -247,7 +254,11 @@ def test_account_deletion_removes_pending_wish_and_job(fresh_db, monkeypatch):
         now=NOW,
     )
 
-    stats = execute_account_deletion(platform_user_id=owner, app_id="zhaoxi", now=NOW)
+    stats = execute_account_deletion(
+        platform_user_id=owner,
+        now=NOW,
+        registry=TEST_REGISTRY,
+    )
 
     assert stats["resident_wishes_deleted"] == 1
     assert stats["resident_wish_jobs_deleted"] == 1

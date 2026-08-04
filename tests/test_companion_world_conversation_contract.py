@@ -6,9 +6,18 @@
 """
 import json
 
+import pytest
+
 import app.db as db
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
-from app.products.zhaoxi.domain.companion_world import CompanionWorldService
+from app.products.mingchan.application import SqlCompanionWorldRepository
+from app.products.mingchan.domain.companion_world import CompanionWorldService
+
+
+@pytest.fixture
+def client(mingchan_client):
+    """使用已启用鸣蝉注册表的隔离测试客户端。"""
+
+    return mingchan_client
 
 
 def _verified_token(phone: str) -> str:
@@ -20,7 +29,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> tuple[dict, dict]:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -47,11 +56,11 @@ def _seed_catalog() -> None:
 
 
 def _confirm(client, headers: dict, count: int = 2) -> list[dict]:
-    candidates = client.post("/v1/worlds/home/bootstrap", headers=headers).json()[
+    candidates = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).json()[
         "data"
     ]["candidates"]
     response = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={
             "selections": [
@@ -95,7 +104,7 @@ def _app_message(account_id: str, *, role: str, content: str, message_id: str) -
 
 
 def _items(client, headers: dict) -> dict:
-    response = client.get("/v1/conversations", headers=headers)
+    response = client.get("/api/v1/products/mingchan/conversations", headers=headers)
     assert response.status_code == 200, response.text
     return {
         item["conversation_id"]: item for item in response.json()["data"]["items"]
@@ -106,7 +115,7 @@ def _items(client, headers: dict) -> dict:
 
 
 def test_conversation_dto_exposes_times_and_send_state(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002001")
     residents = _confirm(client, headers, 2)
@@ -133,7 +142,7 @@ def test_conversation_dto_exposes_times_and_send_state(client, fresh_db):
 
 
 def test_read_only_conversation_reports_reason_and_blocks_send(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002002")
     resident = _confirm(client, headers, 1)[0]
@@ -148,7 +157,7 @@ def test_read_only_conversation_reports_reason_and_blocks_send(client, fresh_db)
     assert item["can_send"] is False
     assert item["read_only_reason"] == "resident_offline"
     denied = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "s4_readonly_1", "text": "hi"},
     )
@@ -158,7 +167,7 @@ def test_read_only_conversation_reports_reason_and_blocks_send(client, fresh_db)
 
 def test_conversation_list_is_constant_query_count(client, fresh_db, monkeypatch):
     """CONV-001 的 N+1 收口：列表查询次数不随会话数增长。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002003")
     residents = _confirm(client, headers, 4)
@@ -192,7 +201,7 @@ def test_conversation_list_is_constant_query_count(client, fresh_db, monkeypatch
 
 
 def test_preview_and_unread_do_not_leak_across_residents(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002004")
     residents = _confirm(client, headers, 2)
@@ -214,7 +223,7 @@ def test_preview_and_unread_do_not_leak_across_residents(client, fresh_db):
 
 
 def test_unread_counts_assistant_messages_until_read(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002005")
     resident = _confirm(client, headers, 1)[0]
@@ -233,7 +242,7 @@ def test_unread_counts_assistant_messages_until_read(client, fresh_db):
     assert _items(client, headers)[target.conversation_id]["unread"] == 2
 
     read = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/read",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
         headers=headers,
         json={"last_message_id": first_ai},
     )
@@ -244,7 +253,7 @@ def test_unread_counts_assistant_messages_until_read(client, fresh_db):
 
 
 def test_read_cursor_only_advances_and_clamps_to_latest(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002006")
     resident = _confirm(client, headers, 1)[0]
@@ -258,7 +267,7 @@ def test_read_cursor_only_advances_and_clamps_to_latest(client, fresh_db):
 
     def _read(last_message_id: int) -> dict:
         response = client.post(
-            f"/v1/ai-conversations/{target.conversation_id}/read",
+            f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
             headers=headers,
             json={"last_message_id": last_message_id},
         )
@@ -279,7 +288,7 @@ def test_read_cursor_only_advances_and_clamps_to_latest(client, fresh_db):
 
 def test_marking_read_does_not_reorder_the_list(client, fresh_db):
     """已读不是活动：标记已读不得改 sort_time，否则列表会跳序。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002007")
     residents = _confirm(client, headers, 2)
@@ -291,7 +300,7 @@ def test_marking_read_does_not_reorder_the_list(client, fresh_db):
     sort_before = _items(client, headers)[target.conversation_id]["sort_time"]
 
     client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/read",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
         headers=headers,
         json={"last_message_id": message_id},
     )
@@ -302,7 +311,7 @@ def test_marking_read_does_not_reorder_the_list(client, fresh_db):
 
 
 def test_read_endpoint_is_owner_scoped_and_validated(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers_a, login_a = _login(client, "19960002008")
     headers_b, _ = _login(client, "19960002009")
@@ -310,22 +319,22 @@ def test_read_endpoint_is_owner_scoped_and_validated(client, fresh_db):
     target = _target(login_a["platform_user"]["id"], resident["conversation_id"])
 
     denied = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/read",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
         headers=headers_b,
         json={"last_message_id": 1},
     )
     missing = client.post(
-        "/v1/ai-conversations/conv-does-not-exist/read",
+        "/api/v1/products/mingchan/ai-conversations/conv-does-not-exist/read",
         headers=headers_a,
         json={"last_message_id": 1},
     )
     invalid = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/read",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
         headers=headers_a,
         json={"last_message_id": 0},
     )
     anonymous = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/read",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/read",
         json={"last_message_id": 1},
     )
 
@@ -341,7 +350,7 @@ def test_read_endpoint_is_owner_scoped_and_validated(client, fresh_db):
 
 
 def test_turn_replay_returns_the_same_persisted_message_id(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002010")
     resident = _confirm(client, headers, 1)[0]
@@ -349,12 +358,12 @@ def test_turn_replay_returns_the_same_persisted_message_id(client, fresh_db):
     body = {"client_message_id": "s4_replay_001", "text": "在吗"}
 
     first = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json=body,
     ).json()["data"]
     replay = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json=body,
     ).json()["data"]
@@ -366,7 +375,7 @@ def test_turn_replay_returns_the_same_persisted_message_id(client, fresh_db):
 
 
 def test_no_reply_turn_returns_null_reply(client, fresh_db, monkeypatch):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002011")
     resident = _confirm(client, headers, 1)[0]
@@ -379,7 +388,7 @@ def test_no_reply_turn_returns_null_reply(client, fresh_db, monkeypatch):
 
     monkeypatch.setattr("app.agent_runtime.adapter.run_product_turn", _silent_turn)
     data = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "s4_silent_01", "text": "……"},
     ).json()["data"]
@@ -394,19 +403,19 @@ def test_no_reply_turn_returns_null_reply(client, fresh_db, monkeypatch):
 
 
 def test_world_message_times_carry_offset(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19960002012")
     resident = _confirm(client, headers, 1)[0]
     target = _target(login["platform_user"]["id"], resident["conversation_id"])
     client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "s4_time_0001", "text": "现在几点"},
     )
 
     world = client.get(
-        f"/v1/ai-conversations/{target.conversation_id}/messages", headers=headers
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/messages", headers=headers
     )
     assert world.status_code == 200
     times = [item["created_at"] for item in world.json()["data"]["messages"]]

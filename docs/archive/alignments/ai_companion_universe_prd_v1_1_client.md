@@ -2,7 +2,7 @@
 
 > **归档说明（2026-07-26）**：本文是**客户端仓库**产出的原始 PRD V1.1，作为跨仓库对齐材料
 > 冻结于此，不作为当前决策依据。已被本仓库口径的
-> [朝夕相伴 App 端 PRD](../../products/zhaoxi/capabilities/companion_world_app_prd.md) 取代 ——
+> [鸣蝉 App 端 PRD](../../products/mingchan/capabilities/companion_world_app_prd.md) 取代 ——
 > 后者以本仓库代码为基线校准了「后端已实现 / 契约缺口」。
 > 正文中指向客户端仓库的相对链接已改为纯文本（本仓库内不存在这些文件）。
 

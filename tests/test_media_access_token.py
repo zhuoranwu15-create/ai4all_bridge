@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import time
 from datetime import datetime, timedelta
 
@@ -12,14 +14,21 @@ import app.db as db
 from app.platform.media import assets
 from app.platform.media.access import (
     owner_scope,
-    sign_media_url,
+    sign_media_url as _sign_media_url,
     visit_scope,
 )
 from app.platform.media.persistence import insert_media_asset, pending_expires_at
-from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
+from app.products.mingchan.application.visits import CompanionWorldVisitService
 
 NOW = datetime(2026, 7, 29, 12, 0, 0)
 _PAYLOAD = b"\x89PNG\r\n\x1a\n" + b"pretend-image-bytes" * 4
+_MEDIA_PATH_PREFIX = "/api/v1/products/mingchan/media"
+
+
+def sign_media_url(**kwargs):
+    """为本文件的鸣蝉读端点签 canonical 产品 URL。"""
+
+    return _sign_media_url(path_prefix=_MEDIA_PATH_PREFIX, **kwargs)
 
 
 def _user(phone: str) -> str:
@@ -88,19 +97,19 @@ def test_tampered_or_missing_signature_is_denied(client, fresh_db):
 
     # 换 exp 想延长有效期：exp 在签名 payload 里，改了就不匹配。
     stretched = client.get(
-        f"/v1/media/{asset['id']}?exp={grant.expires_at + 86400}"
+        f"/api/v1/products/mingchan/media/{asset['id']}?exp={grant.expires_at + 86400}"
         f"&scope={grant.scope}&sig={grant.signature}"
     )
     assert stretched.status_code == 403
     assert stretched.json()["code"] == "media_access_denied"
 
     # 缺失或形状错误也属于媒体访问失败，不能被参数层泄漏成 invalid_request。
-    bare = client.get(f"/v1/media/{asset['id']}")
+    bare = client.get(f"/api/v1/products/mingchan/media/{asset['id']}")
     assert bare.status_code == 403
     assert bare.json()["code"] == "media_access_denied"
 
     malformed = client.get(
-        f"/api/v1/media/{asset['id']}?exp=not-an-int&scope=x&sig=short"
+        f"/api/v1/products/mingchan/media/{asset['id']}?exp=not-an-int&scope=x&sig=short"
     )
     assert malformed.status_code == 403
     assert malformed.json()["code"] == "media_access_denied"
@@ -116,7 +125,7 @@ def test_configured_public_base_returns_absolute_canonical_url(client, fresh_db)
     )
 
     assert grant.url.startswith(
-        "https://media.example/api/v1/media/mda_absolute_url?exp="
+        "https://media.example/api/v1/products/mingchan/media/mda_absolute_url?exp="
     )
     assert _get(client, grant).status_code == 200
 
@@ -254,3 +263,6 @@ def test_missing_file_on_disk_is_denied(client, fresh_db):
 
     assert response.status_code == 403
     assert response.json()["code"] == "media_access_denied"
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

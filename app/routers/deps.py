@@ -114,13 +114,21 @@ def require_product_session(
     *,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Callable[..., SessionPrincipal]:
-    """创建绑定固定产品 audience 的 FastAPI session dependency。"""
+    """创建绑定固定产品 audience 的 FastAPI session dependency。
 
-    registered_app_id = registry.require_enabled(expected_app_id).app_id
+    声明 dependency 时只验证产品已注册，允许禁用产品的模块安全加载；每次请求仍重新
+    校验产品启用状态，因此禁用期间不会解析 token 或产生业务副作用。
+    """
+
+    registered_app_id = registry.require_registered(expected_app_id).app_id
 
     def _dependency(
         authorization: Optional[str] = Header(default=None),
     ) -> SessionPrincipal:
+        try:
+            registry.require_enabled(registered_app_id)
+        except ValueError:
+            raise HTTPException(status_code=401, detail="产品暂不可用") from None
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="未登录")
         token = authorization.removeprefix("Bearer ").strip()

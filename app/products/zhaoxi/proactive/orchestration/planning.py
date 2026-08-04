@@ -16,12 +16,6 @@ from app.db import (
     upsert_proactive_account_state,
 )
 from app.products.zhaoxi.application.onboarding import is_onboarding_done
-from app.products.zhaoxi.application import (
-    HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-    get_human_proactive_last_inbound_at,
-    human_level_proactive_allowed,
-    resolve_human_proactive_scope,
-)
 from app.time_utils import beijing_naive_now, parse_db_timestamp
 from app.products.zhaoxi.proactive.contract.common import format_reactivation_time
 from app.products.zhaoxi.proactive.contract.candidate import ProactiveCandidate
@@ -143,18 +137,9 @@ def _new_user_reactivation_eligibility(
             "onboarding_state": onboarding_state,
         }
 
-    human_scope = resolve_human_proactive_scope(account_id)
-    created_at = parse_db_timestamp(
-        human_scope.owner_created_at if human_scope else account.get("created_at")
-    )
-    # form-A 维持微信口径；world 按真人聚合 owner bindings + 全 resident 的跨渠道入站。
-    owner_last_inbound = get_human_proactive_last_inbound_at(account_id)
+    created_at = parse_db_timestamp(account.get("created_at"))
     last_inbound_at = parse_db_timestamp(
-        owner_last_inbound
-        if human_scope is not None
-        else get_account_last_inbound_at(
-            account_id=account_id, channel=CHANNEL_WEIXIN
-        )
+        get_account_last_inbound_at(account_id=account_id, channel=CHANNEL_WEIXIN)
     )
     if created_at is None:
         return {"eligible": False, "reason": "account_created_at_missing"}
@@ -228,12 +213,6 @@ def plan_reactivation_candidate(
     归位到 orchestration，plan 是规划不是派发。）
     """
     current = now or beijing_naive_now()
-    if not human_level_proactive_allowed(account_id):
-        return _no_op(
-            account_id=account_id,
-            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-            now=current,
-        )
     allowed_windows = _account_allowed_windows(account_id)
 
     # 每个种类一个 proposer：跑生成器 → 把产出适配成 ProactiveCandidate（无产出则 None）。
@@ -383,12 +362,6 @@ def plan_new_user_reactivation_candidate(
 ) -> Dict[str, Any]:
     """Plan the first-24h idle nudge, using topic_followup first and hot_topic fallback."""
     current = now or beijing_naive_now()
-    if not human_level_proactive_allowed(account_id):
-        return _no_op(
-            account_id=account_id,
-            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-            now=current,
-        )
     eligibility = _new_user_reactivation_eligibility(
         account_id=account_id,
         now=current,

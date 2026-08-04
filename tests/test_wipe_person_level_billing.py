@@ -5,7 +5,8 @@
 验证：wipe 非末号 → 共享钱包/daily 原样保留且**不抛**；wipe 末号 → 真正拆除。走 fresh_db。
 """
 import app.db as db
-from tests.factories import make_resident_account
+from app.bootstrap.product_registry import build_test_product_registry
+from tests.factories import make_resident_account, make_user_account
 
 _DATE = "2026-07-21"
 
@@ -25,7 +26,7 @@ def test_wipe_preserves_shared_wallet_when_person_has_other_accounts(fresh_db):
     )["id"]
     # 决策 B：a1 = 用户账号（form-A，发 owner_binding）；a2 = 居民（form-B，无 binding，经世界归属
     # 共享真人钱包/daily）。wipe a1（非末号）的 sibling 检查须能经世界归属看见 a2。
-    a1 = db.create_ai4all_account_for_user(platform_user_id=pu, display_name="甲")["account"]["id"]
+    a1 = make_user_account(pu, "甲", app_id="mingchan")
     a2 = make_resident_account(pu, "乙")
 
     # a2 追加一笔手工赠权 → 生成 account_id=a2、引用共享钱包的 ledger 行（正是旧代码删钱包时
@@ -33,6 +34,7 @@ def test_wipe_preserves_shared_wallet_when_person_has_other_accounts(fresh_db):
     db.grant_shells(
         account_id=a2, platform_user_id=pu, amount_shell_micros=1_000_000,
         source_type="manual_grant", source_id="t", idempotency_key="wipe-shared-extra",
+        registry=build_test_product_registry(),
     )
     db.increment_daily_usage(account_id=a1, date=_DATE)
     db.increment_daily_usage(account_id=a2, date=_DATE)  # 共享同一 (真人,date) 行

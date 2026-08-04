@@ -1023,6 +1023,7 @@ def _persist_and_screen_inbound(
     *,
     started_at: float,
     timings: Dict[str, int],
+    product_services: ProductTurnServices,
 ) -> Union[_InboundResult, OpenClawTurnResponse]:
     """阶段B：text 规范化+图片理解、插入入站消息(+插入后去重早返回)、入站审核 screen、
     referral、图片计费。返回 _InboundResult；插入后去重命中则返回 OpenClawTurnResponse。"""
@@ -1222,6 +1223,7 @@ def _persist_and_screen_inbound(
                     "message_id": message_id,
                     "session_id": int(session["id"]),
                 },
+                registry=product_services.registry,
             )
         except Exception as err:
             logger.exception(
@@ -1884,6 +1886,7 @@ def _finalize_turn(
                     "session_id": int(session["id"]),
                     "estimated": True,
                 },
+                registry=product_services.registry,
             )
         except Exception as err:
             logger.exception("chat usage charge failed account=%s reply=%s error=%s", account_id, reply_message_id, err)
@@ -2112,6 +2115,40 @@ def run_product_turn(
                 "reason": "product_service_mismatch",
             },
         )
+    if ctx.identity.channel not in product_services.allowed_channels:
+        logger.warning(
+            "turn product channel mismatch account=%s app=%s channel=%s",
+            ctx.account_id,
+            ctx.app_id,
+            ctx.identity.channel,
+        )
+        return OpenClawTurnResponse(
+            status="disabled",
+            no_reply=True,
+            metadata={
+                **identity_response_metadata(ctx.identity, ctx.account_id),
+                "app_id": ctx.app_id,
+                "reason": "product_channel_mismatch",
+            },
+        )
+    try:
+        product_services.registry.require_enabled(ctx.app_id)
+    except ValueError as err:
+        logger.warning(
+            "turn product disabled account=%s app=%s error=%s",
+            ctx.account_id,
+            ctx.app_id,
+            err,
+        )
+        return OpenClawTurnResponse(
+            status="disabled",
+            no_reply=True,
+            metadata={
+                **identity_response_metadata(ctx.identity, ctx.account_id),
+                "app_id": ctx.app_id,
+                "reason": "product_disabled",
+            },
+        )
     # 入口只记 metadata，不记正文。身份/账号已由 adapter 解析，非私聊/unbound 已在入口收口。
     # 正文日志移到 disabled 检查之后（见 _prepare_turn）。
     logger.info(
@@ -2223,6 +2260,7 @@ def run_product_turn(
         setup,
         started_at=started_at,
         timings=timings,
+        product_services=product_services,
     )
     _record_timing(timings, "inbound_total_ms", inbound_started)
     if isinstance(inbound, OpenClawTurnResponse):

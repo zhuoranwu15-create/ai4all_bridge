@@ -2,12 +2,9 @@
 from datetime import datetime
 
 import app.db as db
-from app.bootstrap.product_registry import build_test_product_registry
-from app.products.zhaoxi.application import human_level_proactive_allowed
-from app.products.zhaoxi.infrastructure.app_inbox import AppInboxAdapter, HumanAppInboxIntent
-from app.products.zhaoxi.proactive.contract.common import _select_route
-from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
-from app.products.zhaoxi.proactive.delivery.outbound import enqueue_proactive_text
+from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
+from app.products.mingchan.application import human_level_proactive_allowed
+from app.products.mingchan.infrastructure.app_inbox import AppInboxAdapter, HumanAppInboxIntent
 from tests.factories import make_resident_account
 
 
@@ -15,8 +12,8 @@ def _world_with_two_residents(phone: str):
     user_id = db.create_or_get_platform_user_by_phone(
         phone=phone, display_name="真人级主动触达用户"
     )["id"]
-    account_a = make_resident_account(user_id, "居民甲")
-    account_b = make_resident_account(user_id, "居民乙")
+    account_a = make_resident_account(user_id, "居民甲", app_id=MINGCHAN_APP_ID)
+    account_b = make_resident_account(user_id, "居民乙", app_id=MINGCHAN_APP_ID)
     scope = db.resolve_resident_memory_scope(runtime_account_id=account_a)
     for account_id in (account_a, account_b):
         resident_scope = db.resolve_resident_memory_scope(
@@ -112,9 +109,7 @@ def test_owner_activity_aggregation_excludes_other_product_bindings(fresh_db):
         at="2026-07-22 11:00:00",
     )
 
-    assert db.list_active_account_ids_for_user(platform_user_id=user_id) == [zhaoxi_id]
     assert set(db.list_human_proactive_account_ids_for_user(platform_user_id=user_id)) == {
-        zhaoxi_id,
         resident_a,
         resident_b,
     }
@@ -132,8 +127,18 @@ def test_owner_activity_aggregation_excludes_other_product_bindings(fresh_db):
         role="user",
         at="2026-07-22 12:00:00",
     )
+    assert db.get_owner_last_inbound_at(platform_user_id=user_id) is None
+    assert db.count_owner_inbound_after(
+        platform_user_id=user_id, after="2026-07-22 00:00:00"
+    ) == 0
+    _insert_app_message(
+        resident_a,
+        message_id="mingchan-inbound",
+        role="user",
+        at="2026-07-22 12:30:00",
+    )
     assert db.get_owner_last_inbound_at(platform_user_id=user_id) == (
-        "2026-07-22 12:00:00"
+        "2026-07-22 12:30:00"
     )
     assert db.count_owner_inbound_after(
         platform_user_id=user_id, after="2026-07-22 00:00:00"
@@ -144,64 +149,6 @@ def test_owner_activity_aggregation_excludes_other_product_bindings(fresh_db):
             inbound_since="2026-07-15 00:00:00"
         )
     ] == [universe_id]
-
-
-def test_app_only_human_dispatch_uses_double_flag_and_24h_bucket(fresh_db):
-    user_id, _universe_id, account_a, account_b = _world_with_two_residents(
-        "19966001002"
-    )
-    fresh_db.companion_world_app_inbox_enabled = True
-    fresh_db.companion_world_app_only_human_proactive_enabled = True
-    allowed = [
-        account_id
-        for account_id in (account_a, account_b)
-        if human_level_proactive_allowed(account_id)
-    ]
-    assert len(allowed) == 1
-    speaker_account = allowed[0]
-    route = _select_route(speaker_account)
-    assert route is not None and route["channel"] == "native"
-
-    first = dispatch_proactive_text(
-        account_id=speaker_account,
-        channel=route["channel"],
-        channel_account_id=None,
-        to_user_id=user_id,
-        session_key=route.get("session_key"),
-        source="account_check",
-        text="今天也想来看看你。",
-        idempotency_key="human-account-check-due-1",
-        now=datetime(2026, 7, 22, 12, 0, 0),
-        product_category="companion_followup",
-        metadata={"candidate_id": "due-1"},
-    )
-    second = dispatch_proactive_text(
-        account_id=speaker_account,
-        channel=route["channel"],
-        channel_account_id=None,
-        to_user_id=user_id,
-        session_key=route.get("session_key"),
-        source="account_check",
-        text="一小时后不应再出现。",
-        idempotency_key="human-account-check-due-2",
-        now=datetime(2026, 7, 22, 13, 0, 0),
-        product_category="companion_followup",
-        metadata={"candidate_id": "due-2"},
-    )
-
-    assert first["status"] == "sent"
-    assert second["status"] == "cancelled"
-    assert first["m3_observability"] == {"human_claim_success": 1}
-    assert second["human_claim_reason"] == "blocked_24h"
-    assert second["m3_observability"] == {"human_claim_blocked_24h": 1}
-    with db.connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM app_notifications WHERE platform_user_id=?",
-            (user_id,),
-        ).fetchall()
-    assert len(rows) == 1
-    assert rows[0]["scope"] == "human"
-    assert rows[0]["delivery_status"] == "visible"
 
 
 def test_old_reservation_token_cannot_finalize_or_cancel_reacquired_lease(fresh_db):
@@ -297,63 +244,12 @@ def test_old_reservation_token_cannot_finalize_or_cancel_reacquired_lease(fresh_
     assert boundary_acquired is True and boundary["delivery_status"] == "reserved"
 
 
-def test_human_policy_budget_aggregates_other_resident_outbound(fresh_db):
-    user_id, _universe_id, account_a, account_b = _world_with_two_residents(
-        "19966001005"
-    )
-    fresh_db.companion_world_app_inbox_enabled = True
-    fresh_db.companion_world_app_only_human_proactive_enabled = True
-    speaker_account = next(
-        account_id
-        for account_id in (account_a, account_b)
-        if human_level_proactive_allowed(account_id)
-    )
-    other_account = account_b if speaker_account == account_a else account_a
-    seeded = enqueue_proactive_text(
-        account_id=other_account,
-        channel="native",
-        channel_account_id=None,
-        to_user_id=user_id,
-        session_key="__app_active__",
-        source="account_check",
-        text="另一居民已占用今日真人级预算",
-        idempotency_key="other-resident-budget",
-        now=datetime(2026, 7, 22, 11, 0, 0),
-        product_category="companion_followup",
-    )
-    assert seeded["status"] == "pending"
-
-    route = _select_route(speaker_account)
-    result = dispatch_proactive_text(
-        account_id=speaker_account,
-        channel=route["channel"],
-        channel_account_id=None,
-        to_user_id=user_id,
-        session_key=route.get("session_key"),
-        source="account_check",
-        text="不应越过聚合预算",
-        idempotency_key="speaker-budget-attempt",
-        now=datetime(2026, 7, 22, 12, 0, 0),
-        product_category="companion_followup",
-        metadata={"candidate_id": "budget-attempt"},
-    )
-    assert result["status"] == "cancelled"
-    assert result["error"] == "daily_limit_exceeded"
-    with db.connect() as conn:
-        visible = conn.execute(
-            "SELECT COUNT(*) AS c FROM app_notifications "
-            "WHERE platform_user_id=? AND delivery_status='visible'",
-            (user_id,),
-        ).fetchone()["c"]
-    assert int(visible) == 0
-
-
 def test_finalize_reselects_generic_but_cancels_speaker_bound_content(fresh_db):
     user_id, universe_id, account_a, account_b = _world_with_two_residents(
         "19966001004"
     )
-    fresh_db.companion_world_app_inbox_enabled = True
-    fresh_db.companion_world_app_only_human_proactive_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
+    fresh_db.mingchan_app_only_human_proactive_enabled = True
     initial = db.select_human_app_speaker(
         platform_user_id=user_id, universe_id=universe_id
     )

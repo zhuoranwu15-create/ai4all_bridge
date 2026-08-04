@@ -32,6 +32,8 @@ from app.db._core import (
     _migration_0058_async_resident_wishes,
     _migration_0059_creator_role_templates,
     _migration_0060_creator_role_template_opening_and_summary,
+    _migration_0061_companion_world_product_scope,
+    _migration_0062_mingchan_notification_product_scope,
 )
 
 _P1_TABLES = (
@@ -85,14 +87,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        60,
-        _migration_0060_creator_role_template_opening_and_summary,
+        62,
+        _migration_0062_mingchan_notification_product_scope,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 60
+        assert int(version) == 62
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -125,6 +127,38 @@ def test_active_initial_candidate_rank_is_unique(fresh_db):
                 "UPDATE character_templates SET status = 'active' WHERE id = ?",
                 (retired["id"],),
             )
+
+
+def test_initial_candidate_rank_is_isolated_by_product(fresh_db):
+    """朝夕历史目录与鸣蝉目录可复用相同 rank，但产品内仍保持唯一。"""
+    # 鸣蝉 persistence 有意拒绝跨产品写入；直接插入一行模拟迁移后的朝夕历史目录。
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO character_templates(
+                id, app_id, source_type, name, initial_candidate_rank
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            ("tmpl_zhaoxi_history", "zhaoxi", "operations", "朝夕历史模板", 1),
+        )
+    mingchan = db.create_character_template(
+        app_id="mingchan",
+        source_type="operations",
+        name="鸣蝉模板",
+        initial_candidate_rank=1,
+    )
+
+    assert [
+        row["id"]
+        for row in db.list_initial_character_templates(app_id="mingchan")
+    ] == [mingchan["id"]]
+    with pytest.raises(IntegrityError):
+        db.create_character_template(
+            app_id="mingchan",
+            source_type="operations",
+            name="鸣蝉重复模板",
+            initial_candidate_rank=1,
+        )
 
 
 def test_legacy_residents_can_share_sentinel_template(fresh_db):

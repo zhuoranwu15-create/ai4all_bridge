@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from app.products.zhaoxi.domain.companion_world import persona_catalog as pc
+from app.products.mingchan.domain.companion_world import persona_catalog as pc
 
 
 def _persona(**overrides) -> pc.PersonaInput:

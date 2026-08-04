@@ -21,7 +21,6 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
     reactivation_calls = []
     expired_content_calls = []
     reclaim_calls = []
-    notification_cleanup_calls = []
 
     def fake_dispatch_reminders(**kwargs):
         reminder_calls.append(kwargs)
@@ -66,15 +65,6 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
         reclaim_calls.append(kwargs)
         return 2
 
-    def fake_cleanup_notifications(**kwargs):
-        notification_cleanup_calls.append(kwargs)
-        return {
-            "cancelled_reservations": 1,
-            "deleted": 2,
-            "reconciled_users": 1,
-            "errors": None,
-        }
-
     scheduler = ProactiveScheduler(
         interval_seconds=0,
         batch_size=5,
@@ -86,8 +76,6 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
         expire_content_invitations=fake_expire_content_invitations,
         scan_account_checks=fake_scan_account_checks,
         reclaim_quota_reservations=fake_reclaim_quota_reservations,
-        cleanup_app_notifications=fake_cleanup_notifications,
-        notification_cleanup_batch_size=7,
     )
     now = datetime(2026, 5, 22, 10, 0)
 
@@ -106,10 +94,6 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
     assert result["expired_content_invitation_count"] == 1
     assert result["reclaimed_quota_reservations"] == 2
     assert reclaim_calls == [{"now": "2026-05-22 10:00:00", "limit": 5}]
-    assert notification_cleanup_calls == [
-        {"now": "2026-05-22 10:00:00", "limit": 7}
-    ]
-    assert result["app_notification_cleanup"]["deleted"] == 2
     assert result["m3_observability"] == {
         "human_claim_success": 1,
         "human_claim_blocked_24h": 1,
@@ -117,9 +101,6 @@ def test_proactive_scheduler_run_once_calls_due_reminder_dispatch(fresh_db):
         "human_speaker_cancelled": 0,
         "human_speaker_reselected": 1,
     }
-    assert heartbeat["metadata"]["last_notification_cleanup"] == result[
-        "app_notification_cleanup"
-    ]
     assert heartbeat["metadata"]["last_m3_observability"] == result[
         "m3_observability"
     ]

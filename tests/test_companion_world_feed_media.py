@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import datetime
 from io import BytesIO
 
@@ -13,7 +15,7 @@ from PIL import Image
 
 import app.db as db
 from app.platform.media.persistence import get_media_asset
-from app.products.zhaoxi.application.companion_world_visits import (
+from app.products.mingchan.application.visits import (
     CompanionWorldVisitService,
 )
 
@@ -28,7 +30,7 @@ def _login(client, phone: str) -> tuple[dict, str]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -61,15 +63,15 @@ def _seed_catalog() -> None:
 
 def _enable(monkeypatch, fresh_db, *, feed_image: bool = True) -> None:
     """打开 P1 + Feed + 动态图片位，并配好签名 secret（签不出 URL 时 url 会是 null）。"""
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
-    fresh_db.companion_world_feed_image_enabled = feed_image
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
+    fresh_db.mingchan_feed_image_enabled = feed_image
     for module in (
-        "app.products.zhaoxi.api.media",
-        "app.products.zhaoxi.api.companion_world",
+        "app.products.mingchan.api.media",
+        "app.products.mingchan.api.world",
     ):
         monkeypatch.setattr(
-            f"{module}.settings.companion_world_feed_image_enabled", feed_image
+            f"{module}.settings.mingchan_feed_image_enabled", feed_image
         )
     monkeypatch.setattr(
         "app.platform.media.access.settings.media_url_signing_secret", "test-secret"
@@ -81,10 +83,10 @@ def _ready_world(client, fresh_db, phone: str, *, seed: bool = True):
         _seed_catalog()
     headers, platform_user_id = _login(client, phone)
     candidates = client.post(
-        "/v1/worlds/home/bootstrap", headers=headers
+        "/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers
     ).json()["data"]["candidates"]
     response = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": candidates[0]["template_id"]}]},
     )
@@ -100,7 +102,7 @@ def _jpeg(size=(12, 8)) -> bytes:
 
 def _upload_image(client, headers, size=(12, 8)) -> str:
     response = client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": ("photo.jpg", _jpeg(size), "image/jpeg")},
         data={"kind": "image"},
@@ -112,12 +114,12 @@ def _upload_image(client, headers, size=(12, 8)) -> str:
 def _enable_visits(monkeypatch) -> None:
     """打开拜访能力，并把访客侧的"现在"钉在 NOW（visit 有效期 30 天，剩余时长可预期）。"""
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_visits.settings"
-        ".companion_world_visits_enabled",
+        "app.products.mingchan.api.visits.settings"
+        ".mingchan_visits_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_visits.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.visits.beijing_naive_now", lambda: NOW
     )
 
 
@@ -132,7 +134,7 @@ def _active_visit(owner_platform_user_id: str, visitor_platform_user_id: str) ->
 
 def _publish(client, headers, *, request_id: str, text: str = "", media_refs=()):
     return client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={
             "client_request_id": request_id,
@@ -185,7 +187,7 @@ def test_home_feed_list_returns_images_with_owner_scope(client, fresh_db, monkey
         client, headers, request_id="feedmedia-i01", media_refs=[media_id]
     ).status_code == 201
 
-    response = client.get("/v1/worlds/home/feed", headers=headers)
+    response = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers)
     assert response.status_code == 200, response.text
     items = response.json()["data"]["items"]
     by_content = {item["content"]["type"] for item in items}
@@ -205,8 +207,8 @@ def test_publish_feed_post_rejects_media_when_flag_off(client, fresh_db, monkeyp
     headers, _ = _ready_world(client, fresh_db, "19911120003")
     media_id = _upload_image(client, headers)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world.settings"
-        ".companion_world_feed_image_enabled",
+        "app.products.mingchan.api.world.settings"
+        ".mingchan_feed_image_enabled",
         False,
     )
     response = _publish(
@@ -240,7 +242,7 @@ def test_publish_feed_post_rejects_foreign_and_reused_assets(
     assert reuse.status_code == 409, reuse.text
     assert reuse.json()["code"] == "media_ref_invalid"
     # 第二条动态整体回滚：Feed 里只有第一条带图动态。
-    items = client.get("/v1/worlds/home/feed", headers=owner_headers).json()["data"][
+    items = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=owner_headers).json()["data"][
         "items"
     ]
     assert [item["content"]["type"] for item in items].count("image") == 1
@@ -285,7 +287,7 @@ def test_publish_feed_post_media_limits_and_replay(client, fresh_db, monkeypatch
 
 
 def _visitor_feed_image(client, visitor_headers, visit_id: str) -> dict:
-    response = client.get(f"/v1/visits/{visit_id}/feed", headers=visitor_headers)
+    response = client.get(f"/api/v1/products/mingchan/visits/{visit_id}/feed", headers=visitor_headers)
     assert response.status_code == 200, response.text
     items = response.json()["data"]["items"]
     item = next(one for one in items if one["content"]["type"] == "image")
@@ -348,5 +350,8 @@ def test_visitor_feed_image_url_dies_when_visit_revoked(
     assert dead.json()["code"] == "media_access_denied"
     # Feed 本身也不再可读，两道闸各自独立生效。
     assert client.get(
-        f"/v1/visits/{visit_id}/feed", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{visit_id}/feed", headers=visitor_headers
     ).status_code == 409
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

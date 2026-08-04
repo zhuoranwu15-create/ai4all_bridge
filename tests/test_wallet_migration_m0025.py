@@ -18,7 +18,7 @@ import pytest
 import app.db as db
 from app.db._backend import IntegrityError
 from app.db._core import _migration_0025_wallet_unique_platform_user
-from tests.factories import make_resident_account
+from tests.factories import make_resident_account, make_user_account
 
 _B1 = 1_000  # 主钱包（a1）余额
 _B2 = 2_500  # 被并钱包（a2）余额
@@ -47,8 +47,8 @@ def _seed_pre_migration_two_wallets(conn, *, user_id, a1, a2):
     conn.execute(
         """
         INSERT INTO entitlement_wallets(
-            id, account_id, platform_user_id, balance_shell_micros, status
-        ) VALUES (?, ?, ?, ?, 'active')
+            id, account_id, platform_user_id, app_id, balance_shell_micros, status
+        ) VALUES (?, ?, ?, 'mingchan', ?, 'active')
         """,
         (w2_id, a2, user_id, _B2),
     )
@@ -56,17 +56,17 @@ def _seed_pre_migration_two_wallets(conn, *, user_id, a1, a2):
     conn.execute(
         """
         INSERT INTO entitlement_ledger(
-            id, wallet_id, account_id, platform_user_id, entry_type,
+            id, wallet_id, account_id, platform_user_id, app_id, entry_type,
             source_type, amount_shell_micros, balance_after_shell_micros, idempotency_key
-        ) VALUES ('ledger_pre_a2', ?, ?, ?, 'debit', 'chat_usage', -100, ?, 'idem-pre-a2')
+        ) VALUES ('ledger_pre_a2', ?, ?, ?, 'mingchan', 'debit', 'chat_usage', -100, ?, 'idem-pre-a2')
         """,
         (w2_id, a2, user_id, _B2 - 100),
     )
     conn.execute(
         """
         INSERT INTO cost_events(
-            id, wallet_id, account_id, platform_user_id, cost_type, idempotency_key
-        ) VALUES ('cost_pre_a2', ?, ?, ?, 'llm_tokens', 'cost-idem-pre-a2')
+            id, wallet_id, account_id, platform_user_id, app_id, cost_type, idempotency_key
+        ) VALUES ('cost_pre_a2', ?, ?, ?, 'mingchan', 'llm_tokens', 'cost-idem-pre-a2')
         """,
         (w2_id, a2, user_id),
     )
@@ -77,9 +77,7 @@ def _two_accounts_one_user(phone: str):
     # 决策 B：a1 = 用户账号（form-A，发 owner_binding + 建共享钱包）；a2 = 居民（form-B，无 binding、
     # 无独立钱包）。第二号走居民内部路径，不再用 create_ai4all_account_for_user 撞 #42 收敛。
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="迁移用户")
-    a1 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="甲"
-    )["account"]["id"]
+    a1 = make_user_account(user["id"], "甲", app_id="mingchan")
     a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
 

@@ -1,6 +1,6 @@
 # 朝夕相伴产品文档
 
-更新时间：2026-07-31
+更新时间：2026-08-04
 
 ## 产品 manifest
 
@@ -9,7 +9,7 @@
 | `app_id` | `zhaoxi` |
 | 状态 | 生产注册表已启用 |
 | 代码命名空间 | `app/products/zhaoxi/` |
-| 当前渠道 | 微信、Web/H5、朝夕 Native App |
+| 当前渠道 | 微信/OpenClaw；Web/H5 用于注册、扫码和用户入口 |
 | 规范产品入口 | `/api/v1/products/zhaoxi/*`；反代剥离兼容 `/v1/products/zhaoxi/*` |
 | 兼容入口 | 既有 `/web/*`、`/v1/*` 保持可用并固定为朝夕 audience |
 | 共享依赖 | [平台架构](../../architecture/shared/README.md)、[Agent Runtime](../../architecture/agent-runtime/README.md) |
@@ -28,8 +28,9 @@
 | 客户端/通道接入 | Base URL、鉴权、协议、错误码和机器契约 | [接入与契约](integrations/README.md) |
 | 产品能力 | 为什么做、具体业务规则、策略和验收标准 | 下方 `capabilities/` 专题 |
 
-当前微信端用户说明已独立为[微信端使用说明](experiences/wechat.md)。Native App 的开发联调文档与
-未来面向普通用户的 App 使用指南分开维护。
+当前微信端用户说明已独立为[微信端使用说明](experiences/wechat.md)。原 Native App / Companion
+World 已拆为独立产品[鸣蝉](../mingchan/README.md)，相关 PRD、客户端 handoff/brief 与 OpenAPI 已迁入
+鸣蝉目录，不再属于朝夕产品边界。
 
 未排期的朝夕产品事项统一进入[朝夕产品 Backlog](../../backlog/products/zhaoxi/README.md)；进入实施后
 再转为 [`docs/plans/products/zhaoxi/`](../../plans/products/zhaoxi/README.md) 中带验收条件的计划。
@@ -41,7 +42,6 @@
 | [注册与扫码接入](capabilities/onboarding_prd.md) | 手机号 OTP、首次扫码绑定、解绑、后续重复绑定策略 | [身份模型与微信绑定](../../architecture/shared/access/identity_model_and_wechat_binding.md) |
 | [首次聊天 Onboarding](capabilities/first_chat_onboarding_prd.md) | 绑定后两步主动引导、用户称呼、AI 称呼与人设合并设置、留白养成、跳过容错 | [Conversation Orchestrator](../../architecture/agent-runtime/conversation_orchestrator_design.md)、[Agent Context Files](../../architecture/agent-runtime/agent_context_files.md) |
 | [陪伴式聊天](capabilities/companion_chat_prd.md) | 微信私聊、陪伴体验、默认 Soul、安全边界 | [Conversation Orchestrator 主对话场景技术设计](../../architecture/agent-runtime/conversation_orchestrator_design.md) |
-| [朝夕相伴 App 端（Companion World）](capabilities/companion_world_app_prd.md) | App 形态：私人世界、1–10 位居民、世界动态、居民生命周期、信箱、限时来访与真人聊天 | [Companion World 3.0 重构 ADR](../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) |
 | [记忆与上下文](capabilities/memory_prd.md) | short-term context、daily notes、Dreaming、记忆管理 | [Agent Context Files](../../architecture/agent-runtime/agent_context_files.md) |
 | [主动消息与提醒](capabilities/proactive_prd.md) | 用户提醒、陪伴跟进、内容推送 | [主动消息与提醒设计](../../architecture/products/zhaoxi/proactive_messaging_design.md) |
 | [用户标签与元属性建设](capabilities/user_meta_attributes_prd.md) | 生命周期、活跃强度、陪伴类型、安全风险、主动触达反馈、权益增长画像 | 待补充 |

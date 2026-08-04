@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, time
 from typing import Any, Dict, Optional
 
 from app.config import settings
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.db import (
     count_outbound_in_window,
     count_total_proactive_outbound_for_quota_date,
@@ -158,17 +159,7 @@ def evaluate_outbound_policy(
         "source": source,
         **(metadata or {}),
     }
-    raw_scope_ids = (metadata or {}).get("human_proactive_account_ids")
-    if isinstance(raw_scope_ids, (list, tuple)):
-        scope_account_ids = tuple(
-            dict.fromkeys(
-                str(item).strip() for item in raw_scope_ids if str(item).strip()
-            )
-        )
-    else:
-        scope_account_ids = ()
-    if account_id not in scope_account_ids:
-        scope_account_ids = (account_id, *scope_account_ids)
+    scope_account_ids = (account_id,)
 
     account = get_account(account_id=account_id)
     if account is None:
@@ -176,6 +167,13 @@ def evaluate_outbound_policy(
             quota_date=quota_date,
             category=category,
             reason="account_not_found",
+            metadata=policy_metadata,
+        )
+    if str(account.get("app_id") or "") != ZHAOXI_APP_ID:
+        return _blocked(
+            quota_date=quota_date,
+            category=category,
+            reason="product_scope_mismatch",
             metadata=policy_metadata,
         )
     if account.get("status") != "active":

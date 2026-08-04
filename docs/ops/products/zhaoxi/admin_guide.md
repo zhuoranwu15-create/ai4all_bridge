@@ -373,9 +373,14 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 
 ## Companion World P1 发布运行手册
 
+> **历史说明（2026-08-04）：** Companion World 已拆为鸣蝉产品，本节及后续 M3/M4/M5 内容只保留
+> 拆分前发布 provenance，不得继续作为当前 Runbook。鸣蝉首次启用统一使用
+> [`../mingchan/production_first_enablement.md`](../mingchan/production_first_enablement.md)；旧 carry-in
+> backfill 脚本已删除，禁止恢复或执行。
+
 本节只适用于 M2-C。发布原则是：**先以 flag=false 部署和迁移，再导入模板、按固定截点 backfill、对账，最后才允许小流量开 flag**。正式五位角色内容和客户端最低版本必须由产品/客户端团队提供，运维不得临时编造。
 
-注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
+注意：`COMPANION_WORLD_P1_ENABLED` 只门控 World API 与 auth 切换，**不是后台总开关**。L3 读/写/compact 由 `COMPANION_WORLD_L3_BACKGROUND_ENABLED` 独立控制，world-aware proactive 安全阀由 `COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED` 独立控制。关闭 API flag 不会自动改动另外两项；完整边界以 [`../architecture/products/mingchan/companion_world_3_0_refactor_design.md`](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md) 顶部“接手说明”为准。
 
 ### 1. 发布前输入与备份
 
@@ -496,6 +501,9 @@ Mailbox 使用独立 `COMPANION_WORLD_MAILBOX_ENABLED`。独立中心进程 `scr
 
 ### 4. 固定 cutoff 并 backfill
 
+> 本步骤已被产品拆分决策废止。鸣蝉不承接朝夕账号或 World 数据，不执行 backfill；启用前仅允许按
+> 鸣蝉首次启用检查单运行受控 clean-start precheck/cleanup。以下内容作为历史记录保留，示例命令不可执行。
+
 在开始 backfill 前记录一个**北京墙钟、秒粒度且全程不变**的 cutoff。生产 PG 示例：
 
 ```bash
@@ -508,10 +516,10 @@ psql "$DATABASE_URL" -Atc \
 ```bash
 CUTOFF='2026-07-22 12:00:00'
 
-.venv/bin/python scripts/backfill_companion_world.py \
+<已废止的 legacy backfill 命令> \
   --dry-run --batch-size 500 --created-before "$CUTOFF"
 
-.venv/bin/python scripts/backfill_companion_world.py \
+<已废止的 legacy backfill 命令> \
   --dry-run --batch-size 500 --created-before "$CUTOFF" \
   --resume-after '<上一批 next_resume_after>'
 ```
@@ -641,7 +649,7 @@ COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 
 | 开关 | 实际门控 | 不门控 | 回滚动作 |
 |---|---|---|---|
-| `COMPANION_WORLD_FEED_ENABLED` | Feed API、AI world-content scheduler、Feed outbox consumer | P1 API、L3、proactive、通知 | 设为 false，并停止 `scripts/run_world_content_scheduler.py` |
+| `COMPANION_WORLD_FEED_ENABLED` | Feed API、AI world-content scheduler、Feed outbox consumer | P1 API、L3、proactive、通知 | 设为 false，并停止 `scripts/run_mingchan_world_content_scheduler.py` |
 | `COMPANION_WORLD_APP_INBOX_ENABLED` | 通知 API、AppInboxAdapter visible 写入 | 微信 outbound、真人级候选生成、既有通知 cleanup | 设为 false；保留 cleanup 和已存在通知行 |
 | `COMPANION_WORLD_APP_ONLY_HUMAN_PROACTIVE_ENABLED` | 无真实微信路由时的真人级 App reservation/投递 | per-resident reminder/commitment、通知读取、微信 legacy 路径 | 单独设为 false，不要连带关闭 inbox |
 
@@ -649,7 +657,11 @@ App-only 真人级触达的有效条件是 `COMPANION_WORLD_APP_INBOX_ENABLED &&
 
 ### 2. 进程拓扑与灰度顺序
 
-`scripts/run_world_content_scheduler.py` 必须只在一个 central-capable 实例运行。即使 PostgreSQL 的 slot claim 能阻止重复发布，也不得用多实例替代单例部署约束。outbox claim 支持 PG 多 worker，但当前脚本把生成与 outbox 串在同一单例中；不要在 aliyun1、aliyun2 厚节点各启动一份。通知 cleanup 只由 central proactive scheduler 执行，node scheduler 不重复执行。
+> 2026-08-04 owner 校正：此 world-content worker 已归鸣蝉；本段暂留朝夕 legacy runbook，线上
+> 启用鸣蝉前应迁入 `ops/products/mingchan/`。当前变量名仍保持 `COMPANION_WORLD_*`，后续配置批次
+> 再改为 `MINGCHAN_*`。
+
+`scripts/run_mingchan_world_content_scheduler.py` 必须只在一个 central-capable 实例运行。即使 PostgreSQL 的 slot claim 能阻止重复发布，也不得用多实例替代单例部署约束。outbox claim 支持 PG 多 worker，但当前脚本把生成与 outbox 串在同一单例中；不要在 aliyun1、aliyun2 厚节点各启动一份。通知 cleanup 只由 central proactive scheduler 执行，node scheduler 不重复执行。
 
 推荐顺序：
 

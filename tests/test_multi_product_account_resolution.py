@@ -98,6 +98,7 @@ def test_disabled_membership_cannot_create_resident_runtime_account(fresh_db):
             universe_id=universe["id"],
             character_template_id=template["id"],
             display_name="不可创建居民",
+            app_id="zhaoxi",
         )
 
 

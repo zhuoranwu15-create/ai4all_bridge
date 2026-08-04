@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""导出朝夕 App 客户端 `/v1` 契约到 OpenAPI snapshot（CONTRACT-001）。
+"""导出鸣蝉 App 规范产品 API 契约到 OpenAPI snapshot（CONTRACT-001）。
 
 用法::
 
@@ -13,9 +13,8 @@ FastAPI startup 事件——`init_db()` 挂在 `app/bootstrap/lifecycle.py` 的 
 
 范围与口径：
 
-* 只导出内部客户端契约的 ``/v1/...``。规范前缀 ``/v1/products/zhaoxi`` 与
-  ``/api/v1/products/zhaoxi`` 是同一批路由的另外两个挂载点，导出会产生重复条目，
-  故一并排除；公网 ``/api/v1/xxx`` 由 nginx 原 URI 透传到同一套路由。
+* 只导出鸣蝉规范前缀 ``/api/v1/products/mingchan/...``；反代剥离兼容前缀
+  ``/v1/products/mingchan/...`` 不进入客户端主契约。
 * 输出是**确定性**的（键排序 + 固定缩进），否则 CI 的 snapshot 比对会因字典顺序抖动而红。
 * 只有补了 ``response_model`` 的主链路端点才有真实响应 schema；其余端点当前只冻结路径与
   请求体，这是 CONTRACT-001 的既定分步（见 M1 服务端计划 §2.15）。
@@ -31,30 +30,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-# 客户端契约的挂载前缀，以及需要排除的同源重复挂载点。
-CLIENT_PREFIX = "/v1/"
-DUPLICATE_MOUNT_PREFIXES = ("/v1/products/", "/api/v1/products/")
+# 客户端契约只采用稳定的规范产品前缀。
+CLIENT_PREFIX = "/api/v1/products/mingchan/"
 
-SNAPSHOT_PATH = REPO_ROOT / "docs/products/zhaoxi/openapi/app_v1.json"
+SNAPSHOT_PATH = REPO_ROOT / "docs/products/mingchan/openapi/app_v1.json"
 
 # snapshot 描述的是**契约**，不是某次构建。标题/版本固定写死，避免 app 元数据改动
 # （比如给 Swagger 换个标题）把整个 snapshot 顶掉。
 SNAPSHOT_INFO = {
-    "title": "朝夕相伴 App 客户端 API",
+    "title": "鸣蝉 App 客户端 API",
     "version": "v1",
     "description": (
-        "朝夕相伴移动端 App 对接的 /v1 契约。公网入口 https://ai4company.top/api/v1/，"
-        "服务端同时挂载对应公网路径；nginx 原 URI 透传。落地口径见 "
-        "docs/products/zhaoxi/app_api_handoff.md。"
+        "鸣蝉 Native App 对接的固定产品契约。规范入口为 "
+        "https://ai4company.top/api/v1/products/mingchan/；落地口径见 "
+        "docs/products/mingchan/app_api_handoff.md。"
     ),
 }
 
 
 def _is_client_path(path: str) -> bool:
-    """只保留客户端直连的 /v1 路径，剔除同一批路由的其它挂载点。"""
-    if not path.startswith(CLIENT_PREFIX):
-        return False
-    return not path.startswith(DUPLICATE_MOUNT_PREFIXES)
+    """只保留鸣蝉客户端规范产品路径。"""
+    return path.startswith(CLIENT_PREFIX)
 
 
 def _collect_schema_refs(node, found: set[str]) -> None:

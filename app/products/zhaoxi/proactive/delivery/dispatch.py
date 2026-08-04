@@ -12,14 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-from app.platform.channels import CHANNEL_APP
 from app.config import settings
-from app.products.zhaoxi.application import (
-    HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-    count_human_proactive_inbound_after,
-    human_level_proactive_allowed,
-    resolve_human_proactive_scope,
-)
 from app.db import (
     claim_content_invitation_for_send,
     list_due_reactivation_candidate_accounts,
@@ -91,17 +84,6 @@ def dispatch_reactivation_candidate(
     发送公共路径不再有 LLM 调用。
     """
     current = now or beijing_naive_now()
-    if not human_level_proactive_allowed(account_id):
-        clear_reactivation_candidate(
-            account_id=account_id,
-            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-            now=current,
-        )
-        return _no_op(
-            account_id=account_id,
-            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-            now=current,
-        )
     allowed_windows = _account_allowed_windows(account_id)
     candidate = get_reactivation_candidate(account_id=account_id)
     if candidate is None:
@@ -137,13 +119,8 @@ def dispatch_reactivation_candidate(
     # 仅统计入站消息（不含 bot 自身/提醒等出站），以候选 generated_at 为基准。
     generated_at = _parse_reactivation_time(candidate.get("generated_at"))
     if generated_at is not None:
-        owner_inbound_since = count_human_proactive_inbound_after(
-            account_id, after=format_reactivation_time(generated_at)
-        )
-        inbound_since = (
-            owner_inbound_since
-            if owner_inbound_since is not None
-            else _inbound_count_after(account_id=account_id, after=generated_at)
+        inbound_since = _inbound_count_after(
+            account_id=account_id, after=generated_at
         )
         if inbound_since > 0:
             clear_reactivation_candidate(
@@ -212,11 +189,8 @@ def dispatch_reactivation_candidate(
     if route is None:
         return _no_op(account_id=account_id, reason="missing_channel_route", now=current)
 
-    # 微信仍要求 24h context token；App inbox 是原生拉取通道，不套微信可达窗口。
-    if (
-        route.get("channel") != CHANNEL_APP
-        and get_account_touch_state(account_id=account_id, now=current) == STALE
-    ):
+    # 朝夕主动触达只有微信路由，必须满足 24h context token。
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
         clear_reactivation_candidate(
             account_id=account_id,
             reason="proactive_touch_stale",
@@ -418,21 +392,11 @@ def dispatch_due_reactivation_candidates(
         return []
     due_accounts = list_due_reactivation_candidate_accounts(
         now=format_reactivation_time(current),
-        limit=max(1, int(limit)) * 11,
+        limit=max(1, int(limit)),
         node_id=node_id,
     )
-    grouped_accounts: Dict[str, str] = {}
-    for account_id in due_accounts:
-        scope = resolve_human_proactive_scope(account_id)
-        key = scope.platform_user_id if scope else f"account:{account_id}"
-        existing = grouped_accounts.get(key)
-        if existing is None or (
-            human_level_proactive_allowed(account_id)
-            and not human_level_proactive_allowed(existing)
-        ):
-            grouped_accounts[key] = account_id
     results: List[Dict[str, Any]] = []
-    for account_id in list(grouped_accounts.values())[: max(1, int(limit))]:
+    for account_id in due_accounts:
         results.append(
             dispatch_reactivation_candidate(
                 account_id=account_id,

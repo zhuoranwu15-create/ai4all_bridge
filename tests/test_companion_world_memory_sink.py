@@ -6,11 +6,11 @@ import pytest
 
 import app.db as db
 from app.agent_runtime.ports import MemoryEvent, MemoryProvenance
-from app.products.zhaoxi.domain.companion_world.memory_sink import CompanionWorldMemorySink
-from app.products.zhaoxi.application import (
-    build_companion_world_memory_sink,
-    compact_companion_world_memory_batch,
+from app.products.mingchan.application import (
+    build_mingchan_world_memory_sink,
+    compact_mingchan_world_memory_batch,
 )
+from app.products.mingchan.domain.memory_sink import MingchanWorldMemorySink
 from tests.factories import create_account, make_resident_account
 
 
@@ -41,7 +41,7 @@ def _event(
 
 def test_domain_sink_routes_l3_keeps_l2_local_and_rejects_unknown():
     emitted = []
-    sink = CompanionWorldMemorySink(emitted.append)
+    sink = MingchanWorldMemorySink(emitted.append)
     for fact_type in (
         "user_identity",
         "user_preference",
@@ -65,7 +65,7 @@ def test_domain_sink_routes_l3_keeps_l2_local_and_rejects_unknown():
 def test_platform_sink_is_noop_for_form_a_and_isolates_universes(fresh_db):
     form_a = "acc-form-a-memory"
     create_account(form_a)
-    sink = build_companion_world_memory_sink()
+    sink = build_mingchan_world_memory_sink()
     sink.emit(_event(form_a))
     assert db.resolve_resident_memory_scope(runtime_account_id=form_a) is None
 
@@ -75,8 +75,8 @@ def test_platform_sink_is_noop_for_form_a_and_isolates_universes(fresh_db):
     user_b = db.create_or_get_platform_user_by_phone(
         phone="19950003002", display_name="B"
     )
-    account_a = make_resident_account(user_a["id"], "居民A")
-    account_b = make_resident_account(user_b["id"], "居民B")
+    account_a = make_resident_account(user_a["id"], "居民A", app_id="mingchan")
+    account_b = make_resident_account(user_b["id"], "居民B", app_id="mingchan")
     scope_a = db.resolve_resident_memory_scope(runtime_account_id=account_a)
     scope_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)
 
@@ -94,11 +94,11 @@ def test_platform_sink_is_noop_for_form_a_and_isolates_universes(fresh_db):
 
 def test_l3_background_switch_disables_sink_and_compact(fresh_db, monkeypatch):
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_memory.settings.companion_world_l3_background_enabled",
+        "app.products.mingchan.application.memory.settings.mingchan_l3_background_enabled",
         False,
     )
-    assert build_companion_world_memory_sink() is None
-    assert compact_companion_world_memory_batch(limit=10) == {
+    assert build_mingchan_world_memory_sink() is None
+    assert compact_mingchan_world_memory_batch(limit=10) == {
         "scanned": 0,
         "merged_groups": 0,
         "superseded_facts": 0,
@@ -144,7 +144,7 @@ def test_dreaming_emits_only_applied_distilled_memory(fresh_db):
         ensure_ascii=False,
     )
     events = []
-    sink = CompanionWorldMemorySink(events.append)
+    sink = MingchanWorldMemorySink(events.append)
     with patch(
         "app.agent_runtime.llm.service.generate_completion_with_usage", return_value=(payload, None)
     ):
@@ -173,8 +173,8 @@ def test_compact_exact_normalized_duplicates_is_idempotent(fresh_db):
     user = db.create_or_get_platform_user_by_phone(
         phone="19950003003", display_name="compact"
     )
-    account_a = make_resident_account(user["id"], "居民一")
-    account_b = make_resident_account(user["id"], "居民二")
+    account_a = make_resident_account(user["id"], "居民一", app_id="mingchan")
+    account_b = make_resident_account(user["id"], "居民二", app_id="mingchan")
     scope_a = db.resolve_resident_memory_scope(runtime_account_id=account_a)
     scope_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)
     universe_id = scope_a["universe_id"]
@@ -221,6 +221,6 @@ def test_compact_exact_normalized_duplicates_is_idempotent(fresh_db):
     assert {item["superseded_by"] for item in superseded} == {merged["id"]}
     assert db.compact_universe_facts(universe_id=universe_id)["merged_groups"] == 0
 
-    batch = compact_companion_world_memory_batch(limit=10)
+    batch = compact_mingchan_world_memory_batch(limit=10)
     assert batch["scanned"] == 1
     assert batch["merged_groups"] == 0

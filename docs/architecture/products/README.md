@@ -6,3 +6,4 @@
 | 产品 | 架构入口 |
 | --- | --- |
 | 朝夕相伴 | [朝夕产品架构](zhaoxi/README.md) |
+| 鸣蝉 | [鸣蝉产品架构](mingchan/README.md) |

@@ -16,6 +16,7 @@ class NeutralProductTurnServices:
     """仅供 contract 测试的无业务产品服务，不创建生产产品目录。"""
 
     app_id = "test_product"
+    allowed_channels = (CHANNEL_APP,)
     tool_policy = ToolPolicy.allow_all(
         app_id=app_id,
         catalog=SHARED_TOOL_REGISTRY,
@@ -26,6 +27,9 @@ class NeutralProductTurnServices:
     onboarding_step3_sent = "step3_sent"
     onboarding_complete = "complete"
     onboarding_welcome_text = ""
+
+    def __init__(self) -> None:
+        self.registry = build_test_product_registry()
 
     def prepare_session(self, **kwargs) -> ProductSessionSetup:
         state = db.get_or_create_session(

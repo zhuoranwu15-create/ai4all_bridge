@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.products.zhaoxi.application.product_localization import (
+from app.products.mingchan.application.product_localization import (
     normalize_public_error_code,
     product_message,
 )

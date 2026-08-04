@@ -70,16 +70,14 @@ def test_multi_account_rpm_shares_subject(fresh_db):
         get_platform_user_id_for_account,
     )
     from app.platform.quota.rate_limiter import RateLimiter
-    from tests.factories import make_resident_account
+    from tests.factories import make_resident_account, make_user_account
 
     with patch("app.db.settings", fresh_db):
         user = create_or_get_platform_user_by_phone(
             phone="13800040001", display_name="多号RPM"
         )
         # 决策 B：a1 = 用户账号（form-A）；a2 = 居民（form-B，无 binding），经世界归属解析成同一 subject。
-        a1 = create_ai4all_account_for_user(
-            platform_user_id=user["id"], display_name="甲"
-        )["account"]["id"]
+        a1 = make_user_account(user["id"], "甲", app_id="mingchan")
         a2 = make_resident_account(user["id"], "乙")
 
         # turn_service 的 subject 解析（孤儿号回退 account_id）。

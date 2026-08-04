@@ -10,7 +10,7 @@ from typing import Dict, Optional
 
 from app.agent_runtime.persistence import profile_storage
 from app.db._backend import Connection
-from app.platform.channels import CHANNEL_WEIXIN
+from app.platform.channels import CHANNEL_WEB, CHANNEL_WEIXIN
 from app.config import settings
 from app.products.zhaoxi.domain.creator_role_templates import (
     CreatorRoleTemplateContent,
@@ -63,7 +63,7 @@ CONTEXT_FILE_ORDER = SYSTEM_CONTEXT_FILES + USER_CONTEXT_FILE_ORDER
 
 CONTEXT_KEY_BY_FILE = {filename: filename[:-3] for filename in CONTEXT_FILE_ORDER}
 _NO_NAME_IDENTITY_LINE = "- 你还没有名字。以「我」或「你的微信好友」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
-# 中性无名自称行（native/web 播种用，去「微信好友」字样）；weixin 仍用上面的原文（原则一）。
+# Web 播种用中性无名自称行（去「微信好友」字样）；weixin 仍用上面的原文（原则一）。
 _NO_NAME_IDENTITY_LINE_NEUTRAL = "- 你还没有名字。以「我」自称，不要说出 AI4ALL、OpenClaw 等产品名。"
 _LEGACY_DEFAULT_ASSISTANT_NAMES = {"AI4ALL 助手"}
 # 仅留触发条件；"基于工具结果不要凭印象""时间看运行时"已由系统【事实准确与核实纪律】统一约束。
@@ -124,14 +124,24 @@ def _is_system_context_file(filename: str) -> bool:
     return filename in SYSTEM_CONTEXT_FILES
 
 
+def _require_zhaoxi_profile_channel(channel: str) -> str:
+    """拒绝把鸣蝉 native channel 送入朝夕 profile 播种与读取路径。"""
+
+    cleaned = str(channel or "unknown").strip() or "unknown"
+    if cleaned not in {CHANNEL_WEIXIN, CHANNEL_WEB, "unknown"}:
+        raise ValueError(f"channel not allowed for zhaoxi profile: {cleaned}")
+    return cleaned
+
+
 def _resolve_system_context_path(system_dir: Path, filename: str, channel: str) -> Path:
     """解析系统级文件（AGENTS/TOOLS）的渠道变体路径。
 
     weixin（默认，也是未知渠道回落档）→ 原文件（字节级等价现状，原则一）。
-    native/web → 优先同名变体 ``<stem>.<channel>.md``（如 AGENTS.native.md），存在即用；
+    web → 优先同名变体 ``<stem>.web.md``，存在即用；
     缺失则回落原文件——即「未提供变体 = 无回归」，渐进式去微信味不阻断上线。
     """
-    if channel == CHANNEL_WEIXIN:
+    channel = _require_zhaoxi_profile_channel(channel)
+    if channel in {CHANNEL_WEIXIN, "unknown"}:
         return system_dir / filename
     variant = system_dir / f"{filename[:-3]}.{channel}.md"
     return variant if variant.exists() else system_dir / filename
@@ -616,9 +626,10 @@ def _default_user_context_templates(
     """账号级 profile 文件的首建模板。
 
     ``channel`` 决定 IDENTITY 播种文案的渠道口径：weixin（默认，也是未知渠道回落档）保持
-    现状原文（原则一：微信字节不变）；native/web 去「微信」字样，改中性表述，避免 App/Web
+    现状原文（原则一：微信字节不变）；web 去「微信」字样，改中性表述，避免 Web
     面把自己说成「微信好友」。仅影响**首次播种**（懒创建、已存在不覆盖）。
     """
+    channel = _require_zhaoxi_profile_channel(channel)
     assistant_name = (display_name or "").strip()
     if assistant_name in _LEGACY_DEFAULT_ASSISTANT_NAMES:
         assistant_name = ""
@@ -728,7 +739,7 @@ def read_agent_context(
     ``channel`` 决定两处渠道口径（默认 weixin，也是未知渠道回落档，均字节级等价现状）：
     1) 账号级文件首次播种的 IDENTITY 文案（见 ensure_agent_context_files）；
     2) 系统级 AGENTS/TOOLS 的渠道变体解析（见 _resolve_system_context_path）：weixin 读原文，
-       native/web 优先读同名 .<channel>.md 变体、缺失则回落原文（无变体即无回归）。
+       web 优先读同名 ``.web.md`` 变体、缺失则回落原文（无变体即无回归）。
     """
     ensure_system_context_files()
     user_created = ensure_agent_context_files(

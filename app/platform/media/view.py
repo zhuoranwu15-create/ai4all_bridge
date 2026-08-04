@@ -125,7 +125,9 @@ def stored_content_preview(
     return cleaned or _PREVIEW_BY_CONTENT_TYPE.get(stored["type"], "")
 
 
-def _sign_read_url(*, media_id: str, scope: str, ttl_seconds: int) -> Optional[str]:
+def _sign_read_url(
+    *, media_id: str, scope: str, ttl_seconds: int, path_prefix: str
+) -> Optional[str]:
     """现签一条读 URL；签不出来返回 ``None`` 而不是抛错。
 
     两种签不出的情形都不该让整页读接口 500：部署缺 secret（记 error，是运维问题），
@@ -133,7 +135,10 @@ def _sign_read_url(*, media_id: str, scope: str, ttl_seconds: int) -> Optional[s
     """
     try:
         return sign_media_url(
-            media_id=media_id, scope=scope, ttl_seconds=ttl_seconds
+            media_id=media_id,
+            scope=scope,
+            ttl_seconds=ttl_seconds,
+            path_prefix=path_prefix,
         ).url
     except MediaSigningNotConfiguredError:
         logger.error("media_signing_secret_missing media_id=%s", media_id)
@@ -143,7 +148,11 @@ def _sign_read_url(*, media_id: str, scope: str, ttl_seconds: int) -> Optional[s
 
 
 def build_feed_image_item(
-    *, asset: Mapping[str, Any], scope: str, ttl_seconds: int
+    *,
+    asset: Mapping[str, Any],
+    scope: str,
+    ttl_seconds: int,
+    path_prefix: str = "/api/v1/media",
 ) -> Optional[Dict[str, Any]]:
     """把一条图片资产投影成图文动态 ``content.images[]`` 里的一项。
 
@@ -156,7 +165,12 @@ def build_feed_image_item(
     media_id = str(asset.get("id") or "")
     return {
         "media_id": media_id,
-        "url": _sign_read_url(media_id=media_id, scope=scope, ttl_seconds=ttl_seconds),
+        "url": _sign_read_url(
+            media_id=media_id,
+            scope=scope,
+            ttl_seconds=ttl_seconds,
+            path_prefix=path_prefix,
+        ),
         "width": asset.get("width"),
         "height": asset.get("height"),
     }
@@ -168,6 +182,7 @@ def build_media_content(
     caption: Optional[str],
     scope: str,
     ttl_seconds: int,
+    path_prefix: str = "/api/v1/media",
 ) -> Dict[str, Any]:
     """把一条 ``media_assets`` 行投影成 D-1 的 ``content``，并现签一条读 URL。
 
@@ -192,6 +207,9 @@ def build_media_content(
         # transcript 是用户自己说的话，不是服务端生成内容，因此允许下发（D-2 的唯一例外）。
         content["transcript"] = asset.get("transcript")
     content["url"] = _sign_read_url(
-        media_id=str(asset.get("id") or ""), scope=scope, ttl_seconds=ttl_seconds
+        media_id=str(asset.get("id") or ""),
+        scope=scope,
+        ttl_seconds=ttl_seconds,
+        path_prefix=path_prefix,
     )
     return content

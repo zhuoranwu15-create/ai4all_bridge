@@ -7,7 +7,6 @@ from app.routers.deps import verify_admin_auth
 from app.db import get_account, get_dreaming_memory_item, get_dreaming_run, list_dreaming_memory_items, list_dreaming_runs, list_memory_events
 from app.products.zhaoxi.application.memory.dreaming import rollback_memory_item, run_dreaming, summarize_dreaming_run_for_debug, summarize_memory_item_for_debug
 from app.products.zhaoxi.jobs.dreaming.scheduler import get_dreaming_scheduler, run_dreaming_scheduler_once
-from app.products.zhaoxi.application import build_companion_world_memory_sink, compact_companion_world_memory_batch
 from datetime import date as date_cls
 from typing import Optional
 
@@ -30,7 +29,6 @@ def admin_run_account_dreaming(
         source_type="manual_admin",
         actor_type="admin",
         actor_id="admin_api",
-        memory_sink=build_companion_world_memory_sink(),
     )
 
 
@@ -155,11 +153,5 @@ async def admin_dreaming_scheduler_run_once(
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     result = await run_dreaming_scheduler_once(
         batch_size=limit,
-        memory_sink=build_companion_world_memory_sink(),
-        memory_compactor=(
-            compact_companion_world_memory_batch
-            if settings.has_central_role
-            else None
-        ),
     )
     return {"status": "ok", "run": result}

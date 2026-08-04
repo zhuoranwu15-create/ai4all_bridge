@@ -2,13 +2,8 @@
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.platform.channels import CHANNEL_APP
 from app.time_utils import beijing_naive_now
 from app.db import get_account, get_proactive_account_state
-from app.products.zhaoxi.application import (
-    HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-    human_level_proactive_allowed,
-)
 from app.products.zhaoxi.proactive.contract.common import _select_route
 from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
 from app.products.zhaoxi.proactive.delivery.touch_state import STALE, get_account_touch_state
@@ -35,12 +30,6 @@ def decide_account_check_action(
         return _no_op(account_id=account_id, reason="account_not_found", now=current)
     if account.get("status") != "active":
         return _no_op(account_id=account_id, reason="account_not_active", now=current)
-    if not human_level_proactive_allowed(account_id):
-        return _no_op(
-            account_id=account_id,
-            reason=HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
-            now=current,
-        )
     state = get_proactive_account_state(account_id=account_id)
     if state is None:
         return _no_op(account_id=account_id, reason="proactive_state_missing", now=current)
@@ -72,10 +61,7 @@ def decide_account_check_action(
             metadata={"candidate_id": candidate["id"]},
         )
 
-    if (
-        route.get("channel") != CHANNEL_APP
-        and get_account_touch_state(account_id=account_id, now=current) == STALE
-    ):
+    if get_account_touch_state(account_id=account_id, now=current) == STALE:
         return _no_op(
             account_id=account_id, reason="proactive_touch_stale", now=current
         )
@@ -104,13 +90,6 @@ def execute_account_check_decision(
         return {
             "status": "skipped",
             "reason": decision.get("reason") or "not_send_text",
-            "decision": decision,
-        }
-
-    if not human_level_proactive_allowed(str(decision["account_id"])):
-        return {
-            "status": "skipped",
-            "reason": HUMAN_LEVEL_PROACTIVE_BLOCKED_REASON,
             "decision": decision,
         }
 

@@ -13,7 +13,10 @@ from app.bootstrap.lifecycle import install_shared_shutdown, install_shared_star
 from app.config import settings
 from app.products.zhaoxi.manifest import (
     install_access_routes,
-    install_product_lifecycle,
+    install_product_lifecycle as install_zhaoxi_lifecycle,
+)
+from app.products.mingchan.manifest import (
+    install_product_lifecycle as install_mingchan_lifecycle,
 )
 
 _LOCAL_DEBUG_UI_ENVS = {"local", "development", "test"}
@@ -97,7 +100,8 @@ def create_app() -> FastAPI:
             return RedirectResponse(target)
 
     install_shared_startup(app)
-    install_product_lifecycle(app)
+    install_zhaoxi_lifecycle(app)
+    install_mingchan_lifecycle(app)
     install_shared_shutdown(app)
     return app
 

@@ -6,15 +6,16 @@ import threading
 import pytest
 
 import app.db as db
+from app.bootstrap.product_registry import build_test_product_registry
 from app.db._backend import is_postgres
-from app.products.zhaoxi.domain.companion_world import (
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     ResidentSelection,
     TemplateDraft,
     user_post_fingerprint,
 )
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.mingchan.application import SqlCompanionWorldRepository
 from tests.factories import make_resident_account
 
 
@@ -48,7 +49,15 @@ def test_concurrent_tenth_and_eleventh_resident_only_one_commits(fresh_db):
             persona_version=f"v{rank}",
             initial_candidate_rank=rank,
         )
-    service = CompanionWorldService(SqlCompanionWorldRepository())
+    registry = build_test_product_registry()
+    db.ensure_product_membership(
+        platform_user_id=user_id,
+        app_id="mingchan",
+        registry=registry,
+    )
+    service = CompanionWorldService(
+        SqlCompanionWorldRepository(registry=registry)
+    )
     boot = service.bootstrap_home(user_id)
     service.confirm_residents(
         user_id,
@@ -61,7 +70,9 @@ def test_concurrent_tenth_and_eleventh_resident_only_one_commits(fresh_db):
     barrier = threading.Barrier(2)
 
     def _create(index: int) -> str:
-        local = CompanionWorldService(SqlCompanionWorldRepository())
+        local = CompanionWorldService(
+            SqlCompanionWorldRepository(registry=registry)
+        )
         barrier.wait(timeout=5)
         try:
             local.create_resident(

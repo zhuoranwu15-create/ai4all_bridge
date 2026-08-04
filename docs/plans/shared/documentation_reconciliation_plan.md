@@ -4,6 +4,12 @@
 
 状态：**进行中。P0–P3 已完成；P4 持续治理门禁待继续。**
 
+> **2026-08-04 产品边界更新：** DOC-003/DOC-004 中“朝夕同时拥有 Native App/Companion World”
+> 与“App 规范入口属于 zhaoxi”的结论已被朝夕 / 鸣蝉拆分决策取代。当前事实是
+> `zhaoxi=微信/OpenClaw+Web/H5`、`mingchan=Native App+Companion World`，鸣蝉规范入口为
+> `/api/v1/products/mingchan/*`；详见
+> [拆分计划](zhaoxi_mingchan_product_split_plan.md)。下表保留原裁决作为文档治理历史。
+
 ## 1. 目标与边界
 
 本计划负责把项目从“微信单形态 AI 陪伴 Bot”演进到“一个产品可有多种形态、后端可承载多个
@@ -44,7 +50,7 @@
 | DOC-002 | central/node 生产拓扑 | 总览仍描述瘦 node 不碰 DB、turn 全转发中心；厚节点 Runbook 与当前代码描述 node 本地 turn、直连中心 PG | `app/bootstrap/lifecycle.py`；`deploy/systemd/aliyun2-system/`；`ops/platform/p5_production_upgrade_runbook.md`；部署差异实测 | aliyun1 为 `central,node`，aliyun2 为厚 `node`；两端本地处理各自微信 turn 并读写同一中心 PG；只有 central 执行 DDL migration 和 central-only scheduler | `architecture/overview.md`、`ops/platform/aliyun1_aliyun2_deployment_diff.md` | 已回写 |
 | DOC-003 | 产品、形态与渠道 | 早期文档把项目、微信 Bot、朝夕产品与 App 形态混用 | 产品注册表；朝夕 manifest；`ProductTurnServices` 注入边界 | AI4ALL 是多产品后端；`zhaoxi` 是当前唯一启用产品；微信、Web/H5、Native App 是朝夕的入口/形态；Companion World 是朝夕领域，不是共享模型 | `products/README.md`、`products/zhaoxi/README.md`、`architecture/core-model.md` | 已回写 |
 | DOC-004 | App API 规范入口 | `/api/v1/` 与 `/api/v1/products/zhaoxi/` 在交接文档中均被描述为首选 | `app/products/zhaoxi/manifest.py`；产品 manifest；现有兼容路由 | 新客户端和新文档使用 `/api/v1/products/zhaoxi/`；既有 `/api/v1/` 继续兼容并固定为朝夕 audience | `products/zhaoxi/README.md`、App quickstart | 已回写 |
-| DOC-005 | App OpenAPI 覆盖 | quickstart 手写“10 个”，完整交接手写“24 个”，容易继续漂移 | `docs/products/zhaoxi/openapi/app_v1.json`；`tests/test_app_openapi_contract.py` | snapshot 与契约测试是机器事实；quickstart 不再重复数量，完整交接仅在需要解释覆盖边界时维护当前集合 | OpenAPI snapshot、`app_api_handoff.md` | 已回写 |
+| DOC-005 | App OpenAPI 覆盖 | quickstart 手写“10 个”，完整交接手写“24 个”，容易继续漂移 | `docs/products/mingchan/openapi/app_v1.json`；`tests/test_app_openapi_contract.py` | snapshot 与契约测试是机器事实；quickstart 不再重复数量，完整交接仅在需要解释覆盖边界时维护当前集合 | OpenAPI snapshot、`app_api_handoff.md` | 已回写 |
 | DOC-006 | App 生产能力位 | 设计/计划仍有 default-off 或待开量描述，交接文档称已开启 | 2026-07-31 生产 `GET /api/v1/app/config` 只读核验 | 当前生产返回 `voice_input`、Companion World 主能力及 v1.5 四个能力位均为 `true`；客户端仍必须按配置渲染 | `STATUS.md`、`app_client_brief.md`、`app_api_handoff.md` | 已回写 |
 | DOC-007 | 朝夕用户说明范围 | `user_guide.md` 仍只描述微信，并声称没有正式登录态/用户中心 | 当前 Web/App 路由与客户端契约；产品负责人 2026-07-31 决策 | 微信与 App 使用说明分开；旧文档改为微信端说明，App 用户指南在正式发布口径冻结后另建 | `products/zhaoxi/experiences/` | 已回写 |
 | DOC-008 | 完成计划状态 | 多份 M1/v1.5 计划仍写“待合入 main”，但相关提交已在当前主干 | Git 主干、计划验收表、当前实现 | M1、M2、v1.5 稳定事实已回写并归档；真实剩余项集中到朝夕 App backlog，不再借完成计划跟踪 | `plans/README.md`、`backlog/products/zhaoxi/`、`archive/deliveries/companion_world/` | 已回写 |

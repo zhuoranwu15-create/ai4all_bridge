@@ -4,7 +4,7 @@
 >
 > 交付基线：M5 PR #48 已合并为 `origin/main@3403380`；SQLite/PostgreSQL 全量 CI 均通过。M5 flags 继续 default-off，未执行生产 migration 或开量。
 >
-> 权威上位决策：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) D-02/D-06/D-11/D-12、§9、§10.9、§12 M5。
+> 权威上位决策：[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md) D-02/D-06/D-11/D-12、§9、§10.9、§12 M5。
 
 ## 0. 目标与边界
 

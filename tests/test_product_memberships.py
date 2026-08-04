@@ -6,7 +6,9 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import (
+    MINGCHAN_APP_ID,
     PRODUCTION_PRODUCT_REGISTRY,
+    ZHAOXI_APP_ID,
     ProductRegistration,
     ProductRegistry,
     build_test_product_registry,
@@ -14,10 +16,21 @@ from app.bootstrap.product_registry import (
 from app.db._backend import is_postgres
 
 
-def test_production_registry_only_enables_zhaoxi():
+def test_production_registry_enables_zhaoxi_and_keeps_mingchan_disabled():
     registrations = PRODUCTION_PRODUCT_REGISTRY.registrations()
-    assert [product.app_id for product in registrations] == ["zhaoxi"]
-    assert registrations[0].default_language == "zh-CN"
+    assert [
+        (product.app_id, product.enabled, product.default_language)
+        for product in registrations
+    ] == [
+        (MINGCHAN_APP_ID, False, "zh-CN"),
+        (ZHAOXI_APP_ID, True, "zh-CN"),
+    ]
+    assert (
+        PRODUCTION_PRODUCT_REGISTRY.require_registered(MINGCHAN_APP_ID).enabled
+        is False
+    )
+    with pytest.raises(ValueError, match="disabled app_id: mingchan"):
+        PRODUCTION_PRODUCT_REGISTRY.require_enabled(MINGCHAN_APP_ID)
     with pytest.raises(ValueError, match="unregistered app_id"):
         PRODUCTION_PRODUCT_REGISTRY.require_enabled("test_product")
 
@@ -32,6 +45,23 @@ def test_product_registry_validates_default_language():
         ProductRegistry(
             [ProductRegistration(app_id="bad_language", default_language="fr-FR")]
         )
+
+
+def test_product_registry_enforces_static_channel_allowlist():
+    registry = ProductRegistry(
+        [
+            ProductRegistration(
+                app_id="channel_product",
+                allowed_channels=("native",),
+            )
+        ]
+    )
+
+    assert registry.require_allowed_channel("channel_product", "native").app_id == (
+        "channel_product"
+    )
+    with pytest.raises(ValueError, match="channel not allowed"):
+        registry.require_allowed_channel("channel_product", "openclaw-weixin")
 
 
 def test_platform_user_upsert_ensures_zhaoxi_membership_idempotently(fresh_db):

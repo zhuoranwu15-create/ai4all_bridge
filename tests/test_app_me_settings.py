@@ -1,15 +1,41 @@
 """S6「我的」Tab 收尾：Profile（ME-01）、注销申请（ME-06/07）、通知偏好（ME-10）。"""
 import json
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import app.db as db
+from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
 from app.platform.channels import CHANNEL_APP
-from app.products.zhaoxi.application import AppInboxAdapter
-from app.products.zhaoxi.domain.user_profile import USER_AVATAR_KEYS
-from app.products.zhaoxi.infrastructure.persistence import me_settings
-from app.products.zhaoxi.proactive.contract.common import _select_route
-from app.products.zhaoxi.proactive.delivery.outbound import dispatch_proactive_text
+from app.products.mingchan.application import AppInboxAdapter
+from app.products.mingchan.application.proactive import (
+    dispatch_resident_notification,
+)
+from app.products.mingchan.domain.user_profile import USER_AVATAR_KEYS
+from app.products.mingchan.infrastructure import (
+    account_deletion_records,
+    notification_preferences,
+)
+from app.products.mingchan.manifest import install_public_routes
 from app.time_utils import beijing_naive_now, beijing_now
 from tests.factories import make_resident_account
+
+
+MINGCHAN_API = "/api/v1/products/mingchan"
+
+
+@pytest.fixture
+def client(fresh_db):
+    """只安装启用态鸣蝉路由，测试不依赖已废弃的 App legacy namespace。"""
+
+    app = FastAPI()
+    install_public_routes(
+        app,
+        registry=build_test_product_registry(),
+        config=fresh_db,
+    )
+    return TestClient(app)
 
 
 def _verified_token(phone: str) -> str:
@@ -21,7 +47,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> tuple[dict, dict]:
     response = client.post(
-        "/v1/auth/session",
+        f"{MINGCHAN_API}/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -35,7 +61,7 @@ def _login(client, phone: str) -> tuple[dict, dict]:
 def test_profile_options_expose_controlled_avatars_and_limits(client):
     headers, _ = _login(client, "13800139000")
 
-    response = client.get("/v1/me/profile-options", headers=headers)
+    response = client.get(f"{MINGCHAN_API}/me/profile-options", headers=headers)
 
     assert response.status_code == 200
     data = response.json()
@@ -50,7 +76,7 @@ def test_profile_update_persists_and_me_reflects_it(client):
     avatar_key = next(iter(USER_AVATAR_KEYS))
 
     response = client.patch(
-        "/v1/me/profile",
+        f"{MINGCHAN_API}/me/profile",
         headers=headers,
         json={"display_name": "小满", "avatar_key": avatar_key},
     )
@@ -64,7 +90,7 @@ def test_profile_update_persists_and_me_reflects_it(client):
     assert "13800139001" not in response.text
     assert updated["phone_masked"] == login["platform_user"]["phone_masked"]
 
-    me = client.get("/v1/me", headers=headers).json()
+    me = client.get(f"{MINGCHAN_API}/me", headers=headers).json()
     assert me["platform_user"]["display_name"] == "小满"
     assert me["platform_user"]["avatar_key"] == avatar_key
 
@@ -73,19 +99,19 @@ def test_profile_update_accepts_single_field_and_rejects_empty_payload(client):
     headers, _ = _login(client, "13800139002")
     avatar_key = next(iter(USER_AVATAR_KEYS))
     client.patch(
-        "/v1/me/profile",
+        f"{MINGCHAN_API}/me/profile",
         headers=headers,
         json={"display_name": "阿吉", "avatar_key": avatar_key},
     )
 
     # 只传头像不应清空昵称：None 表示「本次不改」，不是「清空」。
     only_avatar = client.patch(
-        "/v1/me/profile", headers=headers, json={"avatar_key": avatar_key}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"avatar_key": avatar_key}
     )
     assert only_avatar.status_code == 200
     assert only_avatar.json()["platform_user"]["display_name"] == "阿吉"
 
-    empty = client.patch("/v1/me/profile", headers=headers, json={})
+    empty = client.patch(f"{MINGCHAN_API}/me/profile", headers=headers, json={})
     assert empty.status_code == 422
     assert empty.json()["detail"] == "profile_update_empty"
 
@@ -94,30 +120,30 @@ def test_profile_update_rejects_bad_nickname_and_unknown_avatar_key(client):
     headers, _ = _login(client, "13800139003")
 
     too_long = client.patch(
-        "/v1/me/profile", headers=headers, json={"display_name": "满" * 40}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"display_name": "满" * 40}
     )
     assert too_long.status_code == 422
 
     blank = client.patch(
-        "/v1/me/profile", headers=headers, json={"display_name": "   "}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"display_name": "   "}
     )
     assert blank.status_code == 422
     assert blank.json()["detail"] == "nickname_length_invalid"
 
     charset = client.patch(
-        "/v1/me/profile", headers=headers, json={"display_name": "小​满"}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"display_name": "小​满"}
     )
     assert charset.status_code == 422
     assert charset.json()["detail"] == "nickname_charset_invalid"
 
     unknown_avatar = client.patch(
-        "/v1/me/profile", headers=headers, json={"avatar_key": "resident_01"}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"avatar_key": "resident_01"}
     )
     assert unknown_avatar.status_code == 422
     assert unknown_avatar.json()["detail"] == "avatar_key_invalid"
 
     # 未知 key 不得落库。
-    assert client.get("/v1/me", headers=headers).json()["platform_user"][
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers).json()["platform_user"][
         "avatar_key"
     ] is None
 
@@ -135,7 +161,7 @@ def test_nickname_hard_reject_and_sanitizer_outage_fail_closed(
         ),
     )
     rejected = client.patch(
-        "/v1/me/profile", headers=headers, json={"display_name": "某真人明星"}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"display_name": "某真人明星"}
     )
     assert rejected.status_code == 422
     assert rejected.json()["detail"] == "content_rejected"
@@ -147,12 +173,12 @@ def test_nickname_hard_reject_and_sanitizer_outage_fail_closed(
         "app.platform.moderation.text_sanitizer.generate_completion", _boom
     )
     unavailable = client.patch(
-        "/v1/me/profile", headers=headers, json={"display_name": "随便"}
+        f"{MINGCHAN_API}/me/profile", headers=headers, json={"display_name": "随便"}
     )
     assert unavailable.status_code == 503
     assert unavailable.json()["detail"] == "content_review_unavailable"
 
-    assert client.get("/v1/me", headers=headers).json()["platform_user"][
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers).json()["platform_user"][
         "display_name"
     ] != "某真人明星"
 
@@ -161,12 +187,12 @@ def test_profile_update_is_scoped_to_the_calling_user(client):
     """账号隔离：改自己的 Profile 不得影响另一个真人。"""
     headers_a, _ = _login(client, "13800139005")
     headers_b, _ = _login(client, "13800139006")
-    client.patch("/v1/me/profile", headers=headers_a, json={"display_name": "甲"})
+    client.patch(f"{MINGCHAN_API}/me/profile", headers=headers_a, json={"display_name": "甲"})
 
-    client.patch("/v1/me/profile", headers=headers_b, json={"display_name": "乙"})
+    client.patch(f"{MINGCHAN_API}/me/profile", headers=headers_b, json={"display_name": "乙"})
 
     assert (
-        client.get("/v1/me", headers=headers_a).json()["platform_user"]["display_name"]
+        client.get(f"{MINGCHAN_API}/me", headers=headers_a).json()["platform_user"]["display_name"]
         == "甲"
     )
 
@@ -179,7 +205,7 @@ def test_deletion_executes_immediately_and_revokes_session(client):
     user_id = login["platform_user"]["id"]
 
     response = client.post(
-        "/v1/me/account/deletion",
+        f"{MINGCHAN_API}/me/account/deletion",
         headers=headers,
         json={"confirm": True, "reason_code": "not_useful"},
     )
@@ -192,16 +218,19 @@ def test_deletion_executes_immediately_and_revokes_session(client):
     # 运营字段不进客户端契约。
     assert "purge_stats_json" not in request
     # 注销后旧 token 立即失效，客户端必须回登录页。
-    assert client.get("/v1/me", headers=headers).status_code == 401
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers).status_code == 401
     # 手机号不被永久占用：platform_users 行保留，可重新注册成全新用户。
     assert db.get_platform_user(platform_user_id=user_id) is not None
 
 
 def test_deletion_purges_chat_records_and_memories(client, fresh_db):
     """核心口径（Q14）：注销后聊天原文、账号级记忆与世界级共享记忆都必须消失。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     headers, account_id, user_id = _ready_user(client, "13800139008", "小满")
-    scope = db.resolve_resident_memory_scope(runtime_account_id=account_id)
+    scope = db.resolve_resident_memory_scope(
+        runtime_account_id=account_id,
+        expected_app_id=MINGCHAN_APP_ID,
+    )
     session = db.get_or_create_session(
         account_id=account_id,
         channel=CHANNEL_APP,
@@ -232,7 +261,7 @@ def test_deletion_purges_chat_records_and_memories(client, fresh_db):
     assert db.list_recent_messages_for_account(account_id=account_id, limit=10)
     assert db.read_universe_facts(universe_id=scope["universe_id"])
 
-    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+    client.post(f"{MINGCHAN_API}/me/account/deletion", headers=headers, json={"confirm": True})
 
     assert db.list_recent_messages_for_account(account_id=account_id, limit=10) == []
     assert db.read_universe_facts(universe_id=scope["universe_id"], status=None) == []
@@ -262,17 +291,17 @@ def test_deletion_requires_explicit_confirmation(client):
     """不可撤销的破坏性操作不接受空 body：漏传 confirm 必须失败且不动数据。"""
     headers, login = _login(client, "13800139009")
 
-    assert client.post("/v1/me/account/deletion", headers=headers, json={}).status_code == 422
+    assert client.post(f"{MINGCHAN_API}/me/account/deletion", headers=headers, json={}).status_code == 422
     not_confirmed = client.post(
-        "/v1/me/account/deletion", headers=headers, json={"confirm": False}
+        f"{MINGCHAN_API}/me/account/deletion", headers=headers, json={"confirm": False}
     )
     assert not_confirmed.status_code == 422
     assert not_confirmed.json()["detail"] == "deletion_not_confirmed"
     # 未确认时会话仍然有效。
-    assert client.get("/v1/me", headers=headers).status_code == 200
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers).status_code == 200
     assert (
-        me_settings.get_last_deletion_record(
-            platform_user_id=login["platform_user"]["id"], app_id="zhaoxi"
+        account_deletion_records.get_last_deletion_record(
+            platform_user_id=login["platform_user"]["id"]
         )
         is None
     )
@@ -282,22 +311,25 @@ def test_deletion_rejects_free_text_reason(client):
     headers, _ = _login(client, "13800139010")
 
     response = client.post(
-        "/v1/me/account/deletion",
+        f"{MINGCHAN_API}/me/account/deletion",
         headers=headers,
         json={"confirm": True, "reason_code": "我就是不想用了"},
     )
 
     assert response.status_code == 422
     # 校验失败不得留下任何清除痕迹。
-    assert client.get("/v1/me", headers=headers).status_code == 200
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers).status_code == 200
 
 
 def test_deletion_is_isolated_across_users(client, fresh_db):
     """账号隔离：注销自己不得动到另一个真人的数据与登录态。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     headers_a, account_a, _ = _ready_user(client, "13800139011", "甲居民")
     headers_b, account_b, _ = _ready_user(client, "13800139012", "乙居民")
-    scope_b = db.resolve_resident_memory_scope(runtime_account_id=account_b)
+    scope_b = db.resolve_resident_memory_scope(
+        runtime_account_id=account_b,
+        expected_app_id=MINGCHAN_APP_ID,
+    )
     session_b = db.get_or_create_session(
         account_id=account_b,
         channel=CHANNEL_APP,
@@ -326,9 +358,9 @@ def test_deletion_is_isolated_across_users(client, fresh_db):
         occurred_at="2026-07-26T09:00:00+08:00",
     )
 
-    client.post("/v1/me/account/deletion", headers=headers_a, json={"confirm": True})
+    client.post(f"{MINGCHAN_API}/me/account/deletion", headers=headers_a, json={"confirm": True})
 
-    assert client.get("/v1/me", headers=headers_b).status_code == 200
+    assert client.get(f"{MINGCHAN_API}/me", headers=headers_b).status_code == 200
     assert [
         row["content"]
         for row in db.list_recent_messages_for_account(account_id=account_b, limit=10)
@@ -347,7 +379,7 @@ def _upload_image(client, headers) -> str:
     buffer = BytesIO()
     Image.new("RGB", (12, 8), color="red").save(buffer, format="JPEG")
     response = client.post(
-        "/v1/media/uploads",
+        f"{MINGCHAN_API}/media/uploads",
         headers=headers,
         files={"file": ("photo.jpg", buffer.getvalue(), "image/jpeg")},
         data={"kind": "image"},
@@ -378,16 +410,17 @@ def test_deletion_purges_owned_media_and_keeps_human_chat_media(
         get_media_asset_unscoped,
         mark_media_assets_referenced,
     )
-    from app.products.zhaoxi.application.companion_world_visits import (
+    from app.products.mingchan.application.visits import (
         CompanionWorldVisitService,
     )
 
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_chat_image_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_chat_image_enabled = True
+    fresh_db.mingchan_human_chat_enabled = True
     for target in (
-        "app.products.zhaoxi.api.media.settings.companion_world_chat_image_enabled",
-        "app.products.zhaoxi.api.companion_world_human_chat.settings"
-        ".companion_world_human_chat_enabled",
+        "app.products.mingchan.api.media.settings.mingchan_chat_image_enabled",
+        "app.products.mingchan.api.human_chat.settings"
+        ".mingchan_human_chat_enabled",
     ):
         monkeypatch.setattr(target, True)
     now = beijing_naive_now()
@@ -413,7 +446,7 @@ def test_deletion_purges_owned_media_and_keeps_human_chat_media(
     conversation = service.accept(user_id, visit_id=visit["id"], now=now)["conversation"]
     human_media = _upload_image(client, headers)
     sent = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"{MINGCHAN_API}/human-conversations/{conversation['id']}/messages",
         headers=headers,
         json={"client_message_id": "human_media_del_001", "media_ref": human_media},
     )
@@ -423,7 +456,11 @@ def test_deletion_purges_owned_media_and_keeps_human_chat_media(
         for media_id in (chat_media, pending_media, other_media, human_media)
     )
 
-    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+    client.post(
+        f"{MINGCHAN_API}/me/account/deletion",
+        headers=headers,
+        json={"confirm": True},
+    )
 
     # AI 会话图与未发出的资产：行与文件都不复存在。
     for media_id in (chat_media, pending_media):
@@ -435,7 +472,9 @@ def test_deletion_purges_owned_media_and_keeps_human_chat_media(
     assert get_media_asset_unscoped(media_id=other_media) is not None
     assert _media_file_exists(other_media)
 
-    record = me_settings.get_last_deletion_record(platform_user_id=user_id, app_id="zhaoxi")
+    record = account_deletion_records.get_last_deletion_record(
+        platform_user_id=user_id
+    )
     stats = json.loads(record["purge_stats_json"])
     assert stats["media_assets_deleted"] == 2
     assert stats["media_files_deleted"] == 2
@@ -450,11 +489,11 @@ def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, mon
     """
     from app.platform.media.persistence import get_media_asset_unscoped
 
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
-    fresh_db.companion_world_feed_image_enabled = True
-    for module in ("app.products.zhaoxi.api.media", "app.products.zhaoxi.api.companion_world"):
-        monkeypatch.setattr(f"{module}.settings.companion_world_feed_image_enabled", True)
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
+    fresh_db.mingchan_feed_image_enabled = True
+    for module in ("app.products.mingchan.api.media", "app.products.mingchan.api.world"):
+        monkeypatch.setattr(f"{module}.settings.mingchan_feed_image_enabled", True)
 
     headers, account_a, user_a = _ready_user(client, "13800139022", "甲居民")
     other_headers, account_b, _user_b = _ready_user(client, "13800139023", "乙居民")
@@ -463,7 +502,7 @@ def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, mon
 
     feed_media = _upload_image(client, headers)
     published = client.post(
-        "/v1/worlds/home/feed/posts",
+        f"{MINGCHAN_API}/worlds/home/feed/posts",
         headers=headers,
         json={
             "client_request_id": "deletion-feed-001",
@@ -473,7 +512,7 @@ def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, mon
     )
     assert published.status_code == 201, published.text
     kept = client.post(
-        "/v1/worlds/home/feed/posts",
+        f"{MINGCHAN_API}/worlds/home/feed/posts",
         headers=other_headers,
         json={"client_request_id": "deletion-feed-002", "text": "乙的动态"},
     )
@@ -501,7 +540,11 @@ def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, mon
     before = _counts(universe_a)
     assert before["posts"] == 1 and before["post_media"] == 1 and before["outbox"] >= 1
 
-    client.post("/v1/me/account/deletion", headers=headers, json={"confirm": True})
+    client.post(
+        f"{MINGCHAN_API}/me/account/deletion",
+        headers=headers,
+        json={"confirm": True},
+    )
 
     assert _counts(universe_a) == {"posts": 0, "post_media": 0, "outbox": 0}
     # 账号隔离：乙的动态与推送派生物完好。
@@ -510,7 +553,9 @@ def test_deletion_purges_feed_posts_and_keeps_other_worlds(client, fresh_db, mon
     # 图片资产同批删掉，动态与媒体不会一边留一边删。
     assert get_media_asset_unscoped(media_id=feed_media) is None
 
-    record = me_settings.get_last_deletion_record(platform_user_id=user_a, app_id="zhaoxi")
+    record = account_deletion_records.get_last_deletion_record(
+        platform_user_id=user_a
+    )
     stats = json.loads(record["purge_stats_json"])
     assert stats["universe_posts_deleted"] == 1
     assert stats["companion_world_outbox_deleted"] == before["outbox"]
@@ -522,12 +567,12 @@ def test_repeated_deletion_after_reregistration_keeps_full_history(client):
     phone = "13800139013"
     headers, _ = _login(client, phone)
     first = client.post(
-        "/v1/me/account/deletion", headers=headers, json={"confirm": True}
+        f"{MINGCHAN_API}/me/account/deletion", headers=headers, json={"confirm": True}
     ).json()["request"]["request_id"]
 
     headers_again, _ = _login(client, phone)
     second = client.post(
-        "/v1/me/account/deletion", headers=headers_again, json={"confirm": True}
+        f"{MINGCHAN_API}/me/account/deletion", headers=headers_again, json={"confirm": True}
     ).json()["request"]["request_id"]
 
     assert second != first
@@ -546,8 +591,15 @@ def test_repeated_deletion_after_reregistration_keeps_full_history(client):
 def _ready_user(client, phone: str, name: str):
     headers, login = _login(client, phone)
     user_id = login["platform_user"]["id"]
-    account_id = make_resident_account(user_id, name)
-    scope = db.resolve_resident_memory_scope(runtime_account_id=account_id)
+    account_id = make_resident_account(
+        user_id,
+        name,
+        app_id=MINGCHAN_APP_ID,
+    )
+    scope = db.resolve_resident_memory_scope(
+        runtime_account_id=account_id,
+        expected_app_id=MINGCHAN_APP_ID,
+    )
     db.set_universe_onboarding_state(
         universe_id=scope["universe_id"], onboarding_state="confirmed"
     )
@@ -555,41 +607,43 @@ def _ready_user(client, phone: str, name: str):
 
 
 def test_notification_preferences_default_and_upsert(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     headers, _ = _login(client, "13800139014")
 
-    default = client.get("/v1/notifications/preferences", headers=headers)
+    default = client.get(f"{MINGCHAN_API}/notifications/preferences", headers=headers)
     assert default.status_code == 200, default.text
     assert default.json()["data"]["quiet_level"] == "standard"
-    assert default.json()["data"]["available_levels"] == list(me_settings.QUIET_LEVELS)
+    assert default.json()["data"]["available_levels"] == list(
+        notification_preferences.QUIET_LEVELS
+    )
 
     updated = client.patch(
-        "/v1/notifications/preferences", headers=headers, json={"quiet_level": "quiet"}
+        f"{MINGCHAN_API}/notifications/preferences", headers=headers, json={"quiet_level": "quiet"}
     )
     assert updated.status_code == 200
     assert updated.json()["data"]["quiet_level"] == "quiet"
     # 幂等：重复设置同一值不报错。
     assert (
         client.patch(
-            "/v1/notifications/preferences",
+            f"{MINGCHAN_API}/notifications/preferences",
             headers=headers,
             json={"quiet_level": "quiet"},
         ).json()["data"]["quiet_level"]
         == "quiet"
     )
-    assert client.get("/v1/notifications/preferences", headers=headers).json()["data"][
+    assert client.get(f"{MINGCHAN_API}/notifications/preferences", headers=headers).json()["data"][
         "quiet_level"
     ] == "quiet"
 
 
 def test_notification_preferences_reject_unknown_level(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     headers, _ = _login(client, "13800139015")
 
     response = client.patch(
-        "/v1/notifications/preferences", headers=headers, json={"quiet_level": "off"}
+        f"{MINGCHAN_API}/notifications/preferences", headers=headers, json={"quiet_level": "off"}
     )
 
     assert response.status_code == 422
@@ -597,16 +651,16 @@ def test_notification_preferences_reject_unknown_level(client, fresh_db):
 
 
 def test_notification_preferences_are_isolated_across_users(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     headers_a, _ = _login(client, "13800139016")
     headers_b, _ = _login(client, "13800139017")
 
     client.patch(
-        "/v1/notifications/preferences", headers=headers_a, json={"quiet_level": "quiet"}
+        f"{MINGCHAN_API}/notifications/preferences", headers=headers_a, json={"quiet_level": "quiet"}
     )
 
-    assert client.get("/v1/notifications/preferences", headers=headers_b).json()["data"][
+    assert client.get(f"{MINGCHAN_API}/notifications/preferences", headers=headers_b).json()["data"][
         "quiet_level"
     ] == "standard"
 
@@ -614,11 +668,11 @@ def test_notification_preferences_are_isolated_across_users(client, fresh_db):
 def test_quiet_mode_cancels_new_dispatches_but_keeps_existing_inbox(client, fresh_db):
     """安静模式只压制**将来**的投递；已在箱内的通知不回收。
 
-    走真实出站路径 `dispatch_proactive_text`，而不是底层 `deliver()`——门控刻意放在
-    建 outbound 行之前，用户偏好必须落 `cancelled` 而非 `failed`。
+    走鸣蝉产品级主动投递入口，而不是直接调用底层 ``deliver()``；偏好门控必须在
+    创建通知行之前返回 ``cancelled``。
     """
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     # 本用例断言的是安静模式，不是频次策略；放开分类日上限以免撞上 daily_limit。
     fresh_db.companion_followup_daily_limit = 5
     headers, account_id, user_id = _ready_user(client, "13800139018", "小满")
@@ -626,44 +680,41 @@ def test_quiet_mode_cancels_new_dispatches_but_keeps_existing_inbox(client, fres
     dispatch_now = beijing_naive_now().replace(hour=12, minute=0, second=0, microsecond=0)
 
     def _dispatch(key: str):
-        return dispatch_proactive_text(
-            account_id=account_id,
-            channel=CHANNEL_APP,
-            channel_account_id=None,
-            to_user_id=user_id,
-            session_key=None,
+        return dispatch_resident_notification(
+            runtime_account_id=account_id,
             source="commitment",
             text=f"通知 {key}",
             idempotency_key=f"resident-obligation:v1:commitment:{key}",
             now=dispatch_now,
             product_category="companion_followup",
+            source_id=key,
+            target_id=f"conv-{key}",
         )
 
     assert _dispatch("before")["status"] == "sent"
-    assert client.get("/v1/notifications", headers=headers).json()["data"][
+    assert client.get(f"{MINGCHAN_API}/notifications", headers=headers).json()["data"][
         "unread_count"
     ] == 1
 
     client.patch(
-        "/v1/notifications/preferences", headers=headers, json={"quiet_level": "quiet"}
+        f"{MINGCHAN_API}/notifications/preferences", headers=headers, json={"quiet_level": "quiet"}
     )
     assert AppInboxAdapter().can_deliver(account_id) is False
-    assert _select_route(account_id) is None
     suppressed = _dispatch("after")
     assert suppressed["status"] == "cancelled"
     assert suppressed["error"] == "app_inbox_quiet_hours_preference"
 
-    listed = client.get("/v1/notifications", headers=headers).json()["data"]
+    listed = client.get(f"{MINGCHAN_API}/notifications", headers=headers).json()["data"]
     assert listed["unread_count"] == 1
     assert [item["body"]["text"] for item in listed["items"]] == ["通知 before"]
 
     # 关掉安静模式后恢复投递。
     client.patch(
-        "/v1/notifications/preferences",
+        f"{MINGCHAN_API}/notifications/preferences",
         headers=headers,
         json={"quiet_level": "standard"},
     )
     assert _dispatch("after")["status"] == "sent"
-    assert client.get("/v1/notifications", headers=headers).json()["data"][
+    assert client.get(f"{MINGCHAN_API}/notifications", headers=headers).json()["data"][
         "unread_count"
     ] == 2

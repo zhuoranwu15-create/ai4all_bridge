@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import json
+
+import pytest
 from datetime import datetime
 from io import BytesIO
 
@@ -14,9 +16,9 @@ from PIL import Image
 
 import app.db as db
 from app.platform.media.persistence import get_media_asset, list_media_assets_unscoped
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
-from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
-from app.products.zhaoxi.domain.companion_world import CompanionWorldService
+from app.products.mingchan.application import SqlCompanionWorldRepository
+from app.products.mingchan.application.visits import CompanionWorldVisitService
+from app.products.mingchan.domain.companion_world import CompanionWorldService
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 VL_DESCRIPTION = "一只橘猫趴在窗台上，阳光温暖"
@@ -30,7 +32,7 @@ def _login(client, phone: str) -> tuple[dict, str]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -42,15 +44,15 @@ def _login(client, phone: str) -> tuple[dict, str]:
 
 def _enable_media(monkeypatch, fresh_db, *, image: bool = True, voice: bool = True) -> None:
     """打开 P1 与聊天媒体位；上传门控与聊天门控读的是同两个开关，一并设置。"""
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_chat_image_enabled = image
-    fresh_db.companion_world_chat_voice_enabled = voice
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_chat_image_enabled = image
+    fresh_db.mingchan_chat_voice_enabled = voice
     for flag, value in (
-        ("companion_world_chat_image_enabled", image),
-        ("companion_world_chat_voice_enabled", voice),
-        ("companion_world_feed_image_enabled", False),
+        ("mingchan_chat_image_enabled", image),
+        ("mingchan_chat_voice_enabled", voice),
+        ("mingchan_feed_image_enabled", False),
     ):
-        monkeypatch.setattr(f"app.products.zhaoxi.api.media.settings.{flag}", value)
+        monkeypatch.setattr(f"app.products.mingchan.api.media.settings.{flag}", value)
 
 
 def _jpeg(size=(12, 8)) -> bytes:
@@ -61,7 +63,7 @@ def _jpeg(size=(12, 8)) -> bytes:
 
 def _upload_image(client, headers) -> str:
     response = client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": ("photo.jpg", _jpeg(), "image/jpeg")},
         data={"kind": "image"},
@@ -72,10 +74,10 @@ def _upload_image(client, headers) -> str:
 
 def _upload_voice(client, headers, monkeypatch, *, transcript: str | None) -> str:
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.transcribe_audio", lambda **kwargs: transcript
+        "app.products.mingchan.api.media.transcribe_audio", lambda **kwargs: transcript
     )
     response = client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": ("clip.m4a", b"\x00\x00\x00\x18ftypM4A " + b"\x33" * 128, "audio/m4a")},
         data={"kind": "voice", "duration_ms": "2400"},
@@ -108,10 +110,10 @@ def _seed_catalog() -> None:
 
 def _confirm_resident(client, headers):
     candidates = client.post(
-        "/v1/worlds/home/bootstrap", headers=headers
+        "/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers
     ).json()["data"]["candidates"]
     response = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": candidates[0]["template_id"]}]},
     )
@@ -156,10 +158,15 @@ def test_ai_image_turn_keeps_vl_description_out_of_display_payload(
         return VL_DESCRIPTION
 
     monkeypatch.setattr("app.agent_runtime.turns.service.describe_image", _describe)
+    image_charges = []
+    monkeypatch.setattr(
+        "app.agent_runtime.turns.service.record_image_understanding_charge",
+        lambda **kwargs: image_charges.append(kwargs),
+    )
     media_id = _upload_image(client, headers)
 
     turn = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "media_turn_0001", "text": "这是哪", "media_ref": media_id},
     )
@@ -169,6 +176,8 @@ def test_ai_image_turn_keeps_vl_description_out_of_display_payload(
     assert described and described[-1]["image_b64"]
     assert described[-1]["image_path"] is None
     assert described[-1]["caption"] == "这是哪"
+    assert image_charges
+    assert image_charges[-1]["registry"].require_enabled("mingchan").app_id == "mingchan"
 
     stored = _last_user_message(target.runtime_account_id)
     assert VL_DESCRIPTION in stored["content"], "上下文文本必须含 VL 描述"
@@ -180,7 +189,7 @@ def test_ai_image_turn_keeps_vl_description_out_of_display_payload(
     assert asset["status"] == "referenced" and asset["expires_at"] is None
 
     history = client.get(
-        f"/v1/ai-conversations/{target.conversation_id}/messages", headers=headers
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/messages", headers=headers
     )
     assert history.status_code == 200, history.text
     assert VL_DESCRIPTION not in history.text, "VL 描述绝不能下发给客户端"
@@ -190,12 +199,14 @@ def test_ai_image_turn_keeps_vl_description_out_of_display_payload(
     assert content["text"] == "这是哪"
     assert content["media_id"] == media_id
     assert (content["width"], content["height"]) == (12, 8)
-    assert content["url"].startswith(f"/api/v1/media/{media_id}?exp=")
+    assert content["url"].startswith(
+        f"/api/v1/products/mingchan/media/{media_id}?exp="
+    )
     assert f"scope=pu:{platform_user_id}" in content["url"]
     # 老字段是 content 的镜像，不是另一份口径。
     assert (user_item["message_type"], user_item["text"]) == ("image", "这是哪")
 
-    listed = client.get("/v1/conversations", headers=headers)
+    listed = client.get("/api/v1/products/mingchan/conversations", headers=headers)
     previews = [item["last_preview"] for item in listed.json()["data"]["items"]]
     assert VL_DESCRIPTION not in " ".join(str(p) for p in previews)
 
@@ -210,13 +221,13 @@ def test_ai_image_turn_without_caption_previews_placeholder(client, fresh_db, mo
     media_id = _upload_image(client, headers)
 
     turn = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "media_turn_0002", "media_ref": media_id},
     )
     assert turn.status_code == 200, turn.text
 
-    listed = client.get("/v1/conversations", headers=headers)
+    listed = client.get("/api/v1/products/mingchan/conversations", headers=headers)
     item = [
         row
         for row in listed.json()["data"]["items"]
@@ -232,7 +243,7 @@ def test_ai_voice_turn_feeds_transcript_and_surfaces_it(client, fresh_db, monkey
     media_id = _upload_voice(client, headers, monkeypatch, transcript="今天挺累的")
 
     turn = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "voice_turn_0001", "media_ref": media_id},
     )
@@ -244,7 +255,7 @@ def test_ai_voice_turn_feeds_transcript_and_surfaces_it(client, fresh_db, monkey
     assert json.loads(stored["content_json"]) == {"type": "audio", "text": ""}
 
     history = client.get(
-        f"/v1/ai-conversations/{target.conversation_id}/messages", headers=headers
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/messages", headers=headers
     )
     content = [
         item for item in history.json()["data"]["messages"] if item["role"] == "user"
@@ -263,7 +274,7 @@ def test_ai_voice_turn_without_transcript_falls_back_without_main_model(
     media_id = _upload_voice(client, headers, monkeypatch, transcript=None)
 
     turn = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "voice_turn_0002", "media_ref": media_id},
     )
@@ -279,14 +290,14 @@ def test_ai_turn_media_ref_is_single_use_and_owner_anchored(client, fresh_db, mo
     media_id = _upload_image(client, headers)
 
     first = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "single_use_0001", "media_ref": media_id},
     )
     assert first.status_code == 200, first.text
 
     reused = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "single_use_0002", "media_ref": media_id},
     )
@@ -301,7 +312,7 @@ def test_ai_turn_media_ref_is_single_use_and_owner_anchored(client, fresh_db, mo
 
     stolen = _upload_image(client, other_headers)
     cross = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "cross_owner_0001", "media_ref": stolen},
     )
@@ -316,10 +327,10 @@ def test_ai_turn_replay_with_same_media_ref_is_idempotent(client, fresh_db, monk
     body = {"client_message_id": "replay_media_001", "media_ref": media_id}
 
     first = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn", headers=headers, json=body
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn", headers=headers, json=body
     )
     replay = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn", headers=headers, json=body
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn", headers=headers, json=body
     )
     assert first.status_code == replay.status_code == 200, replay.text
     assert replay.json()["data"]["deduplicated"] is True
@@ -328,16 +339,16 @@ def test_ai_turn_replay_with_same_media_ref_is_idempotent(client, fresh_db, monk
 def test_ai_turn_requires_text_or_media_and_respects_kind_gate(client, fresh_db, monkeypatch):
     headers, _pu, target = _ai_setup(client, fresh_db, monkeypatch, "19965401008")
     empty = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "empty_turn_0001", "text": "   "},
     )
     assert empty.json()["code"] == "media_content_required"
 
     media_id = _upload_image(client, headers)
-    fresh_db.companion_world_chat_image_enabled = False
+    fresh_db.mingchan_chat_image_enabled = False
     gated = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "gated_turn_0001", "media_ref": media_id},
     )
@@ -349,11 +360,11 @@ def test_ai_turn_requires_text_or_media_and_respects_kind_gate(client, fresh_db,
 
 def _enable_human(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.settings.companion_world_human_chat_enabled",
+        "app.products.mingchan.api.human_chat.settings.mingchan_human_chat_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.human_chat.beijing_naive_now", lambda: NOW
     )
 
 
@@ -378,7 +389,7 @@ def test_human_chat_image_is_visible_to_both_sides_with_scoped_urls(
     media_id = _upload_image(client, owner_headers)
 
     sent = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "human_media_001", "media_ref": media_id},
     )
@@ -392,7 +403,7 @@ def test_human_chat_image_is_visible_to_both_sides_with_scoped_urls(
     assert get_media_asset(media_id=media_id, owner_platform_user_id=owner_id)["status"] == "referenced"
 
     seen = client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages", headers=visitor_headers
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages", headers=visitor_headers
     )
     assert seen.status_code == 200, seen.text
     content = seen.json()["data"]["items"][0]["content"]
@@ -403,7 +414,7 @@ def test_human_chat_image_is_visible_to_both_sides_with_scoped_urls(
     assert fetched.status_code == 200
     assert fetched.headers["Cache-Control"] == "no-store, private"
 
-    listed = client.get("/v1/human-conversations", headers=visitor_headers)
+    listed = client.get("/api/v1/products/mingchan/human-conversations", headers=visitor_headers)
     assert listed.json()["data"]["items"][0]["last_preview"] == "[图片]"
 
 
@@ -425,13 +436,13 @@ def test_human_chat_media_idempotency_conflicts_on_swapped_asset(
     }
 
     created = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json=body,
     )
     assert created.status_code == 200, created.text
     replay = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json=body,
     )
@@ -440,7 +451,7 @@ def test_human_chat_media_idempotency_conflicts_on_swapped_asset(
     assert replay.json()["data"]["message"]["message_id"] == created.json()["data"]["message"]["message_id"]
 
     swapped = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={**body, "media_ref": second_media},
     )
@@ -459,7 +470,7 @@ def test_human_chat_rejects_empty_message_and_foreign_media(client, fresh_db, mo
     conversation = _active_conversation(owner_id, visitor_id)
 
     empty = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "human_media_003", "text": "  "},
     )
@@ -467,9 +478,12 @@ def test_human_chat_rejects_empty_message_and_foreign_media(client, fresh_db, mo
 
     foreign = _upload_image(client, visitor_headers)
     stolen = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "human_media_004", "media_ref": foreign},
     )
     assert stolen.json()["code"] == "media_ref_invalid"
     assert list_media_assets_unscoped(media_ids=[foreign])[foreign]["status"] == "pending"
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

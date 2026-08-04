@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from fastapi import HTTPException, Request
-from fastapi.exception_handlers import http_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.bootstrap.product_registry import ZHAOXI_APP_ID
@@ -52,6 +56,29 @@ async def localized_http_exception_handler(request: Request, exc: HTTPException)
     return response
 
 
+async def localized_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
+    """把朝夕公开 API 的参数校验错误收敛为稳定错误信封。"""
+
+    if not is_public_product_path(request.url.path):
+        return await request_validation_exception_handler(request, exc)
+    code = "invalid_request"
+    response = JSONResponse(
+        status_code=422,
+        content={
+            "detail": code,
+            "message": public_error_message(
+                code,
+                status_code=422,
+                app_id=ZHAOXI_APP_ID,
+            ),
+        },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def install_product_error_handlers(app) -> None:
     """安装仅影响朝夕用户路由的 HTTP 错误本地化处理器。"""
 
@@ -62,4 +89,5 @@ __all__ = [
     "install_product_error_handlers",
     "is_public_product_path",
     "localized_http_exception_handler",
+    "localized_validation_exception_handler",
 ]

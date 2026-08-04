@@ -52,6 +52,13 @@ SCAFFOLD_PACKAGES = (
     "app/bootstrap",
     "app/platform",
     "app/products",
+    "app/products/mingchan",
+    "app/products/mingchan/api",
+    "app/products/mingchan/application",
+    "app/products/mingchan/domain",
+    "app/products/mingchan/infrastructure",
+    "app/products/mingchan/jobs",
+    "app/products/mingchan/tools",
     "app/products/zhaoxi",
     "app/products/zhaoxi/domain",
 )
@@ -265,10 +272,33 @@ def test_product_domains_do_not_import_each_other():
     )
 
 
+def test_companion_world_persistence_is_owned_by_mingchan_only():
+    """World SQL 原语只能保留鸣蝉 owner，禁止在朝夕目录重新形成副本。"""
+
+    module_names = (
+        "companion_world.py",
+        "companion_world_human_chat.py",
+        "companion_world_lifecycle.py",
+        "companion_world_mailbox.py",
+        "companion_world_visits.py",
+        "notifications.py",
+        "resident_wishes.py",
+    )
+    mingchan_root = (
+        REPO_ROOT / "app" / "products" / "mingchan" / "infrastructure" / "persistence"
+    )
+    zhaoxi_root = (
+        REPO_ROOT / "app" / "products" / "zhaoxi" / "infrastructure" / "persistence"
+    )
+    for module_name in module_names:
+        assert (mingchan_root / module_name).is_file(), f"鸣蝉缺少 {module_name}"
+        assert not (zhaoxi_root / module_name).exists(), f"朝夕重新出现 {module_name}"
+
+
 def test_runtime_does_not_import_product_domains():
     """D-06：Agent Runtime 形态无关，禁止反向依赖任何产品实现。
 
-    「读+渲染」的 L3 组合属产品域层（`app.products.zhaoxi.domain.companion_world.l3_context`），Runtime 只留
+    「读+渲染」的 L3 组合属产品域层（`app.products.mingchan.domain.companion_world.l3_context`），Runtime 只留
     形态无关的读 I/O。依赖方向须为 `域层 → agent_runtime`，反向即破 D-06——本门禁堵住
     finding ④ 那类「Runtime import 域层渲染函数」的回归（旧一向门禁只扫域层→Runtime、漏此向）。
     """
@@ -401,14 +431,14 @@ def test_runtime_adapter_has_no_companion_world_composition_methods():
     assert not hasattr(DefaultAgentRuntimeAdapter, "send_companion_world_turn")
 
 
-def test_zhaoxi_application_facade_resolves_all_declared_exports():
-    """兼容 façade 的懒加载映射必须覆盖并解析全部公开导出。"""
+def test_zhaoxi_application_package_does_not_export_companion_world():
+    """朝夕 application 不再承担鸣蝉 World 的兼容 façade。"""
 
     from app.products.zhaoxi import application
 
-    assert set(application.__all__) == set(application._EXPORTS)
-    for name in application.__all__:
-        assert getattr(application, name) is not None
+    assert not hasattr(application, "_EXPORTS")
+    assert not hasattr(application, "build_companion_world_memory_sink")
+    assert not hasattr(application, "compact_companion_world_memory_batch")
 
 
 def test_db_compatibility_facade_resolves_owned_persistence_exports():
@@ -422,6 +452,42 @@ def test_db_compatibility_facade_resolves_owned_persistence_exports():
         assert exports, f"兼容 persistence 未声明 __all__：{module_name}"
         for name in exports:
             assert getattr(db, name) is getattr(module, name)
+
+
+def test_zhaoxi_db_facade_imports_resolve_during_product_migration():
+    """迁移期间朝夕旧 World 调用的 ``app.db`` 符号必须都可解析。"""
+
+    import app.db as db
+
+    zhaoxi_root = REPO_ROOT / "app" / "products" / "zhaoxi"
+    unresolved: list[str] = []
+    for py_file in sorted(zhaoxi_root.rglob("*.py")):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        aliases: set[str] = set()
+        direct_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                aliases.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "app.db"
+                )
+            elif isinstance(node, ast.ImportFrom) and node.module == "app.db":
+                direct_names.update(alias.name for alias in node.names)
+        used_names = set(direct_names)
+        used_names.update(
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in aliases
+        )
+        for name in sorted(used_names):
+            if not hasattr(db, name):
+                unresolved.append(
+                    f"{py_file.relative_to(REPO_ROOT)} → app.db.{name}"
+                )
+    assert not unresolved, "app.db 过渡 façade 缺少导出：\n" + "\n".join(unresolved)
 
 
 def test_ai_paths_do_not_import_human_chat_storage():
@@ -438,7 +504,7 @@ def test_ai_paths_do_not_import_human_chat_storage():
     # 模块路径会漏掉 `from app.db import insert_human_message` 这条兼容 façade 缝。
     # 逐个把 human-chat 的 __all__ 符号名封为 `app.db.<name>`（不封裸 `app.db`，AI 路径合法用它）。
     human_chat_module = (
-        "app/products/zhaoxi/infrastructure/persistence/"
+        "app/products/mingchan/infrastructure/persistence/"
         "companion_world_human_chat.py"
     )
     human_chat_exports = _module_export_names(human_chat_module)
@@ -447,9 +513,9 @@ def test_ai_paths_do_not_import_human_chat_storage():
         "D-11 再导出门禁将失效，请检查该模块是否仍声明 __all__。"
     )
     forbidden = (
-        "app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat",
-        "app.products.zhaoxi.application.companion_world_human_chat",
-        "app.products.zhaoxi.domain.companion_world.human_chat",
+        "app.products.mingchan.infrastructure.persistence.companion_world_human_chat",
+        "app.products.mingchan.application.human_chat",
+        "app.products.mingchan.domain.companion_world.human_chat",
         *(f"app.db.{name}" for name in human_chat_exports),
     )
     violations: list[str] = []

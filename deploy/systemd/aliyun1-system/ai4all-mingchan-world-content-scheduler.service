@@ -1,0 +1,27 @@
+[Unit]
+Description=AI4ALL Mingchan Companion-World Content Scheduler (aliyun1, central-only)
+After=ai4all-weixin-backend.service
+Requires=ai4all-weixin-backend.service
+
+[Service]
+Type=simple
+User=jack
+Group=devops
+WorkingDirectory=/opt/workspace/ai4all_bridge
+EnvironmentFile=/opt/workspace/ai4all_bridge/.env
+Environment=HOME=/home/jack
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/bin:/bin:/home/jack/.local/bin:/home/jack/.npm-global/bin:/home/jack/bin
+# 中心角色进程才应用 schema 迁移；opt-in 闸见 app/db/_core.py 的 AUTO_MIGRATE_ENV。
+# 只能写在这里，**不要写进 .env**（否则同目录手跑的 python 进程会一起继承，闸门失效）。
+Environment=AI4ALL_ALLOW_AUTO_MIGRATE=1
+ExecStart=/opt/workspace/ai4all_bridge/.venv/bin/python scripts/run_mingchan_world_content_scheduler.py
+# world 调度器为中心单实例：仅 aliyun1 启用，aliyun2 永不运行。
+# 用 on-failure 而非 always：feature flag 关闭时脚本会干净退出(0)，不应触发重启循环。
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai4all-mingchan-world-content-scheduler
+
+[Install]
+WantedBy=multi-user.target

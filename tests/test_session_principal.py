@@ -101,10 +101,11 @@ def test_test_product_token_cannot_access_legacy_web_or_v1_routes(client):
     headers = {"Authorization": f"Bearer {session['token']}"}
 
     assert client.get("/web/me", headers=headers).status_code == 401
-    assert client.get("/v1/me", headers=headers).status_code == 401
-    assert (
-        client.get("/api/v1/products/zhaoxi/me", headers=headers).status_code == 401
-    )
+    # 旧朝夕 App `/v1/*` 已移除，不再为任何 audience 暴露兼容路由。
+    assert client.get("/v1/me", headers=headers).status_code == 404
+    assert client.get(
+        "/api/v1/products/zhaoxi/me", headers=headers
+    ).status_code == 404
 
 
 def test_m0038_backfills_existing_sessions_without_changing_count(fresh_db):

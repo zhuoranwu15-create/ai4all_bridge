@@ -106,10 +106,9 @@ def test_rotation_seeds_new_session_rolling_summary_from_carryover(fresh_db):
     assert int(persisted["rolling_summary_upto_id"]) == 0
 
 
-def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch):
+def test_lazy_rotation_uses_explicit_memory_sink(fresh_db, monkeypatch):
     from app.db import insert_message
     from app.products.zhaoxi.application.memory.session_lifecycle import (
-        configure_memory_sink,
         get_or_create_account_active_session_with_dreaming,
     )
 
@@ -143,18 +142,15 @@ def test_lazy_rotation_uses_configured_default_memory_sink(fresh_db, monkeypatch
         }
 
     monkeypatch.setattr("app.products.zhaoxi.application.memory.dreaming.run_dreaming", fake_run_dreaming)
-    configure_memory_sink(marker_sink)
-    try:
-        get_or_create_account_active_session_with_dreaming(
-            account_id=account_id,
-            channel="openclaw-weixin",
-            sender_id="s",
-            sender_name=None,
-            chat_id="c",
-            business_day="2026-05-25",
-        )
-    finally:
-        configure_memory_sink(None)
+    get_or_create_account_active_session_with_dreaming(
+        account_id=account_id,
+        channel="openclaw-weixin",
+        sender_id="s",
+        sender_name=None,
+        chat_id="c",
+        business_day="2026-05-25",
+        memory_sink=marker_sink,
+    )
 
     assert captured["memory_sink"] is marker_sink
 

@@ -16,7 +16,10 @@ def test_resident_resolves_via_world_and_has_no_binding(fresh_db):
     uni = db.get_or_create_home_universe(platform_user_id=uid)
     tmpl = db.create_character_template(source_type="official", name="居民甲")
     res = db.create_resident_runtime_account(
-        universe_id=uni["id"], character_template_id=tmpl["id"], display_name="居民甲"
+        universe_id=uni["id"],
+        character_template_id=tmpl["id"],
+        display_name="居民甲",
+        app_id="zhaoxi",
     )
     a2 = res["account"]["id"]
 
@@ -41,7 +44,10 @@ def test_resident_primitive_requires_existing_universe(fresh_db):
     tmpl = db.create_character_template(source_type="official", name="孤儿模板")
     try:
         db.create_resident_runtime_account(
-            universe_id="uni_does_not_exist", character_template_id=tmpl["id"], display_name="X"
+            universe_id="uni_does_not_exist",
+            character_template_id=tmpl["id"],
+            display_name="X",
+            app_id="zhaoxi",
         )
         assert False, "should raise for missing universe"
     except ValueError as err:

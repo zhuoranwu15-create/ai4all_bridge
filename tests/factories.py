@@ -65,7 +65,12 @@ def create_route(account_id: str, *, session_key: Optional[str] = None) -> None:
     )
 
 
-def make_resident_account(platform_user_id: str, display_name: str) -> str:
+def make_resident_account(
+    platform_user_id: str,
+    display_name: str,
+    *,
+    app_id: str = "mingchan",
+) -> str:
     """为一个真人建「第 2..N 个账号」= 一个居民 runtime account（form-B），返回 account_id。
 
     账号模型决策 B（docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md）：main #42
@@ -79,13 +84,58 @@ def make_resident_account(platform_user_id: str, display_name: str) -> str:
     from app.db import (
         create_character_template,
         create_resident_runtime_account,
+        ensure_product_membership,
         get_or_create_home_universe,
     )
+    from app.bootstrap.product_registry import build_test_product_registry
 
-    universe = get_or_create_home_universe(platform_user_id=platform_user_id)
-    template = create_character_template(source_type="official", name=f"tmpl-{display_name}")
+    registry = build_test_product_registry()
+    ensure_product_membership(
+        platform_user_id=platform_user_id,
+        app_id=app_id,
+        registry=registry,
+    )
+
+    universe = get_or_create_home_universe(
+        platform_user_id=platform_user_id,
+        app_id=app_id,
+    )
+    template = create_character_template(
+        source_type="official",
+        name=f"tmpl-{display_name}",
+        app_id=app_id,
+    )
     return create_resident_runtime_account(
         universe_id=universe["id"],
         character_template_id=template["id"],
         display_name=display_name,
+        app_id=app_id,
+        registry=registry,
+    )["account"]["id"]
+
+
+def make_user_account(
+    platform_user_id: str,
+    display_name: str,
+    *,
+    app_id: str,
+) -> str:
+    """在测试注册表中创建指定产品的 form-A 用户账号并返回 account_id。"""
+
+    from app.bootstrap.product_registry import build_test_product_registry
+    from app.db import create_ai4all_account_for_user, ensure_product_membership
+
+    registry = build_test_product_registry()
+    ensure_product_membership(
+        platform_user_id=platform_user_id,
+        app_id=app_id,
+        registry=registry,
+    )
+    return create_ai4all_account_for_user(
+        platform_user_id=platform_user_id,
+        display_name=display_name,
+        initial_channel="native" if app_id == "mingchan" else "openclaw-weixin",
+        binding_method="test_fixture",
+        app_id=app_id,
+        registry=registry,
     )["account"]["id"]

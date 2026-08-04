@@ -9,11 +9,11 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.products.zhaoxi.application.companion_world_human_chat import (
+from app.products.mingchan.application.human_chat import (
     CompanionWorldHumanChatService,
     HumanChatError,
 )
-from app.products.zhaoxi.application.companion_world_visits import CompanionWorldVisitService
+from app.products.mingchan.application.visits import CompanionWorldVisitService
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 
@@ -26,7 +26,7 @@ def _login(client, phone: str) -> tuple[dict, dict]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -59,14 +59,14 @@ def _active(owner_id: str, visitor_id: str) -> tuple[dict, dict]:
 
 def _enable(monkeypatch, *, write: bool = True) -> None:
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.mingchan.api.world.settings.mingchan_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.settings.companion_world_human_chat_enabled",
+        "app.products.mingchan.api.human_chat.settings.mingchan_human_chat_enabled",
         write,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.human_chat.beijing_naive_now", lambda: NOW
     )
 
 
@@ -80,18 +80,18 @@ def test_human_chat_write_flag_off_keeps_history_readable(
     visitor = visitor_login["platform_user"]["id"]
     _visit, conversation = _active(owner, visitor)
 
-    listed = client.get("/v1/human-conversations", headers=owner_headers)
+    listed = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers)
     assert listed.status_code == 200
     assert listed.json()["data"]["items"][0]["conversation_id"] == conversation["id"]
     blocked = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "hello"},
     )
     assert blocked.status_code == 409
     assert blocked.json()["code"] == "human_chat_read_only"
     history = client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
     )
     assert history.status_code == 200
@@ -112,7 +112,7 @@ def test_human_messages_are_idempotent_participant_scoped_and_not_ai_messages(
         ai_before = conn.execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
 
     sent = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "  hello  "},
     )
@@ -120,7 +120,7 @@ def test_human_messages_are_idempotent_participant_scoped_and_not_ai_messages(
     assert sent.json()["data"]["created"] is True
     message_id = sent.json()["data"]["message"]["message_id"]
     replay = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "hello"},
     )
@@ -128,7 +128,7 @@ def test_human_messages_are_idempotent_participant_scoped_and_not_ai_messages(
     assert replay.json()["data"]["created"] is False
     assert replay.json()["data"]["message"]["message_id"] == message_id
     conflict = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "changed"},
     )
@@ -136,13 +136,13 @@ def test_human_messages_are_idempotent_participant_scoped_and_not_ai_messages(
     assert conflict.json()["code"] == "idempotency_conflict"
 
     reply = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_0002", "text": "hi"},
     )
     assert reply.status_code == 200
     owner_history = client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
     )
     assert [item["sender"] for item in owner_history.json()["data"]["items"]] == [
@@ -150,7 +150,7 @@ def test_human_messages_are_idempotent_participant_scoped_and_not_ai_messages(
         "self",
     ]
     assert client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=outsider_headers,
     ).status_code == 404
     with db.connect() as conn:
@@ -170,7 +170,7 @@ def test_visit_terminal_keeps_human_history_but_disables_new_send(
     visitor = visitor_login["platform_user"]["id"]
     visit, conversation = _active(owner, visitor)
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "留存消息"},
     ).status_code == 200
@@ -179,14 +179,14 @@ def test_visit_terminal_keeps_human_history_but_disables_new_send(
     )
 
     denied = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_0002", "text": "不能再发"},
     )
     assert denied.status_code == 409
     assert denied.json()["code"] == "human_chat_read_only"
     history = client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
     )
     assert history.status_code == 200
@@ -203,24 +203,24 @@ def test_self_hide_only_hides_current_participant_and_never_deletes_messages(
     visitor = visitor_login["platform_user"]["id"]
     _visit, conversation = _active(owner, visitor)
     client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "still stored"},
     )
     hidden = client.delete(
-        f"/v1/human-conversations/{conversation['id']}/entry",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/entry",
         headers=visitor_headers,
     )
     assert hidden.status_code == 200
-    assert client.get("/v1/human-conversations", headers=visitor_headers).json()[
+    assert client.get("/api/v1/products/mingchan/human-conversations", headers=visitor_headers).json()[
         "data"
     ]["items"] == []
     assert client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
     ).status_code == 404
     assert client.get(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
     ).status_code == 200
     with db.connect() as conn:
@@ -240,12 +240,12 @@ def test_report_copies_immutable_evidence_and_optional_block(
     visitor = visitor_login["platform_user"]["id"]
     visit, conversation = _active(owner, visitor)
     sent = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": "client_0001", "text": "需要留证"},
     ).json()["data"]["message"]
     report = client.post(
-        f"/v1/human-conversations/{conversation['id']}/report",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
         headers=visitor_headers,
         json={
             "message_id": sent["message_id"],
@@ -280,7 +280,7 @@ def test_report_options_are_versioned_and_match_accepted_codes(
     _visit, conversation = _active(owner, visitor)
 
     options = client.get(
-        "/v1/human-conversations/report-options", headers=visitor_headers
+        "/api/v1/products/mingchan/human-conversations/report-options", headers=visitor_headers
     )
     assert options.status_code == 200, options.text
     assert options.headers["Cache-Control"] == "no-store"
@@ -296,7 +296,7 @@ def test_report_options_are_versioned_and_match_accepted_codes(
 
     # 未知码不得被接受，否则契约形同虚设。
     unknown = client.post(
-        f"/v1/human-conversations/{conversation['id']}/report",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
         headers=visitor_headers,
         json={"reason_code": "made_up_reason"},
     )
@@ -312,7 +312,7 @@ def test_report_options_are_versioned_and_match_accepted_codes(
     assert optional_codes
     for index, code in enumerate(optional_codes):
         accepted = client.post(
-            f"/v1/human-conversations/{conversation['id']}/report",
+            f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
             headers=visitor_headers,
             json={"reason_code": code},
         )
@@ -329,7 +329,7 @@ def test_report_enforces_details_required_codes(client, fresh_db, monkeypatch):
     _visit, conversation = _active(owner, visitor)
 
     options = client.get(
-        "/v1/human-conversations/report-options", headers=visitor_headers
+        "/api/v1/products/mingchan/human-conversations/report-options", headers=visitor_headers
     ).json()["data"]["options"]
     required = [
         option["reason_code"] for option in options if option["details_required"]
@@ -338,17 +338,17 @@ def test_report_enforces_details_required_codes(client, fresh_db, monkeypatch):
 
     for code in required:
         missing = client.post(
-            f"/v1/human-conversations/{conversation['id']}/report",
+            f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
             headers=visitor_headers,
             json={"reason_code": code},
         )
         blank = client.post(
-            f"/v1/human-conversations/{conversation['id']}/report",
+            f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
             headers=visitor_headers,
             json={"reason_code": code, "details": "   "},
         )
         filled = client.post(
-            f"/v1/human-conversations/{conversation['id']}/report",
+            f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/report",
             headers=visitor_headers,
             json={"reason_code": code, "details": "对方一直发无关内容"},
         )
@@ -374,7 +374,7 @@ def test_report_options_available_when_send_flag_is_off(
     _active(owner_login["platform_user"]["id"], visitor_login["platform_user"]["id"])
 
     options = client.get(
-        "/v1/human-conversations/report-options", headers=visitor_headers
+        "/api/v1/products/mingchan/human-conversations/report-options", headers=visitor_headers
     )
     assert options.status_code == 200
     assert options.json()["data"]["options"]
@@ -392,7 +392,7 @@ def test_conversation_list_unread_preview_and_read_marker(
     _visit, conversation = _active(owner, visitor)
 
     def _item(headers) -> dict:
-        listed = client.get("/v1/human-conversations", headers=headers)
+        listed = client.get("/api/v1/products/mingchan/human-conversations", headers=headers)
         assert listed.status_code == 200, listed.text
         return listed.json()["data"]["items"][0]
 
@@ -403,7 +403,7 @@ def test_conversation_list_unread_preview_and_read_marker(
 
     for index in range(3):
         assert client.post(
-            f"/v1/human-conversations/{conversation['id']}/messages",
+            f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
             headers=visitor_headers,
             json={"client_message_id": f"client_100{index}", "text": f"访客第{index}句"},
         ).status_code == 200
@@ -417,13 +417,13 @@ def test_conversation_list_unread_preview_and_read_marker(
     assert visitor_item["last_preview"] == "访客第2句"
 
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/read", headers=owner_headers
     ).status_code == 200
     assert _item(owner_headers)["unread_count"] == 0
 
     # 已读之后对方再发，未读重新计数且只算新的那条。
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_1003", "text": "已读之后的新消息"},
     ).status_code == 200
@@ -446,21 +446,21 @@ def test_read_marker_uses_sequence_not_timestamp(client, fresh_db, monkeypatch):
     _visit, conversation = _active(owner, visitor)
 
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_2001", "text": "已读前"},
     ).status_code == 200
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/read", headers=owner_headers
     ).status_code == 200
     # 同一秒内到达的下一条：时间戳比不出先后，序号可以。
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_2002", "text": "同秒到达"},
     ).status_code == 200
 
-    item = client.get("/v1/human-conversations", headers=owner_headers).json()[
+    item = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()[
         "data"
     ]["items"][0]
     assert item["unread_count"] == 1
@@ -468,13 +468,13 @@ def test_read_marker_uses_sequence_not_timestamp(client, fresh_db, monkeypatch):
 
     # 游标只前进不回退：重复标记已读不会把未读数算成负或让它复活。
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/read", headers=owner_headers
     ).status_code == 200
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/read", headers=owner_headers
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/read", headers=owner_headers
     ).status_code == 200
     assert (
-        client.get("/v1/human-conversations", headers=owner_headers).json()["data"][
+        client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()["data"][
             "items"
         ][0]["unread_count"]
         == 0
@@ -492,7 +492,7 @@ def test_conversation_list_exposes_send_gate_and_expiry(
     visitor = visitor_login["platform_user"]["id"]
     visit, _conversation = _active(owner, visitor)
 
-    item = client.get("/v1/human-conversations", headers=owner_headers).json()[
+    item = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()[
         "data"
     ]["items"][0]
     assert item["can_send"] is True
@@ -502,11 +502,11 @@ def test_conversation_list_exposes_send_gate_and_expiry(
 
     # 关掉写开关：只读原因是可恢复的 feature_disabled，不是终态。
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.settings"
-        ".companion_world_human_chat_enabled",
+        "app.products.mingchan.api.human_chat.settings"
+        ".mingchan_human_chat_enabled",
         False,
     )
-    gated = client.get("/v1/human-conversations", headers=owner_headers).json()[
+    gated = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()[
         "data"
     ]["items"][0]
     assert gated["can_send"] is False
@@ -514,14 +514,14 @@ def test_conversation_list_exposes_send_gate_and_expiry(
 
     # visit 进终态后，即使开关重新打开也必须是 visit_ended——终态优先于开关。
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.settings"
-        ".companion_world_human_chat_enabled",
+        "app.products.mingchan.api.human_chat.settings"
+        ".mingchan_human_chat_enabled",
         True,
     )
     CompanionWorldVisitService().terminate(
         visitor, visit_id=visit["id"], action="leave", now=NOW
     )
-    ended = client.get("/v1/human-conversations", headers=owner_headers).json()[
+    ended = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()[
         "data"
     ]["items"][0]
     assert ended["can_send"] is False
@@ -532,7 +532,7 @@ def test_conversation_list_is_participant_scoped_and_preview_is_bounded(
     client, fresh_db, monkeypatch
 ):
     """列表按 participant 隔离；预览截断且折叠换行，不把 4000 字正文塞进列表。"""
-    from app.products.zhaoxi.infrastructure.persistence.companion_world_human_chat import (
+    from app.products.mingchan.infrastructure.persistence.companion_world_human_chat import (
         HUMAN_CONVERSATION_PREVIEW_CHARS,
     )
 
@@ -547,12 +547,12 @@ def test_conversation_list_is_participant_scoped_and_preview_is_bounded(
 
     long_text = "第一行\n\n第二行   多空格" + "长" * 300
     assert client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=visitor_headers,
         json={"client_message_id": "client_3001", "text": long_text},
     ).status_code == 200
 
-    preview = client.get("/v1/human-conversations", headers=owner_headers).json()[
+    preview = client.get("/api/v1/products/mingchan/human-conversations", headers=owner_headers).json()[
         "data"
     ]["items"][0]["last_preview"]
     assert len(preview) <= HUMAN_CONVERSATION_PREVIEW_CHARS
@@ -560,7 +560,7 @@ def test_conversation_list_is_participant_scoped_and_preview_is_bounded(
     assert preview.startswith("第一行 第二行 多空格")
 
     # 第三方看不到别人的会话，更看不到预览。
-    stranger = client.get("/v1/human-conversations", headers=stranger_headers)
+    stranger = client.get("/api/v1/products/mingchan/human-conversations", headers=stranger_headers)
     assert stranger.status_code == 200
     assert stranger.json()["data"]["items"] == []
 
@@ -682,3 +682,6 @@ def test_pg_send_vs_exact_expiry_never_commits_message(fresh_db):
             (conversation["id"],),
         ).fetchone()["n"]
     assert count == 0
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

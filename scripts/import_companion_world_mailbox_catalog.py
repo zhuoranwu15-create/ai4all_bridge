@@ -254,7 +254,7 @@ def import_mailbox_catalog(
         create_character_letter_catalog_entry,
         retire_character_letter_catalog_entry,
     )
-    from app.products.zhaoxi.application.companion_world_mailbox import build_mailbox_policy
+    from app.products.mingchan.application.mailbox import build_mailbox_policy
     from app.time_utils import beijing_now_str
 
     with connect() as conn:
@@ -317,7 +317,7 @@ def main() -> int:
 
     if args.database_url is not None:
         settings.database_url = args.database_url
-    secret = settings.companion_world_mailbox_manifest_hmac_secret
+    secret = settings.mingchan_mailbox_manifest_hmac_secret
     records = load_signed_manifest(args.manifest, secret=secret)
     report = import_mailbox_catalog(records, dry_run=args.dry_run, actor=args.actor)
     print(json.dumps(asdict(report), ensure_ascii=False, indent=2))

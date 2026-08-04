@@ -1,6 +1,6 @@
 # AI4ALL 文档导航
 
-更新时间：2026-07-31
+更新时间：2026-08-04
 
 文档同时按“生命周期”和“所有权”组织：需求、架构、执行、运维、历史描述生命周期；
 `products/<app_id>/`、`architecture/shared/` 与 `architecture/agent-runtime/` 描述所有权。
@@ -13,6 +13,7 @@
 | [项目状态](STATUS.md) | 现在运行到哪里、近期在做什么、有哪些已知缺口 |
 | [产品目录](products/README.md) | 已注册产品、`app_id`、状态和产品文档入口 |
 | [朝夕总 PRD](products/zhaoxi/prd.md) | 朝夕产品定位、范围与验收口径 |
+| [鸣蝉总 PRD](products/mingchan/prd.md) | Native App / Companion World 产品边界与启用门槛 |
 | [总体架构](architecture/overview.md) | 系统分层、依赖方向、核心链路与部署形态 |
 | [核心模型与术语](architecture/core-model.md) | 平台、产品、形态、渠道、身份作用域和代码所有权如何区分 |
 | [技术总平面](architecture/system_design.md) | 状态所有权、数据模型与技术平面 |
@@ -38,7 +39,7 @@
 | --- | --- |
 | 产品/项目负责人 | [项目状态](STATUS.md) → [路线图](roadmap.md) → [产品目录](products/README.md) → 对应产品总 PRD |
 | 后端开发 | [核心模型与术语](architecture/core-model.md) → [总体架构](architecture/overview.md) → 对应 shared / agent-runtime / product 设计 → [新增产品清单](guides/adding-product.md) |
-| App/客户端开发 | [朝夕产品 manifest](products/zhaoxi/README.md) → [接入与契约入口](products/zhaoxi/integrations/README.md) → App quickstart / 完整交接 → OpenAPI snapshot |
+| App/客户端开发 | [鸣蝉产品 manifest](products/mingchan/README.md) → 迁移期 legacy App quickstart / 完整交接 → OpenAPI snapshot；客户端 namespace 切换由拆分计划跟踪 |
 | 运维/值守 | [生产 Runbook](ops/production_runbook.md) → [平台运行入口](ops/platform/README.md) → 对应产品运行文档 |
 
 ## 维护规则

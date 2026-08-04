@@ -6,7 +6,6 @@ send_otp/generate_completion 等本模块名（patch where it's used）。
 """
 import json
 import hashlib
-import threading
 import asyncio
 import httpx
 import logging
@@ -18,10 +17,39 @@ from app.bootstrap.product_registry import PRODUCTION_PRODUCT_REGISTRY, ZHAOXI_A
 from app.routers.deps import _require_session
 from app.platform.gateways import node_gateway
 from app.platform.auth.captcha import verify_captcha
-from app.db import SessionPrincipal, count_verifications_last_hour, create_binding_intent, create_faq_message, create_phone_verification, create_platform_user_session, get_account_onboarding_state, get_binding_intent, record_campaign_visit, get_latest_active_verification, get_latest_subscription_for_user, get_or_create_default_ai4all_account_for_user, get_or_create_personal_referral_code_for_user, get_platform_user, get_wallet_summary, increment_verify_attempts, invalidate_other_verifications_for_phone, invalidate_verification, like_faq_message, list_channel_bindings_for_account, list_published_faq_messages, list_wallet_ledger, mark_referral_relationship_bound, normalize_phone, preview_referral_code, reenable_proactive_after_rebind, register_platform_user_with_referral, resolve_node_for_account, set_account_onboarding_state, set_binding_intent_error, set_verification_verified, unbind_account_channel, unbind_and_wipe_account, update_binding_intent, upsert_channel_binding
+from app.db import (
+    SessionPrincipal,
+    create_binding_intent,
+    create_faq_message,
+    create_platform_user_session,
+    get_account_onboarding_state,
+    get_binding_intent,
+    get_latest_subscription_for_user,
+    get_or_create_default_ai4all_account_for_user,
+    get_or_create_personal_referral_code_for_user,
+    get_platform_user,
+    get_wallet_summary,
+    like_faq_message,
+    list_channel_bindings_for_account,
+    list_published_faq_messages,
+    list_wallet_ledger,
+    mark_referral_relationship_bound,
+    normalize_phone,
+    preview_referral_code,
+    record_campaign_visit,
+    reenable_proactive_after_rebind,
+    register_platform_user_with_referral,
+    resolve_node_for_account,
+    set_account_onboarding_state,
+    set_binding_intent_error,
+    unbind_account_channel,
+    unbind_and_wipe_account,
+    update_binding_intent,
+    upsert_channel_binding,
+)
 from app.agent_runtime.llm.service import generate_completion
 from app.products.zhaoxi.application.onboarding import ONBOARDING_STEP1_SENT
-from app.products.zhaoxi.application.product_localization import (
+from app.products.mingchan.application.product_localization import (
     normalize_public_error_code,
     product_message,
     public_error_message,
@@ -34,6 +62,11 @@ from app.products.zhaoxi.application.web_ui_localization import (
 from app.products.zhaoxi.infrastructure.persistence.campaign import campaign_code_exists
 from app.platform.quota.rate_limiter import RateLimiter
 from app.platform.auth.sms import generate_otp, send_otp
+from app.platform.auth.phone_otp import (
+    PhoneOtpError,
+    send_phone_otp,
+    verify_phone_otp,
+)
 from typing import Any, Optional
 
 logger = logging.getLogger("ai4all")
@@ -782,83 +815,32 @@ def web_like_faq_message(
     }
 
 
-_otp_send_master_lock = threading.Lock()
-
-
-_otp_send_locks: dict[str, threading.Lock] = {}
-
-
-def _otp_send_lock_for(phone: str) -> threading.Lock:
-    """Return (lazily creating) a per-phone in-process lock for OTP send.
-
-    Serializes count-check + create + send + post-invalidate so two concurrent
-    requests for the same phone cannot both create active verifications and
-    then mutually expire each other's row. Single-worker scope only — the
-    project runs one uvicorn worker in production, so this is sufficient.
-    """
-    with _otp_send_master_lock:
-        lock = _otp_send_locks.get(phone)
-        if lock is None:
-            lock = threading.Lock()
-            _otp_send_locks[phone] = lock
-        return lock
-
-
 @router.post("/web/sms/send-otp")
 def web_send_otp(payload: SendOtpRequest) -> dict:
     try:
-        phone = normalize_phone(payload.phone)
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-
-    if not verify_captcha(payload.captcha_verify_param):
-        raise HTTPException(status_code=400, detail="验证码校验未通过")
-
-    with _otp_send_lock_for(phone):
-        count = count_verifications_last_hour(phone)
-        if count >= settings.aliyun_sms_max_per_phone_per_hour:
-            raise HTTPException(status_code=429, detail="发送频率过高，请稍后重试")
-
-        code = generate_otp()
-        verification = create_phone_verification(
-            phone=phone,
-            code=code,
+        return send_phone_otp(
+            phone=payload.phone,
+            captcha_verify_param=payload.captcha_verify_param,
+            max_per_phone_per_hour=settings.aliyun_sms_max_per_phone_per_hour,
             expires_minutes=settings.otp_expires_minutes,
+            verify_captcha_fn=verify_captcha,
+            generate_code_fn=generate_otp,
+            send_code_fn=send_otp,
         )
-        try:
-            send_otp(phone=phone, code=code)
-        except Exception:
-            invalidate_verification(verification["id"])
-            logger.exception("sms: send failed for phone=%s", phone)
-            raise HTTPException(status_code=500, detail="短信发送失败，请稍后重试")
-
-        invalidate_other_verifications_for_phone(phone, verification["id"])
-    return {"status": "ok"}
+    except PhoneOtpError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from None
 
 
 @router.post("/web/sms/verify-otp")
 def web_verify_otp(payload: VerifyOtpRequest) -> dict:
     try:
-        phone = normalize_phone(payload.phone)
-    except ValueError as err:
-        raise HTTPException(status_code=400, detail=str(err))
-
-    verification = get_latest_active_verification(phone)
-    if verification is None:
-        raise HTTPException(status_code=400, detail="验证码不存在或已过期，请重新获取")
-
-    if verification["verify_attempts"] >= 5:
-        raise HTTPException(status_code=400, detail="尝试次数过多，请重新获取验证码")
-
-    if verification["code"] != payload.code:
-        increment_verify_attempts(verification["id"])
-        raise HTTPException(status_code=400, detail="验证码错误")
-
-    result = set_verification_verified(
-        verification["id"],
-        token_expires_minutes=settings.otp_token_expires_minutes,
-    )
-    return {"status": "ok", "verified_token": result["verified_token"]}
+        return verify_phone_otp(
+            phone=payload.phone,
+            code=payload.code,
+            token_expires_minutes=settings.otp_token_expires_minutes,
+        )
+    except PhoneOtpError as err:
+        raise HTTPException(status_code=err.status_code, detail=err.detail) from None
 
 
 def _register_platform_user_with_otp_result(
