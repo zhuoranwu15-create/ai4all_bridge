@@ -16,21 +16,16 @@ from app.bootstrap.product_registry import (
 from app.db._backend import is_postgres
 
 
-def test_production_registry_enables_zhaoxi_and_keeps_mingchan_disabled():
+def test_production_registry_enables_zhaoxi_and_mingchan():
     registrations = PRODUCTION_PRODUCT_REGISTRY.registrations()
     assert [
         (product.app_id, product.enabled, product.default_language)
         for product in registrations
     ] == [
-        (MINGCHAN_APP_ID, False, "zh-CN"),
+        (MINGCHAN_APP_ID, True, "zh-CN"),
         (ZHAOXI_APP_ID, True, "zh-CN"),
     ]
-    assert (
-        PRODUCTION_PRODUCT_REGISTRY.require_registered(MINGCHAN_APP_ID).enabled
-        is False
-    )
-    with pytest.raises(ValueError, match="disabled app_id: mingchan"):
-        PRODUCTION_PRODUCT_REGISTRY.require_enabled(MINGCHAN_APP_ID)
+    assert PRODUCTION_PRODUCT_REGISTRY.require_enabled(MINGCHAN_APP_ID).enabled is True
     with pytest.raises(ValueError, match="unregistered app_id"):
         PRODUCTION_PRODUCT_REGISTRY.require_enabled("test_product")
 

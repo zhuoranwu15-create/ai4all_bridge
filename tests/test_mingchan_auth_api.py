@@ -110,9 +110,10 @@ def test_mingchan_logout_revokes_only_presented_mingchan_session(fresh_db):
     assert client.get("/api/v1/products/mingchan/me", headers=headers).status_code == 401
 
 
-def test_disabled_production_mingchan_route_fails_before_consuming_otp(fresh_db):
+def test_disabled_mingchan_route_fails_before_consuming_otp(fresh_db):
     app = FastAPI()
-    install_public_routes(app)
+    registry = build_test_product_registry(mingchan_enabled=False)
+    install_public_routes(app, registry=registry)
     client = TestClient(app)
     phone = "13800037914"
     token = _verified_token(phone)
@@ -206,7 +207,8 @@ def test_mingchan_otp_errors_preserve_shared_security_rules(fresh_db):
 
 def test_disabled_mingchan_otp_route_stops_before_captcha_and_db(fresh_db):
     app = FastAPI()
-    install_public_routes(app, config=fresh_db)
+    registry = build_test_product_registry(mingchan_enabled=False)
+    install_public_routes(app, registry=registry, config=fresh_db)
     client = TestClient(app)
 
     with patch(

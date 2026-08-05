@@ -1,6 +1,6 @@
 """服务端可信产品注册表。
 
-生产注册表当前启用朝夕，并预注册尚未切流的鸣蝉。测试可显式构造独立
+生产注册表启用朝夕与鸣蝉。测试可显式构造独立
 ``ProductRegistry`` 注入数据库原语，但 API 不从 Header 或其他客户端输入动态扩充注册表。
 """
 from __future__ import annotations
@@ -108,10 +108,9 @@ PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
             default_language="zh-CN",
             allowed_channels=("openclaw-weixin", "web", "unknown"),
         ),
-        # 鸣蝉完成首次生产清理、客户端切换与发布确认前保持 fail closed。
+        # 鸣蝉已完成暗部署、schema 63 与朝夕 legacy 资产保留验收。
         ProductRegistration(
             app_id=MINGCHAN_APP_ID,
-            enabled=False,
             default_language="zh-CN",
             allowed_channels=("native",),
         ),
@@ -119,8 +118,8 @@ PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
 )
 
 
-def build_test_product_registry() -> ProductRegistry:
-    """构造带隔离测试产品的注册表；生产代码不得使用。"""
+def build_test_product_registry(*, mingchan_enabled: bool = True) -> ProductRegistry:
+    """构造带隔离测试产品的注册表；可显式验证鸣蝉禁用回滚路径。"""
 
     return ProductRegistry(
         [
@@ -130,6 +129,7 @@ def build_test_product_registry() -> ProductRegistry:
             ),
             ProductRegistration(
                 app_id=MINGCHAN_APP_ID,
+                enabled=mingchan_enabled,
                 allowed_channels=("native",),
             ),
             ProductRegistration(

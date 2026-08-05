@@ -289,7 +289,12 @@ def test_mingchan_world_rejects_wrong_audience_and_disabled_product(fresh_db):
     assert wrong_audience.json()["code"] == "unauthorized"
 
     disabled_app = FastAPI()
-    install_public_routes(disabled_app, config=fresh_db)
+    disabled_registry = build_test_product_registry(mingchan_enabled=False)
+    install_public_routes(
+        disabled_app,
+        registry=disabled_registry,
+        config=fresh_db,
+    )
     disabled = TestClient(disabled_app).post(
         "/api/v1/products/mingchan/worlds/home/bootstrap"
     )
