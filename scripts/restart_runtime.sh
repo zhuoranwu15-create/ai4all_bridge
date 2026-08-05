@@ -10,7 +10,7 @@ PROACTIVE_SERVICE="${AI4ALL_PROACTIVE_SERVICE:-ai4all-weixin-proactive-scheduler
 MONITOR_TIMER="${AI4ALL_MONITOR_TIMER:-ai4all-monitor-health.timer}"
 BACKUP_TIMER="${AI4ALL_BACKUP_TIMER:-ai4all-backup.timer}"
 READY_URL="${AI4ALL_READY_URL:-http://127.0.0.1:8180/health/ready}"
-MONITOR_SCHEDULERS_VALUE="${MONITOR_SCHEDULERS:-proactive_scheduler:90,dreaming_scheduler:900}"
+MONITOR_SCHEDULERS_VALUE="${MONITOR_SCHEDULERS:-proactive_scheduler:90,dreaming_scheduler:900,world_lifecycle_scheduler:900}"
 
 # node-only(厚节点,如 aliyun2)用户级单元:backend(:8180,直连中心 PG 跑 turn)+ access node(:8190 exec/pull/心跳)。
 # 这些是 systemctl --user 单元,无需 sudo;无 nginx / 无系统级 monitor/backup timer / 无 proactive-scheduler。
