@@ -4804,6 +4804,95 @@ def _migration_0062_mingchan_notification_product_scope(conn: Connection) -> Non
     )
 
 
+def _migration_0063_companion_world_owner_product_unique(conn: Connection) -> None:
+    """把 home World 唯一性从真人全局收缩为 ``(app_id, owner)``。
+
+    m0061 已完成 ``app_id`` 回填；本迁移只改变根表唯一契约，不移动或删除任何
+    legacy World。SQLite 在关闭外键检查的单个 ``executescript`` 中重建根表，随后
+    立即运行 ``foreign_key_check``；PostgreSQL 只删除精确覆盖 owner 单列的 UNIQUE
+    constraint。两端最后都建立产品级唯一索引。
+    """
+    duplicate = conn.execute(
+        """
+        SELECT app_id, owner_platform_user_id
+        FROM universes
+        GROUP BY app_id, owner_platform_user_id
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    ).fetchone()
+    if duplicate is not None:
+        raise RuntimeError("m0063 duplicate universe app/owner rows")
+
+    if is_postgres():
+        rows = conn.execute(
+            """
+            SELECT c.conname
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN LATERAL (
+                SELECT array_agg(a.attname ORDER BY key_col.ordinality) AS columns
+                FROM unnest(c.conkey) WITH ORDINALITY AS key_col(attnum, ordinality)
+                JOIN pg_attribute a
+                  ON a.attrelid = t.oid AND a.attnum = key_col.attnum
+            ) names ON TRUE
+            WHERE n.nspname = current_schema()
+              AND t.relname = 'universes'
+              AND c.contype = 'u'
+              AND names.columns = ARRAY['owner_platform_user_id']::name[]
+            """
+        ).fetchall()
+        for row in rows:
+            name = str(row["conname"])
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                raise RuntimeError("unexpected universes unique constraint name")
+            conn.execute(f'ALTER TABLE universes DROP CONSTRAINT "{name}"')
+    else:
+        # executescript 会先结束 sqlite3 的隐式事务；foreign_keys=OFF 因而能生效。
+        # legacy_alter_table 防止 RENAME 把所有子表 FK 目标改成临时表名。
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            PRAGMA legacy_alter_table = ON;
+            ALTER TABLE universes RENAME TO universes_m0063_old;
+            CREATE TABLE universes (
+                id TEXT PRIMARY KEY,
+                owner_platform_user_id TEXT NOT NULL,
+                legacy_primary_account_id TEXT,
+                status TEXT NOT NULL DEFAULT 'active',
+                onboarding_state TEXT NOT NULL DEFAULT 'preparing',
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+                FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
+                UNIQUE(app_id, owner_platform_user_id)
+            );
+            INSERT INTO universes(
+                id, owner_platform_user_id, legacy_primary_account_id, status,
+                onboarding_state, created_at, updated_at, app_id
+            )
+            SELECT id, owner_platform_user_id, legacy_primary_account_id, status,
+                   onboarding_state, created_at, updated_at, app_id
+            FROM universes_m0063_old;
+            DROP TABLE universes_m0063_old;
+            PRAGMA legacy_alter_table = OFF;
+            PRAGMA foreign_keys = ON;
+            """
+        )
+        violation = conn.execute("PRAGMA foreign_key_check").fetchone()
+        if violation is not None:
+            raise RuntimeError("m0063 SQLite foreign key check failed")
+
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS ix_universes_app_owner;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_universes_app_owner
+            ON universes(app_id, owner_platform_user_id);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4862,6 +4951,7 @@ _MIGRATIONS = [
     (60, _migration_0060_creator_role_template_opening_and_summary),
     (61, _migration_0061_companion_world_product_scope),
     (62, _migration_0062_mingchan_notification_product_scope),
+    (63, _migration_0063_companion_world_owner_product_unique),
 ]
 
 

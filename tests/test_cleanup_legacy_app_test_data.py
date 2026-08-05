@@ -11,6 +11,7 @@ from scripts.cleanup_legacy_app_test_data import (
     build_cleanup_plan,
     configure_database_url_override,
 )
+from scripts.precheck_mingchan_clean_start import build_preservation_plan
 
 
 def test_cleanup_database_url_override_rejects_sqlite_url():
@@ -113,3 +114,33 @@ def test_cleanup_refuses_legacy_resident_with_weixin_binding(fresh_db):
         apply_cleanup()
     # 失败必须发生在任何 DELETE 之前。
     assert build_cleanup_plan()["counts"]["legacy_worlds"] == 1
+
+
+def test_preservation_precheck_accepts_protected_zhaoxi_world(fresh_db):
+    """保留方案把微信保护项视为必须留存，不再要求删除 legacy World。"""
+
+    user = db.create_or_get_platform_user_by_phone(
+        phone="19977000063", display_name="preserved-zhaoxi"
+    )
+    account = db.create_ai4all_account_for_user(
+        platform_user_id=user["id"], display_name="保留微信账号"
+    )["account"]
+    _seed_world(app_id="zhaoxi", suffix="63", runtime_account_id=account["id"])
+    db.upsert_channel_binding(
+        account_id=account["id"],
+        channel="openclaw-weixin",
+        session_key="preserved-zhaoxi-weixin",
+        channel_account_id="bot-preserved",
+        sender_id="sender-preserved",
+        chat_id="preserved@im.wechat",
+        raw_identity={"source": "preservation-test"},
+    )
+
+    report = build_preservation_plan()
+
+    assert report["mode"] == "preserve_legacy_zhaoxi"
+    assert report["schema_version"] == 63
+    assert report["product_owner_unique"] is True
+    assert report["safe_to_enable"] is True
+    assert report["legacy_counts_retained"]["legacy_worlds"] == 1
+    assert report["legacy_counts_retained"]["protected_weixin_bindings"] == 1

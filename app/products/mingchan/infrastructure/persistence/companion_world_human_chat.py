@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import json
 from typing import Any, Dict, Iterator, List, Optional
 
+from app.bootstrap.product_registry import MINGCHAN_APP_ID
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
@@ -60,9 +61,10 @@ def create_human_conversation_for_visit(
     suffix = " FOR UPDATE" if is_postgres() else ""
     with _human_write_tx(conn) as tx:
         visit = tx.execute(
-            "SELECT id, owner_platform_user_id, visitor_platform_user_id, status "
-            "FROM universe_visits WHERE id = ?" + suffix,
-            (visit_id,),
+            "SELECT v.id, v.owner_platform_user_id, v.visitor_platform_user_id, v.status "
+            "FROM universe_visits v JOIN universes u ON u.id = v.universe_id "
+            "WHERE v.id = ? AND u.app_id = ?" + suffix,
+            (visit_id, MINGCHAN_APP_ID),
         ).fetchone()
         if visit is None:
             raise ValueError("human conversation visit not found")
@@ -112,17 +114,25 @@ def get_human_conversation_for_participant(
 ) -> Optional[Dict[str, Any]]:
     """按 conversation + participant 读取；第三方返回 None。"""
     hidden = ""
-    params: list[Any] = [conversation_id, platform_user_id, platform_user_id]
+    params: list[Any] = [
+        conversation_id,
+        platform_user_id,
+        platform_user_id,
+        MINGCHAN_APP_ID,
+    ]
     if not include_hidden:
         hidden = (
-            " AND ((owner_platform_user_id = ? AND owner_hidden_at IS NULL) "
-            "OR (visitor_platform_user_id = ? AND visitor_hidden_at IS NULL))"
+            " AND ((c.owner_platform_user_id = ? AND c.owner_hidden_at IS NULL) "
+            "OR (c.visitor_platform_user_id = ? AND c.visitor_hidden_at IS NULL))"
         )
         params.extend([platform_user_id, platform_user_id])
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM human_conversations WHERE id = ? "
-            "AND (owner_platform_user_id = ? OR visitor_platform_user_id = ?)"
+            "SELECT c.* FROM human_conversations c "
+            "JOIN universe_visits v ON v.id = c.visit_id "
+            "JOIN universes u ON u.id = v.universe_id WHERE c.id = ? "
+            "AND (c.owner_platform_user_id = ? OR c.visitor_platform_user_id = ?) "
+            "AND u.app_id = ?"
             + hidden,
             tuple(params),
         ).fetchone()
@@ -135,7 +145,11 @@ def get_human_conversation_for_visit(
     """内部按 visit 读取会话；公开 API 必须使用 participant-scoped 查询。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM human_conversations WHERE visit_id = ?", (visit_id,)
+            "SELECT c.* FROM human_conversations c "
+            "JOIN universe_visits v ON v.id = c.visit_id "
+            "JOIN universes u ON u.id = v.universe_id "
+            "WHERE c.visit_id = ? AND u.app_id = ?",
+            (visit_id, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row else None
 
@@ -165,6 +179,7 @@ def list_human_conversations_for_participant(
         platform_user_id,                  # 未读子查询：CASE 判定自己是不是 owner
         platform_user_id,                  # WHERE owner = 自己
         platform_user_id,                  # WHERE visitor = 自己
+        MINGCHAN_APP_ID,                   # Mingchan visit/world scope
     ]
     if not include_hidden:
         params.extend([platform_user_id, platform_user_id])
@@ -194,7 +209,9 @@ def list_human_conversations_for_participant(
             "JOIN platform_users owner ON owner.id = c.owner_platform_user_id "
             "JOIN platform_users visitor ON visitor.id = c.visitor_platform_user_id "
             "LEFT JOIN universe_visits v ON v.id = c.visit_id "
+            "JOIN universes u ON u.id = v.universe_id "
             "WHERE (c.owner_platform_user_id = ? OR c.visitor_platform_user_id = ?)"
+            " AND u.app_id = ?"
             + hidden
             + " ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC LIMIT ?",
             tuple(params),
