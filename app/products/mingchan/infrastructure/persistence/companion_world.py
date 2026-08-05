@@ -2398,7 +2398,9 @@ def claim_companion_world_outbox(
     """claim 一批可投递/lease 过期 outbox；PG 以 SKIP LOCKED 防 worker 重叠。"""
     clean_limit = max(1, int(batch_size))
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        # 只锁 outbox 行；若连同 universe 一起锁，同一 World 的多条事件会被
+        # 第一个 worker 的根行锁全部挡住，破坏 SKIP LOCKED 分片。
+        lock_suffix = " FOR UPDATE OF o SKIP LOCKED" if is_postgres() else ""
         stale_clause = ""
         select_params: List[Any] = [now]
         if stale_before is not None:
@@ -2703,7 +2705,7 @@ def close_expired_ai_feed_slots(
     """关闭已越过 slot window 的 generating 行；绝不跨窗口补发。"""
     clean_limit = max(1, min(int(limit), 1000))
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE OF p SKIP LOCKED" if is_postgres() else ""
         rows = tx.execute(
             """
             SELECT p.id FROM universe_posts p
