@@ -1,6 +1,6 @@
 # 项目现状与近期方向
 
-更新时间：2026-07-31
+更新时间：2026-08-04
 
 > 本文是**持续更新**的项目状态入口，回答"我们现在在哪、当前重点是什么、还剩哪些大块"。它取代了原 `phase1/next_dev_steps.md`，并承载原 Phase 1 收尾总结里"还剩什么"的活的部分。
 >
@@ -10,27 +10,34 @@
 
 - Phase 1 的基础功能（注册扫码接入、账号隔离、陪伴聊天、记忆、提醒、主动消息、同步搜索、语音文本链路、贝壳计费底座）已经完成并上线内测，项目进入 **2.x 阶段**。
 - 多产品 Phase 1（membership、session、计费、配额、邀请隔离）已完成双后端验收并生产发布；
-  MP-07A～MP-07F 公共基座已完成本地开发与聚焦回归，正在分批评审。生产仍只注册朝夕，
-  Fatetell/Nooki 等候选产品等待真实 PRD，不创建占位实现。
+  MP-07A～MP-07F 公共基座已完成本地开发与聚焦回归，正在分批评审。2026-08-04 已冻结产品拆分：
+  微信/OpenClaw 与 Web/H5 接入保留为朝夕相伴（`zhaoxi`），原 Native App / Companion World 成为
+  独立产品鸣蝉（`mingchan`）。仓库内拆分开发及开发机代码审查、聚焦门禁、SQLite/PG 全量回归和
+  隔离临时库 cleanup 演练已完成；鸣蝉仍预注册且禁用，外部客户端切换和首次生产启用后续执行。
 - "Phase 1" 现在是一个**已完成的历史里程碑**，不再是文档的组织轴。当时的完整状态快照冻结在 [`archive/phase1/phase1_closeout_summary.md`](archive/phase1/phase1_closeout_summary.md)（截至 2026-06-07，全量 424 passed）。
 - 当前是**持续开发**模式，不再做里程碑式工作包规划；重点从"补齐基础功能"转向**架构完善、新功能补充和效果调优**。
 
 ## 2. 当前重点方向
 
-1. **架构完善** — 评审并合并 MP-07 公共基座；真实第二产品按固定 namespace、
-   `ProductTurnServices` 与 `ToolPolicy` 接入。DB 与文件系统解耦另行设计。多机接入
-   （central/node）已上线，继续硬化部署与观测。
+1. **朝夕 / 鸣蝉产品域拆分** — 按[执行计划](plans/shared/zhaoxi_mingchan_product_split_plan.md)
+   仓库代码拆分已完成：App/World 路由、领域、任务、工具、资源和数据作用域已迁入
+   `product:mingchan`，朝夕已收缩为微信/Web 业务；两个产品分别使用固定 namespace、
+   `ProductTurnServices`、`ToolPolicy`、lifecycle 与 scheduler。鸣蝉按全新产品处理，不迁移旧 App
+   测试数据；生产首次启用时再按备份、只读 precheck、人工复核、apply/reconcile 的顺序受控清理。
+   开发机验证已完成，下一步是外部客户端切换、线上 cleanup/部署/启用及微信/App 真机验收。鸣蝉当前
+   仍保持 disabled。
 2. **新功能补充** — 拉新送贝壳闭环已落地，继续补运营复核体验；权益扣减收口、图片理解转正等（见 §3）。
 3. **效果调优** — 主动消息/内容邀请/陪伴跟进在真实数据上调 prompt、阈值与风控；陪伴质量回归集；默认 prompt 与人设。
-4. **朝夕相伴 App 客户端支持** — Companion World 3.0、M1「我的」Tab、M2 Feed 管理与
+4. **鸣蝉 App 客户端与 legacy 契约切换** — Companion World 3.0、M1「我的」Tab、M2 Feed 管理与
    v1.5 媒体/许愿服务端能力已进入主干并上线。2026-07-31 生产 `/app/config` 只读核验显示：
    `voice_input`、Companion World 主能力、图片/语音聊天、图文动态和许愿创建能力位均为 `true`；
-   客户端仍必须按能力位渲染，不能硬编码当前开量状态。产品口径见
-   [App 端 PRD](products/zhaoxi/capabilities/companion_world_app_prd.md)，客户端契约入口见
-   [App 简要说明](products/zhaoxi/app_client_brief.md)，机器可读契约为仓库提交的
-   [`openapi/app_v1.json`](products/zhaoxi/openapi/app_v1.json)。M1/M2/v1.5 交付计划已经归档；
-   未排期的产品、契约与运营项集中在
-   [Companion World App 后续项](backlog/products/zhaoxi/companion_world_app_followups.md)。
+   客户端仍必须按能力位渲染，不能硬编码当前开量状态。这些现状来自拆分前的 legacy 朝夕入口，
+   不代表鸣蝉已经启用。产品口径以[鸣蝉总 PRD](products/mingchan/prd.md)为准；详细 App PRD 暂见
+   [鸣蝉 App PRD](products/mingchan/capabilities/companion_world_app_prd.md)，客户端契约入口见
+   [App 简要说明](products/mingchan/app_client_brief.md)，机器可读契约为仓库提交的
+   [`openapi/app_v1.json`](products/mingchan/openapi/app_v1.json)。M1/M2/v1.5 交付计划已经归档；
+   未排期的产品、契约与运营项暂集中在
+   [Companion World App 后续项](backlog/products/mingchan/companion_world_app_followups.md)。
 
 ## 3. 已知大缺口（按建议起点排序）
 
@@ -43,7 +50,7 @@
 5. **内测部署硬化** — **已落地**：PostgreSQL 迁移（aliyun1+aliyun2 自 2026-06-21 全量切 PG，`app/db/_backend.py` 双后端垫片）、独立 scheduler worker（`scripts/run_proactive_scheduler.py`，含 dreaming 编排与时区校验）、飞书告警体系（`app/platform/observability/alerting.py`，ERROR 日志脱敏+冷却，main 与 scheduler 双处挂载）、per-turn trace_id 与计时结构化行。**仍在的缺口**：Redis 迁移（当前无 redis 依赖）、全局结构化日志框架、用户级 timezone 真正接线、多实例 scheduler lease（现仅行级 `claim_due_*` 幂等、无调度器租约）。
 6. **司辰头像 CDN 同步** — 本仓 512×512 头像资产已存在，但 2026-07-31 对生产头像 URL 的只读
    核验返回 `200 text/html` 而非图片，候选卡片可能收到站点 fallback。同步与验收口径见
-   [APP-OPS-001](backlog/products/zhaoxi/companion_world_app_followups.md)。
+   [APP-OPS-001](backlog/products/mingchan/companion_world_app_followups.md)。
 
 ## 4. 待跟进的架构设计
 

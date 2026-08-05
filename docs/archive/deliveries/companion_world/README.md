@@ -4,10 +4,10 @@
 
 当前事实入口：
 
-- [Companion World App PRD](../../../products/zhaoxi/capabilities/companion_world_app_prd.md)
-- [App API 完整交接](../../../products/zhaoxi/app_api_handoff.md)
-- [Companion World 3.0 架构](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)
-- [尚未排期的后续项](../../../backlog/products/zhaoxi/companion_world_app_followups.md)
+- [Companion World App PRD](../../../products/mingchan/capabilities/companion_world_app_prd.md)
+- [App API 完整交接](../../../products/mingchan/app_api_handoff.md)
+- [Companion World 3.0 架构](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md)
+- [尚未排期的后续项](../../../backlog/products/mingchan/companion_world_app_followups.md)
 
 ## 交付批次
 

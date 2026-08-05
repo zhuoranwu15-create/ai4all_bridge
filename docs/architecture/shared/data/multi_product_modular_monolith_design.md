@@ -4,11 +4,17 @@
 状态：**MP-01～MP-06 已生产发布；MP-07A～MP-07F 已完成本地开发与聚焦回归，待分批评审合并。生产注册表仍只启用 `zhaoxi`；真实第二产品等待 PRD，不预设为 Fatetell 或 Nooki。** 本文冻结任意新产品共用的「产品级模块边界 + 身份/计费隔离」架构决策。
 核查基线：Phase 1 merge commit `f4baa3b`。当前 max migration = `m0046`（`app/db/_core.py`）。
 
+> **2026-08-04 补充裁决：** 第二产品已冻结为鸣蝉（`mingchan`），Native App / Companion World
+> 属于鸣蝉，朝夕只拥有微信/OpenClaw 与 Web/H5 业务。本文关于“朝夕包含 Native App/World”或
+> “真实第二产品尚未确定”的叙述已被
+> [朝夕 / 鸣蝉拆分计划](../../../plans/shared/zhaoxi_mingchan_product_split_plan.md)取代；平台级模块边界与
+> 身份/计费隔离规则继续有效。
+
 路由口径：旧朝夕入口继续使用 `/v1/*`，规范产品入口由 manifest 固定挂载到 `/api/v1/products/<app_id>/*`；同时保留反代剥离 `/api` 后的 `/v1/products/<app_id>/*` 兼容路径。`app_id` 由服务端注册表和固定 router 决定，不接受客户端 Header 动态选择。
 
 关联后端设计：
 - [`architecture/overview.md`](../../overview.md) §2 已确立四层概念模型与依赖方向，本文是其在「多产品」维度上的延伸。
-- [`companion_world_3_0_refactor_design.md`](../../products/zhaoxi/companion_world_3_0_refactor_design.md)（D-01…D-14）：Agent Runtime 形态无关 + Companion World 产品领域层的既有重构，本文**叠加而非推翻**。
+- [`companion_world_3_0_refactor_design.md`](../../products/mingchan/companion_world_3_0_refactor_design.md)（D-01…D-14）：Agent Runtime 形态无关 + Companion World 产品领域层的既有重构，本文**叠加而非推翻**。
 - [`identity_model_and_wechat_binding.md`](../access/identity_model_and_wechat_binding.md)、[`companion_world_account_model_reconciliation.md`](../../../archive/deliveries/companion_world/companion_world_account_model_reconciliation.md)：真人身份与账号收敛模型。
 - [`multi_product_modular_monolith_implementation_plan.md`](../../../plans/shared/multi_product_modular_monolith_implementation_plan.md)：MP-01…MP-07 的实施记录与真实第二产品延期范围。
 - [`adding-product.md`](../../../guides/adding-product.md)：真实新产品开工时的接入清单。

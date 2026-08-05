@@ -4,8 +4,10 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta
 
+import pytest
+
 import app.db as db
-from app.products.zhaoxi.application.companion_world_resident_wishes import (
+from app.products.mingchan.application.resident_wishes import (
     CompanionWorldResidentWishService,
 )
 
@@ -19,7 +21,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> dict:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -55,7 +57,7 @@ def _bootstrapped(client, phone: str) -> dict:
     if not seeded:
         _seed_catalog()
     headers = _login(client, phone)
-    assert client.post("/v1/worlds/home/bootstrap", headers=headers).status_code == 200
+    assert client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).status_code == 200
     # TestClient + 共享内存 SQLite 下 confirm 的欢迎语写入会跨线程等待；本组只测许愿，
     # 直接把已 bootstrap 的 world 推到正式链路要求的 confirmed 前置状态。
     with db.connect() as conn:
@@ -68,8 +70,8 @@ def _bootstrapped(client, phone: str) -> dict:
 
 
 def _enabled(fresh_db) -> None:
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_mailbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_mailbox_enabled = True
     fresh_db.companion_world_wish_daily_max = 10
 
 
@@ -108,14 +110,14 @@ def _stub_generation_and_review(monkeypatch, *, review: str = "pass") -> None:
         return json.dumps(_GOOD, ensure_ascii=False)
 
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_wish.generate_completion",
+        "app.products.mingchan.application.wish.generate_completion",
         _generate,
     )
 
 
 def _submit(client, headers, request_id: str, text: str = "我想要一个朋友"):
     return client.post(
-        "/v1/worlds/home/resident-wishes",
+        "/api/v1/products/mingchan/worlds/home/resident-wishes",
         headers=headers,
         json={"wish_text": text, "client_request_id": request_id},
     )
@@ -128,13 +130,13 @@ def _parse(value: str) -> datetime:
 def test_mailbox_gate_and_old_preview_wish_branch_is_closed(
     client, fresh_db, monkeypatch
 ):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_mailbox_enabled = False
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_mailbox_enabled = False
     headers = _bootstrapped(client, "19930005001")
 
     hidden = _submit(client, headers, "wish-off-0001")
     legacy = client.post(
-        "/v1/worlds/home/resident-drafts/preview",
+        "/api/v1/products/mingchan/worlds/home/resident-drafts/preview",
         headers=headers,
         json={"wish_text": "我想要一个朋友", "client_request_id": "wish-old-0001"},
     )
@@ -218,15 +220,15 @@ def test_current_and_withdraw_are_owner_scoped_and_idempotent(
     _stub_input_review(monkeypatch)
     wish = _submit(client, mine, "wish-withdraw-0001").json()["data"]["wish"]
 
-    current = client.get("/v1/worlds/home/resident-wishes/current", headers=mine)
+    current = client.get("/api/v1/products/mingchan/worlds/home/resident-wishes/current", headers=mine)
     hidden = client.post(
-        f"/v1/resident-wishes/{wish['wish_id']}/withdraw", headers=theirs, json={}
+        f"/api/v1/products/mingchan/resident-wishes/{wish['wish_id']}/withdraw", headers=theirs, json={}
     )
     first = client.post(
-        f"/v1/resident-wishes/{wish['wish_id']}/withdraw", headers=mine, json={}
+        f"/api/v1/products/mingchan/resident-wishes/{wish['wish_id']}/withdraw", headers=mine, json={}
     )
     replay = client.post(
-        f"/v1/resident-wishes/{wish['wish_id']}/withdraw", headers=mine, json={}
+        f"/api/v1/products/mingchan/resident-wishes/{wish['wish_id']}/withdraw", headers=mine, json={}
     )
 
     assert current.json()["data"]["wish"] == wish
@@ -244,7 +246,7 @@ def test_worker_generates_then_delivers_wish_letter_exactly_once(
     client, fresh_db, monkeypatch
 ):
     _enabled(fresh_db)
-    fresh_db.companion_world_mailbox_enabled = True
+    fresh_db.mingchan_mailbox_enabled = True
     headers = _bootstrapped(client, "19930005008")
     _stub_input_review(monkeypatch)
     _stub_generation_and_review(monkeypatch)
@@ -262,14 +264,14 @@ def test_worker_generates_then_delivers_wish_letter_exactly_once(
     assert delivered["metrics"]["delivered"] == 1
     assert replay["metrics"]["claimed"] == 0
     current = client.get(
-        "/v1/worlds/home/resident-wishes/current", headers=headers
+        "/api/v1/products/mingchan/worlds/home/resident-wishes/current", headers=headers
     ).json()["data"]["wish"]
     assert current["status"] == "delivered"
     assert current["letter_id"] and current["is_open"] is True
     assert current["can_withdraw"] is False
 
     letter = client.get(
-        f"/v1/mailbox/letters/{current['letter_id']}", headers=headers
+        f"/api/v1/products/mingchan/mailbox/letters/{current['letter_id']}", headers=headers
     ).json()["data"]["letter"]
     assert letter["source"] == "wish"
     assert letter["wish_id"] == wish["wish_id"]
@@ -285,7 +287,7 @@ def test_wish_letter_accept_closes_wish_and_creates_resident(
     client, fresh_db, monkeypatch
 ):
     _enabled(fresh_db)
-    fresh_db.companion_world_mailbox_enabled = True
+    fresh_db.mingchan_mailbox_enabled = True
     headers = _bootstrapped(client, "19930005009")
     _stub_input_review(monkeypatch)
     _stub_generation_and_review(monkeypatch)
@@ -295,14 +297,14 @@ def test_wish_letter_accept_closes_wish_and_creates_resident(
     service.maintain_batch(now=submitted + timedelta(minutes=1), batch_size=10)
     service.maintain_batch(now=submitted + timedelta(hours=24), batch_size=10)
     current = client.get(
-        "/v1/worlds/home/resident-wishes/current", headers=headers
+        "/api/v1/products/mingchan/worlds/home/resident-wishes/current", headers=headers
     ).json()["data"]["wish"]
 
     accepted = client.post(
-        f"/v1/mailbox/letters/{current['letter_id']}/accept", headers=headers, json={}
+        f"/api/v1/products/mingchan/mailbox/letters/{current['letter_id']}/accept", headers=headers, json={}
     )
     after = client.get(
-        "/v1/worlds/home/resident-wishes/current", headers=headers
+        "/api/v1/products/mingchan/worlds/home/resident-wishes/current", headers=headers
     ).json()["data"]["wish"]
 
     assert accepted.status_code == 200, accepted.text
@@ -327,7 +329,7 @@ def test_failed_second_review_retries_then_becomes_unfulfilled(
     retried = service.maintain_batch(now=submitted + timedelta(minutes=1), batch_size=1)
     terminal = service.maintain_batch(now=submitted + timedelta(hours=72), batch_size=1)
     current = client.get(
-        "/v1/worlds/home/resident-wishes/current", headers=headers
+        "/api/v1/products/mingchan/worlds/home/resident-wishes/current", headers=headers
     ).json()["data"]["wish"]
 
     assert retried["metrics"]["retried"] == 1
@@ -338,12 +340,15 @@ def test_failed_second_review_retries_then_becomes_unfulfilled(
 
 
 def test_app_config_publishes_async_wish_contract(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_mailbox_enabled = False
-    body = client.get("/v1/app/config").json()
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_mailbox_enabled = False
+    body = client.get("/api/v1/products/mingchan/app/config").json()
 
     assert body["features"]["resident_wish_create"] is False
-    fresh_db.companion_world_mailbox_enabled = True
-    assert client.get("/v1/app/config").json()["features"]["resident_wish_create"] is True
+    fresh_db.mingchan_mailbox_enabled = True
+    assert client.get("/api/v1/products/mingchan/app/config").json()["features"]["resident_wish_create"] is True
     assert body["limits"]["wish_text_chars"] == 500
-    assert body["client_contract_version"] == "2026-08-02"
+    assert body["client_contract_version"] == "2026-08-04"
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

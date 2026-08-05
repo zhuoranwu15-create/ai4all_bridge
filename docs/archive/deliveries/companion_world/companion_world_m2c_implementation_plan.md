@@ -1,6 +1,6 @@
 # Companion World M2-C 实施计划
 
-> 状态：**已完成并归档（2026-07-22）**。本文件保留为实施 provenance，不再是后续待执行计划；后续接手以 [`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md) 为入口。
+> 状态：**已完成并归档（2026-07-22）**。本文件保留为实施 provenance，不再是后续待执行计划；后续接手以 [`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md) 为入口。
 >
 > 决策冻结：2026-07-21（ADR §10.1/.2/.6）
 >

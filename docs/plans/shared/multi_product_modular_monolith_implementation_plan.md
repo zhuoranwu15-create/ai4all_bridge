@@ -4,6 +4,11 @@
 
 状态：**MP-01～MP-06 已生产发布；MP-07A～MP-07F 已完成本地开发与聚焦回归，待分批评审合并。生产注册表仍只启用 zhaoxi，真实第二产品接入等待其 PRD。**
 
+> **2026-08-04 后续裁决：** 真实第二产品已确定为鸣蝉（`mingchan`）；Native App / Companion World
+> 归鸣蝉，朝夕收缩为微信/OpenClaw 与 Web/H5。本计划继续记录公共多产品基座实施历史，但不再指导
+> 当前产品归属；后续执行以
+> [朝夕 / 鸣蝉产品域拆分计划](zhaoxi_mingchan_product_split_plan.md)为准。
+
 决策基线：[`multi_product_modular_monolith_design.md`](../../architecture/shared/data/multi_product_modular_monolith_design.md)（MP-01…MP-10、O-1…O-7）。Phase 1 合并基线为 `f4baa3b`；当前最大版本为 `m0046`。
 
 ## 1. 本版调整

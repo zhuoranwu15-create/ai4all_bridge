@@ -4,7 +4,7 @@
 **接缝形状**（DTO 字段/类型 + Protocol 方法签名 + 事务归属），不含 adapter 实现、无 live
 调用方；具体实现与接线随后续刀从真实调用点长出（D-02「方法从真实调用点长出、不提前落死」）。
 
-四接缝（见 docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §7.3）：
+四接缝（见 docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §7.3）：
   ① turn 外部 context 注入（入向）——复用现有 ContextBlock，经 ChannelTurnInput.extra_blocks
      携带（该字段的加性落点属 turn_service，M2-B）；本模块不重定义 ChannelTurnInput。
   ② after-turn typed memory sink（出向）——MemoryEvent + MemorySink.emit。

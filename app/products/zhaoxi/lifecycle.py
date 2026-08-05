@@ -1,4 +1,4 @@
-"""朝夕产品 scheduler 与 memory sink 生命周期。"""
+"""朝夕微信产品 scheduler 生命周期。"""
 
 from __future__ import annotations
 
@@ -7,14 +7,6 @@ import logging
 from fastapi import FastAPI
 
 from app.config import settings
-from app.db import cleanup_app_notifications_batch
-from app.platform.media.access import validate_media_signing_config
-from app.platform.media.reclaim import reclaim_orphan_media_batch
-from app.products.zhaoxi.application import (
-    build_companion_world_memory_sink,
-    compact_companion_world_memory_batch,
-)
-from app.products.zhaoxi.application.memory.session_lifecycle import configure_memory_sink
 from app.products.zhaoxi.jobs.dreaming.scheduler import (
     start_dreaming_scheduler,
     stop_dreaming_scheduler,
@@ -41,9 +33,6 @@ def install_lifecycle(app: FastAPI) -> None:
         )
 
         validate_category_registry()
-        # D-3：任一媒体开关为开而 MEDIA_URL_SIGNING_SECRET 留空 → 启动即失败。
-        # 宁可起不来，也不能"忘配 secret 却签得出可预测的读 URL"。
-        validate_media_signing_config()
 
     @app.on_event("startup")
     async def startup_proactive_scheduler() -> None:
@@ -61,19 +50,8 @@ def install_lifecycle(app: FastAPI) -> None:
             bypass_quiet_hours=settings.proactive_scheduler_bypass_quiet_hours,
             planning_interval_seconds=settings.proactive_planning_interval_seconds,
             node_id=settings.node_id or None,
-            cleanup_app_notifications=cleanup_app_notifications_batch,
-            notification_cleanup_batch_size=(
-                settings.companion_world_notification_cleanup_batch_size
-            ),
-            # D-10：媒体文件只落在中心机磁盘上，回收必须在中心侧执行（此处已被
-            # has_central_role 拦过一道）。函数自身按小时节流。
-            reclaim_orphan_media=reclaim_orphan_media_batch,
         )
         logger.info("proactive scheduler started: %s", scheduler.status())
-
-    @app.on_event("startup")
-    async def startup_companion_world_memory_sink() -> None:
-        configure_memory_sink(build_companion_world_memory_sink())
 
     @app.on_event("startup")
     async def startup_dreaming_scheduler() -> None:
@@ -86,12 +64,6 @@ def install_lifecycle(app: FastAPI) -> None:
             batch_size=settings.dreaming_scheduler_batch_size,
             start_hour=settings.conversation_session_business_day_start_hour,
             node_id=daily_scan_node_id,
-            memory_sink=build_companion_world_memory_sink(),
-            memory_compactor=(
-                compact_companion_world_memory_batch
-                if settings.has_central_role
-                else None
-            ),
         )
         logger.info("dreaming scheduler started: %s", scheduler.status())
 
@@ -109,10 +81,6 @@ def install_lifecycle(app: FastAPI) -> None:
     @app.on_event("shutdown")
     async def shutdown_proactive_scheduler() -> None:
         await stop_proactive_scheduler()
-
-    @app.on_event("shutdown")
-    async def shutdown_companion_world_memory_sink() -> None:
-        configure_memory_sink(None)
 
     @app.on_event("shutdown")
     async def shutdown_dreaming_scheduler() -> None:

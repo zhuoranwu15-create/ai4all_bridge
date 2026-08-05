@@ -3,11 +3,11 @@ import pytest
 
 import app.db as db
 from app.db._backend import IntegrityError
-from app.products.zhaoxi.domain.companion_world.lifecycle import (
+from app.products.mingchan.domain.companion_world.lifecycle import (
     lifecycle_event_fingerprint,
     lifecycle_transition_allowed,
 )
-from app.products.zhaoxi.domain.companion_world.mailbox import (
+from app.products.mingchan.domain.companion_world.mailbox import (
     letter_delivery_fingerprint,
     letter_is_open,
     letter_transition_allowed,

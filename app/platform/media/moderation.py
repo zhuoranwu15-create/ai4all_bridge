@@ -82,12 +82,13 @@ def media_moderation_ready() -> bool:
     return image_review_configured() and bool(public_base_url())
 
 
-def _public_media_url(asset: Dict[str, Any]) -> str:
+def _public_media_url(asset: Dict[str, Any], *, path_prefix: str) -> str:
     """给这份资产签一个阿里云可回源取到的绝对 URL（主人 scope、短 TTL）。"""
     grant = sign_media_url(
         media_id=str(asset.get("id") or ""),
         scope=owner_scope(str(asset.get("owner_platform_user_id") or "")),
         ttl_seconds=owner_ttl_seconds(),
+        path_prefix=path_prefix,
     )
     # sign_media_url 在配置公网基址时已经返回绝对地址；兼容测试/旧配置下的相对地址。
     return (
@@ -102,6 +103,7 @@ def review_pending_media_batch(
     limit: Optional[int] = None,
     force: bool = False,
     on_rejected: Optional[OnRejected] = None,
+    media_path_prefix: str = "/api/v1/media",
     _monotonic: Optional[float] = None,
 ) -> Dict[str, Any]:
     """过一批待审图片。
@@ -150,7 +152,7 @@ def review_pending_media_batch(
             continue
         try:
             bump_media_moderation_attempts(media_id=media_id)
-            image_url = _public_media_url(asset)
+            image_url = _public_media_url(asset, path_prefix=media_path_prefix)
         except Exception as err:  # noqa: BLE001 — 单条失败不能中断整批
             counters["errors"] += 1
             logger.warning(

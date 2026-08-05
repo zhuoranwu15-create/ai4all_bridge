@@ -4,6 +4,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 from app.db._core import MODERATION_BLOCKED_ERROR, _clean_text, connect
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.time_utils import beijing_naive_now
 
 __all__ = [
@@ -473,10 +474,11 @@ def list_accounts_for_meta_refresh(
             FROM accounts
             WHERE COALESCE(is_debug, 0) = 0
               AND COALESCE(status, 'active') != 'deactivated'
+              AND app_id = ?
             ORDER BY id
             LIMIT ? OFFSET ?
             """,
-            (safe_limit, safe_offset),
+            (ZHAOXI_APP_ID, safe_limit, safe_offset),
         ).fetchall()
     return [dict(row) for row in rows]
 

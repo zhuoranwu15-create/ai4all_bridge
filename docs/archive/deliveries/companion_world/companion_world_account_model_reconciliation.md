@@ -1,7 +1,7 @@
 # 账号模型对齐：PR #44（M1）× main #42（App/账号收敛）
 
 > 状态：**已与产品对齐、方案冻结 = B（2026-07-21）**。本文是把 PR #44 并入主干前唯一需拍板的口径记录，供实现与评审引用。
-> 关联：ADR D-02/D-07/D-09/D-14、[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)；main 已合并的 #42「App/账号收敛」。
+> 关联：ADR D-02/D-07/D-09/D-14、[`../../../architecture/designs/companion_world_3_0_refactor_design.md`](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md)；main 已合并的 #42「App/账号收敛」。
 
 ---
 

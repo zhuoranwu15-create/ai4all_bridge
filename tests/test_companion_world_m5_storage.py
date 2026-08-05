@@ -6,12 +6,12 @@ import pytest
 import app.db as db
 from app.db._backend import IntegrityError
 from app.db._core import _MIGRATIONS, _migration_0035_companion_world_visit_human_chat
-from app.products.zhaoxi.domain.companion_world.human_chat import (
+from app.products.mingchan.domain.companion_world.human_chat import (
     human_conversation_transition_allowed,
     human_message_fingerprint,
     normalize_human_message_body,
 )
-from app.products.zhaoxi.domain.companion_world.visits import (
+from app.products.mingchan.domain.companion_world.visits import (
     VisitPolicy,
     active_expires_at,
     invite_expires_at,

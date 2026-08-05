@@ -16,7 +16,7 @@ from app.db._core import (
     _migration_0026_daily_usage_platform_user,
     _migration_0042_quota_app_id_contract,
 )
-from tests.factories import make_resident_account
+from tests.factories import make_resident_account, make_user_account
 
 _DATE = "2026-07-19"
 _C1 = 3  # a1 当日计数
@@ -26,9 +26,7 @@ _C2 = 5  # a2 当日计数
 def _two_accounts_one_user(phone: str):
     # 决策 B：a1 = 用户账号（form-A）；a2 = 居民（form-B，无 binding），走居民内部路径避开 #42 收敛。
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="配额迁移用户")
-    a1 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="甲"
-    )["account"]["id"]
+    a1 = make_user_account(user["id"], "甲", app_id="mingchan")
     a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
 
@@ -45,8 +43,8 @@ def _seed_pre_migration_daily(conn, *, user_id, a1, a2):
     conn.execute("DROP INDEX IF EXISTS ux_daily_usage_user_app_date")
     for acct, pu, cnt in ((a1, None, _C1), (a2, user_id, _C2)):
         conn.execute(
-            "INSERT INTO daily_usage(account_id, platform_user_id, date, message_count, updated_at) "
-            "VALUES (?, ?, ?, ?, '2026-07-19 00:00:00')",
+            "INSERT INTO daily_usage(account_id, platform_user_id, app_id, date, message_count, updated_at) "
+            "VALUES (?, ?, 'mingchan', ?, ?, '2026-07-19 00:00:00')",
             (acct, pu, _DATE, cnt),
         )
 

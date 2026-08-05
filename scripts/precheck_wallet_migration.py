@@ -7,7 +7,7 @@ M1-0 前置门：M1-1 迁移把 `entitlement_wallets` 唯一键从 `account_id` 
 本脚本在跑迁移前盘点生产 PG，产出多钱包用户清单，并校验迁移所依赖的四条数据不变量。
 不写任何数据、不改 .env、不调 init_db（避免误跑迁移）。
 
-背景见 ADR D-14（docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-14）。
+背景见 ADR D-14（docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-14）。
 本地 SQLite 只有 2 个 user，不代表生产——**发布判定必须在生产 PG 上跑**。
 
 阻断发布条件（任一 total>0 即 BLOCK，禁止执行 M1-1 迁移，须先人工修数）：

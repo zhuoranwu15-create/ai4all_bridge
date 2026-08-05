@@ -60,31 +60,12 @@ def list_due_proactive_account_checks(
     limit: int = 20,
     node_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    # 延迟导入避免 turn_service → account_state → platform composition root 的初始化环。
-    from app.products.zhaoxi.infrastructure.repositories.companion_world import (
-        human_level_proactive_allowed,
-        resolve_human_proactive_scope,
-    )
-
     current = now or beijing_naive_now()
-    raw = list_due_proactive_account_states(
+    return list_due_proactive_account_states(
         now=format_state_time(current),
-        # home world 最多 10 residents；扩大底层页后再按真人折叠，避免 N 个号挤占 batch。
-        limit=max(1, int(limit)) * 11,
+        limit=max(1, int(limit)),
         node_id=node_id,
     )
-    grouped: Dict[str, Dict[str, Any]] = {}
-    for item in raw:
-        account_id = str(item["account_id"])
-        scope = resolve_human_proactive_scope(account_id)
-        key = scope.platform_user_id if scope else f"account:{account_id}"
-        current_item = grouped.get(key)
-        if current_item is None or (
-            human_level_proactive_allowed(account_id)
-            and not human_level_proactive_allowed(str(current_item["account_id"]))
-        ):
-            grouped[key] = item
-    return list(grouped.values())[: max(1, int(limit))]
 
 
 def claim_due_account_check(

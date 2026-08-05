@@ -1,22 +1,49 @@
 """M3-4 App 通知 API、保留与 cleanup 功能测试。"""
 from datetime import timedelta
 
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 import app.db as db
-from app.products.zhaoxi.application import AppInboxAdapter, AppInboxIntent
+from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
+from app.products.mingchan.application import AppInboxAdapter, AppInboxIntent
+from app.products.mingchan.manifest import install_public_routes
 from app.time_utils import beijing_now
 from tests.factories import make_resident_account
+
+
+@pytest.fixture
+def client(fresh_db):
+    """仅安装鸣蝉产品路由，避免旧 App legacy namespace 混入契约测试。"""
+
+    app = FastAPI()
+    install_public_routes(
+        app,
+        registry=build_test_product_registry(),
+        config=fresh_db,
+    )
+    return TestClient(app)
 
 
 def _ready_user(phone: str, name: str):
     user_id = db.create_or_get_platform_user_by_phone(
         phone=phone, display_name=name
     )["id"]
-    account_id = make_resident_account(user_id, name)
-    scope = db.resolve_resident_memory_scope(runtime_account_id=account_id)
+    registry = build_test_product_registry()
+    account_id = make_resident_account(user_id, name, app_id=MINGCHAN_APP_ID)
+    scope = db.resolve_resident_memory_scope(
+        runtime_account_id=account_id,
+        expected_app_id=MINGCHAN_APP_ID,
+    )
     db.set_universe_onboarding_state(
         universe_id=scope["universe_id"], onboarding_state="confirmed"
     )
-    session = db.create_platform_user_session(platform_user_id=user_id)
+    session = db.create_platform_user_session(
+        platform_user_id=user_id,
+        app_id=MINGCHAN_APP_ID,
+        registry=registry,
+    )
     return (
         user_id,
         account_id,
@@ -42,22 +69,22 @@ def _deliver(account_id: str, key: str, text: str, *, now=None):
 
 
 def test_notification_routes_require_p1_and_inbox_flags(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    response = client.get("/v1/notifications")
+    fresh_db.mingchan_p1_enabled = True
+    response = client.get("/v1/products/mingchan/notifications")
     assert response.status_code == 404
     assert response.json()["code"] == "feature_disabled"
     assert response.headers["Cache-Control"] == "no-store"
 
-    fresh_db.companion_world_app_inbox_enabled = True
-    fresh_db.companion_world_p1_enabled = False
-    response = client.get("/v1/notifications")
+    fresh_db.mingchan_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = False
+    response = client.get("/v1/products/mingchan/notifications")
     assert response.status_code == 404
     assert response.json()["code"] == "feature_disabled"
 
 
 def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     user_a, account_a, _scope_a, headers_a = _ready_user(
         "19964001001", "通知用户甲"
     )
@@ -70,7 +97,7 @@ def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_
     )
     assert created is True and replay_created is False and replay.id == item.id
 
-    listed = client.get("/api/v1/notifications", headers=headers_a)
+    listed = client.get("/api/v1/products/mingchan/notifications", headers=headers_a)
     assert listed.status_code == 200
     data = listed.json()["data"]
     assert data["unread_count"] == 1 and len(data["items"]) == 1
@@ -86,15 +113,15 @@ def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_
     assert "runtime_account_id" not in listed.text
     assert "request_fingerprint" not in listed.text
 
-    other = client.get("/v1/notifications", headers=headers_b).json()["data"]
+    other = client.get("/v1/products/mingchan/notifications", headers=headers_b).json()["data"]
     assert other["items"] == [] and other["unread_count"] == 0
     forbidden = client.post(
-        f"/v1/notifications/{item.id}/read", headers=headers_b
+        f"/v1/products/mingchan/notifications/{item.id}/read", headers=headers_b
     )
     assert forbidden.status_code == 404
     assert forbidden.json()["code"] == "notification_not_found"
     injected_owner = client.post(
-        "/v1/notifications/read-all",
+        "/v1/products/mingchan/notifications/read-all",
         headers=headers_a,
         json={"account_id": account_a},
     )
@@ -102,10 +129,10 @@ def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_
     assert injected_owner.json()["code"] == "account_id_not_accepted"
 
     first_read = client.post(
-        f"/v1/notifications/{item.id}/read", headers=headers_a
+        f"/v1/products/mingchan/notifications/{item.id}/read", headers=headers_a
     )
     second_read = client.post(
-        f"/v1/notifications/{item.id}/read", headers=headers_a
+        f"/v1/products/mingchan/notifications/{item.id}/read", headers=headers_a
     )
     assert first_read.status_code == second_read.status_code == 200
     first_item = first_read.json()["data"]["notification"]
@@ -113,14 +140,14 @@ def test_visible_notification_list_count_read_and_owner_isolation(client, fresh_
     assert first_item["read_at"] == second_item["read_at"]
     assert first_item["expires_at"] == second_item["expires_at"]
     assert client.get(
-        "/v1/notifications/unread-count", headers=headers_a
+        "/v1/products/mingchan/notifications/unread-count", headers=headers_a
     ).json()["data"]["unread_count"] == 0
     assert user_a not in listed.text
 
 
 def test_notification_cursor_read_all_and_logical_expiry(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     user_id, account_id, _scope, headers = _ready_user(
         "19964001003", "通知分页用户"
     )
@@ -141,18 +168,18 @@ def test_notification_cursor_read_all_and_logical_expiry(client, fresh_db):
         params = {"limit": 1}
         if cursor:
             params["cursor"] = cursor
-        page = client.get("/v1/notifications", headers=headers, params=params)
+        page = client.get("/v1/products/mingchan/notifications", headers=headers, params=params)
         assert page.status_code == 200
         payload = page.json()["data"]
         seen.append(payload["items"][0]["notification_id"])
         cursor = payload["next_cursor"]
     assert set(seen) == created_ids and cursor is None
 
-    read_all = client.post("/v1/notifications/read-all", headers=headers)
+    read_all = client.post("/v1/products/mingchan/notifications/read-all", headers=headers)
     assert read_all.status_code == 200
     assert read_all.json()["data"]["marked_count"] == 3
     unread = client.get(
-        "/v1/notifications", headers=headers, params={"status": "unread"}
+        "/v1/products/mingchan/notifications", headers=headers, params={"status": "unread"}
     ).json()["data"]
     assert unread["items"] == [] and unread["unread_count"] == 0
 
@@ -164,10 +191,10 @@ def test_notification_cursor_read_all_and_logical_expiry(client, fresh_db):
             (expired_id, user_id),
         )
     assert len(
-        client.get("/v1/notifications", headers=headers).json()["data"]["items"]
+        client.get("/v1/products/mingchan/notifications", headers=headers).json()["data"]["items"]
     ) == 2
     invalid = client.get(
-        "/v1/notifications", headers=headers, params={"cursor": "bad!"}
+        "/v1/products/mingchan/notifications", headers=headers, params={"cursor": "bad!"}
     )
     assert invalid.status_code == 400
     assert invalid.json()["code"] == "invalid_cursor"

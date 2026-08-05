@@ -18,32 +18,32 @@ from scripts.export_openapi import SNAPSHOT_PATH, build_snapshot, render
 
 # 主链路端点（M1 服务端计划 §2.15 的 8 项 + S4 冻结的 /read）。这些必须有真实响应 schema。
 MAIN_CHAIN_OPERATIONS = [
-    ("/v1/app/config", "get"),
-    ("/v1/me", "get"),
-    ("/v1/worlds/home/bootstrap", "post"),
-    ("/v1/worlds/home/resident-candidates", "get"),
-    ("/v1/worlds/home/residents", "get"),
-    ("/v1/worlds/home/residents/confirm", "post"),
-    ("/v1/conversations", "get"),
-    ("/v1/ai-conversations/{conversation_id}/messages", "get"),
-    ("/v1/ai-conversations/{conversation_id}/turn", "post"),
-    ("/v1/ai-conversations/{conversation_id}/read", "post"),
+    ("/api/v1/products/mingchan/app/config", "get"),
+    ("/api/v1/products/mingchan/me", "get"),
+    ("/api/v1/products/mingchan/worlds/home/bootstrap", "post"),
+    ("/api/v1/products/mingchan/worlds/home/resident-candidates", "get"),
+    ("/api/v1/products/mingchan/worlds/home/residents", "get"),
+    ("/api/v1/products/mingchan/worlds/home/residents/confirm", "post"),
+    ("/api/v1/products/mingchan/conversations", "get"),
+    ("/api/v1/products/mingchan/ai-conversations/{conversation_id}/messages", "get"),
+    ("/api/v1/products/mingchan/ai-conversations/{conversation_id}/turn", "post"),
+    ("/api/v1/products/mingchan/ai-conversations/{conversation_id}/read", "post"),
     # S6「我的」Tab：Profile / 注销 / 通知偏好同样是客户端要按 schema 渲染的主链路。
-    ("/v1/me/profile-options", "get"),
-    ("/v1/me/profile", "patch"),
-    ("/v1/me/account/deletion", "post"),
-    ("/v1/notifications/preferences", "get"),
-    ("/v1/notifications/preferences", "patch"),
+    ("/api/v1/products/mingchan/me/profile-options", "get"),
+    ("/api/v1/products/mingchan/me/profile", "patch"),
+    ("/api/v1/products/mingchan/me/account/deletion", "post"),
+    ("/api/v1/products/mingchan/notifications/preferences", "get"),
+    ("/api/v1/products/mingchan/notifications/preferences", "patch"),
     # M2 世界 Feed：读取、发布与两条主人管理操作（CONTRACT-M2-001）。
-    ("/v1/worlds/home/feed", "get"),
-    ("/v1/worlds/home/feed/posts", "post"),
-    ("/v1/worlds/home/feed/posts/{post_id}", "delete"),
-    ("/v1/worlds/home/feed/posts/{post_id}/hide", "post"),
+    ("/api/v1/products/mingchan/worlds/home/feed", "get"),
+    ("/api/v1/products/mingchan/worlds/home/feed/posts", "post"),
+    ("/api/v1/products/mingchan/worlds/home/feed/posts/{post_id}", "delete"),
+    ("/api/v1/products/mingchan/worlds/home/feed/posts/{post_id}/hide", "post"),
     # M5 真人聊天：会话列表读模型与举报原因契约（M5-CONV-001 / M5-REPORT-001）。
-    ("/v1/human-conversations", "get"),
-    ("/v1/human-conversations/report-options", "get"),
-    ("/v1/worlds/home/resident-wishes/current", "get"),
-    ("/v1/resident-wishes/{wish_id}/withdraw", "post"),
+    ("/api/v1/products/mingchan/human-conversations", "get"),
+    ("/api/v1/products/mingchan/human-conversations/report-options", "get"),
+    ("/api/v1/products/mingchan/worlds/home/resident-wishes/current", "get"),
+    ("/api/v1/products/mingchan/resident-wishes/{wish_id}/withdraw", "post"),
 ]
 
 
@@ -56,7 +56,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> dict:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -157,14 +157,13 @@ def test_committed_snapshot_matches_current_app():
 
 
 def test_snapshot_only_contains_client_facing_paths():
-    """snapshot 只收客户端直连的 /v1；产品 namespace 是同批路由的重复挂载点，不入契约。"""
+    """snapshot 只收鸣蝉规范产品 namespace，不收反代兼容或其他产品路由。"""
     paths = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))["paths"]
     assert paths
-    assert all(path.startswith("/v1/") for path in paths)
-    assert not any(path.startswith("/v1/products/") for path in paths)
+    assert all(path.startswith("/api/v1/products/mingchan/") for path in paths)
     # admin / bridge / web 路由不属于客户端契约。
     assert not any(
-        path.startswith(("/v1/admin", "/v1/debug", "/v1/bridge")) for path in paths
+        path.startswith(("/api/v1/products/mingchan/admin", "/api/v1/products/mingchan/debug", "/api/v1/products/mingchan/bridge")) for path in paths
     )
 
 
@@ -184,7 +183,7 @@ def test_main_chain_operations_declare_response_schema(path, method):
 def test_world_endpoints_declare_error_envelope():
     """世界类端点的失败响应也要进契约：客户端按 code 分支，不能靠猜。"""
     spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    operation = spec["paths"]["/v1/conversations"]["get"]
+    operation = spec["paths"]["/api/v1/products/mingchan/conversations"]["get"]
     for status in ("401", "404", "409", "422"):
         ref = operation["responses"][status]["content"]["application/json"]["schema"]
         assert _resolve(ref, spec)["properties"].keys() >= {
@@ -198,7 +197,7 @@ def test_world_endpoints_declare_error_envelope():
 def test_async_wish_submit_declares_202_and_service_unavailable_envelopes():
     """受理成功是 202；输入复核/队列不可用的 503 也必须进入正式契约。"""
     spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    operation = spec["paths"]["/v1/worlds/home/resident-wishes"]["post"]
+    operation = spec["paths"]["/api/v1/products/mingchan/worlds/home/resident-wishes"]["post"]
     assert _resolve(
         operation["responses"]["202"]["content"]["application/json"]["schema"], spec
     )["properties"]
@@ -218,9 +217,9 @@ def test_mailbox_contract_exposes_optional_wish_link():
 # --- 门禁 3：真实响应与契约不漂移 -------------------------------------------
 
 
-def test_main_chain_responses_match_declared_contract(client, fresh_db):
+def test_main_chain_responses_match_declared_contract(mingchan_client, fresh_db):
     """跑通主链路，逐个端点把真实响应体和声明 schema 对齐（防 response_model 静默丢字段）。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
 
@@ -233,31 +232,32 @@ def test_main_chain_responses_match_declared_contract(client, fresh_db):
         _assert_shape(body, schema, spec, f"{method.upper()} {path}")
         return body
 
-    _check("/v1/app/config", "get", client.get("/v1/app/config"))
+    client = mingchan_client
+    _check("/api/v1/products/mingchan/app/config", "get", client.get("/api/v1/products/mingchan/app/config"))
 
     headers = _login(client, "19970003001")
     bootstrap = _check(
-        "/v1/worlds/home/bootstrap",
+        "/api/v1/products/mingchan/worlds/home/bootstrap",
         "post",
-        client.post("/v1/worlds/home/bootstrap", headers=headers),
+        client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers),
     )
     assert bootstrap["data"]["candidates"], "候选为空则 CandidateData 没被实际校验到"
 
     # /me 放在 bootstrap 之后，让 world 摘要非 null（P1 新用户此时 account 仍为 null）。
-    me = _check("/v1/me", "get", client.get("/v1/me", headers=headers))
+    me = _check("/api/v1/products/mingchan/me", "get", client.get("/api/v1/products/mingchan/me", headers=headers))
     assert me["world"] is not None
 
     _check(
-        "/v1/worlds/home/resident-candidates",
+        "/api/v1/products/mingchan/worlds/home/resident-candidates",
         "get",
-        client.get("/v1/worlds/home/resident-candidates", headers=headers),
+        client.get("/api/v1/products/mingchan/worlds/home/resident-candidates", headers=headers),
     )
 
     confirmed = _check(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         "post",
         client.post(
-            "/v1/worlds/home/residents/confirm",
+            "/api/v1/products/mingchan/worlds/home/residents/confirm",
             headers=headers,
             json={
                 "selections": [
@@ -270,20 +270,20 @@ def test_main_chain_responses_match_declared_contract(client, fresh_db):
     conversation_id = confirmed["data"]["residents"][0]["conversation_id"]
 
     _check(
-        "/v1/worlds/home/residents",
+        "/api/v1/products/mingchan/worlds/home/residents",
         "get",
-        client.get("/v1/worlds/home/residents", headers=headers),
+        client.get("/api/v1/products/mingchan/worlds/home/residents", headers=headers),
     )
     conversations = _check(
-        "/v1/conversations", "get", client.get("/v1/conversations", headers=headers)
+        "/api/v1/products/mingchan/conversations", "get", client.get("/api/v1/products/mingchan/conversations", headers=headers)
     )
     assert conversations["data"]["items"]
 
     turn = _check(
-        "/v1/ai-conversations/{conversation_id}/turn",
+        "/api/v1/products/mingchan/ai-conversations/{conversation_id}/turn",
         "post",
         client.post(
-            f"/v1/ai-conversations/{conversation_id}/turn",
+            f"/api/v1/products/mingchan/ai-conversations/{conversation_id}/turn",
             headers=headers,
             json={"client_message_id": "s5_shape_0001", "text": "你好"},
         ),
@@ -291,28 +291,29 @@ def test_main_chain_responses_match_declared_contract(client, fresh_db):
     assert turn["data"]["reply"] is not None, "reply 为 null 则 TurnReply 没被校验到"
 
     messages = _check(
-        "/v1/ai-conversations/{conversation_id}/messages",
+        "/api/v1/products/mingchan/ai-conversations/{conversation_id}/messages",
         "get",
-        client.get(f"/v1/ai-conversations/{conversation_id}/messages", headers=headers),
+        client.get(f"/api/v1/products/mingchan/ai-conversations/{conversation_id}/messages", headers=headers),
     )
     assert messages["data"]["messages"]
 
     _check(
-        "/v1/ai-conversations/{conversation_id}/read",
+        "/api/v1/products/mingchan/ai-conversations/{conversation_id}/read",
         "post",
         client.post(
-            f"/v1/ai-conversations/{conversation_id}/read",
+            f"/api/v1/products/mingchan/ai-conversations/{conversation_id}/read",
             headers=headers,
             json={"last_message_id": messages["data"]["messages"][-1]["id"]},
         ),
     )
 
 
-def test_me_tab_responses_match_declared_contract(client, fresh_db):
+def test_me_tab_responses_match_declared_contract(mingchan_client, fresh_db):
     """S6「我的」Tab 的真实响应体逐层对齐契约（Profile / 注销 / 通知偏好）。"""
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_app_inbox_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_app_inbox_enabled = True
     spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+    client = mingchan_client
     headers = _login(client, "19970003003")
 
     def _check(path: str, method: str, response, *, expect: int = 200) -> dict:
@@ -329,15 +330,15 @@ def test_me_tab_responses_match_declared_contract(client, fresh_db):
         return body
 
     options = _check(
-        "/v1/me/profile-options",
+        "/api/v1/products/mingchan/me/profile-options",
         "get",
-        client.get("/v1/me/profile-options", headers=headers),
+        client.get("/api/v1/products/mingchan/me/profile-options", headers=headers),
     )
     _check(
-        "/v1/me/profile",
+        "/api/v1/products/mingchan/me/profile",
         "patch",
         client.patch(
-            "/v1/me/profile",
+            "/api/v1/products/mingchan/me/profile",
             headers=headers,
             json={
                 "display_name": "小满",
@@ -346,47 +347,26 @@ def test_me_tab_responses_match_declared_contract(client, fresh_db):
         ),
     )
     _check(
-        "/v1/notifications/preferences",
+        "/api/v1/products/mingchan/notifications/preferences",
         "get",
-        client.get("/v1/notifications/preferences", headers=headers),
+        client.get("/api/v1/products/mingchan/notifications/preferences", headers=headers),
     )
     _check(
-        "/v1/notifications/preferences",
+        "/api/v1/products/mingchan/notifications/preferences",
         "patch",
         client.patch(
-            "/v1/notifications/preferences",
+            "/api/v1/products/mingchan/notifications/preferences",
             headers=headers,
             json={"quiet_level": "quiet"},
         ),
     )
     # 注销放最后：它会就地吊销本次会话，之后这批 headers 全部 401。
     _check(
-        "/v1/me/account/deletion",
+        "/api/v1/products/mingchan/me/account/deletion",
         "post",
         client.post(
-            "/v1/me/account/deletion",
+            "/api/v1/products/mingchan/me/account/deletion",
             headers=headers,
             json={"confirm": True, "reason_code": "other"},
         ),
-    )
-
-
-def test_me_account_shape_matches_contract_for_legacy_user(client, fresh_db):
-    """P1 关闭时 `/me` 的 account 非 null，单独覆盖 PublicAccount 分支。"""
-    fresh_db.companion_world_p1_enabled = False
-    spec = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-    headers = _login(client, "19970003002")
-
-    response = client.get("/v1/me", headers=headers)
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["account"] is not None
-    _assert_shape(
-        body,
-        spec["paths"]["/v1/me"]["get"]["responses"]["200"]["content"][
-            "application/json"
-        ]["schema"],
-        spec,
-        "GET /v1/me",
     )

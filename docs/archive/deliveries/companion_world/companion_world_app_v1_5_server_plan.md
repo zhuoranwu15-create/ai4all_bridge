@@ -2,15 +2,15 @@
 
 更新时间：2026-07-31
 状态：**已完成并归档。S0–S5 已通过 PR #59 合入主干并上线，生产能力位已开启。** 当前能力以
-[`companion_world_app_prd.md`](../../../products/zhaoxi/capabilities/companion_world_app_prd.md) 和
-[`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md) 为准；媒体撤回、任务章节、契约债和
+[`companion_world_app_prd.md`](../../../products/mingchan/capabilities/companion_world_app_prd.md) 和
+[`app_api_handoff.md`](../../../products/mingchan/app_api_handoff.md) 为准；媒体撤回、任务章节、契约债和
 司辰头像 CDN 同步等剩余项已转入
-[`companion_world_app_followups.md`](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。
+[`companion_world_app_followups.md`](../../../backlog/products/mingchan/companion_world_app_followups.md)。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World v1.5 服务端需求清单 V0.3》（`/home/jack/companion_world_v1_5_server_requirements.md`）。
-> 产品口径：[朝夕相伴 App 端 PRD](../../../products/zhaoxi/capabilities/companion_world_app_prd.md) §18。
-> 技术权威：[Companion World 3.0 ADR](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)。
+> 产品口径：[朝夕相伴 App 端 PRD](../../../products/mingchan/capabilities/companion_world_app_prd.md) §18。
+> 技术权威：[Companion World 3.0 ADR](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md)。
 > 前序计划：[M1 服务端](companion_world_app_m1_server_plan.md)、[M2 主人 Feed 管理](companion_world_app_m2_feed_management_plan.md)。
 > 评审基线：`main@b3f275a`，当前最大迁移号 `m0052`，`CLIENT_CONTRACT_VERSION = 2026-07-28`。
 > S0 落地后：最大迁移号 `m0053`，`CLIENT_CONTRACT_VERSION = 2026-07-29`。

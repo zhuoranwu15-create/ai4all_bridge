@@ -1,12 +1,12 @@
 # AI4ALL 多产品服务总体架构
 
-更新时间：2026-07-31
+更新时间：2026-08-04
 
 ## 一句话理解
 
-AI4ALL = **多渠道接入** + **产品领域层** + **形态无关 Agent Runtime** + **真人级平台服务与中心调度**。当前已启用产品是朝夕相伴；Companion World 是其产品领域，而不是所有未来产品的共享模型。
+AI4ALL = **多渠道接入** + **产品领域层** + **形态无关 Agent Runtime** + **真人级平台服务与中心调度**。当前启用朝夕相伴（`zhaoxi`）；鸣蝉（`mingchan`）的仓库代码拆分已完成，注册表保持禁用直至验证、客户端切换和生产发布完成。
 
-它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 只负责微信连接、消息收发和 hook runtime；AI4ALL Backend 同时服务微信 1:1 Agent、Web 和「朝夕相伴」Native App，持有产品用户、世界/居民、关系运行时、记忆、权益、主动触达和运营状态。
+它不是 OpenClaw 的简单托管版，也不是公共客服号机器人。OpenClaw 只负责微信连接、消息收发和 hook runtime；AI4ALL Backend 以独立产品域服务朝夕的微信 1:1 Agent/Web 接入与鸣蝉 Native App，持有产品用户、世界/居民、关系运行时、记忆、权益、主动触达和运营状态。
 
 ## 文档分层
 
@@ -18,6 +18,7 @@ AI4ALL = **多渠道接入** + **产品领域层** + **形态无关 Agent Runtim
 | --- | --- |
 | `docs/products/README.md` | 产品目录、`app_id` 与产品文档 manifest |
 | `docs/products/zhaoxi/prd.md` | 朝夕产品范围、需求和验收标准 |
+| `docs/products/mingchan/prd.md` | 鸣蝉产品边界、拆分策略和启用门槛 |
 | `docs/STATUS.md` | 项目现状、重点方向、在途工作和已知大缺口（持续更新） |
 | `docs/architecture/system_design.md` | 详细技术设计、数据模型和工作包摘要（§7 工作包为 Phase 1 历史快照） |
 | `docs/architecture/shared/access/identity_model_and_wechat_binding.md` | 身份模型、扫码绑定和账号路由专题 |
@@ -33,7 +34,7 @@ flowchart TB
     subgraph clients["用户与运营入口"]
         wx["微信私聊<br/>text / upstream voice transcript"]
         web["Web / H5<br/>注册、扫码、用户中心"]
-        native["朝夕相伴 Native App<br/>世界、居民、Feed、信箱、访客、真人聊天"]
+        native["鸣蝉 Native App<br/>世界、居民、Feed、信箱、访客、真人聊天"]
         ops["Admin / Staff / Reviewer<br/>运营、审核、Debug"]
     end
 
@@ -44,7 +45,7 @@ flowchart TB
 
     subgraph central["AI4ALL 模块化单体（同一代码按 central / node 角色部署）"]
         api["API adapters / composition root<br/>WeChat · Web · App · Admin"]
-        world["Companion World 产品领域层<br/>universe · resident · L3 · Feed · lifecycle/mailbox<br/>visit ACL · human chat"]
+        world["鸣蝉 Companion World 产品领域层<br/>universe · resident · L3 · Feed · lifecycle/mailbox<br/>visit ACL · human chat"]
         runtime["Agent Runtime（form-agnostic）<br/>runtime account · L1/L2 · session/messages<br/>prompt/turn/tools · Memory/Dreaming · AI moderation"]
         platform["平台服务<br/>platform user/auth · wallet/quota · binding/routing<br/>outbox/notification · audit/observability"]
         schedulers["Central-only single-writer schedulers<br/>proactive + Dreaming/L3 compact<br/>world content + lifecycle/mailbox/visit expiry"]
@@ -95,19 +96,19 @@ flowchart TB
 - **同步链路短**：普通聊天和普通 Web Search 尽量在当前 turn 同步返回；长耗时搜索、复杂整理或后台报告请求直接返回失败/不支持说明，不创建后台任务。语音当前依赖上游转写后进入普通文本链路。
 - **主动触达受控**：所有主动消息经过 outbound ledger 和类型化策略；用户提醒按用户设定时间发送，陪伴跟进和内容推送受 quiet hours、日上限和偏好约束。
 - **运营可见**：账号、绑定、会话、消息、提醒/主动发送、用量、权益、错误都需要能被 Admin 追踪。
-- **新产品默认关闭**：Companion World P1/M3/M4/M5 能力均由正交 flag 灰度；代码合入或 migration 就绪不等于生产开量。
+- **新产品默认关闭**：鸣蝉完成代码归属、产品作用域和客户端切换前，注册表保持禁用；代码合入或 migration 就绪不等于生产开量。产品内能力仍由正交 flag 灰度。
 
 ## 2. 核心概念分层
 
 | 层 | 当前职责 | 依赖约束 |
 | --- | --- | --- |
 | 接入与产品 API | WeChat/OpenClaw、Web、Native App、Admin 的协议适配与 composition | 只做认证、DTO、路由和组合，不持有领域真相 |
-| Companion World 产品领域 | universe/resident、L3、Feed/通知、lifecycle/mailbox、visit/human chat | 可调用 `AgentRuntimePort` 和平台服务；不得把 World 概念下沉 Runtime |
+| 鸣蝉 Companion World 产品领域 | universe/resident、L3、Feed/通知、lifecycle/mailbox、visit/human chat | 可调用 `AgentRuntimePort` 和平台服务；不得把 World 概念下沉 Runtime |
 | Agent Runtime | runtime account、L1/L2、session/messages、prompt/turn/tool、Memory/Dreaming、AI moderation | 形态无关；不得反向 import Companion World；human chat 永不进入 AI 路径 |
 | 平台服务 | platform user/auth、binding/routing、wallet/quota、DB/repository、outbox、审计观测 | 真人级共享能力锚 `platform_user_id`；为上层提供事务与基础设施 |
 | 状态与基础设施 | PostgreSQL/SQLite、system context、OpenClaw 节点状态、外部 provider | 生产业务状态只进中心 PG；厚 node 可直连 PG 执行业务读写，但只有 central 执行 schema migration |
 
-依赖方向固定为 `API adapter → product domain → AgentRuntimePort → runtime implementation`，产品域旁挂平台服务。形态 A（微信）可由 API 直接调用 Runtime；形态 B（朝夕相伴）必须先经过 Companion World 解析 owner/ACL/shared context。
+依赖方向固定为 `API adapter → product domain → AgentRuntimePort → runtime implementation`，产品域旁挂平台服务。朝夕微信链路可由产品 API 直接调用 Runtime；鸣蝉必须先经过 Companion World 解析 owner/ACL/shared context。两个产品不得相互 import。
 
 ## 3. AI4ALL Conversation Turn
 
@@ -300,11 +301,13 @@ aliyun1 central,node                     aliyun2 node
 
 ## 8. 当前架构状态与下一阶段边界
 
-1. 微信形态 A 继续复用既有 Agent Runtime，保持 1 真人 ↔ 1 Agent 的兼容行为；Web/native channel 由 `ChannelCapability` 显式声明会话、投递、onboarding、proactive 和 TDAI 能力。
-2. Companion World 形态 B 的 M2–M5 后端闭环已合入主干：多居民、L3、Feed/通知、lifecycle/mailbox、visit 和 human chat 均已实现并由 AST 分层门禁保护。
+1. 朝夕微信业务继续复用既有 Agent Runtime，保持 1 真人 ↔ 1 Agent 的兼容行为；微信/Web channel 由 `ChannelCapability` 显式声明会话、投递、onboarding、proactive 和 TDAI 能力。
+2. 鸣蝉 Companion World 后端闭环已归入 `app/products/mingchan/`，运行时固定使用
+   `app_id=mingchan`；生产验证和 clean-start 完成前不得启用 `mingchan`。多居民、L3、Feed/通知、
+   lifecycle/mailbox、visit 和 human chat 继续受 AST 分层门禁保护。
 3. 真人级 wallet/quota/override 已上迁 `platform_user`；每位居民仍以独立 runtime account 持有 L1/L2、session/messages，World 只通过端口组合 Runtime。
 4. 当前生产为中心 PostgreSQL + 两个厚节点本地 turn；SQLite 只承担开发与测试，竞态正确性以 PostgreSQL 测试为权威。
-5. Companion World 主能力、语音输入与 v1.5 媒体/许愿能力已在生产配置启用；客户端仍必须以 `/app/config` 返回的能力位为准，不能把当前开量状态硬编码进客户端。
+5. legacy Companion World 主能力、语音输入与 v1.5 媒体/许愿能力曾以朝夕配置启用；拆分期间维持现有行为，不视为鸣蝉已生产启用。客户端切换后仍必须以鸣蝉配置接口返回的能力位为准。
 6. 当前模块化单体、共享 PG 与 central-only scheduler 单 writer 是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
 
-详细数据模型和历史工作包摘要见 `docs/architecture/system_design.md`；3.0 冻结决策与代码地图见 `docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md`；当前实现缺口与近期队列见 `docs/STATUS.md`。
+详细数据模型和历史工作包摘要见 `docs/architecture/system_design.md`；Companion World 3.0 设计见 `docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md`；拆分进度与近期队列见 `docs/STATUS.md`。

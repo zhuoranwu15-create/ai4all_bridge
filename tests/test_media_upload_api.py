@@ -22,7 +22,7 @@ def _login(client, phone: str) -> tuple[dict, str]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -35,16 +35,16 @@ def _login(client, phone: str) -> tuple[dict, str]:
 def _enable(monkeypatch, *, image: bool = True, voice: bool = True, feed: bool = False) -> None:
     """打开 P1 与媒体能力位；三位分别可控，用于验 kind 级门控。"""
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.mingchan.api.world.settings.mingchan_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.companion_world_chat_image_enabled", image
+        "app.products.mingchan.api.media.settings.mingchan_chat_image_enabled", image
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.companion_world_chat_voice_enabled", voice
+        "app.products.mingchan.api.media.settings.mingchan_chat_voice_enabled", voice
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.companion_world_feed_image_enabled", feed
+        "app.products.mingchan.api.media.settings.mingchan_feed_image_enabled", feed
     )
 
 
@@ -60,7 +60,7 @@ def _jpeg_with_gps(size=(12, 8)) -> bytes:
 
 def _upload(client, headers, *, kind: str, content: bytes, name: str, mime: str, **form):
     return client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": (name, content, mime)},
         data={"kind": kind, **form},
@@ -92,7 +92,9 @@ def test_upload_image_strips_exif_and_creates_pending_asset(
     assert data["duration_ms"] is None and data["transcript"] is None
     # 未被引用的资产必须带回收截止时间；URL 过期是另一个更短的口径。
     assert data["expires_at"] and data["url_expires_at"]
-    assert data["url"].startswith(f"/api/v1/media/{data['media_id']}?exp=")
+    assert data["url"].startswith(
+        f"/api/v1/products/mingchan/media/{data['media_id']}?exp="
+    )
     # 签名密钥属于凭证，任何响应体里都不能出现。
     assert test_settings.media_url_signing_secret not in response.text
 
@@ -129,7 +131,7 @@ def test_upload_rejects_cross_owner_read_of_asset_row(client, fresh_db, monkeypa
 def test_upload_voice_stores_bytes_and_transcript(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.transcribe_audio",
+        "app.products.mingchan.api.media.transcribe_audio",
         lambda **kwargs: "今天挺累的",
     )
     headers, platform_user_id = _login(client, "19965301005")
@@ -164,7 +166,7 @@ def test_upload_voice_survives_transcribe_failure(client, fresh_db, monkeypatch)
     def _boom(**kwargs):
         raise RuntimeError("provider down")
 
-    monkeypatch.setattr("app.products.zhaoxi.api.media.transcribe_audio", _boom)
+    monkeypatch.setattr("app.products.mingchan.api.media.transcribe_audio", _boom)
     headers, _pu = _login(client, "19965301006")
 
     response = _upload(
@@ -226,7 +228,7 @@ def test_upload_image_allowed_when_only_feed_flag_is_on(client, fresh_db, monkey
 def test_upload_rejects_oversized_and_empty_payloads(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.media_image_max_bytes", 512
+        "app.products.mingchan.api.media.settings.media_image_max_bytes", 512
     )
     headers, _pu = _login(client, "19965301009")
 
@@ -281,7 +283,7 @@ def test_upload_rejects_non_whitelisted_format_and_bad_kind(client, fresh_db, mo
 def test_upload_rejects_voice_over_duration_limit(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.media_voice_max_duration_ms", 60_000
+        "app.products.mingchan.api.media.settings.media_voice_max_duration_ms", 60_000
     )
     headers, _pu = _login(client, "19965301011")
 
@@ -321,9 +323,9 @@ def test_upload_write_failure_leaves_no_orphan_file(client, fresh_db, monkeypatc
         written.append(storage_path)
         return real_write(storage_path=storage_path, data=data)
 
-    monkeypatch.setattr("app.products.zhaoxi.api.media.write_media_file", _capture)
+    monkeypatch.setattr("app.products.mingchan.api.media.write_media_file", _capture)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.insert_media_asset",
+        "app.products.mingchan.api.media.insert_media_asset",
         lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db down")),
     )
 
@@ -344,7 +346,7 @@ def test_upload_write_failure_leaves_no_orphan_file(client, fresh_db, monkeypatc
 
 def test_upload_is_rate_limited_per_user(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
-    monkeypatch.setattr("app.products.zhaoxi.api.media._UPLOAD_RPM_LIMIT", 2)
+    monkeypatch.setattr("app.products.mingchan.api.media._UPLOAD_RPM_LIMIT", 2)
     headers, _pu = _login(client, "19965301013")
     other_headers, _other = _login(client, "19965301014")
 
@@ -377,3 +379,6 @@ def test_upload_is_rate_limited_per_user(client, fresh_db, monkeypatch):
         ).status_code
         == 200
     )
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

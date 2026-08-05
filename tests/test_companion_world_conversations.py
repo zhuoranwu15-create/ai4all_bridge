@@ -1,10 +1,19 @@
 """M2-C C3：conversation list/history/turn、owner ACL、L3 注入与 single-flight。"""
 import json
 
+import pytest
+
 import app.db as db
-from app.products.zhaoxi.domain.companion_world import CompanionWorldService
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.mingchan.domain.companion_world import CompanionWorldService
+from app.products.mingchan.application import SqlCompanionWorldRepository
 from app.schemas import OpenClawTurnResponse
+
+
+@pytest.fixture
+def client(mingchan_client):
+    """使用已启用鸣蝉注册表的隔离测试客户端。"""
+
+    return mingchan_client
 
 
 def _verified_token(phone: str) -> str:
@@ -16,7 +25,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> tuple[dict, dict]:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -47,10 +56,10 @@ def _seed_catalog() -> None:
 
 def _bootstrap_confirm(client, headers: dict, count: int = 2) -> list[dict]:
     candidates = client.post(
-        "/v1/worlds/home/bootstrap", headers=headers
+        "/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers
     ).json()["data"]["candidates"]
     response = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={
             "selections": [
@@ -98,7 +107,7 @@ def _session_message(
 
 
 def test_conversation_list_preview_unread_and_cursor_are_owner_scoped(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19950001001")
     residents = _bootstrap_confirm(client, headers, 2)
@@ -116,14 +125,14 @@ def test_conversation_list_preview_unread_and_cursor_are_owner_scoped(client, fr
         content="Web 不得成为预览",
     )
 
-    response = client.get("/v1/conversations?limit=1", headers=headers)
+    response = client.get("/api/v1/products/mingchan/conversations?limit=1", headers=headers)
     assert response.status_code == 200
     data = response.json()["data"]
     assert len(data["items"]) == 1 and data["next_cursor"]
     assert data["items"][0]["unread"] == 0
     assert "runtime_account_id" not in response.text
     second = client.get(
-        f"/v1/conversations?limit=1&cursor={data['next_cursor']}", headers=headers
+        f"/api/v1/products/mingchan/conversations?limit=1&cursor={data['next_cursor']}", headers=headers
     )
     assert second.status_code == 200 and len(second.json()["data"]["items"]) == 1
     previews = {
@@ -134,7 +143,7 @@ def test_conversation_list_preview_unread_and_cursor_are_owner_scoped(client, fr
 
 
 def test_history_isolated_by_owner_resident_and_app_scope(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers_a, login_a = _login(client, "19950001002")
     headers_b, _login_b = _login(client, "19950001003")
@@ -163,11 +172,11 @@ def test_history_isolated_by_owner_resident_and_app_scope(client, fresh_db):
     )
 
     own = client.get(
-        f"/v1/ai-conversations/{target_a.conversation_id}/messages",
+        f"/api/v1/products/mingchan/ai-conversations/{target_a.conversation_id}/messages",
         headers=headers_a,
     )
     denied = client.get(
-        f"/v1/ai-conversations/{target_a.conversation_id}/messages",
+        f"/api/v1/products/mingchan/ai-conversations/{target_a.conversation_id}/messages",
         headers=headers_b,
     )
     assert own.status_code == 200
@@ -179,7 +188,7 @@ def test_history_isolated_by_owner_resident_and_app_scope(client, fresh_db):
 
 
 def test_turn_adapter_injects_only_target_universe_l3(client, fresh_db, monkeypatch):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19950001004")
     resident = _bootstrap_confirm(client, headers, 1)[0]
@@ -211,13 +220,13 @@ def test_turn_adapter_injects_only_target_universe_l3(client, fresh_db, monkeypa
 
     monkeypatch.setattr("app.agent_runtime.adapter.run_product_turn", _fake_turn)
     response = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json={"client_message_id": "client_l3_001", "text": "我喜欢什么？"},
     )
     assert response.status_code == 200
     ctx = captured["ctx"]
-    assert captured["product_services"].app_id == "zhaoxi"
+    assert captured["product_services"].app_id == "mingchan"
     assert ctx.account_id == target.runtime_account_id
     assert ctx.cap.active_session_key == db.APP_ACTIVE_SESSION_KEY
     assert len(ctx.extra_blocks) == 1
@@ -226,19 +235,19 @@ def test_turn_adapter_injects_only_target_universe_l3(client, fresh_db, monkeypa
 
 
 def test_turn_persists_once_and_replay_is_deduplicated(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers, login = _login(client, "19950001006")
     resident = _bootstrap_confirm(client, headers, 1)[0]
     target = _target(login["platform_user"]["id"], resident["conversation_id"])
     body = {"client_message_id": "client_dedupe_01", "text": "在吗"}
     first = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json=body,
     )
     replay = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers,
         json=body,
     )
@@ -255,7 +264,7 @@ def test_turn_persists_once_and_replay_is_deduplicated(client, fresh_db):
         ).fetchone()["c"]
     assert inbound == 1
     history = client.get(
-        f"/v1/ai-conversations/{target.conversation_id}/messages",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/messages",
         headers=headers,
     )
     assert history.status_code == 200
@@ -263,7 +272,7 @@ def test_turn_persists_once_and_replay_is_deduplicated(client, fresh_db):
 
 
 def test_read_only_account_id_rejection_and_owner_turn_acl(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers_a, login_a = _login(client, "19950001007")
     headers_b, _ = _login(client, "19950001008")
@@ -271,7 +280,7 @@ def test_read_only_account_id_rejection_and_owner_turn_acl(client, fresh_db):
     target = _target(login_a["platform_user"]["id"], resident["conversation_id"])
 
     forbidden = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers_a,
         json={
             "client_message_id": "client_forbid_1",
@@ -280,7 +289,7 @@ def test_read_only_account_id_rejection_and_owner_turn_acl(client, fresh_db):
         },
     )
     denied = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers_b,
         json={"client_message_id": "client_denied_1", "text": "hi"},
     )
@@ -290,7 +299,7 @@ def test_read_only_account_id_rejection_and_owner_turn_acl(client, fresh_db):
             (target.conversation_id,),
         )
     read_only = client.post(
-        f"/v1/ai-conversations/{target.conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{target.conversation_id}/turn",
         headers=headers_a,
         json={"client_message_id": "client_readonly", "text": "hi"},
     )

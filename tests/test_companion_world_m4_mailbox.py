@@ -10,19 +10,20 @@ from datetime import datetime, timedelta
 
 import app.db as db
 import pytest
+from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
 from app.db._backend import is_postgres
-from app.products.zhaoxi.domain.companion_world import (
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     TemplateDraft,
 )
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
-from app.products.zhaoxi.application.companion_world_mailbox import (
+from app.products.mingchan.application import SqlCompanionWorldRepository
+from app.products.mingchan.application.mailbox import (
     CompanionWorldMailboxService,
     MailboxError,
     build_mailbox_policy,
 )
-from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.mingchan.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 from scripts.import_companion_world_mailbox_catalog import (
     import_mailbox_catalog,
     sign_manifest_payload,
@@ -33,11 +34,17 @@ ADMIN_HEADERS = {"Authorization": "Bearer test-admin"}
 STAFF_HEADERS = {"Authorization": "Bearer test-staff"}
 REVIEWER_HEADERS = {"Authorization": "Bearer test-reviewer"}
 NOW = datetime(2026, 7, 23, 10, 0, 0)
+TEST_REGISTRY = build_test_product_registry()
 
 
 def _world(phone: str) -> tuple[str, dict]:
     owner = db.create_or_get_platform_user_by_phone(
         phone=phone, display_name=f"mailbox-{phone[-4:]}"
+    )
+    db.ensure_product_membership(
+        platform_user_id=owner["id"],
+        app_id=MINGCHAN_APP_ID,
+        registry=TEST_REGISTRY,
     )
     world = db.get_or_create_home_universe(platform_user_id=owner["id"])
     db.set_universe_onboarding_state(
@@ -103,7 +110,7 @@ def _login(client, phone: str) -> dict:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": token}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": token}
     )
     assert response.status_code == 200, response.text
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
@@ -111,14 +118,14 @@ def _login(client, phone: str) -> dict:
 
 def _enable_mailbox(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_mailbox.settings.companion_world_mailbox_enabled",
+        "app.products.mingchan.api.mailbox.settings.mingchan_mailbox_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.mingchan.api.world.settings.mingchan_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_mailbox.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.mailbox.beijing_naive_now", lambda: NOW
     )
 
 
@@ -149,7 +156,7 @@ def test_delivery_capacity_catalog_selection_and_exact_cooldown(fresh_db):
         priority=10,
         policy_version=policy.version,
     )
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
 
     blocked = service.maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
@@ -211,7 +218,7 @@ def test_same_character_never_redelivers_after_new_catalog_version(fresh_db):
         priority=10,
         policy_version=policy.version,
     )
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
     db.transition_open_character_letter(
@@ -243,7 +250,7 @@ def test_scheduler_expiry_exact_boundary_releases_open_slot(fresh_db):
     policy = build_mailbox_policy(fresh_db)
     _catalog("expiry-first", key="expiry-first", priority=20, policy_version=policy.version)
     _catalog("expiry-second", key="expiry-second", priority=10, policy_version=policy.version)
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     before = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)
     assert len(before) == 1 and before[0]["status"] == "unread"
@@ -281,7 +288,7 @@ def test_catalog_new_version_excludes_existing_resident_old_version(fresh_db):
         policy_version=policy.version,
         version="v2",
     )
-    result = CompanionWorldMailboxService(policy=policy).maintain_batch(
+    result = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     assert result["metrics"]["catalog_empty"] == 1
@@ -295,17 +302,17 @@ def test_owner_api_is_private_no_auto_read_and_request_time_expiry(
     owner_id, world = _world(phone)
     policy = build_mailbox_policy(fresh_db)
     _catalog("private", key="private", priority=10, policy_version=policy.version)
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW - timedelta(days=30), after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
     headers = _login(client, phone)
-    disabled = client.get("/v1/mailbox/letters", headers=headers)
+    disabled = client.get("/api/v1/products/mingchan/mailbox/letters", headers=headers)
     assert disabled.status_code == 404
     _enable_mailbox(monkeypatch)
 
-    listed = client.get("/v1/mailbox/letters", headers=headers)
-    unread = client.get("/v1/mailbox/unread-count", headers=headers)
+    listed = client.get("/api/v1/products/mingchan/mailbox/letters", headers=headers)
+    unread = client.get("/api/v1/products/mingchan/mailbox/unread-count", headers=headers)
     assert listed.status_code == unread.status_code == 200
     item = listed.json()["data"]["items"][0]
     assert item["status"] == "expired"
@@ -317,7 +324,7 @@ def test_owner_api_is_private_no_auto_read_and_request_time_expiry(
     assert "eligibility_snapshot" not in listed.text
     assert "runtime_account_id" not in listed.text
     expired_action = client.post(
-        f"/v1/mailbox/letters/{letter['id']}/read", headers=headers, json={}
+        f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}/read", headers=headers, json={}
     )
     assert expired_action.status_code == 409
     assert expired_action.json()["code"] == "letter_not_open"
@@ -326,7 +333,7 @@ def test_owner_api_is_private_no_auto_read_and_request_time_expiry(
     _world(other_phone)
     other_headers = _login(client, other_phone)
     hidden = client.get(
-        f"/v1/mailbox/letters/{letter['id']}", headers=other_headers
+        f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}", headers=other_headers
     )
     assert hidden.status_code == 404
     assert hidden.json()["code"] == "letter_not_found"
@@ -339,13 +346,13 @@ def test_owner_read_defer_decline_are_idempotent_and_do_not_extend_ttl(
     owner_id, _world_row = _world(phone)
     policy = build_mailbox_policy(fresh_db)
     _catalog("actions", key="actions", priority=10, policy_version=policy.version)
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
     headers = _login(client, phone)
     _enable_mailbox(monkeypatch)
-    path = f"/v1/mailbox/letters/{letter['id']}"
+    path = f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}"
 
     read = client.post(f"{path}/read", headers=headers, json={})
     replay_read = client.post(f"{path}/read", headers=headers, json={})
@@ -380,17 +387,17 @@ def test_owner_read_defer_decline_are_idempotent_and_do_not_extend_ttl(
         delivered_at="2026-07-23 10:00:00",
         expires_at="2026-08-22 10:00:00",
     )
-    first_page = client.get("/v1/mailbox/letters?limit=1", headers=headers)
+    first_page = client.get("/api/v1/products/mingchan/mailbox/letters?limit=1", headers=headers)
     cursor = first_page.json()["data"]["next_cursor"]
     second_page = client.get(
-        "/v1/mailbox/letters", headers=headers, params={"limit": 1, "cursor": cursor}
+        "/api/v1/products/mingchan/mailbox/letters", headers=headers, params={"limit": 1, "cursor": cursor}
     )
     assert {
         first_page.json()["data"]["items"][0]["letter_id"],
         second_page.json()["data"]["items"][0]["letter_id"],
     } == {letter["id"], second["id"]}
     assert client.get(
-        "/v1/mailbox/letters?cursor=not-base64!", headers=headers
+        "/api/v1/products/mingchan/mailbox/letters?cursor=not-base64!", headers=headers
     ).status_code == 400
     injected = client.post(
         f"{path}/read", headers=headers, json={"platform_user_id": "other"}
@@ -409,13 +416,13 @@ def test_admin_catalog_permissions_create_replay_and_retire(client, fresh_db):
         "priority": 20,
     }
     assert client.get(
-        "/admin/companion-world/mailbox/catalog", headers=REVIEWER_HEADERS
+        "/admin/products/mingchan/world/mailbox/catalog", headers=REVIEWER_HEADERS
     ).status_code == 403
     created = client.post(
-        "/admin/companion-world/mailbox/catalog", headers=STAFF_HEADERS, json=payload
+        "/admin/products/mingchan/world/mailbox/catalog", headers=STAFF_HEADERS, json=payload
     )
     replay = client.post(
-        "/admin/companion-world/mailbox/catalog", headers=ADMIN_HEADERS, json=payload
+        "/admin/products/mingchan/world/mailbox/catalog", headers=ADMIN_HEADERS, json=payload
     )
     assert created.status_code == 201 and replay.status_code == 200
     entry = created.json()["entry"]
@@ -423,17 +430,17 @@ def test_admin_catalog_permissions_create_replay_and_retire(client, fresh_db):
     assert replay.json()["entry"]["id"] == entry["id"]
     assert created.headers["cache-control"] == "no-store"
     changed = client.post(
-        "/admin/companion-world/mailbox/catalog",
+        "/admin/products/mingchan/world/mailbox/catalog",
         headers=STAFF_HEADERS,
         json={**payload, "letter_body": "静默改写"},
     )
     assert changed.status_code == 422
     listed = client.get(
-        "/admin/companion-world/mailbox/catalog", headers=STAFF_HEADERS
+        "/admin/products/mingchan/world/mailbox/catalog", headers=STAFF_HEADERS
     )
     assert listed.status_code == 200 and len(listed.json()["entries"]) == 1
     retired = client.post(
-        f"/admin/companion-world/mailbox/catalog/{entry['id']}/retire",
+        f"/admin/products/mingchan/world/mailbox/catalog/{entry['id']}/retire",
         headers=STAFF_HEADERS,
         json={"reason": "version rollout"},
     )
@@ -509,7 +516,7 @@ def test_scheduler_can_run_mailbox_with_lifecycle_disabled(fresh_db):
         mailbox_enabled=True,
         interval_seconds=300,
         batch_size=50,
-        mailbox_service=CompanionWorldMailboxService(policy=policy),
+        mailbox_service=CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY),
     )
     result = asyncio.run(scheduler.run_once(now=NOW))
     assert result["metrics"] is None
@@ -545,7 +552,7 @@ def test_accept_api_creates_minimal_runtime_and_replays_same_resident(
         policy_version=policy.version,
         template=template,
     )
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
@@ -573,10 +580,10 @@ def test_accept_api_creates_minimal_runtime_and_replays_same_resident(
         }
 
     accepted = client.post(
-        f"/v1/mailbox/letters/{letter['id']}/accept", headers=headers, json={}
+        f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}/accept", headers=headers, json={}
     )
     replay = client.post(
-        f"/v1/mailbox/letters/{letter['id']}/accept", headers=headers, json={}
+        f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}/accept", headers=headers, json={}
     )
     assert accepted.status_code == replay.status_code == 200
     assert accepted.json()["data"]["replayed"] is False
@@ -624,7 +631,7 @@ def test_accept_api_creates_minimal_runtime_and_replays_same_resident(
     other_phone = "19966001011"
     _world(other_phone)
     hidden = client.post(
-        f"/v1/mailbox/letters/{letter['id']}/accept",
+        f"/api/v1/products/mingchan/mailbox/letters/{letter['id']}/accept",
         headers=_login(client, other_phone),
         json={},
     )
@@ -636,7 +643,7 @@ def test_accept_exact_expiry_commits_expired_status(fresh_db):
     owner_id, _world_row = _world("19966001012")
     policy = build_mailbox_policy(fresh_db)
     _catalog("exact-expiry", key="exact-expiry", priority=10, policy_version=policy.version)
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
 
@@ -668,7 +675,7 @@ def test_accept_revalidates_catalog_and_template_without_orphans(
         policy_version=policy.version,
         template=template,
     )
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
     if unavailable == "catalog":
@@ -703,7 +710,7 @@ def test_accept_capacity_ten_blocks_without_orphans(fresh_db):
     owner_id, world = _world("19966001015")
     policy = build_mailbox_policy(fresh_db)
     _catalog("full", key="full", priority=10, policy_version=policy.version)
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
     for index in range(10):
@@ -739,7 +746,7 @@ def test_accept_failure_after_runtime_insert_rolls_back_everything(
         policy_version=policy.version,
         template=template,
     )
-    service = CompanionWorldMailboxService(policy=policy)
+    service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
     service.maintain_batch(now=NOW, after_universe_id=None, batch_size=50)
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
 
@@ -747,7 +754,7 @@ def test_accept_failure_after_runtime_insert_rolls_back_everything(
         raise RuntimeError("injected resident failure")
 
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_mailbox.create_resident",
+        "app.products.mingchan.application.mailbox.create_resident",
         _fail_create_resident,
     )
     with pytest.raises(RuntimeError, match="injected resident failure"):
@@ -779,7 +786,7 @@ def test_pg_concurrent_mailbox_delivery_keeps_one_open_letter(fresh_db):
     barrier = threading.Barrier(2)
 
     def _run(_index: int) -> str:
-        service = CompanionWorldMailboxService(policy=policy)
+        service = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY)
         barrier.wait(timeout=5)
         result = service.maintain_batch(
             now=NOW, after_universe_id=None, batch_size=50
@@ -803,7 +810,7 @@ def test_pg_double_accept_replays_one_runtime_resident_and_conversation(fresh_db
     owner_id, _world_row = _world("19966001017")
     policy = build_mailbox_policy(fresh_db)
     _catalog("double-accept", key="double-accept", priority=10, policy_version=policy.version)
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
@@ -811,7 +818,7 @@ def test_pg_double_accept_replays_one_runtime_resident_and_conversation(fresh_db
 
     def _accept(_index: int) -> tuple[bool, str, str]:
         barrier.wait(timeout=5)
-        result = CompanionWorldMailboxService(policy=policy).accept_letter(
+        result = CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).accept_letter(
             owner_id, letter_id=letter["id"], now="2026-07-23 10:01:00"
         )
         return (
@@ -841,7 +848,7 @@ def test_pg_mailbox_accept_and_regular_create_share_tenth_slot(fresh_db):
     owner_id, world = _world("19966001018")
     policy = build_mailbox_policy(fresh_db)
     _catalog("race-capacity", key="race-capacity", priority=10, policy_version=policy.version)
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
@@ -852,7 +859,7 @@ def test_pg_mailbox_accept_and_regular_create_share_tenth_slot(fresh_db):
     def _accept() -> str:
         barrier.wait(timeout=5)
         try:
-            CompanionWorldMailboxService(policy=policy).accept_letter(
+            CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).accept_letter(
                 owner_id, letter_id=letter["id"], now="2026-07-23 10:01:00"
             )
             return "created"
@@ -895,7 +902,7 @@ def test_pg_accept_vs_expiry_is_never_torn(fresh_db):
     owner_id, _world_row = _world("19966001019")
     policy = build_mailbox_policy(fresh_db)
     _catalog("race-expiry", key="race-expiry", priority=10, policy_version=policy.version)
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
@@ -904,7 +911,7 @@ def test_pg_accept_vs_expiry_is_never_torn(fresh_db):
     def _accept() -> str:
         barrier.wait(timeout=5)
         try:
-            CompanionWorldMailboxService(policy=policy).accept_letter(
+            CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).accept_letter(
                 owner_id, letter_id=letter["id"], now="2026-08-22 09:59:59"
             )
             return "accepted"
@@ -955,7 +962,7 @@ def test_pg_accept_vs_catalog_retire_is_never_torn(fresh_db):
         priority=10,
         policy_version=policy.version,
     )
-    CompanionWorldMailboxService(policy=policy).maintain_batch(
+    CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).maintain_batch(
         now=NOW, after_universe_id=None, batch_size=50
     )
     letter = db.list_character_letters_for_owner(owner_platform_user_id=owner_id)[0]
@@ -964,7 +971,7 @@ def test_pg_accept_vs_catalog_retire_is_never_torn(fresh_db):
     def _accept() -> str:
         barrier.wait(timeout=5)
         try:
-            CompanionWorldMailboxService(policy=policy).accept_letter(
+            CompanionWorldMailboxService(policy=policy, registry=TEST_REGISTRY).accept_letter(
                 owner_id, letter_id=letter["id"], now="2026-07-23 10:01:00"
             )
             return "accepted"
@@ -1004,3 +1011,6 @@ def test_pg_accept_vs_catalog_retire_is_never_torn(fresh_db):
     else:
         assert persisted["status"] == "unread"
         assert resident_count == conversation_count == 0
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

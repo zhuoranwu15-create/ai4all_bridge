@@ -2,18 +2,24 @@
 import json
 
 import app.db as db
+from app.bootstrap.product_registry import build_test_product_registry
 from app.db import APP_ACTIVE_SESSION_KEY, WEB_ACTIVE_SESSION_KEY
-from app.products.zhaoxi.domain.companion_world import (
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldService,
     ResidentSelection,
 )
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.mingchan.application import SqlCompanionWorldRepository
 
 
 def _resident_accounts() -> tuple[str, str]:
     user_id = db.create_or_get_platform_user_by_phone(
         phone="19920002001", display_name="用户"
     )["id"]
+    db.ensure_product_membership(
+        platform_user_id=user_id,
+        app_id="mingchan",
+        registry=build_test_product_registry(),
+    )
     for rank in range(1, 5):
         db.create_character_template(
             source_type="operations",
@@ -27,7 +33,9 @@ def _resident_accounts() -> tuple[str, str]:
             persona_version=f"v{rank}",
             initial_candidate_rank=rank,
         )
-    service = CompanionWorldService(SqlCompanionWorldRepository())
+    service = CompanionWorldService(
+        SqlCompanionWorldRepository(registry=build_test_product_registry())
+    )
     boot = service.bootstrap_home(user_id)
     residents = service.confirm_residents(
         user_id,

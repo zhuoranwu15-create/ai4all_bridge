@@ -11,6 +11,7 @@ from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import ChannelCapability
 
 if TYPE_CHECKING:
+    from app.bootstrap.product_registry import ProductRegistry
     from app.tools.registry import ToolPolicy
 
 
@@ -69,6 +70,8 @@ class ProductTurnServices(Protocol):
     """Runtime 所需的最小产品能力；实现由产品 manifest 显式注入。"""
 
     app_id: str
+    registry: "ProductRegistry"
+    allowed_channels: Tuple[str, ...]
     tool_policy: "ToolPolicy"
     onboarding_pending: str
     onboarding_step1_sent: str

@@ -2163,7 +2163,7 @@ def _migration_0024_rename_channel_app_to_native(conn: Connection) -> None:
 def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
     """D-14 M1-1：钱包唯一性从 account_id 上迁到 platform_user（一真人一 active 钱包）。
 
-    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
+    见 ADR docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-14。多居民（朝夕相伴）
     上线前，把 entitlement_wallets 的「一 account 一钱包」上迁为「一真人一钱包、全部居民共用
     一份余额」。本迁移刻意**保留** UNIQUE(account_id)：billing 改按 platform_user
     get-or-create 后永不会为同一真人插入第二个钱包行，account_id 事实上仍唯一、保留无害，据此
@@ -2265,7 +2265,7 @@ def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
 def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
     """D-09 M1-3/M1-4：daily 配额计数键从 account_id 上迁到 platform_user（一真人一套配额）。
 
-    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
+    见 ADR docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
     上线前，把 daily_usage 的「一 account 一套额度」上迁为「一真人一套、全部居民共享」。同 D-14
     钱包上迁刻意**保留** UNIQUE(account_id,date)：daily 三函数改按 platform_user get-or-create
     后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开 SQLite 表重建 /
@@ -2349,7 +2349,7 @@ def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
 def _migration_0027_daily_quota_reservations(conn: Connection) -> None:
     """D-09 下半刀：daily 配额原子预占的存储载体（每 reservation 一行 + TTL）。
 
-    见 ADR docs/architecture/products/zhaoxi/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
+    见 ADR docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-09（item 3–6）+
     P1 §2.7（锁序 L3 = pg_advisory_xact_lock('quota:'||platform_user_id)）。多居民聚合到真人后，
     turn_service 的「读—处理—+1」有 TOCTOU；本表承载「预占（reserve）→确认(confirm)/回滚(rollback)」：
     reserve 在 advisory 锁下按 message_count + 活跃 reservation 数校验 cap 后插一行；confirm/rollback/
@@ -4723,6 +4723,87 @@ def _migration_0060_creator_role_template_opening_and_summary(conn: Connection) 
     )
 
 
+def _migration_0061_companion_world_product_scope(conn: Connection) -> None:
+    """给历史 Companion World 根实体补产品锚，并把模板目录唯一性收缩到产品内。
+
+    存量 World/App 数据属于拆分前的朝夕产品，因此两列统一回填 ``zhaoxi``。鸣蝉只会
+    显式写入/读取 ``mingchan``。``universes.owner_platform_user_id`` 的历史全局唯一约束
+    暂不在自动迁移中重建：启用鸣蝉前必须先通过 MC-05 precheck/cleanup 清除旧 App 测试
+    World，避免 SQLite 大范围父子表重建与 PostgreSQL 约束切换混入常规启动迁移。
+    """
+    _ensure_column(
+        conn,
+        "universes",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    _ensure_column(
+        conn,
+        "character_templates",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    conn.execute("UPDATE universes SET app_id = 'zhaoxi' WHERE app_id IS NULL")
+    conn.execute(
+        "UPDATE character_templates SET app_id = 'zhaoxi' WHERE app_id IS NULL"
+    )
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS ux_character_templates_active_initial_rank;
+        CREATE INDEX IF NOT EXISTS ix_universes_app_owner
+            ON universes(app_id, owner_platform_user_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_character_templates_app_active_initial_rank
+            ON character_templates(app_id, initial_candidate_rank)
+            WHERE status = 'active' AND initial_candidate_rank IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_character_templates_app_source
+            ON character_templates(app_id, source_type, status);
+        CREATE INDEX IF NOT EXISTS ix_character_templates_app_owner
+            ON character_templates(app_id, owner_platform_user_id);
+        """
+    )
+
+
+def _migration_0062_mingchan_notification_product_scope(conn: Connection) -> None:
+    """给 App 通知补产品锚，并建立可并存的产品级通知偏好表。
+
+    旧 ``app_notification_preferences`` 的真人主键无法表达多产品，保持为朝夕 legacy
+    数据等待 cleanup；新表从一开始以 ``(platform_user_id, app_id)`` 为主键。存量通知
+    同样属于拆分前朝夕 App，新增列默认并回填为 ``zhaoxi``。
+    """
+    _ensure_column(
+        conn,
+        "app_notifications",
+        "app_id",
+        "TEXT NOT NULL DEFAULT 'zhaoxi'",
+    )
+    conn.execute("UPDATE app_notifications SET app_id = 'zhaoxi' WHERE app_id IS NULL")
+    conn.executescript(
+        """
+        DROP INDEX IF EXISTS ux_app_notifications_user_idempotency;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_app_notifications_app_user_idempotency
+            ON app_notifications(app_id, platform_user_id, idempotency_key);
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_app_list
+            ON app_notifications(
+                app_id, platform_user_id, delivery_status, delivered_at DESC, id DESC
+            );
+        CREATE INDEX IF NOT EXISTS ix_app_notifications_app_unread
+            ON app_notifications(
+                app_id, platform_user_id, delivery_status, read_at, expires_at
+            );
+
+        CREATE TABLE IF NOT EXISTS product_notification_preferences (
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            quiet_level TEXT NOT NULL DEFAULT 'standard',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY(platform_user_id, app_id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4779,6 +4860,8 @@ _MIGRATIONS = [
     (58, _migration_0058_async_resident_wishes),
     (59, _migration_0059_creator_role_templates),
     (60, _migration_0060_creator_role_template_opening_and_summary),
+    (61, _migration_0061_companion_world_product_scope),
+    (62, _migration_0062_mingchan_notification_product_scope),
 ]
 
 

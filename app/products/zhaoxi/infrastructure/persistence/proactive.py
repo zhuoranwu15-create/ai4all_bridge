@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.db._core import (
     _UNSET,
     _clean_text,
@@ -701,11 +702,10 @@ def list_due_reminders(
     """
     node_filter = _clean_text(node_id) if node_id else None
     fulfillment_filter = _clean_text(fulfillment) if fulfillment else None
-    conditions = ["r.status = 'pending'", "r.due_at <= ?"]
-    params: List[Any] = [now]
-    join_clause = ""
+    conditions = ["r.status = 'pending'", "r.due_at <= ?", "a.app_id = ?"]
+    params: List[Any] = [now, ZHAOXI_APP_ID]
+    join_clause = "JOIN accounts a ON a.id = r.account_id"
     if node_filter:
-        join_clause = "JOIN accounts a ON a.id = r.account_id"
         conditions.append("a.assigned_node_id = ?")
         params.append(node_filter)
     if fulfillment_filter:
@@ -771,8 +771,14 @@ def claim_due_reminder(*, reminder_id: str, now: str) -> Optional[Dict[str, Any]
             WHERE id = ?
               AND status = 'pending'
               AND due_at <= ?
+              AND EXISTS (
+                  SELECT 1 FROM accounts
+                  WHERE accounts.id = reminders.account_id
+                    AND accounts.status = 'active'
+                    AND accounts.app_id = ?
+              )
             """,
-            (reminder_id, now),
+            (reminder_id, now, ZHAOXI_APP_ID),
         )
         if cursor.rowcount != 1:
             return None
@@ -1387,7 +1393,6 @@ def list_due_proactive_commitments(
     """node_id 非空时只返回归属该节点的账号的承诺（厚节点改造 P4 调度分片）。"""
     node_filter = _clean_text(node_id) if node_id else None
     node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
-    params: list = [now, now] + ([node_filter] if node_filter else []) + [limit]
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -1398,13 +1403,14 @@ def list_due_proactive_commitments(
             WHERE c.status = 'pending'
               AND c.due_at <= ?
               AND a.status = 'active'
+              AND a.app_id = ?
               AND s.enabled = 1
               AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
               {node_clause}
             ORDER BY c.due_at ASC, c.created_at ASC
             LIMIT ?
             """,
-            params,
+            [now, ZHAOXI_APP_ID, now] + ([node_filter] if node_filter else []) + [limit],
         ).fetchall()
     return [_decode_proactive_commitment(row) for row in rows]
 
@@ -1437,6 +1443,7 @@ def claim_due_proactive_commitment(
                   SELECT 1 FROM accounts
                   WHERE accounts.id = proactive_commitments.account_id
                     AND accounts.status = 'active'
+                    AND accounts.app_id = ?
               )
               AND EXISTS (
                   SELECT 1 FROM proactive_account_state
@@ -1448,7 +1455,7 @@ def claim_due_proactive_commitment(
                     )
               )
             """,
-            (cleaned_commitment_id, cleaned_now, cleaned_now),
+            (cleaned_commitment_id, cleaned_now, ZHAOXI_APP_ID, cleaned_now),
         )
         if cursor.rowcount != 1:
             return None
@@ -2031,7 +2038,6 @@ def list_due_proactive_account_states(
     """node_id 非空时只返回归属该节点的账号状态（厚节点改造 P4 调度分片）。"""
     node_filter = _clean_text(node_id) if node_id else None
     node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
-    params: list = [now, now] + ([node_filter] if node_filter else []) + [limit]
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -2040,6 +2046,7 @@ def list_due_proactive_account_states(
             JOIN accounts a ON a.id = s.account_id
             WHERE s.enabled = 1
               AND a.status = 'active'
+              AND a.app_id = ?
               AND (s.next_scan_at IS NULL OR s.next_scan_at <= ?)
               AND (s.cooldown_until IS NULL OR s.cooldown_until <= ?)
               {node_clause}
@@ -2047,7 +2054,9 @@ def list_due_proactive_account_states(
                      s.updated_at ASC
             LIMIT ?
             """,
-            params,
+            [ZHAOXI_APP_ID, now, now]
+            + ([node_filter] if node_filter else [])
+            + [limit],
         ).fetchall()
     return [_decode_proactive_account_state(row) for row in rows]
 
@@ -2061,7 +2070,6 @@ def list_due_reactivation_candidate_accounts(
     """
     node_filter = _clean_text(node_id) if node_id else None
     node_clause = "AND a.assigned_node_id = ?" if node_filter else ""
-    params: list = ([node_filter] if node_filter else []) + [now, limit]
     with connect() as conn:
         rows = conn.execute(
             f"""
@@ -2070,6 +2078,7 @@ def list_due_reactivation_candidate_accounts(
             JOIN accounts a ON a.id = s.account_id
             WHERE s.enabled = 1
               AND a.status = 'active'
+              AND a.app_id = ?
               {node_clause}
               AND json_valid(s.metadata_json)
               AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') IS NOT NULL
@@ -2078,7 +2087,9 @@ def list_due_reactivation_candidate_accounts(
                      s.updated_at ASC
             LIMIT ?
             """,
-            params,
+            [ZHAOXI_APP_ID]
+            + ([node_filter] if node_filter else [])
+            + [now, limit],
         ).fetchall()
     return [row["account_id"] for row in rows]
 
@@ -2115,6 +2126,7 @@ def claim_due_proactive_account_state(
                   FROM accounts
                   WHERE accounts.id = proactive_account_state.account_id
                     AND accounts.status = 'active'
+                    AND accounts.app_id = ?
               )
             """,
             (
@@ -2123,6 +2135,7 @@ def claim_due_proactive_account_state(
                 cleaned_account_id,
                 cleaned_now,
                 cleaned_now,
+                ZHAOXI_APP_ID,
             ),
         )
         if cursor.rowcount != 1:
@@ -2132,9 +2145,9 @@ def claim_due_proactive_account_state(
             SELECT s.*, a.status AS account_status
             FROM proactive_account_state s
             JOIN accounts a ON a.id = s.account_id
-            WHERE s.account_id = ?
+            WHERE s.account_id = ? AND a.app_id = ?
             """,
-            (cleaned_account_id,),
+            (cleaned_account_id, ZHAOXI_APP_ID),
         ).fetchone()
     return _decode_proactive_account_state(row) if row else None
 
@@ -2339,9 +2352,10 @@ def claim_content_invitation_for_send(
                   SELECT 1 FROM accounts
                   WHERE accounts.id = content_invitations.account_id
                     AND accounts.status = 'active'
+                    AND accounts.app_id = ?
               )
             """,
-            (cleaned_invitation_id,),
+            (cleaned_invitation_id, ZHAOXI_APP_ID),
         )
         if cursor.rowcount != 1:
             return None

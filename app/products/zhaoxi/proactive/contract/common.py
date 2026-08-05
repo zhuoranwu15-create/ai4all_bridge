@@ -6,11 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.platform.channels import get_channel_capability
-from app.platform.channels import CHANNEL_APP
-from app.config import settings
 from app.db import list_channel_bindings_for_account
-from app.products.zhaoxi.infrastructure.app_inbox import AppInboxAdapter
-from app.products.zhaoxi.infrastructure.repositories.companion_world import human_level_app_route
 
 
 def format_reactivation_time(value: datetime) -> str:
@@ -35,26 +31,7 @@ def _truncate_text(text: str, limit: int) -> str:
 
 
 def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
-    app_inbox_route: Optional[Dict[str, Any]] = None
     for binding in list_channel_bindings_for_account(account_id=account_id):
-        if (
-            binding.get("channel") == CHANNEL_APP
-            and bool(getattr(settings, "companion_world_app_inbox_enabled", False))
-            and AppInboxAdapter().can_deliver(account_id)
-        ):
-            app_inbox_route = {
-                "channel_binding_id": binding["id"],
-                "channel": CHANNEL_APP,
-                "channel_account_id": binding.get("channel_account_id"),
-                "to_user_id": (
-                    _clean_text(binding.get("chat_id"))
-                    or _clean_text(binding.get("sender_id"))
-                    or account_id
-                ),
-                "session_key": binding.get("session_key"),
-                "delivery": "app_inbox",
-            }
-            continue
         # 主动路由能力过滤（§8.3，原则一硬需求）：只选可被主动消息投递的渠道。
         # bindings 按 last_seen_at DESC 排序（accounts.py），Web turn 会把 web binding
         # 顶到微信前——若不过滤，现有正常工作的微信主动路由会因账号多一条 web 足迹而
@@ -73,9 +50,7 @@ def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
             "to_user_id": to_user_id,
             "session_key": binding.get("session_key"),
         }
-    # 真人级 App-only 不依赖某条 channel_binding：收件箱按 platform owner 拉取。
-    # 这里只为当前确定性 speaker 合成 route；双 flag/微信优先均由 resolver 再校验。
-    return app_inbox_route or human_level_app_route(account_id)
+    return None
 
 
 def _extract_json_object(text: str) -> Dict[str, Any]:

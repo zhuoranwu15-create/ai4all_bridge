@@ -1,4 +1,6 @@
-from pydantic import model_validator
+from typing import Any
+
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -10,6 +12,71 @@ _NON_PRODUCTION_ENVS = {"local", "development", "test"}
 # web_search_provider_order 等）仍走 Settings，因为那是外部供应商可用性，不是产品开关。
 # 单轮仍可被显式覆盖：debug chat 的 force_web_search_enabled、履约链路的显式入参。
 WEB_SEARCH_ENABLED = True
+
+
+def _mingchan_setting(default: Any, suffix: str):
+    """Declare one Mingchan setting with a one-release legacy env alias."""
+
+    field_name = f"mingchan_{suffix.lower()}"
+    legacy_name = f"companion_world_{suffix.lower()}"
+    return Field(
+        default=default,
+        validation_alias=AliasChoices(
+            f"MINGCHAN_{suffix}",
+            field_name,
+            f"COMPANION_WORLD_{suffix}",
+            legacy_name,
+        ),
+    )
+
+
+_LEGACY_MINGCHAN_SETTING_NAMES = {
+    f"companion_world_{suffix}": f"mingchan_{suffix}"
+    for suffix in (
+        "p1_enabled",
+        "asset_base_url",
+        "l3_background_enabled",
+        "proactive_safety_enabled",
+        "feed_enabled",
+        "feed_morning_start",
+        "feed_morning_end",
+        "feed_evening_start",
+        "feed_evening_end",
+        "feed_scheduler_interval_seconds",
+        "feed_scheduler_batch_size",
+        "feed_claim_lease_seconds",
+        "feed_retry_max_attempts",
+        "feed_retry_base_seconds",
+        "outbox_batch_size",
+        "outbox_claim_lease_seconds",
+        "outbox_max_attempts",
+        "app_inbox_enabled",
+        "app_only_human_proactive_enabled",
+        "notification_cleanup_batch_size",
+        "lifecycle_evaluation_enabled",
+        "lifecycle_commit_enabled",
+        "mailbox_enabled",
+        "lifecycle_inactivity_days",
+        "lifecycle_evidence_window_days",
+        "lifecycle_mismatch_min_events",
+        "lifecycle_mismatch_min_span_days",
+        "lifecycle_cooldown_days",
+        "lifecycle_crisis_freeze_days",
+        "mailbox_delivery_cooldown_days",
+        "mailbox_letter_ttl_days",
+        "mailbox_manifest_hmac_secret",
+        "lifecycle_scheduler_interval_seconds",
+        "lifecycle_scheduler_batch_size",
+        "visits_enabled",
+        "human_chat_enabled",
+        "chat_image_enabled",
+        "chat_voice_enabled",
+        "feed_image_enabled",
+        "wish_daily_max",
+        "wish_job_lease_seconds",
+        "wish_retry_seconds",
+    )
+}
 
 
 class Settings(BaseSettings):
@@ -350,63 +417,113 @@ class Settings(BaseSettings):
     asr_max_duration_ms: int = 60_000
     asr_mock_transcript: str = ""
 
-    # ===== 朝夕相伴 Companion World P1 =====
+    # ===== 鸣蝉 Companion World =====
     # 默认关闭；只有五模板预检、存量 backfill 与支持 account:null 的客户端均就绪后才可开启。
-    companion_world_p1_enabled: bool = False
+    mingchan_p1_enabled: bool = _mingchan_setting(False, "P1_ENABLED")
     # 自建角色受控头像的公网前缀；留空则下发相对路径（本地/测试）。生产填站点根域。
-    companion_world_asset_base_url: str = ""
+    mingchan_asset_base_url: str = _mingchan_setting("", "ASSET_BASE_URL")
     # 后台安全开关与 API/auth flag 正交：默认保持已交付行为，事故时可独立停 L3 或恢复旧 proactive。
-    companion_world_l3_background_enabled: bool = True
-    companion_world_proactive_safety_enabled: bool = True
+    mingchan_l3_background_enabled: bool = _mingchan_setting(
+        True, "L3_BACKGROUND_ENABLED"
+    )
+    mingchan_proactive_safety_enabled: bool = _mingchan_setting(
+        True, "PROACTIVE_SAFETY_ENABLED"
+    )
     # M3 Feed API + 后续 world-content scheduler；与 P1/L3/proactive 开关正交。
-    companion_world_feed_enabled: bool = False
-    companion_world_feed_morning_start: str = ""
-    companion_world_feed_morning_end: str = ""
-    companion_world_feed_evening_start: str = ""
-    companion_world_feed_evening_end: str = ""
-    companion_world_feed_scheduler_interval_seconds: float = 60.0
-    companion_world_feed_scheduler_batch_size: int = 20
-    companion_world_feed_claim_lease_seconds: int = 300
-    companion_world_feed_retry_max_attempts: int = 3
-    companion_world_feed_retry_base_seconds: int = 30
-    companion_world_outbox_batch_size: int = 50
-    companion_world_outbox_claim_lease_seconds: int = 300
-    companion_world_outbox_max_attempts: int = 5
+    mingchan_feed_enabled: bool = _mingchan_setting(False, "FEED_ENABLED")
+    mingchan_feed_morning_start: str = _mingchan_setting("", "FEED_MORNING_START")
+    mingchan_feed_morning_end: str = _mingchan_setting("", "FEED_MORNING_END")
+    mingchan_feed_evening_start: str = _mingchan_setting("", "FEED_EVENING_START")
+    mingchan_feed_evening_end: str = _mingchan_setting("", "FEED_EVENING_END")
+    mingchan_feed_scheduler_interval_seconds: float = _mingchan_setting(
+        60.0, "FEED_SCHEDULER_INTERVAL_SECONDS"
+    )
+    mingchan_feed_scheduler_batch_size: int = _mingchan_setting(
+        20, "FEED_SCHEDULER_BATCH_SIZE"
+    )
+    mingchan_feed_claim_lease_seconds: int = _mingchan_setting(
+        300, "FEED_CLAIM_LEASE_SECONDS"
+    )
+    mingchan_feed_retry_max_attempts: int = _mingchan_setting(
+        3, "FEED_RETRY_MAX_ATTEMPTS"
+    )
+    mingchan_feed_retry_base_seconds: int = _mingchan_setting(
+        30, "FEED_RETRY_BASE_SECONDS"
+    )
+    mingchan_outbox_batch_size: int = _mingchan_setting(50, "OUTBOX_BATCH_SIZE")
+    mingchan_outbox_claim_lease_seconds: int = _mingchan_setting(
+        300, "OUTBOX_CLAIM_LEASE_SECONDS"
+    )
+    mingchan_outbox_max_attempts: int = _mingchan_setting(
+        5, "OUTBOX_MAX_ATTEMPTS"
+    )
     # M3 App 拉取式收件箱；读取/visible adapter default-off，已有数据 cleanup 独立运行。
-    companion_world_app_inbox_enabled: bool = False
+    mingchan_app_inbox_enabled: bool = _mingchan_setting(False, "APP_INBOX_ENABLED")
     # 真人级 App-only 触达的第二道独立闸；必须与 inbox flag 同时开启。
-    companion_world_app_only_human_proactive_enabled: bool = False
-    companion_world_notification_cleanup_batch_size: int = 100
+    mingchan_app_only_human_proactive_enabled: bool = _mingchan_setting(
+        False, "APP_ONLY_HUMAN_PROACTIVE_ENABLED"
+    )
+    mingchan_notification_cleanup_batch_size: int = _mingchan_setting(
+        100, "NOTIFICATION_CLEANUP_BATCH_SIZE"
+    )
     # M4 Lifecycle/Mailbox：evaluation、不可逆 commit 与 mailbox 三个独立 default-off 闸。
-    companion_world_lifecycle_evaluation_enabled: bool = False
-    companion_world_lifecycle_commit_enabled: bool = False
-    companion_world_mailbox_enabled: bool = False
-    companion_world_lifecycle_inactivity_days: int = 60
-    companion_world_lifecycle_evidence_window_days: int = 30
-    companion_world_lifecycle_mismatch_min_events: int = 3
-    companion_world_lifecycle_mismatch_min_span_days: int = 14
-    companion_world_lifecycle_cooldown_days: int = 7
-    companion_world_lifecycle_crisis_freeze_days: int = 30
-    companion_world_mailbox_delivery_cooldown_days: int = 30
-    companion_world_mailbox_letter_ttl_days: int = 30
+    mingchan_lifecycle_evaluation_enabled: bool = _mingchan_setting(
+        False, "LIFECYCLE_EVALUATION_ENABLED"
+    )
+    mingchan_lifecycle_commit_enabled: bool = _mingchan_setting(
+        False, "LIFECYCLE_COMMIT_ENABLED"
+    )
+    mingchan_mailbox_enabled: bool = _mingchan_setting(False, "MAILBOX_ENABLED")
+    mingchan_lifecycle_inactivity_days: int = _mingchan_setting(
+        60, "LIFECYCLE_INACTIVITY_DAYS"
+    )
+    mingchan_lifecycle_evidence_window_days: int = _mingchan_setting(
+        30, "LIFECYCLE_EVIDENCE_WINDOW_DAYS"
+    )
+    mingchan_lifecycle_mismatch_min_events: int = _mingchan_setting(
+        3, "LIFECYCLE_MISMATCH_MIN_EVENTS"
+    )
+    mingchan_lifecycle_mismatch_min_span_days: int = _mingchan_setting(
+        14, "LIFECYCLE_MISMATCH_MIN_SPAN_DAYS"
+    )
+    mingchan_lifecycle_cooldown_days: int = _mingchan_setting(
+        7, "LIFECYCLE_COOLDOWN_DAYS"
+    )
+    mingchan_lifecycle_crisis_freeze_days: int = _mingchan_setting(
+        30, "LIFECYCLE_CRISIS_FREEZE_DAYS"
+    )
+    mingchan_mailbox_delivery_cooldown_days: int = _mingchan_setting(
+        30, "MAILBOX_DELIVERY_COOLDOWN_DAYS"
+    )
+    mingchan_mailbox_letter_ttl_days: int = _mingchan_setting(
+        30, "MAILBOX_LETTER_TTL_DAYS"
+    )
     # 仅供离线 catalog manifest HMAC-SHA256 校验；空值时 apply 必须 fail-closed。
-    companion_world_mailbox_manifest_hmac_secret: str = ""
-    companion_world_lifecycle_scheduler_interval_seconds: float = 300.0
-    companion_world_lifecycle_scheduler_batch_size: int = 50
+    mingchan_mailbox_manifest_hmac_secret: str = _mingchan_setting(
+        "", "MAILBOX_MANIFEST_HMAC_SECRET"
+    )
+    mingchan_lifecycle_scheduler_interval_seconds: float = _mingchan_setting(
+        300.0, "LIFECYCLE_SCHEDULER_INTERVAL_SECONDS"
+    )
+    mingchan_lifecycle_scheduler_batch_size: int = _mingchan_setting(
+        50, "LIFECYCLE_SCHEDULER_BATCH_SIZE"
+    )
     # M5 Visit/Human Chat：访问能力与真人写消息分别 default-off。
-    companion_world_visits_enabled: bool = False
-    companion_world_human_chat_enabled: bool = False
+    mingchan_visits_enabled: bool = _mingchan_setting(False, "VISITS_ENABLED")
+    mingchan_human_chat_enabled: bool = _mingchan_setting(False, "HUMAN_CHAT_ENABLED")
     # v1.5 媒体默认打开；异步许愿随 resident world + mailbox 可用，不设独立开关。
     # 注意：媒体三位对客户端是否可见还取决于 MEDIA_URL_SIGNING_SECRET 是否配置——密钥留空时
     # 能力位一律下发 false、上传返回 media_disabled（见 app/platform/media/access.py），
     # 不会出现「能力位为 true 却签不出读 URL」的半开状态。
-    companion_world_chat_image_enabled: bool = True
-    companion_world_chat_voice_enabled: bool = True
-    companion_world_feed_image_enabled: bool = True
+    mingchan_chat_image_enabled: bool = _mingchan_setting(True, "CHAT_IMAGE_ENABLED")
+    mingchan_chat_voice_enabled: bool = _mingchan_setting(True, "CHAT_VOICE_ENABLED")
+    mingchan_feed_image_enabled: bool = _mingchan_setting(True, "FEED_IMAGE_ENABLED")
     # 每人滚动 24 小时受理上限；同一 client_request_id 重放不计次，<=0 表示不限制。
-    companion_world_wish_daily_max: int = 10
-    companion_world_wish_job_lease_seconds: int = 600
-    companion_world_wish_retry_seconds: int = 3600
+    mingchan_wish_daily_max: int = _mingchan_setting(10, "WISH_DAILY_MAX")
+    mingchan_wish_job_lease_seconds: int = _mingchan_setting(
+        600, "WISH_JOB_LEASE_SECONDS"
+    )
+    mingchan_wish_retry_seconds: int = _mingchan_setting(3600, "WISH_RETRY_SECONDS")
 
     # ===== v1.5 媒体地基（S1；三个媒体开关共用这一套配置）=====
     # 落盘根目录。存相对路径进库（<sha256[0:2]>/<sha256[2:4]>/<media_id>），换对象存储只改解析函数。
@@ -508,6 +625,20 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         extra = "ignore"
+        populate_by_name = True
+
+    def __getattr__(self, name: str) -> Any:
+        """Read a retired ``companion_world_*`` attribute from its Mingchan field."""
+
+        replacement = _LEGACY_MINGCHAN_SETTING_NAMES.get(name)
+        if replacement is not None:
+            return super().__getattribute__(replacement)
+        return super().__getattr__(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Keep test/deploy mutation compatibility during the alias release window."""
+
+        super().__setattr__(_LEGACY_MINGCHAN_SETTING_NAMES.get(name, name), value)
 
     @model_validator(mode="after")
     def _enforce_production_secrets(self) -> "Settings":

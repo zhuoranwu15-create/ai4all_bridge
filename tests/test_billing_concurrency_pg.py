@@ -17,9 +17,10 @@ import concurrent.futures
 import pytest
 
 import app.db as db
+from app.bootstrap.product_registry import build_test_product_registry
 from app.db._backend import IntegrityError, is_postgres
 from app.db.billing import _shell_micros_for_tokens
-from tests.factories import make_resident_account
+from tests.factories import make_resident_account, make_user_account
 
 # 每笔扣款固定 token → 固定扣减，便于按笔数断言总额。
 _INPUT_TOKENS = 1000
@@ -39,9 +40,7 @@ def _user_two_residents(phone: str):
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="并发计费多号")
     # 用户注册入口只负责初始化真人钱包；两个实际扣款账号均为 form-B 居民，
     # 经 universe 归属而非 owner_binding 解析到同一真人。
-    db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="用户账号"
-    )
+    make_user_account(user["id"], "用户账号", app_id="mingchan")
     a1 = make_resident_account(user["id"], "甲")
     a2 = make_resident_account(user["id"], "乙")
     return user["id"], a1, a2
@@ -49,9 +48,9 @@ def _user_two_residents(phone: str):
 
 def _user_binding_and_resident(phone: str):
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="混合解析并发计费")
-    binding_account = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="微信账号"
-    )["account"]["id"]
+    binding_account = make_user_account(
+        user["id"], "鸣蝉用户账号", app_id="mingchan"
+    )
     resident_account = make_resident_account(user["id"], "世界居民")
     return user["id"], binding_account, resident_account
 
@@ -98,6 +97,7 @@ def _charge(account_id: str, idempotency_key: str, source_id: str):
         idempotency_key=idempotency_key,
         input_tokens=_INPUT_TOKENS,
         output_tokens=_OUTPUT_TOKENS,
+        registry=build_test_product_registry(),
     )
 
 

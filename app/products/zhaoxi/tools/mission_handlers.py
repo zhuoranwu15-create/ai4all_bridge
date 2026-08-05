@@ -10,7 +10,7 @@ from typing import Optional, TYPE_CHECKING
 
 from app.db import count_mission_moments, record_mission_moment
 from app.products.zhaoxi.application.missions.state import resolve_account_mission, snapshot_account_mission
-from app.products.zhaoxi.application.app_display_localization import localized_mission_template
+from app.products.zhaoxi.application.mission_localization import localized_mission_template
 from app.tools.errors import tool_error
 
 if TYPE_CHECKING:

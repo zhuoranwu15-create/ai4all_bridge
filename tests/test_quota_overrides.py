@@ -1,14 +1,12 @@
 """D-09：真人级 quota override 来源与遗留冲突兼容。"""
 import app.db as db
 from app.db._core import _migration_0031_platform_user_quota_overrides
-from tests.factories import make_resident_account
+from tests.factories import make_resident_account, make_user_account
 
 
 def _user_with_resident(phone: str):
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="配额用户")
-    primary = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="主账号"
-    )["account"]["id"]
+    primary = make_user_account(user["id"], "主账号", app_id="mingchan")
     resident = make_resident_account(user["id"], "居民")
     return user["id"], primary, resident
 
@@ -28,7 +26,7 @@ def test_admin_override_is_canonical_for_all_residents(fresh_db):
     with db.connect() as conn:
         membership = conn.execute(
             "SELECT daily_limit, rpm_limit FROM product_memberships "
-            "WHERE platform_user_id=? AND app_id='zhaoxi'",
+            "WHERE platform_user_id=? AND app_id='mingchan'",
             (user_id,),
         ).fetchone()
         copies = conn.execute(

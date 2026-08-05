@@ -97,7 +97,7 @@ def delete_file(account_id: str, filename: str, *, conn: Optional[Connection] = 
 def list_filenames(
     account_id: str, *, prefix: str = "", conn: Optional[Connection] = None
 ) -> List[str]:
-    """列举账号下的 profile 文件名（可选按前缀过滤，如 "memory/"），按文件名升序。"""
+    """列举账号下的 profile 文件名，按稳定的 Unicode 码点顺序升序。"""
     with _tx(conn) as tx:
         if prefix:
             rows = tx.execute(
@@ -110,7 +110,8 @@ def list_filenames(
                 "SELECT filename FROM account_profile_files WHERE account_id = ? ORDER BY filename",
                 (account_id,),
             ).fetchall()
-    return [r["filename"] for r in rows]
+    # SQLite/PG 的默认 collation 对大小写排序不同，统一在应用层冻结跨后端顺序。
+    return sorted(str(row["filename"]) for row in rows)
 
 
 def delete_account(account_id: str, *, conn: Optional[Connection] = None) -> int:

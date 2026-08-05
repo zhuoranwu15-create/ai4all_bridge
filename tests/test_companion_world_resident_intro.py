@@ -8,24 +8,40 @@ import json
 import pytest
 
 import app.db as db
-from app.products.zhaoxi.domain.companion_world import (
+from app.bootstrap.product_registry import build_test_product_registry
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldService,
     ResidentSelection,
     TemplateDraft,
 )
-from app.products.zhaoxi.domain.companion_world.onboarding_content import (
+from app.products.mingchan.domain.companion_world.onboarding_content import (
     RESIDENT_INTRO_CONTENT,
     intro_content_for_persona,
 )
-from app.products.zhaoxi.domain.missions.registry import mission_display_for_persona
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.mingchan.domain.mission_display import mission_display_for_persona
+from app.products.mingchan.application import SqlCompanionWorldRepository
 
 # 与预设 manifest 一致的五个人设 key，按 rank 升序。
 PERSONA_KEYS = ("linxiaoman", "luxingye", "shenchuan", "atang", "sichen")
 
 
+@pytest.fixture
+def client(mingchan_client):
+    """使用已启用鸣蝉注册表的隔离测试客户端。"""
+
+    return mingchan_client
+
+
 def _user(phone: str) -> str:
-    return db.create_or_get_platform_user_by_phone(phone=phone, display_name="用户")["id"]
+    platform_user_id = db.create_or_get_platform_user_by_phone(
+        phone=phone, display_name="用户"
+    )["id"]
+    db.ensure_product_membership(
+        platform_user_id=platform_user_id,
+        app_id="mingchan",
+        registry=build_test_product_registry(),
+    )
+    return platform_user_id
 
 
 def _seed_catalog(persona_keys=PERSONA_KEYS) -> list[dict]:
@@ -50,7 +66,9 @@ def _seed_catalog(persona_keys=PERSONA_KEYS) -> list[dict]:
 
 
 def _service() -> CompanionWorldService:
-    return CompanionWorldService(SqlCompanionWorldRepository())
+    return CompanionWorldService(
+        SqlCompanionWorldRepository(registry=build_test_product_registry())
+    )
 
 
 def _messages(runtime_account_id: str) -> list[dict]:
@@ -180,7 +198,7 @@ def test_intro_content_registry_covers_every_shipped_persona():
 
 def test_client_sees_welcome_message_and_mission_display_end_to_end(client, fresh_db):
     """客户端视角：确认后会话里已有欢迎语，居民 DTO 带 mission_display、不带 persona_key。"""
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     phone = "19930001004"
     verification = db.create_phone_verification(
@@ -190,15 +208,15 @@ def test_client_sees_welcome_message_and_mission_display_end_to_end(client, fres
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     login = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": token}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": token}
     ).json()
     headers = {"Authorization": f"Bearer {login['access_token']}"}
 
-    boot = client.post("/v1/worlds/home/bootstrap", headers=headers).json()["data"]
+    boot = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).json()["data"]
     # 司辰是 rank 5，落在候选目录最后一位。
     sichen = boot["candidates"][4]
     confirmed = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": sichen["template_id"]}]},
     )
@@ -209,21 +227,21 @@ def test_client_sees_welcome_message_and_mission_display_end_to_end(client, fres
     assert "persona_key" not in resident
 
     messages = client.get(
-        f"/v1/ai-conversations/{resident['conversation_id']}/messages",
+        f"/api/v1/products/mingchan/ai-conversations/{resident['conversation_id']}/messages",
         headers=headers,
     ).json()["data"]["messages"]
     assert [item["role"] for item in messages] == ["assistant"]
     assert messages[0]["text"] == RESIDENT_INTRO_CONTENT["sichen"].welcome_message
 
     # 会话列表拿它当预览与未读，避免出现「有居民但列表空白」的首屏。
-    item = client.get("/v1/conversations", headers=headers).json()["data"]["items"][0]
+    item = client.get("/api/v1/products/mingchan/conversations", headers=headers).json()["data"]["items"][0]
     assert item["last_preview"] == RESIDENT_INTRO_CONTENT["sichen"].welcome_message
     assert item["unread"] == 1
     assert item["last_message_at"] is not None
 
     # 自我介绍动态出现在主人的世界 Feed 里，作者是居民本人。
-    fresh_db.companion_world_feed_enabled = True
-    feed = client.get("/v1/worlds/home/feed", headers=headers).json()["data"]["items"]
+    fresh_db.mingchan_feed_enabled = True
+    feed = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers).json()["data"]["items"]
     intro = [row for row in feed if row["source"] == "resident_intro"]
     assert len(intro) == 1
     assert intro[0]["author"]["type"] == "resident"

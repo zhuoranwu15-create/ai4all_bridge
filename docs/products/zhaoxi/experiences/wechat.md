@@ -3,8 +3,8 @@
 更新时间：2026-07-31
 
 适用范围：通过朝夕相伴官网完成手机号注册和微信扫码绑定，随后在微信一对一私聊中使用的
-陪伴体验。本文不描述 Native App 的 Companion World；App 开发入口见
-[客户端接入说明](../app_client_brief.md)。
+陪伴体验。本文不描述 Native App 的 Companion World；该产品见
+[鸣蝉文档](../../mingchan/README.md)。
 
 ## 1. 这是什么
 
@@ -68,13 +68,15 @@
 - 长期记忆的用户自助查看、纠错和删除能力尚未完整产品化。
 - 当前不支持用户自助更换手机号或完整账号找回；异常绑定需要联系运营处理。
 
-## 6. 与 Native App 的关系
+## 6. 与鸣蝉 Native App 的关系
 
-微信端和朝夕 Native App 属于同一个 `zhaoxi` 产品，但不是同一套界面或领域流程：
+微信端属于朝夕相伴（`zhaoxi`），原 Native App / Companion World 已拆为独立产品鸣蝉
+（`mingchan`）：
 
 - 微信端保持一位 AI Agent 的私聊陪伴体验。
-- Native App 提供 Companion World、多居民、Feed、信箱、访问和真人会话等产品能力。
-- 两种形态共享真人身份和部分平台能力，但会话、Agent 关系状态和产品领域数据按各自作用域管理。
+- 鸣蝉提供 Companion World、多居民、Feed、信箱、访问和真人会话等产品能力。
+- 两产品可共享真人 `platform_user` 和部分平台能力，但 membership、会话、Agent 关系状态、权益和
+  产品领域数据按 `app_id` 独立管理。
 
 ## 7. 数据与隐私说明
 

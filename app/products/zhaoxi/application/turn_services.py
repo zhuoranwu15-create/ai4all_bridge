@@ -13,7 +13,11 @@ from app.agent_runtime.turns.contracts import (
     ProductPromptContext,
     ProductSessionSetup,
 )
-from app.bootstrap.product_registry import ZHAOXI_APP_ID
+from app.bootstrap.product_registry import (
+    PRODUCTION_PRODUCT_REGISTRY,
+    ProductRegistry,
+    ZHAOXI_APP_ID,
+)
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
     get_account_onboarding_state,
@@ -110,6 +114,17 @@ class ZhaoxiTurnServices:
     onboarding_step3_sent = ONBOARDING_STEP3_SENT
     onboarding_complete = ONBOARDING_COMPLETE
     onboarding_welcome_text = product_message("onboarding_welcome")
+
+    def __init__(
+        self,
+        registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+    ) -> None:
+        """绑定可信产品注册表；Runtime 与计费共用同一产品启停上下文。"""
+
+        self.registry = registry
+        self.allowed_channels = registry.require_registered(
+            self.app_id
+        ).allowed_channels
 
     def localized_message(
         self,

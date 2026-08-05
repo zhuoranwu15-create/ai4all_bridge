@@ -9,11 +9,11 @@ import pytest
 
 import app.db as db
 from app.db._backend import is_postgres
-from app.products.zhaoxi.application.companion_world_visits import (
+from app.products.mingchan.application.visits import (
     CompanionWorldVisitService,
     VisitError,
 )
-from app.products.zhaoxi.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
+from app.products.mingchan.jobs.world_lifecycle.scheduler import WorldLifecycleScheduler
 
 NOW = datetime(2026, 7, 23, 12, 0, 0)
 
@@ -26,7 +26,7 @@ def _login(client, phone: str) -> tuple[dict, dict]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -43,14 +43,14 @@ def _confirm_world(platform_user_id: str) -> dict:
 
 def _enable(monkeypatch) -> None:
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world.settings.companion_world_p1_enabled", True
+        "app.products.mingchan.api.world.settings.mingchan_p1_enabled", True
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_visits.settings.companion_world_visits_enabled",
+        "app.products.mingchan.api.visits.settings.mingchan_visits_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_visits.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.visits.beijing_naive_now", lambda: NOW
     )
 
 
@@ -130,7 +130,7 @@ def _ai_post(owner_id: str, *, text: str = "居民今天说了句话。") -> dic
 
 
 def test_visit_flag_off_is_hidden(client):
-    response = client.post("/v1/world/invites")
+    response = client.post("/api/v1/products/mingchan/world/invites")
     assert response.status_code == 404
     assert response.headers["Cache-Control"] == "no-store"
     assert response.json()["code"] == "feature_disabled"
@@ -147,7 +147,7 @@ def test_invite_redeem_requires_owner_accept_and_accept_is_atomic(
     _confirm_world(owner_id)
     _confirm_world(visitor_id)
 
-    created = client.post("/v1/world/invites", headers=owner_headers)
+    created = client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers)
     assert created.status_code == 200, created.text
     invite = created.json()["data"]["invite"]
     assert len(invite["code"]) == 43
@@ -161,7 +161,7 @@ def test_invite_redeem_requires_owner_accept_and_accept_is_atomic(
     assert stored["code_prefix"] == invite["code"][:6]
 
     redeemed = client.post(
-        "/v1/visits/redeem",
+        "/api/v1/products/mingchan/visits/redeem",
         headers=visitor_headers,
         json={"code": invite["code"]},
     )
@@ -175,13 +175,13 @@ def test_invite_redeem_requires_owner_accept_and_accept_is_atomic(
         ).fetchone()["n"] == 0
 
     denied = client.post(
-        f"/v1/visits/{visit['visit_id']}/accept", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{visit['visit_id']}/accept", headers=visitor_headers
     )
     assert denied.status_code == 404
     assert denied.json()["code"] == "visit_not_found"
 
     accepted = client.post(
-        f"/v1/visits/{visit['visit_id']}/accept", headers=owner_headers
+        f"/api/v1/products/mingchan/visits/{visit['visit_id']}/accept", headers=owner_headers
     )
     assert accepted.status_code == 200, accepted.text
     accepted_data = accepted.json()["data"]
@@ -191,14 +191,14 @@ def test_invite_redeem_requires_owner_accept_and_accept_is_atomic(
     conversation_id = accepted_data["human_conversation_id"]
 
     replay = client.post(
-        f"/v1/visits/{visit['visit_id']}/accept", headers=owner_headers
+        f"/api/v1/products/mingchan/visits/{visit['visit_id']}/accept", headers=owner_headers
     )
     assert replay.status_code == 200
     assert replay.json()["data"]["human_conversation_id"] == conversation_id
     assert replay.json()["data"]["replayed"] is True
 
     left = client.post(
-        f"/v1/visits/{visit['visit_id']}/leave", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{visit['visit_id']}/leave", headers=visitor_headers
     )
     assert left.status_code == 200
     assert left.json()["data"]["visit"]["status"] == "left"
@@ -221,29 +221,29 @@ def test_self_redeem_pending_cancel_and_owner_isolation(client, fresh_db, monkey
     owner_id = owner_login["platform_user"]["id"]
     _confirm_world(owner_id)
 
-    first = client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+    first = client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers).json()["data"][
         "invite"
     ]
     self_redeem = client.post(
-        "/v1/visits/redeem", headers=owner_headers, json={"code": first["code"]}
+        "/api/v1/products/mingchan/visits/redeem", headers=owner_headers, json={"code": first["code"]}
     )
     assert self_redeem.status_code == 403
     assert self_redeem.json()["code"] == "self_invite_not_allowed"
 
     redeemed = client.post(
-        "/v1/visits/redeem", headers=visitor_headers, json={"code": first["code"]}
+        "/api/v1/products/mingchan/visits/redeem", headers=visitor_headers, json={"code": first["code"]}
     ).json()["data"]["visit"]
     rejected_by_visitor = client.post(
-        f"/v1/visits/{redeemed['visit_id']}/reject", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{redeemed['visit_id']}/reject", headers=visitor_headers
     )
     assert rejected_by_visitor.status_code == 404
     cancelled = client.post(
-        f"/v1/visits/{redeemed['visit_id']}/cancel", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{redeemed['visit_id']}/cancel", headers=visitor_headers
     )
     assert cancelled.status_code == 200
     assert cancelled.json()["data"]["visit"]["status"] == "cancelled"
 
-    replacement = client.post("/v1/world/invites", headers=owner_headers)
+    replacement = client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers)
     assert replacement.status_code == 200
 
 
@@ -253,41 +253,41 @@ def test_world_three_slots_are_hard_cap_and_revoke_releases_slot(
     _enable(monkeypatch)
     headers, login = _login(client, "19965103001")
     _confirm_world(login["platform_user"]["id"])
-    invites = [client.post("/v1/world/invites", headers=headers) for _ in range(3)]
+    invites = [client.post("/api/v1/products/mingchan/world/invites", headers=headers) for _ in range(3)]
     assert all(response.status_code == 200 for response in invites)
-    full = client.post("/v1/world/invites", headers=headers)
+    full = client.post("/api/v1/products/mingchan/world/invites", headers=headers)
     assert full.status_code == 409
     assert full.json()["code"] == "world_visit_limit_reached"
 
     invite_id = invites[0].json()["data"]["invite"]["invite_id"]
-    revoked = client.delete(f"/v1/world/invites/{invite_id}", headers=headers)
+    revoked = client.delete(f"/api/v1/products/mingchan/world/invites/{invite_id}", headers=headers)
     assert revoked.status_code == 200
     assert revoked.json()["data"]["invite"]["status"] == "revoked"
-    assert client.post("/v1/world/invites", headers=headers).status_code == 200
+    assert client.post("/api/v1/products/mingchan/world/invites", headers=headers).status_code == 200
 
 
 def test_redeem_uses_db_backed_user_rate_limit(client, fresh_db, monkeypatch):
     _enable(monkeypatch)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_visits._REDEEM_USER_RPM", 1
+        "app.products.mingchan.api.visits._REDEEM_USER_RPM", 1
     )
     owner_headers, owner_login = _login(client, "19965103501")
     visitor_headers, _visitor_login = _login(client, "19965103502")
     _confirm_world(owner_login["platform_user"]["id"])
     invites = [
-        client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+        client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers).json()["data"][
             "invite"
         ]
         for _ in range(2)
     ]
     first = client.post(
-        "/v1/visits/redeem",
+        "/api/v1/products/mingchan/visits/redeem",
         headers=visitor_headers,
         json={"code": invites[0]["code"]},
     )
     assert first.status_code == 200
     limited = client.post(
-        "/v1/visits/redeem",
+        "/api/v1/products/mingchan/visits/redeem",
         headers=visitor_headers,
         json={"code": invites[1]["code"]},
     )
@@ -341,26 +341,26 @@ def test_visitor_feed_is_active_visit_only_and_published_projection(
     owner_id = owner_login["platform_user"]["id"]
     _confirm_world(owner_id)
     post = _publish(owner_id)
-    created = client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+    created = client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers).json()["data"][
         "invite"
     ]
     pending = client.post(
-        "/v1/visits/redeem",
+        "/api/v1/products/mingchan/visits/redeem",
         headers=visitor_headers,
         json={"code": created["code"]},
     ).json()["data"]["visit"]
 
     pending_feed = client.get(
-        f"/v1/visits/{pending['visit_id']}/feed", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{pending['visit_id']}/feed", headers=visitor_headers
     )
     assert pending_feed.status_code == 409
     assert pending_feed.json()["code"] == "visit_not_active"
     assert client.post(
-        f"/v1/visits/{pending['visit_id']}/accept", headers=owner_headers
+        f"/api/v1/products/mingchan/visits/{pending['visit_id']}/accept", headers=owner_headers
     ).status_code == 200
 
     feed = client.get(
-        f"/v1/visits/{pending['visit_id']}/feed", headers=visitor_headers
+        f"/api/v1/products/mingchan/visits/{pending['visit_id']}/feed", headers=visitor_headers
     )
     assert feed.status_code == 200, feed.text
     assert [item["post_id"] for item in feed.json()["data"]["items"]] == [post["id"]]
@@ -373,10 +373,10 @@ def test_visitor_feed_is_active_visit_only_and_published_projection(
         "request_fingerprint",
     }.intersection(item)
     assert client.get(
-        f"/v1/visits/{pending['visit_id']}/feed", headers=owner_headers
+        f"/api/v1/products/mingchan/visits/{pending['visit_id']}/feed", headers=owner_headers
     ).status_code == 404
     assert client.get(
-        f"/v1/visits/{pending['visit_id']}/feed", headers=outsider_headers
+        f"/api/v1/products/mingchan/visits/{pending['visit_id']}/feed", headers=outsider_headers
     ).status_code == 404
 
 
@@ -390,26 +390,26 @@ def test_owner_retire_hides_post_from_active_visitor_immediately(
     以后谁给访客 Feed 换查询都会在这里断。
     """
     _enable(monkeypatch)
-    fresh_db.companion_world_feed_enabled = True
+    fresh_db.mingchan_feed_enabled = True
     owner_headers, owner_login = _login(client, "19965104801")
     visitor_headers, _visitor_login = _login(client, "19965104802")
     owner_id = owner_login["platform_user"]["id"]
     _confirm_world(owner_id)
     human_post = _publish(owner_id)
     ai_post = _ai_post(owner_id)
-    code = client.post("/v1/world/invites", headers=owner_headers).json()["data"][
+    code = client.post("/api/v1/products/mingchan/world/invites", headers=owner_headers).json()["data"][
         "invite"
     ]["code"]
     visit_id = client.post(
-        "/v1/visits/redeem", headers=visitor_headers, json={"code": code}
+        "/api/v1/products/mingchan/visits/redeem", headers=visitor_headers, json={"code": code}
     ).json()["data"]["visit"]["visit_id"]
     assert client.post(
-        f"/v1/visits/{visit_id}/accept", headers=owner_headers
+        f"/api/v1/products/mingchan/visits/{visit_id}/accept", headers=owner_headers
     ).status_code == 200
 
     def _visitor_post_ids() -> list[str]:
         response = client.get(
-            f"/v1/visits/{visit_id}/feed", headers=visitor_headers, params={"limit": 50}
+            f"/api/v1/products/mingchan/visits/{visit_id}/feed", headers=visitor_headers, params={"limit": 50}
         )
         assert response.status_code == 200, response.text
         return [item["post_id"] for item in response.json()["data"]["items"]]
@@ -417,12 +417,12 @@ def test_owner_retire_hides_post_from_active_visitor_immediately(
     assert set(_visitor_post_ids()) == {human_post["id"], ai_post["id"]}
 
     deleted = client.delete(
-        f"/v1/worlds/home/feed/posts/{human_post['id']}", headers=owner_headers
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{human_post['id']}", headers=owner_headers
     )
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["data"]["status"] == "deleted"
     hidden = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide", headers=owner_headers
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide", headers=owner_headers
     )
     assert hidden.status_code == 200, hidden.text
     assert hidden.json()["data"]["status"] == "hidden"
@@ -704,3 +704,6 @@ def test_pg_block_vs_reverse_redeem_finishes_fail_closed(fresh_db):
     assert db.list_open_universe_visits_between(
         first_platform_user_id=first, second_platform_user_id=second
     ) == []
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

@@ -1053,7 +1053,8 @@ def debug_chat_web_search(
 
     turn_payload = OpenClawTurnRequest(
         message_id=f"debug-web-search-chat-{uuid.uuid4().hex[:12]}",
-        channel="debug-web-search",
+        # 调试入口不伪装成 Native 产品渠道；unknown 是朝夕注册表允许的内部渠道。
+        channel="unknown",
         channel_account_id=account_id,
         account_id=account_id,
         sender_id="web-search-debug",

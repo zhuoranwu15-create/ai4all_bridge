@@ -5,14 +5,14 @@ from datetime import datetime
 import pytest
 
 import app.db as db
-from app.products.zhaoxi.domain.companion_world import user_post_fingerprint
-from app.products.zhaoxi.jobs.world_content import (
+from app.products.mingchan.domain.companion_world import user_post_fingerprint
+from app.products.mingchan.jobs.world_content import (
     FeedWindows,
     WorldContentScheduler,
     dispatch_world_outbox_batch,
     generate_ai_feed_batch,
 )
-from app.products.zhaoxi.jobs.world_content.scheduler import _run_metrics
+from app.products.mingchan.jobs.world_content.scheduler import _run_metrics
 from tests.factories import make_resident_account
 
 

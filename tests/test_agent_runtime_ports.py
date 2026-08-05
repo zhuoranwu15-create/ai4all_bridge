@@ -121,3 +121,50 @@ def test_runtime_requires_explicit_matching_product_services(monkeypatch):
 
     assert result.status == "disabled"
     assert result.metadata["reason"] == "product_service_mismatch"
+
+
+def test_runtime_rejects_product_channel_mismatch_before_database(monkeypatch):
+    """产品不允许的渠道必须在账号读取和消息副作用前失败。"""
+
+    import pytest
+
+    from app.agent_runtime.turns.service import ChannelTurnInput, run_product_turn
+    from app.platform.auth.identity import ResolvedIdentity
+    from app.platform.channels import CHANNELS, CHANNEL_WEIXIN
+
+    identity = ResolvedIdentity(
+        ai4all_account_id="acc-mingchan-weixin",
+        session_key="weixin:test",
+        channel=CHANNEL_WEIXIN,
+        channel_account_id="bot-test",
+        sender_id="user-test",
+        chat_id="chat-test",
+    )
+    ctx = ChannelTurnInput(
+        account_id="acc-mingchan-weixin",
+        app_id="mingchan",
+        cap=CHANNELS[CHANNEL_WEIXIN],
+        identity=identity,
+        message_id="msg-test",
+        event_id=None,
+        message_type="text",
+        text="hello",
+        media=None,
+        raw={},
+        sender_name=None,
+    )
+    monkeypatch.setattr(
+        "app.agent_runtime.turns.service.get_account_product_access",
+        lambda **_: pytest.fail("渠道错配必须在数据库访问前拒绝"),
+    )
+
+    result = run_product_turn(
+        ctx,
+        product_services=SimpleNamespace(
+            app_id="mingchan",
+            allowed_channels=("native",),
+        ),
+    )
+
+    assert result.status == "disabled"
+    assert result.metadata["reason"] == "product_channel_mismatch"

@@ -4,17 +4,26 @@ import json
 import pytest
 
 import app.db as db
-from app.products.zhaoxi.domain.companion_world import (
+from app.bootstrap.product_registry import build_test_product_registry
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
     ResidentSelection,
     TemplateDraft,
 )
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
+from app.products.mingchan.application import SqlCompanionWorldRepository
 
 
 def _user(phone: str) -> str:
-    return db.create_or_get_platform_user_by_phone(phone=phone, display_name="用户")["id"]
+    platform_user_id = db.create_or_get_platform_user_by_phone(
+        phone=phone, display_name="用户"
+    )["id"]
+    db.ensure_product_membership(
+        platform_user_id=platform_user_id,
+        app_id="mingchan",
+        registry=build_test_product_registry(),
+    )
+    return platform_user_id
 
 
 def _seed(rank: int) -> str:
@@ -44,7 +53,9 @@ def _seed_catalog() -> list[dict]:
 
 
 def _service() -> CompanionWorldService:
-    return CompanionWorldService(SqlCompanionWorldRepository())
+    return CompanionWorldService(
+        SqlCompanionWorldRepository(registry=build_test_product_registry())
+    )
 
 
 def test_bootstrap_snapshots_four_candidates_and_is_idempotent(fresh_db):
@@ -144,7 +155,7 @@ def test_conversation_failure_rolls_back_account_profile_and_activation(
         raise RuntimeError("forced conversation failure")
 
     monkeypatch.setattr(
-        "app.products.zhaoxi.infrastructure.repositories.companion_world.world_db.create_ai_conversation",
+        "app.products.mingchan.infrastructure.world_repository.world_db.create_ai_conversation",
         _fail_conversation,
     )
     with pytest.raises(RuntimeError, match="forced conversation failure"):
@@ -247,93 +258,6 @@ def test_confirmed_world_enforces_capacity_without_leaving_orphans(fresh_db):
         ).fetchone()["c"] == 0
 
 
-def test_repository_legacy_primitives_preserve_existing_runtime(fresh_db):
-    user_id = _user("19920001008")
-    account_id = db.create_ai4all_account_for_user(
-        platform_user_id=user_id, display_name="存量角色"
-    )["account"]["id"]
-    repository = SqlCompanionWorldRepository()
-    with repository.transaction() as tx:
-        world = tx.get_or_create_home_universe(user_id)
-        world = tx.lock_universe(world.id)
-        assert tuple(tx.list_active_legacy_account_ids(user_id)) == (account_id,)
-        resident = tx.ensure_legacy_resident(world, account_id)
-        world = tx.mark_legacy_world(world.id, account_id)
-
-    assert resident.runtime_account_id == account_id
-    assert resident.origin == "legacy"
-    assert world.legacy_primary_account_id == account_id
-    with db.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) c FROM accounts").fetchone()["c"] == 1
-
-
-# ---------------------------------------------------------------------------
-# D-A（2026-07-26）：微信老用户在 App 侧按新用户走选择角色页，并带入既有角色。
-# ---------------------------------------------------------------------------
-def test_legacy_user_bootstrap_carries_in_wechat_resident_and_still_selects(fresh_db):
-    _seed_catalog()
-    user_id = _user("19920002001")
-    account_id = db.create_ai4all_account_for_user(
-        platform_user_id=user_id, display_name="微信上的小满"
-    )["account"]["id"]
-
-    result = _service().bootstrap_home(user_id)
-
-    # 老用户不再被直接推进 confirmed：照样进选择页、照样拿四位候选。
-    assert result.world.onboarding_state == "selecting"
-    assert len(result.candidates) == 4
-    assert all(item.origin == "preset" for item in result.candidates)
-    # 微信角色作为已 active 的居民带入，且不出现在候选里（不可被叉掉）。
-    assert len(result.residents) == 1
-    carried = result.residents[0]
-    assert carried.origin == "legacy"
-    assert carried.status == "active"
-    assert carried.runtime_account_id == account_id
-    assert carried.name == "微信上的小满"
-    # legacy primary 锚必须落库：微信侧主动消息路由依赖它。
-    assert result.world.legacy_primary_account_id == account_id
-    # 不新建 runtime account，复用微信侧既有账号。
-    with db.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) c FROM accounts").fetchone()["c"] == 1
-
-
-def test_legacy_carry_in_falls_back_to_default_display_name(fresh_db):
-    """微信侧没起过名的账号，在 App 里显示产品默认名而不是哨兵串。"""
-    _seed_catalog()
-    user_id = _user("19920002002")
-    account_id = db.create_ai4all_account_for_user(
-        platform_user_id=user_id, display_name="占位"
-    )["account"]["id"]
-    # 模拟从未在微信 onboarding 里给 AI 起过名字的老账号。
-    with db.connect() as conn:
-        conn.execute(
-            "UPDATE profiles SET display_name = NULL WHERE account_id = ?", (account_id,)
-        )
-        conn.commit()
-
-    result = _service().bootstrap_home(user_id)
-
-    assert [item.name for item in result.residents] == ["来自微信的Bot"]
-
-
-def test_legacy_user_bootstrap_is_idempotent(fresh_db):
-    _seed_catalog()
-    user_id = _user("19920002003")
-    db.create_ai4all_account_for_user(platform_user_id=user_id, display_name="存量角色")
-
-    first = _service().bootstrap_home(user_id)
-    second = _service().bootstrap_home(user_id)
-
-    assert [item.resident_id for item in first.residents] == [
-        item.resident_id for item in second.residents
-    ]
-    assert len(second.candidates) == 4
-    with db.connect() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) c FROM universe_residents WHERE origin='legacy'"
-        ).fetchone()["c"] == 1
-
-
 def test_new_user_bootstrap_has_no_carried_resident(fresh_db):
     _seed_catalog()
     user_id = _user("19920002004")
@@ -341,24 +265,8 @@ def test_new_user_bootstrap_has_no_carried_resident(fresh_db):
     result = _service().bootstrap_home(user_id)
 
     assert result.world.onboarding_state == "selecting"
-    assert result.world.legacy_primary_account_id is None
     assert result.residents == ()
     assert len(result.candidates) == 4
-
-
-def test_legacy_user_can_confirm_after_dismissing_every_preset(fresh_db):
-    """Q2：带入的微信角色占名额、算「至少保留一位」，所以可以零选择确认。"""
-    _seed_catalog()
-    user_id = _user("19920002005")
-    db.create_ai4all_account_for_user(platform_user_id=user_id, display_name="存量角色")
-    service = _service()
-    service.bootstrap_home(user_id)
-
-    residents = service.confirm_residents(user_id, [])
-
-    assert [item.origin for item in residents] == ["legacy"]
-    world = SqlCompanionWorldRepository().get_home_universe(user_id)
-    assert world.onboarding_state == "confirmed"
 
 
 def test_new_user_cannot_confirm_with_empty_selection(fresh_db):

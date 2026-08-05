@@ -2,16 +2,16 @@
 
 更新时间：2026-07-31
 状态：**已完成并归档。S1–S6 已合入 `main` 并上线。** 当前能力以
-[`companion_world_app_prd.md`](../../../products/zhaoxi/capabilities/companion_world_app_prd.md) 和
-[`app_api_handoff.md`](../../../products/zhaoxi/app_api_handoff.md) 为准；第三方数据处置、
+[`companion_world_app_prd.md`](../../../products/mingchan/capabilities/companion_world_app_prd.md) 和
+[`app_api_handoff.md`](../../../products/mingchan/app_api_handoff.md) 为准；第三方数据处置、
 `sample_dialogue` 与灰度能力等剩余项已转入
-[`companion_world_app_followups.md`](../../../backlog/products/zhaoxi/companion_world_app_followups.md)。
+[`companion_world_app_followups.md`](../../../backlog/products/mingchan/companion_world_app_followups.md)。
 
 > 归属：`product:zhaoxi`。
 > 输入：客户端仓库《Companion World M1 服务端需求积压 V0.2》与《AI 陪伴 App 私人平行世界 PRD V1.1》
 > （原件冻结在 [`archive/alignments/`](../../alignments/companion_world_m1_server_requirements_v0_2_client.md)）。
-> 产品口径：[朝夕相伴 App 端 PRD](../../../products/zhaoxi/capabilities/companion_world_app_prd.md)。
-> 技术权威：[Companion World 3.0 ADR](../../../architecture/products/zhaoxi/companion_world_3_0_refactor_design.md)。
+> 产品口径：[朝夕相伴 App 端 PRD](../../../products/mingchan/capabilities/companion_world_app_prd.md)。
+> 技术权威：[Companion World 3.0 ADR](../../../architecture/products/mingchan/companion_world_3_0_refactor_design.md)。
 > 评审基线：`main@7d0943d`，当前最大迁移号 `m0046`。
 
 ---
@@ -398,7 +398,7 @@ mailbox（`companion_world_mailbox.py:53-57`）**都已**转成 `+08:00`。
 **ERR-002（服务端自查，M1 前必修）**：`_validation_error_handler`（`:667-690`）
 只对 `/v1/worlds/`、`/v1/conversations` 等**旧前缀**生效。但产品路由同时挂在三个前缀
 （`manifest.py:16-22`）：`/v1`、`/api/v1/products/zhaoxi`、`/v1/products/zhaoxi`。
-客户端如果按 [`app_client_brief.md`](../../../products/zhaoxi/app_client_brief.md)
+客户端如果按 [`app_client_brief.md`](../../../products/mingchan/app_client_brief.md)
 的推荐使用**规范前缀**，422 校验失败会拿到 FastAPI 默认的 `{"detail": [...]}` 而不是
 统一信封 —— 即「推荐路径」的错误形状与「兼容路径」不一致。
 

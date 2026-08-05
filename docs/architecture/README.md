@@ -15,7 +15,7 @@
 ## 当前关键专题
 
 - [多产品模块化单体](shared/data/multi_product_modular_monolith_design.md)
-- [系统 3.0 / Companion World](products/zhaoxi/companion_world_3_0_refactor_design.md)
+- [系统 3.0 / Companion World](products/mingchan/companion_world_3_0_refactor_design.md)
 - [身份模型与微信绑定](shared/access/identity_model_and_wechat_binding.md)
 - [Conversation Orchestrator](agent-runtime/conversation_orchestrator_design.md)
 - [主动消息与提醒](products/zhaoxi/proactive_messaging_design.md)

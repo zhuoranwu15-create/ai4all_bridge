@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import json
 from datetime import datetime
 from io import BytesIO
@@ -25,8 +27,8 @@ from app.platform.media.persistence import (
     mark_media_assets_referenced,
 )
 from app.platform.moderation.models import MachineReviewResult
-from app.products.zhaoxi.infrastructure.persistence import companion_world as world_db
-from app.products.zhaoxi.jobs.media_moderation import review_pending_media_job
+from app.products.mingchan.infrastructure.persistence import companion_world as world_db
+from app.products.mingchan.jobs.media_moderation import review_pending_media_job
 
 BASE_URL = "https://media.example.com"
 # 真人会话链路（邀请码/来访/会话）要求一个固定"现在"，与 S2 会话媒体测试同一取值。
@@ -269,7 +271,7 @@ def _login(client, phone: str) -> tuple[dict, str]:
         verification["id"], token_expires_minutes=10
     )["verified_token"]
     response = client.post(
-        "/v1/auth/session", json={"phone": phone, "verified_token": verified}
+        "/api/v1/products/mingchan/auth/session", json={"phone": phone, "verified_token": verified}
     )
     assert response.status_code == 200, response.text
     payload = response.json()
@@ -308,7 +310,7 @@ def _jpeg() -> bytes:
 
 def _upload_image(client, headers) -> str:
     response = client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": ("photo.jpg", _jpeg(), "image/jpeg")},
         data={"kind": "image"},
@@ -319,32 +321,32 @@ def _upload_image(client, headers) -> str:
 
 def _enable_app_media(fresh_db, monkeypatch) -> None:
     """打开 P1 与三条写入路径的媒体位（上传门控读 api.media 模块自己的 settings）。"""
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
-    fresh_db.companion_world_chat_image_enabled = True
-    fresh_db.companion_world_feed_image_enabled = True
-    for module in ("app.products.zhaoxi.api.media", "app.products.zhaoxi.api.companion_world"):
-        monkeypatch.setattr(f"{module}.settings.companion_world_feed_image_enabled", True)
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
+    fresh_db.mingchan_chat_image_enabled = True
+    fresh_db.mingchan_feed_image_enabled = True
+    for module in ("app.products.mingchan.api.media", "app.products.mingchan.api.world"):
+        monkeypatch.setattr(f"{module}.settings.mingchan_feed_image_enabled", True)
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.media.settings.companion_world_chat_image_enabled", True
+        "app.products.mingchan.api.media.settings.mingchan_chat_image_enabled", True
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.settings."
-        "companion_world_human_chat_enabled",
+        "app.products.mingchan.api.human_chat.settings."
+        "mingchan_human_chat_enabled",
         True,
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.api.companion_world_human_chat.beijing_naive_now", lambda: NOW
+        "app.products.mingchan.api.human_chat.beijing_naive_now", lambda: NOW
     )
 
 
 def _send_ai_conversation_image(client, headers, *, client_message_id) -> str:
     """在 AI 居民会话里发一张图，返回 media_id。"""
-    candidates = client.post("/v1/worlds/home/bootstrap", headers=headers).json()["data"][
+    candidates = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).json()["data"][
         "candidates"
     ]
     confirmed = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": candidates[0]["template_id"]}]},
     )
@@ -352,7 +354,7 @@ def _send_ai_conversation_image(client, headers, *, client_message_id) -> str:
     conversation_id = confirmed.json()["data"]["residents"][0]["conversation_id"]
     media_id = _upload_image(client, headers)
     turn = client.post(
-        f"/v1/ai-conversations/{conversation_id}/turn",
+        f"/api/v1/products/mingchan/ai-conversations/{conversation_id}/turn",
         headers=headers,
         json={
             "client_message_id": client_message_id,
@@ -368,7 +370,7 @@ def _send_human_chat_image(
     client, owner_headers, owner_id: str, visitor_id: str, *, client_message_id: str
 ) -> str:
     """在真人会话里发一张图（主人发出），返回 media_id。"""
-    from app.products.zhaoxi.application.companion_world_visits import (
+    from app.products.mingchan.application.visits import (
         CompanionWorldVisitService,
     )
 
@@ -380,7 +382,7 @@ def _send_human_chat_image(
     conversation = service.accept(owner_id, visit_id=visit["id"], now=NOW)["conversation"]
     media_id = _upload_image(client, owner_headers)
     sent = client.post(
-        f"/v1/human-conversations/{conversation['id']}/messages",
+        f"/api/v1/products/mingchan/human-conversations/{conversation['id']}/messages",
         headers=owner_headers,
         json={"client_message_id": client_message_id, "media_ref": media_id},
     )
@@ -405,9 +407,12 @@ def test_ai_conversation_image_enters_review_queue(client, fresh_db, monkeypatch
 
     assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "pending"
     # 结案走同一条批处理；会话图只落结论、不撤回（D-7）。
-    _stub_review(monkeypatch, _result("pass"))
+    calls = _stub_review(monkeypatch, _result("pass"))
     reset_media_moderation_throttle()
     assert review_pending_media_job()["passed"] == 1
+    assert calls[0]["image_url"].startswith(
+        f"{BASE_URL}/api/v1/products/mingchan/media/{media_id}?"
+    )
     assert get_media_asset_unscoped(media_id=media_id)["moderation_status"] == "passed"
 
 
@@ -451,7 +456,7 @@ def test_no_write_path_queues_images_when_public_base_url_is_missing(
     )
     feed_media_id = _upload_image(client, headers)
     published = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={
             "client_request_id": "moderation-gate-001",
@@ -471,25 +476,25 @@ def test_rejected_feed_image_retires_post_and_hides_it_from_owner_feed(
     client, fresh_db, monkeypatch
 ):
     """端到端：发带图动态 → 机审判红线 → 动态终态下架、主人 Feed 立刻不可见。"""
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
-    fresh_db.companion_world_feed_image_enabled = True
-    for module in ("app.products.zhaoxi.api.media", "app.products.zhaoxi.api.companion_world"):
-        monkeypatch.setattr(f"{module}.settings.companion_world_feed_image_enabled", True)
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
+    fresh_db.mingchan_feed_image_enabled = True
+    for module in ("app.products.mingchan.api.media", "app.products.mingchan.api.world"):
+        monkeypatch.setattr(f"{module}.settings.mingchan_feed_image_enabled", True)
     _configure_moderation(fresh_db)
 
     _seed_catalog()
     headers, platform_user_id = _login(client, "19911150001")
-    candidates = client.post("/v1/worlds/home/bootstrap", headers=headers).json()["data"][
+    candidates = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).json()["data"][
         "candidates"
     ]
     client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": candidates[0]["template_id"]}]},
     )
     upload = client.post(
-        "/v1/media/uploads",
+        "/api/v1/products/mingchan/media/uploads",
         headers=headers,
         files={"file": ("photo.jpg", _jpeg(), "image/jpeg")},
         data={"kind": "image"},
@@ -497,7 +502,7 @@ def test_rejected_feed_image_retires_post_and_hides_it_from_owner_feed(
     assert upload.status_code == 200, upload.text
     media_id = upload.json()["data"]["media_id"]
     published = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={
             "client_request_id": "moderation-001",
@@ -520,7 +525,7 @@ def test_rejected_feed_image_retires_post_and_hides_it_from_owner_feed(
     )
     assert row["status"] == "deleted"
     assert row["terminal_reason"] == "moderation"
-    feed = client.get("/v1/worlds/home/feed", headers=headers)
+    feed = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers)
     assert [item["post_id"] for item in feed.json()["data"]["items"]] == []
     # 下架事件进了 outbox，端上按既有 deleted 事件同步。
     from app.db._core import _tx
@@ -537,31 +542,44 @@ def test_rejected_feed_image_retires_post_and_hides_it_from_owner_feed(
 
 
 def test_scheduler_tick_reports_moderation_and_isolates_its_failure(fresh_db):
-    """调度接线：机审结果落在 ``media_moderation`` 键上，且它炸了不拖垮整个 tick。"""
+    """鸣蝉 lifecycle 接管机审维护，单步失败不拖垮整个 tick。"""
     import asyncio
 
-    from app.products.zhaoxi.proactive.orchestration.scheduler import (
-        run_proactive_scheduler_once,
+    from app.products.mingchan.jobs.world_lifecycle.scheduler import (
+        WorldLifecycleScheduler,
     )
 
-    result = asyncio.run(
-        run_proactive_scheduler_once(
-            batch_size=1,
-            review_pending_media=lambda: {"status": "disabled", "scanned": 0},
-        )
+    scheduler = WorldLifecycleScheduler(
+        enabled=False,
+        interval_seconds=60,
+        batch_size=1,
+        maintenance_enabled=True,
+        cleanup_notifications=lambda **_: {"deleted": 0},
+        reclaim_media=lambda **_: {"deleted": 0},
+        review_pending_media=lambda **_: {"status": "disabled", "scanned": 0},
     )
-    assert result["media_moderation"] == {"status": "disabled", "scanned": 0}
+    result = asyncio.run(scheduler.run_once())
+    assert result["maintenance_metrics"]["media_moderation"] == {
+        "status": "disabled",
+        "scanned": 0,
+    }
 
-    def _boom():
+    def _boom(**_kwargs):
         raise RuntimeError("aliyun down")
 
-    failed = asyncio.run(
-        run_proactive_scheduler_once(batch_size=1, review_pending_media=_boom)
+    failed_scheduler = WorldLifecycleScheduler(
+        enabled=False,
+        interval_seconds=60,
+        batch_size=1,
+        maintenance_enabled=True,
+        cleanup_notifications=lambda **_: {"deleted": 0},
+        reclaim_media=lambda **_: {"deleted": 0},
+        review_pending_media=_boom,
     )
+    failed = asyncio.run(failed_scheduler.run_once())
     assert failed["status"] == "partial_error"
     assert "aliyun down" in failed["errors"]["media_moderation"]
-    # 未注入时该键为空 dict，不是 None——运维读日志/返回体的形状恒定。
-    assert asyncio.run(run_proactive_scheduler_once(batch_size=1))["media_moderation"] == {}
+    assert failed["maintenance_metrics"]["media_moderation"] == {}
 
 
 def test_rejected_chat_image_only_records_verdict(fresh_db, monkeypatch):
@@ -576,3 +594,6 @@ def test_rejected_chat_image_only_records_verdict(fresh_db, monkeypatch):
     assert get_media_asset_unscoped(media_id="media_chat_block")["moderation_status"] == "rejected"
     # 不在 Feed 上 → 反查为空，回调只记日志，不抛错、不影响结案。
     assert world_db.find_post_owner_by_media_id(media_id="media_chat_block") is None
+@pytest.fixture
+def client(mingchan_client):
+    return mingchan_client

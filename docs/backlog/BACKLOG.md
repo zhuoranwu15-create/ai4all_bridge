@@ -79,7 +79,7 @@
 | ID | 优先级 | 状态 | 条目 | 来源 |
 |---|---|---|---|---|
 | OB-1 | P2 | 🔴 | 绑定后 bot 主动问候(Path A)常失效(拿不到用户 wxid);调研 wxid 回填能否实现「绑定即主动问候」,当前退化为用户先开口(Path B) | [`products/zhaoxi/onboarding_welcome_wxid_followup.md`](products/zhaoxi/onboarding_welcome_wxid_followup.md) |
-| CW-1 | 待分级 | 🔴 | Companion World M1/M2/v1.5 上线后的产品决策、契约债与运维闭环 | [`products/zhaoxi/companion_world_app_followups.md`](products/zhaoxi/companion_world_app_followups.md) |
+| CW-1 | 待分级 | 🔴 | Companion World M1/M2/v1.5 上线后的产品决策、契约债与运维闭环 | [`products/mingchan/companion_world_app_followups.md`](products/mingchan/companion_world_app_followups.md) |
 
 ## 5. 已完成存档
 

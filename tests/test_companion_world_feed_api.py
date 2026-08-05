@@ -4,7 +4,16 @@ M2 追加：主人删除自己的动态（FEED-MGMT-001）与隐藏 AI 居民动
 """
 import json
 
+import pytest
+
 import app.db as db
+
+
+@pytest.fixture
+def client(mingchan_client):
+    """使用已启用鸣蝉注册表的隔离测试客户端。"""
+
+    return mingchan_client
 
 
 def _verified_token(phone: str) -> str:
@@ -16,7 +25,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> tuple[dict, dict]:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -46,16 +55,16 @@ def _seed_catalog() -> None:
 
 
 def _ready_world(client, fresh_db, phone: str, *, seed: bool = False):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
     if seed:
         _seed_catalog()
     headers, login = _login(client, phone)
     candidates = client.post(
-        "/v1/worlds/home/bootstrap", headers=headers
+        "/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers
     ).json()["data"]["candidates"]
     response = client.post(
-        "/v1/worlds/home/residents/confirm",
+        "/api/v1/products/mingchan/worlds/home/residents/confirm",
         headers=headers,
         json={"selections": [{"template_id": candidates[0]["template_id"]}]},
     )
@@ -100,31 +109,31 @@ def _ai_post(owner_id: str, *, text: str = "居民今天说了句话。", slot: 
 
 
 def _feed_post_ids(client, headers) -> list[str]:
-    response = client.get("/v1/worlds/home/feed", headers=headers, params={"limit": 50})
+    response = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers, params={"limit": 50})
     assert response.status_code == 200, response.text
     return [item["post_id"] for item in response.json()["data"]["items"]]
 
 
 def test_feed_requires_both_p1_and_feed_flags(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    response = client.get("/v1/worlds/home/feed")
+    fresh_db.mingchan_p1_enabled = True
+    response = client.get("/api/v1/products/mingchan/worlds/home/feed")
     assert response.status_code == 404
     assert response.json()["code"] == "feature_disabled"
     assert response.headers["Cache-Control"] == "no-store"
 
-    fresh_db.companion_world_p1_enabled = False
-    fresh_db.companion_world_feed_enabled = True
-    response = client.get("/v1/worlds/home/feed")
+    fresh_db.mingchan_p1_enabled = False
+    fresh_db.mingchan_feed_enabled = True
+    response = client.get("/api/v1/products/mingchan/worlds/home/feed")
     assert response.status_code == 404
     assert response.json()["code"] == "feature_disabled"
 
 
 def test_feed_rejects_unconfirmed_world(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
-    fresh_db.companion_world_feed_enabled = True
+    fresh_db.mingchan_p1_enabled = True
+    fresh_db.mingchan_feed_enabled = True
     headers, _ = _login(client, "19962001001")
     response = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={"client_request_id": "feed_req_1001", "text": "世界还没准备好"},
     )
@@ -135,10 +144,10 @@ def test_feed_rejects_unconfirmed_world(client, fresh_db):
 def test_feed_publish_replay_conflict_and_public_dto(client, fresh_db):
     headers, _ = _ready_world(client, fresh_db, "19962001002", seed=True)
     body = {"client_request_id": "feed_req_1002", "text": "  今天心情很好。  "}
-    first = client.post("/api/v1/worlds/home/feed/posts", headers=headers, json=body)
-    replay = client.post("/v1/worlds/home/feed/posts", headers=headers, json=body)
+    first = client.post("/api/v1/products/mingchan/worlds/home/feed/posts", headers=headers, json=body)
+    replay = client.post("/api/v1/products/mingchan/worlds/home/feed/posts", headers=headers, json=body)
     conflict = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={"client_request_id": "feed_req_1002", "text": "换一段正文"},
     )
@@ -170,7 +179,7 @@ def test_feed_cursor_is_stable_and_invalid_cursor_fails(client, fresh_db):
     created_ids = set()
     for index in range(3):
         response = client.post(
-            "/v1/worlds/home/feed/posts",
+            "/api/v1/products/mingchan/worlds/home/feed/posts",
             headers=headers,
             json={
                 "client_request_id": f"feed_req_20{index:02d}",
@@ -186,7 +195,7 @@ def test_feed_cursor_is_stable_and_invalid_cursor_fails(client, fresh_db):
         params = {"limit": 1}
         if cursor:
             params["cursor"] = cursor
-        page = client.get("/v1/worlds/home/feed", headers=headers, params=params)
+        page = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers, params=params)
         assert page.status_code == 200, page.text
         data = page.json()["data"]
         assert len(data["items"]) == 1
@@ -196,7 +205,7 @@ def test_feed_cursor_is_stable_and_invalid_cursor_fails(client, fresh_db):
     assert cursor is None
 
     invalid = client.get(
-        "/v1/worlds/home/feed", headers=headers, params={"cursor": "not-base64!"}
+        "/api/v1/products/mingchan/worlds/home/feed", headers=headers, params={"cursor": "not-base64!"}
     )
     assert invalid.status_code == 400
     assert invalid.json()["code"] == "invalid_cursor"
@@ -208,24 +217,24 @@ def test_feed_isolated_by_platform_user_and_rejects_client_owner_fields(
     headers_a, _ = _ready_world(client, fresh_db, "19962001004", seed=True)
     headers_b, _ = _ready_world(client, fresh_db, "19962001005")
     post_a = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers_a,
         json={"client_request_id": "feed_req_3001", "text": "只属于甲"},
     )
     post_b = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers_b,
         json={"client_request_id": "feed_req_3002", "text": "只属于乙"},
     )
     assert post_a.status_code == post_b.status_code == 201
 
-    list_a = client.get("/v1/worlds/home/feed", headers=headers_a).json()["data"]["items"]
-    list_b = client.get("/v1/worlds/home/feed", headers=headers_b).json()["data"]["items"]
+    list_a = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers_a).json()["data"]["items"]
+    list_b = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers_b).json()["data"]["items"]
     assert [item["content"]["text"] for item in list_a] == ["只属于甲"]
     assert [item["content"]["text"] for item in list_b] == ["只属于乙"]
 
     forbidden = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers_a,
         json={
             "client_request_id": "feed_req_3003",
@@ -234,7 +243,7 @@ def test_feed_isolated_by_platform_user_and_rejects_client_owner_fields(
         },
     )
     whitespace = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers_a,
         json={"client_request_id": "feed_req_3004", "text": "   "},
     )
@@ -248,10 +257,10 @@ def test_feed_isolated_by_platform_user_and_rejects_client_owner_fields(
 
 
 def test_feed_management_requires_both_p1_and_feed_flags(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     for response in (
-        client.delete("/v1/worlds/home/feed/posts/post_x"),
-        client.post("/v1/worlds/home/feed/posts/post_x/hide", json={}),
+        client.delete("/api/v1/products/mingchan/worlds/home/feed/posts/post_x"),
+        client.post("/api/v1/products/mingchan/worlds/home/feed/posts/post_x/hide", json={}),
     ):
         assert response.status_code == 404
         assert response.json()["code"] == "feature_disabled"
@@ -261,13 +270,13 @@ def test_feed_management_requires_both_p1_and_feed_flags(client, fresh_db):
 def test_owner_deletes_own_post_and_replay_is_idempotent(client, fresh_db):
     headers, _ = _ready_world(client, fresh_db, "19962001006", seed=True)
     created = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={"client_request_id": "feed_req_4001", "text": "这条我要删掉"},
     )
     post_id = created.json()["data"]["post"]["post_id"]
 
-    first = client.delete(f"/v1/worlds/home/feed/posts/{post_id}", headers=headers)
+    first = client.delete(f"/api/v1/products/mingchan/worlds/home/feed/posts/{post_id}", headers=headers)
     assert first.status_code == 200, first.text
     assert first.headers["Cache-Control"] == "no-store"
     # 冻结 DTO 字段集：response_model 会过滤未声明字段，多一个少一个都要在这里显形。
@@ -279,7 +288,7 @@ def test_owner_deletes_own_post_and_replay_is_idempotent(client, fresh_db):
     assert _feed_post_ids(client, headers) == []
 
     # IDEM-002 回归：重放不复用首次时间戳，必须仍是 200 且标记 replayed。
-    replay = client.delete(f"/v1/worlds/home/feed/posts/{post_id}", headers=headers)
+    replay = client.delete(f"/api/v1/products/mingchan/worlds/home/feed/posts/{post_id}", headers=headers)
     assert replay.status_code == 200, replay.text
     assert replay.json()["data"] == {
         "post_id": post_id,
@@ -299,7 +308,7 @@ def test_owner_hides_ai_post_without_touching_resident_lifecycle(client, fresh_d
     owner_id = login["platform_user"]["id"]
     ai_post = _ai_post(owner_id)
     mine = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={"client_request_id": "feed_req_4002", "text": "我的动态要留着"},
     ).json()["data"]["post"]["post_id"]
@@ -314,7 +323,7 @@ def test_owner_hides_ai_post_without_touching_resident_lifecycle(client, fresh_d
         )
 
     hidden = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
     )
     assert hidden.status_code == 200, hidden.text
     assert hidden.headers["Cache-Control"] == "no-store"
@@ -326,7 +335,7 @@ def test_owner_hides_ai_post_without_touching_resident_lifecycle(client, fresh_d
     assert _feed_post_ids(client, headers) == [mine]
 
     replay = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
     )
     assert replay.status_code == 200
     assert replay.json()["data"]["replayed"] is True
@@ -348,18 +357,18 @@ def test_delete_and_hide_do_not_cross_author_types(client, fresh_db):
     owner_id = login["platform_user"]["id"]
     ai_post = _ai_post(owner_id)
     mine = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers,
         json={"client_request_id": "feed_req_4003", "text": "我的动态"},
     ).json()["data"]["post"]["post_id"]
 
     # AI 动态必须走隐藏语义，不能被当成用户内容删除。
     wrong_delete = client.delete(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}", headers=headers
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}", headers=headers
     )
     # 自己的动态删就是删，不能用隐藏语义处理。
     wrong_hide = client.post(
-        f"/v1/worlds/home/feed/posts/{mine}/hide", headers=headers, json={}
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{mine}/hide", headers=headers, json={}
     )
     assert wrong_delete.status_code == 404
     assert wrong_delete.json()["code"] == "post_not_found"
@@ -380,7 +389,7 @@ def test_hide_rejects_farewell_post(client, fresh_db):
         )
 
     response = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide", headers=headers, json={}
     )
     assert response.status_code == 409
     assert response.json()["code"] == "post_not_hideable"
@@ -392,20 +401,20 @@ def test_retire_is_owner_scoped_and_rejects_unknown_ids(client, fresh_db):
     headers_b, _ = _ready_world(client, fresh_db, "19962001011")
     ai_post_a = _ai_post(login_a["platform_user"]["id"])
     post_a = client.post(
-        "/v1/worlds/home/feed/posts",
+        "/api/v1/products/mingchan/worlds/home/feed/posts",
         headers=headers_a,
         json={"client_request_id": "feed_req_4004", "text": "甲的动态"},
     ).json()["data"]["post"]["post_id"]
 
     cross_delete = client.delete(
-        f"/v1/worlds/home/feed/posts/{post_a}", headers=headers_b
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{post_a}", headers=headers_b
     )
     cross_hide = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post_a['id']}/hide", headers=headers_b, json={}
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post_a['id']}/hide", headers=headers_b, json={}
     )
-    missing = client.delete("/v1/worlds/home/feed/posts/post_does_not_exist", headers=headers_a)
+    missing = client.delete("/api/v1/products/mingchan/worlds/home/feed/posts/post_does_not_exist", headers=headers_a)
     malformed = client.delete(
-        "/v1/worlds/home/feed/posts/not%20a%20valid%20id", headers=headers_a
+        "/api/v1/products/mingchan/worlds/home/feed/posts/not%20a%20valid%20id", headers=headers_a
     )
 
     for response in (cross_delete, cross_hide, missing, malformed):
@@ -420,13 +429,13 @@ def test_hide_rejects_client_supplied_fields(client, fresh_db):
     ai_post = _ai_post(login["platform_user"]["id"])
     # 自带下架原因/居民状态一律 422：原因由服务端按语义硬编码，客户端不参与。
     reason = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide",
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide",
         headers=headers,
         json={"reason_code": "attacker"},
     )
     # 注入世界/账号锚点走既有的 400 口径（ERROR-001），与发帖一致。
     anchor = client.post(
-        f"/v1/worlds/home/feed/posts/{ai_post['id']}/hide",
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{ai_post['id']}/hide",
         headers=headers,
         json={"universe_id": "uni_attacker"},
     )
@@ -442,7 +451,7 @@ def test_feed_cursor_survives_deletion_mid_pagination(client, fresh_db):
     ids = []
     for index in range(3):
         response = client.post(
-            "/v1/worlds/home/feed/posts",
+            "/api/v1/products/mingchan/worlds/home/feed/posts",
             headers=headers,
             json={
                 "client_request_id": f"feed_req_50{index:02d}",
@@ -451,19 +460,19 @@ def test_feed_cursor_survives_deletion_mid_pagination(client, fresh_db):
         )
         ids.append(response.json()["data"]["post"]["post_id"])
 
-    first = client.get("/v1/worlds/home/feed", headers=headers, params={"limit": 1})
+    first = client.get("/api/v1/products/mingchan/worlds/home/feed", headers=headers, params={"limit": 1})
     cursor = first.json()["data"]["next_cursor"]
     seen = [first.json()["data"]["items"][0]["post_id"]]
 
     # 翻页途中删掉「还没翻到」的一条：keyset cursor 不移位，续用旧游标既不重复也不错页。
     victim = next(post_id for post_id in ids if post_id not in seen)
     assert client.delete(
-        f"/v1/worlds/home/feed/posts/{victim}", headers=headers
+        f"/api/v1/products/mingchan/worlds/home/feed/posts/{victim}", headers=headers
     ).status_code == 200
 
     while cursor:
         page = client.get(
-            "/v1/worlds/home/feed",
+            "/api/v1/products/mingchan/worlds/home/feed",
             headers=headers,
             params={"limit": 1, "cursor": cursor},
         )

@@ -10,12 +10,13 @@ import json
 import pytest
 
 import app.db as db
-from app.products.zhaoxi.application import SqlCompanionWorldRepository
-from app.products.zhaoxi.domain.companion_world import (
+from app.bootstrap.product_registry import build_test_product_registry
+from app.products.mingchan.application import SqlCompanionWorldRepository
+from app.products.mingchan.domain.companion_world import (
     CompanionWorldService,
     ResidentSelection,
 )
-from app.products.zhaoxi.domain.companion_world.naming import (
+from app.products.mingchan.domain.companion_world.naming import (
     NAMING_STATUS_READY,
     NAMING_STATUS_UNAVAILABLE,
     NamePoolError,
@@ -28,8 +29,23 @@ from scripts.import_companion_world_presets import import_presets, validate_mani
 _POOL = ("小满", "阿棠", "青禾", "林间")
 
 
+@pytest.fixture
+def client(mingchan_client):
+    """使用已启用鸣蝉注册表的隔离测试客户端。"""
+
+    return mingchan_client
+
+
 def _user(phone: str) -> str:
-    return db.create_or_get_platform_user_by_phone(phone=phone, display_name="用户")["id"]
+    platform_user_id = db.create_or_get_platform_user_by_phone(
+        phone=phone, display_name="用户"
+    )["id"]
+    db.ensure_product_membership(
+        platform_user_id=platform_user_id,
+        app_id="mingchan",
+        registry=build_test_product_registry(),
+    )
+    return platform_user_id
 
 
 def _seed(rank: int) -> str:
@@ -67,7 +83,9 @@ def _seed_catalog(*, with_pool: bool = True) -> list[dict]:
 
 
 def _service() -> CompanionWorldService:
-    return CompanionWorldService(SqlCompanionWorldRepository())
+    return CompanionWorldService(
+        SqlCompanionWorldRepository(registry=build_test_product_registry())
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +147,7 @@ def test_select_suggested_name_is_stable_across_processes():
     import sys
 
     snippet = (
-        "from app.products.zhaoxi.domain.companion_world.naming import select_suggested_name;"
+        "from app.products.mingchan.domain.companion_world.naming import select_suggested_name;"
         "print(select_suggested_name(universe_id='uni_a', template_id='tmpl_1',"
         f" name_pool={list(_POOL)!r}, name_pool_version='np_v1'))"
     )
@@ -237,7 +255,7 @@ def _verified_token(phone: str) -> str:
 
 def _login(client, phone: str) -> dict:
     response = client.post(
-        "/v1/auth/session",
+        "/api/v1/products/mingchan/auth/session",
         json={"phone": phone, "verified_token": _verified_token(phone)},
     )
     assert response.status_code == 200, response.text
@@ -245,10 +263,10 @@ def _login(client, phone: str) -> dict:
 
 
 def test_candidate_dto_exposes_naming_fields_without_persona(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     headers = _login(client, "19940001007")
-    first = client.post("/v1/worlds/home/bootstrap", headers=headers)
+    first = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers)
     assert first.status_code == 200, first.text
     candidate = first.json()["data"]["candidates"][0]
     assert candidate["suggested_display_name"] in _POOL
@@ -260,15 +278,15 @@ def test_candidate_dto_exposes_naming_fields_without_persona(client, fresh_db):
     assert "persona_seed_json" not in first.text and "resident_id" not in first.text
 
     # 换设备/重装 = 重新 bootstrap + 重新拉候选，两处返回必须与首次完全一致。
-    again = client.get("/v1/worlds/home/resident-candidates", headers=headers)
+    again = client.get("/api/v1/products/mingchan/worlds/home/resident-candidates", headers=headers)
     assert again.json()["data"]["candidates"][0] == candidate
 
 
 def test_candidate_dto_reports_unavailable_when_pool_missing(client, fresh_db):
-    fresh_db.companion_world_p1_enabled = True
+    fresh_db.mingchan_p1_enabled = True
     _seed_catalog(with_pool=False)
     headers = _login(client, "19940001008")
-    response = client.post("/v1/worlds/home/bootstrap", headers=headers)
+    response = client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers)
     assert response.status_code == 200, response.text
     for candidate in response.json()["data"]["candidates"]:
         assert candidate["suggested_display_name"] is None

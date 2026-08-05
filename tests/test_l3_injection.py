@@ -8,10 +8,10 @@ system prompt（build_turn_llm_input 直测 + run_turn_for_account 端到端）�
 from unittest.mock import patch
 
 import app.db as db
-from app.products.zhaoxi.domain.companion_world.l3_context import (
+from app.products.mingchan.domain.companion_world.l3_context import (
     render_universe_l3_block,
 )
-from app.products.zhaoxi.application.companion_world_turn import read_companion_world_context
+from app.products.mingchan.application.companion_world_turn import read_companion_world_context
 from app.prompt_builder import ContextBlock
 
 _MARKER = "MARKER_L3_XYZ"
@@ -79,7 +79,7 @@ def test_l3_background_switch_disables_read(fresh_db, monkeypatch):
         payload_json='{"name":"不应注入"}', occurred_at="2026-07-21 10:02:00",
     )
     monkeypatch.setattr(
-        "app.products.zhaoxi.application.companion_world_turn.settings.companion_world_l3_background_enabled",
+        "app.products.mingchan.application.companion_world_turn.settings.mingchan_l3_background_enabled",
         False,
     )
     assert read_companion_world_context(world["id"]) is None

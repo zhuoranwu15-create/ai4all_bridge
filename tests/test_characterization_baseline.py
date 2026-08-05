@@ -90,9 +90,9 @@ def _two_accounts_of_one_user() -> tuple:
     user = db.create_or_get_platform_user_by_phone(
         phone="13800009001", display_name="多号用户"
     )
-    a1 = db.create_ai4all_account_for_user(
-        platform_user_id=user["id"], display_name="居民甲"
-    )["account"]["id"]
+    a1 = factories.make_user_account(
+        user["id"], "居民甲", app_id="mingchan"
+    )
     a2 = factories.make_resident_account(user["id"], "居民乙")
     assert a1 != a2
     assert (
@@ -133,7 +133,7 @@ def test_multi_account_shared_wallet_and_single_grant_per_person(fresh_db):
     assert len(active_wallets) == 1
     # 全部居民共用一份余额 → 该真人只赠一次，幂等键按 platform_user。
     assert len(grant_rows) == 1
-    assert grant_rows[0]["idempotency_key"] == f"new-user-grant-{user_id}"
+    assert grant_rows[0]["idempotency_key"] == f"new-user-grant-mingchan-{user_id}"
     assert int(grant_rows[0]["amount_shell_micros"]) == NEW_USER_GRANT_SHELL_MICROS
 
 

@@ -4,7 +4,7 @@ import pytest
 import app.db as db
 from app.db._backend import is_postgres
 from app.db._core import _MIGRATIONS, _migration_0033_companion_world_m3_content
-from app.products.zhaoxi.domain.companion_world import user_post_fingerprint
+from app.products.mingchan.domain.companion_world import user_post_fingerprint
 
 
 _M3_TABLES = (
@@ -26,6 +26,7 @@ def _world_with_resident(phone: str, name: str):
         universe_id=world["id"],
         character_template_id=template["id"],
         display_name=name,
+        app_id="zhaoxi",
     )
     db.set_universe_onboarding_state(
         universe_id=world["id"], onboarding_state="confirmed"

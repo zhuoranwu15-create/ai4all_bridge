@@ -1,8 +1,13 @@
 # AI4ALL 多产品服务技术总平面
 
-更新时间：2026-06-06
+更新时间：2026-08-04
 
 > **定位（2026-07-25 校正）：** 本文是跨产品的详细技术基线；当前生产产品为朝夕相伴，Phase 1 是其已完成里程碑。共享数据与身份隔离以 [多产品 ADR](shared/data/multi_product_modular_monolith_design.md) 为准，产品需求见 [`../products/`](../products/README.md)。其中 **§7 工作包摘要**仅作历史参考，不再更新；当前现状与近期队列见 [`STATUS.md`](../STATUS.md)。
+>
+> **产品边界校正（2026-08-04）：** 原朝夕 Native App / Companion World 已决议拆为独立产品鸣蝉
+>（`app_id=mingchan`）；朝夕（`zhaoxi`）保留微信/OpenClaw 与 Web/H5 接入。本文早期章节如把
+> App/World 记作朝夕形态，均以[核心模型](core-model.md)和[拆分计划](../plans/shared/zhaoxi_mingchan_product_split_plan.md)
+> 的新边界为准。
 
 ## 1. 文档定位
 

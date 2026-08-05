@@ -388,6 +388,50 @@ def test_settings(tmp_path, db_dsn):
     s.companion_world_wish_daily_max = 10
     s.companion_world_wish_job_lease_seconds = 600
     s.companion_world_wish_retry_seconds = 3600
+    # 鸣蝉代码统一读取新命名；旧字段继续供迁移前朝夕测试使用。MagicMock 不会执行
+    # Settings 的兼容属性映射，因此两组测试默认值需在替身上显式对齐。
+    s.mingchan_p1_enabled = False
+    s.mingchan_asset_base_url = ""
+    s.mingchan_l3_background_enabled = True
+    s.mingchan_proactive_safety_enabled = True
+    s.mingchan_feed_enabled = False
+    s.mingchan_feed_morning_start = "09:00"
+    s.mingchan_feed_morning_end = "11:00"
+    s.mingchan_feed_evening_start = "18:00"
+    s.mingchan_feed_evening_end = "21:00"
+    s.mingchan_feed_scheduler_interval_seconds = 60.0
+    s.mingchan_feed_scheduler_batch_size = 20
+    s.mingchan_feed_claim_lease_seconds = 300
+    s.mingchan_feed_retry_max_attempts = 3
+    s.mingchan_feed_retry_base_seconds = 30
+    s.mingchan_outbox_batch_size = 50
+    s.mingchan_outbox_claim_lease_seconds = 300
+    s.mingchan_outbox_max_attempts = 5
+    s.mingchan_app_inbox_enabled = False
+    s.mingchan_app_only_human_proactive_enabled = False
+    s.mingchan_notification_cleanup_batch_size = 100
+    s.mingchan_lifecycle_evaluation_enabled = False
+    s.mingchan_lifecycle_commit_enabled = False
+    s.mingchan_mailbox_enabled = False
+    s.mingchan_lifecycle_inactivity_days = 60
+    s.mingchan_lifecycle_evidence_window_days = 30
+    s.mingchan_lifecycle_mismatch_min_events = 3
+    s.mingchan_lifecycle_mismatch_min_span_days = 14
+    s.mingchan_lifecycle_cooldown_days = 7
+    s.mingchan_lifecycle_crisis_freeze_days = 30
+    s.mingchan_mailbox_delivery_cooldown_days = 30
+    s.mingchan_mailbox_letter_ttl_days = 30
+    s.mingchan_mailbox_manifest_hmac_secret = ""
+    s.mingchan_lifecycle_scheduler_interval_seconds = 300.0
+    s.mingchan_lifecycle_scheduler_batch_size = 50
+    s.mingchan_visits_enabled = False
+    s.mingchan_human_chat_enabled = False
+    s.mingchan_chat_image_enabled = False
+    s.mingchan_chat_voice_enabled = False
+    s.mingchan_feed_image_enabled = False
+    s.mingchan_wish_daily_max = 10
+    s.mingchan_wish_job_lease_seconds = 600
+    s.mingchan_wish_retry_seconds = 3600
     # v1.5 媒体地基：数值必须显式给，MagicMock 的 __int__ 恒为 1，否则 /app/config 的限额
     # 会静默变成 1 字节、契约测试也失去意义。签名密钥给固定测试值，与生产的"留空即报错"无关。
     s.media_storage_dir = str(tmp_path / "media")
@@ -477,23 +521,25 @@ def fresh_db(test_settings):
         patch("app.routers.health.settings", test_settings),
         patch("app.products.zhaoxi.api.bridge.settings", test_settings),
         patch("app.routers.web.settings", test_settings),
-        patch("app.products.zhaoxi.api.app.settings", test_settings),
-        patch("app.products.zhaoxi.api.companion_world.settings", test_settings),
-        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", test_settings),
-        patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", test_settings),
+        patch("app.products.mingchan.api.app.settings", test_settings),
+        patch("app.products.mingchan.api.human_chat.settings", test_settings),
+        patch("app.products.mingchan.api.media.settings", test_settings),
+        patch("app.products.mingchan.api.visits.settings", test_settings),
+        patch("app.products.mingchan.api.world.settings", test_settings),
+        patch("app.products.mingchan.api.mailbox.settings", test_settings),
+        patch("app.products.mingchan.api.resident_wishes.settings", test_settings),
         patch(
-            "app.products.zhaoxi.application.companion_world_resident_wishes.settings",
+            "app.products.mingchan.application.resident_wishes.settings",
             test_settings,
         ),
         # admin 侧 world 路由此前漏登记：它 from app.config import settings，未 patch 时读真实
         # settings，开发/生产机 .env 的 COMPANION_WORLD_LIFECYCLE_COMMIT_ENABLED=true 会泄漏进来，
         # 绕过 503 commit 门控使 approve 走到真实提交路径（本机 409、CI 无 .env 则 503 通过）。
-        patch("app.products.zhaoxi.api.admin_companion_world.settings", test_settings),
-        patch("app.products.zhaoxi.api.app_notifications.settings", test_settings),
+        patch("app.products.mingchan.api.admin_world.settings", test_settings),
+        patch("app.products.mingchan.api.notifications.settings", test_settings),
         patch("app.products.zhaoxi.api.creator_role_templates.settings", test_settings),
-        patch("app.products.zhaoxi.infrastructure.app_inbox.settings", test_settings),
-        patch("app.products.zhaoxi.infrastructure.repositories.companion_world.settings", test_settings),
-        patch("app.products.zhaoxi.proactive.contract.common.settings", test_settings),
+        patch("app.products.mingchan.infrastructure.app_inbox.settings", test_settings),
+        patch("app.products.mingchan.infrastructure.world_repository.settings", test_settings),
         patch("app.products.zhaoxi.proactive.delivery.outbound.settings", test_settings),
         patch("app.platform.media.asr.settings", test_settings),
         # v1.5 媒体：assets 决定落盘根目录（不 patch 会往仓库 data/media 写测试文件），
@@ -513,6 +559,9 @@ def fresh_db(test_settings):
         patch("app.products.zhaoxi.infrastructure.profiles.settings", test_settings),
         patch("app.products.zhaoxi.application.memory.dreaming.settings", test_settings),
         patch("app.products.zhaoxi.application.memory.session_lifecycle.settings", test_settings),
+        patch("app.products.mingchan.application.memory.settings", test_settings),
+        patch("app.products.mingchan.application.lifecycle.settings", test_settings),
+        patch("app.products.mingchan.application.mailbox.settings", test_settings),
         patch("app.products.zhaoxi.proactive.delivery.policy.settings", test_settings),
         patch("app.products.zhaoxi.proactive.orchestration.planning.settings", test_settings),
         patch("app.products.zhaoxi.proactive.store.candidates.settings", test_settings),
@@ -577,15 +626,19 @@ def client(fresh_db):
         patch("app.routers.health.settings", fresh_db),
         patch("app.products.zhaoxi.api.bridge.settings", fresh_db),
         patch("app.routers.web.settings", fresh_db),
-        patch("app.products.zhaoxi.api.app.settings", fresh_db),
-        patch("app.products.zhaoxi.api.companion_world.settings", fresh_db),
-        patch("app.products.zhaoxi.api.companion_world_mailbox.settings", fresh_db),
-        patch("app.products.zhaoxi.api.companion_world_resident_wishes.settings", fresh_db),
+        patch("app.products.mingchan.api.app.settings", fresh_db),
+        patch("app.products.mingchan.api.human_chat.settings", fresh_db),
+        patch("app.products.mingchan.api.media.settings", fresh_db),
+        patch("app.products.mingchan.api.visits.settings", fresh_db),
+        patch("app.products.mingchan.api.world.settings", fresh_db),
+        patch("app.products.mingchan.api.mailbox.settings", fresh_db),
+        patch("app.products.mingchan.api.resident_wishes.settings", fresh_db),
         patch(
-            "app.products.zhaoxi.application.companion_world_resident_wishes.settings",
+            "app.products.mingchan.application.resident_wishes.settings",
             fresh_db,
         ),
-        patch("app.products.zhaoxi.api.admin_companion_world.settings", fresh_db),
+        patch("app.products.mingchan.api.admin_world.settings", fresh_db),
+        patch("app.products.mingchan.api.notifications.settings", fresh_db),
         patch("app.platform.media.asr.settings", fresh_db),
         patch("app.products.zhaoxi.api.debug.settings", fresh_db),
         patch("app.products.zhaoxi.api.admin_moderation.settings", fresh_db),
@@ -608,6 +661,8 @@ def client(fresh_db):
         patch("app.platform.moderation.aliyun_alerting.settings", fresh_db),
         patch("app.platform.moderation.export.settings", fresh_db),
         patch("app.products.zhaoxi.application.memory.dreaming.settings", fresh_db),
+        patch("app.products.mingchan.application.lifecycle.settings", fresh_db),
+        patch("app.products.mingchan.application.mailbox.settings", fresh_db),
         patch("app.products.zhaoxi.jobs.user_meta.scheduler.settings", fresh_db),
         patch("app.products.zhaoxi.application.memory.session_lifecycle.settings", fresh_db),
         patch("app.products.zhaoxi.infrastructure.profiles.settings", fresh_db),
@@ -620,3 +675,42 @@ def client(fresh_db):
     yield TestClient(app)
     for p in patches:
         p.stop()
+
+
+@pytest.fixture
+def mingchan_client(fresh_db):
+    """只挂鸣蝉规范 namespace 的启用态测试客户端。"""
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.platform.quota.rate_limiter import RateLimiter
+
+    from app.bootstrap.product_registry import build_test_product_registry
+    from app.products.mingchan.manifest import install_admin_routes, install_public_routes
+
+    patches = [
+        patch("app.agent_runtime.turns.service.rate_limiter", RateLimiter()),
+        patch(
+            "app.agent_runtime.turns.service.generate_reply",
+            return_value="mock reply",
+        ),
+        patch(
+            "app.agent_runtime.turns.service.generate_reply_with_tools",
+            return_value=("mock reply", None),
+        ),
+    ]
+    for item in patches:
+        item.start()
+    try:
+        app = FastAPI()
+        install_public_routes(
+            app,
+            registry=build_test_product_registry(),
+            config=fresh_db,
+        )
+        install_admin_routes(app)
+        with TestClient(app) as test_client:
+            yield test_client
+    finally:
+        for item in reversed(patches):
+            item.stop()

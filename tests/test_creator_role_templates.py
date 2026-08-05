@@ -13,6 +13,7 @@ from app.db._core import (
     _migration_0013_campaign_codes,
     _migration_0059_creator_role_templates,
     _migration_0060_creator_role_template_opening_and_summary,
+    _migration_0062_mingchan_notification_product_scope,
 )
 from app.products.zhaoxi.domain.creator_role_templates import (
     AI_NAME_MAX_CHARS,
@@ -68,16 +69,16 @@ def _create(owner_id: str, suffix: str = ""):
     )
 
 
-def test_migration_60_schema_indexes_head_and_idempotency(fresh_db):
+def test_creator_role_schema_indexes_current_head_and_idempotency(fresh_db):
     assert _MIGRATIONS[-1] == (
-        60,
-        _migration_0060_creator_role_template_opening_and_summary,
+        62,
+        _migration_0062_mingchan_notification_product_scope,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 60
+        assert int(version) == 62
         for table in _TABLES:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 

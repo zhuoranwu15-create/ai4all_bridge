@@ -2635,7 +2635,7 @@ def insert_resident_runtime_account(
     display_name: str,
     system_prompt: str = "",
     initial_channel: str = "native",
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     soul_seed: Optional[str] = None,
     identity_seed: Optional[str] = None,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
@@ -2723,7 +2723,7 @@ def create_resident_runtime_account(
     origin: str = "preset",
     initial_channel: str = "native",
     joined_at: Optional[str] = None,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """建一个居民 runtime account（形态 B / M1-5 内部建号路径），返回 {account, profile, resident}。
@@ -2744,7 +2744,7 @@ def create_resident_runtime_account(
     docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md（冻结 = B）。
     """
     from app.db.accounts import get_account, get_profile_for_account
-    from app.products.zhaoxi.infrastructure.persistence.companion_world import create_resident
+    from app.db import create_resident
 
     with connect() as conn:
         # SQLite 的最外层 SAVEPOINT 在 RELEASE 时会提交；先显式开启外层事务，确保后续
