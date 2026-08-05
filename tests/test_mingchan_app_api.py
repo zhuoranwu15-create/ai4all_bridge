@@ -136,7 +136,8 @@ def test_mingchan_profile_validation_is_fail_closed(fresh_db):
 
 def test_disabled_mingchan_app_config_fails_closed(fresh_db):
     app = FastAPI()
-    install_public_routes(app, config=fresh_db)
+    registry = build_test_product_registry(mingchan_enabled=False)
+    install_public_routes(app, registry=registry, config=fresh_db)
 
     response = TestClient(app).get("/api/v1/products/mingchan/app/config")
 

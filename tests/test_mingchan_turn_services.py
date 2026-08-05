@@ -176,7 +176,7 @@ def test_mingchan_resident_turn_uses_own_product_services_and_shared_tools(
     ]
 
 
-def test_mingchan_production_disabled_registry_rejects_before_turn_side_effects(
+def test_mingchan_disabled_registry_rejects_before_turn_side_effects(
     fresh_db, monkeypatch
 ):
     scope, _registry = _resident_scope("13800037932")
@@ -197,6 +197,7 @@ def test_mingchan_production_disabled_registry_rejects_before_turn_side_effects(
         sender_name="鸣蝉用户",
         message_id="mingchan-disabled-turn",
         text="这条消息不能落库",
+        registry=build_test_product_registry(mingchan_enabled=False),
     )
 
     assert result.status == "disabled"

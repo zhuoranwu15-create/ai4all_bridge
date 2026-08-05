@@ -13,18 +13,21 @@ from app.bootstrap.product_registry import (
     build_test_product_registry,
 )
 from app.products.mingchan.application.identity import create_mingchan_login_session
-from app.products.mingchan.api.deps import _require_session as require_mingchan_session
+from app.products.mingchan.api.deps import build_mingchan_session_dependency
 from app.products.mingchan.infrastructure.accounts import (
     create_mingchan_resident_runtime_account,
 )
 from app.routers.deps import require_product_session
 
 
-def test_disabled_production_mingchan_dependency_loads_and_fails_closed(fresh_db):
+def test_disabled_mingchan_dependency_loads_and_fails_closed(fresh_db):
     """鸣蝉禁用时模块可以加载，但任何请求都在解析 token 前被拒绝。"""
 
     user = db.create_or_get_platform_user_by_phone(phone="13800037901")
     session = db.create_platform_user_session(platform_user_id=user["id"])
+    require_mingchan_session = build_mingchan_session_dependency(
+        build_test_product_registry(mingchan_enabled=False)
+    )
 
     with pytest.raises(HTTPException) as exc:
         require_mingchan_session(authorization=f"Bearer {session['token']}")
