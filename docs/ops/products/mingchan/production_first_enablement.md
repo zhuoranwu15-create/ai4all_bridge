@@ -10,12 +10,12 @@
 - 朝夕相伴继续使用 `app_id=zhaoxi`，保留 Web/H5、扫码、OpenClaw/微信和主动消息链路。
 - 鸣蝉是全新产品，使用 `app_id=mingchan` 与 `/api/v1/products/mingchan/*`；不迁移旧 App token、
   session、World、居民、消息、权益或客户端缓存。
-- `platform_users` 是跨产品真人身份，必须保留；cleanup 也不得删除 runtime account、账务、媒体或
-  任何可能绑定真实微信的朝夕资产。
+- `platform_users` 是跨产品真人身份。朝夕 legacy World、居民、runtime account、微信 binding、
+  消息、记忆、账务和媒体全部原地保留；鸣蝉依靠 `app_id` 隔离创建自己的 World。
 - 生产真实数据库是 PostgreSQL。禁止清空 `DATABASE_URL` 回落旧 SQLite 快照，禁止操作
   `data/ai4all.sqlite3`，禁止用只支持 SQLite 的 `scripts/restore_data.py` 恢复生产。
 - 当前 `PRODUCTION_PRODUCT_REGISTRY` 中鸣蝉是代码级 `enabled=False`，**不是环境变量开关**。首次发布
-  必须先暗部署当前禁用版本，完成 migration、cleanup 和朝夕回归；之后另做经过开发机验证的启用提交。
+  必须先暗部署当前禁用版本，完成 migration、保留型 precheck 和朝夕回归；之后另做经过开发机验证的启用提交。
   禁止直接在生产工作区把 `False` 改成 `True`。
 - 鸣蝉 scheduler 只允许在 aliyun1 central 单实例运行；aliyun2 不安装、不启动。新旧 World worker
   不能并行。
@@ -39,13 +39,13 @@
 | aliyun1 / aliyun2 当前 commit |  |
 | PostgreSQL 主库与 schema version |  |
 | 备份目录、dump 文件及完整性检查结果 |  |
-| cleanup plan 审核人 |  |
+| legacy 保留型 precheck 审核人 |  |
 | 发布执行人 / 回滚负责人 |  |
 | 鸣蝉测试手机号 |  |
 | Native App 测试版本 / 最低支持版本 |  |
 | 开始、结束、观察截止时间 |  |
 
-开发机交付结果应同时附上：SQLite/PG 全量测试、聚焦门禁、OpenAPI snapshot、cleanup 双后端演练、
+开发机交付结果应同时附上：SQLite/PG 全量测试、聚焦门禁、OpenAPI snapshot、双产品 World 隔离测试、
 代码变更清单和配置差异。当前基线见
 [拆分计划](../../../plans/shared/zhaoxi_mingchan_product_split_plan.md)。
 
@@ -54,7 +54,7 @@
 ### 3.1 准备两个不可混用的 commit
 
 1. **暗部署 commit**：即本次拆分提交，`app/bootstrap/product_registry.py` 中鸣蝉保持
-   `enabled=False`。它包含 schema、cleanup、API、代码拆分和 systemd 单元。
+   `enabled=False`。它包含 schema、隔离 precheck、API、代码拆分和 systemd 单元。
 2. **启用 commit**：仅在暗部署线上核验通过后，从暗部署 commit 创建；把生产注册表中的鸣蝉切为
    `enabled=True`，同步修改旁边的禁用说明，并在开发机重跑产品注册、manifest、API 和隔离聚焦测试。
 
@@ -147,7 +147,7 @@ PY
 scripts/restart_runtime.sh
 ```
 
-预期 schema version 为 `62`。如果 migration 失败，不得反复重跑或手改 migration 表；保留日志并中止。
+预期 schema version 为 `63`。如果 migration 失败，不得反复重跑或手改 migration 表；保留日志并中止。
 
 随后部署 aliyun2，同步相同 commit，并用 `scripts/restart_runtime.sh` 按 node-only 路径重启。两机都要
 通过 ready 检查。暗部署阶段鸣蝉仍应返回 `503`，且不得创建 membership/session：
@@ -159,49 +159,44 @@ curl -i https://ai4company.top/api/v1/products/mingchan/app/config
 同时完成朝夕最小回归：Web 注册页/API、现有微信账号被动回复、一个只读 Admin 查询。不要为了本次
 发布全局重启 OpenClaw。
 
-## 5. legacy App/World 数据 cleanup
+## 5. 保留 legacy 朝夕 World 的隔离验收
 
-cleanup 只在 aliyun1、暗部署版本、PostgreSQL 后端执行。脚本默认是只读 plan；不要传
-`sqlite:///...`，也不要把生产连接串复制到命令行。
+生产已有 legacy World 与微信老用户绑定，因此本次采用**原地保留**方案，不执行删除型 cleanup。
+验收只在 aliyun1、暗部署版本、PostgreSQL 后端执行；不要把生产连接串复制到命令行。
 
-### 5.1 只读 precheck 与 plan
+### 5.1 只读 precheck
 
 ```bash
 cd /opt/workspace/ai4all_bridge
 .venv/bin/python scripts/precheck_mingchan_clean_start.py
-.venv/bin/python scripts/cleanup_legacy_app_test_data.py
 ```
 
 人工核对输出：
 
-- `target_app_id` 必须是 `zhaoxi`；
-- `safe_to_apply` 必须是 `true`；
-- `protected_weixin_bindings=0`、`protected_non_app_messages=0`；
-- `mingchan_worlds_retained` 只作控制组，绝不能进入删除目标；
-- retention 必须明确保留 platform user、membership/账务、runtime account、无产品锚草稿、媒体和
-  鸣蝉数据；
-- legacy World/模板/通知数量必须与发布前登记一致，任何未知数据由业务负责人确认。
+- `mode=preserve_legacy_zhaoxi`、`schema_version=63`；
+- `product_owner_unique=true`、`safe_to_enable=true`；
+- `mingchan_counts` 中 World、模板、通知、membership、session、account 全为 `0`；
+- `legacy_counts_retained` 中 World/居民/微信 binding/消息计数必须与发布前登记一致；
+- retention 必须明确保留朝夕 World 子域、微信 binding、消息、记忆、账务、媒体和 runtime account。
 
-任一 blocker 非零、计数异常或真实用户归属不清时立即停止。不要绕过 `safe_to_apply`，不要改脚本或
-直接执行 SQL。
+任一鸣蝉计数非零、组合唯一契约缺失或朝夕计数异常时立即停止。不要为让检查通过而直接改表或删数据。
 
-### 5.2 apply 与 reconcile
+### 5.2 并存探针与朝夕基线复核
 
-至少两人复核 plan 和备份标识后执行一次：
+代码级 SQLite/PG 测试必须证明同一 `platform_user_id` 可同时拥有 `zhaoxi` 与 `mingchan` World，
+且鸣蝉 owner 查询和 scheduler 只扫描 `app_id=mingchan`。生产暗部署阶段鸣蝉仍 disabled，因此不在
+真实库创建探针 World；只复核 schema/index 与朝夕聚合基线。
 
 ```bash
-.venv/bin/python scripts/cleanup_legacy_app_test_data.py --apply
 .venv/bin/python scripts/precheck_mingchan_clean_start.py
-.venv/bin/python scripts/cleanup_legacy_app_test_data.py
 ```
 
 验收要求：
 
-- apply 自带 reconcile 成功，之后 plan 中 legacy World/resident/template/notification 为 0；
-- 二次只读 plan 不产生变化；不要在生产为了“测试幂等”再次执行 `--apply`；
-- 朝夕账号、微信 binding、messages、wallet、主动任务的基线计数无非预期变化；
-- 鸣蝉控制组、platform user、runtime account 和账务仍存在；
-- 如果 reconcile 不通过，立即停止后续启用，保存现场并按 §10 处理。
+- 两次 precheck 输出一致且完全只读；
+- 朝夕账号、World、居民、微信 binding、messages、memory、wallet、主动任务计数无变化；
+- PG 的 `universes(app_id, owner_platform_user_id)` 唯一索引存在，旧 owner 单列唯一约束已移除；
+- `scripts/cleanup_legacy_app_test_data.py --apply` 本次严禁执行；其 blocker 是保护证据，不是待绕过错误。
 
 ## 6. 安装新 scheduler 单元（先不启动）
 
@@ -226,8 +221,8 @@ aliyun2 没有这两个单元。
 
 确认以下条件全部满足后，才能部署 §3.1 的启用 commit：
 
-- 暗部署两机健康，schema version 为 62；
-- cleanup/reconcile 和朝夕回归通过；
+- 暗部署两机健康，schema version 为 63；
+- legacy 保留型 precheck 和朝夕回归通过；
 - Native App 测试构建已切 canonical namespace 并清除旧 token；
 - 核心环境变量和密钥已由双人复核；
 - 回滚负责人在线，观察窗口充足。
@@ -318,12 +313,12 @@ resident 明细。确认旧 `ai4all-weixin-world-*` 单元仍是 inactive/disabl
 
 ## 10. 中止与回滚
 
-### 10.1 cleanup 前或未启用时
+### 10.1 未启用时
 
 - migration、健康检查、朝夕回归或 precheck 任一失败：停止发布，鸣蝉保持 disabled。
 - additive schema 可以保留；不要删除 migration 记录。确需回退代码时部署“前一稳定 commit”，不要
   `git reset --hard`，并确认旧 App 写入口是否会重新出现。
-- 未执行 cleanup 时可以按标准代码回滚；已经 cleanup 后不得把流量切回旧朝夕 App 路由。
+- 本次没有 destructive cleanup；可以按标准代码回滚，但不得恢复旧朝夕 App 写入口。
 
 ### 10.2 启用后的业务异常
 
@@ -354,9 +349,9 @@ resident 明细。确认旧 `ai4all-weixin-world-*` 单元仍是 inactive/disabl
 ## 11. 严禁事项速查
 
 - 禁止线上手改 `product_registry.py` 或留下未提交文件。
-- 禁止绕过 cleanup blocker、手工拼 DELETE、删除 platform user/runtime account/账务。
+- 禁止执行 legacy cleanup `--apply`、绕过保护计数、手工拼 DELETE 或删除朝夕 World/居民/微信资产/账务。
 - 禁止把 `--database-url sqlite:///...` 当临时库；生产只允许 PostgreSQL。
 - 禁止在 aliyun2 启动鸣蝉 scheduler，禁止新旧 World worker 并行。
 - 禁止一次性打开全部高风险能力，尤其 lifecycle commit。
 - 禁止为本次发布全局重启 OpenClaw，禁止把 secret/token/手机号/正文贴进发布记录。
-- 禁止 cleanup 后回切旧朝夕 App API，禁止把旧 SQLite 快照当生产退路。
+- 禁止回切旧朝夕 App API，禁止把旧 SQLite 快照当生产退路。

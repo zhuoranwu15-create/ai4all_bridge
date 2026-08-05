@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
+from app.bootstrap.product_registry import MINGCHAN_APP_ID
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
@@ -70,8 +71,8 @@ def _lock_owner_world(
     suffix = " FOR UPDATE" if is_postgres() else ""
     row = tx.execute(
         "SELECT id, owner_platform_user_id, status, onboarding_state FROM universes "
-        "WHERE id = ? AND owner_platform_user_id = ?" + suffix,
-        (universe_id, owner_platform_user_id),
+        "WHERE id = ? AND owner_platform_user_id = ? AND app_id = ?" + suffix,
+        (universe_id, owner_platform_user_id, MINGCHAN_APP_ID),
     ).fetchone()
     if row is None:
         raise ValueError("visit universe ownership mismatch")
@@ -189,8 +190,10 @@ def get_universe_invite_for_owner(
     """按 invite id + owner 锚读取；跨 owner 返回 None。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM universe_invites WHERE id = ? AND owner_platform_user_id = ?",
-            (invite_id, owner_platform_user_id),
+            "SELECT i.* FROM universe_invites i "
+            "JOIN universes u ON u.id = i.universe_id "
+            "WHERE i.id = ? AND i.owner_platform_user_id = ? AND u.app_id = ?",
+            (invite_id, owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row else None
 
@@ -202,8 +205,10 @@ def get_universe_invite_by_code_hash(
     suffix = " FOR UPDATE" if for_update and is_postgres() else ""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM universe_invites WHERE code_hash = ?" + suffix,
-            (code_hash,),
+            "SELECT i.* FROM universe_invites i "
+            "JOIN universes u ON u.id = i.universe_id "
+            "WHERE i.code_hash = ? AND u.app_id = ?" + suffix,
+            (code_hash, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row else None
 
@@ -217,20 +222,21 @@ def list_universe_invites_for_owner(
 ) -> List[Dict[str, Any]]:
     """列出 owner 自己的 invite，绝不返回其他世界行。"""
     safe_limit = max(1, min(int(limit), 100))
-    params: list[Any] = [owner_platform_user_id]
-    where = ["owner_platform_user_id = ?"]
+    params: list[Any] = [owner_platform_user_id, MINGCHAN_APP_ID]
+    where = ["i.owner_platform_user_id = ?", "u.app_id = ?"]
     if statuses:
         cleaned = [status for status in statuses if status in _INVITE_STATUSES]
         if not cleaned:
             return []
-        where.append("status IN (" + ",".join("?" for _ in cleaned) + ")")
+        where.append("i.status IN (" + ",".join("?" for _ in cleaned) + ")")
         params.extend(cleaned)
     params.append(safe_limit)
     with _tx(conn) as tx:
         rows = tx.execute(
-            "SELECT * FROM universe_invites WHERE "
+            "SELECT i.* FROM universe_invites i "
+            "JOIN universes u ON u.id = i.universe_id WHERE "
             + " AND ".join(where)
-            + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            + " ORDER BY i.created_at DESC, i.id DESC LIMIT ?",
             tuple(params),
         ).fetchall()
     return [dict(row) for row in rows]
@@ -318,9 +324,11 @@ def count_open_universe_visits_for_visitor(
     """按 B 真人锚聚合 pending+active visit 数。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT COUNT(*) AS n FROM universe_visits "
-            "WHERE visitor_platform_user_id = ? AND status IN ('pending', 'active')",
-            (visitor_platform_user_id,),
+            "SELECT COUNT(*) AS n FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id "
+            "WHERE v.visitor_platform_user_id = ? AND u.app_id = ? "
+            "AND v.status IN ('pending', 'active')",
+            (visitor_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
     return int(row["n"] if row else 0)
 
@@ -334,9 +342,11 @@ def get_universe_visit_for_participant(
     """按 visit id + participant 锚读取；旁观者返回 None。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM universe_visits WHERE id = ? "
-            "AND (owner_platform_user_id = ? OR visitor_platform_user_id = ?)",
-            (visit_id, platform_user_id, platform_user_id),
+            "SELECT v.* FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id WHERE v.id = ? "
+            "AND (v.owner_platform_user_id = ? OR v.visitor_platform_user_id = ?) "
+            "AND u.app_id = ?",
+            (visit_id, platform_user_id, platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row else None
 
@@ -347,7 +357,10 @@ def get_universe_visit(
     """内部按 id 读取 visit；公开调用必须改用 participant-scoped 版本。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM universe_visits WHERE id = ?", (visit_id,)
+            "SELECT v.* FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id "
+            "WHERE v.id = ? AND u.app_id = ?",
+            (visit_id, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row else None
 
@@ -361,8 +374,11 @@ def list_universe_visits_for_participant(
 ) -> List[Dict[str, Any]]:
     """列出当前真人作为 owner 或 visitor 参与的 visits。"""
     safe_limit = max(1, min(int(limit), 100))
-    params: list[Any] = [platform_user_id, platform_user_id]
-    where = ["(v.owner_platform_user_id = ? OR v.visitor_platform_user_id = ?)"]
+    params: list[Any] = [platform_user_id, platform_user_id, MINGCHAN_APP_ID]
+    where = [
+        "(v.owner_platform_user_id = ? OR v.visitor_platform_user_id = ?)",
+        "u.app_id = ?",
+    ]
     if statuses:
         cleaned = [status for status in statuses if status in _VISIT_STATUSES]
         if not cleaned:
@@ -375,6 +391,7 @@ def list_universe_visits_for_participant(
             "SELECT v.*, owner.display_name AS owner_display_name, "
             "visitor.display_name AS visitor_display_name "
             "FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id "
             "JOIN platform_users owner ON owner.id = v.owner_platform_user_id "
             "JOIN platform_users visitor ON visitor.id = v.visitor_platform_user_id "
             "WHERE "
@@ -391,9 +408,11 @@ def list_due_universe_invites(
     """列出到期 active invites；调用方按 owner→world 锁序逐条终结。"""
     with _tx(conn) as tx:
         rows = tx.execute(
-            "SELECT * FROM universe_invites WHERE status = 'active' AND expires_at <= ? "
-            "ORDER BY expires_at ASC, id ASC LIMIT ?",
-            (now, max(1, min(int(limit), 500))),
+            "SELECT i.* FROM universe_invites i "
+            "JOIN universes u ON u.id = i.universe_id "
+            "WHERE i.status = 'active' AND i.expires_at <= ? AND u.app_id = ? "
+            "ORDER BY i.expires_at ASC, i.id ASC LIMIT ?",
+            (now, MINGCHAN_APP_ID, max(1, min(int(limit), 500))),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -404,12 +423,14 @@ def list_due_universe_visits(
     """列出到期 pending/active visits；调用方在锁内重查精确期限。"""
     with _tx(conn) as tx:
         rows = tx.execute(
-            "SELECT * FROM universe_visits WHERE "
-            "(status = 'pending' AND pending_expires_at <= ?) OR "
-            "(status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?) "
-            "ORDER BY CASE WHEN status = 'pending' THEN pending_expires_at ELSE expires_at END ASC, "
-            "id ASC LIMIT ?",
-            (now, now, max(1, min(int(limit), 500))),
+            "SELECT v.* FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id WHERE ("
+            "(v.status = 'pending' AND v.pending_expires_at <= ?) OR "
+            "(v.status = 'active' AND v.expires_at IS NOT NULL AND v.expires_at <= ?)) "
+            "AND u.app_id = ? "
+            "ORDER BY CASE WHEN v.status = 'pending' THEN v.pending_expires_at "
+            "ELSE v.expires_at END ASC, v.id ASC LIMIT ?",
+            (now, now, MINGCHAN_APP_ID, max(1, min(int(limit), 500))),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -423,11 +444,14 @@ def list_open_universe_visits_between(
     """列出两真人任一方向的 pending/active visits，供 block 强事务使用。"""
     with _tx(conn) as tx:
         rows = tx.execute(
-            "SELECT * FROM universe_visits WHERE status IN ('pending', 'active') AND "
-            "((owner_platform_user_id = ? AND visitor_platform_user_id = ?) OR "
-            "(owner_platform_user_id = ? AND visitor_platform_user_id = ?)) "
-            "ORDER BY universe_id ASC, id ASC",
+            "SELECT v.* FROM universe_visits v "
+            "JOIN universes u ON u.id = v.universe_id "
+            "WHERE v.status IN ('pending', 'active') AND u.app_id = ? AND "
+            "((v.owner_platform_user_id = ? AND v.visitor_platform_user_id = ?) OR "
+            "(v.owner_platform_user_id = ? AND v.visitor_platform_user_id = ?)) "
+            "ORDER BY v.universe_id ASC, v.id ASC",
             (
+                MINGCHAN_APP_ID,
                 first_platform_user_id,
                 second_platform_user_id,
                 second_platform_user_id,
@@ -457,7 +481,9 @@ def lock_universe_visit(
     """在调用方事务内锁 visit 行。"""
     suffix = " FOR UPDATE" if is_postgres() else ""
     row = conn.execute(
-        "SELECT * FROM universe_visits WHERE id = ?" + suffix, (visit_id,)
+        "SELECT v.* FROM universe_visits v JOIN universes u ON u.id = v.universe_id "
+        "WHERE v.id = ? AND u.app_id = ?" + suffix,
+        (visit_id, MINGCHAN_APP_ID),
     ).fetchone()
     return dict(row) if row else None
 
@@ -475,9 +501,10 @@ def mark_universe_invite_terminal(
         raise ValueError("invalid invite terminal status")
     suffix = " FOR UPDATE" if is_postgres() else ""
     row = conn.execute(
-        "SELECT * FROM universe_invites WHERE id = ? AND owner_platform_user_id = ?"
+        "SELECT i.* FROM universe_invites i JOIN universes u ON u.id = i.universe_id "
+        "WHERE i.id = ? AND i.owner_platform_user_id = ? AND u.app_id = ?"
         + suffix,
-        (invite_id, owner_platform_user_id),
+        (invite_id, owner_platform_user_id, MINGCHAN_APP_ID),
     ).fetchone()
     if row is None:
         return None

@@ -30,7 +30,7 @@ from app.platform.media.view import stored_content_preview
 
 
 class UniverseOwnerProductConflictError(RuntimeError):
-    """同一真人仍有其他产品的历史 World，必须先完成受控清理。"""
+    """兼容旧调用方；m0063 后其他产品 World 不再构成冲突。"""
 
 __all__ = [
     "get_or_create_home_universe",
@@ -117,28 +117,16 @@ def get_or_create_home_universe(
     app_id: str = MINGCHAN_APP_ID,
     conn: Optional[Connection] = None,
 ) -> Dict[str, Any]:
-    """按产品和真人 get-or-create home world，返回 universe 行 dict。
-
-    历史 schema 仍保留 owner 全局唯一约束；若命中其他产品的旧 World，明确 fail closed，
-    由 MC-05 受控 cleanup 处理，绝不把旧朝夕 World 暴露给鸣蝉。
-    """
+    """按产品和真人 get-or-create home world，返回 universe 行 dict。"""
     _require_mingchan_app_id(app_id)
     with _tx(conn) as tx:
-        existing = tx.execute(
-            "SELECT * FROM universes WHERE owner_platform_user_id = ?",
-            (platform_user_id,),
-        ).fetchone()
-        if existing is not None and str(existing["app_id"]) != app_id:
-            raise UniverseOwnerProductConflictError(
-                "owner has a legacy world in another product"
-            )
         tx.execute(
             """
             INSERT INTO universes(
                 id, owner_platform_user_id, app_id, status, onboarding_state
             )
             VALUES (?, ?, ?, 'active', 'preparing')
-            ON CONFLICT(owner_platform_user_id) DO NOTHING
+            ON CONFLICT(app_id, owner_platform_user_id) DO NOTHING
             """,
             (_new_id("uni"), platform_user_id, app_id),
         )
@@ -203,11 +191,14 @@ def set_universe_onboarding_state(
             UPDATE universes
             SET onboarding_state = ?,
                 updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
-            WHERE id = ?
+            WHERE id = ? AND app_id = ?
             """,
-            (onboarding_state, universe_id),
+            (onboarding_state, universe_id, MINGCHAN_APP_ID),
         )
-        row = tx.execute("SELECT * FROM universes WHERE id = ?", (universe_id,)).fetchone()
+        row = tx.execute(
+            "SELECT * FROM universes WHERE id = ? AND app_id = ?",
+            (universe_id, MINGCHAN_APP_ID),
+        ).fetchone()
     return dict(row) if row else None
 
 
@@ -768,10 +759,11 @@ def list_resident_details_for_owner(
             JOIN character_templates t ON t.id = r.character_template_id
             LEFT JOIN profiles p ON p.account_id = r.runtime_account_id
             JOIN ai_conversations c ON c.resident_id = r.id
-            WHERE u.owner_platform_user_id = ? AND r.status IN ({placeholders})
+            WHERE u.owner_platform_user_id = ? AND u.app_id = ?
+              AND r.status IN ({placeholders})
             ORDER BY r.created_at ASC, r.id ASC
             """,
-            (owner_platform_user_id, *status_list),
+            (owner_platform_user_id, MINGCHAN_APP_ID, *status_list),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -1646,11 +1638,11 @@ def claim_ai_feed_slot(
             SELECT 1
             FROM universes u
             JOIN universe_residents r ON r.universe_id = u.id
-            WHERE u.id = ? AND u.status = 'active'
+            WHERE u.id = ? AND u.app_id = ? AND u.status = 'active'
               AND u.onboarding_state = 'confirmed'
               AND r.id = ? AND r.status = 'active'
             """,
-            (universe_id, author_resident_id),
+            (universe_id, MINGCHAN_APP_ID, author_resident_id),
         ).fetchone()
         if eligible is None:
             return None, False
@@ -1665,7 +1657,7 @@ def claim_ai_feed_slot(
                    ?, ?, ?, 1, ?, ?, ?
             FROM universes u
             JOIN universe_residents r ON r.universe_id = u.id
-            WHERE u.id = ? AND u.status = 'active'
+            WHERE u.id = ? AND u.app_id = ? AND u.status = 'active'
               AND u.onboarding_state = 'confirmed'
               AND r.id = ? AND r.status = 'active'
             ON CONFLICT DO NOTHING
@@ -1679,6 +1671,7 @@ def claim_ai_feed_slot(
                 claim_token,
                 next_attempt_at,
                 universe_id,
+                MINGCHAN_APP_ID,
                 author_resident_id,
             ),
         )
@@ -1756,9 +1749,9 @@ def get_universe_post_for_owner(
               ON template.id = resident.character_template_id
             LEFT JOIN profiles profile
               ON profile.account_id = resident.runtime_account_id
-            WHERE p.id = ? AND u.owner_platform_user_id = ?
+            WHERE p.id = ? AND u.owner_platform_user_id = ? AND u.app_id = ?
             """,
-            (post_id, owner_platform_user_id),
+            (post_id, owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if row is None:
             return None
@@ -1792,9 +1785,9 @@ def publish_user_feed_post_with_outbox(
                        WHERE r.universe_id = u.id AND r.status = 'active'
                    ) AS has_active_resident
             FROM universes u
-            WHERE u.owner_platform_user_id = ?
+            WHERE u.owner_platform_user_id = ? AND u.app_id = ?
             """,
-            (owner_platform_user_id,),
+            (owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if world is None:
             raise ValueError("world_not_ready")
@@ -1959,11 +1952,18 @@ def publish_resident_intro_post_with_outbox(
             SELECT ?, u.id, 'resident', r.id, 'resident_intro', 'text', ?, 'published', ?
             FROM universes u
             JOIN universe_residents r ON r.universe_id = u.id
-            WHERE u.id = ? AND u.status = 'active'
+            WHERE u.id = ? AND u.app_id = ? AND u.status = 'active'
               AND r.id = ? AND r.status = 'active'
             ON CONFLICT DO NOTHING
             """,
-            (post_id, clean_text, published_at, universe_id, author_resident_id),
+            (
+                post_id,
+                clean_text,
+                published_at,
+                universe_id,
+                MINGCHAN_APP_ID,
+                author_resident_id,
+            ),
         )
         post = tx.execute(
             """
@@ -2024,7 +2024,7 @@ def list_published_feed_posts_for_owner(
         raise ValueError("invalid_cursor")
     clean_limit = max(1, min(int(limit), 51))
     cursor_clause = ""
-    params: List[Any] = [owner_platform_user_id]
+    params: List[Any] = [owner_platform_user_id, MINGCHAN_APP_ID]
     if cursor_published_at and cursor_post_id:
         cursor_clause = (
             "AND (p.published_at < ? OR (p.published_at = ? AND p.id < ?))"
@@ -2046,9 +2046,9 @@ def list_published_feed_posts_for_owner(
                          AND farewell.status = 'published'
                    ) AS has_published_farewell
             FROM universes u
-            WHERE u.owner_platform_user_id = ?
+            WHERE u.owner_platform_user_id = ? AND u.app_id = ?
             """,
-            (owner_platform_user_id,),
+            (owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if world is None:
             raise ValueError("world_not_ready")
@@ -2082,7 +2082,8 @@ def list_published_feed_posts_for_owner(
               ON template.id = resident.character_template_id
             LEFT JOIN profiles profile
               ON profile.account_id = resident.runtime_account_id
-            WHERE u.owner_platform_user_id = ? AND p.status = 'published'
+            WHERE u.owner_platform_user_id = ? AND u.app_id = ?
+              AND p.status = 'published'
               {cursor_clause}
             ORDER BY p.published_at DESC, p.id DESC
             LIMIT ?
@@ -2148,9 +2149,9 @@ def find_post_owner_by_media_id(
             FROM universe_post_media pm
             JOIN universe_posts p ON p.id = pm.post_id
             JOIN universes u ON u.id = p.universe_id
-            WHERE pm.media_id = ?
+            WHERE pm.media_id = ? AND u.app_id = ?
             """,
-            (cleaned,),
+            (cleaned, MINGCHAN_APP_ID),
         ).fetchone()
     return dict(row) if row is not None else None
 
@@ -2206,9 +2207,9 @@ def retire_feed_post_with_outbox(
             """
             SELECT p.* FROM universe_posts p
             JOIN universes u ON u.id = p.universe_id
-            WHERE p.id = ? AND u.owner_platform_user_id = ?
+            WHERE p.id = ? AND u.owner_platform_user_id = ? AND u.app_id = ?
             """,
-            (post_id, owner_platform_user_id),
+            (post_id, owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if current is None:
             raise ValueError("post_not_found")
@@ -2397,22 +2398,26 @@ def claim_companion_world_outbox(
     """claim 一批可投递/lease 过期 outbox；PG 以 SKIP LOCKED 防 worker 重叠。"""
     clean_limit = max(1, int(batch_size))
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        # 只锁 outbox 行；若连同 universe 一起锁，同一 World 的多条事件会被
+        # 第一个 worker 的根行锁全部挡住，破坏 SKIP LOCKED 分片。
+        lock_suffix = " FOR UPDATE OF o SKIP LOCKED" if is_postgres() else ""
         stale_clause = ""
         select_params: List[Any] = [now]
         if stale_before is not None:
-            stale_clause = " OR (status = 'processing' AND claimed_at <= ?)"
+            stale_clause = " OR (o.status = 'processing' AND o.claimed_at <= ?)"
             select_params.append(stale_before)
         select_params.append(clean_limit)
         rows = tx.execute(
             f"""
-            SELECT id FROM companion_world_outbox
-            WHERE (status = 'pending' AND available_at <= ?){stale_clause}
-            ORDER BY available_at ASC, id ASC
+            SELECT o.id FROM companion_world_outbox o
+            JOIN universes u ON u.id = o.universe_id
+            WHERE u.app_id = ?
+              AND ((o.status = 'pending' AND o.available_at <= ?){stale_clause})
+            ORDER BY o.available_at ASC, o.id ASC
             LIMIT ?
             """
             + lock_suffix,
-            tuple(select_params),
+            (MINGCHAN_APP_ID, *select_params),
         ).fetchall()
         ids = [str(row["id"]) for row in rows]
         if not ids:
@@ -2458,10 +2463,13 @@ def get_companion_world_outbox_metrics(
     with _tx(conn) as tx:
         rows = tx.execute(
             """
-            SELECT status, COUNT(*) AS total, MIN(created_at) AS oldest_created_at
-            FROM companion_world_outbox
-            GROUP BY status
-            """
+            SELECT o.status, COUNT(*) AS total, MIN(o.created_at) AS oldest_created_at
+            FROM companion_world_outbox o
+            JOIN universes u ON u.id = o.universe_id
+            WHERE u.app_id = ?
+            GROUP BY o.status
+            """,
+            (MINGCHAN_APP_ID,),
         ).fetchall()
     counts = {status: 0 for status in ("pending", "processing", "delivered", "dead")}
     oldest_live: Optional[datetime] = None
@@ -2491,7 +2499,12 @@ def list_ai_feed_eligible_worlds(
     """列出近 7 日有任一渠道真人入站的 confirmed worlds，按 universe id 稳定分页。"""
     clean_limit = max(1, min(int(limit), 200))
     cursor_clause = ""
-    params: List[Any] = [inbound_since, MINGCHAN_APP_ID, MINGCHAN_APP_ID]
+    params: List[Any] = [
+        inbound_since,
+        MINGCHAN_APP_ID,
+        MINGCHAN_APP_ID,
+        MINGCHAN_APP_ID,
+    ]
     if after_universe_id:
         cursor_clause = "AND u.id > ?"
         params.append(after_universe_id)
@@ -2523,7 +2536,8 @@ def list_ai_feed_eligible_worlds(
                              )
                        ) AS last_inbound_at
                 FROM universes u
-                WHERE u.status = 'active' AND u.onboarding_state = 'confirmed'
+                WHERE u.app_id = ?
+                  AND u.status = 'active' AND u.onboarding_state = 'confirmed'
                   AND EXISTS (
                       SELECT 1 FROM universe_residents active_resident
                       WHERE active_resident.universe_id = u.id
@@ -2691,17 +2705,19 @@ def close_expired_ai_feed_slots(
     """关闭已越过 slot window 的 generating 行；绝不跨窗口补发。"""
     clean_limit = max(1, min(int(limit), 1000))
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE OF p SKIP LOCKED" if is_postgres() else ""
         rows = tx.execute(
             """
-            SELECT id FROM universe_posts
-            WHERE source_type = 'ai_feed' AND status = 'generating'
-              AND slot_window_end_at <= ?
-            ORDER BY slot_window_end_at ASC, id ASC
+            SELECT p.id FROM universe_posts p
+            JOIN universes u ON u.id = p.universe_id
+            WHERE u.app_id = ?
+              AND p.source_type = 'ai_feed' AND p.status = 'generating'
+              AND p.slot_window_end_at <= ?
+            ORDER BY p.slot_window_end_at ASC, p.id ASC
             LIMIT ?
             """
             + lock_suffix,
-            (now, clean_limit),
+            (MINGCHAN_APP_ID, now, clean_limit),
         ).fetchall()
         ids = [str(row["id"]) for row in rows]
         if not ids:

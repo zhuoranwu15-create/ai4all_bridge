@@ -106,13 +106,13 @@ def test_mingchan_bootstrap_is_idempotent_and_hides_persona(fresh_db):
     assert world["app_id"] == MINGCHAN_APP_ID
 
 
-def test_mingchan_bootstrap_rejects_legacy_zhaoxi_world(fresh_db):
-    """旧朝夕测试 World 未 cleanup 时必须明确失败，不能串读为鸣蝉 World。"""
+def test_mingchan_bootstrap_preserves_and_isolates_legacy_zhaoxi_world(fresh_db):
+    """同一真人保留朝夕 World 时，鸣蝉创建独立 World 且不能串读。"""
     fresh_db.mingchan_p1_enabled = True
     _seed_catalog()
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037929")
-    # 鸣蝉 persistence 会主动拒绝创建跨产品 World；这里直接模拟 cleanup 前的旧库行。
+    # 直接模拟生产保留的朝夕 legacy World。
     with db.connect() as conn:
         conn.execute(
             "INSERT INTO universes(id, owner_platform_user_id, app_id) VALUES (?, ?, ?)",
@@ -131,8 +131,18 @@ def test_mingchan_bootstrap_rejects_legacy_zhaoxi_world(fresh_db):
         headers={"Authorization": f"Bearer {login['session']['token']}"},
     )
 
-    assert response.status_code == 409
-    assert response.json()["code"] == "legacy_world_cleanup_required"
+    assert response.status_code == 200
+    mingchan_world_id = response.json()["data"]["world"]["id"]
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, app_id FROM universes WHERE owner_platform_user_id=? "
+            "ORDER BY app_id",
+            (user["id"],),
+        ).fetchall()
+    assert [(row["id"], row["app_id"]) for row in rows] == [
+        (mingchan_world_id, MINGCHAN_APP_ID),
+        ("uni_legacy_zhaoxi_world", ZHAOXI_APP_ID),
+    ]
 
 
 def test_mingchan_confirm_creates_only_mingchan_resident_account(fresh_db):

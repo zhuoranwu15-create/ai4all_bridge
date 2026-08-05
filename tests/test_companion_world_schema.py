@@ -34,6 +34,7 @@ from app.db._core import (
     _migration_0060_creator_role_template_opening_and_summary,
     _migration_0061_companion_world_product_scope,
     _migration_0062_mingchan_notification_product_scope,
+    _migration_0063_companion_world_owner_product_unique,
 )
 
 _P1_TABLES = (
@@ -87,14 +88,14 @@ def test_p1_tables_exist(fresh_db):
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
     assert _MIGRATIONS[-1] == (
-        62,
-        _migration_0062_mingchan_notification_product_scope,
+        63,
+        _migration_0063_companion_world_owner_product_unique,
     )
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 62
+        assert int(version) == 63
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
@@ -104,6 +105,35 @@ def test_m0030_schema_and_idempotency(fresh_db):
         conn.execute(
             "SELECT initial_candidate_rank FROM character_templates WHERE 1 = 0"
         ).fetchall()
+
+
+def test_same_owner_can_keep_zhaoxi_and_create_mingchan_world(fresh_db):
+    """同一真人的朝夕 legacy World 与鸣蝉新 World 必须并存且读取隔离。"""
+
+    owner = _pu("19976000063", "双产品用户")
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO universes(id, owner_platform_user_id, app_id) "
+            "VALUES ('world_zhaoxi_63', ?, 'zhaoxi')",
+            (owner,),
+        )
+
+    mingchan = db.get_or_create_home_universe(platform_user_id=owner)
+    replay = db.get_or_create_home_universe(platform_user_id=owner)
+
+    assert mingchan["app_id"] == "mingchan"
+    assert replay["id"] == mingchan["id"]
+    assert mingchan["id"] != "world_zhaoxi_63"
+    with db.connect() as conn:
+        rows = conn.execute(
+            "SELECT id, app_id FROM universes WHERE owner_platform_user_id=? "
+            "ORDER BY app_id",
+            (owner,),
+        ).fetchall()
+    assert [(row["id"], row["app_id"]) for row in rows] == [
+        (mingchan["id"], "mingchan"),
+        ("world_zhaoxi_63", "zhaoxi"),
+    ]
 
 
 def test_active_initial_candidate_rank_is_unique(fresh_db):
@@ -203,12 +233,12 @@ def test_nonlegacy_template_is_unique_within_universe(fresh_db):
 def test_universe_owner_unique(fresh_db):
     pu = _pu("19911110001")
     w = db.get_or_create_home_universe(platform_user_id=pu)
-    # 直插第二个同 owner 的 universe → 命中 UNIQUE(owner_platform_user_id)。
+    # 同一产品内第二个 owner World 仍命中组合唯一约束。
     with pytest.raises(IntegrityError):
         with db.connect() as conn:
             conn.execute(
-                "INSERT INTO universes(id, owner_platform_user_id, status, onboarding_state) "
-                "VALUES (?, ?, 'active', 'preparing')",
+                "INSERT INTO universes(id, owner_platform_user_id, app_id, status, onboarding_state) "
+                "VALUES (?, ?, 'mingchan', 'active', 'preparing')",
                 ("uni_dup", pu),
             )
     assert w["owner_platform_user_id"] == pu

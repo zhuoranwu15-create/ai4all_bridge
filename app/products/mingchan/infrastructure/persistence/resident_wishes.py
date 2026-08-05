@@ -49,9 +49,10 @@ def get_resident_wish_by_request(
     """按 owner + client request 读取；幂等键绝不跨真人共享。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM resident_wishes "
-            "WHERE owner_platform_user_id = ? AND client_request_id = ?",
-            (owner_platform_user_id, client_request_id),
+            "SELECT w.* FROM resident_wishes w JOIN universes u ON u.id=w.universe_id "
+            "WHERE w.owner_platform_user_id = ? AND w.client_request_id = ? "
+            "AND u.app_id = ?",
+            (owner_platform_user_id, client_request_id, MINGCHAN_APP_ID),
         ).fetchone()
     return _wish(row) if row else None
 
@@ -62,8 +63,9 @@ def get_resident_wish_for_owner(
     """按 wish id + owner 读取；越权与不存在统一返回 None。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM resident_wishes WHERE id = ? AND owner_platform_user_id = ?",
-            (wish_id, owner_platform_user_id),
+            "SELECT w.* FROM resident_wishes w JOIN universes u ON u.id=w.universe_id "
+            "WHERE w.id = ? AND w.owner_platform_user_id = ? AND u.app_id = ?",
+            (wish_id, owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
     return _wish(row) if row else None
 
@@ -74,9 +76,10 @@ def get_current_resident_wish(
     """返回 owner 最近一笔愿望，包含已闭环终态供客户端恢复结果。"""
     with _tx(conn) as tx:
         row = tx.execute(
-            "SELECT * FROM resident_wishes WHERE owner_platform_user_id = ? "
-            "ORDER BY submitted_at DESC, id DESC LIMIT 1",
-            (owner_platform_user_id,),
+            "SELECT w.* FROM resident_wishes w JOIN universes u ON u.id=w.universe_id "
+            "WHERE w.owner_platform_user_id = ? AND u.app_id = ? "
+            "ORDER BY w.submitted_at DESC, w.id DESC LIMIT 1",
+            (owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
     return _wish(row) if row else None
 
@@ -104,10 +107,10 @@ def create_resident_wish(
             SELECT u.*, p.status AS owner_status
             FROM universes u
             JOIN platform_users p ON p.id = u.owner_platform_user_id
-            WHERE u.owner_platform_user_id = ?
+            WHERE u.owner_platform_user_id = ? AND u.app_id = ?
             """
             + lock,
-            (owner_platform_user_id,),
+            (owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if (
             scope is None
@@ -119,8 +122,9 @@ def create_resident_wish(
 
         existing = tx.execute(
             "SELECT * FROM resident_wishes "
-            "WHERE owner_platform_user_id = ? AND client_request_id = ?",
-            (owner_platform_user_id, client_request_id),
+            "WHERE owner_platform_user_id = ? AND universe_id = ? "
+            "AND client_request_id = ?",
+            (owner_platform_user_id, scope["id"], client_request_id),
         ).fetchone()
         if existing is not None:
             if str(existing["request_fingerprint"]) != request_fingerprint:
@@ -136,16 +140,18 @@ def create_resident_wish(
             raise ValueError("resident_capacity_exceeded")
         open_wish = tx.execute(
             "SELECT id FROM resident_wishes "
-            "WHERE owner_platform_user_id = ? AND closed_at IS NULL LIMIT 1",
-            (owner_platform_user_id,),
+            "WHERE owner_platform_user_id = ? AND universe_id = ? "
+            "AND closed_at IS NULL LIMIT 1",
+            (owner_platform_user_id, scope["id"]),
         ).fetchone()
         if open_wish is not None:
             raise ValueError("wish_already_pending")
         if daily_max > 0 and daily_window_start:
             count = tx.execute(
                 "SELECT COUNT(*) AS c FROM resident_wishes "
-                "WHERE owner_platform_user_id = ? AND submitted_at >= ?",
-                (owner_platform_user_id, daily_window_start),
+                "WHERE owner_platform_user_id = ? AND universe_id = ? "
+                "AND submitted_at >= ?",
+                (owner_platform_user_id, scope["id"], daily_window_start),
             ).fetchone()
             if int(count["c"] if count else 0) >= daily_max:
                 raise ValueError("wish_rate_limited")
@@ -193,9 +199,11 @@ def withdraw_resident_wish(
             tx.execute("BEGIN IMMEDIATE")
         suffix = " FOR UPDATE" if is_postgres() else ""
         row = tx.execute(
-            "SELECT * FROM resident_wishes WHERE id = ? AND owner_platform_user_id = ?"
+            "SELECT w.* FROM resident_wishes w "
+            "JOIN universes u ON u.id = w.universe_id "
+            "WHERE w.id = ? AND w.owner_platform_user_id = ? AND u.app_id = ?"
             + suffix,
-            (wish_id, owner_platform_user_id),
+            (wish_id, owner_platform_user_id, MINGCHAN_APP_ID),
         ).fetchone()
         if row is None:
             return None, False, "wish_not_found"
@@ -242,7 +250,8 @@ def claim_resident_wish_job(
             SELECT j.id AS job_id, j.wish_id
             FROM resident_wish_jobs j
             JOIN resident_wishes w ON w.id = j.wish_id
-            WHERE w.status = 'pending' AND w.closed_at IS NULL
+            JOIN universes u ON u.id = w.universe_id
+            WHERE w.status = 'pending' AND w.closed_at IS NULL AND u.app_id = ?
               AND j.next_attempt_at <= ?
               AND (
                     j.status IN ('queued', 'ready')
@@ -252,7 +261,7 @@ def claim_resident_wish_job(
             LIMIT 1
             """
             + lock,
-            (now, now),
+            (MINGCHAN_APP_ID, now, now),
         ).fetchone()
         if row is None:
             return None
@@ -278,9 +287,9 @@ def claim_resident_wish_job(
             JOIN resident_wishes w ON w.id = j.wish_id
             JOIN universes u ON u.id = w.universe_id
             JOIN platform_users p ON p.id = w.owner_platform_user_id
-            WHERE j.id = ? AND j.claim_token = ?
+            WHERE j.id = ? AND j.claim_token = ? AND u.app_id = ?
             """,
-            (row["job_id"], claim_token),
+            (row["job_id"], claim_token, MINGCHAN_APP_ID),
         ).fetchone()
     return _job(joined) if joined else None
 
@@ -305,7 +314,8 @@ def complete_resident_wish_generation(
             WHERE wish_id = ? AND status = 'running' AND claim_token = ?
               AND EXISTS (
                   SELECT 1 FROM resident_wishes w
-                  WHERE w.id = resident_wish_jobs.wish_id
+                  JOIN universes u ON u.id = w.universe_id
+                  WHERE w.id = resident_wish_jobs.wish_id AND u.app_id = ?
                     AND w.status = 'pending' AND w.closed_at IS NULL
               )
             """,
@@ -316,6 +326,7 @@ def complete_resident_wish_generation(
                 now,
                 wish_id,
                 claim_token,
+                MINGCHAN_APP_ID,
             ),
         )
     return int(changed.rowcount or 0) == 1
@@ -339,10 +350,11 @@ def fail_resident_wish_job(
             SELECT w.*, j.status AS job_status, j.claim_token AS job_claim_token
             FROM resident_wishes w
             JOIN resident_wish_jobs j ON j.wish_id = w.id
-            WHERE w.id = ?
+            JOIN universes u ON u.id = w.universe_id
+            WHERE w.id = ? AND u.app_id = ?
             """
             + suffix,
-            (wish_id,),
+            (wish_id, MINGCHAN_APP_ID),
         ).fetchone()
         if row is None or row["status"] != "pending" or row["closed_at"] is not None:
             return "cancelled"
@@ -402,10 +414,10 @@ def deliver_resident_wish(
             JOIN resident_wish_jobs j ON j.wish_id = w.id
             JOIN universes u ON u.id = w.universe_id
             JOIN platform_users p ON p.id = w.owner_platform_user_id
-            WHERE w.id = ?
+            WHERE w.id = ? AND u.app_id = ?
             """
             + lock,
-            (wish_id,),
+            (wish_id, MINGCHAN_APP_ID),
         ).fetchone()
         if row is None:
             return {"status": "cancelled"}

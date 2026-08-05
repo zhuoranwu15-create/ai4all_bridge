@@ -9,6 +9,7 @@ import json
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
+from app.bootstrap.product_registry import MINGCHAN_APP_ID
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
@@ -125,8 +126,9 @@ def _lock_resident_scope(
     suffix = " FOR UPDATE" if is_postgres() else ""
     world = tx.execute(
         "SELECT id FROM universes "
-        "WHERE id = ? AND owner_platform_user_id = ? AND status = 'active'" + suffix,
-        (universe_id, owner_platform_user_id),
+        "WHERE id = ? AND owner_platform_user_id = ? AND app_id = ? "
+        "AND status = 'active'" + suffix,
+        (universe_id, owner_platform_user_id, MINGCHAN_APP_ID),
     ).fetchone()
     if world is None:
         raise ValueError("lifecycle universe ownership mismatch")
@@ -309,9 +311,14 @@ def lock_resident_lifecycle_commit_scope(
         return None
     event = _event(event_row)
     world = conn.execute(
-        "SELECT * FROM universes WHERE id = ? AND owner_platform_user_id = ?"
+        "SELECT * FROM universes WHERE id = ? AND owner_platform_user_id = ? "
+        "AND app_id = ?"
         + suffix,
-        (event["universe_id"], event["owner_platform_user_id"]),
+        (
+            event["universe_id"],
+            event["owner_platform_user_id"],
+            MINGCHAN_APP_ID,
+        ),
     ).fetchone()
     if world is None:
         raise ValueError("lifecycle universe ownership mismatch")
@@ -670,14 +677,14 @@ def list_resident_lifecycle_scopes(
             LEFT JOIN resident_lifecycle_events e
               ON e.resident_id = r.id
              AND e.status IN ('cooling_down', 'review_pending')
-            WHERE r.status = 'active'
+            WHERE r.status = 'active' AND u.app_id = ?
               AND u.status = 'active'
               AND u.onboarding_state = 'confirmed'
               {cursor_clause}
             ORDER BY r.id ASC
             LIMIT ?
             """,
-            tuple(params),
+            (MINGCHAN_APP_ID, *params),
         ).fetchall()
     return [dict(row) for row in rows]
 

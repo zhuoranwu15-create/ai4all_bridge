@@ -10,6 +10,7 @@ import json
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
+from app.bootstrap.product_registry import MINGCHAN_APP_ID
 from app.db._backend import Connection, is_postgres
 from app.db._core import _new_id, _tx, connect
 
@@ -83,8 +84,9 @@ def _lock_world_for_owner(
     suffix = " FOR UPDATE" if is_postgres() else ""
     row = tx.execute(
         "SELECT id FROM universes WHERE id = ? AND owner_platform_user_id = ? "
-        "AND status = 'active' AND onboarding_state = 'confirmed'" + suffix,
-        (universe_id, owner_platform_user_id),
+        "AND app_id = ? AND status = 'active' AND onboarding_state = 'confirmed'"
+        + suffix,
+        (universe_id, owner_platform_user_id, MINGCHAN_APP_ID),
     ).fetchone()
     if row is None:
         raise ValueError("mailbox universe ownership mismatch")
@@ -116,8 +118,8 @@ def create_character_letter_catalog_entry(
     with _letter_write_tx(conn) as tx:
         template = tx.execute(
             "SELECT id, source_type, persona_version, status FROM character_templates "
-            "WHERE id = ?",
-            (cleaned_template,),
+            "WHERE id = ? AND app_id = ?",
+            (cleaned_template, MINGCHAN_APP_ID),
         ).fetchone()
         if template is None:
             raise ValueError("letter catalog template not found")
@@ -227,12 +229,13 @@ def list_character_letter_catalog(
     with _tx(conn) as tx:
         rows = tx.execute(
             f"""
-            SELECT * FROM character_letter_catalog
-            WHERE status IN ({placeholders})
-            ORDER BY priority DESC, id ASC
+            SELECT c.* FROM character_letter_catalog c
+            JOIN character_templates t ON t.id = c.character_template_id
+            WHERE c.status IN ({placeholders}) AND t.app_id = ?
+            ORDER BY c.priority DESC, c.id ASC
             LIMIT ?
             """,
-            (*cleaned, max(1, min(int(limit), 500))),
+            (*cleaned, MINGCHAN_APP_ID, max(1, min(int(limit), 500))),
         ).fetchall()
     return [_catalog(row) for row in rows]
 
@@ -245,7 +248,7 @@ def list_mailbox_delivery_worlds(
 ) -> List[Dict[str, Any]]:
     """按 universe id 稳定分页列出 active+confirmed world 投递锚。"""
     cursor_clause = ""
-    params: List[Any] = []
+    params: List[Any] = [MINGCHAN_APP_ID]
     if after_universe_id:
         cursor_clause = "AND id > ?"
         params.append(str(after_universe_id))
@@ -255,7 +258,7 @@ def list_mailbox_delivery_worlds(
             f"""
             SELECT id AS universe_id, owner_platform_user_id
             FROM universes
-            WHERE status = 'active' AND onboarding_state = 'confirmed'
+            WHERE app_id = ? AND status = 'active' AND onboarding_state = 'confirmed'
               {cursor_clause}
             ORDER BY id ASC
             LIMIT ?
@@ -340,8 +343,8 @@ def prepare_character_letter_delivery(
     """锁定 world、过期旧信并重算投递资格，返回确定性 catalog 候选。"""
     suffix = " FOR UPDATE" if is_postgres() else ""
     world = conn.execute(
-        "SELECT * FROM universes WHERE id = ?" + suffix,
-        (_clean_required(universe_id, "universe_id"),),
+        "SELECT * FROM universes WHERE id = ? AND app_id = ?" + suffix,
+        (_clean_required(universe_id, "universe_id"), MINGCHAN_APP_ID),
     ).fetchone()
     if (
         world is None
@@ -565,9 +568,9 @@ def lock_character_letter_accept_scope(
     """按 ``world → letter/catalog/template`` 顺序锁定一次 owner accept 的事实快照。"""
     suffix = " FOR UPDATE" if is_postgres() else ""
     world = conn.execute(
-        "SELECT * FROM universes WHERE owner_platform_user_id = ? "
+        "SELECT * FROM universes WHERE owner_platform_user_id = ? AND app_id = ? "
         "AND status = 'active' AND onboarding_state = 'confirmed'" + suffix,
-        (owner_platform_user_id,),
+        (owner_platform_user_id, MINGCHAN_APP_ID),
     ).fetchone()
     if world is None:
         return None

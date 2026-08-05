@@ -169,6 +169,72 @@ def test_eligibility_and_author_selection_use_inbound_and_app_activity(fresh_db)
     )["resident_id"] == scope_a["resident_id"]
 
 
+def test_scheduler_ignores_same_owner_zhaoxi_legacy_world(fresh_db):
+    """鸣蝉批任务不得扫描同一真人保留的朝夕 World。"""
+
+    owner, _mingchan_account, mingchan_scope = _world_with_inbound(
+        "19963001063", "双产品调度用户"
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "INSERT INTO accounts(id, channel, display_name, app_id) "
+            "VALUES ('legacy_zhaoxi_runtime_63', 'openclaw-weixin', '朝夕居民', 'zhaoxi')"
+        )
+        conn.execute(
+            "INSERT INTO character_templates(id, app_id, source_type, name) "
+            "VALUES ('legacy_zhaoxi_template_63', 'zhaoxi', 'operations', '朝夕模板')"
+        )
+        conn.execute(
+            "INSERT INTO universes(id, owner_platform_user_id, app_id, onboarding_state) "
+            "VALUES ('legacy_zhaoxi_world_63', ?, 'zhaoxi', 'confirmed')",
+            (owner,),
+        )
+        conn.execute(
+            """
+            INSERT INTO universe_residents(
+                id, universe_id, character_template_id, template_version,
+                runtime_account_id, origin, status, joined_at
+            ) VALUES (
+                'legacy_zhaoxi_resident_63', 'legacy_zhaoxi_world_63',
+                'legacy_zhaoxi_template_63', 'v1', 'legacy_zhaoxi_runtime_63',
+                'legacy', 'active', '2026-07-22 07:00:00'
+            )
+            """
+        )
+    session = db.get_or_create_session(
+        account_id="legacy_zhaoxi_runtime_63",
+        channel="openclaw-weixin",
+        sender_id="legacy-user",
+        sender_name=None,
+        chat_id="legacy-chat",
+        session_key="legacy-zhaoxi-session",
+        business_day="2026-07-22",
+    )["session"]
+    message_id = db.insert_message(
+        account_id="legacy_zhaoxi_runtime_63",
+        session_id=int(session["id"]),
+        message_id="legacy-zhaoxi-inbound-63",
+        reply_to_message_id=None,
+        direction="inbound",
+        role="user",
+        message_type="text",
+        content="保留的朝夕消息",
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE messages SET created_at='2026-07-22 08:45:00' WHERE id=?",
+            (message_id,),
+        )
+
+    eligible = db.list_ai_feed_eligible_worlds(
+        inbound_since="2026-07-15 09:30:00", limit=20
+    )
+
+    assert [row["universe_id"] for row in eligible] == [
+        mingchan_scope["universe_id"]
+    ]
+
+
 def test_ai_feed_generates_once_per_slot_and_publishes_outbox(fresh_db):
     _user, _account, scope = _world_with_inbound("19963001002", "生成居民")
     generator = _StaticGenerator()
