@@ -8,6 +8,7 @@ from app.db.admin import *  # noqa: F401,F403
 from app.db.billing import *  # noqa: F401,F403
 from app.db.product_memberships import *  # noqa: F401,F403
 from app.db.accounts import *  # noqa: F401,F403
+from app.db.runtime_ownerships import *  # noqa: F401,F403
 from app.db.lifecycle import *  # noqa: F401,F403
 from app.db.llm_config import *  # noqa: F401,F403
 

@@ -1603,6 +1603,18 @@ def resolve_owner_platform_user_id(cursor, account_id: str) -> Optional[str]:
     走 (1) 即返回，行为与上迁前一致（零回归）。迁移期回填只认 owner_binding（居民为增量、
     迁移时不存在），故仅**运行时**解析需要 (2) 这段 fallback。
     """
+    ownership = cursor.execute(
+        """
+        SELECT platform_user_id
+        FROM runtime_ownerships
+        WHERE runtime_account_id = ? AND status = 'active'
+        LIMIT 1
+        """,
+        (account_id,),
+    ).fetchone()
+    if ownership is not None:
+        return str(ownership["platform_user_id"])
+
     row = cursor.execute(
         """
         SELECT platform_user_id
@@ -1650,8 +1662,18 @@ def _account_ids_for_platform_user(
         JOIN accounts a ON a.id=r.runtime_account_id
         WHERE u.owner_platform_user_id = ? AND r.runtime_account_id IS NOT NULL
           AND a.app_id = ?
+        UNION
+        SELECT ro.runtime_account_id AS account_id
+        FROM runtime_ownerships ro
+        JOIN accounts a ON a.id=ro.runtime_account_id
+        WHERE ro.platform_user_id=? AND ro.app_id=? AND ro.status='active'
+          AND a.app_id=?
         """,
-        (platform_user_id, app_id, app_id, platform_user_id, app_id),
+        (
+            platform_user_id, app_id, app_id,
+            platform_user_id, app_id,
+            platform_user_id, app_id, app_id,
+        ),
     ).fetchall()
     return [str(row["account_id"]) for row in rows]
 
@@ -1750,9 +1772,18 @@ def _resolve_quota_scope(
         FROM universe_residents r
         JOIN universes u ON u.id=r.universe_id
         WHERE r.runtime_account_id=? AND u.owner_platform_user_id=?
+        UNION ALL
+        SELECT 1
+        FROM runtime_ownerships ro
+        WHERE ro.runtime_account_id=? AND ro.platform_user_id=?
+          AND ro.app_id=? AND ro.status='active'
         LIMIT 1
         """,
-        (account_id, platform_user_id, app_id, account_id, platform_user_id),
+        (
+            account_id, platform_user_id, app_id,
+            account_id, platform_user_id,
+            account_id, platform_user_id, app_id,
+        ),
     ).fetchone()
     membership = cursor.execute(
         """

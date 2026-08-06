@@ -97,6 +97,16 @@ class Settings(BaseSettings):
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 
+    # ===== Fibre Chat（Web MVP）=====
+    # Fibre API 可部署开关；开发身份仍受 fibre_dev_mode + 非生产环境双重限制。
+    fibre_enabled: bool = True
+    fibre_dev_mode: bool = True
+    fibre_test_user_id: str = "user_fibre_test"
+    fibre_test_phone: str = "fibre-test@local.invalid"
+    fibre_fast_provider_id: str = "deepseek"
+    fibre_balanced_provider_id: str = "chatgpt"
+    fibre_immersive_provider_id: str = "deepseek-v4-pro"
+
     # ===== 数据库后端（厚节点改造，见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。
     database_url: str = ""
