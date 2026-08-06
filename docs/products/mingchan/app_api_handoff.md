@@ -320,7 +320,7 @@ POST /api/v1/products/mingchan/worlds/home/residents                   → 用 d
 
 ```json
 {
-  "template_id": "tmpl_ops_v1_1",
+  "template_id": "tmpl_mingchan_v1_1",
   "template_version": "v1",
   "name": "林小满",
   "avatar_ref": "https://ai4company.top/companion_world/avatars/linxiaoman.png",
@@ -351,21 +351,22 @@ POST /api/v1/products/mingchan/worlds/home/residents                   → 用 d
 - `long_summary` 为角色预览页的长介绍，运营未录入时为 `null`；是否增加
   `sample_dialogue` 仍是[产品后续项](../../backlog/products/mingchan/companion_world_app_followups.md)，客户端当前不得依赖该字段。
 
-**首发 4 位官方候选**（生产 preset v1）：
+**首发 5 位官方候选**（生产 preset v1）：
 
 | template_id | 名字 | 标签 | 头像 |
 |---|---|---|---|
-| `tmpl_ops_v1_1` | 林小满 | 温柔/共情/治愈 | `…/avatars/linxiaoman.png` |
-| `tmpl_ops_v1_2` | 陆星野 | 活泼/好奇/元气 | `…/avatars/luxingye.png` |
-| `tmpl_ops_v1_3` | 沈川 | 沉稳/理性/可靠 | `…/avatars/shenchuan.png` |
-| `tmpl_ops_v1_4` | 阿糖 | 幽默/俏皮/轻松 | `…/avatars/atang.png` |
+| `tmpl_mingchan_v1_1` | 林小满 | 温柔/共情/治愈 | `…/avatars/linxiaoman.png` |
+| `tmpl_mingchan_v1_2` | 陆星野 | 活泼/好奇/元气 | `…/avatars/luxingye.png` |
+| `tmpl_mingchan_v1_3` | 沈川 | 沉稳/理性/可靠 | `…/avatars/shenchuan.png` |
+| `tmpl_mingchan_v1_4` | 阿糖 | 幽默/俏皮/轻松 | `…/avatars/atang.png` |
+| `tmpl_mingchan_v1_5` | 司辰 | 通透/阅历/幽默 | `…/avatars/sichen.png` |
 
 ### 5.3 `POST /api/v1/products/mingchan/worlds/home/residents/confirm`
 
 请求体：
 
 ```json
-{ "selections": [ { "template_id": "tmpl_ops_v1_1", "display_name": "小满" } ] }
+{ "selections": [ { "template_id": "tmpl_mingchan_v1_1", "display_name": "小满" } ] }
 ```
 
 `data`：`{ "residents": [ { /* 见下方居民结构 */ } ] }`

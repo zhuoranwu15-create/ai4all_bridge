@@ -1,7 +1,7 @@
 {
   "templates": [
     {
-      "template_id": "tmpl_ops_v1_1",
+      "template_id": "tmpl_mingchan_v1_1",
       "initial_candidate_rank": 1,
       "name": "林小满",
       "avatar_ref": "https://ai4company.top/companion_world/avatars/linxiaoman.png",
@@ -18,7 +18,7 @@
       }
     },
     {
-      "template_id": "tmpl_ops_v1_2",
+      "template_id": "tmpl_mingchan_v1_2",
       "initial_candidate_rank": 2,
       "name": "陆星野",
       "avatar_ref": "https://ai4company.top/companion_world/avatars/luxingye.png",
@@ -35,7 +35,7 @@
       }
     },
     {
-      "template_id": "tmpl_ops_v1_3",
+      "template_id": "tmpl_mingchan_v1_3",
       "initial_candidate_rank": 3,
       "name": "沈川",
       "avatar_ref": "https://ai4company.top/companion_world/avatars/shenchuan.png",
@@ -52,7 +52,7 @@
       }
     },
     {
-      "template_id": "tmpl_ops_v1_4",
+      "template_id": "tmpl_mingchan_v1_4",
       "initial_candidate_rank": 4,
       "name": "阿糖",
       "avatar_ref": "https://ai4company.top/companion_world/avatars/atang.png",
@@ -69,7 +69,7 @@
       }
     },
     {
-      "template_id": "tmpl_ops_v1_5",
+      "template_id": "tmpl_mingchan_v1_5",
       "initial_candidate_rank": 5,
       "name": "司辰",
       "avatar_ref": "https://ai4company.top/companion_world/avatars/sichen.png",

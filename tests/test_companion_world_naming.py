@@ -300,7 +300,7 @@ def _manifest(*, with_pool: bool = True) -> list[dict]:
     items = []
     for rank in range(1, 5):
         item = {
-            "template_id": f"tmpl_ops_v1_{rank}",
+            "template_id": f"tmpl_mingchan_v1_{rank}",
             "initial_candidate_rank": rank,
             "name": f"运营角色{rank}",
             "avatar_ref": f"asset://v1/{rank}",
@@ -340,16 +340,19 @@ def test_import_writes_pool_and_updates_published_template_in_place(fresh_db):
     import_presets(validate_manifest(_manifest(with_pool=False)), dry_run=False)
     with db.connect() as conn:
         assert conn.execute(
-            "SELECT name_pool_json FROM character_templates WHERE id='tmpl_ops_v1_1'"
+            "SELECT name_pool_json FROM character_templates "
+            "WHERE id='tmpl_mingchan_v1_1'"
         ).fetchone()["name_pool_json"] is None
 
     report = import_presets(validate_manifest(_manifest()), dry_run=False)
     assert report.errors == [] and report.create_ids == []
-    assert sorted(report.update_ids) == [f"tmpl_ops_v1_{rank}" for rank in range(1, 5)]
+    assert sorted(report.update_ids) == [
+        f"tmpl_mingchan_v1_{rank}" for rank in range(1, 5)
+    ]
     with db.connect() as conn:
         row = conn.execute(
             "SELECT name_pool_json, name_pool_version, long_summary "
-            "FROM character_templates WHERE id='tmpl_ops_v1_1'"
+            "FROM character_templates WHERE id='tmpl_mingchan_v1_1'"
         ).fetchone()
     assert json.loads(row["name_pool_json"]) == list(_POOL[:3])
     assert row["name_pool_version"] == "np_v1"
@@ -366,7 +369,7 @@ def test_replaying_manifest_without_pool_does_not_wipe_configured_pool(fresh_db)
     with db.connect() as conn:
         row = conn.execute(
             "SELECT name_pool_json, name_pool_version FROM character_templates "
-            "WHERE id='tmpl_ops_v1_1'"
+            "WHERE id='tmpl_mingchan_v1_1'"
         ).fetchone()
     assert json.loads(row["name_pool_json"]) == list(_POOL[:3])
     assert row["name_pool_version"] == "np_v1"
@@ -380,5 +383,6 @@ def test_persona_key_is_immutable_once_assigned(fresh_db):
     assert report.errors and "persona_key is immutable" in report.errors[0]
     with db.connect() as conn:
         assert conn.execute(
-            "SELECT persona_key FROM character_templates WHERE id='tmpl_ops_v1_1'"
+            "SELECT persona_key FROM character_templates "
+            "WHERE id='tmpl_mingchan_v1_1'"
         ).fetchone()["persona_key"] == "persona_1"

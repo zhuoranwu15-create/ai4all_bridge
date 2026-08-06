@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""导入/预检 Companion World 首发模板目录；默认可用 ``--dry-run`` 只读规划。
+"""导入/预检鸣蝉 Companion World 首发模板目录；默认可用 ``--dry-run`` 只读规划。
+
+本脚本固定操作 ``app_id=mingchan``；其他产品的模板只用于检测全局 ID 冲突，绝不修改。
 
 manifest 不包含代码内置人设，必须显式提供连续的 rank 1..N（N ≥
 ``MIN_INITIAL_CANDIDATES``，与运行时 ``_validate_initial_catalog`` 同一口径，
@@ -8,8 +10,9 @@ manifest 不包含代码内置人设，必须显式提供连续的 rank 1..N（N
 
 **运营元数据是可原地更新的例外**（m0049 / NAME-001、CAND-001）：``name_pool``、
 ``name_pool_version``、``long_summary`` 不参与人设内容的不可变判定，可以对已发布模板
-补配和调整——生产前四模板早已上线、id 不能换，否则名池永远配不上去。``persona_key``
-介于两者之间：允许从空补上，但一旦非空就不许改值（改了会破坏跨模板版本的身份连续性）。
+补配和调整。已在鸣蝉发布的 template_id 不能原地换内容，否则既有实例无法稳定引用。
+``persona_key`` 介于两者之间：允许从空补上，但一旦非空就不许改值（改了会破坏跨模板
+版本的身份连续性）。
 """
 import argparse
 import json
@@ -21,6 +24,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.bootstrap.product_registry import MINGCHAN_APP_ID  # noqa: E402
 from app.products.mingchan.domain.companion_world.naming import (  # noqa: E402
     NamePoolError,
     normalize_name_pool,
@@ -205,14 +209,25 @@ def _operational_updates(row: dict, record: PresetRecord) -> Dict[str, Any]:
 
 
 def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> ImportReport:
-    """只读计算 create/keep/update/retire 与 immutable 冲突。"""
+    """只读计算鸣蝉目录变更，并显式拒绝被其他产品占用的全局模板 ID。"""
     desired = {record.template_id: record for record in records}
     # 占位符按 manifest 条数生成：写死四个会在候选池扩容时静默漏读已存在模板，
     # 把「幂等重放」变成「重复创建 → 唯一索引冲突」。
     placeholders = ",".join("?" for _ in desired)
+    foreign_rows = conn.execute(
+        f"""
+        SELECT id, app_id FROM character_templates
+        WHERE app_id <> ? AND id IN ({placeholders})
+        """,
+        (MINGCHAN_APP_ID, *desired),
+    ).fetchall()
+    foreign_by_id = {str(row["id"]): str(row["app_id"]) for row in foreign_rows}
     rows = conn.execute(
-        f"SELECT * FROM character_templates WHERE id IN ({placeholders})",
-        tuple(desired),
+        f"""
+        SELECT * FROM character_templates
+        WHERE app_id = ? AND id IN ({placeholders})
+        """,
+        (MINGCHAN_APP_ID, *desired),
     ).fetchall()
     existing = {str(row["id"]): dict(row) for row in rows}
     create_ids: List[str] = []
@@ -221,7 +236,13 @@ def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> I
     errors: List[str] = []
     for template_id, record in desired.items():
         row = existing.get(template_id)
-        if row is None:
+        foreign_app_id = foreign_by_id.get(template_id)
+        if foreign_app_id is not None:
+            errors.append(
+                f"{template_id}: template_id belongs to app_id={foreign_app_id}; "
+                "use a globally unique mingchan template_id"
+            )
+        elif row is None:
             create_ids.append(template_id)
         elif row["status"] != "active":
             errors.append(f"{template_id}: retired template_id cannot be reactivated")
@@ -240,9 +261,10 @@ def inspect_import(conn, records: Sequence[PresetRecord], *, dry_run: bool) -> I
     active_rows = conn.execute(
         """
         SELECT id FROM character_templates
-        WHERE status='active' AND initial_candidate_rank IS NOT NULL
+        WHERE app_id = ? AND status='active' AND initial_candidate_rank IS NOT NULL
         ORDER BY initial_candidate_rank
-        """
+        """,
+        (MINGCHAN_APP_ID,),
     ).fetchall()
     retire_ids = [str(row["id"]) for row in active_rows if str(row["id"]) not in desired]
     return ImportReport(
@@ -261,9 +283,10 @@ def _catalog_ready(conn) -> bool:
         SELECT initial_candidate_rank, name, avatar_ref, summary, tags_json,
                persona_seed_json, persona_version
         FROM character_templates
-        WHERE status='active' AND initial_candidate_rank IS NOT NULL
+        WHERE app_id = ? AND status='active' AND initial_candidate_rank IS NOT NULL
         ORDER BY initial_candidate_rank
-        """
+        """,
+        (MINGCHAN_APP_ID,),
     ).fetchall()
     try:
         validate_manifest(
@@ -303,14 +326,16 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
                 SET status='retired',
                     updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id IN ({placeholders})
+                  AND app_id = ?
                 """,
-                tuple(report.retire_ids),
+                (*report.retire_ids, MINGCHAN_APP_ID),
             )
         by_id = {record.template_id: record for record in records}
         for template_id in report.create_ids:
             record = by_id[template_id]
             create_character_template(
                 template_id=record.template_id,
+                app_id=MINGCHAN_APP_ID,
                 source_type="operations",
                 name=record.name,
                 avatar_ref=record.avatar_ref,
@@ -332,7 +357,8 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
         for template_id in report.update_ids:
             row = dict(
                 conn.execute(
-                    "SELECT * FROM character_templates WHERE id = ?", (template_id,)
+                    "SELECT * FROM character_templates WHERE id = ? AND app_id = ?",
+                    (template_id, MINGCHAN_APP_ID),
                 ).fetchone()
             )
             updates = _operational_updates(row, by_id[template_id])
@@ -343,8 +369,9 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
                 SET {assignments},
                     updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
                 WHERE id = ?
+                  AND app_id = ?
                 """,
-                (*updates.values(), template_id),
+                (*updates.values(), template_id, MINGCHAN_APP_ID),
             )
         report.catalog_ready = _catalog_ready(conn)
         if not report.catalog_ready:
@@ -353,7 +380,7 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="导入/预检 Companion World 初始候选模板目录")
+    parser = argparse.ArgumentParser(description="导入/预检鸣蝉 Companion World 初始候选模板目录")
     parser.add_argument("manifest", help="受控 JSON manifest 路径")
     parser.add_argument("--dry-run", action="store_true", help="只读规划，不写数据库")
     parser.add_argument("--database-url", default=None, help="可选覆盖 DATABASE_URL")
