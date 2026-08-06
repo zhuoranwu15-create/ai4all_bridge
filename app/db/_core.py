@@ -4893,6 +4893,109 @@ def _migration_0063_companion_world_owner_product_unique(conn: Connection) -> No
     )
 
 
+def _migration_0064_fibre_mvp(conn: Connection) -> None:
+    """建立通用 runtime 归属投影与 Fibre MVP 产品私有数据表。"""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_ownerships (
+            runtime_account_id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            app_id TEXT NOT NULL,
+            owner_kind TEXT NOT NULL DEFAULT 'user',
+            source_type TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_runtime_ownerships_source
+            ON runtime_ownerships(app_id, source_type, source_id)
+            WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS ix_runtime_ownerships_owner
+            ON runtime_ownerships(platform_user_id, app_id, status);
+
+        CREATE TABLE IF NOT EXISTS fibre_characters (
+            id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            tagline TEXT NOT NULL,
+            intro TEXT NOT NULL,
+            greeting TEXT NOT NULL,
+            tags_json TEXT NOT NULL DEFAULT '[]',
+            heat_count INTEGER NOT NULL DEFAULT 0,
+            avatar_ref TEXT,
+            cover_ref TEXT,
+            accent_color TEXT NOT NULL DEFAULT '#8b5cf6',
+            persona_prompt TEXT NOT NULL,
+            scenario_prompt TEXT NOT NULL DEFAULT '',
+            speaking_style TEXT NOT NULL DEFAULT '',
+            prompt_version INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'draft',
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE INDEX IF NOT EXISTS ix_fibre_characters_feed
+            ON fibre_characters(status, sort_order, id);
+
+        CREATE TABLE IF NOT EXISTS fibre_character_bindings (
+            platform_user_id TEXT NOT NULL,
+            character_id TEXT NOT NULL,
+            runtime_account_id TEXT NOT NULL,
+            character_prompt_version INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            PRIMARY KEY(platform_user_id, character_id),
+            UNIQUE(runtime_account_id),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS fibre_model_profiles (
+            profile TEXT PRIMARY KEY,
+            provider_id TEXT NOT NULL,
+            display_name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            coin_cost_micros INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            is_default INTEGER NOT NULL DEFAULT 0,
+            config_version INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_model_profiles_default
+            ON fibre_model_profiles(is_default) WHERE enabled = 1 AND is_default = 1;
+
+        CREATE TABLE IF NOT EXISTS fibre_conversations (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL,
+            character_id TEXT NOT NULL,
+            runtime_account_id TEXT NOT NULL,
+            runtime_session_id INTEGER NOT NULL,
+            model_profile TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            archived_at TEXT,
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
+            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
+            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id),
+            FOREIGN KEY(runtime_session_id) REFERENCES sessions(id),
+            FOREIGN KEY(model_profile) REFERENCES fibre_model_profiles(profile)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_conversations_active
+            ON fibre_conversations(platform_user_id, character_id)
+            WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS ix_fibre_conversations_owner
+            ON fibre_conversations(platform_user_id, status, updated_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -4952,6 +5055,7 @@ _MIGRATIONS = [
     (61, _migration_0061_companion_world_product_scope),
     (62, _migration_0062_mingchan_notification_product_scope),
     (63, _migration_0063_companion_world_owner_product_unique),
+    (64, _migration_0064_fibre_mvp),
 ]
 
 

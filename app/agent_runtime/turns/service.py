@@ -1012,7 +1012,10 @@ def _prepare_turn(
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
         effective_daily=effective_daily,
-        llm_provider=resolve_active_llm_provider(tier_for_task(TASK_MAIN_REPLY)),
+        llm_provider=resolve_active_llm_provider(
+            tier_for_task(TASK_MAIN_REPLY),
+            provider_id=ctx.provider_id,
+        ),
         cap=cap,
     )
 
@@ -1869,7 +1872,7 @@ def _finalize_turn(
     should_charge = bool(
         not generation_error and normal_reply_generated and text and text not in _SPECIAL_COMMANDS
     )
-    if should_charge:
+    if should_charge and ctx.usage_billing_enabled:
         billing_started = time.monotonic()
         try:
             billing_result = record_chat_usage_charge(
@@ -2085,6 +2088,10 @@ class ChannelTurnInput:
     display_content: Optional[Dict[str, Any]] = None
     media_asset_id: Optional[str] = None
     media_asset_owner_id: Optional[str] = None
+    # 产品层可选择一个已注册 provider；Runtime 只消费 provider id，不感知产品档位名称。
+    provider_id: Optional[str] = None
+    # 产品已在 Runtime 外完成固定价预占/结算时关闭按 token 计费；每日配额仍按成功 turn 结算。
+    usage_billing_enabled: bool = True
 
 
 def run_product_turn(

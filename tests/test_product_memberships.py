@@ -6,6 +6,7 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import (
+    FIBRE_APP_ID,
     MINGCHAN_APP_ID,
     PRODUCTION_PRODUCT_REGISTRY,
     ZHAOXI_APP_ID,
@@ -16,16 +17,18 @@ from app.bootstrap.product_registry import (
 from app.db._backend import is_postgres
 
 
-def test_production_registry_enables_zhaoxi_and_mingchan():
+def test_production_registry_enables_all_shipped_products():
     registrations = PRODUCTION_PRODUCT_REGISTRY.registrations()
     assert [
         (product.app_id, product.enabled, product.default_language)
         for product in registrations
     ] == [
+        (FIBRE_APP_ID, True, "zh-CN"),
         (MINGCHAN_APP_ID, True, "zh-CN"),
         (ZHAOXI_APP_ID, True, "zh-CN"),
     ]
     assert PRODUCTION_PRODUCT_REGISTRY.require_enabled(MINGCHAN_APP_ID).enabled is True
+    assert PRODUCTION_PRODUCT_REGISTRY.require_enabled(FIBRE_APP_ID).enabled is True
     with pytest.raises(ValueError, match="unregistered app_id"):
         PRODUCTION_PRODUCT_REGISTRY.require_enabled("test_product")
 

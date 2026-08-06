@@ -53,6 +53,8 @@ from app.db.product_memberships import (
     _require_active_product_membership_in_conn,
 )
 __all__ = [
+    'FixedShellReservationReleased',
+    'InsufficientWalletBalance',
     'create_ai4all_account_for_user',
     'create_resident_runtime_account',
     'insert_resident_runtime_account',
@@ -77,6 +79,8 @@ __all__ = [
     'get_wallet_summary',
     'grant_new_user_shells',
     'grant_shells',
+    'reserve_fixed_shells',
+    'release_fixed_shell_reservation',
     'increment_session_turn_count',
     'list_account_owner_bindings_for_account',
     'list_binding_intents_for_account',
@@ -101,6 +105,14 @@ __all__ = [
 # App(产品)层默认 id。legacy 调用固定落「朝夕相伴」；所有显式 app_id 都必须先通过
 # 服务端 ProductRegistry，再由 active membership 门禁后才能创建账号。
 DEFAULT_APP_ID = ZHAOXI_APP_ID
+
+
+class InsufficientWalletBalance(ValueError):
+    """固定金额预占时产品钱包余额不足。"""
+
+
+class FixedShellReservationReleased(ValueError):
+    """同一幂等键对应的固定金额预占已经退款，不允许再次消费。"""
 
 
 def _registered_app_id(app_id: str, registry: ProductRegistry) -> str:
@@ -1026,6 +1038,150 @@ def grant_shells(
             source_id=source_id,
             idempotency_key=idempotency_key,
             metadata=metadata,
+            registry=registry,
+        )
+    return _decode_ledger_row(row)
+
+
+def reserve_fixed_shells(
+    *,
+    account_id: str,
+    platform_user_id: str,
+    amount_shell_micros: int,
+    idempotency_key: str,
+    source_id: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Dict[str, Any]:
+    """原子预占固定金额；用负向账本保证并发下余额不会跌破零。"""
+
+    amount = int(amount_shell_micros)
+    if amount <= 0:
+        raise ValueError("amount_shell_micros must be positive")
+    cleaned_key = _clean_text(idempotency_key)
+    if not cleaned_key:
+        raise ValueError("idempotency_key is required")
+    with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            registry=registry,
+        )
+        assert scope is not None
+        app_id = scope["app_id"]
+        existing = conn.execute(
+            "SELECT * FROM entitlement_ledger WHERE app_id=? AND idempotency_key=?",
+            (app_id, cleaned_key),
+        ).fetchone()
+        if existing is not None:
+            if (
+                str(existing["account_id"]) != account_id
+                or str(existing["platform_user_id"]) != platform_user_id
+            ):
+                raise ValueError("billing idempotency owner mismatch")
+            if int(existing["amount_shell_micros"]) != -amount:
+                raise ValueError("billing idempotency amount mismatch")
+            released = conn.execute(
+                "SELECT 1 FROM entitlement_ledger WHERE app_id=? AND idempotency_key=?",
+                (app_id, f"release-{cleaned_key}"),
+            ).fetchone()
+            if released is not None:
+                raise FixedShellReservationReleased(
+                    "fixed shell reservation was already released"
+                )
+            return _decode_ledger_row(existing)
+        wallet = _ensure_wallet_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            registry=registry,
+        )
+        updated = conn.execute(
+            """
+            UPDATE entitlement_wallets
+            SET balance_shell_micros=balance_shell_micros-?,
+                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            WHERE id=? AND app_id=? AND status='active'
+              AND balance_shell_micros>=?
+            """,
+            (amount, wallet["id"], app_id, amount),
+        )
+        if updated.rowcount != 1:
+            raise InsufficientWalletBalance("insufficient wallet balance")
+        balance = conn.execute(
+            "SELECT balance_shell_micros FROM entitlement_wallets WHERE id=? AND app_id=?",
+            (wallet["id"], app_id),
+        ).fetchone()
+        ledger_id = _new_id("ledger")
+        conn.execute(
+            """
+            INSERT INTO entitlement_ledger(
+                id, wallet_id, account_id, platform_user_id, app_id, entry_type,
+                source_type, source_id, amount_shell_micros,
+                balance_after_shell_micros, idempotency_key, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, 'debit', 'fixed_reservation', ?, ?, ?, ?, ?)
+            """,
+            (
+                ledger_id,
+                wallet["id"],
+                account_id,
+                platform_user_id,
+                app_id,
+                _clean_text(source_id),
+                -amount,
+                int(balance["balance_shell_micros"]),
+                cleaned_key,
+                json.dumps(metadata or {}, ensure_ascii=False),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM entitlement_ledger WHERE id=? AND app_id=?",
+            (ledger_id, app_id),
+        ).fetchone()
+    return _decode_ledger_row(row)
+
+
+def release_fixed_shell_reservation(
+    *,
+    account_id: str,
+    platform_user_id: str,
+    reservation_idempotency_key: str,
+    registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
+) -> Dict[str, Any]:
+    """幂等退回一次固定金额预占；成功回复无需再 capture。"""
+
+    cleaned_key = _clean_text(reservation_idempotency_key)
+    with connect() as conn:
+        scope = _resolve_billing_scope_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            registry=registry,
+        )
+        assert scope is not None
+        reservation = conn.execute(
+            """
+            SELECT * FROM entitlement_ledger
+            WHERE app_id=? AND idempotency_key=? AND source_type='fixed_reservation'
+              AND account_id=? AND platform_user_id=?
+            """,
+            (scope["app_id"], cleaned_key, account_id, platform_user_id),
+        ).fetchone()
+        if reservation is None:
+            raise ValueError("reservation not found")
+        amount = -int(reservation["amount_shell_micros"])
+        row = _apply_wallet_ledger_in_conn(
+            conn,
+            account_id=account_id,
+            platform_user_id=platform_user_id,
+            amount_shell_micros=amount,
+            entry_type="credit",
+            source_type="fixed_reservation_release",
+            source_id=str(reservation["id"]),
+            idempotency_key=f"release-{cleaned_key}",
+            metadata={"reservation_ledger_id": str(reservation["id"])},
             registry=registry,
         )
     return _decode_ledger_row(row)
