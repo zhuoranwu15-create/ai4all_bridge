@@ -27,6 +27,7 @@ from app.products.fibre.api.deps import require_fibre_dev_principal
 from app.products.fibre.application.turn_services import FIBRE_TURN_SERVICES
 from app.products.fibre.infrastructure.repository import (
     create_or_get_conversation,
+    get_character_experience,
     get_conversation,
     get_entry_account_id,
     get_model_profile,
@@ -34,6 +35,8 @@ from app.products.fibre.infrastructure.repository import (
     list_conversation_messages,
     list_model_profiles,
     restart_conversation,
+    set_character_favorite,
+    set_character_like,
     touch_conversation,
     update_conversation_model,
 )
@@ -97,6 +100,79 @@ def feed(
     return {"status": "ok", "items": list_characters()}
 
 
+def _set_reaction(
+    *, character_id: str, principal: SessionPrincipal, reaction: str, active: bool
+) -> dict:
+    setter = set_character_like if reaction == "like" else set_character_favorite
+    try:
+        result = setter(
+            platform_user_id=principal.platform_user_id,
+            character_id=character_id,
+            active=active,
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=404, detail=str(err)) from err
+    return {"status": "ok", **result}
+
+
+@router.put("/characters/{character_id}/like")
+def like_character(
+    character_id: str,
+    response: Response,
+    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+) -> dict:
+    result = _set_reaction(
+        character_id=character_id, principal=principal, reaction="like", active=True
+    )
+    _no_store(response)
+    return result
+
+
+@router.delete("/characters/{character_id}/like")
+def unlike_character(
+    character_id: str,
+    response: Response,
+    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+) -> dict:
+    result = _set_reaction(
+        character_id=character_id, principal=principal, reaction="like", active=False
+    )
+    _no_store(response)
+    return result
+
+
+@router.put("/characters/{character_id}/favorite")
+def favorite_character(
+    character_id: str,
+    response: Response,
+    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+) -> dict:
+    result = _set_reaction(
+        character_id=character_id,
+        principal=principal,
+        reaction="favorite",
+        active=True,
+    )
+    _no_store(response)
+    return result
+
+
+@router.delete("/characters/{character_id}/favorite")
+def unfavorite_character(
+    character_id: str,
+    response: Response,
+    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+) -> dict:
+    result = _set_reaction(
+        character_id=character_id,
+        principal=principal,
+        reaction="favorite",
+        active=False,
+    )
+    _no_store(response)
+    return result
+
+
 @router.post("/conversations")
 def create_conversation(
     payload: CreateConversationRequest,
@@ -122,6 +198,12 @@ def conversation_detail(
     principal: SessionPrincipal = Depends(require_fibre_dev_principal),
 ) -> dict:
     conversation = _conversation_or_404(conversation_id, principal)
+    experience = get_character_experience(
+        conversation_id=conversation_id,
+        platform_user_id=principal.platform_user_id,
+    )
+    if experience is None:
+        raise HTTPException(status_code=503, detail="character_experience_unavailable")
     _no_store(response)
     return {
         "status": "ok",
@@ -129,6 +211,7 @@ def conversation_detail(
         "messages": list_conversation_messages(conversation, limit=limit),
         "models": list_model_profiles(),
         "wallet": _wallet(principal.platform_user_id),
+        "experience": experience,
     }
 
 
@@ -164,12 +247,19 @@ def restart(
         )
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
+    experience = get_character_experience(
+        conversation_id=str(conversation["id"]),
+        platform_user_id=principal.platform_user_id,
+    )
+    if experience is None:
+        raise HTTPException(status_code=503, detail="character_experience_unavailable")
     _no_store(response)
     return {
         "status": "ok",
         "conversation": conversation,
         "messages": [],
         "wallet": _wallet(principal.platform_user_id),
+        "experience": experience,
     }
 
 
