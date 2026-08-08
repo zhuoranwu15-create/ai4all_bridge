@@ -16,57 +16,74 @@ from app.db import (
 )
 from app.db._backend import is_postgres
 from app.db.product_memberships import _ensure_product_membership_in_conn
+from app.products.fibre.infrastructure.fixtures import (
+    BADGES,
+    FIXTURE_VERSION,
+    HOT_COMMENTS,
+    INSPIRATION_PROMPTS,
+    PUBLIC_MEMORIES,
+    PUBLIC_PROFILES,
+    REFERENCE_CHARACTERS,
+)
 
 _ACTIVE_SESSION_KEY = "__app_active__"
 
-_CHARACTERS = (
-    {
-        "id": "char_luna",
-        "display_name": "露娜",
-        "tagline": "在月色和旧唱片里，听你慢慢说",
-        "intro": "温柔但不敷衍的深夜电台主播。她擅长接住情绪，也会认真记住你话里的小细节。",
-        "greeting": "晚上好。这里的灯刚刚亮起来，你今天想从哪一段说起？",
-        "tags": ["温柔陪伴", "深夜电台", "治愈"],
-        "heat_count": 12840,
-        "accent_color": "#8b5cf6",
-        "persona_prompt": (
-            "你是露娜，一位深夜电台主播。你温柔、敏锐、有边界感，不说空泛鸡汤。"
-            "先理解用户真实感受，再自然回应；一次通常只追问一个问题。"
-        ),
-        "scenario_prompt": "你和用户在安静的深夜电台直播间里一对一聊天。",
-        "speaking_style": "自然、克制、略带诗意；避免长篇说教。",
-        "sort_order": 10,
-    },
-    {
-        "id": "char_kai",
-        "display_name": "凯",
-        "tagline": "嘴上不饶人，行动永远站在你这边",
-        "intro": "看起来有点酷的城市摄影师。会开玩笑、会直接指出问题，但从不轻视你的感受。",
-        "greeting": "你终于来了。我刚拍完一卷照片——不过先说说你吧，今天过得怎么样？",
-        "tags": ["轻松日常", "直球", "摄影师"],
-        "heat_count": 9360,
-        "accent_color": "#f97316",
-        "persona_prompt": (
-            "你是凯，一位城市摄影师。你幽默、直接、可靠，偶尔轻微吐槽但绝不刻薄。"
-            "像熟悉的朋友一样回应，具体、鲜活，不使用客服腔。"
-        ),
-        "scenario_prompt": "你刚结束一天的街头拍摄，正和用户在咖啡店聊天。",
-        "speaking_style": "短句、口语化、有一点机灵；必要时给出明确建议。",
-        "sort_order": 20,
-    },
-)
 
-
-def _seed_catalog_in_conn(conn) -> None:
-    for item in _CHARACTERS:
+def _seed_catalog_in_conn(conn, *, platform_user_id: str) -> None:
+    conn.execute(
+        """
+        UPDATE fibre_characters SET status='archived',
+            updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        WHERE id IN ('char_luna', 'char_kai') AND status='active'
+        """
+    )
+    for profile in PUBLIC_PROFILES:
+        conn.execute(
+            """
+            INSERT INTO fibre_public_profiles(
+                id, platform_user_id, handle, display_name, profile_type, status,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'active',
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(id) DO UPDATE SET
+                handle=excluded.handle,
+                display_name=excluded.display_name,
+                profile_type=excluded.profile_type,
+                status='active',
+                updated_at=excluded.updated_at
+            """,
+            profile,
+        )
+    conn.execute(
+        """
+        INSERT INTO fibre_public_profiles(
+            id, platform_user_id, handle, display_name, profile_type, status,
+            updated_at
+        )
+        VALUES ('fprof_user_test', ?, 'fibre-test-user', '测试用户', 'user',
+                'active',
+                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        ON CONFLICT(id) DO UPDATE SET
+            platform_user_id=excluded.platform_user_id,
+            display_name=excluded.display_name,
+            status='active',
+            updated_at=excluded.updated_at
+        """,
+        (platform_user_id,),
+    )
+    for index, item in enumerate(REFERENCE_CHARACTERS, start=1):
         conn.execute(
             """
             INSERT INTO fibre_characters(
                 id, display_name, tagline, intro, greeting, tags_json,
-                heat_count, accent_color, persona_prompt, scenario_prompt,
-                speaking_style, prompt_version, status, sort_order, updated_at
+                heat_count, avatar_ref, cover_ref, accent_color, persona_prompt,
+                scenario_prompt, speaking_style, prompt_version, status,
+                sort_order, creator_profile_id, content_rating,
+                capabilities_json, fixture_version, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?,
+                    ?, 'mature', ?, ?,
                     strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
@@ -75,20 +92,148 @@ def _seed_catalog_in_conn(conn) -> None:
                 greeting=excluded.greeting,
                 tags_json=excluded.tags_json,
                 heat_count=excluded.heat_count,
+                avatar_ref=excluded.avatar_ref,
+                cover_ref=excluded.cover_ref,
                 accent_color=excluded.accent_color,
                 persona_prompt=excluded.persona_prompt,
                 scenario_prompt=excluded.scenario_prompt,
                 speaking_style=excluded.speaking_style,
                 sort_order=excluded.sort_order,
+                creator_profile_id=excluded.creator_profile_id,
+                content_rating=excluded.content_rating,
+                capabilities_json=excluded.capabilities_json,
+                fixture_version=excluded.fixture_version,
+                status='active',
                 updated_at=excluded.updated_at
             """,
             (
                 item["id"], item["display_name"], item["tagline"], item["intro"],
                 item["greeting"], json.dumps(item["tags"], ensure_ascii=False),
-                item["heat_count"], item["accent_color"], item["persona_prompt"],
-                item["scenario_prompt"], item["speaking_style"], item["sort_order"],
+                item["interaction_count"], item["cover_ref"], item["cover_ref"],
+                item["accent_color"], item["persona_prompt"],
+                item["scenario_prompt"], item["speaking_style"], index * 10,
+                item["creator_profile_id"],
+                json.dumps(
+                    {"text": True, "voice": bool(item["has_voice"])},
+                    separators=(",", ":"),
+                ),
+                FIXTURE_VERSION,
             ),
         )
+
+    for badge in BADGES:
+        conn.execute(
+            """
+            INSERT INTO fibre_character_badges(
+                id, code, display_name, style_token, status, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'active',
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(id) DO UPDATE SET
+                code=excluded.code,
+                display_name=excluded.display_name,
+                style_token=excluded.style_token,
+                status='active',
+                updated_at=excluded.updated_at
+            """,
+            badge,
+        )
+
+    for item in REFERENCE_CHARACTERS:
+        badge_code = item["badge_code"]
+        if badge_code:
+            conn.execute(
+                """
+                INSERT INTO fibre_character_badge_assignments(
+                    character_id, badge_id, sort_order
+                )
+                SELECT ?, id, 10 FROM fibre_character_badges WHERE code=?
+                ON CONFLICT(character_id, badge_id) DO UPDATE SET
+                    sort_order=excluded.sort_order
+                """,
+                (item["id"], badge_code),
+            )
+        conn.execute(
+            """
+            INSERT INTO fibre_character_stats(
+                character_id, interaction_count, connector_count,
+                comment_count, memory_count, like_count, favorite_count
+            )
+            VALUES (?, ?, 12400, 2154, 18, 119, 120)
+            ON CONFLICT(character_id) DO NOTHING
+            """,
+            (item["id"], item["interaction_count"]),
+        )
+        for slug, author_id, content, like_count, rank in HOT_COMMENTS:
+            conn.execute(
+                """
+                INSERT INTO fibre_character_comments(
+                    id, character_id, author_profile_id, content, source_locale,
+                    status, like_count, is_featured, featured_rank, created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, 'en', 'visible', ?, 1, ?,
+                        '2026-02-13 20:00:00', '2026-02-13 20:00:00')
+                ON CONFLICT(id) DO UPDATE SET
+                    content=excluded.content,
+                    like_count=excluded.like_count,
+                    status='visible',
+                    is_featured=1,
+                    featured_rank=excluded.featured_rank,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    f"fcomment_{item['id'].removeprefix('char_ref_')}_{slug}",
+                    item["id"], author_id, content, like_count, rank,
+                ),
+            )
+        for slug, title, message_count, engagement_count, published_at in PUBLIC_MEMORIES:
+            conn.execute(
+                """
+                INSERT INTO fibre_character_memories(
+                    id, character_id, owner_profile_id, origin, title,
+                    message_count, engagement_count, visibility,
+                    moderation_status, published_at
+                )
+                VALUES (?, ?, 'fprof_user_test', 'seed', ?, ?, ?, 'public',
+                        'approved', ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    title=excluded.title,
+                    message_count=excluded.message_count,
+                    engagement_count=excluded.engagement_count,
+                    visibility='public',
+                    moderation_status='approved',
+                    published_at=excluded.published_at
+                """,
+                (
+                    f"fmemory_{item['id'].removeprefix('char_ref_')}_{slug}",
+                    item["id"], title, message_count, engagement_count,
+                    published_at,
+                ),
+            )
+
+    conn.execute(
+        """
+        INSERT INTO fibre_user_personas(
+            id, platform_user_id, display_name, description, prompt_text,
+            status, is_default, version, updated_at
+        )
+        VALUES ('fpersona_test_default', ?, '测试用户',
+                '定义“你”在故事中的身份与背景。',
+                '用户在故事中使用测试用户这一身份；不要替用户决定行动或台词。',
+                'active', 1, 1,
+                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        ON CONFLICT(id) DO UPDATE SET
+            platform_user_id=excluded.platform_user_id,
+            display_name=excluded.display_name,
+            description=excluded.description,
+            prompt_text=excluded.prompt_text,
+            status='active',
+            is_default=1,
+            updated_at=excluded.updated_at
+        """,
+        (platform_user_id,),
+    )
     profiles = (
         ("fast", settings.fibre_fast_provider_id, "快速", "响应更快，适合轻松日常", 1_000_000, 0),
         ("balanced", settings.fibre_balanced_provider_id, "均衡", "质量与速度兼顾", 3_000_000, 1),
@@ -175,7 +320,7 @@ def seed_fibre_dev() -> Dict[str, Any]:
             source_id=user_id,
             conn=conn,
         )
-        _seed_catalog_in_conn(conn)
+        _seed_catalog_in_conn(conn, platform_user_id=user_id)
     grant = grant_new_user_shells(
         account_id=entry_account_id,
         platform_user_id=user_id,
@@ -208,17 +353,60 @@ def list_characters() -> List[Dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT id, display_name, tagline, intro, greeting, tags_json,
-                   heat_count, avatar_ref, cover_ref, accent_color, prompt_version
-            FROM fibre_characters
-            WHERE status='active'
+                   heat_count, avatar_ref, cover_ref, accent_color,
+                   prompt_version, content_rating, capabilities_json,
+                   creator_profile_id
+            FROM fibre_characters WHERE status='active'
             ORDER BY sort_order, id
             """
         ).fetchall()
-    items = []
-    for row in rows:
-        item = dict(row)
-        item["tags"] = json.loads(item.pop("tags_json") or "[]")
-        items.append(item)
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = json.loads(item.pop("tags_json") or "[]")
+            item["capabilities"] = json.loads(
+                item.pop("capabilities_json") or '{"text":true,"voice":false}'
+            )
+            creator = conn.execute(
+                """
+                SELECT id, handle, display_name, avatar_ref
+                FROM fibre_public_profiles
+                WHERE id=? AND status='active'
+                """,
+                (item.pop("creator_profile_id"),),
+            ).fetchone()
+            item["creator"] = dict(creator) if creator else None
+            stats = conn.execute(
+                """
+                SELECT interaction_count, connector_count, comment_count,
+                       memory_count, like_count, favorite_count
+                FROM fibre_character_stats WHERE character_id=?
+                """,
+                (item["id"],),
+            ).fetchone()
+            item["stats"] = dict(stats) if stats else {
+                "interaction_count": int(item["heat_count"]),
+                "connector_count": 0,
+                "comment_count": 0,
+                "memory_count": 0,
+                "like_count": 0,
+                "favorite_count": 0,
+            }
+            item["interaction_count"] = int(item["stats"]["interaction_count"])
+            badge_rows = conn.execute(
+                """
+                SELECT b.code, b.display_name, b.icon_ref, b.style_token
+                FROM fibre_character_badge_assignments a
+                JOIN fibre_character_badges b ON b.id=a.badge_id
+                WHERE a.character_id=? AND b.status='active'
+                  AND (a.starts_at IS NULL OR a.starts_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                  AND (a.ends_at IS NULL OR a.ends_at > strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                ORDER BY a.sort_order, b.code
+                """,
+                (item["id"],),
+            ).fetchall()
+            item["badges"] = [dict(badge) for badge in badge_rows]
+            items.append(item)
     return items
 
 
@@ -256,7 +444,8 @@ def _conversation_row(conn, conversation_id: str, platform_user_id: str):
         """
         SELECT c.*, ch.display_name, ch.tagline, ch.intro, ch.greeting,
                ch.tags_json, ch.heat_count, ch.avatar_ref, ch.cover_ref,
-               ch.accent_color
+               ch.accent_color, ch.prompt_version, ch.content_rating,
+               ch.capabilities_json
         FROM fibre_conversations c
         JOIN fibre_characters ch ON ch.id=c.character_id
         WHERE c.id=? AND c.platform_user_id=? AND c.status='active'
@@ -271,11 +460,15 @@ def _decode_conversation(row) -> Dict[str, Any]:
         key: item.pop(key)
         for key in (
             "display_name", "tagline", "intro", "greeting", "heat_count",
-            "avatar_ref", "cover_ref", "accent_color",
+            "avatar_ref", "cover_ref", "accent_color", "prompt_version",
+            "content_rating",
         )
     }
     item["character"]["id"] = item["character_id"]
     item["character"]["tags"] = json.loads(item.pop("tags_json") or "[]")
+    item["character"]["capabilities"] = json.loads(
+        item.pop("capabilities_json") or '{"text":true,"voice":false}'
+    )
     return item
 
 
@@ -304,6 +497,18 @@ def create_or_get_conversation(
         # conversation 必须处于同一个显式事务。PG 首条查询已自动开启事务。
         if not is_postgres() and not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            INSERT INTO fibre_user_character_relationships(
+                platform_user_id, character_id, state, updated_at
+            )
+            VALUES (?, ?, 'connected',
+                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            ON CONFLICT(platform_user_id, character_id) DO UPDATE SET
+                state='connected', updated_at=excluded.updated_at
+            """,
+            (platform_user_id, character_id),
+        )
         binding = conn.execute(
             """
             SELECT * FROM fibre_character_bindings
@@ -405,6 +610,281 @@ def get_conversation(
     with connect() as conn:
         row = _conversation_row(conn, conversation_id, platform_user_id)
     return _decode_conversation(row) if row else None
+
+
+def _api_timestamp(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value)
+    if "T" not in text:
+        text = text.replace(" ", "T", 1)
+    return text if text.endswith(("Z", "+08:00")) else f"{text}+08:00"
+
+
+def _public_profile(row) -> Dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "display_name": str(row["display_name"]),
+        "avatar_ref": row["avatar_ref"],
+    }
+
+
+def get_character_experience(
+    *, conversation_id: str, platform_user_id: str
+) -> Optional[Dict[str, Any]]:
+    """聚合当前用户在一个 Fibre 会话里需要的 Profile 与 viewer state。"""
+
+    with connect() as conn:
+        conversation = conn.execute(
+            """
+            SELECT character_id, current_chapter_no
+            FROM fibre_conversations
+            WHERE id=? AND platform_user_id=? AND status='active'
+            """,
+            (conversation_id, platform_user_id),
+        ).fetchone()
+        if conversation is None:
+            return None
+        character_id = str(conversation["character_id"])
+        character = conn.execute(
+            """
+            SELECT ch.tags_json, p.id, p.display_name, p.avatar_ref
+            FROM fibre_characters ch
+            JOIN fibre_public_profiles p ON p.id=ch.creator_profile_id
+            WHERE ch.id=? AND ch.status='active' AND p.status='active'
+            """,
+            (character_id,),
+        ).fetchone()
+        stats = conn.execute(
+            """
+            SELECT interaction_count, connector_count, comment_count,
+                   memory_count, like_count, favorite_count
+            FROM fibre_character_stats WHERE character_id=?
+            """,
+            (character_id,),
+        ).fetchone()
+        badge_rows = conn.execute(
+            """
+            SELECT b.code, b.display_name, b.style_token
+            FROM fibre_character_badge_assignments a
+            JOIN fibre_character_badges b ON b.id=a.badge_id
+            WHERE a.character_id=? AND b.status='active'
+            ORDER BY a.sort_order, b.code
+            """,
+            (character_id,),
+        ).fetchall()
+        comment_rows = conn.execute(
+            """
+            SELECT c.id AS comment_id, c.content, c.source_locale,
+                   c.like_count, c.created_at, p.id, p.display_name,
+                   p.avatar_ref
+            FROM fibre_character_comments c
+            JOIN fibre_public_profiles p ON p.id=c.author_profile_id
+            WHERE c.character_id=? AND c.status='visible' AND c.is_featured=1
+            ORDER BY c.featured_rank, c.created_at DESC LIMIT 2
+            """,
+            (character_id,),
+        ).fetchall()
+        memory_rows = conn.execute(
+            """
+            SELECT m.id AS memory_id, m.title, m.message_count,
+                   m.engagement_count, m.published_at, p.id,
+                   p.display_name, p.avatar_ref
+            FROM fibre_character_memories m
+            JOIN fibre_public_profiles p ON p.id=m.owner_profile_id
+            WHERE m.character_id=? AND m.visibility='public'
+              AND m.moderation_status='approved'
+            ORDER BY m.published_at DESC, m.id LIMIT 3
+            """,
+            (character_id,),
+        ).fetchall()
+        relationship = conn.execute(
+            """
+            SELECT relationship_level, relationship_xp
+            FROM fibre_user_character_relationships
+            WHERE platform_user_id=? AND character_id=? AND state='connected'
+            """,
+            (platform_user_id, character_id),
+        ).fetchone()
+        liked = conn.execute(
+            """
+            SELECT 1 FROM fibre_character_likes
+            WHERE platform_user_id=? AND character_id=?
+            """,
+            (platform_user_id, character_id),
+        ).fetchone()
+        favorited = conn.execute(
+            """
+            SELECT 1 FROM fibre_character_favorites
+            WHERE platform_user_id=? AND character_id=?
+            """,
+            (platform_user_id, character_id),
+        ).fetchone()
+        persona = conn.execute(
+            """
+            SELECT id, display_name, avatar_ref, description
+            FROM fibre_user_personas
+            WHERE platform_user_id=? AND status='active' AND is_default=1
+            """,
+            (platform_user_id,),
+        ).fetchone()
+        pin_rows = conn.execute(
+            """
+            SELECT id, content_snapshot, sort_order
+            FROM fibre_conversation_pins
+            WHERE conversation_id=? AND status='active'
+            ORDER BY sort_order, id
+            """,
+            (conversation_id,),
+        ).fetchall()
+
+    if character is None or stats is None:
+        return None
+    comments = []
+    for row in comment_rows:
+        comments.append({
+            "id": str(row["comment_id"]),
+            "author": _public_profile(row),
+            "content": str(row["content"]),
+            "source_locale": str(row["source_locale"]),
+            "like_count": int(row["like_count"]),
+            "viewer_has_liked": False,
+            "created_at": _api_timestamp(row["created_at"]),
+        })
+    memories = []
+    for row in memory_rows:
+        memories.append({
+            "id": str(row["memory_id"]),
+            "title": str(row["title"]),
+            "owner": _public_profile(row),
+            "message_count": int(row["message_count"]),
+            "engagement_count": int(row["engagement_count"]),
+            "published_at": _api_timestamp(row["published_at"]),
+        })
+    return {
+        "profile": {
+            "creator": _public_profile(character),
+            "badges": [dict(row) for row in badge_rows],
+            "tags": json.loads(character["tags_json"] or "[]"),
+            "stats": {
+                key: int(stats[key])
+                for key in (
+                    "interaction_count", "connector_count", "comment_count",
+                    "memory_count",
+                )
+            },
+            "hot_comments": comments,
+            "memories": memories,
+        },
+        "viewer_state": {
+            "relationship_level": int(relationship["relationship_level"]) if relationship else 0,
+            "relationship_xp": int(relationship["relationship_xp"]) if relationship else 0,
+            "current_chapter": int(conversation["current_chapter_no"]),
+            "has_liked": liked is not None,
+            "like_count": int(stats["like_count"]),
+            "is_favorite": favorited is not None,
+            "favorite_count": int(stats["favorite_count"]),
+        },
+        "conversation_tools": {
+            "role_card": dict(persona) if persona else None,
+            "pins": [
+                {
+                    "id": str(row["id"]),
+                    "content": str(row["content_snapshot"]),
+                    "sort_order": int(row["sort_order"]),
+                }
+                for row in pin_rows
+            ],
+        },
+        "inspiration_prompts": list(INSPIRATION_PROMPTS),
+    }
+
+
+def _set_character_reaction(
+    *, platform_user_id: str, character_id: str, reaction: str, active: bool
+) -> Dict[str, Any]:
+    table, count_column = {
+        "like": ("fibre_character_likes", "like_count"),
+        "favorite": ("fibre_character_favorites", "favorite_count"),
+    }[reaction]
+    with connect() as conn:
+        character = conn.execute(
+            "SELECT 1 FROM fibre_characters WHERE id=? AND status='active'",
+            (character_id,),
+        ).fetchone()
+        if character is None:
+            raise ValueError("character not found")
+        if not is_postgres() and not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        if active:
+            changed = conn.execute(
+                f"""
+                INSERT INTO {table}(platform_user_id, character_id)
+                VALUES (?, ?) ON CONFLICT(platform_user_id, character_id) DO NOTHING
+                """,
+                (platform_user_id, character_id),
+            ).rowcount
+            if changed:
+                conn.execute(
+                    f"""
+                    UPDATE fibre_character_stats
+                    SET {count_column}={count_column}+1, stats_version=stats_version+1,
+                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    WHERE character_id=?
+                    """,
+                    (character_id,),
+                )
+        else:
+            changed = conn.execute(
+                f"DELETE FROM {table} WHERE platform_user_id=? AND character_id=?",
+                (platform_user_id, character_id),
+            ).rowcount
+            if changed:
+                conn.execute(
+                    f"""
+                    UPDATE fibre_character_stats
+                    SET {count_column}=CASE WHEN {count_column}>0 THEN {count_column}-1 ELSE 0 END,
+                        stats_version=stats_version+1,
+                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    WHERE character_id=?
+                    """,
+                    (character_id,),
+                )
+        current = conn.execute(
+            f"SELECT 1 FROM {table} WHERE platform_user_id=? AND character_id=?",
+            (platform_user_id, character_id),
+        ).fetchone()
+        stats = conn.execute(
+            f"SELECT {count_column} AS count FROM fibre_character_stats WHERE character_id=?",
+            (character_id,),
+        ).fetchone()
+    return {"active": current is not None, "count": int(stats["count"])}
+
+
+def set_character_like(
+    *, platform_user_id: str, character_id: str, active: bool
+) -> Dict[str, Any]:
+    """幂等设置当前用户对角色的点赞状态，并返回权威计数。"""
+
+    return _set_character_reaction(
+        platform_user_id=platform_user_id,
+        character_id=character_id,
+        reaction="like",
+        active=active,
+    )
+
+
+def set_character_favorite(
+    *, platform_user_id: str, character_id: str, active: bool
+) -> Dict[str, Any]:
+    """幂等设置当前用户对角色的收藏状态，并返回权威计数。"""
+
+    return _set_character_reaction(
+        platform_user_id=platform_user_id,
+        character_id=character_id,
+        reaction="favorite",
+        active=active,
+    )
 
 
 def list_conversation_messages(conversation: Dict[str, Any], *, limit: int = 100):
@@ -509,8 +989,9 @@ def restart_conversation(
 
 
 __all__ = [
-    "create_or_get_conversation", "get_conversation", "get_entry_account_id",
-    "get_model_profile", "list_characters", "list_conversation_messages",
-    "list_model_profiles", "restart_conversation", "seed_fibre_dev",
-    "touch_conversation", "update_conversation_model",
+    "create_or_get_conversation", "get_character_experience",
+    "get_conversation", "get_entry_account_id", "get_model_profile",
+    "list_characters", "list_conversation_messages", "list_model_profiles",
+    "restart_conversation", "seed_fibre_dev", "set_character_favorite",
+    "set_character_like", "touch_conversation", "update_conversation_model",
 ]

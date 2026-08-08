@@ -32,7 +32,13 @@ def test_fibre_seed_is_idempotent_and_product_scoped(fresh_db, monkeypatch):
 
     assert first["platform_user_id"] == "user_fibre_test"
     assert second["grant_balance_shells"] == "1000"
-    assert len(repository.list_characters()) == 2
+    characters = repository.list_characters()
+    assert len(characters) == 10
+    assert characters[0]["id"] == "char_ref_after_hours"
+    assert characters[0]["creator"]["display_name"] == "fibre"
+    assert characters[0]["interaction_count"] == 48200
+    assert characters[0]["capabilities"] == {"text": True, "voice": True}
+    assert characters[0]["badges"][0]["code"] == "featured"
     assert [item["profile"] for item in repository.list_model_profiles()] == [
         "fast",
         "balanced",
@@ -53,15 +59,15 @@ def test_fibre_conversation_uses_shared_runtime_account_and_session(
     repository.seed_fibre_dev()
 
     first = repository.create_or_get_conversation(
-        platform_user_id="user_fibre_test", character_id="char_luna"
+        platform_user_id="user_fibre_test", character_id="char_ref_after_hours"
     )
     replay = repository.create_or_get_conversation(
-        platform_user_id="user_fibre_test", character_id="char_luna"
+        platform_user_id="user_fibre_test", character_id="char_ref_after_hours"
     )
 
     assert replay["id"] == first["id"]
     assert first["model_profile"] == "balanced"
-    assert first["character"]["display_name"] == "露娜"
+    assert first["character"]["display_name"] == "Kai · After Hours"
     assert repository.list_conversation_messages(first) == []
     with db.connect() as conn:
         assert (
@@ -161,18 +167,61 @@ def test_fibre_http_core_flow_charges_fixed_price_once(fresh_db, monkeypatch):
 
         feed = client.get("/api/v1/products/fibre/feed")
         assert feed.status_code == 200
-        assert [item["id"] for item in feed.json()["items"]] == [
-            "char_luna",
-            "char_kai",
-        ]
+        assert len(feed.json()["items"]) == 10
+        assert feed.json()["items"][0]["id"] == "char_ref_after_hours"
 
         created = client.post(
             "/api/v1/products/fibre/conversations",
-            json={"character_id": "char_luna"},
+            json={"character_id": "char_ref_after_hours"},
         )
         assert created.status_code == 200
         conversation = created.json()["conversation"]
         assert conversation["model_profile"] == "balanced"
+
+        detail = client.get(
+            f"/api/v1/products/fibre/conversations/{conversation['id']}"
+        )
+        assert detail.status_code == 200
+        experience = detail.json()["experience"]
+        assert experience["profile"]["creator"]["display_name"] == "fibre"
+        assert len(experience["profile"]["hot_comments"]) == 2
+        assert len(experience["profile"]["memories"]) == 3
+        assert experience["viewer_state"] == {
+            "relationship_level": 0,
+            "relationship_xp": 0,
+            "current_chapter": 1,
+            "has_liked": False,
+            "like_count": 119,
+            "is_favorite": False,
+            "favorite_count": 120,
+        }
+        assert experience["conversation_tools"]["role_card"]["id"] == (
+            "fpersona_test_default"
+        )
+
+        liked = client.put(
+            "/api/v1/products/fibre/characters/char_ref_after_hours/like"
+        )
+        liked_again = client.put(
+            "/api/v1/products/fibre/characters/char_ref_after_hours/like"
+        )
+        assert liked.json() == {"status": "ok", "active": True, "count": 120}
+        assert liked_again.json() == liked.json()
+        unliked = client.delete(
+            "/api/v1/products/fibre/characters/char_ref_after_hours/like"
+        )
+        unliked_again = client.delete(
+            "/api/v1/products/fibre/characters/char_ref_after_hours/like"
+        )
+        assert unliked.json() == {"status": "ok", "active": False, "count": 119}
+        assert unliked_again.json() == unliked.json()
+
+        favorited = client.put(
+            "/api/v1/products/fibre/characters/char_ref_after_hours/favorite"
+        )
+        assert favorited.json() == {
+            "status": "ok", "active": True, "count": 121
+        }
 
         mismatched_ids = client.post(
             f"/api/v1/products/fibre/conversations/{conversation['id']}/turns",
