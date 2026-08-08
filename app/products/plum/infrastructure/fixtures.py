@@ -1,9 +1,9 @@
-"""Fibre 本地/测试联调资料；不参与共享 Runtime。"""
+"""Plum 本地/测试联调资料；不参与共享 Runtime。"""
 
 FIXTURE_VERSION = "reference_fixture_v1"
 
 PUBLIC_PROFILES = (
-    ("fprof_creator_fibre", None, "fibre", "fibre", "creator"),
+    ("fprof_creator_plum", None, "plum", "plum", "creator"),
     ("fprof_creator_nightfall", None, "nightfall", "nightfall", "creator"),
     ("fprof_creator_velvetink", None, "velvetink", "velvetink", "creator"),
     ("fprof_creator_aurora", None, "aurora", "aurora", "creator"),
@@ -25,7 +25,7 @@ REFERENCE_CHARACTERS = (
         "tagline": "He said the studio was closed. Then he left the door open for you.",
         "intro": "A late-night encounter with Kai in his locked photography studio.",
         "greeting": "The studio sign says CLOSED, but Kai leaves the door ajar. ‘You made it. Come in before I change my mind.’",
-        "creator_profile_id": "fprof_creator_fibre",
+        "creator_profile_id": "fprof_creator_plum",
         "tags": ["OC", "Slow Burn", "Photographer"],
         "interaction_count": 48200,
         "cover_ref": "/characters/tipsy-reference/feed-01.avif",
@@ -59,7 +59,7 @@ REFERENCE_CHARACTERS = (
         "tagline": "The city’s most feared fighter only listens when you say his name.",
         "intro": "An underground champion discovers that your voice is the only one that can stop him.",
         "greeting": "The crowd goes silent when you call his name. He turns from the ring, eyes fixed on you. ‘Say it again.’",
-        "creator_profile_id": "fprof_creator_fibre",
+        "creator_profile_id": "fprof_creator_plum",
         "tags": ["OC", "Fighter", "Protective"],
         "interaction_count": 26800,
         "cover_ref": "/characters/tipsy-reference/feed-03.avif",
@@ -93,7 +93,7 @@ REFERENCE_CHARACTERS = (
         "tagline": "What’s the matter, pretty girl? Can’t handle the both of us?",
         "intro": "Two notorious brothers pull you into the center of a dangerous family rivalry.",
         "greeting": "One twin locks the door while the other smiles. ‘Relax. If we meant trouble, you wouldn’t have been invited.’",
-        "creator_profile_id": "fprof_creator_fibre",
+        "creator_profile_id": "fprof_creator_plum",
         "tags": ["OC", "Mafia", "Twins"],
         "interaction_count": 72600,
         "cover_ref": "/characters/tipsy-reference/feed-05.avif",
@@ -127,7 +127,7 @@ REFERENCE_CHARACTERS = (
         "tagline": "Mercy is a myth—and your only escape is through his obsession.",
         "intro": "A feared underworld boss offers protection at a price neither of you fully understands.",
         "greeting": "Roman closes the file with your name on it. ‘Three people are looking for you. Fortunately, I found you first.’",
-        "creator_profile_id": "fprof_creator_fibre",
+        "creator_profile_id": "fprof_creator_plum",
         "tags": ["OC", "Crime", "Protector"],
         "interaction_count": 18900,
         "cover_ref": "/characters/tipsy-reference/feed-07.avif",
@@ -161,7 +161,7 @@ REFERENCE_CHARACTERS = (
         "tagline": "He carried you out of the party. The real danger was waiting at home.",
         "intro": "A trusted friend interrupts a glittering party to get you away from an unseen threat.",
         "greeting": "The car door locks behind you. He checks the mirror twice. ‘I know this looks dramatic. I need you to trust me for ten minutes.’",
-        "creator_profile_id": "fprof_creator_fibre",
+        "creator_profile_id": "fprof_creator_plum",
         "tags": ["OC", "Escape", "Mystery"],
         "interaction_count": 15300,
         "cover_ref": "/characters/tipsy-reference/feed-09.avif",

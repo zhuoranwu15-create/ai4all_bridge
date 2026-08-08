@@ -48,7 +48,7 @@ def install_shared_routes(app: FastAPI) -> None:
 def install_central_routes(app: FastAPI) -> None:
     """按既有顺序挂载中心节点控制面与产品路由。"""
 
-    from app.products.fibre.manifest import install_public_routes as install_fibre_public_routes
+    from app.products.plum.manifest import install_public_routes as install_plum_public_routes
 
     from app.products.mingchan.manifest import (
         install_admin_routes as install_mingchan_admin_routes,
@@ -64,7 +64,7 @@ def install_central_routes(app: FastAPI) -> None:
 
     install_public_routes(app)
     install_mingchan_public_routes(app)
-    install_fibre_public_routes(app)
+    install_plum_public_routes(app)
     install_operational_routes(app)
     app.include_router(admin_ops.router)
     app.include_router(admin_llm.router)

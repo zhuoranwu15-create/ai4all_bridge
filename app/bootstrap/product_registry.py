@@ -12,7 +12,7 @@ from typing import Iterable, Mapping
 
 ZHAOXI_APP_ID = "zhaoxi"
 MINGCHAN_APP_ID = "mingchan"
-FIBRE_APP_ID = "fibre"
+PLUM_APP_ID = "plum"
 _APP_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
 SUPPORTED_PRODUCT_LANGUAGES = frozenset({"zh-CN", "en-US", "ja-JP"})
 
@@ -116,7 +116,7 @@ PRODUCTION_PRODUCT_REGISTRY = ProductRegistry(
             allowed_channels=("native",),
         ),
         ProductRegistration(
-            app_id=FIBRE_APP_ID,
+            app_id=PLUM_APP_ID,
             default_language="zh-CN",
             allowed_channels=("native",),
         ),
@@ -139,7 +139,7 @@ def build_test_product_registry(*, mingchan_enabled: bool = True) -> ProductRegi
                 allowed_channels=("native",),
             ),
             ProductRegistration(
-                app_id=FIBRE_APP_ID,
+                app_id=PLUM_APP_ID,
                 allowed_channels=("native",),
             ),
             ProductRegistration(

@@ -1,4 +1,4 @@
-"""Fibre MVP 请求契约。"""
+"""Plum MVP 请求契约。"""
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -7,6 +7,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class CreateConversationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     character_id: str = Field(min_length=1, max_length=80)
+
+
+class RedeemAccessCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    access_code: str = Field(min_length=16, max_length=160)
+    display_name: str = Field(min_length=1, max_length=40)
 
 
 class UpdateModelRequest(BaseModel):

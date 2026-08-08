@@ -5193,6 +5193,217 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
     )
 
 
+def _migration_0066_fibre_public_test_auth(conn: Connection) -> None:
+    """Add one-person-one-code credentials for the Fibre public test."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS fibre_access_invites (
+            id TEXT PRIMARY KEY,
+            code_hash TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL DEFAULT '',
+            platform_user_id TEXT UNIQUE,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active', 'revoked')),
+            expires_at TEXT,
+            claimed_at TEXT,
+            last_used_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_fibre_access_invites_status_expiry
+            ON fibre_access_invites(status, expires_at);
+        """
+    )
+
+
+def _migration_0067_plum_product_rename(conn: Connection) -> None:
+    """Rename the Fibre product schema and shared ownership rows to Plum.
+
+    Migrations 64-66 stay immutable so an existing deployment can prove which
+    schema it originally applied.  This forward migration is deliberately
+    idempotent and refuses to guess when both the legacy and Plum table for the
+    same entity exist.
+    """
+
+    legacy_prefix = "fi" + "bre"
+    plum_prefix = "plum"
+    table_suffixes = (
+        "access_invites",
+        "character_badge_assignments",
+        "character_badges",
+        "character_bindings",
+        "character_comments",
+        "character_favorites",
+        "character_likes",
+        "character_memories",
+        "character_stats",
+        "characters",
+        "conversation_pins",
+        "conversations",
+        "model_profiles",
+        "public_profiles",
+        "user_character_relationships",
+        "user_personas",
+    )
+    table_pairs = tuple(
+        (f"{legacy_prefix}_{suffix}", f"{plum_prefix}_{suffix}")
+        for suffix in table_suffixes
+    )
+    for legacy_table, plum_table in table_pairs:
+        if _table_exists(conn, legacy_table) and _table_exists(conn, plum_table):
+            raise RuntimeError(
+                "m0067 refuses to merge coexisting product tables: "
+                f"{legacy_table}, {plum_table}"
+            )
+
+    legacy_indexes = (
+        "ix_characters_feed",
+        "ux_model_profiles_default",
+        "ux_conversations_active",
+        "ix_conversations_owner",
+        "ux_public_profiles_platform_user",
+        "ix_character_badges_character",
+        "ix_relationships_character",
+        "ix_character_likes_character",
+        "ix_character_favorites_character",
+        "ix_comments_profile",
+        "ix_memories_profile",
+        "ux_personas_default",
+        "ix_conversation_pins_active",
+        "ix_access_invites_status_expiry",
+    )
+    for index_suffix in legacy_indexes:
+        conn.execute(
+            f"DROP INDEX IF EXISTS "
+            f"{index_suffix[:3]}_{legacy_prefix}_{index_suffix[3:]}"
+        )
+
+    for legacy_table, plum_table in table_pairs:
+        if _table_exists(conn, legacy_table):
+            conn.execute(f"ALTER TABLE {legacy_table} RENAME TO {plum_table}")
+
+    memories_table = "plum_character_memories"
+    legacy_conversation_column = f"{legacy_prefix}_conversation_id"
+    plum_conversation_column = "plum_conversation_id"
+    if _table_exists(conn, memories_table):
+        if is_postgres():
+            rows = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name=? AND column_name IN (?, ?)
+                """,
+                (
+                    memories_table,
+                    legacy_conversation_column,
+                    plum_conversation_column,
+                ),
+            ).fetchall()
+            columns = {str(row["column_name"]) for row in rows}
+        else:
+            columns = {
+                str(row["name"])
+                for row in conn.execute(
+                    f"PRAGMA table_info({memories_table})"
+                ).fetchall()
+            }
+        if (
+            legacy_conversation_column in columns
+            and plum_conversation_column in columns
+        ):
+            raise RuntimeError(
+                "m0067 refuses to merge coexisting conversation reference columns"
+            )
+        if legacy_conversation_column in columns:
+            conn.execute(
+                f"ALTER TABLE {memories_table} "
+                f"RENAME COLUMN {legacy_conversation_column} "
+                f"TO {plum_conversation_column}"
+            )
+
+    shared_app_tables = (
+        "accounts",
+        "account_owner_bindings",
+        "platform_user_sessions",
+        "product_memberships",
+        "subscriptions",
+        "entitlement_wallets",
+        "entitlement_ledger",
+        "cost_events",
+        "daily_usage",
+        "daily_quota_reservations",
+        "runtime_ownerships",
+    )
+    for table in shared_app_tables:
+        if _table_exists(conn, table):
+            conn.execute(
+                f"UPDATE {table} SET app_id=? WHERE app_id=?",
+                (plum_prefix, legacy_prefix),
+            )
+
+    if is_postgres():
+        for _legacy_table, plum_table in table_pairs:
+            if not _table_exists(conn, plum_table):
+                continue
+            constraints = conn.execute(
+                """
+                SELECT conname
+                FROM pg_constraint
+                WHERE conrelid=to_regclass(?) AND conname LIKE ?
+                """,
+                (plum_table, f"{legacy_prefix}_%"),
+            ).fetchall()
+            for row in constraints:
+                old_name = str(row["conname"])
+                new_name = old_name.replace(legacy_prefix, plum_prefix, 1)
+                if not re.fullmatch(r"[a-z_][a-z0-9_]*", old_name):
+                    raise RuntimeError(f"unsafe legacy constraint name: {old_name!r}")
+                conn.execute(
+                    f"ALTER TABLE {plum_table} "
+                    f"RENAME CONSTRAINT {old_name} TO {new_name}"
+                )
+
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_plum_characters_feed
+            ON plum_characters(status, sort_order, id);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_plum_model_profiles_default
+            ON plum_model_profiles(is_default) WHERE enabled = 1 AND is_default = 1;
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_plum_conversations_active
+            ON plum_conversations(platform_user_id, character_id)
+            WHERE status = 'active';
+        CREATE INDEX IF NOT EXISTS ix_plum_conversations_owner
+            ON plum_conversations(platform_user_id, status, updated_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_plum_public_profiles_platform_user
+            ON plum_public_profiles(platform_user_id) WHERE platform_user_id IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_plum_character_badges_character
+            ON plum_character_badge_assignments(character_id, sort_order);
+        CREATE INDEX IF NOT EXISTS ix_plum_relationships_character
+            ON plum_user_character_relationships(character_id, state, last_interacted_at);
+        CREATE INDEX IF NOT EXISTS ix_plum_character_likes_character
+            ON plum_character_likes(character_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_plum_character_favorites_character
+            ON plum_character_favorites(character_id, created_at);
+        CREATE INDEX IF NOT EXISTS ix_plum_comments_profile
+            ON plum_character_comments(
+                character_id, status, is_featured, featured_rank, created_at
+            );
+        CREATE INDEX IF NOT EXISTS ix_plum_memories_profile
+            ON plum_character_memories(
+                character_id, visibility, moderation_status, published_at
+            );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_plum_personas_default
+            ON plum_user_personas(platform_user_id, is_default)
+            WHERE status = 'active' AND is_default = 1;
+        CREATE INDEX IF NOT EXISTS ix_plum_conversation_pins_active
+            ON plum_conversation_pins(conversation_id, status, sort_order);
+        CREATE INDEX IF NOT EXISTS ix_plum_access_invites_status_expiry
+            ON plum_access_invites(status, expires_at);
+        """
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -5254,6 +5465,8 @@ _MIGRATIONS = [
     (63, _migration_0063_companion_world_owner_product_unique),
     (64, _migration_0064_fibre_mvp),
     (65, _migration_0065_fibre_character_experience),
+    (66, _migration_0066_fibre_public_test_auth),
+    (67, _migration_0067_plum_product_rename),
 ]
 
 

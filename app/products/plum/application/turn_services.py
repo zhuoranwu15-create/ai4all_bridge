@@ -1,4 +1,4 @@
-"""Fibre 对共享 Human-AI Runtime 的产品能力实现。"""
+"""Plum 对共享 Human-AI Runtime 的产品能力实现。"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -11,21 +11,21 @@ from app.agent_runtime.turns.contracts import (
     ProductSessionSetup,
 )
 from app.bootstrap.product_registry import (
-    FIBRE_APP_ID,
+    PLUM_APP_ID,
     PRODUCTION_PRODUCT_REGISTRY,
     ProductRegistry,
 )
 from app.db import get_or_create_session
-from app.products.fibre.tools.registry import FIBRE_TOOL_POLICY
+from app.products.plum.tools.registry import PLUM_TOOL_POLICY
 
 _PROFILE_FILENAMES = ("SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md")
 
 
-class FibreTurnServices:
-    """只投影 Fibre 人设与会话规则，不依赖其他产品实现。"""
+class PlumTurnServices:
+    """只投影 Plum 人设与会话规则，不依赖其他产品实现。"""
 
-    app_id = FIBRE_APP_ID
-    tool_policy = FIBRE_TOOL_POLICY
+    app_id = PLUM_APP_ID
+    tool_policy = PLUM_TOOL_POLICY
     onboarding_pending = "pending"
     onboarding_step1_sent = "step1_sent"
     onboarding_step2_sent = "step2_sent"
@@ -91,15 +91,15 @@ class FibreTurnServices:
         return self.onboarding_complete
 
     def start_onboarding(self, account_id: str) -> None:
-        raise RuntimeError(f"fibre onboarding is not supported: {account_id}")
+        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
 
     async def extract_onboarding_info(self, *, user_text: str, current_state: str) -> dict:
-        raise RuntimeError(f"fibre onboarding is not supported: {current_state}")
+        raise RuntimeError(f"plum onboarding is not supported: {current_state}")
 
     def apply_onboarding_info(
         self, *, account_id: str, extracted: dict, current_state: str
     ) -> dict:
-        raise RuntimeError(f"fibre onboarding is not supported: {account_id}")
+        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
 
     def load_prompt_context(
         self,
@@ -152,12 +152,12 @@ class FibreTurnServices:
         extracted: Optional[dict],
         session_turn_count: int,
     ) -> Optional[str]:
-        raise RuntimeError(f"fibre onboarding is not supported: {account_id}")
+        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
 
     def after_turn_hooks(self) -> Tuple[Tuple[str, AfterTurnHook], ...]:
         return ()
 
 
-FIBRE_TURN_SERVICES = FibreTurnServices()
+PLUM_TURN_SERVICES = PlumTurnServices()
 
-__all__ = ["FIBRE_TURN_SERVICES", "FibreTurnServices"]
+__all__ = ["PLUM_TURN_SERVICES", "PlumTurnServices"]
