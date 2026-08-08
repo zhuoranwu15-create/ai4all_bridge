@@ -30,6 +30,22 @@ def _mingchan_setting(default: Any, suffix: str):
     )
 
 
+def _plum_setting(default: Any, suffix: str):
+    """Declare a Plum setting with a one-release Fibre env compatibility alias."""
+
+    field_name = f"plum_{suffix.lower()}"
+    legacy_name = f"fibre_{suffix.lower()}"
+    return Field(
+        default=default,
+        validation_alias=AliasChoices(
+            f"PLUM_{suffix}",
+            field_name,
+            f"FIBRE_{suffix}",
+            legacy_name,
+        ),
+    )
+
+
 _LEGACY_MINGCHAN_SETTING_NAMES = {
     f"companion_world_{suffix}": f"mingchan_{suffix}"
     for suffix in (
@@ -97,15 +113,32 @@ class Settings(BaseSettings):
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 
-    # ===== Fibre Chat（Web MVP）=====
-    # Fibre API 可部署开关；开发身份仍受 fibre_dev_mode + 非生产环境双重限制。
-    fibre_enabled: bool = True
-    fibre_dev_mode: bool = True
-    fibre_test_user_id: str = "user_fibre_test"
-    fibre_test_phone: str = "fibre-test@local.invalid"
-    fibre_fast_provider_id: str = "deepseek"
-    fibre_balanced_provider_id: str = "chatgpt"
-    fibre_immersive_provider_id: str = "deepseek-v4-pro"
+    # ===== Plum Chat（Web MVP）=====
+    # Plum API 可部署开关；开发身份仍受 plum_dev_mode + 非生产环境双重限制。
+    plum_enabled: bool = _plum_setting(True, "ENABLED")
+    plum_dev_mode: bool = _plum_setting(True, "DEV_MODE")
+    plum_test_user_id: str = _plum_setting("user_plum_test", "TEST_USER_ID")
+    plum_test_phone: str = _plum_setting(
+        "plum-test@local.invalid", "TEST_PHONE"
+    )
+    plum_fast_provider_id: str = _plum_setting("deepseek", "FAST_PROVIDER_ID")
+    plum_balanced_provider_id: str = _plum_setting(
+        "chatgpt", "BALANCED_PROVIDER_ID"
+    )
+    plum_immersive_provider_id: str = _plum_setting(
+        "deepseek-v4-pro", "IMMERSIVE_PROVIDER_ID"
+    )
+    plum_public_test_auth_enabled: bool = _plum_setting(
+        True, "PUBLIC_TEST_AUTH_ENABLED"
+    )
+    plum_session_cookie_name: str = _plum_setting(
+        "plum_session", "SESSION_COOKIE_NAME"
+    )
+    plum_csrf_cookie_name: str = _plum_setting("plum_csrf", "CSRF_COOKIE_NAME")
+    plum_session_days: int = _plum_setting(30, "SESSION_DAYS")
+    plum_session_cookie_secure: bool = _plum_setting(
+        False, "SESSION_COOKIE_SECURE"
+    )
 
     # ===== 数据库后端（厚节点改造，见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。
@@ -665,6 +698,8 @@ class Settings(BaseSettings):
             insecure.append("AI4ALL_BRIDGE_SECRET")
         if not self.admin_token or self.admin_token == "dev-admin-token":
             insecure.append("ADMIN_TOKEN")
+        if self.plum_public_test_auth_enabled and not self.plum_session_cookie_secure:
+            insecure.append("PLUM_SESSION_COOKIE_SECURE")
         if insecure:
             raise ValueError(
                 f"app_env={self.app_env!r} 拒绝以不安全的默认/空密钥启动: "

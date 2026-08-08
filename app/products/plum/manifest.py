@@ -1,15 +1,15 @@
-"""Fibre 产品 HTTP 组合清单。"""
+"""Plum 产品 HTTP 组合清单。"""
 from fastapi import FastAPI
 
-from app.bootstrap.product_registry import FIBRE_APP_ID
+from app.bootstrap.product_registry import PLUM_APP_ID
 
-APP_ID = FIBRE_APP_ID
+APP_ID = PLUM_APP_ID
 CANONICAL_API_PREFIX = f"/api/v1/products/{APP_ID}"
 PROXY_STRIPPED_API_PREFIX = f"/v1/products/{APP_ID}"
 
 
 def install_public_routes(app: FastAPI) -> None:
-    from app.products.fibre.api.app import router
+    from app.products.plum.api.app import router
 
     app.include_router(router, prefix=CANONICAL_API_PREFIX)
     app.include_router(

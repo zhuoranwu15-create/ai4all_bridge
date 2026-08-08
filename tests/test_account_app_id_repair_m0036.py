@@ -15,6 +15,31 @@ from app.db._core import (
 _HEAD_VERSION = _MIGRATIONS[-1][0]
 
 
+def _drop_post_v35_plum_schema(conn) -> None:
+    """Make the head fixture structurally match the legacy v35 start point."""
+
+    for table in (
+        "plum_access_invites",
+        "plum_character_badge_assignments",
+        "plum_conversation_pins",
+        "plum_character_comments",
+        "plum_character_memories",
+        "plum_character_likes",
+        "plum_character_favorites",
+        "plum_character_stats",
+        "plum_user_character_relationships",
+        "plum_character_bindings",
+        "plum_user_personas",
+        "plum_conversations",
+        "plum_model_profiles",
+        "plum_character_badges",
+        "plum_characters",
+        "plum_public_profiles",
+        "runtime_ownerships",
+    ):
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+
+
 def _columns(conn, table: str) -> set[str]:
     """返回指定表的列名，兼容 SQLite 与 PostgreSQL 测试后端。"""
     if is_postgres():
@@ -45,6 +70,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         conn.execute("DROP INDEX IF EXISTS ix_accounts_app_status")
         conn.execute("ALTER TABLE account_owner_bindings DROP COLUMN app_id")
         conn.execute("ALTER TABLE accounts DROP COLUMN app_id")
+        _drop_post_v35_plum_schema(conn)
         # m0037–m0046 已依赖修复后的身份 schema；模拟旧分支回放时一并移除
         # 后续版本记录，让 init_db 从 m0036 按序重放，而不是制造不可能的迁移空洞。
         conn.execute("DELETE FROM schema_migrations WHERE version >= 36")

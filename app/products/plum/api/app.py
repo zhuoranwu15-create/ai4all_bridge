@@ -1,32 +1,39 @@
-"""Fibre Feed、会话、模型选择和同步文字 turn API。"""
+"""Plum Feed、会话、模型选择和同步文字 turn API。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.agent_runtime.llm.providers import get_llm_provider
 from app.agent_runtime.turns.service import ChannelTurnInput, run_product_turn
-from app.bootstrap.product_registry import FIBRE_APP_ID
+from app.bootstrap.product_registry import PLUM_APP_ID
 from app.config import settings
 from app.db import (
     FixedShellReservationReleased,
     InsufficientWalletBalance,
     SessionPrincipal,
+    create_platform_user_session,
+    get_platform_user,
     get_duplicate_reply_record,
     get_wallet_summary,
     release_fixed_shell_reservation,
+    revoke_platform_user_session,
     reserve_fixed_shells,
 )
 from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import CHANNEL_APP, get_channel_capability
-from app.products.fibre.api.contracts import (
+from app.products.plum.api.contracts import (
     CreateConversationRequest,
     CreateTurnRequest,
+    RedeemAccessCodeRequest,
     UpdateModelRequest,
 )
-from app.products.fibre.api.deps import require_fibre_dev_principal
-from app.products.fibre.application.turn_services import FIBRE_TURN_SERVICES
-from app.products.fibre.infrastructure.repository import (
+from app.products.plum.api.deps import plum_session_token, require_plum_principal
+from app.products.plum.application.turn_services import PLUM_TURN_SERVICES
+from app.products.plum.infrastructure.repository import (
     create_or_get_conversation,
+    redeem_plum_access_invite,
     get_character_experience,
     get_conversation,
     get_entry_account_id,
@@ -40,8 +47,114 @@ from app.products.fibre.infrastructure.repository import (
     touch_conversation,
     update_conversation_model,
 )
+from app.platform.quota.rate_limiter import RateLimiter
 
-router = APIRouter(tags=["fibre"])
+router = APIRouter(tags=["plum"])
+_auth_rate_limiter = RateLimiter()
+
+
+def _set_auth_cookies(response: Response, *, session_token: str, csrf_token: str) -> None:
+    max_age = max(1, int(settings.plum_session_days)) * 86400
+    common = {
+        "secure": bool(settings.plum_session_cookie_secure),
+        "samesite": "strict",
+        "path": "/",
+        "max_age": max_age,
+    }
+    response.set_cookie(
+        key=str(settings.plum_session_cookie_name),
+        value=session_token,
+        httponly=True,
+        **common,
+    )
+    response.set_cookie(
+        key=str(settings.plum_csrf_cookie_name),
+        value=csrf_token,
+        httponly=False,
+        **common,
+    )
+
+
+def _clear_auth_cookies(response: Response) -> None:
+    response.delete_cookie(str(settings.plum_session_cookie_name), path="/")
+    response.delete_cookie(str(settings.plum_csrf_cookie_name), path="/")
+
+
+@router.post("/auth/access-code")
+def redeem_access_code(
+    payload: RedeemAccessCodeRequest, request: Request, response: Response
+) -> dict:
+    if not bool(settings.plum_enabled):
+        raise HTTPException(status_code=503, detail="plum_disabled")
+    if not bool(settings.plum_public_test_auth_enabled):
+        raise HTTPException(status_code=404, detail="public_test_auth_disabled")
+    client_host = request.client.host if request.client else "unknown"
+    if not _auth_rate_limiter.check_rpm(
+        f"plum-auth:{client_host}", 10, window_seconds=60.0
+    ):
+        raise HTTPException(status_code=429, detail="too_many_login_attempts")
+    try:
+        identity = redeem_plum_access_invite(
+            access_code=payload.access_code,
+            display_name=payload.display_name,
+        )
+        session = create_platform_user_session(
+            platform_user_id=str(identity["platform_user_id"]),
+            app_id=PLUM_APP_ID,
+            days=max(1, int(settings.plum_session_days)),
+        )
+    except ValueError as err:
+        detail = str(err)
+        if detail in {"invalid_access_code", "access_code_already_claimed"}:
+            detail = "invalid_access_code"
+        raise HTTPException(status_code=401, detail=detail) from None
+    csrf_token = secrets.token_urlsafe(24)
+    _set_auth_cookies(
+        response,
+        session_token=str(session["token"]),
+        csrf_token=csrf_token,
+    )
+    _no_store(response)
+    return {
+        "status": "ok",
+        "user": {
+            "id": identity["platform_user_id"],
+            "display_name": identity["display_name"],
+        },
+        "expires_at": session["expires_at"],
+        "wallet": _wallet(str(identity["platform_user_id"])),
+    }
+
+
+@router.get("/auth/me")
+def auth_me(
+    response: Response,
+    principal: SessionPrincipal = Depends(require_plum_principal),
+) -> dict:
+    user = get_platform_user(platform_user_id=principal.platform_user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="session_expired")
+    _no_store(response)
+    return {
+        "status": "ok",
+        "user": {"id": user["id"], "display_name": user.get("display_name")},
+        "expires_at": principal.expires_at,
+        "wallet": _wallet(principal.platform_user_id),
+    }
+
+
+@router.delete("/auth/session/current")
+def logout(
+    request: Request,
+    response: Response,
+    _principal: SessionPrincipal = Depends(require_plum_principal),
+) -> dict:
+    token = plum_session_token(request)
+    if token:
+        revoke_platform_user_session(token=token)
+    _clear_auth_cookies(response)
+    _no_store(response)
+    return {"status": "ok"}
 
 
 def _no_store(response: Response) -> None:
@@ -78,13 +191,18 @@ def _conversation_or_404(conversation_id: str, principal: SessionPrincipal) -> d
 @router.get("/bootstrap")
 def bootstrap(
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     _no_store(response)
     return {
         "status": "ok",
-        "app_id": FIBRE_APP_ID,
-        "user": {"id": principal.platform_user_id, "display_name": "Fibre 测试用户"},
+        "app_id": PLUM_APP_ID,
+        "user": {
+            "id": principal.platform_user_id,
+            "display_name": (
+                get_platform_user(platform_user_id=principal.platform_user_id) or {}
+            ).get("display_name") or "Plum 测试用户",
+        },
         "wallet": _wallet(principal.platform_user_id),
         "models": list_model_profiles(),
     }
@@ -93,7 +211,7 @@ def bootstrap(
 @router.get("/feed")
 def feed(
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     del principal
     _no_store(response)
@@ -119,7 +237,7 @@ def _set_reaction(
 def like_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id, principal=principal, reaction="like", active=True
@@ -132,7 +250,7 @@ def like_character(
 def unlike_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id, principal=principal, reaction="like", active=False
@@ -145,7 +263,7 @@ def unlike_character(
 def favorite_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id,
@@ -161,7 +279,7 @@ def favorite_character(
 def unfavorite_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id,
@@ -177,7 +295,7 @@ def unfavorite_character(
 def create_conversation(
     payload: CreateConversationRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     try:
         conversation = create_or_get_conversation(
@@ -195,7 +313,7 @@ def conversation_detail(
     conversation_id: str,
     response: Response,
     limit: int = Query(default=100, ge=1, le=100),
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     conversation = _conversation_or_404(conversation_id, principal)
     experience = get_character_experience(
@@ -220,7 +338,7 @@ def change_model(
     conversation_id: str,
     payload: UpdateModelRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     try:
         conversation = update_conversation_model(
@@ -238,7 +356,7 @@ def change_model(
 def restart(
     conversation_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     try:
         conversation = restart_conversation(
@@ -268,7 +386,7 @@ def create_turn(
     conversation_id: str,
     payload: CreateTurnRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_fibre_dev_principal),
+    principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
     text = payload.text.strip()
     if not text:
@@ -284,7 +402,7 @@ def create_turn(
     if not provider.enabled:
         raise HTTPException(status_code=503, detail="model_provider_unavailable")
     reservation_key = (
-        f"fibre-turn:{conversation_id}:{payload.idempotency_key.strip()}"
+        f"plum-turn:{conversation_id}:{payload.idempotency_key.strip()}"
     )
     try:
         reserve_fixed_shells(
@@ -309,7 +427,7 @@ def create_turn(
 
     identity = ResolvedIdentity(
         ai4all_account_id=str(conversation["runtime_account_id"]),
-        session_key=f"fibre:{conversation_id}",
+        session_key=f"plum:{conversation_id}",
         channel=CHANNEL_APP,
         channel_account_id=None,
         sender_id=principal.platform_user_id,
@@ -319,7 +437,7 @@ def create_turn(
         turn_response = run_product_turn(
             ChannelTurnInput(
                 account_id=str(conversation["runtime_account_id"]),
-                app_id=FIBRE_APP_ID,
+                app_id=PLUM_APP_ID,
                 cap=get_channel_capability(CHANNEL_APP),
                 identity=identity,
                 message_id=payload.client_message_id.strip(),
@@ -327,12 +445,12 @@ def create_turn(
                 message_type="text",
                 text=text,
                 media=None,
-                raw={"transport": "fibre_web"},
-                sender_name="Fibre 测试用户",
+                raw={"transport": "plum_web"},
+                sender_name="Plum 测试用户",
                 provider_id=str(model["provider_id"]),
                 usage_billing_enabled=False,
             ),
-            product_services=FIBRE_TURN_SERVICES,
+            product_services=PLUM_TURN_SERVICES,
         )
     except Exception as err:
         release_fixed_shell_reservation(
