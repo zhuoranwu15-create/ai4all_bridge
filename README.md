@@ -40,6 +40,19 @@ Health check:
 curl http://127.0.0.1:8180/health
 ```
 
+### Plum Chat 本地联调
+
+Plum 联调使用独立 SQLite，避免误连 `.env` 中已有的 PostgreSQL；模型密钥仍从 `.env`
+读取。初始化固定测试账号、演示角色和 1000 金币后启动 SSE 流式后端：
+
+```bash
+make plum-local-init
+make plum-local-run
+```
+
+默认数据库为 `data/plum_dev.sqlite3`。需要隔离分支或同事数据时，先设置
+`PLUM_DEV_DB=data/plum_dev_<name>.sqlite3`，并让 init/run 两条命令使用同一个值。
+
 Web onboarding:
 
 ```text
