@@ -58,6 +58,44 @@ def test_plum_seed_is_idempotent_and_product_scoped(fresh_db, monkeypatch):
     assert wallet["wallet"]["balance_shell_micros"] == 1_000_000_000
 
 
+def test_plum_feed_is_public_without_session(fresh_db, monkeypatch):
+    """Visitors can browse characters while account-scoped APIs stay protected."""
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = False
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        feed = client.get("/api/v1/products/plum/feed")
+        assert feed.status_code == 200
+        assert len(feed.json()["items"]) == 10
+        assert client.get("/api/v1/products/plum/bootstrap").status_code == 401
+
+
+def test_plum_feed_respects_product_disabled_flag(fresh_db, monkeypatch):
+    """Public browsing must not bypass the product-level kill switch."""
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = False
+    config.plum_dev_mode = False
+    monkeypatch.setattr(plum_deps, "settings", config)
+
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        feed = client.get("/api/v1/products/plum/feed")
+
+    assert feed.status_code == 503
+    assert feed.json()["detail"] == "plum_disabled"
+
+
 def test_plum_conversation_uses_shared_runtime_account_and_session(
     fresh_db, monkeypatch
 ):
@@ -183,6 +221,15 @@ def test_plum_http_core_flow_charges_fixed_price_once(fresh_db, monkeypatch):
         assert created.status_code == 200
         conversation = created.json()["conversation"]
         assert conversation["model_profile"] == "balanced"
+
+        history = client.get("/api/v1/products/plum/conversations")
+        assert history.status_code == 200
+        assert [item["id"] for item in history.json()["items"]] == [
+            conversation["id"]
+        ]
+        assert history.json()["items"][0]["character"]["id"] == (
+            "char_ref_after_hours"
+        )
 
         detail = client.get(
             f"/api/v1/products/plum/conversations/{conversation['id']}"
