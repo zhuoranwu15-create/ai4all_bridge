@@ -8,7 +8,7 @@ PYTEST := .venv/bin/pytest
 PLUM_DEV_DB ?= data/plum_dev.sqlite3
 PLUM_DEV_PORT ?= 8180
 
-.PHONY: help test test-unit test-fast test-pg run plum-local-init plum-local-run
+.PHONY: help test test-unit test-fast test-pg run plum-local-init plum-local-run plum-local-start
 
 help:
 	@echo "make test       # 默认 SQLite 档全量测试（日常迭代用）"
@@ -18,6 +18,7 @@ help:
 	@echo "make run        # 本地启动服务（端口 8180）"
 	@echo "make plum-local-init # 初始化 Plum 隔离 SQLite 与固定测试账号"
 	@echo "make plum-local-run  # 启动 Plum 本地后端（SSE 流式，端口 8180）"
+	@echo "make plum-local-start # 初始化并启动 Plum 本地测试后端（推荐入口）"
 
 # 默认 SQLite/内存档：快速回归
 test:
@@ -51,3 +52,7 @@ plum-local-run:
 		PROACTIVE_SCHEDULER_ENABLED=false DREAMING_SCHEDULER_ENABLED=false \
 		USER_META_SCHEDULER_ENABLED=false \
 		.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $(PLUM_DEV_PORT) --reload
+
+# 本地测试的统一入口：seed 是幂等操作，只补齐固定测试数据，不重置余额或聊天记录。
+plum-local-start: plum-local-init
+	$(MAKE) plum-local-run PLUM_DEV_DB="$(PLUM_DEV_DB)" PLUM_DEV_PORT="$(PLUM_DEV_PORT)"

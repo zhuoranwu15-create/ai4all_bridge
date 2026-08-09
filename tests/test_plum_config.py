@@ -5,6 +5,23 @@ import pytest
 from app.config import Settings
 
 
+def test_plum_streaming_is_enabled_by_default(monkeypatch):
+    monkeypatch.delenv("PLUM_CHAT_STREAMING_ENABLED", raising=False)
+    monkeypatch.delenv("FIBRE_CHAT_STREAMING_ENABLED", raising=False)
+
+    config = Settings(_env_file=None)
+
+    assert config.plum_chat_streaming_enabled is True
+
+
+def test_plum_streaming_can_be_disabled_explicitly(monkeypatch):
+    monkeypatch.setenv("PLUM_CHAT_STREAMING_ENABLED", "false")
+
+    config = Settings(_env_file=None)
+
+    assert config.plum_chat_streaming_enabled is False
+
+
 def test_plum_settings_read_new_environment_names(monkeypatch):
     monkeypatch.setenv("PLUM_SESSION_COOKIE_NAME", "plum_public_session")
     monkeypatch.setenv("PLUM_SESSION_COOKIE_SECURE", "true")
