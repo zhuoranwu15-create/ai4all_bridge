@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     plum_session_cookie_secure: bool = _plum_setting(
         False, "SESSION_COOKIE_SECURE"
     )
+    plum_chat_streaming_enabled: bool = _plum_setting(
+        False, "CHAT_STREAMING_ENABLED"
+    )
 
     # ===== 数据库后端（厚节点改造，见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。

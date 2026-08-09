@@ -5404,6 +5404,49 @@ def _migration_0067_plum_product_rename(conn: Connection) -> None:
     )
 
 
+def _migration_0068_runtime_turn_runs(conn: Connection) -> None:
+    """Add provider-neutral streaming run state and active-session/idempotency guards."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_turn_runs (
+            id TEXT PRIMARY KEY,
+            app_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            session_id INTEGER NOT NULL,
+            client_message_id TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            status TEXT NOT NULL,
+            provider_id TEXT,
+            model_ref TEXT,
+            assistant_message_id TEXT,
+            first_delta_at TEXT,
+            finish_reason TEXT,
+            error_code TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            completed_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_runtime_turn_runs_idempotency
+            ON runtime_turn_runs(app_id, account_id, idempotency_key);
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_runtime_turn_runs_active_session
+            ON runtime_turn_runs(app_id, account_id, session_id)
+            WHERE status IN ('accepted', 'running');
+        CREATE INDEX IF NOT EXISTS ix_runtime_turn_runs_stale
+            ON runtime_turn_runs(status, updated_at);
+        """
+    )
+
+
+def _migration_0069_runtime_turn_cancellation(conn: Connection) -> None:
+    """Persist cross-worker cancellation requests for active streaming turns."""
+    _ensure_column(
+        conn,
+        "runtime_turn_runs",
+        "cancel_requested_at",
+        "TEXT",
+    )
+
+
 _MIGRATIONS = [
     (1, _migration_0001_baseline),
     (2, _migration_0002_llm_runtime_config),
@@ -5467,6 +5510,8 @@ _MIGRATIONS = [
     (65, _migration_0065_fibre_character_experience),
     (66, _migration_0066_fibre_public_test_auth),
     (67, _migration_0067_plum_product_rename),
+    (68, _migration_0068_runtime_turn_runs),
+    (69, _migration_0069_runtime_turn_cancellation),
 ]
 
 
