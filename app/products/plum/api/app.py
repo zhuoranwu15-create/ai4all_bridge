@@ -46,7 +46,11 @@ from app.products.plum.api.contracts import (
     RedeemAccessCodeRequest,
     UpdateModelRequest,
 )
-from app.products.plum.api.deps import plum_session_token, require_plum_principal
+from app.products.plum.api.deps import (
+    plum_session_token,
+    require_plum_available,
+    require_plum_principal,
+)
 from app.products.plum.application.turn_services import PLUM_TURN_SERVICES
 from app.products.plum.infrastructure.repository import (
     create_or_get_conversation,
@@ -58,6 +62,7 @@ from app.products.plum.infrastructure.repository import (
     list_characters,
     list_conversation_messages,
     list_model_profiles,
+    list_user_conversations,
     restart_conversation,
     set_character_favorite,
     set_character_like,
@@ -232,9 +237,10 @@ def bootstrap(
 @router.get("/feed")
 def feed(
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    _available: None = Depends(require_plum_available),
 ) -> dict:
-    del principal
+    """Return the public character catalog; account-scoped state stays private."""
+
     _no_store(response)
     return {"status": "ok", "items": list_characters()}
 
@@ -327,6 +333,24 @@ def create_conversation(
         raise HTTPException(status_code=404, detail=str(err)) from err
     _no_store(response)
     return {"status": "ok", "conversation": conversation}
+
+
+@router.get("/conversations")
+def conversation_history(
+    response: Response,
+    limit: int = Query(default=30, ge=1, le=100),
+    principal: SessionPrincipal = Depends(require_plum_principal),
+) -> dict:
+    """Return the authenticated user's active character conversations."""
+
+    _no_store(response)
+    return {
+        "status": "ok",
+        "items": list_user_conversations(
+            platform_user_id=principal.platform_user_id,
+            limit=limit,
+        ),
+    }
 
 
 @router.get("/conversations/{conversation_id}")

@@ -15,6 +15,17 @@ from app.db import (
 _DEV_ENVS = {"local", "development", "test"}
 
 
+def require_plum_available() -> None:
+    """Reject Plum routes when the product is disabled by configuration."""
+
+    if not bool(settings.plum_enabled):
+        raise HTTPException(status_code=503, detail="plum_disabled")
+    try:
+        PRODUCTION_PRODUCT_REGISTRY.require_enabled(PLUM_APP_ID)
+    except ValueError:
+        raise HTTPException(status_code=503, detail="plum_disabled") from None
+
+
 def _require_csrf(request: Request) -> None:
     if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
         return
@@ -27,12 +38,7 @@ def _require_csrf(request: Request) -> None:
 def require_plum_principal(request: Request) -> SessionPrincipal:
     """Resolve a product-scoped cookie session; local dev may use the fixed seed."""
 
-    if not bool(settings.plum_enabled):
-        raise HTTPException(status_code=503, detail="plum_disabled")
-    try:
-        PRODUCTION_PRODUCT_REGISTRY.require_enabled(PLUM_APP_ID)
-    except ValueError:
-        raise HTTPException(status_code=503, detail="plum_disabled") from None
+    require_plum_available()
     token = request.cookies.get(str(settings.plum_session_cookie_name)) or ""
     if token and bool(settings.plum_public_test_auth_enabled):
         principal = resolve_session_principal(
@@ -78,4 +84,8 @@ def plum_session_token(request: Request) -> str:
     return str(request.cookies.get(str(settings.plum_session_cookie_name)) or "")
 
 
-__all__ = ["plum_session_token", "require_plum_principal"]
+__all__ = [
+    "plum_session_token",
+    "require_plum_available",
+    "require_plum_principal",
+]

@@ -827,6 +827,30 @@ def get_conversation(
     return _decode_conversation(row) if row else None
 
 
+def list_user_conversations(
+    *, platform_user_id: str, limit: int = 30
+) -> List[Dict[str, Any]]:
+    """Return one user's active Plum conversations, most recently used first."""
+
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.*, ch.display_name, ch.tagline, ch.intro, ch.greeting,
+                   ch.tags_json, ch.heat_count, ch.avatar_ref, ch.cover_ref,
+                   ch.accent_color, ch.prompt_version, ch.content_rating,
+                   ch.capabilities_json
+            FROM plum_conversations c
+            JOIN plum_characters ch ON ch.id=c.character_id
+            WHERE c.platform_user_id=? AND c.status='active'
+              AND ch.status='active'
+            ORDER BY c.updated_at DESC, c.id DESC
+            LIMIT ?
+            """,
+            (platform_user_id, limit),
+        ).fetchall()
+    return [_decode_conversation(row) for row in rows]
+
+
 def _api_timestamp(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -1239,6 +1263,7 @@ __all__ = [
     "create_or_get_conversation", "get_character_experience",
     "get_conversation", "get_entry_account_id", "get_model_profile",
     "list_characters", "list_conversation_messages", "list_model_profiles",
+    "list_user_conversations",
     "create_plum_access_invite", "redeem_plum_access_invite",
     "restart_conversation", "seed_plum_catalog", "seed_plum_dev",
     "set_character_favorite",
