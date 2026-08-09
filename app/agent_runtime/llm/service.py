@@ -7,7 +7,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.config import settings
-from app.agent_runtime.llm.adapters import chat_completion
+from app.agent_runtime.llm.adapters import chat_completion, chat_completion_stream
 from app.agent_runtime.llm.providers import (
     TIER_PRO,
     LLMProviderConfig,
@@ -24,6 +24,11 @@ from app.tools.external_content import (
 
 logger = logging.getLogger("ai4all.llm")
 _MOCK_FALLBACK_ENVS = {"local", "development", "test"}
+
+
+class LLMStreamCancelled(RuntimeError):
+    """Raised when a caller cancellation token stops an active provider stream."""
+
 
 def _settings_app_env() -> str:
     env = getattr(settings, "app_env", "local")
@@ -194,6 +199,87 @@ def _http_chat(
     return _extract_content(_http_chat_payload(messages, provider=provider))
 
 
+def _http_chat_stream_payload(
+    messages: List[Dict[str, Any]],
+    *,
+    provider: LLMProviderConfig,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Any = "auto",
+    on_text_delta: Optional[Callable[[str], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
+    expose_text: bool = True,
+) -> Dict[str, Any]:
+    """Collect a normalized stream into the existing OpenAI-shaped Runtime payload."""
+    if is_cancelled is not None and is_cancelled():
+        raise LLMStreamCancelled("llm_stream_cancelled")
+    content_chunks: List[str] = []
+    tool_parts: Dict[int, Dict[str, str]] = {}
+    usage: Dict[str, Any] = {}
+    finish_reason = "stop"
+    response_id: Optional[str] = None
+    iterator = chat_completion_stream(
+        provider,
+        messages,
+        tools=tools,
+        tool_choice=tool_choice,
+    )
+    try:
+        for event in iterator:
+            if is_cancelled is not None and is_cancelled():
+                raise LLMStreamCancelled("llm_stream_cancelled")
+            response_id = event.response_id or response_id
+            if event.kind == "text_delta" and event.text:
+                content_chunks.append(event.text)
+                if expose_text and on_text_delta is not None:
+                    on_text_delta(event.text)
+            elif event.kind == "tool_delta" and event.tool_call is not None:
+                index = int(event.tool_call.get("index", 0) or 0)
+                part = tool_parts.setdefault(
+                    index,
+                    {"id": "", "name": "", "arguments": ""},
+                )
+                part["id"] = str(event.tool_call.get("id") or part["id"])
+                part["name"] += str(event.tool_call.get("name_delta") or "")
+                part["arguments"] += str(event.tool_call.get("arguments_delta") or "")
+            elif event.kind == "usage" and event.usage:
+                usage.update(event.usage)
+            elif event.kind == "completed":
+                finish_reason = str(event.finish_reason or finish_reason)
+                break
+            elif event.kind == "error":
+                raise RuntimeError(f"LLM stream failed: {event.error_code or 'provider_error'}")
+    finally:
+        iterator.close()
+
+    tool_calls = [
+        {
+            "id": part["id"] or f"call_{index}",
+            "type": "function",
+            "function": {
+                "name": part["name"],
+                "arguments": part["arguments"] or "{}",
+            },
+        }
+        for index, part in sorted(tool_parts.items())
+    ]
+    message: Dict[str, Any] = {
+        "role": "assistant",
+        "content": "".join(content_chunks).strip(),
+    }
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+        if not message["content"]:
+            message["content"] = None
+        finish_reason = "tool_calls"
+    payload: Dict[str, Any] = {
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+        "usage": usage,
+        "id": response_id,
+        "_provider_protocol": provider.protocol,
+    }
+    return payload
+
+
 def _history_with_current_user(
     history: List[Dict[str, str]],
     user_text: str,
@@ -227,6 +313,38 @@ def generate_reply(
     built_messages = [{"role": "system", "content": prompt}]
     built_messages.extend(_history_with_current_user(history, user_text))
     return _http_chat(built_messages, provider=selected_provider)
+
+
+def generate_reply_stream(
+    *,
+    user_text: str,
+    history: List[Dict[str, str]],
+    on_text_delta: Callable[[str], None],
+    is_cancelled: Callable[[], bool],
+    system_prompt: Optional[str] = None,
+    messages: Optional[List[Dict[str, str]]] = None,
+    provider: Optional[LLMProviderConfig] = None,
+    tier: str = TIER_PRO,
+) -> str:
+    """Streaming counterpart of ``generate_reply`` with identical prompt construction."""
+    selected_provider = provider or _active_llm_provider(tier)
+    if not _llm_api_key(selected_provider):
+        reply = _missing_api_key_reply(user_text, messages)
+        on_text_delta(reply)
+        return reply
+    if messages is None:
+        prompt = system_prompt or settings.llm_default_prompt
+        built_messages: List[Dict[str, str]] = [{"role": "system", "content": prompt}]
+        built_messages.extend(_history_with_current_user(history, user_text))
+    else:
+        built_messages = messages
+    payload = _http_chat_stream_payload(
+        built_messages,
+        provider=selected_provider,
+        on_text_delta=on_text_delta,
+        is_cancelled=is_cancelled,
+    )
+    return _extract_content(payload)
 
 
 def generate_completion(
@@ -393,6 +511,8 @@ def generate_reply_with_tools(
     tier: str = TIER_PRO,
     on_tool_detected: Optional[Callable[[List[str]], None]] = None,
     round_trace_collector: Optional[List[Dict]] = None,
+    on_text_delta: Optional[Callable[[str], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> tuple:
     """LLM call with tool use support. Returns (reply_text, error_str | None).
 
@@ -441,12 +561,27 @@ def generate_reply_with_tools(
             _round_snapshot = {"round": round_index, "messages": copy.deepcopy(tool_messages)}
             round_trace_collector.append(_round_snapshot)
         try:
-            response = _http_chat_with_tools(
-                tool_messages,
-                tools,
-                tool_choice=tc,
-                provider=selected_provider,
-            )
+            if on_text_delta is None:
+                response = _http_chat_with_tools(
+                    tool_messages,
+                    tools,
+                    tool_choice=tc,
+                    provider=selected_provider,
+                )
+            else:
+                # 有工具可选时先在 Runtime 内缓冲本轮文本，确认该轮不是 tool call 后才展示；
+                # Plum 当前工具集为空，因此主路径仍会逐 delta 直出。
+                response = _http_chat_stream_payload(
+                    tool_messages,
+                    provider=selected_provider,
+                    tools=tools,
+                    tool_choice=tc,
+                    on_text_delta=on_text_delta,
+                    is_cancelled=is_cancelled,
+                    expose_text=not bool(tools),
+                )
+        except LLMStreamCancelled:
+            raise
         except RuntimeError as err:
             return "", str(err)
 
@@ -468,6 +603,9 @@ def generate_reply_with_tools(
             content = (message.get("content") or "").strip()
             if not content:
                 return "", "llm_empty_response"
+
+            if on_text_delta is not None and tools:
+                on_text_delta(content)
 
             return content, None
 

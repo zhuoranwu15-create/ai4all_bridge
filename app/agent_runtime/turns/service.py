@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import queue
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -11,7 +13,7 @@ from app.time_utils import (
     beijing_weekday_str,
     format_history_timestamp,
 )
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Union
 
 if TYPE_CHECKING:
     from app.agent_runtime.ports import MemorySink
@@ -21,6 +23,7 @@ from app.platform.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, Chan
 from app.config import WEB_SEARCH_ENABLED, settings
 from app.db import (
     ACCOUNT_ACTIVE_SESSION_KEY,
+    ActiveRuntimeTurnError,
     clear_session_messages,
     connect as db_connect,
     count_inbound_messages_for_account,
@@ -28,6 +31,8 @@ from app.db import (
     get_account_product_access,
     get_daily_usage,
     get_duplicate_reply,
+    create_runtime_turn_run,
+    finish_runtime_turn_run,
     increment_session_turn_count,
     reserve_daily_quota,
     confirm_daily_quota,
@@ -37,6 +42,9 @@ from app.db import (
     list_context_messages_for_session,
     list_recent_context_messages_for_session,
     mark_message_moderation_blocked,
+    mark_runtime_turn_first_delta,
+    mark_runtime_turn_running,
+    runtime_turn_cancel_requested,
     process_referral_message_for_account,
     record_chat_usage_charge,
     record_image_understanding_charge,
@@ -50,7 +58,13 @@ from app.platform.media.assets import MediaRefInvalidError
 from app.platform.media.image_understanding import describe_image
 from app.platform.media.moderation import media_moderation_ready
 from app.platform.media.persistence import mark_media_assets_referenced
-from app.agent_runtime.llm.service import generate_reply, generate_reply_with_tools, resolve_active_llm_provider
+from app.agent_runtime.llm.service import (
+    LLMStreamCancelled,
+    generate_reply,
+    generate_reply_stream,
+    generate_reply_with_tools,
+    resolve_active_llm_provider,
+)
 from app.agent_runtime.llm.providers import TASK_MAIN_REPLY, tier_for_task
 from app.agent_runtime.llm.providers import LLMProviderConfig
 from app.platform.moderation.sensitive_words import check_sync_guard
@@ -913,13 +927,13 @@ def _prepare_turn(
             metadata=identity_response_metadata(identity, account_id),
         )
 
-    # 绑定有效且账号 active 后再记录正文，未绑定/已解绑/disabled 均已在上方返回。
+    # 绑定有效且账号 active 后只记录正文长度，避免普通运行日志持久化消息内容。
     logger.info(
-        "openclaw_turn text account=%s session=%s message_id=%s text=%r",
+        "openclaw_turn text account=%s session=%s message_id=%s text_chars=%s",
         account_id,
         openclaw_session_key,
         message_id,
-        ctx.text,
+        len(ctx.text or ""),
     )
 
     quota_limits = resolve_effective_quota_limits(
@@ -1259,6 +1273,8 @@ def _resolve_turn_reply(
     force_web_search_enabled: Optional[bool],
     timings: Dict[str, int],
     product_services: ProductTurnServices,
+    on_text_delta: Optional[Callable[[str], None]] = None,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> _ReplyResult:
     """阶段C：决定本轮回复来源（inbound_blocked / #重置 / #状态 / 图片失败 / 正常聊天）。
     正常分支内做 onboarding 预抽取、build_turn_llm_input、构建 TurnContext 并调 LLM。"""
@@ -1491,13 +1507,24 @@ def _resolve_turn_reply(
             _round_traces: Optional[List[Dict]] = None
             if onboarding_active:
                 try:
-                    reply = generate_reply(
-                        user_text=text,
-                        history=history,
-                        system_prompt=system_prompt,
-                        messages=llm_messages,
-                        provider=llm_provider,
-                    )
+                    if on_text_delta is None:
+                        reply = generate_reply(
+                            user_text=text,
+                            history=history,
+                            system_prompt=system_prompt,
+                            messages=llm_messages,
+                            provider=llm_provider,
+                        )
+                    else:
+                        reply = generate_reply_stream(
+                            user_text=text,
+                            history=history,
+                            system_prompt=system_prompt,
+                            messages=llm_messages,
+                            provider=llm_provider,
+                            on_text_delta=on_text_delta,
+                            is_cancelled=is_cancelled or (lambda: False),
+                        )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
                 if onboarding_state == product_services.onboarding_pending:
@@ -1529,6 +1556,8 @@ def _resolve_turn_reply(
                         provider=llm_provider,
                         on_tool_detected=_on_tool_detected,
                         round_trace_collector=_round_traces,
+                        on_text_delta=on_text_delta,
+                        is_cancelled=is_cancelled,
                     )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
@@ -1553,6 +1582,8 @@ def _resolve_turn_reply(
             normal_reply_generated = generation_error is None
             if tool_names_used:
                 debug_metadata["tool_names_used"] = tool_names_used
+        except LLMStreamCancelled:
+            raise
         except Exception as err:
             logger.exception("reply generation failed: %s", err)
             generation_error = str(err)
@@ -2092,6 +2123,355 @@ class ChannelTurnInput:
     provider_id: Optional[str] = None
     # 产品已在 Runtime 外完成固定价预占/结算时关闭按 token 计费；每日配额仍按成功 turn 结算。
     usage_billing_enabled: bool = True
+    # 流式入口使用；同步入口保持 None，由 Runtime 生成安全默认值。
+    turn_id: Optional[str] = None
+    client_message_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class CancellationToken:
+    """Thread-safe cooperative cancellation shared by HTTP, Runtime and Provider layers."""
+
+    def __init__(
+        self,
+        *,
+        external_check: Optional[Callable[[], bool]] = None,
+        check_interval_seconds: float = 0.1,
+    ) -> None:
+        self._event = threading.Event()
+        self._external_check = external_check
+        self._check_interval_seconds = max(0.02, float(check_interval_seconds))
+        self._check_lock = threading.Lock()
+        self._last_external_check = 0.0
+
+    def cancel(self) -> None:
+        self._event.set()
+
+    def is_cancelled(self) -> bool:
+        if self._event.is_set():
+            return True
+        if self._external_check is None:
+            return False
+        now = time.monotonic()
+        if now - self._last_external_check < self._check_interval_seconds:
+            return False
+        with self._check_lock:
+            if self._event.is_set():
+                return True
+            now = time.monotonic()
+            if now - self._last_external_check < self._check_interval_seconds:
+                return False
+            self._last_external_check = now
+            try:
+                if self._external_check():
+                    self._event.set()
+            except Exception:
+                logger.warning("runtime turn external cancellation check failed")
+        return self._event.is_set()
+
+
+@dataclass(frozen=True)
+class RuntimeTurnEvent:
+    """Product-neutral event emitted by ``run_product_turn_stream``."""
+
+    kind: str
+    turn_id: str
+    seq: int = 0
+    text: str = ""
+    response: Optional[OpenClawTurnResponse] = None
+    error_code: Optional[str] = None
+    run: Optional[Dict[str, Any]] = None
+
+
+class _StreamModerationBlocked(RuntimeError):
+    pass
+
+
+class _VisibleTextBuffer:
+    """Short-buffer provider deltas before deterministic moderation and delivery."""
+
+    def __init__(
+        self,
+        *,
+        account_id: str,
+        turn_id: str,
+        cancellation: CancellationToken,
+        emit: Callable[[str], None],
+    ) -> None:
+        self.account_id = account_id
+        self.turn_id = turn_id
+        self.cancellation = cancellation
+        self.emit = emit
+        self.pending = ""
+        self.visible = ""
+
+    def add(self, text: str) -> None:
+        if self.cancellation.is_cancelled():
+            raise LLMStreamCancelled("llm_stream_cancelled")
+        self.pending += text
+        if len(self.pending) >= 48 or any(mark in self.pending for mark in "。！？!?\n"):
+            self.flush()
+
+    def flush(self) -> None:
+        if not self.pending:
+            return
+        candidate = self.visible + self.pending
+        decision = check_sync_guard(
+            account_id=self.account_id,
+            text=candidate,
+            direction="outbound",
+            content_kind="text",
+            source_type="streaming_reply",
+            source_id=self.turn_id,
+        )
+        if not decision.allowed:
+            raise _StreamModerationBlocked("stream_moderation_blocked")
+        chunk = self.pending
+        self.pending = ""
+        self.visible = candidate
+        self.emit(chunk)
+
+
+def run_product_turn_stream(
+    ctx: ChannelTurnInput,
+    *,
+    product_services: ProductTurnServices,
+    cancellation: Optional[CancellationToken] = None,
+) -> Iterator[RuntimeTurnEvent]:
+    """Stream a turn while reusing the synchronous prepare, inbound and finalize phases."""
+    turn_id = ctx.turn_id or f"turn-{uuid.uuid4()}"
+    cancellation = cancellation or CancellationToken(
+        external_check=lambda: runtime_turn_cancel_requested(turn_id)
+    )
+    client_message_id = ctx.client_message_id or ctx.message_id or turn_id
+    idempotency_key = ctx.idempotency_key or client_message_id
+    started_at = time.monotonic()
+    timings: Dict[str, int] = {}
+    setup: Optional[_TurnSetup] = None
+    inbound: Optional[_InboundResult] = None
+    terminal = False
+    partial_text = ""
+    response: Optional[OpenClawTurnResponse] = None
+
+    if not _same_product_scope(ctx.app_id, product_services.app_id):
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_service_mismatch")
+        return
+    if ctx.identity.channel not in product_services.allowed_channels:
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_channel_mismatch")
+        return
+    try:
+        product_services.registry.require_enabled(ctx.app_id)
+    except ValueError:
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_disabled")
+        return
+    access = get_account_product_access(account_id=ctx.account_id)
+    if access is not None and access["app_id"] != ctx.app_id:
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_scope_mismatch")
+        return
+    if (
+        access is not None
+        and access["platform_user_id"] is not None
+        and access["membership_status"] != "active"
+    ):
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_membership_required")
+        return
+
+    prepare_started = time.monotonic()
+    prepared = _prepare_turn(ctx, started_at=started_at, product_services=product_services)
+    _record_timing(timings, "prepare_ms", prepare_started)
+    if isinstance(prepared, OpenClawTurnResponse):
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, response=prepared, error_code=prepared.status)
+        return
+    setup = prepared
+
+    try:
+        run, created = create_runtime_turn_run(
+            turn_id=turn_id,
+            app_id=ctx.app_id,
+            account_id=ctx.account_id,
+            session_id=int(setup.session["id"]),
+            client_message_id=client_message_id,
+            idempotency_key=idempotency_key,
+            provider_id=setup.llm_provider.id,
+            model_ref=setup.llm_provider.model,
+        )
+    except ActiveRuntimeTurnError:
+        yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="runtime_turn_active")
+        return
+    if not created and str(run["id"]) == turn_id and run["status"] == "accepted":
+        created = True
+    if not created:
+        yield RuntimeTurnEvent(kind="deduplicated", turn_id=str(run["id"]), run=run)
+        return
+
+    yield RuntimeTurnEvent(kind="accepted", turn_id=turn_id, run=run)
+    inbound_started = time.monotonic()
+    persisted = _persist_and_screen_inbound(
+        ctx,
+        setup,
+        started_at=started_at,
+        timings=timings,
+        product_services=product_services,
+    )
+    _record_timing(timings, "inbound_total_ms", inbound_started)
+    if isinstance(persisted, OpenClawTurnResponse):
+        finish_runtime_turn_run(
+            turn_id=turn_id,
+            status="completed" if persisted.status == "ok" else "failed",
+            assistant_message_id=(persisted.metadata or {}).get("reply_message_id"),
+            finish_reason="deduplicated" if persisted.status == "ok" else None,
+            error_code=None if persisted.status == "ok" else persisted.status,
+        )
+        terminal = True
+        yield RuntimeTurnEvent(
+            kind="completed" if persisted.status == "ok" else "failed",
+            turn_id=turn_id,
+            response=persisted,
+            error_code=None if persisted.status == "ok" else persisted.status,
+        )
+        return
+    inbound = persisted
+    mark_runtime_turn_running(turn_id)
+
+    event_queue: "queue.Queue[tuple]" = queue.Queue()
+    seq = 0
+
+    def enqueue_text(chunk: str) -> None:
+        nonlocal seq
+        if cancellation.is_cancelled() or not mark_runtime_turn_first_delta(turn_id):
+            cancellation.cancel()
+            raise LLMStreamCancelled("llm_stream_cancelled")
+        seq += 1
+        event_queue.put(("delta", seq, chunk))
+
+    buffer = _VisibleTextBuffer(
+        account_id=ctx.account_id,
+        turn_id=turn_id,
+        cancellation=cancellation,
+        emit=enqueue_text,
+    )
+
+    def resolve_worker() -> None:
+        try:
+            result = _resolve_turn_reply(
+                ctx,
+                setup,
+                inbound,
+                background_loop=ctx.background_loop,
+                force_web_search_enabled=ctx.force_web_search_enabled,
+                timings=timings,
+                product_services=product_services,
+                on_text_delta=buffer.add,
+                is_cancelled=cancellation.is_cancelled,
+            )
+            if not buffer.visible and not buffer.pending and result.reply:
+                buffer.add(result.reply)
+            buffer.flush()
+            event_queue.put(("result", result))
+        except LLMStreamCancelled:
+            event_queue.put(("cancelled",))
+        except _StreamModerationBlocked:
+            event_queue.put(("moderation_blocked",))
+        except Exception as err:
+            logger.exception("stream reply generation failed account=%s error=%s", ctx.account_id, err)
+            event_queue.put(("failed", "runtime_stream_error"))
+
+    worker = threading.Thread(target=resolve_worker, name=f"runtime-turn-{turn_id}", daemon=True)
+    worker.start()
+    cancelled_in_stream = False
+    try:
+        while True:
+            item = event_queue.get()
+            kind = item[0]
+            if kind == "delta":
+                partial_text += item[2]
+                yield RuntimeTurnEvent(kind="text_delta", turn_id=turn_id, seq=item[1], text=item[2])
+                continue
+            if kind == "result":
+                result = item[1]
+                latency_ms = _elapsed_ms(started_at)
+                response = _finalize_turn(
+                    ctx,
+                    setup,
+                    inbound,
+                    result,
+                    latency_ms=latency_ms,
+                    background_loop=ctx.background_loop,
+                    timings=timings,
+                    product_services=product_services,
+                )
+                assistant_message_id = (response.metadata or {}).get("reply_message_id")
+                if result.generation_error:
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="failed",
+                        assistant_message_id=assistant_message_id,
+                        error_code="generation_error",
+                    )
+                    terminal = True
+                    yield RuntimeTurnEvent(
+                        kind="failed",
+                        turn_id=turn_id,
+                        response=response,
+                        error_code="generation_error",
+                    )
+                else:
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="completed",
+                        assistant_message_id=assistant_message_id,
+                        finish_reason="stop",
+                    )
+                    terminal = True
+                    yield RuntimeTurnEvent(kind="completed", turn_id=turn_id, response=response)
+                return
+            if kind == "cancelled":
+                cancelled_in_stream = True
+                break
+            error_code = "moderation_blocked" if kind == "moderation_blocked" else item[1]
+            rollback_daily_quota(reservation_id=inbound.quota_reservation_id)
+            finish_runtime_turn_run(turn_id=turn_id, status="failed", error_code=error_code)
+            terminal = True
+            yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code=error_code)
+            return
+    finally:
+        if not terminal:
+            cancellation.cancel()
+            worker.join(timeout=1.0)
+            assistant_message_id = None
+            if partial_text and setup is not None and inbound is not None:
+                cancelled_result = _ReplyResult(
+                    reply=partial_text,
+                    generation_error=None,
+                    normal_reply_generated=True,
+                    tool_names=[],
+                    onboarding_pre_extracted=None,
+                    system_prompt=None,
+                    llm_messages=[],
+                    debug_metadata={"stream_status": "cancelled"},
+                    llm_provider=setup.llm_provider,
+                )
+                response = _finalize_turn(
+                    ctx,
+                    setup,
+                    inbound,
+                    cancelled_result,
+                    latency_ms=_elapsed_ms(started_at),
+                    background_loop=ctx.background_loop,
+                    timings=timings,
+                    product_services=product_services,
+                )
+                assistant_message_id = (response.metadata or {}).get("reply_message_id")
+            elif inbound is not None:
+                rollback_daily_quota(reservation_id=inbound.quota_reservation_id)
+            finish_runtime_turn_run(
+                turn_id=turn_id,
+                status="cancelled",
+                assistant_message_id=assistant_message_id,
+                finish_reason="client_cancelled",
+            )
+    if cancelled_in_stream:
+        yield RuntimeTurnEvent(kind="cancelled", turn_id=turn_id, response=response)
 
 
 def run_product_turn(
