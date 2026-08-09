@@ -46,12 +46,12 @@ Plum 联调使用独立 SQLite，避免误连 `.env` 中已有的 PostgreSQL；�
 读取。初始化固定测试账号、演示角色和 1000 金币后启动 SSE 流式后端：
 
 ```bash
-make plum-local-init
-make plum-local-run
+make plum-local-start
 ```
 
 默认数据库为 `data/plum_dev.sqlite3`。需要隔离分支或同事数据时，先设置
-`PLUM_DEV_DB=data/plum_dev_<name>.sqlite3`，并让 init/run 两条命令使用同一个值。
+`PLUM_DEV_DB=data/plum_dev_<name>.sqlite3`。统一入口会幂等初始化测试数据后启动服务；排障时
+仍可分别运行 `make plum-local-init` 和 `make plum-local-run`。
 
 Web onboarding:
 
