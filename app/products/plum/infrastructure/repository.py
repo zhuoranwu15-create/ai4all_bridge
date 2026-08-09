@@ -1127,11 +1127,43 @@ def set_character_favorite(
 
 
 def list_conversation_messages(conversation: Dict[str, Any], *, limit: int = 100):
-    return list_session_messages_before(
+    messages = list_session_messages_before(
         account_id=str(conversation["runtime_account_id"]),
         session_id=int(conversation["runtime_session_id"]),
         limit=limit,
     )
+    assistant_ids = {
+        str(message["message_id"])
+        for message in messages
+        if message.get("role") == "assistant" and message.get("message_id")
+    }
+    run_statuses: Dict[str, str] = {}
+    if assistant_ids:
+        placeholders = ",".join("?" for _ in assistant_ids)
+        with connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT assistant_message_id, status FROM runtime_turn_runs
+                WHERE app_id='plum' AND account_id=? AND session_id=?
+                  AND assistant_message_id IN ({placeholders})
+                """,
+                (
+                    str(conversation["runtime_account_id"]),
+                    int(conversation["runtime_session_id"]),
+                    *sorted(assistant_ids),
+                ),
+            ).fetchall()
+        run_statuses = {
+            str(row["assistant_message_id"]): str(row["status"])
+            for row in rows
+        }
+    return [
+        {
+            **message,
+            "status": run_statuses.get(str(message.get("message_id")), "completed"),
+        }
+        for message in messages
+    ]
 
 
 def update_conversation_model(

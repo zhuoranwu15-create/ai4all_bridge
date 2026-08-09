@@ -1,25 +1,42 @@
 """Plum Feed、会话、模型选择和同步文字 turn API。"""
 from __future__ import annotations
 
+import json
+import logging
 import secrets
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import StreamingResponse
 
 from app.agent_runtime.llm.providers import get_llm_provider
-from app.agent_runtime.turns.service import ChannelTurnInput, run_product_turn
+from app.agent_runtime.turns.service import (
+    CancellationToken,
+    ChannelTurnInput,
+    run_product_turn,
+    run_product_turn_stream,
+)
 from app.bootstrap.product_registry import PLUM_APP_ID
 from app.config import settings
 from app.db import (
     FixedShellReservationReleased,
     InsufficientWalletBalance,
     SessionPrincipal,
+    ActiveRuntimeTurnError,
+    create_runtime_turn_run,
     create_platform_user_session,
+    finish_runtime_turn_run,
     get_platform_user,
     get_duplicate_reply_record,
+    get_runtime_turn_run,
+    get_runtime_turn_run_by_idempotency,
     get_wallet_summary,
     release_fixed_shell_reservation,
+    reclaim_stale_runtime_turn_runs,
+    request_runtime_turn_cancel,
     revoke_platform_user_session,
     reserve_fixed_shells,
+    runtime_turn_cancel_requested,
 )
 from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import CHANNEL_APP, get_channel_capability
@@ -56,6 +73,7 @@ from app.platform.quota.rate_limiter import RateLimiter
 
 router = APIRouter(tags=["plum"])
 _auth_rate_limiter = RateLimiter()
+logger = logging.getLogger("ai4all.plum")
 
 
 def _set_auth_cookies(response: Response, *, session_token: str, csrf_token: str) -> None:
@@ -210,6 +228,9 @@ def bootstrap(
         },
         "wallet": _wallet(principal.platform_user_id),
         "models": list_model_profiles(),
+        "capabilities": {
+            "chat_streaming": bool(settings.plum_chat_streaming_enabled),
+        },
     }
 
 
@@ -514,6 +535,446 @@ def create_turn(
         ),
         "wallet": _wallet(principal.platform_user_id),
         "deduplicated": turn_response.status == "duplicate",
+    }
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+
+
+def _release_stream_reservation(
+    *, conversation: dict, principal: SessionPrincipal, reservation_key: str
+) -> None:
+    release_fixed_shell_reservation(
+        account_id=str(conversation["runtime_account_id"]),
+        platform_user_id=principal.platform_user_id,
+        reservation_idempotency_key=reservation_key,
+    )
+
+
+def _reclaim_stale_stream_runs(
+    *, conversation: dict, principal: SessionPrincipal
+) -> None:
+    """Clear stale active guards and refund unseen Plum turns on the next request."""
+    reclaimed = reclaim_stale_runtime_turn_runs(
+        ttl_seconds=600,
+        app_id=PLUM_APP_ID,
+        account_id=str(conversation["runtime_account_id"]),
+        session_id=int(conversation["runtime_session_id"]),
+    )
+    for run in reclaimed:
+        if run.get("first_delta_at") is not None:
+            continue
+        try:
+            _release_stream_reservation(
+                conversation=conversation,
+                principal=principal,
+                reservation_key=(
+                    f"plum-turn:{conversation['id']}:{run['idempotency_key']}"
+                ),
+            )
+        except ValueError:
+            # Shared Runtime callers may not have a Plum fixed-price reservation.
+            logger.warning(
+                "stale Plum turn had no releasable reservation turn_id=%s",
+                run["id"],
+            )
+
+
+@router.post("/conversations/{conversation_id}/turns/stream")
+def create_turn_stream(
+    conversation_id: str,
+    payload: CreateTurnRequest,
+    principal: SessionPrincipal = Depends(require_plum_principal),
+):
+    if not bool(settings.plum_chat_streaming_enabled):
+        raise HTTPException(status_code=503, detail="chat_streaming_disabled")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="message_empty")
+    request_id = payload.idempotency_key.strip()
+    client_message_id = payload.client_message_id.strip()
+    conversation = _conversation_or_404(conversation_id, principal)
+    model = get_model_profile(str(conversation["model_profile"]))
+    if model is None:
+        raise HTTPException(status_code=503, detail="model_profile_unavailable")
+    try:
+        provider = get_llm_provider(str(model["provider_id"]), settings_obj=settings)
+    except ValueError as err:
+        raise HTTPException(status_code=503, detail="model_provider_unavailable") from err
+    if not provider.enabled:
+        raise HTTPException(status_code=503, detail="model_provider_unavailable")
+
+    account_id = str(conversation["runtime_account_id"])
+    _reclaim_stale_stream_runs(conversation=conversation, principal=principal)
+    existing_run = get_runtime_turn_run_by_idempotency(
+        app_id=PLUM_APP_ID,
+        account_id=account_id,
+        idempotency_key=request_id,
+    )
+    if existing_run is not None:
+        if existing_run["status"] != "completed":
+            raise HTTPException(status_code=409, detail="turn_idempotency_conflict")
+        reply_row = get_duplicate_reply_record(
+            account_id=account_id,
+            reply_to_message_id=client_message_id,
+        )
+        if reply_row is None:
+            raise HTTPException(status_code=409, detail="turn_replay_unavailable")
+
+        def replay():
+            yield _sse(
+                "turn.accepted",
+                {
+                    "version": 1,
+                    "turn_id": existing_run["id"],
+                    "request_id": request_id,
+                    "model_profile": model["profile"],
+                    "reserved_coins": int(model["coin_cost_micros"]) // 1_000_000,
+                    "deduplicated": True,
+                },
+            )
+            yield _sse(
+                "message.delta",
+                {
+                    "version": 1,
+                    "turn_id": existing_run["id"],
+                    "seq": 1,
+                    "text": str(reply_row["content"]),
+                },
+            )
+            yield _sse(
+                "turn.completed",
+                {
+                    "version": 1,
+                    "turn_id": existing_run["id"],
+                    "message_id": reply_row["message_id"],
+                    "finish_reason": existing_run.get("finish_reason") or "stop",
+                    "charged_coins": int(model["coin_cost_micros"]) // 1_000_000,
+                    "wallet": _wallet(principal.platform_user_id),
+                    "deduplicated": True,
+                },
+            )
+
+        return StreamingResponse(
+            replay(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    reservation_key = f"plum-turn:{conversation_id}:{request_id}"
+    try:
+        reserve_fixed_shells(
+            account_id=account_id,
+            platform_user_id=principal.platform_user_id,
+            amount_shell_micros=int(model["coin_cost_micros"]),
+            idempotency_key=reservation_key,
+            source_id=conversation_id,
+            metadata={
+                "model_profile": model["profile"],
+                "provider_id": model["provider_id"],
+                "config_version": model["config_version"],
+                "transport": "sse",
+            },
+        )
+    except InsufficientWalletBalance as err:
+        raise HTTPException(status_code=402, detail="insufficient_coins") from err
+    except FixedShellReservationReleased as err:
+        raise HTTPException(status_code=409, detail="idempotency_key_already_released") from err
+
+    turn_id = f"turn_{uuid.uuid4().hex}"
+    try:
+        _run, created = create_runtime_turn_run(
+            turn_id=turn_id,
+            app_id=PLUM_APP_ID,
+            account_id=account_id,
+            session_id=int(conversation["runtime_session_id"]),
+            client_message_id=client_message_id,
+            idempotency_key=request_id,
+            provider_id=provider.id,
+            model_ref=provider.model,
+        )
+    except ActiveRuntimeTurnError as err:
+        _release_stream_reservation(
+            conversation=conversation,
+            principal=principal,
+            reservation_key=reservation_key,
+        )
+        raise HTTPException(status_code=409, detail="conversation_turn_active") from err
+    except Exception as err:
+        logger.exception(
+            "runtime turn initialization failed turn_id=%s account=%s",
+            turn_id,
+            account_id,
+        )
+        finish_runtime_turn_run(
+            turn_id=turn_id,
+            status="failed",
+            error_code="runtime_turn_initialization_failed",
+        )
+        _release_stream_reservation(
+            conversation=conversation,
+            principal=principal,
+            reservation_key=reservation_key,
+        )
+        raise HTTPException(status_code=503, detail="runtime_turn_unavailable") from err
+    if not created:
+        raise HTTPException(status_code=409, detail="turn_idempotency_conflict")
+
+    identity = ResolvedIdentity(
+        ai4all_account_id=account_id,
+        session_key=f"plum:{conversation_id}",
+        channel=CHANNEL_APP,
+        channel_account_id=None,
+        sender_id=principal.platform_user_id,
+        chat_id=conversation_id,
+    )
+    turn_input = ChannelTurnInput(
+        account_id=account_id,
+        app_id=PLUM_APP_ID,
+        cap=get_channel_capability(CHANNEL_APP),
+        identity=identity,
+        message_id=client_message_id,
+        event_id=request_id,
+        message_type="text",
+        text=text,
+        media=None,
+        raw={"transport": "plum_web_sse"},
+        sender_name="Plum 测试用户",
+        provider_id=str(model["provider_id"]),
+        usage_billing_enabled=False,
+        turn_id=turn_id,
+        client_message_id=client_message_id,
+        idempotency_key=request_id,
+    )
+    cancellation = CancellationToken(
+        external_check=lambda: runtime_turn_cancel_requested(turn_id)
+    )
+
+    def stream():
+        saw_delta = False
+        settled = False
+        runtime_events = run_product_turn_stream(
+            turn_input,
+            product_services=PLUM_TURN_SERVICES,
+            cancellation=cancellation,
+        )
+        try:
+            for event in runtime_events:
+                if event.kind == "accepted":
+                    yield _sse(
+                        "turn.accepted",
+                        {
+                            "version": 1,
+                            "turn_id": turn_id,
+                            "request_id": request_id,
+                            "model_profile": model["profile"],
+                            "reserved_coins": int(model["coin_cost_micros"]) // 1_000_000,
+                        },
+                    )
+                elif event.kind == "text_delta":
+                    saw_delta = True
+                    yield _sse(
+                        "message.delta",
+                        {
+                            "version": 1,
+                            "turn_id": turn_id,
+                            "seq": event.seq,
+                            "text": event.text,
+                        },
+                    )
+                elif event.kind == "completed":
+                    message_id = (
+                        (event.response.metadata or {}).get("reply_message_id")
+                        if event.response
+                        else None
+                    )
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="completed",
+                        assistant_message_id=message_id,
+                        finish_reason="stop",
+                    )
+                    settled = True
+                    touch_conversation(
+                        conversation_id=conversation_id,
+                        platform_user_id=principal.platform_user_id,
+                    )
+                    yield _sse(
+                        "turn.completed",
+                        {
+                            "version": 1,
+                            "turn_id": turn_id,
+                            "message_id": message_id,
+                            "finish_reason": "stop",
+                            "charged_coins": int(model["coin_cost_micros"]) // 1_000_000,
+                            "wallet": _wallet(principal.platform_user_id),
+                            "deduplicated": False,
+                        },
+                    )
+                elif event.kind == "cancelled":
+                    message_id = (
+                        (event.response.metadata or {}).get("reply_message_id")
+                        if event.response
+                        else None
+                    )
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="cancelled",
+                        assistant_message_id=message_id,
+                        finish_reason="client_cancelled",
+                    )
+                    if not saw_delta:
+                        _release_stream_reservation(
+                            conversation=conversation,
+                            principal=principal,
+                            reservation_key=reservation_key,
+                        )
+                    else:
+                        touch_conversation(
+                            conversation_id=conversation_id,
+                            platform_user_id=principal.platform_user_id,
+                        )
+                    settled = True
+                    yield _sse(
+                        "turn.cancelled",
+                        {
+                            "version": 1,
+                            "turn_id": turn_id,
+                            "message_id": message_id,
+                            "charged_coins": int(model["coin_cost_micros"]) // 1_000_000 if saw_delta else 0,
+                            "wallet": _wallet(principal.platform_user_id),
+                        },
+                    )
+                elif event.kind in {"failed", "deduplicated"}:
+                    error_code = event.error_code or "runtime_stream_failed"
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="failed",
+                        error_code=error_code,
+                    )
+                    _release_stream_reservation(
+                        conversation=conversation,
+                        principal=principal,
+                        reservation_key=reservation_key,
+                    )
+                    settled = True
+                    yield _sse(
+                        "turn.failed",
+                        {
+                            "version": 1,
+                            "turn_id": turn_id,
+                            "code": error_code,
+                            "retryable": True,
+                            "charged_coins": 0,
+                            "wallet": _wallet(principal.platform_user_id),
+                        },
+                    )
+        except Exception as err:
+            logger.exception(
+                "Plum stream failed turn_id=%s account=%s error=%s",
+                turn_id,
+                account_id,
+                type(err).__name__,
+            )
+            if not settled:
+                finish_runtime_turn_run(
+                    turn_id=turn_id,
+                    status="failed",
+                    error_code="stream_internal_error",
+                )
+                _release_stream_reservation(
+                    conversation=conversation,
+                    principal=principal,
+                    reservation_key=reservation_key,
+                )
+                settled = True
+            yield _sse(
+                "turn.failed",
+                {
+                    "version": 1,
+                    "turn_id": turn_id,
+                    "code": "stream_internal_error",
+                    "retryable": True,
+                    "charged_coins": 0,
+                    "wallet": _wallet(principal.platform_user_id),
+                },
+            )
+        finally:
+            cancellation.cancel()
+            try:
+                runtime_events.close()
+            except Exception:
+                logger.exception(
+                    "runtime stream close failed turn_id=%s account=%s",
+                    turn_id,
+                    account_id,
+                )
+            if not settled:
+                current_run = get_runtime_turn_run(turn_id)
+                if current_run is not None and current_run["status"] in {
+                    "accepted",
+                    "running",
+                }:
+                    finish_runtime_turn_run(
+                        turn_id=turn_id,
+                        status="cancelled",
+                        finish_reason="client_disconnected",
+                    )
+                if saw_delta:
+                    touch_conversation(
+                        conversation_id=conversation_id,
+                        platform_user_id=principal.platform_user_id,
+                    )
+                else:
+                    _release_stream_reservation(
+                        conversation=conversation,
+                        principal=principal,
+                        reservation_key=reservation_key,
+                    )
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/conversations/{conversation_id}/turns/{request_id}/cancel")
+def cancel_turn_stream(
+    conversation_id: str,
+    request_id: str,
+    principal: SessionPrincipal = Depends(require_plum_principal),
+):
+    """Persist a cooperative Stop signal before the browser tears down its stream."""
+    conversation = _conversation_or_404(conversation_id, principal)
+    account_id = str(conversation["runtime_account_id"])
+    run = get_runtime_turn_run_by_idempotency(
+        app_id=PLUM_APP_ID,
+        account_id=account_id,
+        idempotency_key=request_id,
+    )
+    if run is None or int(run["session_id"]) != int(conversation["runtime_session_id"]):
+        raise HTTPException(status_code=404, detail="turn_not_found")
+    requested = request_runtime_turn_cancel(
+        turn_id=str(run["id"]),
+        app_id=PLUM_APP_ID,
+        account_id=account_id,
+        session_id=int(conversation["runtime_session_id"]),
+    )
+    current = get_runtime_turn_run(str(run["id"])) or run
+    return {
+        "status": "ok",
+        "turn_id": str(run["id"]),
+        "cancel_requested": requested or current.get("cancel_requested_at") is not None,
+        "run_status": current["status"],
+        "wallet": _wallet(principal.platform_user_id),
     }
 
 

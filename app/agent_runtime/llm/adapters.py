@@ -1,6 +1,7 @@
 """Protocol adapters that normalize provider responses to OpenAI chat shape."""
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import logging
@@ -8,9 +9,10 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -23,6 +25,19 @@ logger = logging.getLogger("ai4all.llm.adapters")
 _VERSION_PATH_RE = re.compile(r"/v\d+(?:/|$)")
 _DUMP_SEQ_LOCK = threading.Lock()
 _DUMP_SEQ = 0
+
+
+@dataclass(frozen=True)
+class LLMStreamEvent:
+    """Provider-neutral event emitted by a streaming LLM call."""
+
+    kind: str
+    text: str = ""
+    tool_call: Optional[Dict[str, Any]] = None
+    usage: Optional[Dict[str, Any]] = None
+    finish_reason: Optional[str] = None
+    response_id: Optional[str] = None
+    error_code: Optional[str] = None
 
 
 def _json_body_bytes(body: Dict[str, Any]) -> bytes:
@@ -632,6 +647,372 @@ def _normalize_openai_chat_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     message["content"] = None
     choice["finish_reason"] = "tool_calls"
     return payload
+
+
+def _iter_sse_records(chunks: Iterable[bytes]) -> Iterator[Tuple[str, str]]:
+    """Decode arbitrarily split UTF-8 chunks into SSE event/data records."""
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    buffer = ""
+
+    def pop_records(*, final: bool = False) -> Iterator[Tuple[str, str]]:
+        nonlocal buffer
+        while True:
+            match = re.search(r"\r?\n\r?\n", buffer)
+            if match is None:
+                break
+            block = buffer[: match.start()]
+            buffer = buffer[match.end() :]
+            record = _parse_sse_block(block)
+            if record is not None:
+                yield record
+        if final and buffer:
+            record = _parse_sse_block(buffer)
+            buffer = ""
+            if record is not None:
+                yield record
+
+    for chunk in chunks:
+        if not chunk:
+            continue
+        buffer += decoder.decode(chunk)
+        yield from pop_records()
+    buffer += decoder.decode(b"", final=True)
+    yield from pop_records(final=True)
+
+
+def _parse_sse_block(block: str) -> Optional[Tuple[str, str]]:
+    event_name = "message"
+    data_lines: List[str] = []
+    for line in block.splitlines():
+        if not line or line.startswith(":"):
+            continue
+        field, separator, value = line.partition(":")
+        if not separator:
+            value = ""
+        elif value.startswith(" "):
+            value = value[1:]
+        if field == "event":
+            event_name = value or "message"
+        elif field == "data":
+            data_lines.append(value)
+    if not data_lines:
+        return None
+    return event_name, "\n".join(data_lines)
+
+
+def _stream_sse_json(
+    *,
+    provider: LLMProviderConfig,
+    url: str,
+    headers: Dict[str, str],
+    body: Dict[str, Any],
+) -> Iterator[Tuple[str, Optional[Dict[str, Any]]]]:
+    """POST an SSE request and yield decoded JSON records; ``None`` is the DONE marker."""
+    body_bytes = _json_body_bytes(body)
+    max_attempts = max(1, int(provider.max_retries) + 1)
+    for attempt in range(1, max_attempts + 1):
+        emitted = False
+        try:
+            _write_request_dump(
+                provider=provider,
+                url=url,
+                body_bytes=body_bytes,
+                attempt=attempt,
+            )
+            with httpx.Client(
+                timeout=_chat_timeout(provider),
+                trust_env=False,
+                transport=_chat_transport(provider),
+            ) as client:
+                with client.stream("POST", url, headers=headers, content=body_bytes) as response:
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "").lower()
+                    if "text/event-stream" not in content_type:
+                        raise RuntimeError("LLM streaming response is not SSE")
+                    for event_name, raw_data in _iter_sse_records(response.iter_bytes()):
+                        emitted = True
+                        if raw_data.strip() == "[DONE]":
+                            yield event_name, None
+                            continue
+                        try:
+                            payload = json.loads(raw_data)
+                        except json.JSONDecodeError as err:
+                            raise RuntimeError("LLM returned invalid SSE JSON") from err
+                        if not isinstance(payload, dict):
+                            raise RuntimeError("LLM returned invalid SSE payload")
+                        yield event_name, payload
+            return
+        except httpx.HTTPStatusError as err:
+            logger.error(
+                "llm stream http error provider=%s protocol=%s status=%s",
+                provider.id,
+                provider.protocol,
+                err.response.status_code,
+            )
+            raise RuntimeError(f"LLM HTTP error: {err.response.status_code}") from err
+        except httpx.RequestError as err:
+            logger.warning(
+                "llm stream request failed provider=%s attempt=%s/%s emitted=%s error=%s",
+                provider.id,
+                attempt,
+                max_attempts,
+                emitted,
+                type(err).__name__,
+            )
+            if emitted or isinstance(err, httpx.ReadTimeout) or attempt >= max_attempts:
+                raise RuntimeError(_request_error_message(err)) from err
+            time.sleep(min(0.2 * attempt, 1.0))
+
+
+def _normalized_usage(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "prompt_tokens": payload.get("prompt_tokens", payload.get("input_tokens")),
+        "completion_tokens": payload.get("completion_tokens", payload.get("output_tokens")),
+    }
+
+
+def _openai_chat_stream_events(
+    records: Iterable[Tuple[str, Optional[Dict[str, Any]]]],
+) -> Iterator[LLMStreamEvent]:
+    finish_reason: Optional[str] = None
+    response_id: Optional[str] = None
+    completed = False
+    for _event_name, payload in records:
+        if payload is None:
+            completed = True
+            yield LLMStreamEvent(
+                kind="completed",
+                finish_reason=finish_reason or "stop",
+                response_id=response_id,
+            )
+            return
+        response_id = str(payload.get("id") or response_id or "") or None
+        usage = payload.get("usage")
+        if isinstance(usage, dict) and usage:
+            yield LLMStreamEvent(kind="usage", usage=_normalized_usage(usage))
+        for choice in payload.get("choices") or []:
+            if not isinstance(choice, dict):
+                continue
+            delta = choice.get("delta") or {}
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                yield LLMStreamEvent(kind="text_delta", text=content, response_id=response_id)
+            for tool_delta in delta.get("tool_calls") or []:
+                if not isinstance(tool_delta, dict):
+                    continue
+                function = tool_delta.get("function") or {}
+                yield LLMStreamEvent(
+                    kind="tool_delta",
+                    tool_call={
+                        "index": tool_delta.get("index", 0),
+                        "id": tool_delta.get("id") or "",
+                        "name_delta": function.get("name") or "",
+                        "arguments_delta": function.get("arguments") or "",
+                    },
+                    response_id=response_id,
+                )
+            if choice.get("finish_reason"):
+                finish_reason = str(choice["finish_reason"])
+    if not completed:
+        if finish_reason:
+            # A few OpenAI-compatible providers close cleanly after the finish chunk
+            # without a separate [DONE] sentinel.
+            yield LLMStreamEvent(
+                kind="completed",
+                finish_reason=finish_reason,
+                response_id=response_id,
+            )
+        else:
+            yield LLMStreamEvent(
+                kind="error",
+                error_code="stream_truncated",
+                response_id=response_id,
+            )
+
+
+def _openai_responses_stream_events(
+    records: Iterable[Tuple[str, Optional[Dict[str, Any]]]],
+) -> Iterator[LLMStreamEvent]:
+    response_id: Optional[str] = None
+    completed = False
+    has_tool_call = False
+    for event_name, payload in records:
+        if payload is None:
+            continue
+        event_type = str(payload.get("type") or event_name)
+        response = payload.get("response") or {}
+        response_id = str(
+            payload.get("response_id") or response.get("id") or response_id or ""
+        ) or None
+        if event_type == "response.output_text.delta":
+            delta = payload.get("delta")
+            if isinstance(delta, str) and delta:
+                yield LLMStreamEvent(kind="text_delta", text=delta, response_id=response_id)
+        elif event_type == "response.output_item.added":
+            item = payload.get("item") or {}
+            if item.get("type") == "function_call":
+                has_tool_call = True
+                yield LLMStreamEvent(
+                    kind="tool_delta",
+                    tool_call={
+                        "index": payload.get("output_index", 0),
+                        "id": item.get("call_id") or item.get("id") or "",
+                        "name_delta": item.get("name") or "",
+                        "arguments_delta": item.get("arguments") or "",
+                    },
+                    response_id=response_id,
+                )
+        elif event_type == "response.function_call_arguments.delta":
+            has_tool_call = True
+            yield LLMStreamEvent(
+                kind="tool_delta",
+                tool_call={
+                    "index": payload.get("output_index", 0),
+                    "id": payload.get("item_id") or "",
+                    "name_delta": "",
+                    "arguments_delta": payload.get("delta") or "",
+                },
+                response_id=response_id,
+            )
+        elif event_type == "response.completed":
+            usage = response.get("usage")
+            if isinstance(usage, dict) and usage:
+                yield LLMStreamEvent(kind="usage", usage=_normalized_usage(usage))
+            completed = True
+            yield LLMStreamEvent(
+                kind="completed",
+                finish_reason="tool_calls" if has_tool_call else "stop",
+                response_id=response_id,
+            )
+        elif event_type in {"error", "response.failed", "response.incomplete"}:
+            completed = True
+            yield LLMStreamEvent(kind="error", error_code=event_type, response_id=response_id)
+    if not completed:
+        yield LLMStreamEvent(kind="error", error_code="stream_truncated", response_id=response_id)
+
+
+def _anthropic_stream_events(
+    records: Iterable[Tuple[str, Optional[Dict[str, Any]]]],
+) -> Iterator[LLMStreamEvent]:
+    response_id: Optional[str] = None
+    finish_reason: Optional[str] = None
+    completed = False
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    for event_name, payload in records:
+        if payload is None:
+            continue
+        event_type = str(payload.get("type") or event_name)
+        if event_type == "message_start":
+            message = payload.get("message") or {}
+            response_id = str(message.get("id") or "") or response_id
+            usage = message.get("usage") or {}
+            input_tokens = usage.get("input_tokens", input_tokens)
+        elif event_type == "content_block_start":
+            block = payload.get("content_block") or {}
+            if block.get("type") == "tool_use":
+                initial_input = block.get("input") or {}
+                arguments = json.dumps(initial_input, ensure_ascii=False) if initial_input else ""
+                yield LLMStreamEvent(
+                    kind="tool_delta",
+                    tool_call={
+                        "index": payload.get("index", 0),
+                        "id": block.get("id") or "",
+                        "name_delta": block.get("name") or "",
+                        "arguments_delta": arguments,
+                    },
+                    response_id=response_id,
+                )
+        elif event_type == "content_block_delta":
+            delta = payload.get("delta") or {}
+            if delta.get("type") == "text_delta":
+                text = delta.get("text")
+                if isinstance(text, str) and text:
+                    yield LLMStreamEvent(kind="text_delta", text=text, response_id=response_id)
+            elif delta.get("type") == "input_json_delta":
+                yield LLMStreamEvent(
+                    kind="tool_delta",
+                    tool_call={
+                        "index": payload.get("index", 0),
+                        "id": "",
+                        "name_delta": "",
+                        "arguments_delta": delta.get("partial_json") or "",
+                    },
+                    response_id=response_id,
+                )
+        elif event_type == "message_delta":
+            delta = payload.get("delta") or {}
+            if delta.get("stop_reason"):
+                finish_reason = "tool_calls" if delta["stop_reason"] == "tool_use" else str(delta["stop_reason"])
+            usage = payload.get("usage") or {}
+            output_tokens = usage.get("output_tokens", output_tokens)
+        elif event_type == "message_stop":
+            if input_tokens is not None or output_tokens is not None:
+                yield LLMStreamEvent(
+                    kind="usage",
+                    usage={"prompt_tokens": input_tokens, "completion_tokens": output_tokens},
+                )
+            completed = True
+            yield LLMStreamEvent(
+                kind="completed",
+                finish_reason=finish_reason or "stop",
+                response_id=response_id,
+            )
+        elif event_type == "error":
+            completed = True
+            error = payload.get("error") or {}
+            yield LLMStreamEvent(
+                kind="error",
+                error_code=str(error.get("type") or "provider_error"),
+                response_id=response_id,
+            )
+    if not completed:
+        yield LLMStreamEvent(kind="error", error_code="stream_truncated", response_id=response_id)
+
+
+def chat_completion_stream(
+    provider: LLMProviderConfig,
+    messages: List[Dict[str, Any]],
+    *,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_choice: Any = "auto",
+) -> Iterator[LLMStreamEvent]:
+    """Call a provider in streaming mode and emit provider-neutral events."""
+    if provider.protocol == "openai_chat":
+        body = _openai_chat_payload(provider, messages, tools=tools, tool_choice=tool_choice)
+        body["stream"] = True
+        body["stream_options"] = {"include_usage": True}
+        records = _stream_sse_json(
+            provider=provider,
+            url=_openai_chat_url(provider),
+            headers=_openai_headers(provider),
+            body=body,
+        )
+        yield from _openai_chat_stream_events(records)
+        return
+    if provider.protocol == "openai_responses":
+        body = _openai_responses_body(provider, messages, tools=tools, tool_choice=tool_choice)
+        body["stream"] = True
+        records = _stream_sse_json(
+            provider=provider,
+            url=_openai_responses_url(provider),
+            headers=_openai_headers(provider),
+            body=body,
+        )
+        yield from _openai_responses_stream_events(records)
+        return
+    if provider.protocol == "anthropic_messages":
+        body = _anthropic_body(provider, messages, tools=tools, tool_choice=tool_choice)
+        body["stream"] = True
+        records = _stream_sse_json(
+            provider=provider,
+            url=_anthropic_messages_url(provider),
+            headers=_anthropic_headers(provider),
+            body=body,
+        )
+        yield from _anthropic_stream_events(records)
+        return
+    raise RuntimeError(f"unsupported LLM protocol: {provider.protocol}")
 
 
 def chat_completion(

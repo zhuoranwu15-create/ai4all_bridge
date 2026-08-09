@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import app.db as db
+from app.schemas import OpenClawTurnResponse
 from app.db._core import _migration_0067_plum_product_rename, _table_exists
 from app.products.plum.api import app as plum_api
 from app.products.plum.api import deps as plum_deps
@@ -26,6 +27,7 @@ def _configure_plum(monkeypatch, fresh_db):
     config.plum_csrf_cookie_name = "plum_csrf"
     config.plum_session_days = 30
     config.plum_session_cookie_secure = False
+    config.plum_chat_streaming_enabled = False
     monkeypatch.setattr(repository, "settings", config)
     return config
 
@@ -123,6 +125,62 @@ def test_plum_conversation_uses_shared_runtime_account_and_session(
             (first["runtime_account_id"],),
         ).fetchone()
         assert account["app_id"] == "plum"
+
+
+def test_plum_conversation_restores_cancelled_assistant_status(
+    fresh_db, monkeypatch
+):
+    _configure_plum(monkeypatch, fresh_db)
+    repository.seed_plum_dev()
+    conversation = repository.create_or_get_conversation(
+        platform_user_id="user_plum_test", character_id="char_ref_after_hours"
+    )
+    account_id = conversation["runtime_account_id"]
+    session_id = conversation["runtime_session_id"]
+
+    db.insert_message(
+        account_id=account_id,
+        session_id=session_id,
+        message_id="assistant-cancelled",
+        reply_to_message_id=None,
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content="partial reply",
+    )
+    db.insert_message(
+        account_id=account_id,
+        session_id=session_id,
+        message_id="assistant-completed",
+        reply_to_message_id=None,
+        direction="outbound",
+        role="assistant",
+        message_type="text",
+        content="ordinary reply",
+    )
+    db.create_runtime_turn_run(
+        turn_id="turn-cancelled-refresh",
+        app_id="plum",
+        account_id=account_id,
+        session_id=session_id,
+        client_message_id="client-cancelled-refresh",
+        idempotency_key="client-cancelled-refresh",
+        provider_id="chatgpt",
+        model_ref="gpt-test",
+    )
+    db.finish_runtime_turn_run(
+        turn_id="turn-cancelled-refresh",
+        status="cancelled",
+        assistant_message_id="assistant-cancelled",
+        finish_reason="cancelled",
+    )
+
+    messages = {
+        message["message_id"]: message
+        for message in repository.list_conversation_messages(conversation)
+    }
+    assert messages["assistant-cancelled"]["status"] == "cancelled"
+    assert messages["assistant-completed"]["status"] == "completed"
 
 
 def test_fixed_wallet_reservation_prevents_negative_balance_and_releases(
@@ -310,6 +368,357 @@ def test_plum_http_core_flow_charges_fixed_price_once(fresh_db, monkeypatch):
     assert captured["ctx"].usage_billing_enabled is False
 
 
+def test_plum_streaming_feature_flag_and_completed_billing(fresh_db, monkeypatch):
+    from app.agent_runtime.turns.service import RuntimeTurnEvent
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+    monkeypatch.setattr(
+        plum_api,
+        "get_llm_provider",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="chatgpt", model="gpt-test", enabled=True
+        ),
+    )
+
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        bootstrap = client.get("/api/v1/products/plum/bootstrap")
+        assert bootstrap.json()["capabilities"] == {"chat_streaming": False}
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        disabled = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "hello",
+                "client_message_id": "client-stream-disabled",
+                "idempotency_key": "client-stream-disabled",
+            },
+        )
+        assert disabled.status_code == 503
+
+        config.plum_chat_streaming_enabled = True
+
+        def fake_stream(ctx, *, product_services, cancellation):
+            del product_services, cancellation
+            yield RuntimeTurnEvent(kind="accepted", turn_id=ctx.turn_id)
+            yield RuntimeTurnEvent(kind="text_delta", turn_id=ctx.turn_id, seq=1, text="你")
+            yield RuntimeTurnEvent(kind="text_delta", turn_id=ctx.turn_id, seq=2, text="好")
+            yield RuntimeTurnEvent(
+                kind="completed",
+                turn_id=ctx.turn_id,
+                response=OpenClawTurnResponse(
+                    status="ok",
+                    reply="你好",
+                    metadata={"reply_message_id": "reply-stream-1"},
+                ),
+            )
+
+        monkeypatch.setattr(plum_api, "run_product_turn_stream", fake_stream)
+        streamed = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "hello streaming",
+                "client_message_id": "client-stream-1",
+                "idempotency_key": "client-stream-1",
+            },
+        )
+
+        assert streamed.status_code == 200
+        assert streamed.headers["content-type"].startswith("text/event-stream")
+        assert streamed.headers["x-accel-buffering"] == "no"
+        assert [
+            line.removeprefix("event: ")
+            for line in streamed.text.splitlines()
+            if line.startswith("event: ")
+        ] == ["turn.accepted", "message.delta", "message.delta", "turn.completed"]
+        assert client.get("/api/v1/products/plum/bootstrap").json()["wallet"]["balance"] == 997
+
+
+def test_plum_streaming_failure_releases_fixed_coins(fresh_db, monkeypatch):
+    from app.agent_runtime.turns.service import RuntimeTurnEvent
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    config.plum_chat_streaming_enabled = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+    monkeypatch.setattr(
+        plum_api,
+        "get_llm_provider",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="chatgpt", model="gpt-test", enabled=True
+        ),
+    )
+
+    def fake_stream(ctx, *, product_services, cancellation):
+        del product_services, cancellation
+        yield RuntimeTurnEvent(kind="accepted", turn_id=ctx.turn_id)
+        yield RuntimeTurnEvent(
+            kind="failed", turn_id=ctx.turn_id, error_code="provider_failed"
+        )
+
+    monkeypatch.setattr(plum_api, "run_product_turn_stream", fake_stream)
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        streamed = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "fail streaming",
+                "client_message_id": "client-stream-fail",
+                "idempotency_key": "client-stream-fail",
+            },
+        )
+        assert "event: turn.failed" in streamed.text
+        assert client.get("/api/v1/products/plum/bootstrap").json()["wallet"]["balance"] == 1000
+
+
+def test_plum_streaming_exception_finishes_run_and_releases_coins(
+    fresh_db, monkeypatch
+):
+    from app.agent_runtime.turns.service import RuntimeTurnEvent
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    config.plum_chat_streaming_enabled = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+    monkeypatch.setattr(
+        plum_api,
+        "get_llm_provider",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="chatgpt", model="gpt-test", enabled=True
+        ),
+    )
+
+    def exploding_stream(ctx, *, product_services, cancellation):
+        del product_services, cancellation
+        yield RuntimeTurnEvent(kind="accepted", turn_id=ctx.turn_id)
+        raise RuntimeError("synthetic runtime failure")
+
+    monkeypatch.setattr(plum_api, "run_product_turn_stream", exploding_stream)
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        streamed = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "explode streaming",
+                "client_message_id": "client-stream-explode",
+                "idempotency_key": "client-stream-explode",
+            },
+        )
+
+        assert "event: turn.failed" in streamed.text
+        assert client.get("/api/v1/products/plum/bootstrap").json()["wallet"]["balance"] == 1000
+        run = db.get_runtime_turn_run_by_idempotency(
+            app_id="plum",
+            account_id=conversation["runtime_account_id"],
+            idempotency_key="client-stream-explode",
+        )
+        assert run["status"] == "failed"
+        assert run["error_code"] == "stream_internal_error"
+
+
+def test_plum_streaming_reclaims_stale_unseen_run_and_refunds_reservation(
+    fresh_db, monkeypatch
+):
+    from app.agent_runtime.turns.service import RuntimeTurnEvent
+
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    config.plum_chat_streaming_enabled = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+    monkeypatch.setattr(
+        plum_api,
+        "get_llm_provider",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="chatgpt", model="gpt-test", enabled=True
+        ),
+    )
+
+    def completed_stream(ctx, *, product_services, cancellation):
+        del product_services, cancellation
+        yield RuntimeTurnEvent(kind="accepted", turn_id=ctx.turn_id)
+        yield RuntimeTurnEvent(kind="text_delta", turn_id=ctx.turn_id, seq=1, text="ok")
+        yield RuntimeTurnEvent(
+            kind="completed",
+            turn_id=ctx.turn_id,
+            response=OpenClawTurnResponse(
+                status="ok",
+                reply="ok",
+                metadata={"reply_message_id": "reply-after-stale"},
+            ),
+        )
+
+    monkeypatch.setattr(plum_api, "run_product_turn_stream", completed_stream)
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        stale_key = "client-stream-stale"
+        db.reserve_fixed_shells(
+            account_id=conversation["runtime_account_id"],
+            platform_user_id="user_plum_test",
+            amount_shell_micros=3_000_000,
+            idempotency_key=f"plum-turn:{conversation['id']}:{stale_key}",
+            source_id=conversation["id"],
+        )
+        db.create_runtime_turn_run(
+            turn_id="turn-stream-stale",
+            app_id="plum",
+            account_id=conversation["runtime_account_id"],
+            session_id=conversation["runtime_session_id"],
+            client_message_id=stale_key,
+            idempotency_key=stale_key,
+            provider_id="chatgpt",
+            model_ref="gpt-test",
+        )
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE runtime_turn_runs SET updated_at='2000-01-01 00:00:00' "
+                "WHERE id='turn-stream-stale'"
+            )
+
+        streamed = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "after stale",
+                "client_message_id": "client-stream-after-stale",
+                "idempotency_key": "client-stream-after-stale",
+            },
+        )
+
+        assert "event: turn.completed" in streamed.text
+        assert db.get_runtime_turn_run("turn-stream-stale")["status"] == "abandoned"
+        assert client.get("/api/v1/products/plum/bootstrap").json()["wallet"]["balance"] == 997
+
+
+def test_plum_streaming_rejects_active_conversation_and_releases_coins(
+    fresh_db, monkeypatch
+):
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    config.plum_chat_streaming_enabled = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+    monkeypatch.setattr(
+        plum_api,
+        "get_llm_provider",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id="chatgpt", model="gpt-test", enabled=True
+        ),
+    )
+
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        db.create_runtime_turn_run(
+            turn_id="turn-already-active",
+            app_id="plum",
+            account_id=conversation["runtime_account_id"],
+            session_id=conversation["runtime_session_id"],
+            client_message_id="client-already-active",
+            idempotency_key="client-already-active",
+            provider_id="chatgpt",
+            model_ref="gpt-test",
+        )
+
+        blocked = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}/turns/stream",
+            json={
+                "text": "second concurrent turn",
+                "client_message_id": "client-concurrent-second",
+                "idempotency_key": "client-concurrent-second",
+            },
+        )
+
+        assert blocked.status_code == 409
+        assert blocked.json()["detail"] == "conversation_turn_active"
+        assert client.get("/api/v1/products/plum/bootstrap").json()["wallet"]["balance"] == 1000
+        assert db.get_runtime_turn_run_by_idempotency(
+            app_id="plum",
+            account_id=conversation["runtime_account_id"],
+            idempotency_key="client-concurrent-second",
+        ) is None
+
+
+def test_plum_stream_cancel_endpoint_requests_scoped_runtime_cancel(fresh_db, monkeypatch):
+    config = _configure_plum(monkeypatch, fresh_db)
+    config.app_env = "test"
+    config.plum_enabled = True
+    config.plum_dev_mode = True
+    config.plum_chat_streaming_enabled = True
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    repository.seed_plum_dev()
+
+    app = FastAPI()
+    install_public_routes(app)
+    with TestClient(app) as client:
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        db.create_runtime_turn_run(
+            turn_id="turn-cancel-api",
+            app_id="plum",
+            account_id=conversation["runtime_account_id"],
+            session_id=conversation["runtime_session_id"],
+            client_message_id="client-cancel-api",
+            idempotency_key="client-cancel-api",
+            provider_id="chatgpt",
+            model_ref="gpt-test",
+        )
+
+        cancelled = client.post(
+            f"/api/v1/products/plum/conversations/{conversation['id']}"
+            "/turns/client-cancel-api/cancel"
+        )
+
+        assert cancelled.status_code == 200
+        assert cancelled.json()["cancel_requested"] is True
+        assert cancelled.json()["run_status"] == "accepted"
+        assert db.get_runtime_turn_run("turn-cancel-api")["cancel_requested_at"] is not None
+
+
 def test_plum_public_test_cookie_sessions_isolate_users(fresh_db, monkeypatch):
     config = _configure_plum(monkeypatch, fresh_db)
     config.app_env = "production"
@@ -351,7 +760,19 @@ def test_plum_public_test_cookie_sessions_isolate_users(fresh_db, monkeypatch):
             json={"character_id": "char_ref_after_hours"},
         )
         assert created.status_code == 200
-        first_conversation_id = created.json()["conversation"]["id"]
+        first_conversation = created.json()["conversation"]
+        first_conversation_id = first_conversation["id"]
+
+    db.create_runtime_turn_run(
+        turn_id="turn-first-user-active",
+        app_id="plum",
+        account_id=first_conversation["runtime_account_id"],
+        session_id=first_conversation["runtime_session_id"],
+        client_message_id="client-first-user-active",
+        idempotency_key="client-first-user-active",
+        provider_id="chatgpt",
+        model_ref="gpt-test",
+    )
 
     with TestClient(app) as second_client:
         login = second_client.post(
@@ -372,6 +793,16 @@ def test_plum_public_test_cookie_sessions_isolate_users(fresh_db, monkeypatch):
         )
         assert created.status_code == 200
         assert created.json()["conversation"]["id"] != first_conversation_id
+        forbidden_cancel = second_client.post(
+            f"/api/v1/products/plum/conversations/{first_conversation_id}"
+            "/turns/client-first-user-active/cancel",
+            headers={"X-Plum-CSRF": csrf},
+        )
+        assert forbidden_cancel.status_code == 404
+        assert (
+            db.get_runtime_turn_run("turn-first-user-active")["cancel_requested_at"]
+            is None
+        )
 
     with TestClient(app) as recovery_client:
         recovered = recovery_client.post(
