@@ -50,6 +50,25 @@ TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 # ---------------------------------------------------------------------------
 
 TABLES_TO_CLEAR = [
+    # account identity, memberships and profile truth
+    "account_profile_files",
+    "account_user_meta_daily",
+    "account_user_meta",
+    "account_mission",
+    "account_campaign_attribution",
+    "account_creator_role_template_attribution",
+    "account_deletion_requests",
+    "product_memberships",
+    "product_notification_preferences",
+    "app_notification_preferences",
+    "app_notifications",
+    "platform_user_blocks",
+    # runtime, traces and tool executions
+    "runtime_ownerships",
+    "runtime_turn_runs",
+    "tool_invocations",
+    "search_provider_runs",
+    "analytics_events",
     # dreaming / memory
     "memory_events",
     "dreaming_memory_items",
@@ -68,6 +87,11 @@ TABLES_TO_CLEAR = [
     "content_invitation_preferences",
     "outbound_messages",
     "proactive_account_state",
+    "proactive_message_settings",
+    "proactive_message_setting_events",
+    "proactive_global_candidates",
+    "reminder_content_runs",
+    "scheduler_heartbeats",
     # misc account-scoped
     "daily_usage",
     "profiles",
@@ -84,9 +108,61 @@ TABLES_TO_CLEAR = [
     "platform_users",
     # standalone
     "phone_verifications",
+    "faq_message_likes",
+    # content moderation
+    "content_moderation_actions",
+    "content_moderation_exports",
+    "content_moderation_results",
+    "content_moderation_tasks",
+    "moderation_account_risk_state",
+    # media and Companion World user state
+    "media_assets",
+    "universe_post_media",
+    "universe_memory_facts",
+    "universe_visit_slots",
+    "universe_visits",
+    "universe_invites",
+    "resident_lifecycle_event_actions",
+    "resident_lifecycle_events",
+    "resident_drafts",
+    "resident_wish_jobs",
+    "resident_wishes",
+    "meaningful_message_reviews",
+    "human_chat_reports",
+    "human_messages",
+    "human_conversations",
+    "companion_world_outbox",
+    "universe_posts",
+    "universe_residents",
+    "universes",
+    # Plum Fibre user state
+    "fibre_conversation_pins",
+    "fibre_conversations",
+    "fibre_character_memories",
+    "fibre_user_character_relationships",
+    "fibre_user_personas",
+    "fibre_character_comments",
+    "fibre_character_favorites",
+    "fibre_character_likes",
+    "fibre_character_stats",
+    "fibre_character_bindings",
+    "fibre_public_profiles",
+    "fibre_access_invites",
 ]
 
-TABLES_TO_KEEP = {"admin_users", "admin_access_events", "admin_plaintext_grants"}
+# Static catalog/configuration and operator identity survive a user-data reset.
+TABLES_TO_KEEP = {
+    "access_nodes",
+    "admin_users",
+    "admin_access_events",
+    "admin_plaintext_grants",
+    "campaign_codes",
+    "character_templates",
+    "faq_messages",
+    "llm_runtime_config",
+    "fibre_character_badges",
+    "fibre_model_profiles",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -395,11 +471,12 @@ def main():
     print()
     print("⚠️  " * 21)
     print()
-    print("  此操作将永久删除所有用户数据：")
+    print("  此操作将永久删除所有用户数据（保留静态产品目录与后台权限数据）：")
     print(
-        "    • 数据库：platform_users, accounts, messages, sessions 等 "
+        "    • 数据库：身份、profile、审核、runtime、Companion World、Fibre 等 "
         f"{len(TABLES_TO_CLEAR)} 张表"
     )
+    print("    • 数据库清理使用 TRUNCATE ... CASCADE；依赖这些用户表的关联行也会被连带清除")
     print("    • 文件：data/user_profiles/ 下全部 account 目录")
     print("    • OpenClaw：微信 bot 的 session token（需重新扫码登录）")
     print()
