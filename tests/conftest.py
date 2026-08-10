@@ -80,9 +80,40 @@ _DB_FIXTURES = frozenset({
     "fresh_db", "test_settings", "db_dsn", "postgresql_db", "postgresql_proc",
 })
 
+# 产品归属先以稳定的文件/module 命名线索推断；后续测试迁移到
+# tests/products/<app_id>/ 后，同一规则会自然按目录命中。未能可靠归属
+# 某个具体产品的用例归入 shared，避免把共享契约误算进某个产品回归档。
+_PRODUCT_MARKER_PATTERNS = (
+    ("plum", "plum"),
+    ("mingchan", "mingchan"),
+    ("zhaoxi", "zhaoxi"),
+)
+_PLATFORM_MARKER_WORDS = frozenset(
+    {
+        "moderation", "billing", "quota", "rate_limiter", "product_policy",
+        "product_membership", "multi_product", "account_app_id", "layer_boundaries",
+        "agent_runtime", "runtime", "db_backend", "migration", "pytest_postgres",
+    }
+)
+
+
+def _product_marker_for_item(item):
+    """Return exactly one product/platform/shared marker for a collected test."""
+    nodeid = item.nodeid.lower().replace("\\", "/")
+    stem = nodeid.rsplit("/", 1)[-1].split("::", 1)[0]
+    matches = [marker for token, marker in _PRODUCT_MARKER_PATTERNS if token in nodeid]
+    if len(set(matches)) > 1:
+        # 跨产品隔离/兼容契约属于 shared，不应被任一产品档独占。
+        return "shared"
+    if matches:
+        return matches[0]
+    if any(word in stem for word in _PLATFORM_MARKER_WORDS):
+        return "platform"
+    return "shared"
+
 
 def pytest_collection_modifyitems(config, items):
-    """按 fixture 依赖自动派生互斥的 unit/db/integration marker。"""
+    """派生测试层级及互斥的产品归属 marker。"""
     for item in items:
         fx = set(getattr(item, "fixturenames", ()))
         if "client" in fx:
@@ -91,6 +122,7 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker("db")
         else:
             item.add_marker("unit")
+        item.add_marker(_product_marker_for_item(item))
 
 
 def _dsn_from_conn(conn) -> str:
