@@ -10,10 +10,17 @@ PROXY_STRIPPED_API_PREFIX = f"/v1/products/{APP_ID}"
 
 def install_public_routes(app: FastAPI) -> None:
     from app.products.plum.api.app import router
+    from app.products.plum.api.media import router as media_router
 
     app.include_router(router, prefix=CANONICAL_API_PREFIX)
+    app.include_router(media_router, prefix=CANONICAL_API_PREFIX)
     app.include_router(
         router,
+        prefix=PROXY_STRIPPED_API_PREFIX,
+        include_in_schema=False,
+    )
+    app.include_router(
+        media_router,
         prefix=PROXY_STRIPPED_API_PREFIX,
         include_in_schema=False,
     )
