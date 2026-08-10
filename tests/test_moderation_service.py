@@ -1,3 +1,6 @@
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
+
+
 def _session(account_id: str = "acc-mod"):
     from app.db import get_or_create_session
 
@@ -39,6 +42,7 @@ def test_enqueue_message_records_passed_rule_result(fresh_db):
     task = enqueue_message_for_moderation(
         message_db_id=message_db_id,
         account_id="acc-mod",
+        app_id=ZHAOXI_APP_ID,
         session_id=session["id"],
         direction="inbound",
         content_kind="text",
@@ -48,6 +52,7 @@ def test_enqueue_message_records_passed_rule_result(fresh_db):
     duplicate = enqueue_message_for_moderation(
         message_db_id=message_db_id,
         account_id="acc-mod",
+        app_id=ZHAOXI_APP_ID,
         session_id=session["id"],
         direction="inbound",
         content_kind="text",
@@ -73,6 +78,7 @@ def test_enqueue_message_rule_hit_enters_review_queue(fresh_db):
     task = enqueue_message_for_moderation(
         message_db_id=message_db_id,
         account_id="acc-mod",
+        app_id=ZHAOXI_APP_ID,
         session_id=session["id"],
         direction="inbound",
         content_kind="text",
@@ -98,6 +104,7 @@ def test_enqueue_image_message_keeps_media_reference_without_file_read(fresh_db)
     task = enqueue_message_for_moderation(
         message_db_id=message_db_id,
         account_id="acc-image",
+        app_id=ZHAOXI_APP_ID,
         session_id=session["id"],
         direction="inbound",
         content_kind="image",

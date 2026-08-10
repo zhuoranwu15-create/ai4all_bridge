@@ -11,6 +11,7 @@ from app.platform.moderation.models import (
     max_risk_level,
     normalize_risk_level,
 )
+from app.platform.moderation.product_policy import resolve_moderation_policy
 
 
 DEFAULT_RULES_VERSION = "moderation_rules_v1"
@@ -147,6 +148,7 @@ def check_text_rules(
 def check_sync_guard(
     *,
     account_id: str,
+    app_id: str,
     text: Optional[str],
     direction: str,
     content_kind: str,
@@ -156,9 +158,10 @@ def check_sync_guard(
     """Run the synchronous outbound guard without calling external services."""
 
     del source_type, source_id
-    if not bool(getattr(settings, "moderation_enabled", True)):
+    policy = resolve_moderation_policy(app_id)
+    if not policy.enabled:
         return SyncModerationDecision(allowed=True)
-    if not bool(getattr(settings, "moderation_sync_guard_enabled", True)):
+    if not policy.sync_guard_enabled:
         return SyncModerationDecision(allowed=True)
     if str(direction or "").strip().lower() != "outbound":
         return SyncModerationDecision(allowed=True)
@@ -168,6 +171,7 @@ def check_sync_guard(
         text=text,
         direction=direction,
         content_kind=content_kind,
+        terms_path=policy.sensitive_terms_path,
     )
     blocked = decision.level in {"block", "escalate"}
     return SyncModerationDecision(

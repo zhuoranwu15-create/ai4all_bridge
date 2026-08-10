@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.platform.moderation.models import MachineReviewResult
 
 
@@ -161,6 +162,7 @@ def test_screen_pass_creates_machine_passed_task(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-pass",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="text",
             text="今天天气真不错呀",
@@ -186,6 +188,7 @@ def test_screen_cloud_block_stops_reply_and_enters_review(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-block",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="text",
             text="一些命中云审核的内容",
@@ -210,6 +213,7 @@ def test_screen_cloud_error_degrades_to_local_pass(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-degrade",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="text",
             text="普通的一句闲聊内容",
@@ -232,6 +236,7 @@ def test_screen_cloud_error_degrades_to_local_rule_hit(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-degrade-hit",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="text",
             text="请检查 MODERATION_TEST_REVIEW 这条",
@@ -249,11 +254,11 @@ def test_screen_is_idempotent(fresh_db):
     session, mid = _message(account_id="acc-idem", content="同一条消息重复筛查")
     with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
         first = screen_inbound_message_sync(
-            message_db_id=mid, account_id="acc-idem", session_id=session["id"],
+            message_db_id=mid, account_id="acc-idem", app_id=ZHAOXI_APP_ID, session_id=session["id"],
             content_kind="text", text="同一条消息重复筛查",
         )
         second = screen_inbound_message_sync(
-            message_db_id=mid, account_id="acc-idem", session_id=session["id"],
+            message_db_id=mid, account_id="acc-idem", app_id=ZHAOXI_APP_ID, session_id=session["id"],
             content_kind="text", text="同一条消息重复筛查",
         )
 
@@ -271,6 +276,7 @@ def test_screen_disabled_falls_back_to_async_enqueue(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-async",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="text",
             text="阿里云关闭时应走异步路径",
@@ -292,10 +298,10 @@ def test_screen_account_isolation(fresh_db):
     s2, m2 = _message(account_id="acc-y", content="账号Y内容")
     with patch("app.platform.moderation.service.aliyun_review.review_text_with_aliyun", return_value=_cloud("pass")):
         d1 = screen_inbound_message_sync(
-            message_db_id=m1, account_id="acc-x", session_id=s1["id"], content_kind="text", text="账号X内容",
+            message_db_id=m1, account_id="acc-x", app_id=ZHAOXI_APP_ID, session_id=s1["id"], content_kind="text", text="账号X内容",
         )
         d2 = screen_inbound_message_sync(
-            message_db_id=m2, account_id="acc-y", session_id=s2["id"], content_kind="text", text="账号Y内容",
+            message_db_id=m2, account_id="acc-y", app_id=ZHAOXI_APP_ID, session_id=s2["id"], content_kind="text", text="账号Y内容",
         )
 
     from app.db import get_content_moderation_task
@@ -322,6 +328,7 @@ def test_screen_image_skips_moderation_entirely(fresh_db):
         decision = screen_inbound_message_sync(
             message_db_id=mid,
             account_id="acc-img",
+            app_id=ZHAOXI_APP_ID,
             session_id=session["id"],
             content_kind="image",
             text="[图片]",
@@ -347,6 +354,7 @@ def test_screen_image_skips_even_when_aliyun_disabled(fresh_db):
     decision = screen_inbound_message_sync(
         message_db_id=mid,
         account_id="acc-img2",
+        app_id=ZHAOXI_APP_ID,
         session_id=session["id"],
         content_kind="image",
         text="[图片]",

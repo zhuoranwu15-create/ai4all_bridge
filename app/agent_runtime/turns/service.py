@@ -1174,6 +1174,7 @@ def _persist_and_screen_inbound(
         inbound_screen = screen_inbound_message_sync(
             message_db_id=int(inserted_id),
             account_id=account_id,
+            app_id=ctx.app_id,
             session_id=int(session["id"]),
             content_kind=inbound_content_kind,
             text=text,
@@ -1739,6 +1740,7 @@ def _finalize_turn(
     moderation_reply_metadata: Dict[str, Any] = {}
     sync_decision = check_sync_guard(
         account_id=account_id,
+        app_id=ctx.app_id,
         text=reply,
         direction="outbound",
         content_kind="text",
@@ -1750,6 +1752,7 @@ def _finalize_turn(
         try:
             blocked_task = create_sync_block_task(
                 account_id=account_id,
+                app_id=ctx.app_id,
                 session_id=int(session["id"]),
                 source_type="generated_reply",
                 source_id=reply_message_id,
@@ -1878,6 +1881,7 @@ def _finalize_turn(
             enqueue_message_for_moderation(
                 message_db_id=int(outbound_inserted_id),
                 account_id=account_id,
+                app_id=ctx.app_id,
                 session_id=int(session["id"]),
                 direction="outbound",
                 content_kind="text",
@@ -2194,11 +2198,13 @@ class _VisibleTextBuffer:
         self,
         *,
         account_id: str,
+        app_id: str,
         turn_id: str,
         cancellation: CancellationToken,
         emit: Callable[[str], None],
     ) -> None:
         self.account_id = account_id
+        self.app_id = app_id
         self.turn_id = turn_id
         self.cancellation = cancellation
         self.emit = emit
@@ -2218,6 +2224,7 @@ class _VisibleTextBuffer:
         candidate = self.visible + self.pending
         decision = check_sync_guard(
             account_id=self.account_id,
+            app_id=self.app_id,
             text=candidate,
             direction="outbound",
             content_kind="text",
@@ -2346,6 +2353,7 @@ def run_product_turn_stream(
 
     buffer = _VisibleTextBuffer(
         account_id=ctx.account_id,
+        app_id=ctx.app_id,
         turn_id=turn_id,
         cancellation=cancellation,
         emit=enqueue_text,
