@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from app.config import settings  # noqa: E402
 from app.db import (  # noqa: E402
     get_account_water_level,
+    get_database_storage_stats,
     get_scheduler_heartbeat,
     init_db,
 )
@@ -205,6 +206,37 @@ def _record_water_level(record_file: str) -> Optional[str]:
     return None
 
 
+def _check_database(
+    *, state: Dict, max_connection_percent: float, max_replication_lag_seconds: float,
+    max_growth_percent: float,
+) -> Optional[str]:
+    """Check PostgreSQL capacity/replication and compare size with prior sample."""
+    try:
+        stats = get_database_storage_stats()
+    except Exception as err:  # noqa: BLE001
+        return f"database: metrics unavailable: {err}"
+    problems: List[str] = []
+    usage = stats.get("connection_usage_percent")
+    if max_connection_percent > 0 and usage is not None and usage >= max_connection_percent:
+        problems.append(f"connections={usage:.1f}% max={max_connection_percent:.0f}%")
+    lag = stats.get("replication_lag_seconds")
+    replay = stats.get("replay_lag_seconds")
+    lags = [float(v) for v in (lag, replay) if v is not None]
+    if max_replication_lag_seconds > 0 and lags and max(lags) >= max_replication_lag_seconds:
+        problems.append(f"replication_lag={max(lags):.1f}s max={max_replication_lag_seconds:.1f}s")
+    current = stats.get("db_bytes")
+    previous = state.get("database_db_bytes")
+    if max_growth_percent > 0 and current is not None and previous:
+        growth = (float(current) - float(previous)) * 100.0 / float(previous)
+        if growth >= max_growth_percent:
+            problems.append(f"growth={growth:.1f}% max={max_growth_percent:.1f}%")
+    if current is not None:
+        state["database_db_bytes"] = int(current)
+    if problems:
+        return "database: " + ", ".join(problems)
+    return None
+
+
 def _run_command(command: List[str], timeout: float) -> Tuple[bool, str]:
     try:
         completed = subprocess.run(
@@ -381,6 +413,15 @@ def main() -> int:
         default=_env_bool("MONITOR_CHECK_DISK", True),
         help="alert when the log filesystem is running low on space",
     )
+    parser.add_argument("--check-database", action=argparse.BooleanOptionalAction,
+                        default=_env_bool("MONITOR_CHECK_DATABASE", True),
+                        help="check PostgreSQL connections, replication lag, and size growth")
+    parser.add_argument("--database-max-connection-percent", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_CONNECTION_PERCENT", "85")))
+    parser.add_argument("--database-max-replication-lag-seconds", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_REPLICATION_LAG_SECONDS", "60")))
+    parser.add_argument("--database-max-growth-percent", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_GROWTH_PERCENT", "20")))
     parser.add_argument(
         "--disk-path",
         default=os.getenv("MONITOR_DISK_PATH", "/var/log"),
@@ -440,6 +481,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    state = _load_state(args.state_file)
     errors: List[str] = []
     ok, health = _http_get_json(args.url, args.timeout)
     if not ok:
@@ -478,14 +520,23 @@ def main() -> int:
         if error:
             errors.append(error)
 
+    if args.check_database:
+        _ensure_schema_best_effort()
+        error = _check_database(
+            state=state,
+            max_connection_percent=args.database_max_connection_percent,
+            max_replication_lag_seconds=args.database_max_replication_lag_seconds,
+            max_growth_percent=args.database_max_growth_percent,
+        )
+        if error:
+            errors.append(error)
+
     # 水位采集是测量旁路：每次运行都采，独立于健康告警（不进 errors），失败只打到 stderr。
     if args.record_water_level:
         _ensure_schema_best_effort()
         wl_error = _record_water_level(args.water_level_file)
         if wl_error:
             print(wl_error, file=sys.stderr)
-
-    state = _load_state(args.state_file)
 
     if not errors:
         recovery_alert = _should_send_recovery_alert(

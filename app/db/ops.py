@@ -331,18 +331,43 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
 
 
 def get_database_storage_stats() -> Dict[str, Any]:
-    """Return PostgreSQL database size for ops metrics."""
+    """Return PostgreSQL capacity, connection, and replication metrics."""
     with connect() as conn:
         size_row = conn.execute(
-            "SELECT pg_database_size(current_database()) AS db_bytes"
+            """SELECT current_database() AS database_name,
+                      pg_database_size(current_database()) AS db_bytes,
+                      current_setting('max_connections')::int AS max_connections,
+                      (SELECT count(*) FROM pg_stat_activity) AS current_connections"""
         ).fetchone()
+        replica_row = conn.execute(
+            """SELECT count(*) AS replica_count,
+                      COALESCE(max(EXTRACT(EPOCH FROM (now() - reply_time))), 0) AS max_lag_seconds
+               FROM pg_stat_replication"""
+        ).fetchone()
+        receiver_row = conn.execute(
+            """SELECT COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())), 0)
+                      AS replay_lag_seconds
+               WHERE pg_is_in_recovery()"""
+        ).fetchone()
+    max_connections = int(size_row["max_connections"]) if size_row else None
+    current_connections = int(size_row["current_connections"]) if size_row else None
     return {
         "backend": "postgresql",
+        "database_name": size_row["database_name"] if size_row else None,
         "db_bytes": (
             int(size_row["db_bytes"])
             if size_row and size_row["db_bytes"] is not None
             else None
         ),
+        "max_connections": max_connections,
+        "current_connections": current_connections,
+        "connection_usage_percent": (
+            current_connections * 100.0 / max_connections
+            if max_connections else None
+        ),
+        "replica_count": int(replica_row["replica_count"] or 0) if replica_row else 0,
+        "replication_lag_seconds": float(replica_row["max_lag_seconds"] or 0) if replica_row else None,
+        "replay_lag_seconds": float(receiver_row["replay_lag_seconds"] or 0) if receiver_row else None,
     }
 
 
