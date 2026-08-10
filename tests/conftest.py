@@ -88,6 +88,36 @@ _PRODUCT_MARKER_PATTERNS = (
     ("mingchan", "mingchan"),
     ("zhaoxi", "zhaoxi"),
 )
+# 历史顶层测试的显式所有权。目录重组完成前，先用这张表让 marker 反映代码
+# 所属产品；后续文件迁移到 products/<app_id>/ 后可逐步删除对应条目。
+_PRODUCT_FILE_OVERRIDES = {
+    "mingchan": (
+        "companion_world_",
+        "world_content_scheduler",
+    ),
+    "zhaoxi": (
+        "admin_proactive",
+        "after_turn_scheduling",
+        "commitment",
+        "content_invitations",
+        "creator_role_template",
+        "debug_onboarding_campaign",
+        "dreaming",
+        "dynamic_reminders",
+        "memory_writer",
+        "mission_",
+        "onboarding",
+        "proactive_",
+        "reactivation",
+        "reminder",
+        "relationship_state",
+        "session_lifecycle",
+        "user_meta",
+        "web_campaign",
+        "web_onboarding",
+        "world_content",
+    ),
+}
 _PLATFORM_MARKER_WORDS = frozenset(
     {
         "moderation", "billing", "quota", "rate_limiter", "product_policy",
@@ -101,6 +131,10 @@ def _product_marker_for_item(item):
     """Return exactly one product/platform/shared marker for a collected test."""
     nodeid = item.nodeid.lower().replace("\\", "/")
     stem = nodeid.rsplit("/", 1)[-1].split("::", 1)[0]
+    filename = stem.removeprefix("test_")
+    for marker, prefixes in _PRODUCT_FILE_OVERRIDES.items():
+        if any(filename.startswith(prefix) for prefix in prefixes):
+            return marker
     matches = [marker for token, marker in _PRODUCT_MARKER_PATTERNS if token in nodeid]
     if len(set(matches)) > 1:
         # 跨产品隔离/兼容契约属于 shared，不应被任一产品档独占。
