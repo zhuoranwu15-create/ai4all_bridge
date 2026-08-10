@@ -104,7 +104,10 @@ def enqueue_message_for_moderation(
         return None
     source_id = str(message_db_id)
     idempotency_key = f"message:{account_id}:{message_db_id}:{direction}"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
@@ -129,6 +132,7 @@ def enqueue_message_for_moderation(
         rule, sampling.run_llm_review, llm_enabled=policy.llm_enabled
     )
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type="message",
@@ -205,7 +209,10 @@ def screen_inbound_message_sync(
         return InboundScreenDecision(allowed=True, reason="aliyun_inbound_sync_disabled")
 
     idempotency_key = f"message:{account_id}:{message_db_id}:inbound"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         status = str(existing.get("status") or "")
         return InboundScreenDecision(
@@ -249,6 +256,7 @@ def screen_inbound_message_sync(
 
     confidence_values = [c for c in (rule.confidence, cloud.confidence) if c is not None]
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type="message",
@@ -319,7 +327,10 @@ def enqueue_outbound_for_moderation(
     account_id = str(outbound["account_id"])
     source_id = str(outbound["id"])
     idempotency_key = f"outbound:{account_id}:{source_id}"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
@@ -344,6 +355,7 @@ def enqueue_outbound_for_moderation(
         rule, sampling.run_llm_review, llm_enabled=policy.llm_enabled
     )
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=None,
         source_type="outbound_message",
@@ -396,12 +408,16 @@ def create_sync_block_task(
     if not policy.enabled:
         return None
     idempotency_key = f"{source_type}:{account_id}:{source_id}:pre_send"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
     risk_level = decision.level if decision.level in {"block", "escalate"} else "block"
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type=source_type,

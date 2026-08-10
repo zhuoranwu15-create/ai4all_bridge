@@ -93,6 +93,7 @@ def _decode_content_moderation_export(row: Row) -> Dict[str, Any]:
 
 def create_content_moderation_task(
     *,
+    app_id: str,
     account_id: str,
     session_id: Optional[int],
     source_type: str,
@@ -117,6 +118,7 @@ def create_content_moderation_task(
 ) -> Dict[str, Any]:
     """Insert a content moderation task, returning the existing row on retries."""
 
+    cleaned_app_id = _clean_text(app_id)
     cleaned_account_id = _clean_text(account_id)
     cleaned_source_type = _clean_text(source_type)
     cleaned_source_id = _clean_text(source_id)
@@ -126,6 +128,8 @@ def create_content_moderation_task(
     cleaned_risk_level = _clean_text(risk_level) or "unknown"
     cleaned_policy_version = _clean_text(policy_version)
     cleaned_idempotency_key = _clean_text(idempotency_key)
+    if not cleaned_app_id:
+        raise ValueError("app_id is required")
     if not cleaned_account_id:
         raise ValueError("account_id is required")
     if not cleaned_source_type:
@@ -143,19 +147,28 @@ def create_content_moderation_task(
 
     task_id = _new_id("modtask")
     with connect() as conn:
+        account = conn.execute(
+            "SELECT app_id FROM accounts WHERE id = ?",
+            (cleaned_account_id,),
+        ).fetchone()
+        if account is None:
+            raise ValueError("account_id does not exist")
+        if _clean_text(account["app_id"]) != cleaned_app_id:
+            raise ValueError("account_id does not belong to app_id")
         conn.execute(
             """
             INSERT OR IGNORE INTO content_moderation_tasks(
-                id, account_id, session_id, source_type, source_id, message_db_id,
+                id, app_id, account_id, session_id, source_type, source_id, message_db_id,
                 outbound_message_id, direction, content_kind, status, risk_level,
                 risk_categories_json, confidence, content_hash, snapshot_text,
                 media_json, sampling_reason, sample_rate_percent, policy_version,
                 prompt_version, idempotency_key, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
             """,
             (
                 task_id,
+                cleaned_app_id,
                 cleaned_account_id,
                 session_id,
                 cleaned_source_type,
@@ -180,8 +193,9 @@ def create_content_moderation_task(
             ),
         )
         row = conn.execute(
-            "SELECT * FROM content_moderation_tasks WHERE idempotency_key = ?",
-            (cleaned_idempotency_key,),
+            "SELECT * FROM content_moderation_tasks "
+            "WHERE app_id = ? AND idempotency_key = ?",
+            (cleaned_app_id, cleaned_idempotency_key),
         ).fetchone()
     if row is None:
         raise RuntimeError("content_moderation_task was not created")
@@ -201,20 +215,23 @@ def get_content_moderation_task(*, task_id: str) -> Optional[Dict[str, Any]]:
 
 def get_content_moderation_task_by_idempotency_key(
     *,
+    app_id: str,
     idempotency_key: str,
 ) -> Optional[Dict[str, Any]]:
-    """Return one content moderation task by its idempotency key."""
+    """Return one product-scoped moderation task by its idempotency key."""
 
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM content_moderation_tasks WHERE idempotency_key = ?",
-            (idempotency_key,),
+            "SELECT * FROM content_moderation_tasks "
+            "WHERE app_id = ? AND idempotency_key = ?",
+            (app_id, idempotency_key),
         ).fetchone()
     return _decode_content_moderation_task(row) if row else None
 
 
 def list_content_moderation_tasks(
     *,
+    app_id: Optional[str] = None,
     account_id: Optional[str] = None,
     status: Optional[str] = None,
     risk_level: Optional[str] = None,
@@ -230,6 +247,9 @@ def list_content_moderation_tasks(
 
     clauses = []
     params: List[Any] = []
+    if app_id:
+        clauses.append("app_id = ?")
+        params.append(app_id)
     if account_id:
         clauses.append("account_id = ?")
         params.append(account_id)
@@ -671,11 +691,18 @@ def get_content_moderation_export(*, export_id: str) -> Optional[Dict[str, Any]]
     return _decode_content_moderation_export(row) if row else None
 
 
-def get_content_moderation_stats(*, account_id: Optional[str] = None) -> Dict[str, Any]:
+def get_content_moderation_stats(
+    *,
+    app_id: Optional[str] = None,
+    account_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Return aggregate moderation counts for admin stats."""
 
     clauses = []
     params: List[Any] = []
+    if app_id:
+        clauses.append("app_id = ?")
+        params.append(app_id)
     if account_id:
         clauses.append("account_id = ?")
         params.append(account_id)
@@ -881,5 +908,4 @@ def _delete_content_moderation_tasks_where(
         "moderation_results_deleted": results,
         "moderation_tasks_deleted": tasks,
     }
-
 

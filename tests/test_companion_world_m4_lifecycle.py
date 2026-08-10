@@ -98,6 +98,7 @@ def _moderation_signal(
         risk_level = "block" if category != "self_harm" else "review"
         status = "blocked" if risk_level == "block" else "needs_review"
     task = db.create_content_moderation_task(
+        app_id="zhaoxi",
         account_id=account_id,
         session_id=None,
         source_type="message",

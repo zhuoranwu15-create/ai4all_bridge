@@ -16,7 +16,7 @@ from app.db._core import (
     _migration_0064_fibre_mvp,
     _migration_0065_fibre_character_experience,
     _migration_0067_plum_product_rename,
-    _migration_0069_runtime_turn_cancellation,
+    _migration_0070_moderation_task_product_scope,
 )
 from app.products.zhaoxi.domain.creator_role_templates import (
     AI_NAME_MAX_CHARS,
@@ -73,12 +73,12 @@ def _create(owner_id: str, suffix: str = ""):
 
 
 def test_creator_role_schema_indexes_current_head_and_idempotency(fresh_db):
-    assert _MIGRATIONS[-1] == (69, _migration_0069_runtime_turn_cancellation)
+    assert _MIGRATIONS[-1] == (70, _migration_0070_moderation_task_product_scope)
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 69
+        assert int(version) == 70
         for table in _TABLES:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 

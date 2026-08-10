@@ -285,6 +285,7 @@ def test_screen_disabled_falls_back_to_async_enqueue(fresh_db):
     assert decision.allowed is True
     # 异步路径仍创建了任务
     task = get_content_moderation_task_by_idempotency_key(
+        app_id=ZHAOXI_APP_ID,
         idempotency_key=f"message:acc-async:{mid}:inbound"
     )
     assert task is not None
@@ -338,6 +339,7 @@ def test_screen_image_skips_moderation_entirely(fresh_db):
     assert decision.reason == "inbound_non_text_skipped"
     # 不建任务：既无幂等任务，账号下也没有任何 moderation 任务
     assert get_content_moderation_task_by_idempotency_key(
+        app_id=ZHAOXI_APP_ID,
         idempotency_key=f"message:acc-img:{mid}:inbound"
     ) is None
     assert list_content_moderation_tasks(account_id="acc-img", limit=20) == []

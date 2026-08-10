@@ -7,8 +7,14 @@ from unittest.mock import patch
 from app.bootstrap.product_registry import MINGCHAN_APP_ID, PLUM_APP_ID, ZHAOXI_APP_ID
 
 
-def _session(account_id: str):
-    from app.db import get_or_create_session
+def _session(account_id: str, app_id: str):
+    from app.db import connect, get_or_create_session
+
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO accounts(id, app_id) VALUES (?, ?)",
+            (account_id, app_id),
+        )
 
     state = get_or_create_session(
         account_id=account_id,
@@ -21,10 +27,10 @@ def _session(account_id: str):
     return state["session"]
 
 
-def _message(*, account_id: str, content: str):
+def _message(*, account_id: str, app_id: str, content: str):
     from app.db import insert_message
 
-    session = _session(account_id)
+    session = _session(account_id, app_id)
     message_db_id = insert_message(
         account_id=account_id,
         session_id=session["id"],
@@ -146,7 +152,11 @@ def test_plum_inbound_skips_aliyun_and_still_creates_task(fresh_db):
     from app.db import get_content_moderation_task_by_idempotency_key
     from app.platform.moderation.service import screen_inbound_message_sync
 
-    session, mid = _message(account_id="plum-acc", content="a perfectly normal message")
+    session, mid = _message(
+        account_id="plum-acc",
+        app_id=PLUM_APP_ID,
+        content="a perfectly normal message",
+    )
     with patch(
         "app.platform.moderation.service.aliyun_review.review_text_with_aliyun",
         side_effect=AssertionError("plum must never hit aliyun"),
@@ -163,6 +173,7 @@ def test_plum_inbound_skips_aliyun_and_still_creates_task(fresh_db):
     assert decision.allowed is True
     assert decision.reason == "aliyun_inbound_sync_disabled"
     task = get_content_moderation_task_by_idempotency_key(
+        app_id=PLUM_APP_ID,
         idempotency_key=f"message:plum-acc:{mid}:inbound"
     )
     assert task is not None
@@ -188,7 +199,11 @@ def test_zhaoxi_inbound_still_hits_aliyun(fresh_db):
             level="pass",
         )
 
-    session, mid = _message(account_id="zx-acc", content="今天天气真不错呀")
+    session, mid = _message(
+        account_id="zx-acc",
+        app_id=ZHAOXI_APP_ID,
+        content="今天天气真不错呀",
+    )
     with patch(
         "app.platform.moderation.service.aliyun_review.review_text_with_aliyun", _fake
     ):

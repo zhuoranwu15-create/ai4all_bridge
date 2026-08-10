@@ -24,6 +24,7 @@ def _queued_task(
 
     _ensure_account(account_id)
     return create_content_moderation_task(
+        app_id="zhaoxi",
         account_id=account_id,
         session_id=None,
         source_type="message",

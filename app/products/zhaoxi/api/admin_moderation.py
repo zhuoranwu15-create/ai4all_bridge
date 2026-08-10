@@ -221,6 +221,7 @@ def _apply_moderation_admin_action(
 
 @router.get("/admin/moderation/tasks")
 def admin_moderation_tasks(
+    app_id: Optional[str] = None,
     account_id: Optional[str] = None,
     status_filter: Optional[str] = Query(default=None, alias="status"),
     risk_level: Optional[str] = None,
@@ -234,6 +235,7 @@ def admin_moderation_tasks(
         raise HTTPException(status_code=400, detail="limit must be between 1 and 500")
     reviewer_scope = None if admin_user.get("role") == "admin" else str(admin_user.get("id"))
     tasks = list_content_moderation_tasks(
+        app_id=app_id,
         account_id=account_id,
         status=status_filter,
         risk_level=risk_level,
@@ -469,12 +471,15 @@ def admin_moderation_get_export(
 
 @router.get("/admin/moderation/stats")
 def admin_moderation_stats(
+    app_id: Optional[str] = None,
     account_id: Optional[str] = None,
     admin_user: dict = Depends(get_admin_user),
 ) -> dict:
     if admin_user.get("role") not in {"admin", "reviewer", "staff"}:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin, reviewer or staff role required")
-    return {"stats": get_content_moderation_stats(account_id=account_id)}
+    return {
+        "stats": get_content_moderation_stats(app_id=app_id, account_id=account_id)
+    }
 
 
 @router.get("/admin/moderation/policy")

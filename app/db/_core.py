@@ -94,6 +94,7 @@ from app.db.migrations.shared import (
     _migration_0056_media_moderation_scan_index,
     _migration_0068_runtime_turn_runs,
     _migration_0069_runtime_turn_cancellation,
+    _migration_0070_moderation_task_product_scope,
     _phase1_contract_violation_counts,
     _quota_contract_violation_counts,
     _rebuild_billing_idempotency_sqlite,
@@ -752,6 +753,7 @@ _MIGRATIONS = [
     (67, _migration_0067_plum_product_rename),
     (68, _migration_0068_runtime_turn_runs),
     (69, _migration_0069_runtime_turn_cancellation),
+    (70, _migration_0070_moderation_task_product_scope),
 ]
 
 

@@ -3271,6 +3271,89 @@ def _migration_0069_runtime_turn_cancellation(conn: Connection) -> None:
     )
 
 
+def _migration_0070_moderation_task_product_scope(conn: Connection) -> None:
+    """给审核任务补齐产品归属，并拒绝空值、孤儿和跨产品漂移。"""
+
+    if is_postgres():
+        _ensure_column(conn, "content_moderation_tasks", "app_id", "TEXT")
+    else:
+        # SQLite 不能原地 SET NOT NULL。空串默认只用于完成加列；下方触发器会拒绝
+        # 新 writer 省略 app_id，避免把平台默认值重新固化为某个产品。
+        _ensure_column(
+            conn,
+            "content_moderation_tasks",
+            "app_id",
+            "TEXT NOT NULL DEFAULT ''",
+        )
+
+    conn.execute(
+        """
+        UPDATE content_moderation_tasks
+        SET app_id = (
+            SELECT accounts.app_id
+            FROM accounts
+            WHERE accounts.id = content_moderation_tasks.account_id
+        )
+        WHERE app_id IS NULL OR TRIM(app_id) = ''
+        """
+    )
+    violations = conn.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM content_moderation_tasks task
+        LEFT JOIN accounts account ON account.id = task.account_id
+        WHERE account.id IS NULL
+           OR task.app_id IS NULL
+           OR TRIM(task.app_id) = ''
+           OR task.app_id <> account.app_id
+        """
+    ).fetchone()
+    if int(violations["n"] or 0) > 0:
+        raise RuntimeError(
+            "m0070 moderation task product reconcile failed: "
+            f"violations={int(violations['n'])}"
+        )
+
+    if is_postgres():
+        conn.execute(
+            "ALTER TABLE content_moderation_tasks ALTER COLUMN app_id SET NOT NULL"
+        )
+    else:
+        columns = {
+            str(row["name"]): int(row["notnull"])
+            for row in conn.execute(
+                "PRAGMA table_info(content_moderation_tasks)"
+            ).fetchall()
+        }
+        if columns.get("app_id") != 1:
+            raise RuntimeError("m0070 moderation task app_id must be NOT NULL")
+        conn.executescript(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_moderation_tasks_app_id_insert
+            BEFORE INSERT ON content_moderation_tasks
+            FOR EACH ROW WHEN NEW.app_id IS NULL OR TRIM(NEW.app_id) = ''
+            BEGIN
+                SELECT RAISE(ABORT, 'content_moderation_tasks.app_id is required');
+            END;
+            CREATE TRIGGER IF NOT EXISTS trg_moderation_tasks_app_id_update
+            BEFORE UPDATE OF app_id ON content_moderation_tasks
+            FOR EACH ROW WHEN NEW.app_id IS NULL OR TRIM(NEW.app_id) = ''
+            BEGIN
+                SELECT RAISE(ABORT, 'content_moderation_tasks.app_id is required');
+            END;
+            """
+        )
+
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS ix_moderation_tasks_app_queue
+        ON content_moderation_tasks(app_id, status, risk_level, created_at);
+        CREATE INDEX IF NOT EXISTS ix_moderation_tasks_app_account_created
+        ON content_moderation_tasks(app_id, account_id, created_at);
+        """
+    )
+
+
 __all__ = [
     "_billing_contract_violation_counts",
     "_billing_idempotency_contract_violation_counts",
@@ -3316,6 +3399,7 @@ __all__ = [
     "_migration_0056_media_moderation_scan_index",
     "_migration_0068_runtime_turn_runs",
     "_migration_0069_runtime_turn_cancellation",
+    "_migration_0070_moderation_task_product_scope",
     "_phase1_contract_violation_counts",
     "_quota_contract_violation_counts",
     "_rebuild_billing_idempotency_sqlite",

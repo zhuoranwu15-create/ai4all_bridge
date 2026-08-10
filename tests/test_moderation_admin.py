@@ -21,6 +21,7 @@ def _ensure_account(account_id: str = "acc-mod-admin") -> None:
 
 def _task(
     *,
+    app_id: str = "zhaoxi",
     account_id: str = "acc-mod-admin",
     text: str = "moderation detail text",
     status: str = "needs_review",
@@ -29,9 +30,23 @@ def _task(
 ):
     from app.db import create_content_moderation_task
 
-    _ensure_account(account_id)
+    if app_id == "zhaoxi":
+        _ensure_account(account_id)
+    else:
+        from app.db import connect
+
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO accounts(id, channel, app_id) VALUES (?, 'native', ?)",
+                (account_id, app_id),
+            )
+            conn.execute(
+                "INSERT INTO profiles(account_id) VALUES (?)",
+                (account_id,),
+            )
     suffix = abs(hash((account_id, text, status, risk_level)))
     return create_content_moderation_task(
+        app_id=app_id,
         account_id=account_id,
         session_id=None,
         source_type="message",
@@ -92,6 +107,33 @@ def test_reviewer_queue_detail_claim_and_decision_are_audited(client):
     actions = [event["action"] for event in res.json()["events"]]
     assert "moderation.view_task" in actions
     assert "moderation.approved" in actions
+
+
+def test_admin_can_filter_moderation_queue_and_stats_by_app(client):
+    zhaoxi_task = _task(account_id="acc-mod-zhaoxi", text="zhaoxi queue")
+    mingchan_task = _task(
+        app_id="mingchan",
+        account_id="acc-mod-mingchan",
+        text="mingchan queue",
+    )
+
+    res = client.get(
+        "/admin/moderation/tasks?app_id=mingchan",
+        headers=ADMIN_HEADERS,
+    )
+    assert res.status_code == 200
+    tasks = res.json()["tasks"]
+    assert [task["id"] for task in tasks] == [mingchan_task["id"]]
+    assert tasks[0]["app_id"] == "mingchan"
+    assert zhaoxi_task["id"] not in {task["id"] for task in tasks}
+
+    res = client.get(
+        "/admin/moderation/stats?app_id=mingchan",
+        headers=ADMIN_HEADERS,
+    )
+    assert res.status_code == 200
+    assert res.json()["stats"]["total"] == 1
+    assert res.json()["stats"]["review_queue_count"] == 1
 
 
 def test_reviewer_cannot_use_non_moderation_or_admin_only_paths(client):

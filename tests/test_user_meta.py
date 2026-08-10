@@ -68,6 +68,7 @@ def _insert_moderation_task(
     from app.db import connect, create_content_moderation_task
 
     task = create_content_moderation_task(
+        app_id="zhaoxi",
         account_id=account_id,
         session_id=None,
         source_type=source_type,

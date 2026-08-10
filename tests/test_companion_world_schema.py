@@ -37,7 +37,7 @@ from app.db._core import (
     _migration_0064_fibre_mvp,
     _migration_0065_fibre_character_experience,
     _migration_0067_plum_product_rename,
-    _migration_0069_runtime_turn_cancellation,
+    _migration_0070_moderation_task_product_scope,
 )
 
 _P1_TABLES = (
@@ -90,12 +90,12 @@ def test_p1_tables_exist(fresh_db):
 
 def test_m0030_schema_and_idempotency(fresh_db):
     """m0030 已登记、列可查询，且重复执行不会重复加列/索引。"""
-    assert _MIGRATIONS[-1] == (69, _migration_0069_runtime_turn_cancellation)
+    assert _MIGRATIONS[-1] == (70, _migration_0070_moderation_task_product_scope)
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 69
+        assert int(version) == 70
         _migration_0030_companion_world_candidates(conn)
         _migration_0030_companion_world_candidates(conn)
         _migration_0034_companion_world_lifecycle_mailbox(conn)
