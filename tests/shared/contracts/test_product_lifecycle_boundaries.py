@@ -47,7 +47,7 @@ def test_composition_root_registers_mingchan_lifecycle():
 
 def test_zhaoxi_process_entrypoint_no_longer_composes_world_jobs():
     script = (
-        Path(__file__).resolve().parents[1] / "scripts" / "run_proactive_scheduler.py"
+        Path(__file__).resolve().parents[3] / "scripts" / "run_proactive_scheduler.py"
     ).read_text(encoding="utf-8")
     for forbidden in (
         "build_companion_world_memory_sink",

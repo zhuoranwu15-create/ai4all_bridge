@@ -50,7 +50,7 @@ def _insert_history(account_id: str, text: str) -> None:
 def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
     from app.db import claim_content_invitation_for_send, create_content_invitation, mark_content_invitation_invited, get_content_invitation
     from app.products.zhaoxi.tools.content_invitation_handlers import handle_send_content_invitation_titles
-    from tests.test_tools_handlers import _make_ctx, _setup_account
+    from tests.shared.runtime.test_tools_handlers import _make_ctx, _setup_account
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-content-tool")
@@ -88,7 +88,7 @@ def test_content_invitation_titles_tool_returns_titles_only(fresh_db):
 def test_content_invitation_feedback_writes_cooldown(fresh_db):
     from app.db import get_content_invitation_preference
     from app.products.zhaoxi.tools.content_invitation_handlers import handle_record_content_invitation_feedback
-    from tests.test_tools_handlers import _make_ctx, _setup_account
+    from tests.shared.runtime.test_tools_handlers import _make_ctx, _setup_account
 
     with patch("app.db.settings", fresh_db):
         _setup_account("acc-content-feedback")

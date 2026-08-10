@@ -60,7 +60,7 @@ def test_agent_context_user_files_created_from_blank_template(fresh_db, tmp_path
 def test_checked_in_system_tools_file_matches_default_template():
     from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     checked_in = (repo_root / "data" / "system" / "TOOLS.md").read_text(encoding="utf-8")
 
     assert checked_in.strip() == _default_system_templates()["TOOLS.md"].strip()
@@ -69,7 +69,7 @@ def test_checked_in_system_tools_file_matches_default_template():
 def test_checked_in_system_agents_file_matches_default_template():
     from app.products.zhaoxi.infrastructure.profiles import _default_system_templates
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     checked_in = (repo_root / "data" / "system" / "AGENTS.md").read_text(encoding="utf-8")
 
     assert checked_in.strip() == _default_system_templates()["AGENTS.md"].strip()

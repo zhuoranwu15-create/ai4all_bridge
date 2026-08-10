@@ -109,7 +109,7 @@ def test_plum_keeps_shared_local_redlines(fresh_db):
     )
 
     fresh_db.moderation_sensitive_terms_path = str(
-        Path(__file__).resolve().parent.parent / "data/moderation/sensitive_terms.json"
+        Path(__file__).resolve().parents[2] / "data/moderation/sensitive_terms.json"
     )
     clear_sensitive_terms_cache()
 

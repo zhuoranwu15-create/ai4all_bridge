@@ -5,8 +5,8 @@ import ast
 from importlib import import_module
 from pathlib import Path
 
-# 仓库根：tests/ 的上一级
-REPO_ROOT = Path(__file__).resolve().parents[1]
+# 仓库根：tests/shared/contracts/ 的上三级
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # 产品根；每个产品在自己的 ``domain`` 子包中保持纯领域层。
 PRODUCTS_ROOT = REPO_ROOT / "app" / "products"

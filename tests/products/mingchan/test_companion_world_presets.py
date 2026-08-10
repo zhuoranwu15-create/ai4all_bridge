@@ -8,7 +8,7 @@ from pathlib import Path
 import app.db as db
 from scripts.import_companion_world_presets import import_presets, load_manifest, validate_manifest
 
-SHIPPED_MANIFEST = Path(__file__).resolve().parents[1] / "data/companion_world/presets_v1.json"
+SHIPPED_MANIFEST = Path(__file__).resolve().parents[3] / "data/companion_world/presets_v1.json"
 
 
 def _manifest(version: str = "v1") -> list[dict]:

@@ -22,7 +22,7 @@ def _persona(**overrides) -> pc.PersonaInput:
 
 def test_avatar_keys_all_have_shipped_assets():
     """受控头像必须真有静态资产，否则客户端拿到的是 404 图。"""
-    root = pathlib.Path(__file__).resolve().parents[1] / "app" / "static"
+    root = pathlib.Path(__file__).resolve().parents[3] / "app" / "static"
     for key, ref in pc.AVATAR_KEYS.items():
         assert (root / ref.lstrip("/")).is_file(), key
 

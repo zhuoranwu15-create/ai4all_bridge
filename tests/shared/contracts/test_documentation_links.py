@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 DEPRECATED_DOC_REFERENCES = (
     "docs/tech_design/",
