@@ -24,10 +24,6 @@ from app.config import settings
 
 logger = logging.getLogger("ai4all.moderation.product_policy")
 
-# Plum 面向海外，中文敏感词表不适用；这里是占位词表，选定海外 provider 后再补齐。
-PLUM_SENSITIVE_TERMS_PATH = "data/moderation/sensitive_terms_plum.json"
-
-
 @dataclass(frozen=True)
 class ModerationProductPolicy:
     """一个产品在内容审核链路上的完整开关集合。
@@ -39,6 +35,7 @@ class ModerationProductPolicy:
     enabled: bool
     sync_guard_enabled: bool
     aliyun_inbound_sync_enabled: bool
+    aliyun_image_enabled: bool
     llm_enabled: bool
     sensitive_terms_path: Optional[str] = None
 
@@ -53,6 +50,10 @@ def _global_sync_guard_enabled() -> bool:
 
 def _global_llm_enabled() -> bool:
     return bool(getattr(settings, "moderation_llm_enabled", False))
+
+
+def _global_aliyun_image_enabled() -> bool:
+    return bool(getattr(settings, "moderation_image_safety_enabled", False))
 
 
 def _global_aliyun_inbound_sync_enabled() -> bool:
@@ -71,6 +72,7 @@ def _domestic_policy(app_id: str) -> ModerationProductPolicy:
         enabled=_global_enabled(),
         sync_guard_enabled=_global_sync_guard_enabled(),
         aliyun_inbound_sync_enabled=_global_aliyun_inbound_sync_enabled(),
+        aliyun_image_enabled=_global_aliyun_image_enabled(),
         llm_enabled=_global_llm_enabled(),
         sensitive_terms_path=None,
     )
@@ -79,9 +81,9 @@ def _domestic_policy(app_id: str) -> ModerationProductPolicy:
 def _plum_policy(app_id: str) -> ModerationProductPolicy:
     """Plum（海外）：管线与任务记录照常，但绝不调用阿里云。
 
-    ``aliyun_inbound_sync_enabled`` 写死 False 而非读环境变量——把海外流量送进境内
-    审核既是合规问题也是延迟问题，不接受被一处 ``.env`` 笔误打开。选定海外 provider
-    后在此处接入，届时管线里已有可回溯的存量任务。
+    阿里云文本、阿里云图片和当前全局 LLM provider 均写死 False，而非读环境变量——
+    把海外流量送进未审定的 provider 是合规问题，不接受被一处 ``.env`` 笔误打开。
+    海外规则/provider 尚未落地前，继续沿用共享本地红线，避免形成空审核。
     """
 
     return ModerationProductPolicy(
@@ -89,8 +91,9 @@ def _plum_policy(app_id: str) -> ModerationProductPolicy:
         enabled=_global_enabled(),
         sync_guard_enabled=_global_sync_guard_enabled(),
         aliyun_inbound_sync_enabled=False,
-        llm_enabled=_global_llm_enabled(),
-        sensitive_terms_path=PLUM_SENSITIVE_TERMS_PATH,
+        aliyun_image_enabled=False,
+        llm_enabled=False,
+        sensitive_terms_path=None,
     )
 
 
@@ -102,6 +105,7 @@ def _conservative_policy(app_id: str) -> ModerationProductPolicy:
         enabled=True,
         sync_guard_enabled=True,
         aliyun_inbound_sync_enabled=False,
+        aliyun_image_enabled=False,
         llm_enabled=False,
         sensitive_terms_path=None,
     )
@@ -112,8 +116,6 @@ _POLICY_BUILDERS: Dict[str, Callable[[str], ModerationProductPolicy]] = {
     ZHAOXI_APP_ID: _domestic_policy,
     MINGCHAN_APP_ID: _domestic_policy,
     PLUM_APP_ID: _plum_policy,
-    # 跨产品隔离测试用的注入产品，按国内档处理以复用既有测试断言。
-    "test_product": _domestic_policy,
 }
 
 
@@ -133,6 +135,5 @@ def resolve_moderation_policy(app_id: str) -> ModerationProductPolicy:
 
 __all__ = [
     "ModerationProductPolicy",
-    "PLUM_SENSITIVE_TERMS_PATH",
     "resolve_moderation_policy",
 ]
