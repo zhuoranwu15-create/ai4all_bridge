@@ -139,7 +139,7 @@ class Settings(BaseSettings):
         False, "SESSION_COOKIE_SECURE"
     )
     plum_chat_streaming_enabled: bool = _plum_setting(
-        False, "CHAT_STREAMING_ENABLED"
+        True, "CHAT_STREAMING_ENABLED"
     )
 
     # ===== 主应用 PostgreSQL（见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====

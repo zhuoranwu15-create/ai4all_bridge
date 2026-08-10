@@ -27,6 +27,25 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 
 ## 运行
 
+### Plum 本地联调（Coding Agent 默认）
+
+当任务上下文是 Plum，用户说“启动服务”“启动项目”或“本地联调”时，Codex、Claude 等
+Coding Agent 必须优先使用：
+
+```bash
+make plum-local-start
+```
+
+该命令只面向本地测试：它会启动本地 PostgreSQL，幂等初始化隔离的 `ai4all_plum_dev` 和
+固定测试身份，开启 Plum 流式聊天，
+并关闭若干与联调无关的后台调度器。不得用于生产或共享环境。
+
+这些选项是当前测试约定，并非永久不变。若任务需要不同数据库、鉴权模式、端口或后台任务，
+先查看 `Makefile` 中 `plum-local-init`、`plum-local-run` 和 `plum-local-start` 的具体封装；
+确认不适用时应修改 Make 封装及本说明，不要长期绕开入口复制临时启动命令。
+
+### 通用后端开发（非 Plum）
+
 ```bash
 make pg-local-up
 make pg-local-init

@@ -55,14 +55,14 @@ Plum 联调使用同一本地 PostgreSQL 实例中的独立 `ai4all_plum_dev` �
 演示角色和 1000 金币，随后启动 SSE 流式后端：
 
 ```bash
-make pg-local-up
-make pg-local-init
-make plum-local-init
-make plum-local-run
+make plum-local-start
 ```
 
-`plum-local-init` 和 `plum-local-run` 都强制注入本地 Plum PG DSN，不读取 `.env` 中可能存在
-的其他 `DATABASE_URL`。初始化脚本只允许 loopback 地址和固定开发库名，拒绝远端或生产库。
+统一入口会启动本地 PostgreSQL、幂等创建并迁移隔离的 `ai4all_plum_dev` 数据库、补齐固定
+测试数据，再启动服务。`plum-local-init` 和 `plum-local-run` 都强制注入本地 Plum PG DSN，
+不读取 `.env` 中可能存在的其他 `DATABASE_URL`；初始化脚本只允许 loopback 地址和固定开发
+库名，拒绝远端或生产库。排障时仍可分别运行 `make pg-local-up`、`make pg-local-init`、
+`make plum-local-init` 和 `make plum-local-run`。
 
 Web onboarding:
 

@@ -14,7 +14,7 @@ PLUM_DEV_PORT ?= 8180
 	test-plum-fast test-plum-db test-platform test-shared \
 	test-shared-runtime test-shared-infrastructure test-shared-contracts \
 	pg-local-up pg-local-init pg-local-status \
-	pg-local-stop pg-local-reset run plum-local-init plum-local-run
+	pg-local-stop pg-local-reset run plum-local-init plum-local-run plum-local-start
 
 help:
 	@echo "make test       # PostgreSQL 全量测试（预迁移模板 + 逐测试克隆）"
@@ -38,6 +38,7 @@ help:
 	@echo "make run        # 使用本地 PG 启动服务（端口 8180）"
 	@echo "make plum-local-init # 初始化 Plum 隔离 PG 库与固定测试账号"
 	@echo "make plum-local-run  # 启动 Plum 本地后端（SSE 流式，端口 8180）"
+	@echo "make plum-local-start # 初始化并启动 Plum 本地测试后端（推荐入口）"
 
 # 唯一全量档：固定使用 pytest-postgresql 临时实例。
 test:
@@ -117,3 +118,8 @@ plum-local-run:
 		PROACTIVE_SCHEDULER_ENABLED=false DREAMING_SCHEDULER_ENABLED=false \
 		USER_META_SCHEDULER_ENABLED=false \
 		.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $(PLUM_DEV_PORT) --reload
+
+# 本地测试的统一入口：启动隔离 PG、幂等建库/迁移并补齐固定测试数据。
+plum-local-start: pg-local-up pg-local-init plum-local-init
+	$(MAKE) plum-local-run PLUM_DATABASE_URL="$(PLUM_DATABASE_URL)" \
+		PLUM_DEV_PORT="$(PLUM_DEV_PORT)"
