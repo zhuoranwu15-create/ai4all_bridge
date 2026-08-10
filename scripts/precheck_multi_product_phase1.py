@@ -29,7 +29,6 @@ class CheckResult:
 class PrecheckReport:
     """Phase 1 迁移前报告；不承载任何生产数据样本。"""
 
-    is_postgres: bool
     inventory: Dict[str, int]
     checks: List[CheckResult]
 
@@ -291,14 +290,10 @@ def run_precheck(conn) -> PrecheckReport:
 
     inventory_row = conn.execute(_INVENTORY_SQL).fetchone()
     inventory = {key: int(inventory_row[key]) for key in inventory_row.keys()}
-    identity_expanded = _identity_contract_columns_present(
-        conn, is_postgres=_core.is_postgres()
-    )
-    billing_expanded = _billing_app_columns_present(conn, is_postgres=_core.is_postgres())
-    quota_expanded = _quota_app_columns_present(conn, is_postgres=_core.is_postgres())
-    referral_expanded = _referral_app_columns_present(
-        conn, is_postgres=_core.is_postgres()
-    )
+    identity_expanded = _identity_contract_columns_present(conn)
+    billing_expanded = _billing_app_columns_present(conn)
+    quota_expanded = _quota_app_columns_present(conn)
+    referral_expanded = _referral_app_columns_present(conn)
     fully_expanded = (
         identity_expanded
         and billing_expanded
@@ -308,7 +303,6 @@ def run_precheck(conn) -> PrecheckReport:
     if fully_expanded:
         counts = _core._phase1_contract_violation_counts(conn)
         return PrecheckReport(
-            is_postgres=_core.is_postgres(),
             inventory=inventory,
             checks=[
                 CheckResult(
@@ -392,120 +386,87 @@ def run_precheck(conn) -> PrecheckReport:
             )
             for name, total in counts.items()
         )
-    return PrecheckReport(
-        is_postgres=_core.is_postgres(), inventory=inventory, checks=checks
-    )
+    return PrecheckReport(inventory=inventory, checks=checks)
 
 
-def _identity_contract_columns_present(conn, *, is_postgres: bool) -> bool:
+def _identity_contract_columns_present(conn) -> bool:
     """判断 m0037/m0038 身份与 session 产品列是否已就绪。"""
-    if is_postgres:
-        rows = conn.execute(
-            """
-            SELECT table_name, column_name
-            FROM information_schema.columns
-            WHERE table_schema=current_schema()
-              AND ((table_name='product_memberships' AND column_name='app_id')
-                OR (table_name='platform_user_sessions' AND column_name='app_id'))
-            """
-        ).fetchall()
-        return {
-            (str(row["table_name"]), str(row["column_name"])) for row in rows
-        } == {
-            ("product_memberships", "app_id"),
-            ("platform_user_sessions", "app_id"),
-        }
-    membership_table = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='product_memberships'"
-    ).fetchone()
-    if membership_table is None:
-        return False
-    session_columns = {
-        str(row["name"])
-        for row in conn.execute("PRAGMA table_info(platform_user_sessions)").fetchall()
+    rows = conn.execute(
+        """
+        SELECT table_name, column_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND ((table_name='product_memberships' AND column_name='app_id')
+            OR (table_name='platform_user_sessions' AND column_name='app_id'))
+        """
+    ).fetchall()
+    return {
+        (str(row["table_name"]), str(row["column_name"])) for row in rows
+    } == {
+        ("product_memberships", "app_id"),
+        ("platform_user_sessions", "app_id"),
     }
-    return "app_id" in session_columns
 
 
-def _billing_app_columns_present(conn, *, is_postgres: bool) -> bool:
-    """判断 m0039 是否已展开；兼容在 expand 前安全运行同一只读脚本。"""
+def _billing_app_columns_present(conn) -> bool:
+    """判断 m0039 是否已展开；expand 前也可安全运行同一只读脚本。"""
     tables = (
         "subscriptions",
         "entitlement_wallets",
         "entitlement_ledger",
         "cost_events",
     )
-    if is_postgres:
-        rows = conn.execute(
-            """
-            SELECT table_name
-            FROM information_schema.columns
-            WHERE table_schema=current_schema()
-              AND column_name='app_id'
-              AND table_name IN ('subscriptions', 'entitlement_wallets',
-                                 'entitlement_ledger', 'cost_events')
-            """
-        ).fetchall()
-        return {str(row["table_name"]) for row in rows} == set(tables)
-    for table in tables:
-        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
-        if "app_id" not in columns:
-            return False
-    return True
+    rows = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND column_name='app_id'
+          AND table_name IN ('subscriptions', 'entitlement_wallets',
+                             'entitlement_ledger', 'cost_events')
+        """
+    ).fetchall()
+    return {str(row["table_name"]) for row in rows} == set(tables)
 
 
-def _quota_app_columns_present(conn, *, is_postgres: bool) -> bool:
+def _quota_app_columns_present(conn) -> bool:
     """判断 m0041 是否已展开；expand 前不得引用尚不存在的 quota app_id。"""
     tables = ("daily_usage", "daily_quota_reservations")
-    if is_postgres:
-        rows = conn.execute(
-            """
-            SELECT table_name
-            FROM information_schema.columns
-            WHERE table_schema=current_schema()
-              AND column_name='app_id'
-              AND table_name IN ('daily_usage', 'daily_quota_reservations')
-            """
-        ).fetchall()
-        return {str(row["table_name"]) for row in rows} == set(tables)
-    for table in tables:
-        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
-        if "app_id" not in columns:
-            return False
-    return True
+    rows = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND column_name='app_id'
+          AND table_name IN ('daily_usage', 'daily_quota_reservations')
+        """
+    ).fetchall()
+    return {str(row["table_name"]) for row in rows} == set(tables)
 
 
-def _referral_app_columns_present(conn, *, is_postgres: bool) -> bool:
+def _referral_app_columns_present(conn) -> bool:
     """判断 m0043 是否已展开；expand 前不得引用 referral app_id。"""
     tables = (
         "referral_codes",
         "referral_relationships",
         "meaningful_message_reviews",
     )
-    if is_postgres:
-        rows = conn.execute(
-            """
-            SELECT table_name
-            FROM information_schema.columns
-            WHERE table_schema=current_schema()
-              AND column_name='app_id'
-              AND table_name IN ('referral_codes', 'referral_relationships',
-                                 'meaningful_message_reviews')
-            """
-        ).fetchall()
-        return {str(row["table_name"]) for row in rows} == set(tables)
-    for table in tables:
-        columns = {str(row["name"]) for row in conn.execute(f"PRAGMA table_info({table})")}
-        if "app_id" not in columns:
-            return False
-    return True
+    rows = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.columns
+        WHERE table_schema=current_schema()
+          AND column_name='app_id'
+          AND table_name IN ('referral_codes', 'referral_relationships',
+                             'meaningful_message_reviews')
+        """
+    ).fetchall()
+    return {str(row["table_name"]) for row in rows} == set(tables)
 
 
 def _print_report(report: PrecheckReport) -> None:
     print("=== Multi-product Phase 1 precheck ===")
-    print(f"backend={'postgresql' if report.is_postgres else 'sqlite'}")
-    if not report.is_postgres:
-        print("[WARN] SQLite 结果只用于冒烟，不作为生产发布依据")
+    print("backend=postgresql")
     print("inventory:")
     for name, total in report.inventory.items():
         print(f"  {name}={total}")
@@ -527,10 +488,7 @@ def main() -> int:
     from app.db import _core
 
     with _core.connect() as conn:
-        if _core.is_postgres():
-            conn.execute("SET TRANSACTION READ ONLY")
-        else:
-            conn.execute("PRAGMA query_only = ON")
+        conn.execute("SET TRANSACTION READ ONLY")
         report = run_precheck(conn)
 
     _print_report(report)

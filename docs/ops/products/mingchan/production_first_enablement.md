@@ -12,8 +12,8 @@
   session、World、居民、消息、权益或客户端缓存。
 - `platform_users` 是跨产品真人身份。朝夕 legacy World、居民、runtime account、微信 binding、
   消息、记忆、账务和媒体全部原地保留；鸣蝉依靠 `app_id` 隔离创建自己的 World。
-- 生产真实数据库是 PostgreSQL。禁止清空 `DATABASE_URL` 回落旧 SQLite 快照，禁止操作
-  `data/ai4all.sqlite3`，禁止用只支持 SQLite 的 `scripts/restore_data.py` 恢复生产。
+- 主应用数据库固定为 PostgreSQL。禁止清空或替换 `DATABASE_URL`，禁止操作历史
+  `data/ai4all.sqlite3` 快照；恢复只走 PostgreSQL 备份/主备流程。
 - 当前 `PRODUCTION_PRODUCT_REGISTRY` 中鸣蝉是代码级 `enabled=False`，**不是环境变量开关**。首次发布
   必须先暗部署当前禁用版本，完成 migration、保留型 precheck 和朝夕回归；之后另做经过开发机验证的启用提交。
   禁止直接在生产工作区把 `False` 改成 `True`。
@@ -45,7 +45,7 @@
 | Native App 测试版本 / 最低支持版本 |  |
 | 开始、结束、观察截止时间 |  |
 
-开发机交付结果应同时附上：SQLite/PG 全量测试、聚焦门禁、OpenAPI snapshot、双产品 World 隔离测试、
+开发机交付结果应同时附上：PostgreSQL 全量测试、聚焦门禁、OpenAPI snapshot、双产品 World 隔离测试、
 代码变更清单和配置差异。当前基线见
 [拆分计划](../../../plans/shared/zhaoxi_mingchan_product_split_plan.md)。
 
@@ -183,7 +183,7 @@ cd /opt/workspace/ai4all_bridge
 
 ### 5.2 并存探针与朝夕基线复核
 
-代码级 SQLite/PG 测试必须证明同一 `platform_user_id` 可同时拥有 `zhaoxi` 与 `mingchan` World，
+代码级 PostgreSQL 测试必须证明同一 `platform_user_id` 可同时拥有 `zhaoxi` 与 `mingchan` World，
 且鸣蝉 owner 查询和 scheduler 只扫描 `app_id=mingchan`。生产暗部署阶段鸣蝉仍 disabled，因此不在
 真实库创建探针 World；只复核 schema/index 与朝夕聚合基线。
 
@@ -338,8 +338,8 @@ resident 明细。确认旧 `ai4all-weixin-world-*` 单元仍是 inactive/disabl
 
 - 立即停止 aliyun1/aliyun2 所有 backend、access node 和所有 scheduler，暂停客户端流量，先保存当前
   故障现场 dump。
-- 由数据库负责人按 PostgreSQL 备份/主备流程恢复并核对 schema、朝夕关键计数和账本；禁止使用
-  `scripts/restore_data.py`，禁止回落 SQLite。
+- 由数据库负责人按 PostgreSQL 备份/主备流程恢复并核对 schema、朝夕关键计数和账本；禁止把
+  历史 SQLite 快照作为恢复目标。
 - 恢复后先以鸣蝉 disabled 启动 backend，完成朝夕与数据 reconcile，再决定是否重新启用。
 
 详细备份/恢复与双机差异分别见[生产运行手册](../../production_runbook.md)、

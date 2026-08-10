@@ -13,7 +13,7 @@ M1（D-14 钱包上迁 / D-09 配额上迁）会改动的接缝：
 
 重要：2) 原钉 pre-D-14 现状、已随 M1-1+M1-7 翻转为新预期；3) 原钉 pre-D-09 现状、已随
 M1-3+M1-4 翻转为新预期。RPM 的 account 隔离已由 test_rate_limiter::test_accounts_are_isolated
-覆盖，此处不重复。全部走内存 SQLite（fresh_db）。
+覆盖，此处不重复。持久化用例使用 fresh_db 提供的隔离 PostgreSQL。
 """
 import app.db as db
 from tests import factories

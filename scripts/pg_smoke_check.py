@@ -29,15 +29,18 @@ def main() -> int:
 
     from app.db import _core
     from app.db import accounts, billing
+    from app.db._backend import database_url
 
     ok = True
 
     # 0) 后端确认
     print("=== 后端 ===")
-    print(f"  is_postgres = {_core.is_postgres()}")
-    if not _core.is_postgres():
-        print("  [FAIL] settings 未指向 PG")
+    try:
+        database_url()
+    except RuntimeError as err:
+        print(f"  [FAIL] {err}")
         return 1
+    print("  postgresql")
 
     # 1) json_patch 函数存在（厚节点 schema 依赖）+ JSON 列可读
     print("=== schema 自检 ===")

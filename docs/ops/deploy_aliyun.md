@@ -12,7 +12,8 @@
 - 服务器开放 HTTPS 入口，公网只暴露 Web onboarding 和 OpenClaw Bridge 需要访问的 Backend 地址。
 - `/admin/*` 和 `/debug/*` 应通过 nginx IP allowlist、VPN 或内网访问限制保护；应用层 token 不是唯一边界。
 - 生产 `.env` 必须从 `.env.example` 复制后在服务器本地填写，不能提交真实密钥。
-- 生产必须配置 PostgreSQL `DATABASE_URL`。SQLite 只用于本地开发/测试，不是生产回滚路径。
+- 生产必须配置 PostgreSQL `DATABASE_URL`。主应用开发、测试和生产均不支持 SQLite；nearline/TDAI
+  自有 SQLite 不构成生产回滚路径。
 - 每个微信接入节点上的 OpenClaw、`openclaw-weixin` 与 Backend 同机部署，Bridge 通过
   `http://127.0.0.1:8180` 调本节点 Backend；只有 central 节点挂 Web/App/Admin 公网入口。
 
@@ -575,8 +576,8 @@ cd /opt/ai4all-weixin-bot
 生产已使用定时备份；异机 `pg_dump`、流复制与恢复演练状态见
 [PG 备份与切换跟踪](pg_backup_failover_tracking.md)。
 
-恢复时必须停止两台机器上的业务写入和 central-only scheduler，再恢复到 PostgreSQL 并完成一致性
-核对。`scripts/restore_data.py` 仅支持 SQLite 开发档，不得用于生产恢复。
+恢复时必须停止两台机器上的业务写入和 central-only scheduler，再通过 `pg_restore` 或主备切换
+恢复到 PostgreSQL 并完成一致性核对。
 
 ```bash
 sudo systemctl stop ai4all-weixin-proactive-scheduler

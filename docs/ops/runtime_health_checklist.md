@@ -9,7 +9,7 @@
 ### 1.1 确认配置
 
 ```bash
-.venv/bin/python -c "from app.config import settings; print('APP_ENV=', settings.app_env); print('DATABASE_PATH=', settings.database_path); print('PROACTIVE_SCHEDULER_ENABLED=', settings.proactive_scheduler_enabled); print('DREAMING_SCHEDULER_ENABLED=', settings.dreaming_scheduler_enabled)"
+.venv/bin/python -c "from app.config import settings; print('APP_ENV=', settings.app_env); print('DATABASE_URL_CONFIGURED=', bool(settings.database_url)); print('PROACTIVE_SCHEDULER_ENABLED=', settings.proactive_scheduler_enabled); print('DREAMING_SCHEDULER_ENABLED=', settings.dreaming_scheduler_enabled)"
 ```
 
 当前默认：

@@ -58,8 +58,8 @@ def _bootstrapped(client, phone: str) -> dict:
         _seed_catalog()
     headers = _login(client, phone)
     assert client.post("/api/v1/products/mingchan/worlds/home/bootstrap", headers=headers).status_code == 200
-    # TestClient + 共享内存 SQLite 下 confirm 的欢迎语写入会跨线程等待；本组只测许愿，
-    # 直接把已 bootstrap 的 world 推到正式链路要求的 confirmed 前置状态。
+    # 本组只测许愿，不重复验证 confirm 的欢迎语写入；直接把已 bootstrap 的 world
+    # 推到正式链路要求的 confirmed 前置状态。
     with db.connect() as conn:
         conn.execute(
             "UPDATE universes SET onboarding_state = 'confirmed' "

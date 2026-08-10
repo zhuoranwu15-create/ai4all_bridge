@@ -1,7 +1,7 @@
 """图片理解 turn 链路测试。
 
 覆盖设计文档 A/B/C 三场景、VL 失败兜底、总开关、账号隔离、memory modality、
-以及固定贝壳计费事件。VL 调用全部 mock，不触网；使用内存/临时 SQLite。
+以及固定贝壳计费事件。VL 调用全部 mock，不触网；持久化使用隔离 PostgreSQL。
 """
 
 from unittest.mock import MagicMock

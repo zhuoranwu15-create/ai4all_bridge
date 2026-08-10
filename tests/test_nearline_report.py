@@ -3,8 +3,8 @@
 1. H4 质量检查（proactive_reply_fk）对已清空账号的孤儿归因豁免，对活跃账号仍硬失败。
 2. 飞书精简摘要渲染（纯函数）及平台发送模块接线。
 
-注：nearline 与主 app 解耦，用临时 sqlite 文件构造最小 facts/source 库，
-不依赖标准库 data/ai4all.sqlite3。
+注：nearline 与主 app 解耦，用临时 SQLite 文件构造最小 facts/source 快照，
+不连接主应用 PostgreSQL。
 """
 
 import sqlite3

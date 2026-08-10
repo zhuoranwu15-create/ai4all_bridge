@@ -2,11 +2,10 @@
 
 每日由 systemd ai4all-backup.timer 触发，产出一份带完整性校验的本地快照：
   data/backups/ai4all_<时间戳>/
-    ├── db.sqlite3 / db.dump SQLite 在线一致快照（非文件直拷）；PG 模式则为
-    │                        pg_dump -Fc 自定义格式快照（文件名 db.dump）
-    │                        含 account_profile_files（P2 后账号 profile 的真相所在）
+    ├── db.dump             pg_dump -Fc 自定义格式快照，含 account_profile_files
+    │                       （P2 后账号 profile 的真相所在）
     ├── user_profiles.tar.gz 磁盘 user_profiles 目录（P2 后为存量副本，不含最新 profile 数据；
-    │                        真实数据在 db.sqlite3 的 account_profile_files 表）
+    │                        真实数据在 PostgreSQL 的 account_profile_files 表）
     ├── system.tar.gz        data/system 下系统文件（AGENTS.md/TOOLS.md 仍为磁盘文件）
     ├── env.bak              .env（含凭证，chmod 600）
     └── manifest.json        校验结果、各产物大小、关键表行数、git commit
@@ -34,7 +33,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import settings  # noqa: E402
-from app.db._backend import is_postgres  # noqa: E402
+from app.db._backend import database_url  # noqa: E402
 
 DEFAULT_STATE_FILE = "/tmp/ai4all_backup_state.json"
 BACKUP_PREFIX = "ai4all_"
@@ -95,22 +94,6 @@ def _integrity_check(db_path: Path) -> str:
         conn.close()
 
 
-def _table_counts(db_path: Path) -> Dict[str, Optional[int]]:
-    """统计关键表行数写入 manifest；缺表记 None。"""
-    counts: Dict[str, Optional[int]] = {}
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        for table in _COUNTED_TABLES:
-            try:
-                row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-                counts[table] = int(row[0]) if row else 0
-            except sqlite3.Error:
-                counts[table] = None
-    finally:
-        conn.close()
-    return counts
-
-
 def _pg_env_from_url(database_url: str) -> Dict[str, str]:
     """把 postgresql:// URL 解析成 libpq 连接环境变量。
 
@@ -136,7 +119,7 @@ def _pg_env_from_url(database_url: str) -> Dict[str, str]:
 def _backup_postgres(database_url: str, dest_path: Path) -> None:
     """用 pg_dump -Fc（自定义格式，压缩 + 可选择性恢复）导出一致快照到 dest_path。
 
-    pg_dump 在单事务快照中导出，并发写下仍得一致镜像（等价 SQLite 在线备份）。
+    pg_dump 在单事务快照中导出，并发写下仍得到一致镜像。
     --no-owner/--no-privileges 让 dump 可恢复到任意角色，降低跨环境恢复摩擦。
     """
     env = dict(os.environ)
@@ -280,17 +263,12 @@ def run_backup(
 ) -> Dict:
     """执行一次完整备份，返回 manifest dict；失败抛 BackupError。
 
-    DB 快照按后端分支：SQLite 走在线 backup API + integrity_check；PostgreSQL 走
-    pg_dump -Fc + pg_restore --list 校验。其余产物（profiles/system/env）与轮转/
-    异地/告警/state 逻辑两后端共用。
+    主数据库固定走 pg_dump -Fc + pg_restore --list 校验。nearline facts 若存在，
+    仍使用 SQLite online backup API 生成一致快照。其余产物、轮转、异地、告警和
+    state 逻辑保持不变。
     """
-    pg_mode = is_postgres()
-    db_path: Optional[Path] = None
-    if pg_mode:
-        db_source_desc = "PostgreSQL(pg_dump -Fc)"
-    else:
-        db_path = ROOT / settings.database_path if not os.path.isabs(settings.database_path) else Path(settings.database_path)
-        db_source_desc = str(db_path)
+    dsn = database_url()
+    db_source_desc = "PostgreSQL(pg_dump -Fc)"
     profiles_dir = Path(settings.user_profiles_dir)
     if not profiles_dir.is_absolute():
         profiles_dir = ROOT / profiles_dir
@@ -312,23 +290,14 @@ def run_backup(
         raise BackupError(f"backup dir already exists: {target_dir}")
     target_dir.mkdir(parents=True)
 
-    # 1) DB 一致快照 + 完整性校验（按后端分支）
-    if pg_mode:
-        db_artifact_name = "db.dump"
-        db_dest = target_dir / db_artifact_name
-        _backup_postgres(settings.database_url, db_dest)
-        integrity = _pg_dump_integrity(db_dest)
-        if integrity != "ok":
-            raise BackupError(f"pg_dump integrity check failed: {integrity[:500]}")
-        db_counts = _pg_table_counts(settings.database_url)
-    else:
-        db_artifact_name = "db.sqlite3"
-        db_dest = target_dir / db_artifact_name
-        _backup_sqlite(db_path, db_dest)  # db_path 非 None（SQLite 分支已赋值）
-        integrity = _integrity_check(db_dest)
-        if integrity != "ok":
-            raise BackupError(f"integrity_check failed: {integrity[:500]}")
-        db_counts = _table_counts(db_dest)
+    # 1) PostgreSQL 一致快照 + 完整性校验。
+    db_artifact_name = "db.dump"
+    db_dest = target_dir / db_artifact_name
+    _backup_postgres(dsn, db_dest)
+    integrity = _pg_dump_integrity(db_dest)
+    if integrity != "ok":
+        raise BackupError(f"pg_dump integrity check failed: {integrity[:500]}")
+    db_counts = _pg_table_counts(dsn)
 
     # 1b) nearline facts.sqlite3（分析事实基线，存在才备份；marts 可重建不入备份）
     facts_src = ROOT / "nearline" / "data" / "facts.sqlite3"

@@ -11,7 +11,7 @@ ledger/cost_events），再**直接调用**迁移函数，验证 money 路径的
   - 局部唯一索引重建后，再对第二个 account get-or-create 返回同一主钱包；
   - 可重复执行（幂等）。
 
-走内存/临时 SQLite（fresh_db）。
+使用 fresh_db 提供的隔离 PostgreSQL。
 """
 import pytest
 

@@ -15,7 +15,6 @@ Usage:
 import argparse
 import json
 import shutil
-import sqlite3
 import subprocess
 import sys
 import time
@@ -27,7 +26,13 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = REPO_ROOT / "data" / "ai4all.sqlite3"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from app.db import connect  # noqa: E402
+from app.db._backend import database_url  # noqa: E402
+from scripts.backup_data import _backup_postgres, _pg_dump_integrity  # noqa: E402
+
 USER_PROFILES_DIR = REPO_ROOT / "data" / "user_profiles"
 OPENCLAW_DIR = Path.home() / ".openclaw"
 OPENCLAW_WEIXIN_DIR = OPENCLAW_DIR / "openclaw-weixin"
@@ -119,17 +124,16 @@ def _dry(msg):
 # ---------------------------------------------------------------------------
 
 def _db_counts() -> dict:
-    if not DB_PATH.exists():
-        return {}
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
     counts = {}
-    for tbl in TABLES_TO_CLEAR:
-        try:
-            counts[tbl] = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
-        except sqlite3.OperationalError:
-            counts[tbl] = None  # table missing
-    conn.close()
+    with connect() as conn:
+        conn.execute("SET TRANSACTION READ ONLY")
+        for table in TABLES_TO_CLEAR:
+            exists = conn.execute("SELECT to_regclass(?) AS name", (table,)).fetchone()
+            if exists is None or exists["name"] is None:
+                counts[table] = None
+                continue
+            row = conn.execute(f'SELECT COUNT(*) AS n FROM "{table}"').fetchone()
+            counts[table] = int(row["n"] if row else 0)
     return counts
 
 
@@ -151,17 +155,14 @@ def _profile_dirs() -> list:
 def print_summary():
     _hdr("AI4ALL 全系统重置 — 预检摘要")
 
-    print(f"\n📊  数据库  ({DB_PATH.relative_to(REPO_ROOT)})")
-    if not DB_PATH.exists():
-        _warn("数据库文件不存在")
-    else:
-        counts = _db_counts()
-        total = 0
-        for tbl, n in counts.items():
-            if n:
-                print(f"      {tbl:<44}  {n:>6} 行")
-                total += n
-        print(f"      {'合计':<44}  {total:>6} 行")
+    print("\n📊  数据库  (PostgreSQL)")
+    counts = _db_counts()
+    total = 0
+    for tbl, n in counts.items():
+        if n:
+            print(f"      {tbl:<44}  {n:>6} 行")
+            total += n
+    print(f"      {'合计':<44}  {total:>6} 行")
 
     print(f"\n📁  用户 Profile 文件  (data/user_profiles/)")
     dirs = _profile_dirs()
@@ -194,21 +195,20 @@ def print_summary():
 # ---------------------------------------------------------------------------
 
 def _backup_db(dry_run: bool) -> Path:
-    bak = DB_PATH.parent / f"ai4all_{TIMESTAMP}.sqlite3.bak"
+    bak = REPO_ROOT / "data" / f"ai4all_{TIMESTAMP}.dump"
     if dry_run:
         _dry(f"备份 DB → data/{bak.name}")
     else:
-        shutil.copy2(DB_PATH, bak)
+        _backup_postgres(database_url(), bak)
+        integrity = _pg_dump_integrity(bak)
+        if integrity != "ok":
+            raise RuntimeError(f"pg_dump integrity check failed: {integrity}")
         _ok(f"DB 备份 → data/{bak.name}")
     return bak
 
 
 def phase_db(dry_run: bool):
     _section("阶段 1 — 数据库清理")
-
-    if not DB_PATH.exists():
-        _warn("数据库不存在，跳过")
-        return
 
     _backup_db(dry_run)
 
@@ -217,27 +217,19 @@ def phase_db(dry_run: bool):
     if dry_run:
         for tbl in TABLES_TO_CLEAR:
             n = counts.get(tbl) or 0
-            _dry(f"DELETE FROM {tbl:<44}  (当前 {n} 行)")
+            _dry(f"TRUNCATE {tbl:<47}  (当前 {n} 行)")
         return
 
-    conn = sqlite3.connect(str(DB_PATH))
-    try:
-        conn.execute("PRAGMA foreign_keys = OFF")
-        conn.execute("BEGIN")
-        for tbl in TABLES_TO_CLEAR:
-            try:
-                cur = conn.execute(f"DELETE FROM {tbl}")
-                if cur.rowcount:
-                    _ok(f"DELETE FROM {tbl:<44}  {cur.rowcount:>6} 行")
-            except sqlite3.OperationalError as exc:
-                _warn(f"跳过 {tbl}: {exc}")
-        conn.commit()
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+    existing = [table for table, count in counts.items() if count is not None]
+    if not existing:
+        _warn("没有找到可清理的业务表")
+        return
+    quoted = ", ".join(f'"{table}"' for table in existing)
+    with connect() as conn:
+        conn.execute(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
+    for table in existing:
+        if counts.get(table):
+            _ok(f"TRUNCATE {table:<47}  {counts[table]:>6} 行")
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +396,10 @@ def main():
     print("⚠️  " * 21)
     print()
     print("  此操作将永久删除所有用户数据：")
-    print("    • 数据库：platform_users, accounts, messages, sessions 等 24 张表")
+    print(
+        "    • 数据库：platform_users, accounts, messages, sessions 等 "
+        f"{len(TABLES_TO_CLEAR)} 张表"
+    )
     print("    • 文件：data/user_profiles/ 下全部 account 目录")
     print("    • OpenClaw：微信 bot 的 session token（需重新扫码登录）")
     print()
@@ -431,7 +426,7 @@ def main():
         phase_openclaw(dry_run=False)
     except Exception as exc:
         _err(f"\n执行中断: {exc}")
-        _err("请检查备份文件（data/*.bak, ~/.openclaw/openclaw-weixin.bak.*/）并手动恢复。")
+        _err("请检查备份文件（data/*.dump, data/*.tar.gz, ~/.openclaw/openclaw-weixin.bak.*/）并手动恢复。")
         import traceback
         traceback.print_exc()
         sys.exit(1)
@@ -446,7 +441,7 @@ def main():
     print("  5. 发一条微信消息触发 onboarding")
     print()
     print(f"  备份位置:")
-    print(f"    data/ai4all_{TIMESTAMP}.sqlite3.bak")
+    print(f"    data/ai4all_{TIMESTAMP}.dump")
     print(f"    data/user_profiles_backup_{TIMESTAMP}.tar.gz")
     print(f"    ~/.openclaw/openclaw-weixin.bak.{TIMESTAMP}/")
     print()

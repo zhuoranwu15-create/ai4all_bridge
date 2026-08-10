@@ -1,8 +1,8 @@
 """只读连接操作库（operational source）。
 
-nearline 与主 app 解耦：默认读仓库根 data/ai4all.sqlite3（标准库），
-可用 connect_source(override) 或环境变量 NEARLINE_SOURCE_DB 覆盖。
-一律以 mode=ro 打开，禁止对操作库写入。
+nearline 与主 app 解耦：先由 ``scripts/export_pg_to_sqlite.py`` 把 PostgreSQL
+操作库导出到默认快照，再以只读方式消费。可用 ``connect_source(override)`` 或环境变量
+``NEARLINE_SOURCE_DB`` 覆盖快照路径。
 """
 
 import os
@@ -12,11 +12,11 @@ from typing import Optional
 
 # nearline/analytics/source_db.py -> 仓库根
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SOURCE_DB = REPO_ROOT / "data" / "ai4all.sqlite3"
+DEFAULT_SOURCE_DB = REPO_ROOT / "nearline" / "data" / "source_snapshot.sqlite3"
 
 
 def source_db_path(override: Optional[str] = None) -> Path:
-    """解析操作库路径：显式 override > 环境变量 > 默认标准库。"""
+    """解析源快照路径：显式 override > 环境变量 > 默认 nearline 快照。"""
     if override:
         return Path(override)
     env = os.environ.get("NEARLINE_SOURCE_DB")

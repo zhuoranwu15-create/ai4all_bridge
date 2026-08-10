@@ -2,7 +2,6 @@
 """Export the latest AI4ALL/OpenClaw prompt trace pair for one account."""
 import argparse
 import json
-import sqlite3
 import sys
 import time
 from collections import defaultdict
@@ -12,38 +11,13 @@ from typing import Any, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.db import connect  # noqa: E402
+
 DEFAULT_ACCOUNT_ID = "aid_806382741"
 DEFAULT_MESSAGE_TEXT = "查查今日金价"
-
-
-def _env_value(key: str) -> Optional[str]:
-    """Return a simple KEY=value entry from the repo .env file."""
-    env_path = ROOT / ".env"
-    if not env_path.exists():
-        return None
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        found_key, value = line.split("=", 1)
-        if found_key.strip() != key:
-            continue
-        cleaned = value.strip()
-        if (cleaned.startswith('"') and cleaned.endswith('"')) or (
-            cleaned.startswith("'") and cleaned.endswith("'")
-        ):
-            cleaned = cleaned[1:-1]
-        return cleaned
-    return None
-
-
-def _default_db_path() -> Path:
-    """Resolve DATABASE_PATH from .env, falling back to the standard local DB."""
-    raw = _env_value("DATABASE_PATH") or "data/ai4all.sqlite3"
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
 
 
 def _decode_json(raw: Any, fallback: Any) -> Any:
@@ -58,7 +32,6 @@ def _decode_json(raw: Any, fallback: Any) -> Any:
 
 def _load_traces(
     *,
-    db_path: Path,
     account_id: str,
     message_id: Optional[str],
     since_minutes: int,
@@ -86,8 +59,8 @@ def _load_traces(
         ORDER BY id DESC
         LIMIT ?
     """
-    with sqlite3.connect(db_path) as conn:
-        conn.row_factory = sqlite3.Row
+    with connect() as conn:
+        conn.execute("SET TRANSACTION READ ONLY")
         rows = conn.execute(sql, params).fetchall()
 
     traces: list[dict[str, Any]] = []
@@ -306,7 +279,6 @@ def main() -> int:
         description="Export a recent AI4ALL/OpenClaw prompt trace pair from debug_traces."
     )
     parser.add_argument("--account", default=DEFAULT_ACCOUNT_ID)
-    parser.add_argument("--db", default=str(_default_db_path()))
     parser.add_argument("--out-dir", default=str(ROOT / "tmp" / "prompt_traces"))
     parser.add_argument("--message-id", default=None)
     parser.add_argument(
@@ -331,19 +303,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    db_path = Path(args.db).expanduser()
-    if not db_path.is_absolute():
-        db_path = ROOT / db_path
-    if not db_path.exists():
-        print(f"DB not found: {db_path}", file=sys.stderr)
-        return 2
-
     deadline = time.monotonic() + max(args.wait_seconds, 0)
     traces: list[dict[str, Any]] = []
     pair: Optional[tuple[str, dict[str, Any], dict[str, Any]]] = None
     while True:
         traces = _load_traces(
-            db_path=db_path,
             account_id=args.account,
             message_id=args.message_id,
             since_minutes=max(args.since_minutes, 0),

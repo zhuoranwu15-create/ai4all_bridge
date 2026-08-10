@@ -52,7 +52,7 @@ Fatetell、Nooki 或其他候选产品猜测领域契约。
 - 钱包、订阅、quota、cost、referral 与新客权益沿用 `(platform_user_id, app_id)` 隔离；
   冗余 `app_id` 写入时校验与 membership、account、wallet 一致。
 - migration 必须同时支持 SQLite 与 PostgreSQL，包含存量 backfill、唯一约束、幂等键与并发
-  锁序；不得删除 SQLite 开发/测试路径（它是 dev/test 默认档，不是生产退路）。
+  锁序；主应用开发、测试和生产均只允许 PostgreSQL。
 
 ## 4. Agent Runtime 接入
 

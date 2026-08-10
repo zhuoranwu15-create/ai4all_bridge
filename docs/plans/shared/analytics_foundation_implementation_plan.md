@@ -22,7 +22,8 @@
 
 ## 二、数据源现状
 
-主库：`data/ai4all.sqlite3`（只读访问）
+源数据：主应用 PostgreSQL 经 `scripts/export_pg_to_sqlite.py` 导出的
+`nearline/data/source_snapshot.sqlite3`（只读访问）
 
 | 表 | 用途 | 关键字段 |
 |---|---|---|
@@ -108,7 +109,7 @@ nearline/
 ### 3.2 分层原则
 
 ```
-操作库（data/ai4all.sqlite3，只读 source）
+操作库 PostgreSQL → source_snapshot.sqlite3（只读 source）
   └→ 基础表层 dim_/fct_（facts.sqlite3，只追加，durable 基线）
        └→ 聚合层 agg_（marts.sqlite3，可删重建）
             └→ 报告层（reporting/）—— 消费 agg_，渲染文档
@@ -304,11 +305,12 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
 
 ## 六、实施路径
 
-> **已校验现状（2026-06-08，对照 `data/ai4all.sqlite3` + 代码）**：
+> **历史校验记录（2026-06-08，当时对照主库 SQLite + 代码）**：
 > - 操作库列名与本文 `fct_`/`dim_` 假设一致（`messages.role/direction`、`outbound_messages.product_category/sent_at/policy_reason`、`dreaming_runs.token_input/output/status`、`entitlement_ledger.entry_type`）。
 > - `created_at` 为无时区的北京本地时间 → `DATE(created_at)` 即北京自然日，无需转换。
 > - 数据量极小：50 账号（0 debug）、597 条用户入站、44 条 outbound、71 次 dreaming（全 succeeded）。→ 留存/分时段初期普遍 < 阈值，按 foundation §8 标注"仅观察"，**先跑通管线而非追指标**。
-> - 备份接入点 = `scripts/backup_data.py`（当前单库 `_backup_sqlite` + `_COUNTED_TABLES` + manifest artifacts）。
+> - 当前主库已切 PostgreSQL；nearline 源由 PG→SQLite 快照桥生成，`facts.sqlite3`
+>   仍由 `scripts/backup_data.py` 单独纳入备份。
 > - `.gitignore` 当前仅含 `ai4all.db`，需补 nearline 产物。
 >
 > 执行顺序原则：**先打通 source→fct→agg→report 端到端最薄一条线（dim_date + dim_account + fct_message → daily_users → Markdown），再横向补齐其余事实表/域**。
@@ -316,7 +318,8 @@ nearline 的依赖与主 app 完全隔离，放在 `nearline/requirements.txt`�
 ### Phase 0：基建骨架 + 端到端最薄一条线 ✅ 已完成（2026-06-08）
 
 - [x] 搭 `nearline/` 目录骨架（按 §3.1），含 `nearline/requirements.txt`（pandas、jinja2；Phase 0 仅用标准库）
-- [x] `source_db.py`：以 `mode=ro` URI 只读连接 `data/ai4all.sqlite3`（默认仓库根路径，可经 `--source-db`/`NEARLINE_SOURCE_DB` 覆盖，禁止写）
+- [x] `source_db.py`：以 `mode=ro` URI 只读连接 PG 导出的
+  `nearline/data/source_snapshot.sqlite3`（可经 `--source-db`/`NEARLINE_SOURCE_DB` 覆盖，禁止写）
 - [x] `facts_db.py` / `marts_db.py`：连接 + 建表（执行 `facts_schema.sql` / `marts_schema.sql`，幂等 `CREATE TABLE IF NOT EXISTS`）
 - [x] `facts_schema.sql`：`dim_date`、`dim_account`、`fct_message`、`etl_watermark`（其余 fct_ 放 Phase 1）
 - [x] `marts_schema.sql`：`agg_daily_users`（其余 agg_ 放 Phase 1）

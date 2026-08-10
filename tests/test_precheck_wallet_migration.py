@@ -2,8 +2,7 @@
 
 预检是 D-14 钱包上迁的 money 路径发布闸，自身必须可信：干净多钱包用户应 PASS，
 四条阻断条件（ambiguous_owner / orphan_wallet / owner_drift / primary_undefined）
-各自注入后应 BLOCK。生产真值在 PG（本地 SQLite 仅 2 user）；此处只验查询与判定逻辑
-的正确性，走内存 SQLite（fresh_db）。
+各自注入后应 BLOCK。此处在 fresh_db 提供的隔离 PostgreSQL 中验证查询与判定逻辑。
 """
 import app.db as db
 from app.db._core import NEW_USER_GRANT_SHELL_MICROS

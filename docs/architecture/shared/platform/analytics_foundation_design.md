@@ -1,6 +1,6 @@
 # 数据分析与指标基建设计
 
-更新时间：2026-06-08
+更新时间：2026-08-10
 
 本文定义 AI4ALL 微信 Bot 数据分析建设的指标口径、现有数据可用性、埋点缺口和分阶段基础设施规划。当前阶段先服务运营和产品判断，不进入用户画像正文分析，不读取或导出聊天明文。
 
@@ -18,7 +18,7 @@
 - 指标定义可复用，避免不同报表各算一套。
 - 只使用账号级隔离后的元数据，所有查询必须按 `account_id` 或明确的用户维度约束。
 - 对历史数据能回算，对未来数据能通过结构化事件补齐。
-- 先支持 SQLite 单库离线分析，后续可平滑迁移到 DuckDB、OLAP 或数据仓库。
+- 先通过 PostgreSQL → SQLite 只读快照支持 nearline 离线分析，后续可平滑迁移到 DuckDB、OLAP 或数据仓库。
 
 ## 2. 分析不变量
 
@@ -45,7 +45,8 @@
 | Dreaming | `dreaming_runs`、`dreaming_memory_items`、`memory_events`、`scheduler_heartbeats` | 运行量、状态、耗时、条目生成/应用/跳过、scheduler 健康 | token 字段可能为空；输入覆盖量和记忆质量需要后续评估维度 |
 | 首次聊天 onboarding | `accounts.onboarding_state`、`accounts.onboarding_updated_at`、账号上下文文件 | 当前状态分布、完成率粗口径 | 状态流转历史、人设选择、跳过原因当前缺结构化事件 |
 
-当前标准库 `data/ai4all.sqlite3` 已有上述核心表。后续实现时不应新增依赖 contacts 表或 `/admin/contacts/*`。
+当前中心 PostgreSQL 已有上述核心表。nearline 作业通过 `scripts/export_pg_to_sqlite.py` 导出到
+`nearline/data/source_snapshot.sqlite3`，不直接读取或锁定业务主库。后续实现时不应新增依赖 contacts 表或 `/admin/contacts/*`。
 
 ## 4. 指标口径
 
@@ -244,13 +245,13 @@ onboarding_events
 | `daily_dreaming_metrics` | 每日 | runs、success、failed、items_generated、items_applied、scheduler_status |
 | `onboarding_funnel_daily` | cohort date + step | entered、converted、conversion_rate、median_step_latency |
 
-SQLite 阶段可以先用 `scripts/analytics_report.py` 直接输出 CSV/Markdown；当数据量增长后，再把 DWD/DWM 迁到 DuckDB 或云数仓。
+nearline 阶段可基于独立 SQLite 快照直接输出 CSV/Markdown；当数据量增长后，再把 DWD/DWM 迁到 DuckDB 或云数仓。
 
 ## 6. 分阶段路线
 
 ### Phase 0：口径确认和离线 SQL
 
-- 新增一组只读 SQL 或脚本，基于 `data/ai4all.sqlite3` 输出增长、主动消息、Dreaming、onboarding 粗口径。
+- 新增一组只读 SQL 或脚本，基于 `nearline/data/source_snapshot.sqlite3` 输出增长、主动消息、Dreaming、onboarding 粗口径。
 - 明确排除 debug 账号的过滤规则。
 - 不新增业务表，不改运行链路。
 - 用历史数据回算，确认口径是否符合运营直觉。
@@ -269,7 +270,7 @@ SQLite 阶段可以先用 `scripts/analytics_report.py` 直接输出 CSV/Markdow
 
 ### Phase 3：外部分析栈
 
-- 当 SQLite 查询开始影响线上或数据量超过单机可接受范围时，使用只读备份导出到 DuckDB/对象存储/数据仓库。
+- 当 nearline SQLite 数据量超过单机可接受范围时，将 DWD/DWM 迁到 DuckDB、对象存储或数据仓库。
 - 保留业务库为事实源，分析系统只读消费。
 - 建立每日自动任务和数据质量告警。
 

@@ -153,7 +153,7 @@ def main() -> int:
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     print(f"mode={mode}")
-    print(f"database={settings.database_path}")
+    print("database=postgresql")
     print(f"user_profiles_dir={settings.user_profiles_dir}")
     print(f"account_filter={args.account or 'all-db-accounts'}")
     print(f"include_missing={args.include_missing}")

@@ -5,25 +5,22 @@
 
     .venv/bin/python scripts/diagnose_reactivation.py
     .venv/bin/python scripts/diagnose_reactivation.py --account aid_806382741
-    .venv/bin/python scripts/diagnose_reactivation.py --run-planning --dispatch-dry-run
     .venv/bin/python scripts/diagnose_reactivation.py --json --output /tmp/reactivation.json
 
-默认只读标准数据库。加 --run-planning 或 --dispatch-dry-run 时会复制 SQLite 到 /tmp，
-所有候选写入、延后、清理都只发生在临时数据库；不会真实发送消息。
+脚本固定只读 PostgreSQL。旧的 planning/dispatch dry-run 依赖复制 SQLite 主库，现已禁用；
+需要写安全的生成探测时，应使用隔离的本地 PostgreSQL 数据库。
 """
 
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Allow running from repo root or scripts/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -67,33 +64,6 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     if len(text) <= limit:
         return text
     return text[: max(0, limit - 1)] + "…"
-
-
-@contextmanager
-def temporary_database_copy() -> Iterator[str]:
-    """Point repository DB helpers at a copied SQLite file for write-safe diagnosis."""
-    original_path = str(getattr(settings, "database_path", "data/ai4all.sqlite3"))
-    source = Path(original_path)
-    if not source.is_absolute():
-        source = Path.cwd() / source
-    if not source.exists():
-        raise FileNotFoundError(f"database not found: {source}")
-
-    with tempfile.TemporaryDirectory(prefix="ai4all_reactivation_") as tmp_dir:
-        temp_path = Path(tmp_dir) / source.name
-        src_conn = sqlite3.connect(str(source))
-        dst_conn = sqlite3.connect(str(temp_path))
-        try:
-            src_conn.backup(dst_conn)
-        finally:
-            dst_conn.close()
-            src_conn.close()
-
-        settings.database_path = str(temp_path)
-        try:
-            yield str(temp_path)
-        finally:
-            settings.database_path = original_path
 
 
 def parse_now(value: Optional[str]) -> datetime:
@@ -421,7 +391,7 @@ def write_result_file(results: List[Dict[str, Any]], *, output: Optional[str] = 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": _fmt(datetime.now()),
-        "database_path": str(getattr(settings, "database_path", "")),
+        "database": "postgresql",
         "results": results,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -552,12 +522,16 @@ def main() -> None:
     )
     parser.add_argument("--output", help="JSON 结果文件路径；默认写入 /tmp")
     args = parser.parse_args()
+    if args.run_planning or args.dispatch_dry_run or args.bootstrap_state:
+        parser.error(
+            "SQLite-copy dry-run modes were removed; use an isolated local PostgreSQL "
+            "database for planning or dispatch probes"
+        )
 
     now = parse_now(args.now)
     accounts = [{"id": args.account}] if args.account else [
         account for account in list_accounts() if account.get("status") == "active"
     ]
-    needs_temp_db = args.run_planning or args.dispatch_dry_run
     result_file = None
 
     def collect_results() -> List[Dict[str, Any]]:
@@ -570,15 +544,9 @@ def main() -> None:
                         account_id=account_id,
                         now=now,
                         sample_limit=args.sample_limit,
-                        bootstrap_state=(
-                            needs_temp_db
-                            and (
-                                args.bootstrap_state
-                                or (args.run_planning and not args.strict_state)
-                            )
-                        ),
-                        run_planning=args.run_planning,
-                        dispatch_dry_run=args.dispatch_dry_run,
+                        bootstrap_state=False,
+                        run_planning=False,
+                        dispatch_dry_run=False,
                         include_no_recent_chat=args.include_no_recent_chat,
                         use_llm_dedupe=args.llm_dedupe,
                     )
@@ -599,16 +567,9 @@ def main() -> None:
                 )
         return results
 
-    if needs_temp_db:
-        with temporary_database_copy() as temp_db_path:
-            results = collect_results()
-            result_file = write_result_file(results, output=args.output)
-            for item in results:
-                item["temporary_database_path"] = temp_db_path
-    else:
-        results = collect_results()
-        if args.output:
-            result_file = write_result_file(results, output=args.output)
+    results = collect_results()
+    if args.output:
+        result_file = write_result_file(results, output=args.output)
 
     if args.as_json:
         print(json.dumps({"result_file": result_file, "results": results}, ensure_ascii=False, indent=2))

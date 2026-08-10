@@ -28,7 +28,7 @@ def pg_settings(postgresql_db, monkeypatch):
     import types
 
     dsn = _dsn_from_conn(postgresql_db)
-    fake = types.SimpleNamespace(database_url=dsn, database_path="unused.sqlite3")
+    fake = types.SimpleNamespace(database_url=dsn)
     monkeypatch.setattr(_backend, "_settings", lambda: fake)
     try:
         yield fake

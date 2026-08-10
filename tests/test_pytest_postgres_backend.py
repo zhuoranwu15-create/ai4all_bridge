@@ -20,4 +20,3 @@ def test_postgres_template_is_migrated_once_to_latest_schema(postgresql_proc):
 
 def test_fresh_db_always_uses_isolated_postgres_clone(fresh_db):
     assert fresh_db.database_url.startswith("postgresql://")
-    assert fresh_db.database_path.endswith("test.db")  # non-DB file setting remains isolated

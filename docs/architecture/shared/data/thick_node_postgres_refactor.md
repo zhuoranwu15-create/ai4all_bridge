@@ -26,7 +26,7 @@
 | 节点如何访库 | **换 Postgres，节点直连** | 中心 DB 从 SQLite 迁到 PG，节点原样跑 `turn_service`、只是连远程库 |
 | 计费一致性 | **每轮实时回中心扣费** | 库在中心，`record_chat_usage_charge` 直写中心 PG 即天然满足 |
 | profile 文件 | **进 PG** | SOUL/IDENTITY/USER/MEMORY + daily notes 的内容存 PG TEXT 列 |
-| 测试基座 | **核心走 ephemeral Postgres** | 保真，避免「测试 SQLite、生产 PG」方言漂移；少量纯逻辑测试可仍用 SQLite |
+| 测试基座 | **主测试固定 ephemeral Postgres** | 保真，避免「测试 SQLite、生产 PG」方言漂移；nearline/TDAI 自有 SQLite 单独测试 |
 
 > 为什么「共享中心库 + 多节点写」就**必须**换 PG：SQLite 是单机单写者（WAL 只放宽并发读，写串行且不能跨主机）。多个节点并发写同一个库，SQLite 扛不住，client-server 数据库是硬需求。
 
@@ -125,11 +125,12 @@
    - 游标代理在 `execute(sql, params)` 时把 `?`→`%s`（注意跳过字符串字面量内的 `?`；本仓 SQL 内字面量含 `?` 极少，垫片用「按单引号配对分段、仅段外替换」规避）。
    - Row 工厂用 psycopg `dict_row`，再包一层同时支持 `row["col"]` 和 `row[0]`（兼容现存两种访问）。
 2. **后端中立别名**：`_backend.py` 导出 `Connection`、`Row`、`IntegrityError`、`connect_raw()`。把全仓 `sqlite3.Connection`/`sqlite3.Row`/`except sqlite3.IntegrityError` 机械替换为 `_backend.*`，type hint 与异常捕获一次性中立化。
-3. **双后端开关**：`connect()` 按 `settings.database_url`（新增配置）选 SQLite / PG；`DATABASE_URL` 缺省回落现有 SQLite 路径，**保证 standalone 与测试零行为变化**直到切换。
+3. **历史过渡开关（已移除）**：切换期 `connect()` 曾按 `settings.database_url` 选择 SQLite / PG；
+   自 2026-08-10 起主应用固定要求 PostgreSQL，空值或非 PostgreSQL URL 会在首次连接时报错。
 
 ```python
-# app/config.py 新增（示意）
-database_url: str = ""          # 空=用 database_path 的 SQLite；postgresql://… = PG
+# app/config.py 当前配置（示意）
+database_url: str = ""          # 运行时必须由 DATABASE_URL 提供 postgresql://…
 db_pool_min_size: int = 1
 db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG max_connections）
 ```
@@ -218,7 +219,7 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 | 中心 PG 成为单点 | 一期可接受（低负载）；二期上 PG 流复制热备（替代调研里的 Litestream） |
 | 节点直连中心 PG 的网络抖动 | 连接池 + 重试；内网低延迟；turn 失败回落"稍后再发"既有兜底 |
 | `init_db` 多实例并发跑迁移 | 仅中心跑迁移；节点跳过；必要时 PG advisory lock |
-| 测试变慢（ephemeral PG） | 纯逻辑测试保留 SQLite；PG 档 session 级复用容器 |
+| 测试变慢（ephemeral PG） | session 级模板库只迁移一次，每个 DB 测试从模板克隆隔离库 |
 
 ---
 

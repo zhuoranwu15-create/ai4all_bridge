@@ -109,9 +109,6 @@ class Settings(BaseSettings):
     feishu_error_log_alert_min_interval_seconds: int = 300
     feishu_error_log_alert_timeout_seconds: float = 3.0
     feishu_error_log_alert_max_chars: int = 3500
-    # Transitional offline-tool setting only. The main runtime never opens this path;
-    # remaining script consumers are removed in the next cleanup phase.
-    database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
 

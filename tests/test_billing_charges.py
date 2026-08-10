@@ -1,7 +1,7 @@
 """P0-4 计费红线单测：token→贝壳换算、扣费/赠贝幂等、新用户赠送恰好一次、账号隔离。
 
 billing.py 是金钱红线但此前只有黑盒间接覆盖；这里补隔离的单元断言，作为后续重构的
-安全网。所有用例走内存 SQLite（fresh_db fixture）。
+安全网。所有用例使用 fresh_db 提供的隔离 PostgreSQL。
 """
 import pytest
 

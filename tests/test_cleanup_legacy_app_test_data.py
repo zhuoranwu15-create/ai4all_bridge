@@ -15,7 +15,7 @@ from scripts.precheck_mingchan_clean_start import build_preservation_plan
 
 
 def test_cleanup_database_url_override_rejects_sqlite_url():
-    """SQLite URL 不能静默回落标准库；临时 SQLite 必须显式设置路径。"""
+    """SQLite URL 必须被拒绝，不能作为主应用数据库配置。"""
 
     with pytest.raises(ValueError, match="only accepts PostgreSQL"):
         configure_database_url_override("sqlite:////private/tmp/cleanup.sqlite3")

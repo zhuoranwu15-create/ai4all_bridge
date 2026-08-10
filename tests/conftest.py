@@ -146,7 +146,6 @@ def empty_pg_database(postgresql_db):
 @pytest.fixture
 def test_settings(tmp_path, db_dsn):
     s = MagicMock()
-    s.database_path = str(tmp_path / "test.db")
     # database_url 必须显式赋值为临时 PG DSN；否则 MagicMock 自动属性会污染后端选择。
     s.database_url = db_dsn
     s.db_pool_min_size = 1

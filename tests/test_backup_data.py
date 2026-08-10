@@ -1,29 +1,16 @@
-"""scripts/backup_data.py 的聚焦测试：用 tmp_path 造临时库+目录，不起服务。"""
+"""scripts/backup_data.py 的 PostgreSQL-only 备份编排测试。"""
 
 import json
-import sqlite3
 from pathlib import Path
 
 import pytest
 
 
-def _make_sqlite(path: Path) -> None:
-    """造一个最小可校验的 SQLite 库（含 accounts/messages 便于行数统计）。"""
-    conn = sqlite3.connect(str(path))
-    conn.execute("CREATE TABLE accounts (id TEXT PRIMARY KEY)")
-    conn.execute("CREATE TABLE messages (id INTEGER PRIMARY KEY, account_id TEXT)")
-    conn.execute("INSERT INTO accounts(id) VALUES ('a1'), ('a2')")
-    conn.execute("INSERT INTO messages(account_id) VALUES ('a1'), ('a1'), ('a2')")
-    conn.commit()
-    conn.close()
-
-
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    """搭建临时库/目录并把 backup_data.settings 指向它们。"""
+    """搭建临时目录并用桩隔离 pg_dump/psql 外部命令。"""
     from scripts import backup_data
 
-    db = tmp_path / "ai4all.sqlite3"
     profiles = tmp_path / "user_profiles"
     system = tmp_path / "system"
     profiles.mkdir()
@@ -31,14 +18,31 @@ def env(tmp_path, monkeypatch):
     (profiles / "acc1").mkdir()
     (profiles / "acc1" / "SOUL.md").write_text("soul", encoding="utf-8")
     (system / "TOOLS.md").write_text("tools", encoding="utf-8")
-    _make_sqlite(db)
-
-    # 强制 SQLite 后端：清空 database_url，使测试不受运行环境 .env（可能配 PG）影响，
-    # 确定性地走 SQLite 备份分支（这些用例针对的就是 SQLite 路径）。
-    monkeypatch.setattr(backup_data.settings, "database_url", "", raising=False)
-    monkeypatch.setattr(backup_data.settings, "database_path", str(db), raising=False)
+    monkeypatch.setattr(
+        backup_data.settings,
+        "database_url",
+        "postgresql://test:test@127.0.0.1:5432/ai4all_test",
+        raising=False,
+    )
     monkeypatch.setattr(backup_data.settings, "user_profiles_dir", str(profiles), raising=False)
     monkeypatch.setattr(backup_data.settings, "system_dir", str(system), raising=False)
+    monkeypatch.setattr(
+        backup_data,
+        "_backup_postgres",
+        lambda _dsn, dest: dest.write_bytes(b"fake-pg-dump"),
+    )
+    monkeypatch.setattr(backup_data, "_pg_dump_integrity", lambda _path: "ok")
+    monkeypatch.setattr(
+        backup_data,
+        "_pg_table_counts",
+        lambda _dsn: {
+            "accounts": 2,
+            "platform_users": 1,
+            "messages": 3,
+            "outbound_messages": None,
+            "account_profile_files": 2,
+        },
+    )
     return backup_data, tmp_path
 
 
@@ -56,7 +60,7 @@ def test_backup_produces_complete_artifacts(env, tmp_path):
     )
 
     target = Path(manifest_target(backups_dir))
-    assert (target / "db.sqlite3").exists()
+    assert (target / "db.dump").exists()
     assert (target / "user_profiles.tar.gz").exists()
     assert (target / "system.tar.gz").exists()
     assert (target / "manifest.json").exists()
@@ -96,8 +100,10 @@ def test_rotation_keeps_only_latest_n(env, tmp_path):
 
 def test_failure_triggers_alert_and_nonzero_exit(env, tmp_path, monkeypatch):
     backup_data, _ = env
-    # 让数据库源不存在 → _backup_sqlite 抛 BackupError
-    monkeypatch.setattr(backup_data.settings, "database_path", str(tmp_path / "missing.sqlite3"), raising=False)
+    def fail_backup(_dsn, _dest):
+        raise backup_data.BackupError("pg_dump unavailable")
+
+    monkeypatch.setattr(backup_data, "_backup_postgres", fail_backup)
     monkeypatch.setattr(backup_data.settings, "feishu_alert_webhook_url", "https://example/hook", raising=False)
 
     alerts = []
@@ -129,17 +135,3 @@ def test_pg_env_from_url_parses_and_keeps_password_out_of_argv():
     # 缺省端口/无口令时不产出对应键（让 libpq 用默认）
     sparse = _pg_env_from_url("postgresql://u@host/db")
     assert sparse == {"PGHOST": "host", "PGUSER": "u", "PGDATABASE": "db"}
-
-
-def test_restore_dry_run_validates(env, tmp_path):
-    backup_data, _ = env
-    backups_dir = tmp_path / "backups"
-    backup_data.run_backup(
-        backups_dir=backups_dir, retention=14, rsync_target="",
-        dry_run=False, state_file=str(tmp_path / "state.json"),
-    )
-    target = manifest_target(backups_dir)
-
-    from scripts import restore_data
-    rc = restore_data.restore(target, target=None, force=False, assume_yes=False)
-    assert rc == 0

@@ -33,11 +33,13 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    from app.db._backend import is_postgres
+    from app.db._backend import database_url
     from app.db._core import migrate_db_through
 
-    if not is_postgres():
-        parser.error("Phase 1 checkpoint migration requires PostgreSQL DATABASE_URL")
+    try:
+        database_url()
+    except RuntimeError as err:
+        parser.error(str(err))
 
     result = migrate_db_through(
         target_version=args.through,

@@ -22,16 +22,13 @@ from app.db import connect  # noqa: E402
 
 
 def configure_database_url_override(database_url: Optional[str]) -> None:
-    """为 cleanup CLI 设置 PostgreSQL URL；SQLite 临时库必须使用 DATABASE_PATH。"""
+    """为 cleanup CLI 设置可选的 PostgreSQL URL。"""
 
     if database_url is None:
         return
     value = database_url.strip()
     if not value.lower().startswith(("postgres://", "postgresql://")):
-        raise ValueError(
-            "--database-url only accepts PostgreSQL URLs; for temporary SQLite set "
-            "DATABASE_URL='' and DATABASE_PATH=/absolute/path.sqlite3"
-        )
+        raise ValueError("--database-url only accepts PostgreSQL URLs")
     from app.config import settings
 
     settings.database_url = value
@@ -254,7 +251,7 @@ def main() -> int:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="可选覆盖 PostgreSQL DATABASE_URL；SQLite 临时库请设置 DATABASE_PATH",
+        help="可选覆盖 PostgreSQL DATABASE_URL",
     )
     args = parser.parse_args()
     try:

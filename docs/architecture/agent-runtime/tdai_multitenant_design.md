@@ -22,7 +22,7 @@ Gemini 原方案给出的方向有价值：TDAI 的 L0/L1/L2/L3 分层、query-t
 
 因此推荐采用两阶段策略：
 
-- **近期可落地**：把 TDAI 作为本机 sidecar，通过 HTTP 接入 AI4ALL turn 热路径。TDAI 自己维护本地 SQLite 或 TCVDB 记忆库；AI4ALL 继续以 PostgreSQL/SQLite 抽象作为业务真相。
+- **近期可落地**：把 TDAI 作为本机 sidecar，通过 HTTP 接入 AI4ALL turn 热路径。TDAI 自己维护本地 SQLite 或 TCVDB 记忆库；AI4ALL 以中心 PostgreSQL 作为业务真相。
 - **后续可选**：当 sidecar 效果验证后，再评估是否给 TDAI 增加 `postgres` store backend，把 L0/L1/L2/L3 统一收敛到中心 PG。
 
 > **关键修正（2026-06，blocker）：`session_key` 不足以隔离多账号。** 经核实 TDAI 当前 standalone/sqlite store 是「单租户 per dataDir」：`session_key` 只隔离了 L0（原始对话）和 pipeline/session 状态，**L1/L2/L3 召回是 dataDir 全局的**——L1 搜索接口（`store/types.ts:269-270` 的 `searchL1Fts`/`searchL1Vector`）签名里没有 session 过滤；persona/scene 是 dataDir 根级文件（`auto-recall.ts:148/162`）。因此「一个 sidecar 靠 `session_key` 服务多账号」会跨账号召回，**违反 AI4ALL「按账号隔离」红线**。已确认方向：在 P1 灰度前对 TDAI 做**多租户改造（路 B，§8.4）**，并补 `/recall` response 丢失的 `prependContext`（§5.3、§8.4）。这两项是 P1 前置，不是可选优化。
@@ -573,7 +573,7 @@ memory:
 
 ### 7.1 近期：双系统并行
 
-AI4ALL PostgreSQL/SQLite 仍是业务真相；TDAI store 是记忆增强缓存。
+AI4ALL PostgreSQL 是业务真相；TDAI 自有 SQLite/TCVDB store 是记忆增强缓存。
 
 | 数据 | 权威系统 |
 |---|---|

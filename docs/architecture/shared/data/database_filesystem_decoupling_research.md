@@ -1,6 +1,8 @@
 # 数据库与文件系统解耦调研
 
-> 状态：技术调研与演进建议。
+> 状态：**历史调研基线**。其中 SQLite 主库现状和 A→E 路线记录的是 2026-06-15 的决策背景；
+> 当前主应用已完成 PostgreSQL 切换，运行时和主测试不再支持 SQLite。当前操作规范以
+> [`AGENTS.md`](../../../../AGENTS.md) 和运维 Runbook 为准。
 > 日期：2026-06-15。
 > 适用范围：AI4ALL 微信个人 AI 陪伴项目，尤其是 `data/ai4all.sqlite3`、`data/user_profiles`、`data/system` 在多服务器部署下的演进。
 
@@ -25,11 +27,11 @@
 阶段 E：按账号 home region 做多中心接入，非必要不做数据库多写
 ```
 
-## 2. 当前事实
+## 2. 当时事实（2026-06-15）
 
 ### 2.1 数据库
 
-当前主库是 SQLite 文件：
+当时主库是 SQLite 文件：
 
 - 配置入口：`app/config.py` 的 `database_path = "data/ai4all.sqlite3"`。
 - 连接入口：`app/db.py:connect()`，每次短连接，已设置 `busy_timeout=5000`、`journal_mode=WAL`、`synchronous=NORMAL`、`foreign_keys=ON`。
@@ -278,25 +280,25 @@ class ContextStorage:
 - 按账号灰度读新后端。
 - 全量读新后端，保留本地文件只读备份一段时间。
 
-### Phase 2：PostgreSQL 影子库
+### Phase 2：PostgreSQL 影子库（历史方案，已完成并收口）
 
 目标：迁数据库，但不一次性切流。
 
-- 引入 `DATABASE_URL`，保留 `DATABASE_PATH`。
+- 引入 `DATABASE_URL`；切换期曾保留 `DATABASE_PATH`，现已删除。
 - 把生产 DDL 从 `init_db()` 迁到版本化 migration。
 - 建 PostgreSQL schema。
 - SQLite -> PostgreSQL 全量导入。
 - 关键写路径双写：messages、sessions、daily_usage、outbound_messages、ledger、moderation、context metadata。
 - 建一致性校验脚本：行数、关键索引、最近 N 条 hash、按 account 抽样。
 
-### Phase 3：PostgreSQL 切主
+### Phase 3：PostgreSQL 切主（已完成）
 
 目标：API/worker 主读写 PG。
 
 - 选少量 debug account 读写 PG。
 - 后台 worker 先切 PG claim，例如 moderation/outbound。
 - 主 turn 链路切 PG。
-- SQLite 保留只读快照和回滚窗口。
+- 切换期曾短暂保留 SQLite 只读快照；当前不再把它作为运行时回滚通道。
 - 删除双写后，备份策略改为 PG 快照 + OSS/NAS 快照。
 
 ### Phase 4：多实例与多中心
@@ -349,4 +351,3 @@ class ContextStorage:
 - 阿里云 NAS NFS 挂载文档：https://www.alibabacloud.com/help/en/nas/user-guide/mount-an-nfs-file-system-on-a-linux-ecs-instance
 - 阿里云 OSS ossfs 文档：https://www.alibabacloud.com/help/en/oss/user-guide/ossfs
 - 阿里云 OSS 条件请求文档：https://www.alibabacloud.com/help/en/oss/user-guide/conditional-requests
-

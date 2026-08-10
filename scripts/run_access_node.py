@@ -1,7 +1,7 @@
 """节点 agent 进程入口(node-only 远程机,如 aliyun2)。
 
 起三件事:exec app(uvicorn,主线程)+ 出站 pull 循环 + 心跳循环(后台线程)。
-**不调 init_db**:节点不碰 SQLite,一律走 HTTP 与中心通信。
+**不调 init_db**：接入节点不直连数据库，一律走 HTTP 与中心通信。
 
 启动前置(.env,见 runbook B Part 2):AI4ALL_ROLE=node、NODE_ID、CENTRAL_URL、
 NODE_BASE_URL、AI4ALL_BRIDGE_SECRET(须与中心一致)。

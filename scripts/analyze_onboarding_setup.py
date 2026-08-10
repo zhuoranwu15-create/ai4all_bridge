@@ -17,7 +17,6 @@ import json
 import os
 from pathlib import Path
 import re
-import sqlite3
 import sys
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -27,6 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.agent_runtime.persistence import profile_storage
     from app.config import settings
+    from app.db import connect
+    from app.db._backend import Connection
     from app.products.zhaoxi.infrastructure.profiles import _safe_account_dir_name
 except ModuleNotFoundError as exc:
     missing = exc.name or str(exc)
@@ -104,14 +105,6 @@ class AccountStats:
         }
 
 
-def _db_path(raw: Optional[str]) -> Path:
-    """Resolve the SQLite database path without creating files."""
-    path = Path(raw or settings.database_path)
-    if not path.is_absolute():
-        path = Path.cwd() / path
-    return path
-
-
 def _profiles_root(raw: Optional[str]) -> Path:
     """Resolve the account context-file root without creating directories."""
     path = Path(raw or settings.user_profiles_dir)
@@ -163,7 +156,7 @@ def _validate_date(value: Optional[str], arg_name: str) -> Optional[str]:
 
 
 def fetch_accounts(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     account_id: Optional[str],
     start_date: Optional[str],
@@ -199,7 +192,7 @@ def fetch_accounts(
 
 
 def fetch_registration_day_message_stats(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     account_id: str,
     registered_date: str,
@@ -246,7 +239,7 @@ def fetch_registration_day_message_stats(
 
 
 def analyze_account(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     account: Dict[str, Any],
     profiles_root: Path,
@@ -413,7 +406,6 @@ def parse_args() -> argparse.Namespace:
             "USER.md, and registration-day messages."
         )
     )
-    parser.add_argument("--db", help="SQLite path; defaults to settings.database_path")
     parser.add_argument("--profiles-dir", help="user_profiles root; defaults to settings.user_profiles_dir")
     parser.add_argument("--account", help="Analyze one account_id")
     parser.add_argument("--start-date", help="Registration date lower bound, YYYY-MM-DD")
@@ -433,14 +425,9 @@ def main() -> int:
     if start_date and end_date and start_date > end_date:
         raise SystemExit("--start-date must be earlier than or equal to --end-date")
 
-    db_path = _db_path(args.db)
     profiles_root = _profiles_root(args.profiles_dir)
-    if not db_path.exists():
-        raise SystemExit(f"database not found: {db_path}")
-
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
+    with connect() as conn:
+        conn.execute("SET TRANSACTION READ ONLY")
         accounts = fetch_accounts(
             conn,
             account_id=args.account,
@@ -453,12 +440,10 @@ def main() -> int:
             analyze_account(conn, account=account, profiles_root=profiles_root)
             for account in accounts
         ]
-    finally:
-        conn.close()
 
     output = {
         "filters": {
-            "db": str(db_path),
+            "database": "postgresql",
             "profiles_dir": str(profiles_root),
             "account": args.account,
             "start_date": start_date,

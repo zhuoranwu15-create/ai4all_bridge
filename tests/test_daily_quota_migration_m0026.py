@@ -9,7 +9,7 @@ fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故�
   - 唯一索引重建后，两号经公共 API 读到同一份共享计数、继续 increment 命中同一行；
   - 可重复执行（幂等）。
 
-走内存/临时 SQLite（fresh_db）。
+使用 fresh_db 提供的隔离 PostgreSQL。
 """
 import app.db as db
 from app.db._core import (
