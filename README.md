@@ -111,8 +111,9 @@ cp .env.example .env
 ## Storage
 
 主应用本地开发与生产均使用 PostgreSQL；本地入口见上面的 `make pg-local-*`。本阶段代码仍按
-`DATABASE_URL` 保留 SQLite 兼容路径，主 pytest 默认档也暂时仍使用内存 SQLite，后续阶段再
-删除。nearline 分析库、PG→SQLite 快照和 TDAI 自身 SQLite 不属于主应用后端，继续保留。
+`DATABASE_URL` 保留 SQLite 兼容路径，后续阶段再删除；主 pytest 已固定使用临时 PostgreSQL，
+并从预迁移模板为每个测试克隆隔离数据库。nearline 分析库、PG→SQLite 快照和 TDAI 自身
+SQLite 不属于主应用后端，继续保留。
 
 迁移期 SQLite 默认路径是：
 

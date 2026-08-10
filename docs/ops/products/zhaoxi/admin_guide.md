@@ -408,7 +408,6 @@ COMPANION_WORLD_L3_BACKGROUND_ENABLED=false
 COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 make test-unit
 make test
-make test-pg
 git diff --check
 ```
 
@@ -628,7 +627,7 @@ COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 - 调度：`/admin/dreaming/scheduler` 的 `last_run.memory_compaction` 和 heartbeat；确认只有 central writer。
 - 主动消息：`companion_world_human_level_proactive_blocked` 命中量与每真人实际触达数，确认无 N×。
 
-扩量前再次运行 `make test-pg`、模板 dry-run、backfill 幂等复跑和第 5 步对账。
+扩量前再次运行 `make test`、模板 dry-run、backfill 幂等复跑和第 5 步对账。
 
 ### 8. 回滚
 

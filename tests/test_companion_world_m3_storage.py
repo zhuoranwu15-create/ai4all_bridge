@@ -319,17 +319,22 @@ def test_user_feed_publish_list_idempotency_and_delete_seam(fresh_db):
 
 
 def test_user_feed_rolls_back_post_when_outbox_insert_fails(fresh_db):
-    if is_postgres():
-        pytest.skip("SQLite trigger 注入测试；PG 原子性由同事务与并发门禁覆盖")
     user_id, _world, _resident = _world_with_resident("19961001007", "回滚用户")
     with db.connect() as conn:
-        conn.executescript(
+        conn.execute(
+            """
+            CREATE FUNCTION fail_user_feed_outbox() RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced outbox failure';
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        )
+        conn.execute(
             """
             CREATE TRIGGER fail_user_feed_outbox
             BEFORE INSERT ON companion_world_outbox
-            BEGIN
-                SELECT RAISE(ABORT, 'forced outbox failure');
-            END;
+            FOR EACH ROW EXECUTE FUNCTION fail_user_feed_outbox()
             """
         )
 

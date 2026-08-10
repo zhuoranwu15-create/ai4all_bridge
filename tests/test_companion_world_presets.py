@@ -1,4 +1,6 @@
 """连续 rank 运营目录导入：dry-run、幂等、不可变、换版退休与当前五人 manifest。"""
+from __future__ import annotations
+
 import copy
 import json
 from pathlib import Path

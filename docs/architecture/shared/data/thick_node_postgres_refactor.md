@@ -180,8 +180,8 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 
 ### 4.7 测试基座（**已落地**）
 
-- `pytest-postgresql` 提供 ephemeral PG：`conftest.py` 加 `AI4ALL_TEST_DB=postgres` 开关，`postgresql_proc`（session 级 PG 进程）+ `postgresql_db`（每测试 create/drop 独立库），经 `db_dsn` fixture 把 `test_settings.database_url` 指向临时库；SQLite 档（默认）完全不引入 pytest-postgresql。
-- **现状：PG 档 762 passed / 4 skipped、SQLite 档 766 passed，两档全绿。** 4 个 skipped 是 SQLite 专有基础设施测试（WAL checkpoint 截断、临时 DB 文件拷贝隔离、迁移用 `PRAGMA table_info` 内省），由 conftest 的 `pytest_collection_modifyitems` 按测试名在 PG 档自动跳过。
+- `pytest-postgresql` 提供唯一主测试后端：`postgresql_proc` 启动 session 级临时 PG，并通过 `load=` 只对模板库应用一次完整迁移；`postgresql_db` 为每个 DB/integration 测试从模板 create/drop 独立库，`db_dsn` 把 `test_settings.database_url` 指向该克隆库。
+- 主测试不再运行重复 SQLite 全量档，也不保留永久跳过的 SQLite 专有主应用测试。历史 SQLite→PG 工具和 nearline/TDAI 自有 SQLite 仍按各自边界保留聚焦测试。
 - 长尾方言修复（运行 PG 档实测暴露 → 收敛到垫片层为主）：
   - `json_extract/json_valid/json_patch` → jsonb 运算（json_patch 用 init 时建的 RFC 7396 递归 PG 函数，保留「null 即删键」语义）；
   - `lastrowid`→`lastval()`、`INSERT OR IGNORE`→`ON CONFLICT DO NOTHING`、`changes()`→`rowcount`、`PRAGMA` 维护函数按后端分支；
@@ -193,9 +193,9 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 
 1. `DATABASE_URL=postgresql://…` 下 standalone 启动、`init_db` 建表成功。
 2. 真实 `data/ai4all.sqlite3` 快照经迁移脚本导入 PG，行数/账本对拍一致（脚本 + 真 PG 测试**已落地**；待对真实快照实跑一次最终确认）。
-3. PG 档全量回归绿（**已达成**：762 passed / 4 SQLite 专有跳过）。
+3. PostgreSQL 全量回归绿；测试模板只迁移一次、逐测试数据库仍完全隔离。
 4. `send_mock_turn.py` 对 PG 库完成一轮收发、计费、记忆写入正确。
-5. SQLite 档仍可运行（开关回落），保证可灰度、可回滚。
+5. 主 pytest 固定使用 PostgreSQL；运行时 SQLite 兼容层在后续清理阶段删除。
 
 ---
 

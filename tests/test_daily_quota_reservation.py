@@ -1,16 +1,12 @@
 """D-09 下半刀：daily 配额原子预占 / 确认 / 回滚 / TTL 的直接单测。
 
 覆盖 accounts.reserve_daily_quota / confirm_daily_quota / rollback_daily_quota /
-reclaim_expired_reservations。功能用例走 fresh_db（SQLite 默认，PG 档亦跑）；并发不超卖
-用例仅在 PG 下算数（§9 硬门禁：SQLite 单写者天然串行，无法复现 advisory 锁语义），SQLite
-下 skip。
+reclaim_expired_reservations。全部功能与并发不超卖用例均运行在临时 PostgreSQL；并发门禁
+验证 advisory lock 下的真实事务语义。
 """
 import concurrent.futures
 
-import pytest
-
 import app.db as db
-from app.db._backend import is_postgres
 from tests.factories import make_resident_account, make_user_account
 
 _DATE = "2026-07-19"
@@ -185,16 +181,13 @@ def test_rollback_does_not_touch_other_users_quota(fresh_db):
 
 
 # ---------------------------------------------------------------------------
-# PG 并发不超卖（§9 硬门禁；SQLite skip）
+# PG 并发不超卖（§9 硬门禁）
 # ---------------------------------------------------------------------------
 def test_concurrent_reserve_no_oversell_pg(fresh_db):
     """跨居民/并发同一真人抢预占：advisory 锁串行，恰好 limit 个成功、不超卖。
 
-    仅 PG 算数：SQLite 单写者天然串行，无法复现 READ COMMITTED 下的 TOCTOU 击穿。
+    PostgreSQL READ COMMITTED 下验证 TOCTOU 不会击穿配额。
     """
-    if not is_postgres():
-        pytest.skip("并发不超卖只在 PG 档算数（§9 硬门禁，SQLite 绿不作数）")
-
     pu, a = _user_with_account("13800020013")
     limit = 3
     workers = 8

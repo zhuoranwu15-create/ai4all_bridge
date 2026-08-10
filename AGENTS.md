@@ -42,9 +42,9 @@ make run
 （aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG：aliyun1 本地 PG，aliyun2
 直连中心 PG。
 
-当前第一阶段仍保留 `DATABASE_URL` 留空时的主应用 SQLite 兼容代码，主 pytest 默认档也仍用
-内存 SQLite，后续阶段删除。nearline SQLite 分析库、PG→SQLite 快照和 TDAI 自身 SQLite
-继续保留，不属于主应用后端清理范围。
+当前仍保留 `DATABASE_URL` 留空时的主应用 SQLite 兼容代码，后续阶段删除；主 pytest 已固定
+使用临时 PostgreSQL。nearline SQLite 分析库、PG→SQLite 快照和 TDAI 自身 SQLite 继续
+保留，不属于主应用后端清理范围。
 
 **「注释掉 `DATABASE_URL` 回落 SQLite」自 2026-07-26 起不再是生产退路**：切 PG 后一个多月的新数据不会同步回 `data/ai4all.sqlite3`，回落等于回到切换当天的快照。生产遇险走 PG 自身的备份/主备，不走后端回落。
 
@@ -67,15 +67,9 @@ make run
 .venv/bin/pytest tests/test_turn_service.py -v
 ```
 
-测试不需要启动服务。默认档使用内存 SQLite。
-
-PG 档（生产真实后端，改动触及持久化/迁移时必跑）：
-
-```bash
-AI4ALL_TEST_DB=postgres .venv/bin/pytest tests/ -q
-```
-
-由 `pytest-postgresql` 起临时实例，只需 PATH 上有 `pg_ctl`/`initdb`（RPM 系装
+测试不需要启动服务。主测试固定使用 PostgreSQL：由 `pytest-postgresql` 起临时实例，session
+内只迁移一次模板库，每个 DB/integration 测试从模板克隆独立数据库。只需 PATH 上有
+`pg_ctl`/`initdb`（RPM 系装
 `postgresql-server` 即可，**不需要** `pg_config` / `*-devel`）；多版本共存时用
 `AI4ALL_TEST_PG_CTL` 指定绝对路径。
 

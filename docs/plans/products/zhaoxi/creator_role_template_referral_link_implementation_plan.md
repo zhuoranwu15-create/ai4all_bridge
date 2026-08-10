@@ -481,16 +481,6 @@ CREATOR_ROLE_TEMPLATES_ENABLED=false
   tests/test_db_campaign.py \
   tests/test_db_campaign_analytics.py -q
 
-AI4ALL_TEST_DB=postgres .venv/bin/pytest \
-  tests/test_creator_role_templates.py \
-  tests/test_creator_role_template_review.py \
-  tests/test_creator_role_template_runtime.py \
-  tests/test_creator_role_template_api.py \
-  tests/test_admin_creator_role_templates.py \
-  tests/test_web_creator_role_template_links.py \
-  tests/test_web_onboarding.py \
-  tests/test_db_campaign.py \
-  tests/test_db_campaign_analytics.py -q
 ```
 
 若最终没有单独的 `test_creator_role_template_api.py`，从命令删除该文件并在交付说明中指出测试已合并到哪个文件，
@@ -502,7 +492,6 @@ AI4ALL_TEST_DB=postgres .venv/bin/pytest \
 
 ```bash
 .venv/bin/pytest tests/ -q
-AI4ALL_TEST_DB=postgres .venv/bin/pytest tests/ -q
 .venv/bin/pytest tests/test_documentation_links.py -q
 ```
 

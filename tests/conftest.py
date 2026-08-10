@@ -5,11 +5,9 @@ from unittest.mock import patch, MagicMock
 
 
 # ---------------------------------------------------------------------------
-# ambient DATABASE_URL guard：本地/生产 .env 可能为「运行时」设了 DATABASE_URL（切 PG）。
-# 测试后端只由 AI4ALL_TEST_DB 决定、且每测试用独立库；因此在此把进程内 ambient
-# database_url 清空，避免它泄漏到未 patch settings 的测试——否则全局 is_postgres()
-# 会被误判（SQLite 连接跑出 PG 分支报错），PG 档下甚至会误连真实 dev/生产库。
-# 两档都生效：SQLite 档回到空串（→ database_path）；PG 档由 test_settings 各自注入临时库 DSN。
+# ambient DATABASE_URL guard：本地/生产 .env 可能指向真实 dev/生产 PG。主 pytest 始终使用
+# pytest-postgresql 创建的临时 PG，因此先清空进程内 ambient URL，再由 test_settings 为每个
+# DB/integration 测试注入克隆库 DSN，杜绝误连外部数据库。
 # ---------------------------------------------------------------------------
 import app.config as _app_config  # noqa: E402
 _app_config.settings.database_url = ""
@@ -18,21 +16,16 @@ _app_config.settings.database_url = ""
 # 装了 CLI 的开发机上 cmd[0] 变成绝对路径致误判失败（CI/干净环境无 .env 故不暴露）。在此固定回默认裸名，
 # 使测试与本机 .env 无关；需要绝对路径的测试自行 monkeypatch 覆盖。
 _app_config.settings.openclaw_cli_path = "openclaw"
-# init_db 的 PG 迁移闸（app.db._core._guard_unattended_pg_migrations）：PG 档用的是
-# pytest-postgresql 每测试临时空库，必须允许自动建表。真实库不会被误连——上面的 ambient
-# guard 已把 database_url 清空，PG 档的 DSN 只来自 test_settings 注入的临时库。
-os.environ.setdefault("AI4ALL_ALLOW_AUTO_MIGRATE", "1")
+# init_db 的 PG 迁移闸：session 启动时只对 pytest-postgresql 模板库应用一次迁移。
+# 真实库不会被误连——上面的 ambient guard 已清空 URL，测试 DSN 只来自临时 PG fixture。
+os.environ["AI4ALL_ALLOW_AUTO_MIGRATE"] = "1"
 
 
 # ---------------------------------------------------------------------------
-# 测试后端开关（1e）：默认 SQLite；AI4ALL_TEST_DB=postgres 时整套跑临时 PG。
-# PG 档由 pytest-postgresql 提供：postgresql_proc 起一个 session 级 PG 进程，
-# postgresql_db 为每个测试 create/drop 一个独立库（与 SQLite 的 tmp_path 每测试隔离对等）。
+# 主测试后端固定为 PostgreSQL。pytest-postgresql 启动一个 session 级临时 PG 进程，先把
+# 完整迁移链加载到模板库；postgresql_db 再为每个测试从模板 create/drop 独立数据库。
+# 这样同时保留逐测试隔离，并避免约 1290 个 DB/integration 用例重复执行整条迁移链。
 # ---------------------------------------------------------------------------
-_PG_MODE = os.environ.get("AI4ALL_TEST_DB", "").strip().lower() in (
-    "pg", "postgres", "postgresql",
-)
-
 def _resolve_pg_ctl() -> "str | None":
     """定位 ``pg_ctl``；返回 None 表示交回 pytest-postgresql 的默认查找逻辑。
 
@@ -48,26 +41,40 @@ def _resolve_pg_ctl() -> "str | None":
     return shutil.which("pg_ctl")
 
 
-if _PG_MODE:  # 仅 PG 档注册，SQLite 档完全不引入 pytest-postgresql
-    from pytest_postgresql import factories as _pg_factories
+def _load_migrated_pg_template(host, port, user, dbname, password):
+    """Apply the complete application migration chain once to the PG template DB."""
+    import psycopg
 
-    postgresql_proc = _pg_factories.postgresql_proc(executable=_resolve_pg_ctl())
-    postgresql_db = _pg_factories.postgresql("postgresql_proc")
+    from app.db import init_db
+    from app.db._backend import close_pg_pool
+
+    probe = psycopg.connect(
+        host=host, port=port, user=user, dbname=dbname, password=password
+    )
+    try:
+        template_dsn = _dsn_from_conn(probe)
+    finally:
+        probe.close()
+
+    original_url = _app_config.settings.database_url
+    close_pg_pool()
+    _app_config.settings.database_url = template_dsn
+    try:
+        init_db()
+    finally:
+        close_pg_pool()
+        _app_config.settings.database_url = original_url
 
 
-# PG 档下应跳过的「SQLite 专有基础设施」测试（按测试函数名匹配）：
-# - 临时 DB 文件拷贝隔离（依赖 sqlite 文件 + shutil.copy）
-# - WAL checkpoint 截断（依赖 -wal 文件）
-# - 迁移用 PRAGMA table_info 内省列（PG 无 PRAGMA）
-_SQLITE_ONLY_TESTS = frozenset({
-    "test_temporary_database_copy_isolates_candidate_writes",
-    "test_temporary_database_copy_isolates_invitation_writes",
-    "test_checkpoint_wal_truncates_after_writes",
-    "test_migration_adds_node_columns_table_index_idempotent",
-})
+from pytest_postgresql import factories as _pg_factories  # noqa: E402
+
+postgresql_proc = _pg_factories.postgresql_proc(
+    executable=_resolve_pg_ctl(), load=[_load_migrated_pg_template]
+)
+postgresql_db = _pg_factories.postgresql("postgresql_proc")
 
 
-# 判定为「db 档」的 fixture：请求其一即视为依赖真实 DB（建库+迁移）。client 不在此列，
+# 判定为「db 档」的 fixture：请求其一即视为依赖真实 DB（模板克隆）。client 不在此列，
 # 因为含 client 的用例统一归为 integration（client 依赖 fresh_db，故须先判 client）。
 _DB_FIXTURES = frozenset({
     "fresh_db", "test_settings", "db_dsn", "postgresql_db", "postgresql_proc",
@@ -75,11 +82,7 @@ _DB_FIXTURES = frozenset({
 
 
 def pytest_collection_modifyitems(config, items):
-    """两件事：
-    1) 按 fixture 依赖自动派生互斥主档 marker（unit/db/integration）——一处覆盖全部用例，
-       新增测试按其请求的 fixture 自动归档，无需逐文件手写 marker。
-    2) PG 档下跳过验证 SQLite 专有基础设施的测试（WAL/文件拷贝/PRAGMA 内省）。
-    """
+    """按 fixture 依赖自动派生互斥的 unit/db/integration marker。"""
     for item in items:
         fx = set(getattr(item, "fixturenames", ()))
         if "client" in fx:
@@ -88,12 +91,6 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker("db")
         else:
             item.add_marker("unit")
-
-    if _PG_MODE:
-        skip = pytest.mark.skip(reason="SQLite 专有基础设施，PG 档不适用")
-        for item in items:
-            if item.originalname in _SQLITE_ONLY_TESTS or item.name in _SQLITE_ONLY_TESTS:
-                item.add_marker(skip)
 
 
 def _dsn_from_conn(conn) -> str:
@@ -128,19 +125,29 @@ def _stub_text_sanitizer_llm(monkeypatch):
 
 @pytest.fixture
 def db_dsn(request):
-    """SQLite 档返回空串（→ 走 database_path）；PG 档返回本测试独立临时库的 DSN。"""
-    if not _PG_MODE:
-        return ""
+    """Return the DSN of this test's isolated clone of the migrated PG template."""
     conn = request.getfixturevalue("postgresql_db")
     return _dsn_from_conn(conn)
+
+
+@pytest.fixture
+def empty_pg_database(postgresql_db):
+    """Reset this test's clone to schema zero for migration-chain boundary tests."""
+    from app.db._backend import close_pg_pool
+
+    close_pg_pool()
+    postgresql_db.execute("DROP SCHEMA public CASCADE")
+    postgresql_db.execute("CREATE SCHEMA public")
+    postgresql_db.commit()
+    yield postgresql_db
+    close_pg_pool()
 
 
 @pytest.fixture
 def test_settings(tmp_path, db_dsn):
     s = MagicMock()
     s.database_path = str(tmp_path / "test.db")
-    # database_url 必须显式赋值：SQLite 档为空串（→ database_path）；PG 档为临时库 DSN。
-    # 否则 MagicMock 自动属性会让 is_postgres() 误判为 True。
+    # database_url 必须显式赋值为临时 PG DSN；否则 MagicMock 自动属性会污染后端选择。
     s.database_url = db_dsn
     s.db_pool_min_size = 1
     s.db_pool_max_size = 8
@@ -508,7 +515,7 @@ def test_settings(tmp_path, db_dsn):
 
 @pytest.fixture
 def fresh_db(test_settings):
-    """Patch settings modules to use a temp SQLite/profile workspace."""
+    """Patch settings modules to use an isolated clone of the migrated PG template."""
     patches = [
         patch("app.db.settings", test_settings),
         patch("app.db.billing.settings", test_settings),
@@ -587,20 +594,11 @@ def fresh_db(test_settings):
     for p in patches:
         p.start()
     try:
-        from app.db import init_db
         from app.db._backend import is_postgres
-        from app.db._core import _db_path
-        # 护栏：确认 db 层确实路由到临时库，绝不落到生产库。
-        # （拆包后 settings 绑定若失效会静默回落生产库；此断言可第一时间拦截。）
-        if is_postgres():
-            # PG 档：临时库由 pytest-postgresql 每测试 create/drop 隔离，DSN 非空即可。
-            assert test_settings.database_url, "PG 档下 database_url 不应为空"
-        else:
-            resolved = str(_db_path())
-            assert resolved == str(test_settings.database_path), (
-                f"测试 DB 未隔离，疑似指向生产库: {resolved}"
-            )
-        init_db()
+        # 护栏：主测试后端必须路由到 pytest-postgresql 克隆库，不能静默回落 SQLite，
+        # 也不能继承 .env 中的外部数据库。schema 已在 session 模板中迁移完成。
+        assert is_postgres(), "主 pytest 必须使用 PostgreSQL 临时库"
+        assert test_settings.database_url, "PG 临时库 database_url 不应为空"
         yield test_settings
     finally:
         from app.db._backend import close_pg_pool

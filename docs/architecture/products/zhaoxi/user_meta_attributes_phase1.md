@@ -523,7 +523,7 @@ POST /admin/ops/user-meta/run-once
 
 ## 9. 测试方案
 
-使用内存 SQLite，不启动服务，LLM 调用通过 mock 替换。
+使用 pytest-postgresql 临时 PG，不启动服务，LLM 调用通过 mock 替换。
 
 ### 9.1 DB 层单测
 

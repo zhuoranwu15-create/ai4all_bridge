@@ -2,28 +2,11 @@
 
 构造一个小型 SQLite 源库（含大额 micros 测 BIGINT、IDENTITY 表测序列重置、
 账本两条测勾稽），迁移到临时 PG，校验：逐表行数对拍、账本勾稽、BIGINT 不溢出、
-IDENTITY 序列对齐到 MAX(id)+1。任一依赖缺失则整文件跳过。
+IDENTITY 序列对齐到 MAX(id)+1。目标端复用主测试基座的临时 PG 克隆库。
 """
 import sqlite3
 
 import pytest
-
-pytest.importorskip("psycopg")
-pytest.importorskip("pytest_postgresql")
-
-# 见 test_db_backend_pg.py 同款说明：pytest-postgresql 已是必装依赖，纯 SQLite 档需靠
-# 本地 PG 工具链(pg_config)是否存在来决定跳过，否则 `make test` 在无本地 PG 的开发机上 ERROR。
-import shutil
-if shutil.which("pg_config") is None:
-    pytest.skip("缺 pg_config（未装本地 PG 开发工具链），跳过真 PG 测试", allow_module_level=True)
-
-try:
-    from pytest_postgresql import factories as _pg_factories
-
-    postgresql_my_proc = _pg_factories.postgresql_proc()
-    postgresql_my = _pg_factories.postgresql("postgresql_my_proc")
-except Exception:  # pragma: no cover
-    pytest.skip("pytest-postgresql 不可用", allow_module_level=True)
 
 from scripts.migrate_sqlite_to_pg import migrate  # noqa: E402
 
@@ -89,11 +72,11 @@ def _build_source_sqlite(path: str) -> None:
 
 
 @pytest.fixture
-def pg_dsn(postgresql_my):
+def pg_dsn(postgresql_db):
     from app.db._backend import close_pg_pool
 
     try:
-        yield _dsn_from_conn(postgresql_my)
+        yield _dsn_from_conn(postgresql_db)
     finally:
         close_pg_pool()
 

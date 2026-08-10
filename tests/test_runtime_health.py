@@ -513,25 +513,6 @@ def test_monitor_openclaw_check_reports_probe_failure(monkeypatch):
     assert error == "openclaw status failed: gateway unreachable"
 
 
-def test_checkpoint_wal_truncates_after_writes(fresh_db):
-    from app.db import (
-        checkpoint_wal,
-        get_database_storage_stats,
-        record_scheduler_heartbeat,
-    )
-
-    # 产生若干 WAL 帧（不足以触发默认 autocheckpoint，-wal 会留存）
-    for i in range(5):
-        record_scheduler_heartbeat(service=f"svc-{i}", status="ok")
-
-    result = checkpoint_wal()
-
-    assert result["mode"] == "TRUNCATE"
-    assert result["busy"] == 0  # 无长读连接，应能完整 checkpoint
-    assert result["wal_bytes_after"] == 0  # TRUNCATE 后 -wal 被截断回 0
-    assert get_database_storage_stats()["journal_mode"].lower() == "wal"
-
-
 def test_monitor_wal_check_self_heals_before_alert(monkeypatch):
     from scripts import monitor_health
 

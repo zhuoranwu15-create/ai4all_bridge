@@ -1,35 +1,13 @@
 """app.db._backend 垫片层的 PostgreSQL 路径测试（真实临时 PG）。
 
-依赖 pytest-postgresql 起一个临时 PG 实例 + psycopg。任一缺失则整文件跳过，
-保证纯 SQLite 环境/CI 不受影响。
+复用主测试基座的 pytest-postgresql 临时 PG 和逐测试模板克隆库。
 
 这里只验证**垫片机制**（连接包装、占位符翻译、HybridRow、事务、IntegrityError），
 不涉及业务 schema —— PG 基线 DDL 重写是后续增量，故用手写的 PG 兼容小表。
 """
 import pytest
 
-pytest.importorskip("psycopg")
-pytest.importorskip("pytest_postgresql")
-
-# pytest-postgresql 在 requirements.txt 内（PG 已是生产后端），故"纯 SQLite 机器没装它"的
-# 旧假设不再成立：仅 importorskip 不足以让纯 SQLite 档跳过本文件。还需本地 PG 工具链——
-# pytest-postgresql 7.x 起临时实例要 pg_config 探测版本。缺则优雅跳过，使 `make test`
-# 在"装了依赖但没本地 PG server"的开发机上也干净（CI/PG 档装了完整 postgresql，照常运行）。
-import shutil
-if shutil.which("pg_config") is None:
-    pytest.skip("缺 pg_config（未装本地 PG 开发工具链），跳过真 PG 测试", allow_module_level=True)
-
 from app.db import _backend  # noqa: E402
-
-postgresql_proc = None
-try:  # 仅在 pytest-postgresql 可用时注册 fixture
-    from pytest_postgresql import factories as _pg_factories
-
-    postgresql_my_proc = _pg_factories.postgresql_proc()
-    postgresql_my = _pg_factories.postgresql("postgresql_my_proc")
-except Exception:  # pragma: no cover
-    pytest.skip("pytest-postgresql 不可用", allow_module_level=True)
-
 
 def _dsn_from_conn(conn) -> str:
     """从 pytest-postgresql 给的 psycopg 连接推出 URL 形式 DSN（供 is_postgres 识别）。"""
@@ -45,11 +23,11 @@ def _dsn_from_conn(conn) -> str:
 
 
 @pytest.fixture
-def pg_settings(postgresql_my, monkeypatch):
+def pg_settings(postgresql_db, monkeypatch):
     """把 _backend 的 settings 指向临时 PG。"""
     import types
 
-    dsn = _dsn_from_conn(postgresql_my)
+    dsn = _dsn_from_conn(postgresql_db)
     fake = types.SimpleNamespace(database_url=dsn, database_path="unused.sqlite3")
     monkeypatch.setattr(_backend, "_settings", lambda: fake)
     try:
@@ -132,7 +110,7 @@ def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_sett
         _ensure_pg_functions(conn)
         conn.execute(
             """
-            CREATE TABLE outbound_messages (
+            CREATE TABLE test_outbound_messages (
                 account_id TEXT NOT NULL,
                 quota_date TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -142,7 +120,7 @@ def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_sett
         )
         conn.execute(
             """
-            INSERT INTO outbound_messages(account_id, quota_date, status, metadata_json)
+            INSERT INTO test_outbound_messages(account_id, quota_date, status, metadata_json)
             VALUES (?, ?, ?, ?)
             """,
             ("acc-pg-react", "2026-06-24", "sent", '{"reactivation": true}'),
@@ -152,7 +130,7 @@ def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_sett
         row = conn.execute(
             """
             SELECT COUNT(*) AS count
-            FROM outbound_messages
+            FROM test_outbound_messages
             WHERE account_id = ?
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')

@@ -10,7 +10,6 @@ from app.db._backend import is_postgres
 from app.db._core import (
     _migration_0043_referral_app_id_expand,
     _migration_0044_referral_app_id_contract,
-    _migration_0046_billing_idempotency_contract,
     _referral_contract_violation_counts,
 )
 
@@ -218,50 +217,6 @@ def test_meaningful_reviews_and_rewards_are_product_isolated(fresh_db):
     )
     assert {row["app_id"] for row in z_rows} == {"zhaoxi"}
     assert {row["app_id"] for row in test_rows} == {"test_product"}
-
-
-def test_m0044_sqlite_rebuild_preserves_relationships_reviews_and_fk(fresh_db):
-    if is_postgres():
-        pytest.skip("SQLite 重建表契约仅在 SQLite 路径验证")
-    registry, _inviter_id, _za, _ta, zcode, tcode = _inviter_with_two_product_codes(
-        "13800037705"
-    )
-    zhaoxi, _test_product = _register_invitee_in_both_products(
-        phone="13800037706",
-        registry=registry,
-        zhaoxi_code=zcode,
-        test_code=tcode,
-    )
-    invitee_id = zhaoxi["platform_user"]["id"]
-    z_account = db.create_ai4all_account_for_user(
-        app_id="zhaoxi",
-        platform_user_id=invitee_id, display_name="重建被邀请人"
-    )["account"]["id"]
-    _create_messages_and_process(
-        account_id=z_account, prefix="rebuild-ref", registry=registry
-    )
-
-    with db.connect() as conn:
-        before_relationships = conn.execute(
-            "SELECT COUNT(*) AS n FROM referral_relationships"
-        ).fetchone()["n"]
-        before_reviews = conn.execute(
-            "SELECT COUNT(*) AS n FROM meaningful_message_reviews"
-        ).fetchone()["n"]
-        _migration_0043_referral_app_id_expand(conn)
-        _migration_0044_referral_app_id_contract(conn)
-        _migration_0044_referral_app_id_contract(conn)
-    with db.connect() as conn:
-        after_relationships = conn.execute(
-            "SELECT COUNT(*) AS n FROM referral_relationships"
-        ).fetchone()["n"]
-        after_reviews = conn.execute(
-            "SELECT COUNT(*) AS n FROM meaningful_message_reviews"
-        ).fetchone()["n"]
-        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    assert after_relationships == before_relationships == 2
-    assert after_reviews == before_reviews == 1
-    assert fk_errors == []
 
 
 def test_m0043_realigns_relationship_and_review_from_authoritative_parents(fresh_db):
@@ -521,54 +476,3 @@ def test_pg_concurrent_referral_message_processing_counts_and_rewards_once(fresh
     assert relationship["status"] == "rewarded"
     assert relationship["reward_ledger_id"] is not None
     assert int(rewards) == 1
-
-
-def test_sqlite_referral_reward_lock_fallback_is_idempotent(fresh_db):
-    if is_postgres():
-        pytest.skip("SQLite 无 advisory lock 降级路径")
-    registry, inviter_id, _za, _ta, zcode, _tcode = _inviter_with_two_product_codes(
-        "13800037717"
-    )
-    invitee = db.register_platform_user_with_referral(
-        phone="13800037718",
-        invite_code=zcode["code"],
-        app_id="zhaoxi",
-        registry=registry,
-    )["platform_user"]
-    account_id = db.create_ai4all_account_for_user(
-        platform_user_id=invitee["id"],
-        display_name="SQLite 被邀请人",
-        app_id="zhaoxi",
-    )["account"]["id"]
-    _create_messages_and_process(
-        account_id=account_id, prefix="sqlite-lock-fallback", registry=registry
-    )
-    with db.connect() as conn:
-        relationship = conn.execute(
-            """
-            SELECT id, reward_ledger_id FROM referral_relationships
-            WHERE invitee_platform_user_id=? AND app_id='zhaoxi'
-            """,
-            (invitee["id"],),
-        ).fetchone()
-    # SQLite 不执行 PG advisory SQL；重复处理和奖励重试仍不得重复入账。
-    db.retry_qualified_referral_rewards_for_user(
-        platform_user_id=inviter_id, app_id="zhaoxi", registry=registry
-    )
-    db.retry_qualified_referral_rewards_for_user(
-        platform_user_id=inviter_id, app_id="zhaoxi", registry=registry
-    )
-    with db.connect() as conn:
-        _migration_0046_billing_idempotency_contract(conn)
-        rewards = conn.execute(
-            """
-            SELECT COUNT(*) AS n FROM entitlement_ledger
-            WHERE platform_user_id=? AND app_id='zhaoxi'
-              AND source_type='referral_reward'
-            """,
-            (inviter_id,),
-        ).fetchone()["n"]
-        fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    assert relationship["reward_ledger_id"] is not None
-    assert int(rewards) == 1
-    assert fk_errors == []

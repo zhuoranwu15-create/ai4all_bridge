@@ -70,7 +70,9 @@ def test_moderation_persistence_requires_matching_product_scope(fresh_db):
     assert get_content_moderation_stats(app_id="mingchan")["total"] == 1
 
 
-def test_m0070_backfills_existing_tasks_and_enforces_required_app_id(test_settings):
+def test_m0070_backfills_existing_tasks_and_enforces_required_app_id(
+    test_settings, empty_pg_database
+):
     from app.db import close_pg_pool, connect, migrate_db_through
 
     with patch("app.db.settings", test_settings):
