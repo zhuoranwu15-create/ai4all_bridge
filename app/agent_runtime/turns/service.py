@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional,
 if TYPE_CHECKING:
     from app.agent_runtime.ports import MemorySink
 
-from app.agent_runtime.turns.contracts import ProductAfterTurnContext, ProductTurnServices
+from app.agent_runtime.turns.contracts import (
+    ProductAfterTurnContext,
+    ProductOnboarding,
+    ProductTurnServices,
+)
 from app.platform.channels import CHANNEL_APP, CHANNEL_WEB, CHANNEL_WEIXIN, ChannelCapability, get_channel_capability
 from app.config import WEB_SEARCH_ENABLED, settings
 from app.db import (
@@ -197,21 +201,21 @@ def _log_turn_timing(
     )
 
 def _ensure_pending_onboarding_question(
-    reply: str, *, product_services: ProductTurnServices
+    reply: str, *, onboarding: ProductOnboarding
 ) -> str:
     cleaned = (reply or "").strip()
     if "称呼你" in cleaned or "叫你" in cleaned or "喊你" in cleaned:
         return cleaned
     if not cleaned:
-        return product_services.onboarding_welcome_text
-    return f"{cleaned}\n\n{product_services.onboarding_welcome_text}"
+        return onboarding.welcome_text
+    return f"{cleaned}\n\n{onboarding.welcome_text}"
 
 
 def _extract_onboarding_info_sync(
-    *, user_text: str, current_state: str, product_services: ProductTurnServices
+    *, user_text: str, current_state: str, onboarding: ProductOnboarding
 ) -> dict:
     return asyncio.run(
-        product_services.extract_onboarding_info(
+        onboarding.extract_info(
             user_text=user_text,
             current_state=current_state,
         )
@@ -819,10 +823,12 @@ def _prepare_turn(
     profile_path = product_setup.profile_path
     debug_trace_enabled = _is_debug_trace_account(account_id)
 
-    onboarding_state = product_services.get_onboarding_state(account_id)
-    # onboarding 由渠道能力开关（微信 True == 历史 channel=="openclaw-weixin"）。
-    onboarding_channel_enabled = cap.onboarding_enabled
-    onboarding_active = onboarding_channel_enabled and product_services.is_onboarding_active(
+    # 产品未提供 onboarding 能力（鸣蝉/Plum）：整条引导链路短路，状态取中性空串。
+    onboarding = product_services.onboarding
+    onboarding_state = onboarding.get_state(account_id) if onboarding is not None else ""
+    # onboarding 需产品有该能力，且渠道能力开着（微信 True == 历史 channel=="openclaw-weixin"）。
+    onboarding_channel_enabled = onboarding is not None and cap.onboarding_enabled
+    onboarding_active = onboarding_channel_enabled and onboarding.is_active(
         onboarding_state
     )
 
@@ -831,8 +837,9 @@ def _prepare_turn(
     # timer at binding time always fails because the user peer isn't known until now.
     welcome_to_user_id = identity.chat_id or sender_id
     if (
+        # onboarding_channel_enabled 为真即蕴含 onboarding is not None，下方取属性安全。
         onboarding_channel_enabled
-        and onboarding_state == product_services.onboarding_pending
+        and onboarding_state == onboarding.pending
         and welcome_to_user_id
     ):
         try:
@@ -841,7 +848,7 @@ def _prepare_turn(
             node_gateway.node_send_text(
                 node_id=resolve_node_for_account(account_id) or (settings.default_node_id or None),
                 to_user_id=welcome_to_user_id,
-                text=product_services.onboarding_welcome_text,
+                text=onboarding.welcome_text,
                 gateway_timeout_ms=settings.openclaw_gateway_call_timeout_ms,
                 account_id=identity.channel_account_id,
                 # 固定幂等键:与 binding-timer welcome 共用,网关去重防并发重复欢迎。
@@ -849,7 +856,7 @@ def _prepare_turn(
                 session_key=openclaw_session_key,
                 channel=identity.channel,
             )
-            product_services.start_onboarding(account_id)
+            onboarding.start(account_id)
             logger.info(
                 "onboarding welcome sent on first inbound message account=%s target=%s sender=%s chat=%s",
                 account_id, welcome_to_user_id, sender_id, identity.chat_id,
@@ -883,7 +890,7 @@ def _prepare_turn(
                     direction="outbound",
                     role="assistant",
                     message_type="text",
-                    content=product_services.onboarding_welcome_text,
+                    content=onboarding.welcome_text,
                     raw=_turn_message_raw(
                         source="onboarding_welcome",
                         identity=identity,
@@ -1293,6 +1300,8 @@ def _resolve_turn_reply(
     profile = setup.profile
     profile_path = setup.profile_path
     debug_trace_enabled = setup.debug_trace_enabled
+    # None = 本产品无引导；下方所有 onboarding 分支都已由 onboarding_active 守卫（恒 False）。
+    onboarding = product_services.onboarding
     onboarding_state = setup.onboarding_state
     onboarding_active = setup.onboarding_active
     llm_provider = setup.llm_provider
@@ -1429,14 +1438,14 @@ def _resolve_turn_reply(
             prompt_started = time.monotonic()
             onboarding_pre_written = {}
             if onboarding_active and onboarding_state in {
-                product_services.onboarding_step1_sent,
-                product_services.onboarding_step2_sent,
-                product_services.onboarding_step3_sent,
+                onboarding.step1_sent,
+                onboarding.step2_sent,
+                onboarding.step3_sent,
             }:
                 onboarding_pre_extracted = _extract_onboarding_info_sync(
                     user_text=text,
                     current_state=onboarding_state,
-                    product_services=product_services,
+                    onboarding=onboarding,
                 )
                 # Writing before prompt build ensures the AI sees what was just collected.
                 _has_onboarding_write = any(
@@ -1444,7 +1453,7 @@ def _resolve_turn_reply(
                     for key in ("user_name", "ai_name", "persona", "persona_custom")
                 )
                 if _has_onboarding_write:
-                    onboarding_pre_written = product_services.apply_onboarding_info(
+                    onboarding_pre_written = onboarding.apply_info(
                         account_id=account_id,
                         extracted=onboarding_pre_extracted,
                         current_state=onboarding_state,
@@ -1528,10 +1537,10 @@ def _resolve_turn_reply(
                         )
                 finally:
                     _record_timing(timings, "reply_generation_ms", generation_started)
-                if onboarding_state == product_services.onboarding_pending:
+                if onboarding_state == onboarding.pending:
                     reply = _ensure_pending_onboarding_question(
                         reply,
-                        product_services=product_services,
+                        onboarding=onboarding,
                     )
             else:
                 def _on_tool_detected(tool_names: List[str]) -> None:
@@ -1952,9 +1961,11 @@ def _finalize_turn(
     # Advance onboarding state synchronously after reply so onboarding completion
     # does not depend on the after-turn background loop.
     if not generation_error and normal_reply_generated and onboarding_active:
+        # onboarding_active 为真即蕴含产品提供了 onboarding 能力。
+        onboarding = product_services.onboarding
         onboarding_advance_started = time.monotonic()
         try:
-            new_state = product_services.advance_onboarding(
+            new_state = onboarding.advance(
                 account_id=account_id,
                 current_state=onboarding_state,
                 extracted=onboarding_pre_extracted,

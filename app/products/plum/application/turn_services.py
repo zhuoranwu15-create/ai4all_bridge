@@ -26,12 +26,8 @@ class PlumTurnServices:
 
     app_id = PLUM_APP_ID
     tool_policy = PLUM_TOOL_POLICY
-    onboarding_pending = "pending"
-    onboarding_step1_sent = "step1_sent"
-    onboarding_step2_sent = "step2_sent"
-    onboarding_step3_sent = "step3_sent"
-    onboarding_complete = "complete"
-    onboarding_welcome_text = ""
+    # Plum 没有聊天内引导流程；None 让 Runtime 整条短路，取代此前那组 raise 桩实现。
+    onboarding = None
 
     def __init__(self, registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY) -> None:
         self.registry = registry
@@ -82,25 +78,6 @@ class PlumTurnServices:
             profile_path=None,
         )
 
-    def is_onboarding_active(self, state: str) -> bool:
-        del state
-        return False
-
-    def get_onboarding_state(self, account_id: str) -> str:
-        del account_id
-        return self.onboarding_complete
-
-    def start_onboarding(self, account_id: str) -> None:
-        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
-
-    async def extract_onboarding_info(self, *, user_text: str, current_state: str) -> dict:
-        raise RuntimeError(f"plum onboarding is not supported: {current_state}")
-
-    def apply_onboarding_info(
-        self, *, account_id: str, extracted: dict, current_state: str
-    ) -> dict:
-        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
-
     def load_prompt_context(
         self,
         *,
@@ -143,16 +120,6 @@ class PlumTurnServices:
             agent_self_state=None,
             onboarding_context="",
         )
-
-    def advance_onboarding(
-        self,
-        *,
-        account_id: str,
-        current_state: str,
-        extracted: Optional[dict],
-        session_turn_count: int,
-    ) -> Optional[str]:
-        raise RuntimeError(f"plum onboarding is not supported: {account_id}")
 
     def after_turn_hooks(self) -> Tuple[Tuple[str, AfterTurnHook], ...]:
         return ()

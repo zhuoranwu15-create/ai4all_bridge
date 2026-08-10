@@ -179,7 +179,7 @@ def test_creator_role_onboarding_completes_after_user_name_and_has_no_quantified
     account_id = "acc-template-onboarding"
     _, snapshot = _seed_creator_role_account(account_id)
 
-    written = ZHAOXI_TURN_SERVICES.apply_onboarding_info(
+    written = ZHAOXI_TURN_SERVICES.onboarding.apply_info(
         account_id=account_id,
         extracted={
             "user_name": "阿辰",
@@ -208,7 +208,7 @@ def test_creator_role_onboarding_completes_after_user_name_and_has_no_quantified
     assert "四个选项含义分别是" not in onboarding_context.onboarding_context
     assert "第一次用这个角色开口说话" not in onboarding_context.onboarding_context
 
-    new_state = ZHAOXI_TURN_SERVICES.advance_onboarding(
+    new_state = ZHAOXI_TURN_SERVICES.onboarding.advance(
         account_id=account_id,
         current_state="step1_sent",
         extracted={"user_name": "阿辰"},
@@ -222,7 +222,7 @@ def test_creator_role_onboarding_completes_after_user_name_and_has_no_quantified
     assert get_account_mission(account_id=account_id) is None
 
     # 即使异常重放到旧 step2，统一 override 仍阻止抽取结果覆盖模板名字和性格。
-    replayed = ZHAOXI_TURN_SERVICES.apply_onboarding_info(
+    replayed = ZHAOXI_TURN_SERVICES.onboarding.apply_info(
         account_id=account_id,
         extracted={
             "user_name": None,
@@ -264,7 +264,7 @@ def test_creator_role_onboarding_completes_after_user_name_and_has_no_quantified
 
 def test_default_and_operator_onboarding_transitions_remain_unchanged(fresh_db):
     create_account("acc-default-onboarding")
-    default_state = ZHAOXI_TURN_SERVICES.advance_onboarding(
+    default_state = ZHAOXI_TURN_SERVICES.onboarding.advance(
         account_id="acc-default-onboarding",
         current_state="step1_sent",
         extracted={"user_name": "小林"},
@@ -281,7 +281,7 @@ def test_default_and_operator_onboarding_transitions_remain_unchanged(fresh_db):
         soul_preset_key="xiaotaiyang",
         ai_name_preset="小满",
     )
-    operator_state = ZHAOXI_TURN_SERVICES.advance_onboarding(
+    operator_state = ZHAOXI_TURN_SERVICES.onboarding.advance(
         account_id="acc-operator-onboarding",
         current_state="step1_sent",
         extracted={"user_name": "小林"},

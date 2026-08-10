@@ -21,12 +21,8 @@ class NeutralProductTurnServices:
         app_id=app_id,
         catalog=SHARED_TOOL_REGISTRY,
     )
-    onboarding_pending = "pending"
-    onboarding_step1_sent = "step1_sent"
-    onboarding_step2_sent = "step2_sent"
-    onboarding_step3_sent = "step3_sent"
-    onboarding_complete = "complete"
-    onboarding_welcome_text = ""
+    # 中性产品没有引导流程：契约上直接用 None 表达，而不是实现一组抛异常的桩方法。
+    onboarding = None
 
     def __init__(self) -> None:
         self.registry = build_test_product_registry()
