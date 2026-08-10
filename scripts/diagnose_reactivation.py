@@ -7,8 +7,8 @@
     .venv/bin/python scripts/diagnose_reactivation.py --account aid_806382741
     .venv/bin/python scripts/diagnose_reactivation.py --json --output /tmp/reactivation.json
 
-脚本固定只读 PostgreSQL。旧的 planning/dispatch dry-run 依赖复制 SQLite 主库，现已禁用；
-需要写安全的生成探测时，应使用隔离的本地 PostgreSQL 数据库。
+脚本默认只读当前 PostgreSQL。planning/dispatch 写探测必须显式传入隔离的
+``--probe-database-url``，不会触碰应用当前数据库。
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.config import settings
     from app.db import (
+        close_pg_pool,
         connect,
         get_account,
         get_proactive_account_state,
@@ -77,6 +78,24 @@ def parse_now(value: Optional[str]) -> datetime:
         except ValueError:
             continue
     raise ValueError("--now must look like '2026-06-05 12:15:00'")
+
+
+def _switch_to_probe_database(url: Optional[str], *, requires_isolation: bool) -> Optional[str]:
+    """Switch this process to an explicitly supplied isolated PostgreSQL URL."""
+
+    if not url:
+        if requires_isolation:
+            raise ValueError("write probes require --probe-database-url pointing to an isolated PostgreSQL database")
+        return None
+    cleaned = str(url).strip()
+    if not cleaned.startswith(("postgresql://", "postgres://")):
+        raise ValueError("--probe-database-url must be a PostgreSQL connection URL")
+    current = str(getattr(settings, "database_url", "") or "").strip()
+    if current and cleaned == current:
+        raise ValueError("probe database must differ from the configured application database")
+    close_pg_pool()
+    settings.database_url = cleaned
+    return current
 
 
 def recent_chat_summary(
@@ -521,12 +540,19 @@ def main() -> None:
         help="即使账号最近 72 小时没有聊天记录，也执行 planning 探测",
     )
     parser.add_argument("--output", help="JSON 结果文件路径；默认写入 /tmp")
+    parser.add_argument(
+        "--probe-database-url",
+        help="隔离 PostgreSQL 数据库 URL；planning/dispatch/bootstrap 写探测必须显式提供",
+    )
     args = parser.parse_args()
-    if args.run_planning or args.dispatch_dry_run or args.bootstrap_state:
-        parser.error(
-            "SQLite-copy dry-run modes were removed; use an isolated local PostgreSQL "
-            "database for planning or dispatch probes"
+    requires_isolation = args.run_planning or args.dispatch_dry_run or args.bootstrap_state
+    try:
+        previous_database_url = _switch_to_probe_database(
+            args.probe_database_url,
+            requires_isolation=requires_isolation,
         )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     now = parse_now(args.now)
     accounts = [{"id": args.account}] if args.account else [
@@ -575,6 +601,10 @@ def main() -> None:
         print(json.dumps({"result_file": result_file, "results": results}, ensure_ascii=False, indent=2))
     else:
         _print_table(results, result_file=result_file)
+
+    if previous_database_url is not None:
+        close_pg_pool()
+        settings.database_url = previous_database_url
 
 
 if __name__ == "__main__":

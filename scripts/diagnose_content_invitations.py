@@ -8,8 +8,8 @@
     .venv/bin/python scripts/diagnose_content_invitations.py --json
 
 输出：每个账号的生成前置检查结果、今日聊天摘要，以及调度层策略评估。
-脚本固定只读 PostgreSQL。旧的 ``--run-generation`` 依赖复制 SQLite 主库，现已禁用；
-生成探测必须显式使用隔离的本地 PostgreSQL 数据库。
+脚本默认只读当前 PostgreSQL。``--run-generation`` 写探测必须显式传入隔离的
+``--probe-database-url``，不会触碰应用当前数据库。
 """
 
 import argparse
@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.config import settings
     from app.db import (
+        close_pg_pool,
         connect,
         get_account,
         get_active_content_invitation,
@@ -59,6 +60,24 @@ except ModuleNotFoundError as exc:
 
 def _fmt(dt: datetime) -> str:
     return dt.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _switch_to_probe_database(url: Optional[str], *, requires_isolation: bool) -> Optional[str]:
+    """Switch this process to an explicitly supplied isolated PostgreSQL URL."""
+
+    if not url:
+        if requires_isolation:
+            raise ValueError("write probes require --probe-database-url pointing to an isolated PostgreSQL database")
+        return None
+    cleaned = str(url).strip()
+    if not cleaned.startswith(("postgresql://", "postgres://")):
+        raise ValueError("--probe-database-url must be a PostgreSQL connection URL")
+    current = str(getattr(settings, "database_url", "") or "").strip()
+    if current and cleaned == current:
+        raise ValueError("probe database must differ from the configured application database")
+    close_pg_pool()
+    settings.database_url = cleaned
+    return current
 
 
 def _compact_invitation(invitation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -568,12 +587,19 @@ def main() -> None:
         "--output",
         help="--run-generation 的 JSON 结果文件路径；默认写入 /tmp",
     )
+    parser.add_argument(
+        "--probe-database-url",
+        help="隔离 PostgreSQL 数据库 URL；generation/bootstrap 写探测必须显式提供",
+    )
     args = parser.parse_args()
-    if args.run_generation or args.bootstrap_state:
-        parser.error(
-            "SQLite-copy generation mode was removed; use an isolated local "
-            "PostgreSQL database for generation probes"
+    requires_isolation = args.run_generation or args.bootstrap_state
+    try:
+        previous_database_url = _switch_to_probe_database(
+            args.probe_database_url,
+            requires_isolation=requires_isolation,
         )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     now = datetime.now()
 
@@ -620,6 +646,10 @@ def main() -> None:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_table(results, result_file=result_file)
+
+    if previous_database_url is not None:
+        close_pg_pool()
+        settings.database_url = previous_database_url
 
 
 if __name__ == "__main__":
