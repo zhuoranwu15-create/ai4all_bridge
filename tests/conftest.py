@@ -604,6 +604,7 @@ def fresh_db(test_settings):
         patch("app.products.mingchan.api.app.settings", test_settings),
         patch("app.products.mingchan.api.human_chat.settings", test_settings),
         patch("app.products.mingchan.api.media.settings", test_settings),
+        patch("app.products.plum.api.media.settings", test_settings),
         patch("app.products.mingchan.api.visits.settings", test_settings),
         patch("app.products.mingchan.api.world.settings", test_settings),
         patch("app.products.mingchan.api.mailbox.settings", test_settings),

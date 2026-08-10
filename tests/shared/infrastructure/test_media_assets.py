@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image
+import pillow_heif
 
 from app.platform.media import assets
 
@@ -38,6 +39,23 @@ def _jpeg_with_gps(size=(8, 6)) -> bytes:
     exif[0x8825] = gps  # GPSInfo
     buffer = BytesIO()
     image.save(buffer, format="JPEG", exif=exif)
+    return buffer.getvalue()
+
+
+def _image_bytes(fmt: str, *, mode: str = "RGB", size=(8, 6)) -> bytes:
+    image = Image.new(mode, size, color=(255, 0, 0, 96) if "A" in mode else "red")
+    buffer = BytesIO()
+    image.save(buffer, format=fmt)
+    return buffer.getvalue()
+
+
+def _heif_with_orientation(size=(10, 4)) -> bytes:
+    image = Image.new("RGB", size, color="white")
+    exif = Image.Exif()
+    exif[0x0112] = 6
+    exif[0x010F] = "TestMake"
+    buffer = BytesIO()
+    pillow_heif.from_pillow(image).save(buffer, exif=exif.tobytes())
     return buffer.getvalue()
 
 
@@ -136,6 +154,43 @@ def test_strip_image_metadata_rejects_oversized_pixel_count(monkeypatch):
     with pytest.raises(assets.MediaTooLargeError) as err:
         assets.strip_image_metadata(_png_bytes(size=(8, 6)))
     assert err.value.code == "media_too_large"
+
+
+def test_normalize_creator_portrait_accepts_opaque_webp_as_jpeg():
+    normalized = assets.normalize_creator_portrait(_image_bytes("WEBP"))
+
+    assert normalized.mime == "image/jpeg"
+    reopened = Image.open(BytesIO(normalized.data))
+    assert reopened.format == "JPEG"
+    assert reopened.size == (8, 6)
+
+
+def test_normalize_creator_portrait_preserves_transparent_webp_as_png():
+    normalized = assets.normalize_creator_portrait(
+        _image_bytes("WEBP", mode="RGBA")
+    )
+
+    assert normalized.mime == "image/png"
+    reopened = Image.open(BytesIO(normalized.data))
+    assert reopened.format == "PNG"
+    assert reopened.mode == "RGBA"
+    assert reopened.getpixel((0, 0))[3] < 255
+
+
+def test_normalize_creator_portrait_decodes_oriented_heif_and_drops_exif():
+    normalized = assets.normalize_creator_portrait(_heif_with_orientation())
+
+    assert normalized.mime == "image/jpeg"
+    assert (normalized.width, normalized.height) == (4, 10)
+    reopened = Image.open(BytesIO(normalized.data))
+    assert not reopened.getexif()
+    assert b"TestMake" not in normalized.data
+
+
+@pytest.mark.parametrize("fmt", ["AVIF", "GIF", "BMP", "TIFF"])
+def test_normalize_creator_portrait_rejects_out_of_scope_formats(fmt):
+    with pytest.raises(assets.MediaKindUnsupportedError):
+        assets.normalize_creator_portrait(_image_bytes(fmt))
 
 
 def test_normalize_voice_trusts_magic_bytes_over_declared_type():
