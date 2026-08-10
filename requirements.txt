@@ -11,6 +11,8 @@ python-multipart==0.0.20
 qrcode[pil]==8.0
 # 原本是 qrcode[pil] 的间接依赖，v1.5 起被媒体上传直接 import（EXIF 剥离重编码），显式化。
 Pillow==12.2.0
+# Plum Create 需要解码 iPhone 常见的 HEIC/HEIF；wheel 自带 libheif，服务端统一转成 JPEG/PNG。
+pillow-heif==1.1.1
 # 大模型 ASR 极速版不接收客户端 M4A；wheel 自带 ffmpeg，避免生产机依赖第三方 RPM 仓库。
 imageio-ffmpeg==0.6.0
 websockets==15.0.1
