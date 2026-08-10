@@ -343,8 +343,8 @@ def _guard_automatic_phase1_contract_migrations(conn: Connection) -> None:
 # 背景：生产机同时是开发机，`.env` 指向生产 PG，而 pydantic 的 env_file 让**任何**在仓库
 # 目录里手跑的 python 进程都读到它。于是自测时顺手跑一条会触发 init_db 的命令，就把尚未
 # 评审的迁移写进了生产库（2026-07-16 / 07-29 / 07-30 三次，皆无害但均属意外）。
-# 该变量只写进 systemd 单元的 ``Environment=``——**绝不能写进 `.env`**，否则同目录的手跑
-# 进程会一起继承，闸门等于不存在。
+# 该变量只写进 systemd 单元的 ``Environment=``，或由本地 ``make pg-local-init`` 仅注入
+# 初始化子进程——**绝不能写进 `.env`**，否则同目录的手跑进程会一起继承，闸门等于不存在。
 AUTO_MIGRATE_ENV = "AI4ALL_ALLOW_AUTO_MIGRATE"
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -367,7 +367,7 @@ def _guard_unattended_pg_migrations(conn: Connection) -> None:
         "unattended PostgreSQL migration blocked: "
         f"current={current}, pending={','.join(str(v) for v in pending)}; "
         f"迁移只应由受控部署应用（systemd 单元已带 {AUTO_MIGRATE_ENV}=1）。"
-        f"本地自测请改用 SQLite（DATABASE_URL=\"\"）或临时库；确需手工迁移生产库时显式加 "
+        "本地开发请运行 make pg-local-init，测试请使用临时 PG；确需手工迁移生产库时显式加 "
         f"{AUTO_MIGRATE_ENV}=1 前缀。"
     )
 

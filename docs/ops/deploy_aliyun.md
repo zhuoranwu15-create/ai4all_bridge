@@ -100,7 +100,7 @@ Environment=AI4ALL_ALLOW_AUTO_MIGRATE=1
 
 确需在部署之外手工迁移生产库时，显式加前缀：
 `AI4ALL_ALLOW_AUTO_MIGRATE=1 .venv/bin/python -c "from app.db import init_db; init_db()"`。
-本机自测请改用 SQLite（`DATABASE_URL="" .venv/bin/pytest …`）或临时库。
+本机开发请使用 `make pg-local-init` 初始化的本地 PG，pytest 使用临时 PG；不要连接生产库自测。
 
 启动：
 

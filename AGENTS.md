@@ -28,21 +28,28 @@ AI4ALL 微信 Bot 是一个微信个人 AI 陪伴项目。每个微信账号都�
 ## 运行
 
 ```bash
-.venv/bin/uvicorn app.main:app --reload --port 8180
+make pg-local-up
+make pg-local-init
+make run
 ```
 
 本地地址：`http://localhost:8180`
 
-### 数据库后端（双后端，按 `DATABASE_URL` 二选一）
+### 数据库后端（主应用迁移到 PostgreSQL）
 
-代码同时支持 SQLite 与 PostgreSQL，由 `.env` 的 `DATABASE_URL` 决定：
+主应用本地开发与生产统一使用 PostgreSQL。本地 PostgreSQL 16 由 `compose.dev.yml` 提供。
+`ai4all_dev` 供朝夕/鸣蝉本地开发共用，`ai4all_plum_dev` 供 Plum 联调隔离数据。生产
+（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG：aliyun1 本地 PG，aliyun2
+直连中心 PG。
 
-- **留空（默认）→ SQLite**：本地开发用 `data/ai4all.sqlite3`，测试用内存 SQLite。本文档下文提到的「标准数据库 `data/ai4all.sqlite3`」均指此本地/测试默认。
-- **非空（`postgresql://…`）→ PostgreSQL**：**生产（aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG，这是线上真实后端**。aliyun1 本地 PG，aliyun2 直连中心 PG。
+当前第一阶段仍保留 `DATABASE_URL` 留空时的主应用 SQLite 兼容代码，主 pytest 默认档也仍用
+内存 SQLite，后续阶段删除。nearline SQLite 分析库、PG→SQLite 快照和 TDAI 自身 SQLite
+继续保留，不属于主应用后端清理范围。
 
 **「注释掉 `DATABASE_URL` 回落 SQLite」自 2026-07-26 起不再是生产退路**：切 PG 后一个多月的新数据不会同步回 `data/ai4all.sqlite3`，回落等于回到切换当天的快照。生产遇险走 PG 自身的备份/主备，不走后端回落。
 
-因此 SQLite 代码路径的存在理由只剩一条：**dev/test 默认档**。它仍必须能跑（每个人本地 `pytest` 走的就是它），但不再承担生产职责。下文 `app/db/*` 等描述同时覆盖两后端。
+主应用 SQLite 从来不是生产退路；当前兼容路径仅服务迁移过程。下文 `app/db/*` 等描述在
+兼容路径删除前仍覆盖两后端。
 
 ## 鉴权
 
@@ -127,7 +134,8 @@ AI4ALL_TEST_DB=postgres .venv/bin/pytest tests/ -q
 
 主动调度器推荐作为独立进程运行，通过 `scripts/run_proactive_scheduler.py` 启动；只有在单 worker 部署时才可设置 `PROACTIVE_SCHEDULER_ENABLED=true`。Dreaming scheduler 可通过 FastAPI in-process 开关或 admin run-once 调试，避免多实例重复扫描。
 
-标准数据库是 `data/ai4all.sqlite3`。忽略仓库根目录和 `data/` 下空的 `ai4all.db` 文件。
+主应用标准数据库是 PostgreSQL。本地 Compose 默认端口 `55432`；nearline/TDAI 的 SQLite
+文件按各自文档管理。忽略仓库根目录和 `data/` 下空的 `ai4all.db` 文件。
 
 所有配置变量都在 `.env.example` 中用行内注释说明。
 

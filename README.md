@@ -31,8 +31,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8180 --reload
+make pg-local-up
+make pg-local-init
+make run
 ```
+
+本地 PostgreSQL 由 Docker Compose 提供，默认监听 `127.0.0.1:55432`。初始化命令会幂等
+创建并迁移 `ai4all_dev`（朝夕/鸣蝉）和 `ai4all_plum_dev`（Plum 联调）两个开发库；迁移
+opt-in 只注入该初始化进程，不写入 `.env`。日常可用 `make pg-local-status` 查看状态，
+`make pg-local-stop` 停止并保留数据。需要清空本地开发数据时必须显式执行
+`make pg-local-reset CONFIRM=1`。
 
 Health check:
 
@@ -42,16 +50,19 @@ curl http://127.0.0.1:8180/health
 
 ### Plum Chat 本地联调
 
-Plum 联调使用独立 SQLite，避免误连 `.env` 中已有的 PostgreSQL；模型密钥仍从 `.env`
-读取。初始化固定测试账号、演示角色和 1000 金币后启动 SSE 流式后端：
+Plum 联调使用同一本地 PostgreSQL 实例中的独立 `ai4all_plum_dev` 数据库，避免污染
+朝夕/鸣蝉开发数据；模型密钥仍从 `.env` 读取。先初始化本地 PG，再初始化固定测试账号、
+演示角色和 1000 金币，随后启动 SSE 流式后端：
 
 ```bash
+make pg-local-up
+make pg-local-init
 make plum-local-init
 make plum-local-run
 ```
 
-默认数据库为 `data/plum_dev.sqlite3`。需要隔离分支或同事数据时，先设置
-`PLUM_DEV_DB=data/plum_dev_<name>.sqlite3`，并让 init/run 两条命令使用同一个值。
+`plum-local-init` 和 `plum-local-run` 都强制注入本地 Plum PG DSN，不读取 `.env` 中可能存在
+的其他 `DATABASE_URL`。初始化脚本只允许 loopback 地址和固定开发库名，拒绝远端或生产库。
 
 Web onboarding:
 
@@ -99,14 +110,18 @@ cp .env.example .env
 
 ## Storage
 
-数据库按 `DATABASE_URL` 二选一：本地开发和测试默认使用 SQLite，生产自 2026-06-21 起使用
-PostgreSQL；两条代码路径都必须保留。SQLite 默认路径是：
+主应用本地开发与生产均使用 PostgreSQL；本地入口见上面的 `make pg-local-*`。本阶段代码仍按
+`DATABASE_URL` 保留 SQLite 兼容路径，主 pytest 默认档也暂时仍使用内存 SQLite，后续阶段再
+删除。nearline 分析库、PG→SQLite 快照和 TDAI 自身 SQLite 不属于主应用后端，继续保留。
+
+迁移期 SQLite 默认路径是：
 
 ```text
 data/ai4all.sqlite3
 ```
 
-PostgreSQL 连接串只写入 `.env` 的 `DATABASE_URL`，不要提交凭证。部署和切换步骤见
+生产 PostgreSQL 连接串只写入部署环境的 `.env`，不要提交真实凭证；仓库模板中的 DSN
+仅用于 loopback Compose。部署和切换步骤见
 [生产运行手册](docs/ops/production_runbook.md)。
 
 Backend 按 AI4ALL 业务账号隔离上下文。当前代码里的 `account_id` 是历史命名，语义上应理解为 `ai4all_account_id`；未绑定 legacy 入站可 fallback 为 OpenClaw `session_key`，Web onboarding 绑定完成后会路由到 Backend 预创建的 `aid_...` 账号（当前生成规则为 `aid_` + 9 位数字）。不要把它等同于 OpenClaw payload 原生 `account_id`。身份与架构边界见 [总体架构 / 框架设计](docs/architecture/overview.md)、[详细技术设计](docs/architecture/system_design.md) 和 [身份模型与微信绑定](docs/architecture/shared/access/identity_model_and_wechat_binding.md)。
