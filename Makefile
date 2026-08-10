@@ -12,6 +12,7 @@ PLUM_DEV_PORT ?= 8180
 
 .PHONY: help test test-unit test-fast test-zhaoxi test-mingchan test-plum \
 	test-plum-fast test-plum-db test-platform test-shared \
+	test-shared-runtime test-shared-infrastructure test-shared-contracts \
 	pg-local-up pg-local-init pg-local-status \
 	pg-local-stop pg-local-reset run plum-local-init plum-local-run
 
@@ -26,6 +27,9 @@ help:
 	@echo "make test-plum-db # Plum 数据库回归"
 	@echo "make test-platform # 跨产品平台能力回归"
 	@echo "make test-shared # 共享运行时/基础设施回归"
+	@echo "make test-shared-runtime # 共享 Runtime 回归"
+	@echo "make test-shared-infrastructure # 共享基础设施回归"
+	@echo "make test-shared-contracts # 跨产品协议/隔离回归"
 	@echo "make pg-local-up     # 启动本地 PostgreSQL 16（端口 55432）"
 	@echo "make pg-local-init   # 幂等创建并迁移主应用/Plum 本地库"
 	@echo "make pg-local-status # 查看本地 PostgreSQL 状态"
@@ -68,6 +72,15 @@ test-platform:
 
 test-shared:
 	$(PYTEST) tests/ -m shared -q
+
+test-shared-runtime:
+	$(PYTEST) tests/shared/runtime/ -q
+
+test-shared-infrastructure:
+	$(PYTEST) tests/shared/infrastructure/ -q
+
+test-shared-contracts:
+	$(PYTEST) tests/shared/contracts/ -q
 
 pg-local-up:
 	LOCAL_PG_PORT=$(LOCAL_PG_PORT) $(COMPOSE) up -d --wait postgres
