@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageOps
+from pillow_heif import register_heif_opener
 
 from app.config import settings
 
@@ -35,8 +36,14 @@ MEDIA_KIND_VOICE = "voice"
 # 不透明 media_ref：沿用 resident_drafts.draft_token 的既有做法，不发明 HMAC 句柄。
 _MEDIA_ID_PREFIX = "mda_"
 
-# D-4 白名单：只有 JPEG / PNG 能落地；HEIC / GIF / WEBP 由客户端转码后再传。
+# 共享聊天媒体保持原白名单；Plum Create 通过专用入口额外接受 WEBP / HEIF，
+# 再统一落成浏览器稳定支持的 JPEG / PNG，避免扩大其他产品已有上传合同。
 _IMAGE_MIME_BY_FORMAT = {"JPEG": "image/jpeg", "PNG": "image/png"}
+_BASE_IMAGE_FORMATS = frozenset(_IMAGE_MIME_BY_FORMAT)
+_CREATOR_PORTRAIT_FORMATS = frozenset({"JPEG", "PNG", "WEBP", "HEIF", "HEIC"})
+
+# 只注册 HEIF/HEIC opener，不注册 AVIF opener；AVIF 明确不在 Create V1 白名单内。
+register_heif_opener()
 
 # 像素上限：8MB 的字节闸门挡不住"低熵超大图"（一张纯渐变 100MP JPEG 可能只有几 MB），
 # 而重编码要按像素分配内存。刻意不做成配置项，避免为一个安全网加开关。
@@ -135,19 +142,25 @@ def _target_mode(image_format: str, source: Image.Image) -> str:
     return "RGBA" if has_alpha or source.mode.endswith("A") else "RGB"
 
 
-def strip_image_metadata(raw: bytes) -> NormalizedImage:
-    """强制重编码图片并剥离全部元数据（D-4）。
+def _has_alpha(source: Image.Image) -> bool:
+    """判断图像是否确实携带透明通道，供 Create 选择无损 PNG 输出。"""
 
-    先按 EXIF Orientation 物理旋转像素，再丢元数据——否则竖拍照片剥完 EXIF 就会躺倒。
-    解码失败（含改后缀伪装）抛 ``MediaDecodeFailedError``，非白名单格式抛
-    ``MediaKindUnsupportedError``，像素数超上限抛 ``MediaTooLargeError``。
-    """
+    return source.mode in {"RGBA", "LA", "PA"} or (
+        source.mode == "P" and "transparency" in source.info
+    )
+
+
+def _normalize_image(
+    raw: bytes, *, allowed_formats: frozenset[str], standardize_output: bool
+) -> NormalizedImage:
+    """按调用方白名单解码、纠正方向、剥离元数据并重编码。"""
+
     if not raw:
         raise MediaDecodeFailedError("empty image payload")
     try:
         with Image.open(BytesIO(raw)) as probe:
             image_format = str(probe.format or "").upper()
-            if image_format not in _IMAGE_MIME_BY_FORMAT:
+            if image_format not in allowed_formats:
                 raise MediaKindUnsupportedError(f"unsupported image format: {image_format or 'unknown'}")
             width, height = probe.size
             if width * height > MAX_IMAGE_PIXELS:
@@ -155,7 +168,10 @@ def strip_image_metadata(raw: bytes) -> NormalizedImage:
             probe.load()  # 触发真实解码：截断文件在这里暴露，而不是落盘之后
             icc_profile = probe.info.get("icc_profile")
             oriented = ImageOps.exif_transpose(probe) or probe
-            target_mode = _target_mode(image_format, oriented)
+            output_format = (
+                "PNG" if _has_alpha(oriented) else "JPEG"
+            ) if standardize_output else image_format
+            target_mode = _target_mode(output_format, oriented)
             normalized = (
                 oriented if oriented.mode == target_mode else oriented.convert(target_mode)
             )
@@ -171,15 +187,42 @@ def strip_image_metadata(raw: bytes) -> NormalizedImage:
 
     buffer = BytesIO()
     save_kwargs = {"icc_profile": icc_profile} if icc_profile else {}
-    if image_format == "JPEG":
+    if output_format == "JPEG":
         clean.save(buffer, format="JPEG", quality=88, progressive=True, optimize=True, **save_kwargs)
     else:
         clean.save(buffer, format="PNG", optimize=True, **save_kwargs)
     return NormalizedImage(
         data=buffer.getvalue(),
-        mime=_IMAGE_MIME_BY_FORMAT[image_format],
+        mime=_IMAGE_MIME_BY_FORMAT[output_format],
         width=clean.width,
         height=clean.height,
+    )
+
+
+def strip_image_metadata(raw: bytes) -> NormalizedImage:
+    """按共享 JPEG/PNG 合同重编码图片并剥离全部元数据（D-4）。
+
+    先按 EXIF Orientation 物理旋转像素，再丢元数据——否则竖拍照片剥完 EXIF 就会躺倒。
+    解码失败（含改后缀伪装）抛 ``MediaDecodeFailedError``，非白名单格式抛
+    ``MediaKindUnsupportedError``，像素数超上限抛 ``MediaTooLargeError``。
+    """
+
+    return _normalize_image(
+        raw, allowed_formats=_BASE_IMAGE_FORMATS, standardize_output=False
+    )
+
+
+def normalize_creator_portrait(raw: bytes) -> NormalizedImage:
+    """标准化 Plum Create 立绘：接受 JPEG/PNG/WebP/HEIC/HEIF，输出 JPEG/PNG。
+
+    不透明图片统一为 JPEG；有透明通道的 PNG/WebP 统一为 PNG。HEIC/HEIF 原始容器不会
+    作为消费者资源落盘，浏览器始终读取标准化结果。
+    """
+
+    return _normalize_image(
+        raw,
+        allowed_formats=_CREATOR_PORTRAIT_FORMATS,
+        standardize_output=True,
     )
 
 
@@ -300,6 +343,7 @@ __all__ = [
     "build_storage_path",
     "delete_media_file",
     "new_media_id",
+    "normalize_creator_portrait",
     "normalize_voice",
     "read_media_file",
     "resolve_media_file",

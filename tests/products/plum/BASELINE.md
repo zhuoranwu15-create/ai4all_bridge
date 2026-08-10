@@ -10,6 +10,7 @@
 | 最小文本 turn 与取消/恢复 | `test_mvp.py` | 已覆盖 |
 | 固定价格 wallet 扣款、幂等、失败退款 | `test_mvp.py`、平台 billing 测试 | 已覆盖 |
 | 流式 turn、取消、过期运行回收 | `test_mvp.py` | 已覆盖 |
+| Create 立绘上传、格式标准化、CSRF 与 owner 隔离 | `test_creator_media.py`、`tests/shared/infrastructure/test_media_assets.py` | 已覆盖 |
 | 本地审核红线仍启用 | `tests/platform/test_moderation_product_policy.py` | 已覆盖 |
 | Plum 不调用阿里云图片/LLM provider | `tests/platform/test_moderation_worker.py` | 已覆盖 |
 | 异步审核复用入队规则快照 | `tests/platform/test_moderation_worker.py` | 已覆盖 |
