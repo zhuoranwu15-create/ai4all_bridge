@@ -134,7 +134,7 @@ def generate_topic_followup_candidate(
     except (TypeError, ValueError):
         context_limit = 100
 
-    # messages.created_at 存北京时间（insert 时 datetime('now','+8 hours')），current 也是
+    # messages.created_at 存北京时间（INSERT 使用 PostgreSQL 北京墙钟），current 也是
     # 北京 naive 时间，直接按北京时间比较，**不做 UTC 转换**（旧 local_to_utc_string 会把
     # 阈值偏移一个时区，导致窗口错位）。
     since_local = _format_decision_time(current - timedelta(hours=max(window_hours, 1)))

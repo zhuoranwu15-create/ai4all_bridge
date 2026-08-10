@@ -67,7 +67,7 @@ def _ensure_product_membership_in_conn(
     cursor = conn.execute(
         """
         INSERT INTO product_memberships(platform_user_id, app_id, status, updated_at)
-        VALUES (?, ?, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, 'active', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(platform_user_id, app_id) DO NOTHING
         """,
         (platform_user_id, registered_app_id),
@@ -188,7 +188,7 @@ def update_product_membership_status(
         conn.execute(
             """
             UPDATE product_memberships
-            SET status=?, updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            SET status=?, updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE platform_user_id=? AND app_id=?
             """,
             (cleaned_status, platform_user_id, registered_app_id),

@@ -29,8 +29,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             notes TEXT,
             onboarding_state TEXT NOT NULL DEFAULT 'pending',
             onboarding_updated_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS platform_users (
@@ -38,8 +38,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             phone TEXT NOT NULL UNIQUE,
             display_name TEXT,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -47,9 +47,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             platform_user_id TEXT NOT NULL,
             plan TEXT NOT NULL DEFAULT 'free',
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_subscriptions_user
@@ -59,12 +58,10 @@ def _migration_0001_baseline(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             account_id TEXT NOT NULL UNIQUE,
             platform_user_id TEXT NOT NULL,
-            balance_shell_micros INTEGER NOT NULL DEFAULT 0,
+            balance_shell_micros BIGINT NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_entitlement_wallets_user
@@ -78,14 +75,11 @@ def _migration_0001_baseline(conn: Connection) -> None:
             entry_type TEXT NOT NULL,
             source_type TEXT NOT NULL,
             source_id TEXT,
-            amount_shell_micros INTEGER NOT NULL,
-            balance_after_shell_micros INTEGER NOT NULL,
+            amount_shell_micros BIGINT NOT NULL,
+            balance_after_shell_micros BIGINT NOT NULL,
             idempotency_key TEXT NOT NULL UNIQUE,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_entitlement_ledger_wallet_created
@@ -101,23 +95,19 @@ def _migration_0001_baseline(conn: Connection) -> None:
             platform_user_id TEXT,
             cost_type TEXT NOT NULL,
             cost_owner TEXT NOT NULL DEFAULT 'user',
-            billable_to_user INTEGER NOT NULL DEFAULT 1,
+            billable_to_user BIGINT NOT NULL DEFAULT 1,
             model TEXT,
-            input_tokens INTEGER,
-            output_tokens INTEGER,
-            billable_tokens INTEGER,
-            model_price_multiplier_micros INTEGER NOT NULL DEFAULT 1000000,
-            computed_shell_micros INTEGER NOT NULL DEFAULT 0,
+            input_tokens BIGINT,
+            output_tokens BIGINT,
+            billable_tokens BIGINT,
+            model_price_multiplier_micros BIGINT NOT NULL DEFAULT 1000000,
+            computed_shell_micros BIGINT NOT NULL DEFAULT 0,
             entitlement_ledger_id TEXT,
             source_type TEXT,
             source_id TEXT,
             idempotency_key TEXT NOT NULL UNIQUE,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(entitlement_ledger_id) REFERENCES entitlement_ledger(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_cost_events_account_created
@@ -130,17 +120,15 @@ def _migration_0001_baseline(conn: Connection) -> None:
         -- 非通用「用户账号」机制。朝夕相伴居民（form-B runtime account）不发 binding，经世界归属解析到
         -- 真人（accounts.resolve_owner_platform_user_id）。详见 docs/archive/deliveries/companion_world/companion_world_account_model_reconciliation.md。
         CREATE TABLE IF NOT EXISTS account_owner_bindings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             platform_user_id TEXT NOT NULL,
             account_id TEXT NOT NULL,
             binding_method TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
             verified_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(platform_user_id, account_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(platform_user_id, account_id)
         );
 
         CREATE INDEX IF NOT EXISTS ix_account_owner_bindings_account
@@ -152,15 +140,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
             code TEXT NOT NULL UNIQUE,
             code_type TEXT NOT NULL DEFAULT 'personal',
             status TEXT NOT NULL DEFAULT 'active',
-            max_uses INTEGER,
-            used_count INTEGER NOT NULL DEFAULT 0,
+            max_uses BIGINT,
+            used_count BIGINT NOT NULL DEFAULT 0,
             expires_at TEXT,
             created_by_admin_user_id TEXT,
             disabled_reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS ux_referral_codes_personal_user
@@ -176,17 +163,13 @@ def _migration_0001_baseline(conn: Connection) -> None:
             invitee_platform_user_id TEXT NOT NULL UNIQUE,
             referral_code_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'registered',
-            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
+            meaningful_message_count BIGINT NOT NULL DEFAULT 0,
             review_status TEXT NOT NULL DEFAULT 'pending',
             reward_ledger_id TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            rewarded_at TEXT,
-            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
-            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            rewarded_at TEXT
         );
 
         CREATE INDEX IF NOT EXISTS ix_referral_relationships_inviter_created
@@ -205,10 +188,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'pending',
             reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS ux_meaningful_reviews_relationship_reviewer
@@ -228,10 +208,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             expires_at TEXT,
             completed_at TEXT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_binding_intents_user_created
@@ -241,7 +219,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON binding_intents(account_id, created_at);
 
         CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             session_key TEXT NOT NULL,
             sender_id TEXT,
@@ -250,35 +228,33 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'active',
             ended_at TEXT,
             close_reason TEXT,
-            turn_count INTEGER NOT NULL DEFAULT 0,
+            turn_count BIGINT NOT NULL DEFAULT 0,
             business_day TEXT,
             session_summary TEXT,
             carryover_summary TEXT,
             summary_model TEXT,
             summary_prompt_version TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(account_id, session_key),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(account_id, session_key)
         );
 
         CREATE TABLE IF NOT EXISTS profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL UNIQUE,
             display_name TEXT,
             style TEXT,
             preferences_json TEXT NOT NULL DEFAULT '{}',
             system_prompt TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
-            session_id INTEGER NOT NULL,
+            session_id BIGINT NOT NULL,
             message_id TEXT,
             reply_to_message_id TEXT,
             direction TEXT NOT NULL,
@@ -286,11 +262,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
             message_type TEXT NOT NULL DEFAULT 'text',
             content TEXT,
             raw_json TEXT,
-            latency_ms INTEGER,
+            latency_ms BIGINT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS ux_messages_account_message
@@ -301,17 +275,16 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON messages(session_id, id);
 
         CREATE TABLE IF NOT EXISTS daily_usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             date TEXT NOT NULL,
-            message_count INTEGER NOT NULL DEFAULT 0,
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(account_id, date),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            message_count BIGINT NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(account_id, date)
         );
 
         CREATE TABLE IF NOT EXISTS channel_bindings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             channel TEXT NOT NULL,
             session_key TEXT NOT NULL,
@@ -319,17 +292,16 @@ def _migration_0001_baseline(conn: Connection) -> None:
             sender_id TEXT,
             chat_id TEXT,
             raw_identity_json TEXT NOT NULL DEFAULT '{}',
-            first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(account_id, channel, session_key),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            first_seen_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            last_seen_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(account_id, channel, session_key)
         );
 
         CREATE INDEX IF NOT EXISTS ix_channel_bindings_account_seen
         ON channel_bindings(account_id, last_seen_at);
 
         CREATE TABLE IF NOT EXISTS outbound_messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             channel TEXT NOT NULL,
             channel_account_id TEXT,
@@ -339,7 +311,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             text TEXT NOT NULL,
             idempotency_key TEXT NOT NULL UNIQUE,
             status TEXT NOT NULL DEFAULT 'pending',
-            attempts INTEGER NOT NULL DEFAULT 0,
+            attempts BIGINT NOT NULL DEFAULT 0,
             error TEXT,
             gateway_message_id TEXT,
             quota_date TEXT NOT NULL,
@@ -349,9 +321,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             scheduled_at TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             sent_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_outbound_messages_account_date
@@ -363,11 +334,11 @@ def _migration_0001_baseline(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS content_moderation_tasks (
             id TEXT PRIMARY KEY,
             account_id TEXT NOT NULL,
-            session_id INTEGER,
+            session_id BIGINT,
             source_type TEXT NOT NULL,
             source_id TEXT NOT NULL,
-            message_db_id INTEGER,
-            outbound_message_id INTEGER,
+            message_db_id BIGINT,
+            outbound_message_id BIGINT,
             direction TEXT NOT NULL,
             content_kind TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'queued',
@@ -378,10 +349,10 @@ def _migration_0001_baseline(conn: Connection) -> None:
             snapshot_text TEXT,
             media_json TEXT NOT NULL DEFAULT '{}',
             sampling_reason TEXT,
-            sample_rate_percent INTEGER,
+            sample_rate_percent BIGINT,
             policy_version TEXT NOT NULL,
             prompt_version TEXT,
-            machine_attempts INTEGER NOT NULL DEFAULT 0,
+            machine_attempts BIGINT NOT NULL DEFAULT 0,
             machine_claimed_at TEXT,
             machine_completed_at TEXT,
             assigned_admin_user_id TEXT,
@@ -390,12 +361,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             last_error TEXT,
             idempotency_key TEXT NOT NULL UNIQUE,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id),
-            FOREIGN KEY(message_db_id) REFERENCES messages(id),
-            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_moderation_tasks_account_created
@@ -411,7 +378,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON content_moderation_tasks(status, risk_level, created_at);
 
         CREATE TABLE IF NOT EXISTS content_moderation_results (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             task_id TEXT NOT NULL,
             account_id TEXT NOT NULL,
             reviewer_type TEXT NOT NULL,
@@ -423,11 +390,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
             matched_terms_json TEXT NOT NULL DEFAULT '[]',
             reason TEXT,
             raw_result_json TEXT NOT NULL DEFAULT '{}',
-            latency_ms INTEGER,
+            latency_ms BIGINT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_moderation_results_task
@@ -437,7 +402,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON content_moderation_results(account_id, created_at);
 
         CREATE TABLE IF NOT EXISTS content_moderation_actions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             task_id TEXT NOT NULL,
             account_id TEXT NOT NULL,
             admin_user_id TEXT,
@@ -446,9 +411,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             next_status TEXT,
             reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_moderation_actions_task_created
@@ -466,9 +429,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'created',
             artifact_path TEXT,
             artifact_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(task_id) REFERENCES content_moderation_tasks(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_moderation_exports_account_created
@@ -477,15 +438,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS moderation_account_risk_state (
             account_id TEXT PRIMARY KEY,
             risk_level TEXT NOT NULL DEFAULT 'normal',
-            risk_score INTEGER NOT NULL DEFAULT 0,
+            risk_score BIGINT NOT NULL DEFAULT 0,
             sample_multiplier REAL NOT NULL DEFAULT 1.0,
             proactive_blocked_until TEXT,
             conversation_blocked_until TEXT,
             last_risk_at TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS reminders (
@@ -498,17 +458,15 @@ def _migration_0001_baseline(conn: Connection) -> None:
             text TEXT NOT NULL,
             due_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
-            attempts INTEGER NOT NULL DEFAULT 0,
-            outbound_message_id INTEGER,
+            attempts BIGINT NOT NULL DEFAULT 0,
+            outbound_message_id BIGINT,
             error TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             claimed_at TEXT,
             sent_at TEXT,
             cancelled_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_reminders_status_due
@@ -520,7 +478,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS proactive_commitments (
             id TEXT PRIMARY KEY,
             account_id TEXT NOT NULL,
-            session_id INTEGER,
+            session_id BIGINT,
             source_message_id TEXT,
             source_reply_message_id TEXT,
             dedupe_key TEXT NOT NULL UNIQUE,
@@ -529,18 +487,15 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'pending',
             confidence REAL,
             reason TEXT,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            outbound_message_id INTEGER,
+            attempts BIGINT NOT NULL DEFAULT 0,
+            outbound_message_id BIGINT,
             error TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             claimed_at TEXT,
             sent_at TEXT,
             cancelled_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id),
-            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_proactive_commitments_status_due
@@ -551,15 +506,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
 
         CREATE TABLE IF NOT EXISTS proactive_account_state (
             account_id TEXT PRIMARY KEY,
-            enabled INTEGER NOT NULL DEFAULT 1,
+            enabled BIGINT NOT NULL DEFAULT 1,
             next_scan_at TEXT,
             last_scan_at TEXT,
             last_proactive_sent_at TEXT,
             cooldown_until TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_proactive_account_state_due
@@ -569,8 +523,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT,
             updated_by TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         -- 账号级主动消息偏好（source of truth）。稀疏存储：未显式设置的
@@ -578,7 +532,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         -- 以此区分"未设置=继承全局"与"用户显式设置"。
         CREATE TABLE IF NOT EXISTS proactive_message_settings (
             account_id TEXT PRIMARY KEY,
-            master_enabled INTEGER NOT NULL DEFAULT 1,
+            master_enabled BIGINT NOT NULL DEFAULT 1,
             timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
             quiet_hours_json TEXT,                              -- NULL = 继承全局 quiet hours
             allowed_windows_json TEXT NOT NULL DEFAULT '[]',    -- 预留，Phase 2
@@ -586,24 +540,21 @@ def _migration_0001_baseline(conn: Connection) -> None:
             category_settings_json TEXT NOT NULL DEFAULT '{}',
             muted_until TEXT,                                   -- NULL = 未临时静默
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         -- 主动消息设置变更审计：每次 tool/admin 修改都记录 before/patch/after。
         CREATE TABLE IF NOT EXISTS proactive_message_setting_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             source TEXT NOT NULL,                              -- tool | admin | system | migration
-            tool_invocation_id INTEGER,
+            tool_invocation_id BIGINT,
             previous_settings_json TEXT,
             patch_json TEXT NOT NULL,
             next_settings_json TEXT NOT NULL,
             reason TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_proactive_message_setting_events_account
@@ -620,17 +571,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
             invited_at TEXT,
             responded_at TEXT,
             expires_at TEXT,
-            outbound_message_id INTEGER,
+            outbound_message_id BIGINT,
             trigger_message_id TEXT,
-            tool_invocation_id INTEGER,
+            tool_invocation_id BIGINT,
             source_task_id TEXT,
             policy_reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
-            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_invitations_status_due
@@ -645,22 +593,21 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'allowed',
             cooldown_until TEXT,
             last_feedback_at TEXT,
-            feedback_count INTEGER NOT NULL DEFAULT 0,
+            feedback_count BIGINT NOT NULL DEFAULT 0,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(account_id, topic),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(account_id, topic)
         );
 
         CREATE INDEX IF NOT EXISTS ix_content_invitation_preferences_cooldown
         ON content_invitation_preferences(account_id, status, cooldown_until);
 
         CREATE TABLE IF NOT EXISTS dreaming_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             source_type TEXT NOT NULL,
-            source_session_id INTEGER,
+            source_session_id BIGINT,
             source_business_day TEXT,
             status TEXT NOT NULL DEFAULT 'queued',
             prompt_version TEXT NOT NULL,
@@ -668,16 +615,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
             input_hash TEXT,
             output_json TEXT NOT NULL DEFAULT '{}',
             error TEXT,
-            token_input INTEGER,
-            token_output INTEGER,
+            token_input BIGINT,
+            token_output BIGINT,
             actor_type TEXT NOT NULL DEFAULT 'system',
             actor_id TEXT,
             started_at TEXT,
             completed_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_dreaming_runs_account_created
@@ -687,11 +632,11 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON dreaming_runs(source_session_id);
 
         CREATE TABLE IF NOT EXISTS dreaming_memory_items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
-            dreaming_run_id INTEGER NOT NULL,
+            dreaming_run_id BIGINT NOT NULL,
             source_type TEXT NOT NULL,
-            source_session_id INTEGER,
+            source_session_id BIGINT,
             source_daily_note_date TEXT,
             operation TEXT NOT NULL DEFAULT 'add',
             target_file TEXT NOT NULL DEFAULT 'MEMORY.md',
@@ -706,11 +651,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             skip_reason TEXT,
             reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            applied_at TEXT,
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(dreaming_run_id) REFERENCES dreaming_runs(id),
-            FOREIGN KEY(source_session_id) REFERENCES sessions(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            applied_at TEXT
         );
 
         CREATE INDEX IF NOT EXISTS ix_dreaming_memory_items_run
@@ -720,9 +662,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON dreaming_memory_items(account_id, apply_status, created_at);
 
         CREATE TABLE IF NOT EXISTS memory_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
-            memory_item_id INTEGER,
+            memory_item_id BIGINT,
             event_type TEXT NOT NULL,
             actor_type TEXT NOT NULL DEFAULT 'system',
             actor_id TEXT,
@@ -730,9 +672,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             after_text TEXT,
             diff_text TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(memory_item_id) REFERENCES dreaming_memory_items(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_memory_events_account_created
@@ -742,16 +682,15 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON memory_events(memory_item_id, created_at);
 
         CREATE TABLE IF NOT EXISTS analytics_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             event_name TEXT NOT NULL,
             from_state TEXT,
             to_state TEXT,
             source TEXT,
             properties_json TEXT NOT NULL DEFAULT '{}',
-            event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            event_time TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_analytics_events_name_time
@@ -761,10 +700,10 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON analytics_events(account_id, event_time);
 
         CREATE TABLE IF NOT EXISTS debug_traces (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             trace_id TEXT NOT NULL UNIQUE,
             account_id TEXT NOT NULL,
-            session_id INTEGER NOT NULL,
+            session_id BIGINT NOT NULL,
             message_id TEXT,
             source TEXT NOT NULL,
             llm_model TEXT,
@@ -772,11 +711,9 @@ def _migration_0001_baseline(conn: Connection) -> None:
             messages_json TEXT NOT NULL DEFAULT '[]',
             reply TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            latency_ms INTEGER,
+            latency_ms BIGINT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_debug_traces_account_created
@@ -786,22 +723,20 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON debug_traces(session_id, created_at);
 
         CREATE TABLE IF NOT EXISTS tool_invocations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
-            session_id INTEGER,
+            session_id BIGINT,
             message_id TEXT,
             tool_call_id TEXT,
             tool_name TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'running',
             args_json TEXT NOT NULL DEFAULT '{}',
             result_json TEXT NOT NULL DEFAULT '{}',
-            latency_ms INTEGER,
+            latency_ms BIGINT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             finished_at TEXT,
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(session_id) REFERENCES sessions(id)
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_tool_invocations_account_created
@@ -811,23 +746,21 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON tool_invocations(tool_name, status, created_at);
 
         CREATE TABLE IF NOT EXISTS search_provider_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tool_invocation_id INTEGER,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            tool_invocation_id BIGINT,
             task_id TEXT,
             account_id TEXT NOT NULL,
             provider TEXT NOT NULL,
-            attempt INTEGER NOT NULL DEFAULT 1,
+            attempt BIGINT NOT NULL DEFAULT 1,
             status TEXT NOT NULL DEFAULT 'running',
             request_json TEXT NOT NULL DEFAULT '{}',
             response_json TEXT NOT NULL DEFAULT '{}',
-            started_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            started_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             finished_at TEXT,
-            latency_ms INTEGER,
+            latency_ms BIGINT,
             error TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_search_provider_runs_account_created
@@ -842,26 +775,26 @@ def _migration_0001_baseline(conn: Connection) -> None:
             display_name TEXT,
             role TEXT NOT NULL DEFAULT 'staff',
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_admin_users_role_status
         ON admin_users(role, status);
 
         CREATE TABLE IF NOT EXISTS admin_access_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             admin_user_id TEXT,
             action TEXT NOT NULL,
             resource_type TEXT NOT NULL,
             resource_id TEXT,
             account_id TEXT,
-            plaintext INTEGER NOT NULL DEFAULT 0,
-            grant_id INTEGER,
+            plaintext BIGINT NOT NULL DEFAULT 0,
+            grant_id BIGINT,
             reason TEXT,
             request_path TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_admin_access_events_account_created
@@ -871,7 +804,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
         ON admin_access_events(plaintext, created_at);
 
         CREATE TABLE IF NOT EXISTS admin_plaintext_grants (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             requester_admin_user_id TEXT NOT NULL,
             approver_admin_user_id TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
@@ -883,8 +816,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             approved_at TEXT,
             expires_at TEXT,
             revoked_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_admin_plaintext_grants_requester_status
@@ -897,13 +830,13 @@ def _migration_0001_baseline(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             phone TEXT NOT NULL,
             code TEXT NOT NULL,
-            verify_attempts INTEGER NOT NULL DEFAULT 0,
+            verify_attempts BIGINT NOT NULL DEFAULT 0,
             verified_at TEXT,
             verified_token TEXT,
             token_expires_at TEXT,
             token_consumed_at TEXT,
             expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_phone_verifications_phone_created
@@ -917,8 +850,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             last_error_at TEXT,
             last_error TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS faq_messages (
@@ -930,13 +863,12 @@ def _migration_0001_baseline(conn: Connection) -> None:
             moderation_status TEXT NOT NULL DEFAULT 'pending',
             moderation_reason TEXT,
             moderation_categories_json TEXT NOT NULL DEFAULT '[]',
-            like_count INTEGER NOT NULL DEFAULT 0,
-            reply_count INTEGER NOT NULL DEFAULT 0,
+            like_count BIGINT NOT NULL DEFAULT 0,
+            reply_count BIGINT NOT NULL DEFAULT 0,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             published_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_faq_messages_parent_status_created
@@ -949,9 +881,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             message_id TEXT NOT NULL,
             voter_key TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(message_id, voter_key),
-            FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(message_id, voter_key)
         );
 
         CREATE INDEX IF NOT EXISTS ix_faq_message_likes_message
@@ -1003,11 +934,11 @@ def _migration_0001_baseline(conn: Connection) -> None:
             base_url TEXT,
             egress_ip TEXT,
             last_heartbeat_at TEXT,
-            session_count INTEGER NOT NULL DEFAULT 0,
-            max_sessions INTEGER,
+            session_count BIGINT NOT NULL DEFAULT 0,
+            max_sessions BIGINT,
             status TEXT NOT NULL DEFAULT 'online',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1031,17 +962,14 @@ def _migration_0001_baseline(conn: Connection) -> None:
             invited_at TEXT,
             responded_at TEXT,
             expires_at TEXT,
-            outbound_message_id INTEGER,
+            outbound_message_id BIGINT,
             trigger_message_id TEXT,
-            tool_invocation_id INTEGER,
+            tool_invocation_id BIGINT,
             source_task_id TEXT,
             policy_reason TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(outbound_message_id) REFERENCES outbound_messages(id),
-            FOREIGN KEY(tool_invocation_id) REFERENCES tool_invocations(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1065,12 +993,11 @@ def _migration_0001_baseline(conn: Connection) -> None:
             status TEXT NOT NULL DEFAULT 'allowed',
             cooldown_until TEXT,
             last_feedback_at TEXT,
-            feedback_count INTEGER NOT NULL DEFAULT 0,
+            feedback_count BIGINT NOT NULL DEFAULT 0,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(account_id, topic),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(account_id, topic)
         )
         """
     )
@@ -1115,8 +1042,7 @@ def _migration_0001_baseline(conn: Connection) -> None:
             platform_user_id TEXT NOT NULL,
             token TEXT NOT NULL UNIQUE,
             expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1136,8 +1062,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             last_error_at TEXT,
             last_error TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1152,13 +1078,12 @@ def _migration_0001_baseline(conn: Connection) -> None:
             moderation_status TEXT NOT NULL DEFAULT 'pending',
             moderation_reason TEXT,
             moderation_categories_json TEXT NOT NULL DEFAULT '[]',
-            like_count INTEGER NOT NULL DEFAULT 0,
-            reply_count INTEGER NOT NULL DEFAULT 0,
+            like_count BIGINT NOT NULL DEFAULT 0,
+            reply_count BIGINT NOT NULL DEFAULT 0,
             metadata_json TEXT NOT NULL DEFAULT '{}',
             published_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(parent_id) REFERENCES faq_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1180,9 +1105,8 @@ def _migration_0001_baseline(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             message_id TEXT NOT NULL,
             voter_key TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(message_id, voter_key),
-            FOREIGN KEY(message_id) REFERENCES faq_messages(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(message_id, voter_key)
         )
         """
     )
@@ -1202,8 +1126,8 @@ def _migration_0002_llm_runtime_config(conn: Connection) -> None:
             key TEXT PRIMARY KEY,
             value TEXT,
             updated_by TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         )
         """
     )
@@ -1216,7 +1140,7 @@ def _migration_0003_user_meta(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS account_user_meta (
             account_id TEXT PRIMARY KEY,
             registered_at TEXT NOT NULL,
-            message_intensity_level INTEGER NOT NULL DEFAULT 0,
+            message_intensity_level BIGINT NOT NULL DEFAULT 0,
             companion_primary_type TEXT,
             companion_secondary_types TEXT NOT NULL DEFAULT '[]',
             companion_type_confidence REAL,
@@ -1224,19 +1148,18 @@ def _migration_0003_user_meta(conn: Connection) -> None:
             companion_type_source TEXT NOT NULL DEFAULT 'auto',
             companion_type_expires_at TEXT,
             companion_type_reasoning TEXT,
-            safety_risk_trigger_count_30d INTEGER NOT NULL DEFAULT 0,
+            safety_risk_trigger_count_30d BIGINT NOT NULL DEFAULT 0,
             last_evaluated_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS account_user_meta_daily (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             snapshot_date TEXT NOT NULL,
             registered_at TEXT NOT NULL,
-            message_intensity_level INTEGER NOT NULL DEFAULT 0,
+            message_intensity_level BIGINT NOT NULL DEFAULT 0,
             companion_primary_type TEXT,
             companion_secondary_types TEXT NOT NULL DEFAULT '[]',
             companion_type_confidence REAL,
@@ -1244,11 +1167,10 @@ def _migration_0003_user_meta(conn: Connection) -> None:
             companion_type_source TEXT NOT NULL DEFAULT 'auto',
             companion_type_expires_at TEXT,
             companion_type_reasoning TEXT,
-            safety_risk_trigger_count_30d INTEGER NOT NULL DEFAULT 0,
+            safety_risk_trigger_count_30d BIGINT NOT NULL DEFAULT 0,
             last_evaluated_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(account_id, snapshot_date),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(account_id, snapshot_date)
         );
 
         CREATE INDEX IF NOT EXISTS ix_account_user_meta_daily_account_date
@@ -1272,9 +1194,9 @@ def _migration_0004_account_profile_files(conn: Connection) -> None:
             account_id TEXT NOT NULL,
             filename TEXT NOT NULL,
             content TEXT NOT NULL DEFAULT '',
-            version INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            version BIGINT NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             PRIMARY KEY (account_id, filename)
         );
         """
@@ -1291,7 +1213,7 @@ def _migration_0005_rpm_hits(conn: Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS rpm_hits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             hit_at DOUBLE PRECISION NOT NULL
         );
@@ -1380,7 +1302,7 @@ def _migration_0007_merge_reactivation_settings_keys(conn: Connection) -> None:
         new_freq, freq_changed = _apply_rename(row["frequency_json"], freq_rename)
         if not (cat_changed or freq_changed):
             continue
-        # 一条 UPDATE 写两列；未变更的列写回原值（同值回写在 SQLite/PG 均为 no-op）。
+        # 一条 UPDATE 写两列；未变更的列写回原值。
         conn.execute(
             "UPDATE proactive_message_settings "
             "SET category_settings_json = ?, frequency_json = ? WHERE account_id = ?",
@@ -1412,7 +1334,7 @@ def _migration_0009_messages_account_id_index(conn: Connection) -> None:
     list_recent_messages_for_account 走 `WHERE account_id=? ORDER BY id DESC LIMIT N`，
     既有索引 ux_messages_account_message(account_id, message_id) 因 message_id 非有序无法服务
     该 ORDER BY id，会退化成"扫该账号全部消息再排序"。本索引让其走有序覆盖、O(LIMIT) 取回。
-    纯增益、幂等，SQLite/PG 双后端通用。
+    纯增益、幂等。
     """
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_messages_account_id ON messages(account_id, id)"
@@ -1442,12 +1364,12 @@ def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
 
     UNIQUE(kind, generated_date, dedupe_key) 天然实现"当日同主题只入一次 + 跨天历史去重依据"；
     expires_at 存北京 naive 时间字符串，读活跃池时按 expires_at > now 过滤（被动 TTL，不主动清表）。
-    strftime 默认值 / AUTOINCREMENT / INSERT OR IGNORE 由 _backend 方言翻译层适配 PG，双后端通用。
+    DDL 与幂等写入均直接使用 PostgreSQL 原生语法。
     """
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS proactive_global_candidates (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             kind TEXT NOT NULL,
             topic TEXT,
             text TEXT NOT NULL,
@@ -1455,7 +1377,7 @@ def _migration_0011_proactive_global_candidates(conn: Connection) -> None:
             dedupe_key TEXT NOT NULL,
             expires_at TEXT NOT NULL,
             metadata_json TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_global_candidates_kind_date_key
             ON proactive_global_candidates(kind, generated_date, dedupe_key);
@@ -1483,21 +1405,19 @@ def _migration_0012_agent_mission(conn: Connection) -> None:
             account_id TEXT PRIMARY KEY,
             mission_id TEXT NOT NULL,
             assigned_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS mission_moments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             account_id TEXT NOT NULL,
             mission_id TEXT NOT NULL,
             content TEXT NOT NULL,
             session_id TEXT,
             message_id TEXT,
             recorded_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE INDEX IF NOT EXISTS ix_mission_moments_account
@@ -1526,10 +1446,10 @@ def _migration_0013_campaign_codes(conn: Connection) -> None:
             mission_id TEXT,
             onboarding_script_variant TEXT,
             soul_preset_key TEXT,
-            used_count INTEGER NOT NULL DEFAULT 0,
+            used_count BIGINT NOT NULL DEFAULT 0,
             created_by_admin_user_id TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_campaign_codes_status ON campaign_codes(status);
 
@@ -1540,8 +1460,7 @@ def _migration_0013_campaign_codes(conn: Connection) -> None:
             onboarding_script_variant TEXT,
             soul_preset_key TEXT,
             attributed_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_account_campaign_attribution_code ON account_campaign_attribution(campaign_code);
         """
@@ -1554,7 +1473,7 @@ def _migration_0019_campaign_ai_name_preset(conn: Connection) -> None:
     campaign_codes（可编辑配置）与 account_campaign_attribution（注册快照）各加一列：
     活码设定该值时，建号即把 AI 名字写入 IDENTITY.md，onboarding 不再问用户"想怎么称呼 AI"
     （见 campaign_codes_technical_design.md §4.4）。与 soul_preset_key 并列的第四个策略旋钮，
-    双后端通用（SQLite/PG 均支持 ADD COLUMN）。
+    仅追加可空列，支持安全重放。
 
     编号说明：14–18 曾被未合并实验分支预留，现明确保留为空号/废弃，不再回填。
     迁移框架按 `version > MAX(已应用)` 判定，版本号不要求连续；本迁移固定为 19，
@@ -1572,20 +1491,20 @@ def _migration_0020_campaign_visits(conn: Connection) -> None:
     刻意 campaign-scoped、无 account_id——曝光发生在注册建号之前，此时没有账号；表内不含
     任何用户正文/PII，故不违反账号隔离不变量（该不变量约束的是账号级用户数据）。
     S1–S5 漏斗仍以 account_campaign_attribution 按 account_id 归组，与本表不 join。
-    双后端通用 DDL（AUTOINCREMENT/TEXT/默认值 SQLite+PG 均支持）。
+    使用 PostgreSQL IDENTITY 自增主键与北京时间文本默认值。
     """
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS campaign_visits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
             campaign_code TEXT NOT NULL,
             visitor_token TEXT,
             page TEXT,
             referrer TEXT,
             user_agent TEXT,
             visit_date TEXT NOT NULL,
-            event_time TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            event_time TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_campaign_visits_code_date ON campaign_visits(campaign_code, visit_date);
         """
@@ -1616,17 +1535,16 @@ def _migration_0021_dynamic_reminders(conn: Connection) -> None:
             account_id TEXT NOT NULL,
             scheduled_for TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
-            attempts INTEGER NOT NULL DEFAULT 0,
+            attempts BIGINT NOT NULL DEFAULT 0,
             generated_text TEXT,
-            outbound_message_id INTEGER,
-            search_ok INTEGER NOT NULL DEFAULT 0,
+            outbound_message_id BIGINT,
+            search_ok BIGINT NOT NULL DEFAULT 0,
             search_trace_json TEXT,
             error TEXT,
             metadata_json TEXT,
             started_at TEXT,
             finished_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_reminder_content_runs_reminder_sched
             ON reminder_content_runs(reminder_id, scheduled_for);
@@ -1647,12 +1565,12 @@ def _migration_0022_account_app_id(conn: Connection) -> None:
     account_owner_bindings 是安全的(创建时写入、永不漂移),使"每 (platform_user, app) 一个
     active 账号"的收敛不变量能用单条部分唯一索引(m0023)表达。
 
-    双后端通用:ADD COLUMN ... NOT NULL DEFAULT 会自动把存量行回填为 'zhaoxi'(SQLite/PG 均支持)。
+    ADD COLUMN ... NOT NULL DEFAULT 会自动把存量行回填为 'zhaoxi'。
     owner_bindings.app_id 再用相关子查询从 accounts 精确对齐(当前均为 zhaoxi,为混合 App 未来预留正确性)。
     """
     _ensure_column(conn, "accounts", "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
     _ensure_column(conn, "account_owner_bindings", "app_id", "TEXT NOT NULL DEFAULT 'zhaoxi'")
-    # 用账号真实 app_id 对齐 owner_binding 冗余列(相关子查询,SQLite/PG 通用)。
+    # 用账号真实 app_id 对齐 owner_binding 冗余列。
     conn.execute(
         """
         UPDATE account_owner_bindings
@@ -1669,8 +1587,8 @@ def _migration_0022_account_app_id(conn: Connection) -> None:
 def _migration_0023_owner_binding_active_unique(conn: Connection) -> None:
     """A 收敛的 DB 层唯一保证:每个 (platform_user, app) 最多一个 active owner_binding。
 
-    见 §9.3 A2。部分唯一索引仅约束 status='active' 行,归档/停用行不占名额。SQLite/PG 均支持
-    带 WHERE 的部分索引(范式同 ux_messages_account_message)。当前单 App 下 app_id 恒为 'zhaoxi',
+    见 §9.3 A2。部分唯一索引仅约束 status='active' 行,归档/停用行不占名额。当前单 App 下
+    app_id 恒为 'zhaoxi',
     (platform_user_id, app_id) 索引行为等价于 (platform_user_id),但形态已是多 App 终态。
     生产 S1 审计已确认无重复(0 多账号 user),建索引不会因存量冲突失败。
     """
@@ -1701,12 +1619,12 @@ def _migration_0025_wallet_unique_platform_user(conn: Connection) -> None:
     上线前，把 entitlement_wallets 的「一 account 一钱包」上迁为「一真人一钱包、全部居民共用
     一份余额」。本迁移刻意**保留** UNIQUE(account_id)：billing 改按 platform_user
     get-or-create 后永不会为同一真人插入第二个钱包行，account_id 事实上仍唯一、保留无害，据此
-    完全避开 SQLite 表重建 / PG DROP CONSTRAINT 的高风险后端分叉（决策见 §D-14 item3）。只做：
+    完全避开重建大表或删除旧约束，只做：
 
       1) 合并存量多钱包老用户（建号允许每真人 ≤10 account，历史上可能已有多钱包）：
          选主钱包 = 该真人「最早 active binding 对应 account」的 active 钱包；余额求和入主钱包、
          ledger/cost_events.wallet_id 归并到主、其余钱包置 status='merged'（保留审计，不删行避免 FK 冲突）。
-      2) 加局部唯一索引 ux_entitlement_wallets_user_active（合并后可满足；SQLite/PG 同一 DDL，无需分支）。
+      2) 加局部唯一索引 ux_entitlement_wallets_user_active（合并后可满足）。
 
     可重复执行（幂等）：再跑时每真人仅 1 active 钱包，不再进入合并分支。生产执行前须先跑
     scripts/precheck_wallet_migration.py（四条阻断全过）；本迁移假定 primary 有定义、无歧义/
@@ -1802,14 +1720,14 @@ def _migration_0026_daily_usage_platform_user(conn: Connection) -> None:
     见 ADR docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-09。多居民（朝夕相伴）
     上线前，把 daily_usage 的「一 account 一套额度」上迁为「一真人一套、全部居民共享」。同 D-14
     钱包上迁刻意**保留** UNIQUE(account_id,date)：daily 三函数改按 platform_user get-or-create
-    后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开 SQLite 表重建 /
-    PG DROP CONSTRAINT 的后端分叉（决策见 §D-09 落地说明）。只做：
+    后每 (真人,date) 至多一行、account_id = 当日首个号，旧唯一仍满足，据此完全避开重建表或
+    DROP CONSTRAINT（决策见 §D-09 落地说明）。只做：
 
       1) 新增 platform_user_id 列（无 FK，容 fallback 值）+ 从最早 active binding 回填。
       2) 合并同 (真人,date) 多行（历史多号可能各有当日行）：message_count 求和入主行（MIN(id)）、
          删其余行（daily_usage 无被引用，直接删，无需 status 保留）。须在建唯一索引前。
-      3) 加唯一索引 ux_daily_usage_user_date(platform_user_id, date)（合并后可满足；SQLite/PG
-         同一 DDL，NULL 行互不相等不冲突，无需分支）。
+      3) 加唯一索引 ux_daily_usage_user_date(platform_user_id, date)（合并后可满足；
+         NULL 行互不相等不冲突）。
 
     可重复执行（幂等）：再跑时每 (真人,date) 仅 1 行、回填只补 NULL、索引 IF NOT EXISTS。daily/rpm
     是瞬态计数（无历史余额可损坏），故无需 precheck（owner 解析不变式已由 D-14 precheck 作同一 M1
@@ -1899,7 +1817,7 @@ def _migration_0027_daily_quota_reservations(conn: Connection) -> None:
             platform_user_id TEXT NOT NULL,
             date TEXT NOT NULL,
             account_id TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             expires_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_qres_pu_date ON daily_quota_reservations(platform_user_id, date);
@@ -1945,7 +1863,7 @@ def _migration_0031_platform_user_quota_overrides(conn: Connection) -> None:
         if daily is not None or rpm is not None:
             conn.execute(
                 "UPDATE platform_users SET daily_limit = ?, rpm_limit = ?, "
-                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) "
+                "updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') "
                 "WHERE id = ?",
                 (daily, rpm, platform_user_id),
             )
@@ -1980,13 +1898,12 @@ def _migration_0037_product_memberships(conn: Connection) -> None:
             app_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active'
                 CHECK(status IN ('active', 'disabled')),
-            daily_limit INTEGER,
-            rpm_limit INTEGER,
+            daily_limit BIGINT,
+            rpm_limit BIGINT,
             settings_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            UNIQUE(platform_user_id, app_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(platform_user_id, app_id)
         );
         CREATE INDEX IF NOT EXISTS ix_product_memberships_app_status
         ON product_memberships(app_id, status);
@@ -1998,7 +1915,7 @@ def _migration_0037_product_memberships(conn: Connection) -> None:
             platform_user_id, app_id, status, daily_limit, rpm_limit, updated_at
         )
         SELECT pu.id, 'zhaoxi', 'active', pu.daily_limit, pu.rpm_limit,
-               strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+               to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         FROM platform_users pu
         WHERE NOT EXISTS (
             SELECT 1 FROM product_memberships pm
@@ -2111,7 +2028,7 @@ def _migration_0039_billing_app_id_expand(conn: Connection) -> None:
                 """
                 UPDATE subscriptions
                 SET status = 'superseded',
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'active'
                 """,
                 (stale["id"],),
@@ -2546,82 +2463,6 @@ def _referral_contract_violation_counts(conn: Connection) -> Dict[str, int]:
     return counts
 
 
-def _rebuild_referral_relationships_sqlite(conn: Connection) -> None:
-    """SQLite 同步重建 relationship 及其 review 子表，移除 invitee 全局 UNIQUE。"""
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS referral_relationships_mp04;
-        DROP TABLE IF EXISTS meaningful_message_reviews_mp04_backup;
-        CREATE TABLE meaningful_message_reviews_mp04_backup AS
-        SELECT id, referral_relationship_id, invitee_platform_user_id,
-               account_id, message_ids_json, reviewer_type, status, reason,
-               metadata_json, created_at, app_id
-        FROM meaningful_message_reviews;
-        DROP TABLE meaningful_message_reviews;
-        CREATE TABLE referral_relationships_mp04 (
-            id TEXT PRIMARY KEY,
-            inviter_platform_user_id TEXT NOT NULL,
-            invitee_platform_user_id TEXT NOT NULL,
-            referral_code_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'registered',
-            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
-            review_status TEXT NOT NULL DEFAULT 'pending',
-            reward_ledger_id TEXT,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            rewarded_at TEXT,
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
-            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
-        );
-        INSERT INTO referral_relationships_mp04(
-            id, inviter_platform_user_id, invitee_platform_user_id,
-            referral_code_id, status, meaningful_message_count, review_status,
-            reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at, app_id
-        )
-        SELECT id, inviter_platform_user_id, invitee_platform_user_id,
-               referral_code_id, status, meaningful_message_count, review_status,
-               reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at, app_id
-        FROM referral_relationships;
-        DROP TABLE referral_relationships;
-        ALTER TABLE referral_relationships_mp04 RENAME TO referral_relationships;
-
-        CREATE TABLE meaningful_message_reviews (
-            id TEXT PRIMARY KEY,
-            referral_relationship_id TEXT NOT NULL,
-            invitee_platform_user_id TEXT NOT NULL,
-            account_id TEXT NOT NULL,
-            message_ids_json TEXT NOT NULL DEFAULT '[]',
-            reviewer_type TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            reason TEXT,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
-        );
-        INSERT INTO meaningful_message_reviews(
-            id, referral_relationship_id, invitee_platform_user_id,
-            account_id, message_ids_json, reviewer_type, status, reason,
-            metadata_json, created_at, app_id
-        )
-        SELECT id, referral_relationship_id, invitee_platform_user_id,
-               account_id, message_ids_json, reviewer_type, status, reason,
-               metadata_json, created_at, app_id
-        FROM meaningful_message_reviews_mp04_backup;
-        DROP TABLE meaningful_message_reviews_mp04_backup;
-        CREATE UNIQUE INDEX ux_meaningful_reviews_relationship_reviewer
-        ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
-        CREATE INDEX ix_meaningful_reviews_app_relationship
-        ON meaningful_message_reviews(app_id, referral_relationship_id);
-        """
-    )
-
 
 def _migration_0044_referral_app_id_contract(conn: Connection) -> None:
     """切换 invitee 唯一性到产品维度；执行前必须排空全部旧 writer。"""
@@ -2773,7 +2614,7 @@ def _migration_0045_multi_product_phase1_contract(conn: Connection) -> None:
     for table in app_id_tables:
         conn.execute(f"ALTER TABLE {table} ALTER COLUMN app_id SET NOT NULL")
 
-    # 幂等确认终态查询/唯一 arbiter，避免 contract 阶段重写业务数据或 SQLite 重建。
+    # 幂等确认终态查询/唯一 arbiter，避免 contract 阶段重写业务数据或重建表。
     conn.executescript(
         """
         CREATE INDEX IF NOT EXISTS ix_accounts_app_status
@@ -2826,195 +2667,6 @@ def _billing_idempotency_contract_violation_counts(conn: Connection) -> Dict[str
         counts[name] = int(row["n"])
     return counts
 
-
-def _rebuild_billing_idempotency_sqlite(conn: Connection) -> None:
-    """SQLite 重建 billing 及引用子表，移除列级全局幂等 UNIQUE。"""
-    conn.executescript(
-        """
-        DROP TABLE IF EXISTS meaningful_message_reviews_mp06_backup;
-        DROP TABLE IF EXISTS referral_relationships_mp06_backup;
-        DROP TABLE IF EXISTS cost_events_mp06_backup;
-        DROP TABLE IF EXISTS entitlement_ledger_mp06_backup;
-
-        CREATE TABLE meaningful_message_reviews_mp06_backup AS
-        SELECT * FROM meaningful_message_reviews;
-        DROP TABLE meaningful_message_reviews;
-        CREATE TABLE referral_relationships_mp06_backup AS
-        SELECT * FROM referral_relationships;
-        DROP TABLE referral_relationships;
-        CREATE TABLE cost_events_mp06_backup AS
-        SELECT * FROM cost_events;
-        DROP TABLE cost_events;
-        CREATE TABLE entitlement_ledger_mp06_backup AS
-        SELECT * FROM entitlement_ledger;
-        DROP TABLE entitlement_ledger;
-
-        CREATE TABLE entitlement_ledger (
-            id TEXT PRIMARY KEY,
-            wallet_id TEXT NOT NULL,
-            account_id TEXT NOT NULL,
-            platform_user_id TEXT NOT NULL,
-            entry_type TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            source_id TEXT,
-            amount_shell_micros INTEGER NOT NULL,
-            balance_after_shell_micros INTEGER NOT NULL,
-            idempotency_key TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
-        );
-        INSERT INTO entitlement_ledger(
-            id, wallet_id, account_id, platform_user_id, entry_type,
-            source_type, source_id, amount_shell_micros,
-            balance_after_shell_micros, idempotency_key, metadata_json,
-            created_at, app_id
-        )
-        SELECT id, wallet_id, account_id, platform_user_id, entry_type,
-               source_type, source_id, amount_shell_micros,
-               balance_after_shell_micros, idempotency_key, metadata_json,
-               created_at, app_id
-        FROM entitlement_ledger_mp06_backup;
-        DROP TABLE entitlement_ledger_mp06_backup;
-
-        CREATE TABLE cost_events (
-            id TEXT PRIMARY KEY,
-            wallet_id TEXT,
-            account_id TEXT NOT NULL,
-            platform_user_id TEXT,
-            cost_type TEXT NOT NULL,
-            cost_owner TEXT NOT NULL DEFAULT 'user',
-            billable_to_user INTEGER NOT NULL DEFAULT 1,
-            model TEXT,
-            input_tokens INTEGER,
-            output_tokens INTEGER,
-            billable_tokens INTEGER,
-            model_price_multiplier_micros INTEGER NOT NULL DEFAULT 1000000,
-            computed_shell_micros INTEGER NOT NULL DEFAULT 0,
-            entitlement_ledger_id TEXT,
-            source_type TEXT,
-            source_id TEXT,
-            idempotency_key TEXT NOT NULL,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(wallet_id) REFERENCES entitlement_wallets(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(entitlement_ledger_id) REFERENCES entitlement_ledger(id)
-        );
-        INSERT INTO cost_events(
-            id, wallet_id, account_id, platform_user_id, cost_type,
-            cost_owner, billable_to_user, model, input_tokens, output_tokens,
-            billable_tokens, model_price_multiplier_micros,
-            computed_shell_micros, entitlement_ledger_id, source_type,
-            source_id, idempotency_key, metadata_json, created_at, app_id
-        )
-        SELECT id, wallet_id, account_id, platform_user_id, cost_type,
-               cost_owner, billable_to_user, model, input_tokens, output_tokens,
-               billable_tokens, model_price_multiplier_micros,
-               computed_shell_micros, entitlement_ledger_id, source_type,
-               source_id, idempotency_key, metadata_json, created_at, app_id
-        FROM cost_events_mp06_backup;
-        DROP TABLE cost_events_mp06_backup;
-
-        CREATE TABLE referral_relationships (
-            id TEXT PRIMARY KEY,
-            inviter_platform_user_id TEXT NOT NULL,
-            invitee_platform_user_id TEXT NOT NULL,
-            referral_code_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'registered',
-            meaningful_message_count INTEGER NOT NULL DEFAULT 0,
-            review_status TEXT NOT NULL DEFAULT 'pending',
-            reward_ledger_id TEXT,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            rewarded_at TEXT,
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(inviter_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(referral_code_id) REFERENCES referral_codes(id),
-            FOREIGN KEY(reward_ledger_id) REFERENCES entitlement_ledger(id)
-        );
-        INSERT INTO referral_relationships(
-            id, inviter_platform_user_id, invitee_platform_user_id,
-            referral_code_id, status, meaningful_message_count, review_status,
-            reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at,
-            app_id
-        )
-        SELECT id, inviter_platform_user_id, invitee_platform_user_id,
-               referral_code_id, status, meaningful_message_count, review_status,
-               reward_ledger_id, metadata_json, created_at, updated_at, rewarded_at,
-               app_id
-        FROM referral_relationships_mp06_backup;
-        DROP TABLE referral_relationships_mp06_backup;
-
-        CREATE TABLE meaningful_message_reviews (
-            id TEXT PRIMARY KEY,
-            referral_relationship_id TEXT NOT NULL,
-            invitee_platform_user_id TEXT NOT NULL,
-            account_id TEXT NOT NULL,
-            message_ids_json TEXT NOT NULL DEFAULT '[]',
-            reviewer_type TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            reason TEXT,
-            metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-            FOREIGN KEY(referral_relationship_id) REFERENCES referral_relationships(id),
-            FOREIGN KEY(invitee_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(account_id) REFERENCES accounts(id)
-        );
-        INSERT INTO meaningful_message_reviews(
-            id, referral_relationship_id, invitee_platform_user_id,
-            account_id, message_ids_json, reviewer_type, status, reason,
-            metadata_json, created_at, app_id
-        )
-        SELECT id, referral_relationship_id, invitee_platform_user_id,
-               account_id, message_ids_json, reviewer_type, status, reason,
-               metadata_json, created_at, app_id
-        FROM meaningful_message_reviews_mp06_backup;
-        DROP TABLE meaningful_message_reviews_mp06_backup;
-
-        CREATE INDEX ix_entitlement_ledger_wallet_created
-        ON entitlement_ledger(wallet_id, created_at);
-        CREATE INDEX ix_entitlement_ledger_account_created
-        ON entitlement_ledger(account_id, created_at);
-        CREATE INDEX ix_entitlement_ledger_user_app_created
-        ON entitlement_ledger(platform_user_id, app_id, created_at);
-        CREATE UNIQUE INDEX ux_entitlement_ledger_app_idempotency
-        ON entitlement_ledger(app_id, idempotency_key);
-        CREATE INDEX ix_cost_events_account_created
-        ON cost_events(account_id, created_at);
-        CREATE INDEX ix_cost_events_wallet_created
-        ON cost_events(wallet_id, created_at);
-        CREATE INDEX ix_cost_events_account_app_created
-        ON cost_events(account_id, app_id, created_at);
-        CREATE UNIQUE INDEX ux_cost_events_app_idempotency
-        ON cost_events(app_id, idempotency_key);
-        CREATE UNIQUE INDEX ux_referral_relationships_invitee_app
-        ON referral_relationships(invitee_platform_user_id, app_id);
-        CREATE INDEX ix_referral_relationships_inviter_created
-        ON referral_relationships(inviter_platform_user_id, created_at);
-        CREATE INDEX ix_referral_relationships_status
-        ON referral_relationships(status, review_status);
-        CREATE INDEX ix_referral_relationships_inviter_app_created
-        ON referral_relationships(inviter_platform_user_id, app_id, created_at);
-        CREATE INDEX ix_referral_relationships_app_status
-        ON referral_relationships(app_id, status, review_status);
-        CREATE UNIQUE INDEX ux_meaningful_reviews_relationship_reviewer
-        ON meaningful_message_reviews(referral_relationship_id, reviewer_type);
-        CREATE INDEX ix_meaningful_reviews_app_relationship
-        ON meaningful_message_reviews(app_id, referral_relationship_id);
-        """
-    )
-    fk_errors = conn.execute("PRAGMA foreign_key_check").fetchall()
-    if fk_errors:
-        raise RuntimeError("m0046 SQLite billing rebuild produced foreign key drift")
 
 
 def _drop_pg_global_billing_idempotency_constraints(conn: Connection) -> None:
@@ -3095,9 +2747,8 @@ def _migration_0051_app_me_tab(conn: Connection) -> None:
             reason_code TEXT,                        -- 受控取值，非自由文本
             executed_at TEXT NOT NULL,               -- 实际完成清除的时刻
             purge_stats_json TEXT,                   -- 本次删除行数快照，供运营核对
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         -- 同一真人可多次注销（注销后手机号仍可重新注册），因此**不**加唯一约束。
         CREATE INDEX IF NOT EXISTS ix_account_deletion_requests_owner
@@ -3106,9 +2757,8 @@ def _migration_0051_app_me_tab(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS app_notification_preferences (
             platform_user_id TEXT PRIMARY KEY,
             quiet_level TEXT NOT NULL DEFAULT 'standard',  -- standard | quiet
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         """
     )
@@ -3136,12 +2786,12 @@ def _migration_0054_media_assets(conn: Connection) -> None:
       ``{"type", "text"}``：URL 是短 TTL 签名的、宽高/时长/转写在 ``media_assets`` 里，
       存第二份必然漂移，所以库里只留不可再生的 caption，其余读时现取；
     - ``messages.media_id`` / ``human_messages.media_id`` 单列引用，**不加 FK**——
-      SQLite 无法用 ALTER 补 FK，为一个可空列重建带 2 个 UNIQUE + 2 个 FK 的
-      ``human_messages`` 表不值当，完整性由应用层与回收 job 的状态位保证；
+      为一个可空列重建带 2 个 UNIQUE + 2 个 FK 的 ``human_messages`` 表不值当，
+      完整性由应用层与回收 job 的状态位保证；
     - ``human_messages.body_text`` 保持 ``NOT NULL``（同上，重建风险 > 收益），
       纯媒体消息写空串，"文本或媒体至少有一个"在 API 层校验。
 
-    纯加表 + 加列，无回填、无锁表风险，两后端幂等。
+    纯加表 + 加列，无回填、无锁表风险，支持幂等重放。
     """
     conn.executescript(
         """
@@ -3150,10 +2800,10 @@ def _migration_0054_media_assets(conn: Connection) -> None:
             owner_platform_user_id TEXT NOT NULL,            -- 账号隔离锚，读写都必须带上
             kind TEXT NOT NULL,                              -- image | voice
             mime TEXT NOT NULL,                              -- 重编码后的真实 mime，非客户端声明
-            bytes INTEGER NOT NULL,                           -- 落盘字节数（重编码后）
-            width INTEGER,                                   -- 图片；语音为 NULL
-            height INTEGER,
-            duration_ms INTEGER,                             -- 语音；图片为 NULL
+            bytes BIGINT NOT NULL,                           -- 落盘字节数（重编码后）
+            width BIGINT,                                   -- 图片；语音为 NULL
+            height BIGINT,
+            duration_ms BIGINT,                             -- 语音；图片为 NULL
             sha256 TEXT NOT NULL,                            -- 落盘内容摘要，也是分片目录来源
             storage_path TEXT NOT NULL,                      -- 相对 media_storage_dir 的路径
             transcript TEXT,                                 -- 语音同步转写结果；失败或图片为 NULL
@@ -3163,8 +2813,7 @@ def _migration_0054_media_assets(conn: Connection) -> None:
             moderation_status TEXT NOT NULL DEFAULT 'skipped',  -- skipped | pending | passed | rejected
             moderation_task_id TEXT,                         -- S4 接阿里云内容安全后回填
             expires_at TEXT,                                 -- pending 的回收截止；referenced 置 NULL
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_media_assets_owner
             ON media_assets(owner_platform_user_id, created_at);
@@ -3209,7 +2858,7 @@ def _migration_0068_runtime_turn_runs(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             app_id TEXT NOT NULL,
             account_id TEXT NOT NULL,
-            session_id INTEGER NOT NULL,
+            session_id BIGINT NOT NULL,
             client_message_id TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
             status TEXT NOT NULL,
@@ -3219,8 +2868,8 @@ def _migration_0068_runtime_turn_runs(conn: Connection) -> None:
             first_delta_at TEXT,
             finish_reason TEXT,
             error_code TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             completed_at TEXT
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_runtime_turn_runs_idempotency
@@ -3339,7 +2988,5 @@ __all__ = [
     "_migration_0070_moderation_task_product_scope",
     "_phase1_contract_violation_counts",
     "_quota_contract_violation_counts",
-    "_rebuild_billing_idempotency_sqlite",
-    "_rebuild_referral_relationships_sqlite",
     "_referral_contract_violation_counts",
 ]

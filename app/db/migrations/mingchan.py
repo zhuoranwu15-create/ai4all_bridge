@@ -29,9 +29,8 @@ def _migration_0028_companion_world_core(conn: Connection) -> None:
             legacy_primary_account_id TEXT,               -- 老用户迁移/计费锚点（D-08 legacy 映射）
             status TEXT NOT NULL DEFAULT 'active',         -- active | disabled
             onboarding_state TEXT NOT NULL DEFAULT 'preparing',  -- preparing | selecting | confirmed
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS character_templates (
@@ -45,9 +44,8 @@ def _migration_0028_companion_world_core(conn: Connection) -> None:
             persona_seed_json TEXT,                        -- 实例化时写入 runtime account 的 SOUL/IDENTITY 种子；不经 App DTO 下发
             persona_version TEXT NOT NULL DEFAULT 'v1',    -- 版本；运营更新不静默改写既有关系
             status TEXT NOT NULL DEFAULT 'active',          -- active | retired
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_character_templates_source ON character_templates(source_type, status);
         CREATE INDEX IF NOT EXISTS ix_character_templates_owner ON character_templates(owner_platform_user_id);
@@ -63,10 +61,8 @@ def _migration_0028_companion_world_core(conn: Connection) -> None:
             joined_at TEXT,
             offline_at TEXT,
             departure_event_id TEXT,                        -- M4 用，P1 留列
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_universe_residents_universe_status ON universe_residents(universe_id, status);
         CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_residents_runtime
@@ -79,11 +75,8 @@ def _migration_0028_companion_world_core(conn: Connection) -> None:
             owner_platform_user_id TEXT NOT NULL,          -- owner 校验锚（防越权）
             runtime_account_id TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT 'active',            -- active | read_only（resident offline 后原子切换）
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(resident_id) REFERENCES universe_residents(id),
-            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_ai_conversations_resident ON ai_conversations(resident_id);
         CREATE INDEX IF NOT EXISTS ix_ai_conversations_owner_state ON ai_conversations(owner_platform_user_id, state);
@@ -114,8 +107,7 @@ def _migration_0029_universe_memory_l3(conn: Connection) -> None:
             occurred_at TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',           -- active | superseded
             superseded_by TEXT,                              -- compact 合并后新行的 id
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(universe_id) REFERENCES universes(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_universe_memory_facts_read
             ON universe_memory_facts(universe_id, fact_type, status);
@@ -169,18 +161,15 @@ def _migration_0033_companion_world_m3_content(conn: Connection) -> None:
             ai_local_date TEXT,
             ai_slot TEXT,                              -- morning | evening
             slot_window_end_at TEXT,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
+            attempt_count BIGINT NOT NULL DEFAULT 0,
             claimed_at TEXT,
             claim_token TEXT,
             next_attempt_at TEXT,
             terminal_reason TEXT,
             published_at TEXT,
             deleted_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(author_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(author_resident_id) REFERENCES universe_residents(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_posts_user_request
             ON universe_posts(universe_id, author_platform_user_id, client_request_id)
@@ -201,16 +190,14 @@ def _migration_0033_companion_world_m3_content(conn: Connection) -> None:
             idempotency_key TEXT NOT NULL UNIQUE,
             payload_json TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',     -- pending | processing | delivered | dead
-            attempts INTEGER NOT NULL DEFAULT 0,
+            attempts BIGINT NOT NULL DEFAULT 0,
             available_at TEXT NOT NULL,
             claimed_at TEXT,
             claim_token TEXT,
             last_error TEXT,
             delivered_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(post_id) REFERENCES universe_posts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_companion_world_outbox_claim
             ON companion_world_outbox(status, available_at, claimed_at, id);
@@ -241,11 +228,8 @@ def _migration_0033_companion_world_m3_content(conn: Connection) -> None:
             expires_at TEXT,
             cancelled_at TEXT,
             terminal_reason TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(resident_id) REFERENCES universe_residents(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_app_notifications_user_idempotency
             ON app_notifications(platform_user_id, idempotency_key);
@@ -290,11 +274,11 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
             policy_version TEXT NOT NULL,
             evidence_window_start TEXT NOT NULL,
             evidence_window_end TEXT NOT NULL,
-            evidence_count INTEGER NOT NULL,
+            evidence_count BIGINT NOT NULL,
             evidence_refs_json TEXT NOT NULL DEFAULT '[]',
             cooldown_until TEXT,
             crisis_freeze_until TEXT,
-            last_resident_exception_requested INTEGER NOT NULL DEFAULT 0,
+            last_resident_exception_requested BIGINT NOT NULL DEFAULT 0,
             idempotency_key TEXT NOT NULL UNIQUE,
             request_fingerprint TEXT NOT NULL,
             farewell_text TEXT,
@@ -307,12 +291,8 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
             corrected_by TEXT,
             corrected_at TEXT,
             correction_reason TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(resident_id) REFERENCES universe_residents(id),
-            FOREIGN KEY(farewell_post_id) REFERENCES universe_posts(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_lifecycle_resident_open
             ON resident_lifecycle_events(resident_id)
@@ -336,8 +316,7 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
             actor_type TEXT NOT NULL,
             actor_id TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(event_id) REFERENCES resident_lifecycle_events(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_lifecycle_actions_event
             ON resident_lifecycle_event_actions(event_id, created_at, id);
@@ -349,16 +328,15 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
             template_version TEXT NOT NULL,
             letter_body TEXT NOT NULL,
             policy_version TEXT NOT NULL,
-            priority INTEGER NOT NULL DEFAULT 0,
+            priority BIGINT NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'active',
             available_from TEXT,
             available_until TEXT,
             created_by TEXT NOT NULL,
             retired_by TEXT,
             retired_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(character_template_id) REFERENCES character_templates(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_letter_catalog_character_version
             ON character_letter_catalog(character_key, template_version);
@@ -391,13 +369,8 @@ def _migration_0034_companion_world_lifecycle_mailbox(conn: Connection) -> None:
             expires_at TEXT NOT NULL,
             accepted_resident_id TEXT,
             terminal_reason TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(catalog_id) REFERENCES character_letter_catalog(id),
-            FOREIGN KEY(character_template_id) REFERENCES character_templates(id),
-            FOREIGN KEY(accepted_resident_id) REFERENCES universe_residents(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_character_letters_open_world
             ON character_letters(universe_id)
@@ -422,13 +395,12 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
         """
         CREATE TABLE IF NOT EXISTS universe_visit_slots (
             universe_id TEXT NOT NULL,
-            slot_no INTEGER NOT NULL,
+            slot_no BIGINT NOT NULL,
             occupant_type TEXT,
             occupant_id TEXT,
             occupied_at TEXT,
             PRIMARY KEY (universe_id, slot_no),
-            UNIQUE (occupant_type, occupant_id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id)
+            UNIQUE (occupant_type, occupant_id)
         );
         CREATE INDEX IF NOT EXISTS ix_universe_visit_slots_occupant
             ON universe_visit_slots(occupant_type, occupant_id);
@@ -446,10 +418,7 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             redeemed_at TEXT,
             revoked_at TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(redeemed_by_platform_user_id) REFERENCES platform_users(id)
+            updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_universe_invites_owner
             ON universe_invites(owner_platform_user_id, created_at DESC, id DESC);
@@ -469,11 +438,7 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             terminal_at TEXT,
             terminal_reason TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(invite_id) REFERENCES universe_invites(id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(visitor_platform_user_id) REFERENCES platform_users(id)
+            updated_at TEXT NOT NULL
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_visits_open_pair
             ON universe_visits(universe_id, visitor_platform_user_id)
@@ -497,10 +462,7 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             visitor_last_read_at TEXT,
             last_message_at TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY(visit_id) REFERENCES universe_visits(id),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(visitor_platform_user_id) REFERENCES platform_users(id)
+            updated_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_human_conversations_owner
             ON human_conversations(owner_platform_user_id, last_message_at DESC, id DESC);
@@ -512,11 +474,9 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             conversation_id TEXT NOT NULL,
             sender_platform_user_id TEXT NOT NULL,
             client_message_id TEXT NOT NULL,
-            sequence_no INTEGER NOT NULL,
+            sequence_no BIGINT NOT NULL,
             body_text TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
-            FOREIGN KEY(sender_platform_user_id) REFERENCES platform_users(id),
             UNIQUE(conversation_id, sender_platform_user_id, client_message_id),
             UNIQUE(conversation_id, sequence_no)
         );
@@ -527,9 +487,7 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             blocker_platform_user_id TEXT NOT NULL,
             blocked_platform_user_id TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            PRIMARY KEY(blocker_platform_user_id, blocked_platform_user_id),
-            FOREIGN KEY(blocker_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(blocked_platform_user_id) REFERENCES platform_users(id)
+            PRIMARY KEY(blocker_platform_user_id, blocked_platform_user_id)
         );
         CREATE INDEX IF NOT EXISTS ix_platform_user_blocks_blocked
             ON platform_user_blocks(blocked_platform_user_id, blocker_platform_user_id);
@@ -547,11 +505,7 @@ def _migration_0035_companion_world_visit_human_chat(conn: Connection) -> None:
             retained_until TEXT,
             created_at TEXT NOT NULL,
             reviewed_at TEXT,
-            reviewed_by TEXT,
-            FOREIGN KEY(conversation_id) REFERENCES human_conversations(id),
-            FOREIGN KEY(reporter_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(reported_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(reported_message_id) REFERENCES human_messages(id)
+            reviewed_by TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_human_chat_reports_queue
             ON human_chat_reports(status, created_at, id);
@@ -609,9 +563,8 @@ def _migration_0048_companion_world_resident_drafts(conn: Connection) -> None:
             client_request_id TEXT,                  -- 消费时写入，承载 IDEM-001
             resident_id TEXT,                        -- 消费结果，幂等重放直接回放
             expires_at TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_resident_drafts_owner
             ON resident_drafts(platform_user_id, status);
@@ -712,10 +665,9 @@ def _migration_0055_universe_post_media(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS universe_post_media (
             post_id TEXT NOT NULL,
             media_id TEXT NOT NULL,
-            position INTEGER NOT NULL,               -- 0..3，客户端按此排版
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY (post_id, position),
-            FOREIGN KEY(post_id) REFERENCES universe_posts(id)
+            position BIGINT NOT NULL,               -- 0..3，客户端按此排版
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY (post_id, position)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_universe_post_media_media
             ON universe_post_media(media_id);
@@ -793,11 +745,8 @@ def _migration_0058_async_resident_wishes(conn: Connection) -> None:
             letter_id TEXT,
             closed_at TEXT,
             terminal_reason TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(universe_id) REFERENCES universes(id),
-            FOREIGN KEY(letter_id) REFERENCES character_letters(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_resident_wishes_owner_request
             ON resident_wishes(owner_platform_user_id, client_request_id);
@@ -813,7 +762,7 @@ def _migration_0058_async_resident_wishes(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             wish_id TEXT NOT NULL UNIQUE,
             status TEXT NOT NULL DEFAULT 'queued',
-            attempt_count INTEGER NOT NULL DEFAULT 0,
+            attempt_count BIGINT NOT NULL DEFAULT 0,
             next_attempt_at TEXT NOT NULL,
             claim_token TEXT,
             lease_expires_at TEXT,
@@ -821,9 +770,8 @@ def _migration_0058_async_resident_wishes(conn: Connection) -> None:
             safety_json TEXT,
             last_error_code TEXT,
             completed_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(wish_id) REFERENCES resident_wishes(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_resident_wish_jobs_claim
             ON resident_wish_jobs(status, next_attempt_at, lease_expires_at, id);
@@ -852,7 +800,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             app_id TEXT NOT NULL DEFAULT 'zhaoxi' CHECK (app_id = 'zhaoxi'),
             creator_platform_user_id TEXT NOT NULL,
-            slot_no INTEGER NOT NULL CHECK (slot_no BETWEEN 1 AND 3),
+            slot_no BIGINT NOT NULL CHECK (slot_no BETWEEN 1 AND 3),
             campaign_code TEXT NOT NULL
                 CHECK (
                     substr(campaign_code, 1, 4) = 'urt_'
@@ -863,7 +811,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
                     'pending_review', 'approved', 'active', 'rejected',
                     'disabled_creator', 'disabled_admin', 'deleted'
                 )),
-            used_count INTEGER NOT NULL DEFAULT 0 CHECK (used_count >= 0),
+            used_count BIGINT NOT NULL DEFAULT 0 CHECK (used_count >= 0),
             activated_at TEXT,
             expires_at TEXT,
             disabled_by_admin_user_id TEXT,
@@ -874,10 +822,8 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
                 )
             ),
             deleted_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(creator_platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(disabled_by_admin_user_id) REFERENCES admin_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_templates_owner_slot_live
             ON creator_role_templates(creator_platform_user_id, app_id, slot_no)
@@ -892,7 +838,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS creator_role_template_versions (
             id TEXT PRIMARY KEY,
             creator_role_template_id TEXT NOT NULL,
-            version_no INTEGER NOT NULL CHECK (version_no >= 1),
+            version_no BIGINT NOT NULL CHECK (version_no >= 1),
             ai_name TEXT NOT NULL,
             personality_text TEXT NOT NULL,
             mission_text TEXT NOT NULL,
@@ -902,14 +848,13 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             summary_edit_status TEXT NOT NULL DEFAULT 'unavailable',
             review_status TEXT NOT NULL DEFAULT 'pending'
                 CHECK (review_status IN ('pending', 'reviewing', 'passed', 'rejected')),
-            is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+            is_published BIGINT NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
             review_categories_json TEXT NOT NULL DEFAULT '[]',
             review_reason TEXT,
             reviewed_at TEXT,
             published_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             UNIQUE(creator_role_template_id, version_no)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_creator_role_template_versions_published
@@ -924,19 +869,17 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS creator_role_template_review_runs (
             id TEXT PRIMARY KEY,
             creator_role_template_version_id TEXT NOT NULL,
-            attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
+            attempt_no BIGINT NOT NULL CHECK (attempt_no >= 1),
             status TEXT NOT NULL DEFAULT 'running'
                 CHECK (status IN ('running', 'passed', 'rejected', 'error')),
             model TEXT,
             provider TEXT,
-            latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+            latency_ms BIGINT CHECK (latency_ms IS NULL OR latency_ms >= 0),
             categories_json TEXT NOT NULL DEFAULT '[]',
             reason TEXT,
             error_code TEXT,
             started_at TEXT NOT NULL,
             finished_at TEXT,
-            FOREIGN KEY(creator_role_template_version_id)
-                REFERENCES creator_role_template_versions(id),
             UNIQUE(creator_role_template_version_id, attempt_no)
         );
         CREATE INDEX IF NOT EXISTS ix_creator_role_template_review_runs_version
@@ -954,12 +897,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             personality_snapshot TEXT NOT NULL,
             mission_snapshot TEXT NOT NULL,
             opening_line_snapshot TEXT,
-            attributed_at TEXT NOT NULL,
-            FOREIGN KEY(account_id) REFERENCES accounts(id),
-            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
-            FOREIGN KEY(creator_role_template_version_id)
-                REFERENCES creator_role_template_versions(id),
-            FOREIGN KEY(creator_platform_user_id) REFERENCES platform_users(id)
+            attributed_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_account_creator_role_template_source
             ON account_creator_role_template_attribution(
@@ -980,10 +918,7 @@ def _migration_0059_creator_role_templates(conn: Connection) -> None:
             actor_type TEXT NOT NULL CHECK (actor_type IN ('creator', 'admin', 'system')),
             actor_id TEXT,
             metadata_json TEXT NOT NULL DEFAULT '{}',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(creator_role_template_id) REFERENCES creator_role_templates(id),
-            FOREIGN KEY(creator_role_template_version_id)
-                REFERENCES creator_role_template_versions(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_creator_role_template_events_history
             ON creator_role_template_events(
@@ -1015,20 +950,18 @@ def _migration_0060_creator_role_template_opening_and_summary(conn: Connection) 
         CREATE TABLE IF NOT EXISTS creator_role_template_summary_review_runs (
             id TEXT PRIMARY KEY,
             creator_role_template_version_id TEXT NOT NULL,
-            attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
+            attempt_no BIGINT NOT NULL CHECK (attempt_no >= 1),
             submitted_summary TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'running'
                 CHECK (status IN ('running', 'passed', 'rejected', 'error')),
             model TEXT,
             provider TEXT,
-            latency_ms INTEGER CHECK (latency_ms IS NULL OR latency_ms >= 0),
+            latency_ms BIGINT CHECK (latency_ms IS NULL OR latency_ms >= 0),
             categories_json TEXT NOT NULL DEFAULT '[]',
             reason TEXT,
             error_code TEXT,
             started_at TEXT NOT NULL,
             finished_at TEXT,
-            FOREIGN KEY(creator_role_template_version_id)
-                REFERENCES creator_role_template_versions(id),
             UNIQUE(creator_role_template_version_id, attempt_no)
         );
         CREATE INDEX IF NOT EXISTS ix_creator_role_template_summary_runs_version
@@ -1045,7 +978,7 @@ def _migration_0061_companion_world_product_scope(conn: Connection) -> None:
     存量 World/App 数据属于拆分前的朝夕产品，因此两列统一回填 ``zhaoxi``。鸣蝉只会
     显式写入/读取 ``mingchan``。``universes.owner_platform_user_id`` 的历史全局唯一约束
     暂不在自动迁移中重建：启用鸣蝉前必须先通过 MC-05 precheck/cleanup 清除旧 App 测试
-    World，避免 SQLite 大范围父子表重建与 PostgreSQL 约束切换混入常规启动迁移。
+    World，避免大范围父子表重建与约束切换混入常规启动迁移。
     """
     _ensure_column(
         conn,
@@ -1111,10 +1044,9 @@ def _migration_0062_mingchan_notification_product_scope(conn: Connection) -> Non
             platform_user_id TEXT NOT NULL,
             app_id TEXT NOT NULL,
             quiet_level TEXT NOT NULL DEFAULT 'standard',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(platform_user_id, app_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, app_id)
         );
         """
     )
@@ -1124,9 +1056,8 @@ def _migration_0063_companion_world_owner_product_unique(conn: Connection) -> No
     """把 home World 唯一性从真人全局收缩为 ``(app_id, owner)``。
 
     m0061 已完成 ``app_id`` 回填；本迁移只改变根表唯一契约，不移动或删除任何
-    legacy World。SQLite 在关闭外键检查的单个 ``executescript`` 中重建根表，随后
-    立即运行 ``foreign_key_check``；PostgreSQL 只删除精确覆盖 owner 单列的 UNIQUE
-    constraint。两端最后都建立产品级唯一索引。
+    legacy World。迁移只删除精确覆盖 owner 单列的 PostgreSQL UNIQUE constraint，
+    随后建立产品级唯一索引。
     """
     duplicate = conn.execute(
         """

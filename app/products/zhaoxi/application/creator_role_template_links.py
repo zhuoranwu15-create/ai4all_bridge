@@ -58,7 +58,7 @@ def require_creator_role_template_eligibility(
             SELECT code FROM referral_codes
             WHERE platform_user_id = ? AND app_id = ? AND code_type = 'personal'
               AND status = 'active'
-              AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
+              AND (expires_at IS NULL OR expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
               AND (max_uses IS NULL OR used_count < max_uses)
             ORDER BY created_at ASC, id ASC
             LIMIT 1
@@ -85,7 +85,7 @@ def get_creator_personal_invite_code(
             SELECT code FROM referral_codes
             WHERE platform_user_id = ? AND app_id = ? AND code_type = 'personal'
               AND status = 'active'
-              AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
+              AND (expires_at IS NULL OR expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
               AND (max_uses IS NULL OR used_count < max_uses)
             ORDER BY created_at ASC, id ASC
             LIMIT 1

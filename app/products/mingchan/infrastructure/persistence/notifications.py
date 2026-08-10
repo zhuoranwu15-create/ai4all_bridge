@@ -406,7 +406,7 @@ def mark_app_notification_read(
             """
             UPDATE app_notifications
             SET read_at = ?, expires_at = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ?
               AND delivery_status = 'visible'
               AND expires_at > ? AND read_at IS NULL
@@ -440,7 +440,7 @@ def mark_all_app_notifications_read(
             """
             UPDATE app_notifications
             SET read_at = ?, expires_at = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE platform_user_id = ? AND app_id = ? AND delivery_status = 'visible'
               AND expires_at > ? AND read_at IS NULL
             """,
@@ -478,7 +478,7 @@ def cleanup_app_notifications_batch(
                 UPDATE app_notifications
                 SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                     terminal_reason = 'claim_expired', claim_token = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE app_id = ? AND delivery_status = 'reserved' AND claim_expires_at <= ?
                   AND id IN ({placeholders})
                 """,
@@ -602,7 +602,7 @@ def reserve_human_app_notification(
             UPDATE app_notifications
             SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                 terminal_reason = 'claim_expired', claim_token = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE platform_user_id = ? AND app_id = ? AND scope = 'human'
               AND delivery_status = 'reserved' AND claim_expires_at <= ?
             """,
@@ -648,7 +648,7 @@ def reserve_human_app_notification(
                     SET delivery_status = 'reserved', metadata_json = ?,
                         claim_token = ?, claim_expires_at = ?, cancelled_at = NULL,
                         terminal_reason = NULL, expires_at = NULL,
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE id = ? AND platform_user_id = ? AND app_id = ?
                       AND delivery_status = 'cancelled'
                     """,
@@ -785,7 +785,7 @@ def cancel_human_app_notification(
             UPDATE app_notifications
             SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                 terminal_reason = ?, claim_token = NULL, claim_expires_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ? AND scope = 'human'
               AND delivery_status = 'reserved' AND claim_token = ?
             """,
@@ -897,7 +897,7 @@ def finalize_human_app_notification(
                 SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                     terminal_reason = 'speaker_unavailable', claim_token = NULL,
                     claim_expires_at = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND platform_user_id = ? AND app_id = ?
                   AND delivery_status = 'reserved'
                   AND claim_token = ?
@@ -929,7 +929,7 @@ def finalize_human_app_notification(
                 target_type = ?, target_id = ?, delivered_at = ?, expires_at = ?,
                 claim_token = NULL, claim_expires_at = NULL, cancelled_at = NULL,
                 terminal_reason = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ? AND universe_id = ?
               AND scope = 'human' AND delivery_status = 'reserved'
               AND claim_token = ? AND claim_expires_at > ?

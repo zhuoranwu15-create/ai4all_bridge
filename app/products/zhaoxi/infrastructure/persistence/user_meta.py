@@ -326,7 +326,7 @@ def insert_account_user_meta_daily(
     with connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO account_user_meta_daily(
+            INSERT INTO account_user_meta_daily(
                 account_id, snapshot_date, registered_at, message_intensity_level,
                 companion_primary_type, companion_secondary_types,
                 companion_type_confidence, companion_type_last_evaluated_at,
@@ -337,6 +337,7 @@ def insert_account_user_meta_daily(
                 agent_need_trust_status, agent_need_growth_status
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (
                 cleaned_account_id,

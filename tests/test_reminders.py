@@ -360,7 +360,7 @@ def test_recurring_reminder_second_occurrence_actually_sends(fresh_db):
     """回归:周期提醒的第二次触发必须真正发送,而不是被幂等键去重短路。
 
     走真实出站去重路径(只 mock 网关 send_weixin_text),覆盖
-    create_outbound_message 的 INSERT OR IGNORE。修复前第二周期的键与第一
+    create_outbound_message 的冲突去重。修复前第二周期的键与第一
     周期相同,会命中已 sent 的出站行而静默不发;修复后键含当次 due_at。
     """
     from app.db import create_reminder, get_reminder, list_outbound_messages

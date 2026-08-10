@@ -5,7 +5,6 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import is_postgres
 from app.db._core import (
     _MIGRATIONS,
     _migration_0045_multi_product_phase1_contract,
@@ -239,45 +238,17 @@ def test_m0045_final_contract_is_clean_idempotent_and_has_final_indexes(fresh_db
         assert all(total == 0 for total in _phase1_contract_violation_counts(conn).values())
         _migration_0045_multi_product_phase1_contract(conn)
         _migration_0045_multi_product_phase1_contract(conn)
-        if is_postgres():
-            rows = conn.execute(
-                "SELECT indexname AS name FROM pg_indexes WHERE schemaname=current_schema()"
-            ).fetchall()
-            nullable_app_columns = conn.execute(
-                """
-                SELECT table_name
-                FROM information_schema.columns
-                WHERE table_schema=current_schema() AND column_name='app_id'
-                  AND is_nullable<>'NO'
-                """
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            ).fetchall()
-            nullable_app_columns = []
-            for table in (
-                "accounts",
-                "account_owner_bindings",
-                "platform_user_sessions",
-                "product_memberships",
-                "subscriptions",
-                "entitlement_wallets",
-                "entitlement_ledger",
-                "cost_events",
-                "daily_usage",
-                "daily_quota_reservations",
-                "referral_codes",
-                "referral_relationships",
-                "meaningful_message_reviews",
-            ):
-                app_column = next(
-                    row
-                    for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-                    if row["name"] == "app_id"
-                )
-                if int(app_column["notnull"]) != 1:
-                    nullable_app_columns.append({"table_name": table})
+        rows = conn.execute(
+            "SELECT indexname AS name FROM pg_indexes WHERE schemaname=current_schema()"
+        ).fetchall()
+        nullable_app_columns = conn.execute(
+            """
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema=current_schema() AND column_name='app_id'
+              AND is_nullable<>'NO'
+            """
+        ).fetchall()
         index_names = {str(row["name"]) for row in rows}
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"

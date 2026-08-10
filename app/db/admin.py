@@ -58,13 +58,13 @@ def upsert_admin_user(
         conn.execute(
             """
             INSERT INTO admin_users(id, email, display_name, role, status, updated_at)
-            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 email = COALESCE(excluded.email, admin_users.email),
                 display_name = COALESCE(excluded.display_name, admin_users.display_name),
                 role = excluded.role,
                 status = excluded.status,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (admin_user_id, email, display_name, role, status),
         )
@@ -207,7 +207,7 @@ def update_admin_plaintext_grant_status(
                 approved_at = COALESCE(?, approved_at),
                 expires_at = COALESCE(?, expires_at),
                 revoked_at = COALESCE(?, revoked_at),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -357,8 +357,8 @@ def create_dreaming_run(
         conn.execute(
             """
             INSERT INTO accounts(id, updated_at)
-            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-            ON CONFLICT(id) DO UPDATE SET updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            VALUES (?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT(id) DO UPDATE SET updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (account_id,),
         )
@@ -369,7 +369,7 @@ def create_dreaming_run(
                 status, prompt_version, llm_model, input_hash, actor_type, actor_id,
                 started_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 account_id,
@@ -413,8 +413,8 @@ def update_dreaming_run(
                 error = ?,
                 token_input = COALESCE(?, token_input),
                 token_output = COALESCE(?, token_output),
-                completed_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE completed_at END,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                completed_at = CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE completed_at END,
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -569,7 +569,7 @@ def update_dreaming_memory_item_status(
                 skip_reason = ?,
                 diff_json = COALESCE(?, diff_json),
                 base_text_hash = COALESCE(?, base_text_hash),
-                applied_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE applied_at END
+                applied_at = CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE applied_at END
             WHERE id = ?
             """,
             (
@@ -777,7 +777,7 @@ def update_session_summary(
                 carryover_summary = COALESCE(?, carryover_summary),
                 summary_model = COALESCE(?, summary_model),
                 summary_prompt_version = COALESCE(?, summary_prompt_version),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -811,13 +811,13 @@ def close_session(
             UPDATE sessions
             SET session_key = COALESCE(?, session_key),
                 status = 'closed',
-                ended_at = COALESCE(ended_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                ended_at = COALESCE(ended_at, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
                 close_reason = COALESCE(close_reason, ?),
                 session_summary = COALESCE(?, session_summary),
                 carryover_summary = COALESCE(?, carryover_summary),
                 summary_model = COALESCE(?, summary_model),
                 summary_prompt_version = COALESCE(?, summary_prompt_version),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (

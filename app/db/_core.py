@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
-from app.db._backend import Connection, close_pg_pool, is_postgres
+from app.db._backend import Connection, close_pg_pool
 from app.time_utils import beijing_now_str
 
 # 迁移函数体已按产品拆分到 app/db/migrations/*，此处整体回导出：
@@ -96,8 +96,6 @@ from app.db.migrations.shared import (
     _migration_0070_moderation_task_product_scope,
     _phase1_contract_violation_counts,
     _quota_contract_violation_counts,
-    _rebuild_billing_idempotency_sqlite,
-    _rebuild_referral_relationships_sqlite,
     _referral_contract_violation_counts,
 )
 
@@ -403,9 +401,9 @@ def migrate_db_through(
         return {"before": current, "after": after}
 
 
-# SQLite 内置 json_patch（RFC 7396 JSON Merge Patch）；PG 无内置实现。这里建一个同名
+# PostgreSQL 没有内置 RFC 7396 JSON Merge Patch；这里建一个同名
 # 递归函数，严格保留「patch 值为 null 即删除该键、对象递归合并」语义——浅 || 合并做不到。
-# 垫片层把 json_patch(A, ?) 翻成 json_patch(A::jsonb, (?)::jsonb)::text 调用本函数。
+# repository 显式将 TEXT JSON 转成 jsonb，调用后再转回 TEXT 存储。
 _PG_JSON_PATCH_FN = """
 CREATE OR REPLACE FUNCTION json_patch(target jsonb, patch jsonb)
 RETURNS jsonb AS $$
@@ -448,7 +446,7 @@ END;
 $$ LANGUAGE plpgsql IMMUTABLE;
 """
 
-# safe_json_extract_text: SQLite json_extract(col, '$.a.b') 的 PG 安全替代。
+# safe_json_extract_text: 从 TEXT JSON 安全读取嵌套路径。
 # 脏 JSON 时返回 NULL 而非抛异常（::jsonb 强转遇非法 JSON 会直接报错）。
 _PG_SAFE_JSON_EXTRACT_FN = """
 CREATE OR REPLACE FUNCTION safe_json_extract_text(val text, path text[])
@@ -463,16 +461,16 @@ $$ LANGUAGE plpgsql IMMUTABLE;
 
 
 def _ensure_pg_functions(conn: Connection) -> None:
-    """在 PG 后端建立 SQLite 专有但本仓 SQL 依赖的函数（幂等 CREATE OR REPLACE）。"""
+    """Create the PostgreSQL JSON helpers required by repositories."""
     conn.execute(_PG_JSON_PATCH_FN)
     conn.execute(_PG_JSON_VALID_FN)
     conn.execute(_PG_SAFE_JSON_EXTRACT_FN)
 
 
 def _ensure_schema_migrations_table(conn: Connection) -> None:
-    """建立跨后端通用的迁移版本表（取代 SQLite 专属的 PRAGMA user_version）。
+    """Create the PostgreSQL migration version table.
 
-    applied_at 由 Python 侧写入北京时间串，避免在引导表上引入方言默认值。
+    applied_at 由 Python 侧写入北京时间串，保持引导表定义简单。
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations ("

@@ -45,15 +45,10 @@ def test_sessions_rolling_columns_exist(fresh_db):
 
 def test_messages_account_id_index_exists(fresh_db):
     from app.db import connect
-    from app.db._backend import is_postgres
-
     with connect() as conn:
-        if is_postgres():
-            rows = conn.execute(
-                "SELECT indexname AS name FROM pg_indexes WHERE tablename = 'messages'"
-            ).fetchall()
-        else:
-            rows = conn.execute("PRAGMA index_list('messages')").fetchall()
+        rows = conn.execute(
+            "SELECT indexname AS name FROM pg_indexes WHERE tablename = 'messages'"
+        ).fetchall()
         names = {row["name"] for row in rows}
     assert "ix_messages_account_id" in names
 

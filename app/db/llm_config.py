@@ -35,7 +35,7 @@ def _set_value(conn, key: str, value: str, actor: Optional[str]) -> None:
         ON CONFLICT(key) DO UPDATE SET
             value = excluded.value,
             updated_by = excluded.updated_by,
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         """,
         (key, value, actor),
     )

@@ -185,7 +185,7 @@ def set_universe_onboarding_state(
             """
             UPDATE universes
             SET onboarding_state = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND app_id = ?
             """,
             (onboarding_state, universe_id, MINGCHAN_APP_ID),
@@ -498,7 +498,7 @@ def consume_resident_draft(
             SET status = 'consumed',
                 client_request_id = ?,
                 resident_id = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND status = 'open'
             """,
             (client_request_id, resident_id, draft_id, platform_user_id),
@@ -652,8 +652,8 @@ def activate_candidate_resident(
             """
             UPDATE universe_residents
             SET runtime_account_id = ?, status = 'active',
-                joined_at = COALESCE(joined_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                joined_at = COALESCE(joined_at, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND universe_id = ?
               AND status = 'candidate' AND runtime_account_id IS NULL
             """,
@@ -686,7 +686,7 @@ def dismiss_unselected_candidate_residents(
             f"""
             UPDATE universe_residents
             SET status = 'dismissed',
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE universe_id = ? AND status = 'candidate' AND origin <> 'legacy'
               {keep_clause}
             """,
@@ -843,7 +843,7 @@ def insert_resident_welcome_message(
     conn.execute(
         """
         INSERT INTO sessions(account_id, session_key, metadata_json, updated_at)
-        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(account_id, session_key) DO NOTHING
         """,
         (
@@ -1677,7 +1677,7 @@ def claim_ai_feed_slot(
             UPDATE universe_posts
             SET claimed_at = ?, claim_token = ?, next_attempt_at = NULL,
                 attempt_count = attempt_count + 1,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'generating'
               AND slot_window_end_at > ?
               AND (claim_token IS NULL OR claimed_at <= ?)
@@ -2215,7 +2215,7 @@ def retire_feed_post_with_outbox(
                 """
                 UPDATE universe_posts
                 SET status = 'deleted', terminal_reason = ?, deleted_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND universe_id = ? AND status = 'published'
                 """,
                 (reason_code, deleted_at, post_id, current_row["universe_id"]),
@@ -2318,7 +2318,7 @@ def publish_ai_feed_post_with_outbox(
                 """
                 UPDATE universe_posts
                 SET text = ?, status = 'published', published_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (clean_text, published_at, post_id, claim_token),
@@ -2415,7 +2415,7 @@ def claim_companion_world_outbox(
             UPDATE companion_world_outbox
             SET status = 'processing', attempts = attempts + 1,
                 claimed_at = ?, claim_token = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id IN ({placeholders})
               AND (status = 'pending'{update_stale_clause})
             """,
@@ -2630,7 +2630,7 @@ def defer_ai_feed_post(
                 UPDATE universe_posts
                 SET status = 'skipped', terminal_reason = 'retry_exhausted',
                     claim_token = NULL, next_attempt_at = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (post_id, claim_token),
@@ -2640,7 +2640,7 @@ def defer_ai_feed_post(
                 """
                 UPDATE universe_posts
                 SET claimed_at = NULL, claim_token = NULL, next_attempt_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (next_attempt_at, post_id, claim_token),
@@ -2670,7 +2670,7 @@ def skip_ai_feed_post(
             UPDATE universe_posts
             SET status = 'skipped', terminal_reason = ?, claim_token = NULL,
                 next_attempt_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'generating' {token_clause}
             """,
             tuple(params),
@@ -2710,7 +2710,7 @@ def close_expired_ai_feed_slots(
             UPDATE universe_posts
             SET status = 'skipped', terminal_reason = 'window_closed',
                 claim_token = NULL, next_attempt_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE status = 'generating' AND id IN ({placeholders})
             """,
             tuple(ids),
@@ -2732,7 +2732,7 @@ def complete_companion_world_outbox(
             UPDATE companion_world_outbox
             SET status = 'delivered', delivered_at = ?, claim_token = NULL,
                 last_error = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'processing' AND claim_token = ?
             """,
             (delivered_at, outbox_id, claim_token),
@@ -2760,7 +2760,7 @@ def fail_companion_world_outbox(
             SET status = CASE WHEN attempts >= ? THEN 'dead' ELSE 'pending' END,
                 available_at = ?, claim_token = NULL, claimed_at = NULL,
                 last_error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'processing' AND claim_token = ?
             """,
             (

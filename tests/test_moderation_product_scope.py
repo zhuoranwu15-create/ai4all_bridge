@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 
 
 def _insert_account(*, account_id: str, app_id: str) -> None:
@@ -117,29 +117,17 @@ def test_m0070_backfills_existing_tasks_and_enforces_required_app_id(
                     ("legacy-task-mc", "mingchan"),
                     ("legacy-task-zx", "zhaoxi"),
                 ]
-                if is_postgres():
-                    column = conn.execute(
-                        "SELECT is_nullable FROM information_schema.columns "
-                        "WHERE table_schema=current_schema() "
-                        "AND table_name='content_moderation_tasks' "
-                        "AND column_name='app_id'"
-                    ).fetchone()
-                    index_rows = conn.execute(
-                        "SELECT indexname AS name FROM pg_indexes "
-                        "WHERE schemaname=current_schema()"
-                    ).fetchall()
-                    assert column["is_nullable"] == "NO"
-                else:
-                    columns = {
-                        row["name"]: row
-                        for row in conn.execute(
-                            "PRAGMA table_info(content_moderation_tasks)"
-                        ).fetchall()
-                    }
-                    index_rows = conn.execute(
-                        "SELECT name FROM sqlite_master WHERE type='index'"
-                    ).fetchall()
-                    assert int(columns["app_id"]["notnull"]) == 1
+                column = conn.execute(
+                    "SELECT is_nullable FROM information_schema.columns "
+                    "WHERE table_schema=current_schema() "
+                    "AND table_name='content_moderation_tasks' "
+                    "AND column_name='app_id'"
+                ).fetchone()
+                index_rows = conn.execute(
+                    "SELECT indexname AS name FROM pg_indexes "
+                    "WHERE schemaname=current_schema()"
+                ).fetchall()
+                assert column["is_nullable"] == "NO"
                 index_names = {row["name"] for row in index_rows}
                 assert {
                     "ix_moderation_tasks_app_queue",

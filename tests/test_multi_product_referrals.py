@@ -6,7 +6,6 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import is_postgres
 from app.db._core import (
     _migration_0043_referral_app_id_expand,
     _migration_0044_referral_app_id_contract,
@@ -287,8 +286,6 @@ def test_referral_contract_rejects_review_scope_drift(fresh_db):
 
 
 def test_pg_concurrent_first_membership_and_reward_are_idempotent(fresh_db):
-    if not is_postgres():
-        pytest.skip("membership/referral/reward 并发以 PostgreSQL 为准")
     registry, inviter_id, _za, _ta, _zcode, tcode = _inviter_with_two_product_codes(
         "13800037709"
     )
@@ -352,8 +349,6 @@ def test_pg_concurrent_first_membership_and_reward_are_idempotent(fresh_db):
 
 
 def test_pg_concurrent_full_registration_for_new_phone_is_idempotent(fresh_db):
-    if not is_postgres():
-        pytest.skip("全新手机号注册竞态以 PostgreSQL 为准")
     registry, _inviter_id, _za, _ta, _zcode, tcode = _inviter_with_two_product_codes(
         "13800037713"
     )
@@ -403,8 +398,6 @@ def test_pg_concurrent_full_registration_for_new_phone_is_idempotent(fresh_db):
 
 
 def test_pg_concurrent_referral_message_processing_counts_and_rewards_once(fresh_db):
-    if not is_postgres():
-        pytest.skip("referral 生产主路径并发以 PostgreSQL 为准")
     registry, inviter_id, _za, _ta, _zcode, tcode = _inviter_with_two_product_codes(
         "13800037715"
     )

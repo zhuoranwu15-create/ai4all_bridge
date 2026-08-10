@@ -1,16 +1,15 @@
-"""app.db._backend 垫片层的 PostgreSQL 路径测试（真实临时 PG）。
+"""app.db._backend adapter tests against a temporary PostgreSQL instance.
 
 复用主测试基座的 pytest-postgresql 临时 PG 和逐测试模板克隆库。
 
-这里只验证**垫片机制**（连接包装、占位符翻译、HybridRow、事务、IntegrityError），
-不涉及业务 schema —— PG 基线 DDL 重写是后续增量，故用手写的 PG 兼容小表。
+覆盖连接包装、占位符绑定、HybridRow、事务、IntegrityError 与完整业务 schema。
 """
 import pytest
 
 from app.db import _backend  # noqa: E402
 
 def _dsn_from_conn(conn) -> str:
-    """从 pytest-postgresql 给的 psycopg 连接推出 URL 形式 DSN（供 is_postgres 识别）。"""
+    """从 pytest-postgresql 给的 psycopg 连接推出 URL 形式 DSN。"""
     info = conn.info
     user = info.user
     host = info.host
@@ -135,7 +134,7 @@ def test_pg_reactivation_json_bool_predicate_counts_without_integer_cast(pg_sett
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+              AND CAST(safe_json_extract_text(metadata_json, ARRAY['reactivation']) AS TEXT) IN ('1', 'true')
             """,
             ("acc-pg-react", "2026-06-24"),
         ).fetchone()
@@ -154,7 +153,7 @@ def test_pg_init_db_builds_full_schema(pg_settings):
     init_db()
 
     with connect() as conn:
-        # 迁移版本写入 schema_migrations（取代 PRAGMA user_version）
+        # 迁移版本写入 schema_migrations。
         versions = [r["version"] for r in conn.execute(
             "SELECT version FROM schema_migrations ORDER BY version"
         ).fetchall()]
@@ -211,7 +210,7 @@ def test_pg_init_db_blocks_automatic_phase1_contract_migrations(pg_settings):
 
 
 def test_pg_identity_default_and_now_default(pg_settings):
-    """AUTOINCREMENT→IDENTITY、strftime→to_char 默认值在真 PG 生效。"""
+    """PostgreSQL IDENTITY and Beijing wall-clock defaults work."""
     from app.db._core import connect, init_db
 
     init_db()
@@ -239,7 +238,7 @@ def test_pg_identity_default_and_now_default(pg_settings):
 
 
 # ---------------------------------------------------------------------------
-# 1d：运行期方言（lastrowid / INSERT OR IGNORE / DML 内 strftime）
+# PostgreSQL adapter runtime behavior
 # ---------------------------------------------------------------------------
 
 def test_pg_lastrowid_via_lastval(pg_settings):
@@ -261,24 +260,30 @@ def test_pg_lastrowid_via_lastval(pg_settings):
         assert row["v"] == "b"
 
 
-def test_pg_insert_or_ignore_dedup(pg_settings):
-    """INSERT OR IGNORE → ON CONFLICT DO NOTHING：唯一冲突时静默跳过、不报错不重复。"""
+def test_pg_on_conflict_do_nothing_dedup(pg_settings):
+    """ON CONFLICT DO NOTHING silently preserves the existing row."""
     from app.db._core import connect
 
     with connect() as conn:
         conn.execute("CREATE TABLE t (k TEXT PRIMARY KEY, v TEXT)")
     with connect() as conn:
-        conn.execute("INSERT OR IGNORE INTO t (k, v) VALUES (?, ?)", ("k1", "first"))
+        conn.execute(
+            "INSERT INTO t (k, v) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            ("k1", "first"),
+        )
         # 同主键再插：应被忽略，原值保留
-        conn.execute("INSERT OR IGNORE INTO t (k, v) VALUES (?, ?)", ("k1", "second"))
+        conn.execute(
+            "INSERT INTO t (k, v) VALUES (?, ?) ON CONFLICT DO NOTHING",
+            ("k1", "second"),
+        )
     with connect() as conn:
         rows = conn.execute("SELECT k, v FROM t").fetchall()
         assert len(rows) == 1
         assert rows[0]["v"] == "first"
 
 
-def test_pg_strftime_default_in_dml_values(pg_settings):
-    """带参 INSERT 的 VALUES 内 strftime(now+8h) 在 PG 上被翻译为 to_char 并生效。"""
+def test_pg_beijing_timestamp_in_dml_values(pg_settings):
+    """PG-native Beijing wall-clock formatting works in parameterized SQL."""
     import re as _re
 
     from app.db._core import connect
@@ -288,7 +293,7 @@ def test_pg_strftime_default_in_dml_values(pg_settings):
     with connect() as conn:
         conn.execute(
             "INSERT INTO t (name, ts) VALUES (?, "
-            "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+            "to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))",
             ("x",),
         )
     with connect() as conn:
@@ -307,7 +312,7 @@ def _seed_window_table(connect):
         # recent：用 now-北京默认值；old：远古字面值
         conn.execute(
             "INSERT INTO w (name, created_at) VALUES "
-            "(?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+            "(?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))",
             ("recent",),
         )
         conn.execute(
@@ -317,44 +322,44 @@ def _seed_window_table(connect):
 
 
 def test_pg_datetime_window_literal_modifier(pg_settings):
-    """created_at >= datetime('now','+8h','-1 hour') 仅命中近窗行（TEXT 字典序=时间序）。"""
+    """PG interval window only matches the recent TEXT timestamp row."""
     from app.db._core import connect
 
     _seed_window_table(connect)
     with connect() as conn:
         rows = conn.execute(
-            "SELECT name FROM w WHERE created_at >= datetime('now', '+8 hours', '-1 hour')"
+            "SELECT name FROM w WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-1 hour')::interval, 'YYYY-MM-DD HH24:MI:SS')"
         ).fetchall()
         assert {r["name"] for r in rows} == {"recent"}
 
 
 def test_pg_datetime_window_param_modifier(pg_settings):
-    """datetime('now','+8h', ?) 参数为完整 SQLite 修饰符串，PG 当作 interval。"""
+    """A bound interval modifier works with PG-native timestamp formatting."""
     from app.db._core import connect
 
     _seed_window_table(connect)
     with connect() as conn:
         rows = conn.execute(
-            "SELECT name FROM w WHERE created_at >= datetime('now', '+8 hours', ?)",
+            "SELECT name FROM w WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')",
             ("-60 minutes",),
         ).fetchall()
         assert {r["name"] for r in rows} == {"recent"}
 
 
 def test_pg_date_now_midnight_boundary(pg_settings):
-    """date('now','+8h') || ' 00:00:00' 当日零点边界：近窗行入、远古行出。"""
+    """The Beijing midnight boundary includes the recent row only."""
     from app.db._core import connect
 
     _seed_window_table(connect)
     with connect() as conn:
         rows = conn.execute(
-            "SELECT name FROM w WHERE created_at >= date('now', '+8 hours') || ' 00:00:00'"
+            "SELECT name FROM w WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') || ' 00:00:00'"
         ).fetchall()
         assert {r["name"] for r in rows} == {"recent"}
 
 
-def test_pg_julianday_ms_diff(pg_settings):
-    """(julianday(a)-julianday(b))*86400000 → EXTRACT(EPOCH...)*1000，毫秒差正确。"""
+def test_pg_timestamp_ms_diff(pg_settings):
+    """EXTRACT(EPOCH) computes the millisecond difference between TEXT timestamps."""
     from app.db._core import connect
 
     with connect() as conn:
@@ -365,6 +370,7 @@ def test_pg_julianday_ms_diff(pg_settings):
         )
     with connect() as conn:
         ms = conn.execute(
-            "SELECT CAST(ROUND((julianday(a) - julianday(b)) * 86400000) AS INTEGER) AS d FROM j"
+            "SELECT CAST(ROUND(EXTRACT(EPOCH FROM "
+            "((a)::timestamp - (b)::timestamp)) * 1000) AS INTEGER) AS d FROM j"
         ).fetchone()["d"]
         assert int(ms) == 1000

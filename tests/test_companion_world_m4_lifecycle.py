@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 
 import app.db as db
 import pytest
-from app.db._backend import is_postgres
 from app.products.mingchan.domain.companion_world.lifecycle import (
     LifecycleEvidenceRef,
     LifecyclePolicy,
@@ -740,8 +739,6 @@ def test_offline_uses_same_conversation_lock_as_turn(fresh_db):
 
 
 def test_pg_double_approve_creates_one_farewell_and_outbox(fresh_db):
-    if not is_postgres():
-        pytest.skip("double approve 并发正确性以 PG 为准")
     owner_id, world = _world("19965001015")
     target = _resident(owner_id, world, "double", joined_at="2026-05-01 10:00:00")
     _resident(owner_id, world, "double-other", joined_at="2026-07-01 10:00:00")
@@ -777,8 +774,6 @@ def test_pg_double_approve_creates_one_farewell_and_outbox(fresh_db):
 
 
 def test_pg_concurrent_candidate_creation_has_one_open_event(fresh_db):
-    if not is_postgres():
-        pytest.skip("lifecycle open-event 并发正确性以 PG 为准")
     owner_id, world = _world("19965001007")
     target = _resident(
         owner_id, world, "concurrent", joined_at="2026-05-01 10:00:00"

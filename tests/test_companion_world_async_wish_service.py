@@ -10,7 +10,6 @@ from datetime import datetime, timedelta
 import app.db as db
 import pytest
 from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
-from app.db._backend import is_postgres
 from app.products.mingchan.application.mailbox import (
     CompanionWorldMailboxService,
 )
@@ -268,8 +267,6 @@ def test_account_deletion_removes_pending_wish_and_job(fresh_db, monkeypatch):
 
 
 def test_withdraw_and_delivery_race_has_one_atomic_winner(fresh_db, monkeypatch):
-    if not is_postgres():
-        pytest.skip("收回/投递真并发只在 PostgreSQL 算数")
     owner, _ = _world("19930101006")
     _stub_input(monkeypatch)
     service = CompanionWorldResidentWishService(config=fresh_db)

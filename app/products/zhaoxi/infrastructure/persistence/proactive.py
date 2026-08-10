@@ -155,13 +155,14 @@ def create_outbound_message(
     with connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO outbound_messages(
+            INSERT INTO outbound_messages(
                 account_id, channel, channel_account_id, to_user_id, session_key,
                 source, text, idempotency_key, status, error, quota_date,
                 product_category, policy_version, policy_reason, scheduled_at,
                 node_id, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (
                 cleaned_account_id,
@@ -224,7 +225,7 @@ def update_outbound_message_metadata(
             """
             UPDATE outbound_messages
             SET metadata_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (json.dumps(metadata, ensure_ascii=False), outbound_message_id),
@@ -421,7 +422,7 @@ def claim_pending_outbound_message(
             SET status = 'sending',
                 attempts = attempts + 1,
                 error = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'pending'
             """,
@@ -466,12 +467,12 @@ def claim_pending_outbound_by_node(
                 OR (
                   status = 'sending'
                   AND claimed_at IS NOT NULL
-                  AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                  AND claimed_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
                 )
               )
               AND (
                 scheduled_at IS NULL
-                OR scheduled_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                OR scheduled_at <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
               )
             ORDER BY created_at ASC, id ASC
             LIMIT ?
@@ -485,9 +486,9 @@ def claim_pending_outbound_by_node(
                 UPDATE outbound_messages
                 SET status = 'sending',
                     attempts = attempts + 1,
-                    claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    claimed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                     error = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                   AND node_id = ?
                   AND attempts < ?
@@ -496,7 +497,7 @@ def claim_pending_outbound_by_node(
                     OR (
                       status = 'sending'
                       AND claimed_at IS NOT NULL
-                      AND claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                      AND claimed_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
                     )
                   )
                 """,
@@ -525,8 +526,8 @@ def mark_outbound_message_sent(
             SET status = 'sent',
                 gateway_message_id = ?,
                 error = NULL,
-                sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                sent_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (gateway_message_id, outbound_message_id),
@@ -549,7 +550,7 @@ def mark_outbound_message_failed(
             UPDATE outbound_messages
             SET status = 'failed',
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (error, outbound_message_id),
@@ -572,7 +573,7 @@ def cancel_outbound_message(
             UPDATE outbound_messages
             SET status = 'cancelled',
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (error, outbound_message_id),
@@ -651,7 +652,7 @@ def create_reminder(
                 session_key, text, due_at, recur_rule, metadata_json,
                 fulfillment, content_meta_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 cleaned_reminder_id,
@@ -765,9 +766,9 @@ def claim_due_reminder(*, reminder_id: str, now: str) -> Optional[Dict[str, Any]
             UPDATE reminders
             SET status = 'sending',
                 attempts = attempts + 1,
-                claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                claimed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                 error = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'pending'
               AND due_at <= ?
@@ -803,11 +804,11 @@ def mark_reminder_sent(
                 SET status = 'pending',
                     due_at = ?,
                     sent_count = sent_count + 1,
-                    last_sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    last_sent_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                     claimed_at = NULL,
                     outbound_message_id = ?,
                     error = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                 """,
                 (next_due_at, outbound_message_id, reminder_id),
@@ -818,11 +819,11 @@ def mark_reminder_sent(
                 UPDATE reminders
                 SET status = 'sent',
                     sent_count = sent_count + 1,
-                    last_sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                    last_sent_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                     outbound_message_id = ?,
                     error = NULL,
-                    sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    sent_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                 """,
                 (outbound_message_id, reminder_id),
@@ -851,7 +852,7 @@ def reschedule_reminder_stale_touch(
                 due_at = ?,
                 claimed_at = NULL,
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (next_due_at, error, reminder_id),
@@ -876,7 +877,7 @@ def mark_reminder_failed(
             SET status = 'failed',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, error, reminder_id),
@@ -901,8 +902,8 @@ def cancel_reminder(
             SET status = 'cancelled',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                cancelled_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, error, reminder_id),
@@ -937,7 +938,7 @@ def update_reminder(
         fields.append("recur_rule = NULL")
     if not fields:
         return get_reminder(reminder_id=reminder_id)
-    fields.append("updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))")
+    fields.append("updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')")
     values.append(reminder_id)
     with connect() as conn:
         conn.execute(
@@ -1007,13 +1008,14 @@ def create_reminder_content_run(
     with connect() as conn:
         cursor = conn.execute(
             """
-            INSERT OR IGNORE INTO reminder_content_runs(
+            INSERT INTO reminder_content_runs(
                 id, reminder_id, account_id, scheduled_for, status,
                 attempts, started_at, created_at
             )
             VALUES (?, ?, ?, ?, 'running', 1,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (cleaned_run_id, cleaned_reminder_id, cleaned_account_id, cleaned_scheduled_for),
         )
@@ -1054,13 +1056,14 @@ def claim_reminder_content_run(
     with connect() as conn:
         cursor = conn.execute(
             """
-            INSERT OR IGNORE INTO reminder_content_runs(
+            INSERT INTO reminder_content_runs(
                 id, reminder_id, account_id, scheduled_for, status,
                 attempts, started_at, created_at
             )
             VALUES (?, ?, ?, ?, 'running', 1,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (cleaned_run_id, cleaned_reminder_id, cleaned_account_id, cleaned_scheduled_for),
         )
@@ -1090,7 +1093,7 @@ def claim_reminder_content_run(
             SET status = 'running',
                 attempts = attempts + 1,
                 error = NULL,
-                started_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                started_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (run["id"],),
@@ -1122,7 +1125,7 @@ def update_reminder_content_meta(
             """
             UPDATE reminders
             SET content_meta_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (json.dumps(current, ensure_ascii=False), cleaned),
@@ -1164,7 +1167,7 @@ def _finish_reminder_content_run(
         values.append(error)
     if finished:
         fields.append(
-            "finished_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+            "finished_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')"
         )
     values.append(run_id)
     with connect() as conn:
@@ -1320,11 +1323,12 @@ def create_proactive_commitment(
     with connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO proactive_commitments(
+            INSERT INTO proactive_commitments(
                 id, account_id, session_id, source_message_id, source_reply_message_id,
                 dedupe_key, text, due_at, confidence, reason, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (
                 cleaned_commitment_id,
@@ -1433,9 +1437,9 @@ def claim_due_proactive_commitment(
             UPDATE proactive_commitments
             SET status = 'sending',
                 attempts = attempts + 1,
-                claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                claimed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                 error = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'pending'
               AND due_at <= ?
@@ -1478,8 +1482,8 @@ def mark_proactive_commitment_sent(
             SET status = 'sent',
                 outbound_message_id = ?,
                 error = NULL,
-                sent_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                sent_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, commitment_id),
@@ -1504,7 +1508,7 @@ def mark_proactive_commitment_failed(
             SET status = 'failed',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, error, commitment_id),
@@ -1529,8 +1533,8 @@ def cancel_proactive_commitment(
             SET status = 'cancelled',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 error = ?,
-                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                cancelled_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, error, commitment_id),
@@ -1574,15 +1578,16 @@ def insert_global_candidate(
 ) -> None:
     """入池一条全局候选；命中 UNIQUE(kind,generated_date,dedupe_key) 则静默忽略（幂等）。
 
-    调用方在入池前已做历史去重，这里的 INSERT OR IGNORE 只作并发/重跑的兜底防重，
-    不返回是否命中（跨后端 rowcount 语义不统一，调用方按"尝试集 - 已存在集"自行计数）。
+    调用方在入池前已做历史去重，这里的 ON CONFLICT DO NOTHING 只作并发/重跑的
+    兜底防重，不返回是否命中（调用方按"尝试集 - 已存在集"自行计数）。
     """
     with connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO proactive_global_candidates(
+            INSERT INTO proactive_global_candidates(
                 kind, topic, text, generated_date, dedupe_key, expires_at, metadata_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (
                 kind,
@@ -1669,8 +1674,8 @@ def upsert_proactive_account_state(
     """Upsert proactive_account_state for an account.
 
     metadata replaces the entire metadata JSON (legacy semantics).
-    metadata_patch applies an RFC 7396 JSON Merge Patch via SQLite json_patch
-    in a single statement: only the named keys are written, and keys mapped to
+    metadata_patch applies an RFC 7396 JSON Merge Patch via the PostgreSQL
+    json_patch helper in one statement: only the named keys are written, and keys mapped to
     None are removed. metadata_patch is preferred for concurrent updaters
     (scheduler + admin) because it avoids the read-modify-write race that
     silently drops sibling keys; metadata and metadata_patch are mutually
@@ -1716,7 +1721,7 @@ def upsert_proactive_account_state(
                     last_proactive_sent_at, cooldown_until, metadata_json,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                VALUES (?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (
                     cleaned_account_id,
@@ -1743,10 +1748,10 @@ def upsert_proactive_account_state(
                         last_proactive_sent_at = ?,
                         cooldown_until = ?,
                         metadata_json = json_patch(
-                            COALESCE(metadata_json, '{}'),
-                            ?
-                        ),
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                            (COALESCE(metadata_json, '{}'))::jsonb,
+                            (?)::jsonb
+                        )::text,
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE account_id = ?
                     """,
                     (
@@ -1781,7 +1786,7 @@ def upsert_proactive_account_state(
                         last_proactive_sent_at = ?,
                         cooldown_until = ?,
                         metadata_json = ?,
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE account_id = ?
                     """,
                     (
@@ -1902,7 +1907,7 @@ def upsert_proactive_message_settings_row(
                     category_settings_json, frequency_json, allowed_windows_json,
                     muted_until, metadata_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (
                     cleaned_account_id,
@@ -1953,7 +1958,7 @@ def upsert_proactive_message_settings_row(
                     allowed_windows_json = ?,
                     muted_until = ?,
                     metadata_json = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE account_id = ?
                 """,
                 (
@@ -2081,9 +2086,15 @@ def list_due_reactivation_candidate_accounts(
               AND a.app_id = ?
               {node_clause}
               AND json_valid(s.metadata_json)
-              AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') IS NOT NULL
-              AND json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') <= ?
-            ORDER BY json_extract(s.metadata_json, '$.reactivation_candidate.scheduled_at') ASC,
+              AND safe_json_extract_text(
+                    s.metadata_json, ARRAY['reactivation_candidate', 'scheduled_at']
+                  ) IS NOT NULL
+              AND safe_json_extract_text(
+                    s.metadata_json, ARRAY['reactivation_candidate', 'scheduled_at']
+                  ) <= ?
+            ORDER BY safe_json_extract_text(
+                         s.metadata_json, ARRAY['reactivation_candidate', 'scheduled_at']
+                     ) ASC,
                      s.updated_at ASC
             LIMIT ?
             """,
@@ -2116,7 +2127,7 @@ def claim_due_proactive_account_state(
             UPDATE proactive_account_state
             SET last_scan_at = ?,
                 next_scan_at = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ?
               AND enabled = 1
               AND (next_scan_at IS NULL OR next_scan_at <= ?)
@@ -2246,7 +2257,7 @@ def create_content_invitation(
                 scheduled_at, expires_at, source_task_id, metadata_json,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 cleaned_invitation_id,
@@ -2345,7 +2356,7 @@ def claim_content_invitation_for_send(
             """
             UPDATE content_invitations
             SET status = 'sending',
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'candidate'
               AND EXISTS (
@@ -2376,7 +2387,7 @@ def release_content_invitation_claim(
             """
             UPDATE content_invitations
             SET status = 'candidate',
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'sending'
             """,
@@ -2401,7 +2412,7 @@ def mark_content_invitation_invited(
                 expires_at = COALESCE(?, expires_at),
                 outbound_message_id = ?,
                 policy_reason = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'sending'
             """,
@@ -2429,7 +2440,7 @@ def mark_content_invitation_rejected_by_policy(
             SET status = 'rejected_by_policy',
                 outbound_message_id = COALESCE(?, outbound_message_id),
                 policy_reason = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (outbound_message_id, _clean_text(policy_reason), invitation_id),
@@ -2456,7 +2467,7 @@ def mark_content_invitation_titles_sent(
                 responded_at = ?,
                 trigger_message_id = ?,
                 tool_invocation_id = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status = 'invited'
             """,
@@ -2493,7 +2504,7 @@ def mark_content_invitation_feedback(
                 trigger_message_id = ?,
                 tool_invocation_id = ?,
                 metadata_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -2533,7 +2544,7 @@ def expire_content_invitations(*, now: str, limit: int = 100) -> List[Dict[str, 
                 f"""
                 UPDATE content_invitations
                 SET status = 'expired',
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id IN ({placeholders})
                 """,
                 ids,
@@ -2593,14 +2604,14 @@ def upsert_content_invitation_preference(
                 account_id, topic, status, cooldown_until, last_feedback_at,
                 feedback_count, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), 1, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), 1, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id, topic) DO UPDATE SET
                 status = excluded.status,
                 cooldown_until = excluded.cooldown_until,
-                last_feedback_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                last_feedback_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                 feedback_count = content_invitation_preferences.feedback_count + 1,
                 metadata_json = excluded.metadata_json,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 cleaned_account_id,

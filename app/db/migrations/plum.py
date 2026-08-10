@@ -23,10 +23,8 @@ def _migration_0064_fibre_mvp(conn: Connection) -> None:
             source_type TEXT NOT NULL,
             source_id TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_runtime_ownerships_source
             ON runtime_ownerships(app_id, source_type, source_id)
@@ -41,18 +39,18 @@ def _migration_0064_fibre_mvp(conn: Connection) -> None:
             intro TEXT NOT NULL,
             greeting TEXT NOT NULL,
             tags_json TEXT NOT NULL DEFAULT '[]',
-            heat_count INTEGER NOT NULL DEFAULT 0,
+            heat_count BIGINT NOT NULL DEFAULT 0,
             avatar_ref TEXT,
             cover_ref TEXT,
             accent_color TEXT NOT NULL DEFAULT '#8b5cf6',
             persona_prompt TEXT NOT NULL,
             scenario_prompt TEXT NOT NULL DEFAULT '',
             speaking_style TEXT NOT NULL DEFAULT '',
-            prompt_version INTEGER NOT NULL DEFAULT 1,
+            prompt_version BIGINT NOT NULL DEFAULT 1,
             status TEXT NOT NULL DEFAULT 'draft',
-            sort_order INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            sort_order BIGINT NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_characters_feed
             ON fibre_characters(status, sort_order, id);
@@ -61,15 +59,12 @@ def _migration_0064_fibre_mvp(conn: Connection) -> None:
             platform_user_id TEXT NOT NULL,
             character_id TEXT NOT NULL,
             runtime_account_id TEXT NOT NULL,
-            character_prompt_version INTEGER NOT NULL,
+            character_prompt_version BIGINT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             PRIMARY KEY(platform_user_id, character_id),
-            UNIQUE(runtime_account_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
-            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id)
+            UNIQUE(runtime_account_id)
         );
 
         CREATE TABLE IF NOT EXISTS fibre_model_profiles (
@@ -77,12 +72,12 @@ def _migration_0064_fibre_mvp(conn: Connection) -> None:
             provider_id TEXT NOT NULL,
             display_name TEXT NOT NULL,
             description TEXT NOT NULL,
-            coin_cost_micros INTEGER NOT NULL,
-            enabled INTEGER NOT NULL DEFAULT 1,
-            is_default INTEGER NOT NULL DEFAULT 0,
-            config_version INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            coin_cost_micros BIGINT NOT NULL,
+            enabled BIGINT NOT NULL DEFAULT 1,
+            is_default BIGINT NOT NULL DEFAULT 0,
+            config_version BIGINT NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_model_profiles_default
             ON fibre_model_profiles(is_default) WHERE enabled = 1 AND is_default = 1;
@@ -92,17 +87,12 @@ def _migration_0064_fibre_mvp(conn: Connection) -> None:
             platform_user_id TEXT NOT NULL,
             character_id TEXT NOT NULL,
             runtime_account_id TEXT NOT NULL,
-            runtime_session_id INTEGER NOT NULL,
+            runtime_session_id BIGINT NOT NULL,
             model_profile TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            archived_at TEXT,
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
-            FOREIGN KEY(runtime_account_id) REFERENCES accounts(id),
-            FOREIGN KEY(runtime_session_id) REFERENCES sessions(id),
-            FOREIGN KEY(model_profile) REFERENCES fibre_model_profiles(profile)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            archived_at TEXT
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_conversations_active
             ON fibre_conversations(platform_user_id, character_id)
@@ -118,7 +108,7 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
 
     # Migration replay tests and repaired legacy databases may already contain
     # one or more of these columns even when version 65 is absent. Keep the
-    # migration idempotent across SQLite and PostgreSQL.
+    # Migration replay may encounter columns repaired outside the version chain.
     _ensure_column(conn, "fibre_characters", "creator_profile_id", "TEXT")
     _ensure_column(
         conn,
@@ -150,9 +140,8 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             avatar_ref TEXT,
             profile_type TEXT NOT NULL DEFAULT 'creator',
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_public_profiles_platform_user
             ON fibre_public_profiles(platform_user_id) WHERE platform_user_id IS NOT NULL;
@@ -164,50 +153,45 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             icon_ref TEXT,
             style_token TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE TABLE IF NOT EXISTS fibre_character_badge_assignments (
             character_id TEXT NOT NULL,
             badge_id TEXT NOT NULL,
-            sort_order INTEGER NOT NULL DEFAULT 0,
+            sort_order BIGINT NOT NULL DEFAULT 0,
             starts_at TEXT,
             ends_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(character_id, badge_id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
-            FOREIGN KEY(badge_id) REFERENCES fibre_character_badges(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(character_id, badge_id)
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_character_badges_character
             ON fibre_character_badge_assignments(character_id, sort_order);
 
         CREATE TABLE IF NOT EXISTS fibre_character_stats (
             character_id TEXT PRIMARY KEY,
-            interaction_count INTEGER NOT NULL DEFAULT 0 CHECK(interaction_count >= 0),
-            connector_count INTEGER NOT NULL DEFAULT 0 CHECK(connector_count >= 0),
-            comment_count INTEGER NOT NULL DEFAULT 0 CHECK(comment_count >= 0),
-            memory_count INTEGER NOT NULL DEFAULT 0 CHECK(memory_count >= 0),
-            like_count INTEGER NOT NULL DEFAULT 0 CHECK(like_count >= 0),
-            favorite_count INTEGER NOT NULL DEFAULT 0 CHECK(favorite_count >= 0),
-            stats_version INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id)
+            interaction_count BIGINT NOT NULL DEFAULT 0 CHECK(interaction_count >= 0),
+            connector_count BIGINT NOT NULL DEFAULT 0 CHECK(connector_count >= 0),
+            comment_count BIGINT NOT NULL DEFAULT 0 CHECK(comment_count >= 0),
+            memory_count BIGINT NOT NULL DEFAULT 0 CHECK(memory_count >= 0),
+            like_count BIGINT NOT NULL DEFAULT 0 CHECK(like_count >= 0),
+            favorite_count BIGINT NOT NULL DEFAULT 0 CHECK(favorite_count >= 0),
+            stats_version BIGINT NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
 
         CREATE TABLE IF NOT EXISTS fibre_user_character_relationships (
             platform_user_id TEXT NOT NULL,
             character_id TEXT NOT NULL,
             state TEXT NOT NULL DEFAULT 'connected',
-            relationship_level INTEGER NOT NULL DEFAULT 0 CHECK(relationship_level >= 0),
-            relationship_xp INTEGER NOT NULL DEFAULT 0 CHECK(relationship_xp >= 0),
-            completed_turn_count INTEGER NOT NULL DEFAULT 0 CHECK(completed_turn_count >= 0),
-            first_connected_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+            relationship_level BIGINT NOT NULL DEFAULT 0 CHECK(relationship_level >= 0),
+            relationship_xp BIGINT NOT NULL DEFAULT 0 CHECK(relationship_xp >= 0),
+            completed_turn_count BIGINT NOT NULL DEFAULT 0 CHECK(completed_turn_count >= 0),
+            first_connected_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
             last_interacted_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(platform_user_id, character_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, character_id)
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_relationships_character
             ON fibre_user_character_relationships(character_id, state, last_interacted_at);
@@ -215,10 +199,8 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS fibre_character_likes (
             platform_user_id TEXT NOT NULL,
             character_id TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(platform_user_id, character_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, character_id)
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_character_likes_character
             ON fibre_character_likes(character_id, created_at);
@@ -226,10 +208,8 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
         CREATE TABLE IF NOT EXISTS fibre_character_favorites (
             platform_user_id TEXT NOT NULL,
             character_id TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            PRIMARY KEY(platform_user_id, character_id),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, character_id)
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_character_favorites_character
             ON fibre_character_favorites(character_id, created_at);
@@ -241,14 +221,12 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             content TEXT NOT NULL,
             source_locale TEXT NOT NULL DEFAULT 'en',
             status TEXT NOT NULL DEFAULT 'visible',
-            like_count INTEGER NOT NULL DEFAULT 0 CHECK(like_count >= 0),
-            is_featured INTEGER NOT NULL DEFAULT 0,
-            featured_rank INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            deleted_at TEXT,
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
-            FOREIGN KEY(author_profile_id) REFERENCES fibre_public_profiles(id)
+            like_count BIGINT NOT NULL DEFAULT 0 CHECK(like_count >= 0),
+            is_featured BIGINT NOT NULL DEFAULT 0,
+            featured_rank BIGINT NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            deleted_at TEXT
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_comments_profile
             ON fibre_character_comments(character_id, status, is_featured, featured_rank, created_at);
@@ -262,16 +240,13 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             title TEXT NOT NULL,
             summary TEXT NOT NULL DEFAULT '',
             cover_ref TEXT,
-            message_count INTEGER NOT NULL DEFAULT 0 CHECK(message_count >= 0),
-            engagement_count INTEGER NOT NULL DEFAULT 0 CHECK(engagement_count >= 0),
+            message_count BIGINT NOT NULL DEFAULT 0 CHECK(message_count >= 0),
+            engagement_count BIGINT NOT NULL DEFAULT 0 CHECK(engagement_count >= 0),
             visibility TEXT NOT NULL DEFAULT 'private',
             moderation_status TEXT NOT NULL DEFAULT 'pending',
             published_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(character_id) REFERENCES fibre_characters(id),
-            FOREIGN KEY(owner_profile_id) REFERENCES fibre_public_profiles(id),
-            FOREIGN KEY(fibre_conversation_id) REFERENCES fibre_conversations(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_memories_profile
             ON fibre_character_memories(character_id, visibility, moderation_status, published_at);
@@ -284,11 +259,10 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             description TEXT NOT NULL DEFAULT '',
             prompt_text TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'active',
-            is_default INTEGER NOT NULL DEFAULT 0,
-            version INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            is_default BIGINT NOT NULL DEFAULT 0,
+            version BIGINT NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE UNIQUE INDEX IF NOT EXISTS ux_fibre_personas_default
             ON fibre_user_personas(platform_user_id, is_default)
@@ -298,11 +272,10 @@ def _migration_0065_fibre_character_experience(conn: Connection) -> None:
             id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL,
             content_snapshot TEXT NOT NULL,
-            sort_order INTEGER NOT NULL DEFAULT 0,
+            sort_order BIGINT NOT NULL DEFAULT 0,
             status TEXT NOT NULL DEFAULT 'active',
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(conversation_id) REFERENCES fibre_conversations(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_conversation_pins_active
             ON fibre_conversation_pins(conversation_id, status, sort_order);
@@ -325,9 +298,8 @@ def _migration_0066_fibre_public_test_auth(conn: Connection) -> None:
             expires_at TEXT,
             claimed_at TEXT,
             last_used_at TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            FOREIGN KEY(platform_user_id) REFERENCES platform_users(id)
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         );
         CREATE INDEX IF NOT EXISTS ix_fibre_access_invites_status_expiry
             ON fibre_access_invites(status, expires_at);

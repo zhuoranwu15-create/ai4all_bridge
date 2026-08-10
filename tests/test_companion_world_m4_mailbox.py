@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import app.db as db
 import pytest
 from app.bootstrap.product_registry import MINGCHAN_APP_ID, build_test_product_registry
-from app.db._backend import is_postgres
 from app.products.mingchan.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
@@ -778,8 +777,6 @@ def test_accept_failure_after_runtime_insert_rolls_back_everything(
 
 
 def test_pg_concurrent_mailbox_delivery_keeps_one_open_letter(fresh_db):
-    if not is_postgres():
-        pytest.skip("mailbox delivery 并发正确性以 PG 为准")
     owner_id, _world_row = _world("19966001007")
     policy = build_mailbox_policy(fresh_db)
     _catalog("concurrent", key="concurrent", priority=10, policy_version=policy.version)
@@ -805,8 +802,6 @@ def test_pg_concurrent_mailbox_delivery_keeps_one_open_letter(fresh_db):
 
 
 def test_pg_double_accept_replays_one_runtime_resident_and_conversation(fresh_db):
-    if not is_postgres():
-        pytest.skip("mailbox accept 并发正确性以 PG 为准")
     owner_id, _world_row = _world("19966001017")
     policy = build_mailbox_policy(fresh_db)
     _catalog("double-accept", key="double-accept", priority=10, policy_version=policy.version)
@@ -843,8 +838,6 @@ def test_pg_double_accept_replays_one_runtime_resident_and_conversation(fresh_db
 
 
 def test_pg_mailbox_accept_and_regular_create_share_tenth_slot(fresh_db):
-    if not is_postgres():
-        pytest.skip("mailbox capacity 并发正确性以 PG 为准")
     owner_id, world = _world("19966001018")
     policy = build_mailbox_policy(fresh_db)
     _catalog("race-capacity", key="race-capacity", priority=10, policy_version=policy.version)
@@ -897,8 +890,6 @@ def test_pg_mailbox_accept_and_regular_create_share_tenth_slot(fresh_db):
 
 
 def test_pg_accept_vs_expiry_is_never_torn(fresh_db):
-    if not is_postgres():
-        pytest.skip("mailbox accept/expiry 并发正确性以 PG 为准")
     owner_id, _world_row = _world("19966001019")
     policy = build_mailbox_policy(fresh_db)
     _catalog("race-expiry", key="race-expiry", priority=10, policy_version=policy.version)
@@ -952,8 +943,6 @@ def test_pg_accept_vs_expiry_is_never_torn(fresh_db):
 
 
 def test_pg_accept_vs_catalog_retire_is_never_torn(fresh_db):
-    if not is_postgres():
-        pytest.skip("mailbox accept/catalog retire 并发正确性以 PG 为准")
     owner_id, _world_row = _world("19966001020")
     policy = build_mailbox_policy(fresh_db)
     catalog = _catalog(

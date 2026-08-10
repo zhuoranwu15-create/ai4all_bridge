@@ -157,10 +157,11 @@ def test_inbound_rate_counts_messages_and_unique_accounts(fresh_db):
                 (row_id,),
             )
 
-    add_message("acc-rate-a", "rate-a-1", "datetime('now', '+8 hours', '-5 minutes')")
-    add_message("acc-rate-a", "rate-a-2", "datetime('now', '+8 hours', '-2 minutes')")
-    add_message("acc-rate-b", "rate-b-1", "datetime('now', '+8 hours', '-30 minutes')")
-    add_message("acc-rate-c", "rate-c-old", "datetime('now', '+8 hours', '-2 hours')")
+    now_bj = "now() AT TIME ZONE 'Asia/Shanghai'"
+    add_message("acc-rate-a", "rate-a-1", f"to_char(({now_bj}) - interval '5 minutes', 'YYYY-MM-DD HH24:MI:SS')")
+    add_message("acc-rate-a", "rate-a-2", f"to_char(({now_bj}) - interval '2 minutes', 'YYYY-MM-DD HH24:MI:SS')")
+    add_message("acc-rate-b", "rate-b-1", f"to_char(({now_bj}) - interval '30 minutes', 'YYYY-MM-DD HH24:MI:SS')")
+    add_message("acc-rate-c", "rate-c-old", f"to_char(({now_bj}) - interval '2 hours', 'YYYY-MM-DD HH24:MI:SS')")
 
     rates = {item["minutes"]: item for item in get_inbound_message_rate(windows_minutes=(10, 60))}
 
@@ -179,7 +180,10 @@ def test_today_inbound_rate_counts_from_beijing_midnight(fresh_db):
         *,
         direction: str = "inbound",
         role: str = "user",
-        created_at_expr: str = "datetime('now', '+8 hours')",
+        created_at_expr: str = (
+            "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+            "'YYYY-MM-DD HH24:MI:SS')"
+        ),
     ) -> None:
         session_state = get_or_create_session(
             account_id=account_id,
@@ -211,7 +215,10 @@ def test_today_inbound_rate_counts_from_beijing_midnight(fresh_db):
     add_message(
         "acc-today-c",
         "today-c-old",
-        created_at_expr="datetime('now', '+8 hours', '-1 day')",
+        created_at_expr=(
+            "to_char((now() AT TIME ZONE 'Asia/Shanghai') - interval '1 day', "
+            "'YYYY-MM-DD HH24:MI:SS')"
+        ),
     )
     add_message("acc-today-a", "today-outbound", direction="outbound", role="assistant")
 

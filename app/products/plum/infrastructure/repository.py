@@ -36,7 +36,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
     conn.execute(
         """
         UPDATE plum_characters SET status='archived',
-            updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id IN ('char_luna', 'char_kai') AND status='active'
         """
     )
@@ -48,7 +48,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 handle=excluded.handle,
                 display_name=excluded.display_name,
@@ -66,7 +66,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
         )
         VALUES ('fprof_user_test', ?, 'plum-community', '社区用户', 'user',
                 'active',
-                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(id) DO UPDATE SET
             platform_user_id=COALESCE(excluded.platform_user_id, plum_public_profiles.platform_user_id),
             display_name=excluded.display_name,
@@ -87,7 +87,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', ?,
                     ?, 'mature', ?, ?,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
                 tagline=excluded.tagline,
@@ -131,7 +131,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
                 id, code, display_name, style_token, status, updated_at
             )
             VALUES (?, ?, ?, ?, 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 code=excluded.code,
                 display_name=excluded.display_name,
@@ -234,7 +234,7 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
                 coin_cost_micros, enabled, is_default, config_version, updated_at
             )
             VALUES (?, ?, ?, ?, ?, 1, ?, 1,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(profile) DO UPDATE SET
                 provider_id=excluded.provider_id,
                 display_name=excluded.display_name,
@@ -266,7 +266,7 @@ def _seed_default_persona_in_conn(
         VALUES (?, ?, ?, '定义“你”在故事中的身份与背景。',
                 '用户以自己选择的身份进入故事；不要替用户决定行动或台词。',
                 'active', 1, 1,
-                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(id) DO UPDATE SET
             display_name=excluded.display_name,
             description=excluded.description,
@@ -317,7 +317,7 @@ def ensure_plum_user(
                 id, channel, display_name, status, onboarding_state, app_id, updated_at
             )
             VALUES (?, 'native', ?, 'active', 'complete', ?,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
                 status='active',
@@ -329,7 +329,7 @@ def ensure_plum_user(
         conn.execute(
             """
             INSERT INTO profiles(account_id, display_name, updated_at)
-            VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO UPDATE SET
                 display_name=excluded.display_name,
                 updated_at=excluded.updated_at
@@ -389,7 +389,7 @@ def create_plum_access_invite(
                 id, code_hash, label, status, expires_at, updated_at
             )
             VALUES (?, ?, ?, 'active', ?,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (invite_id, _access_code_hash(access_code), str(label or "").strip()[:80], expires_at),
         )
@@ -415,7 +415,7 @@ def redeem_plum_access_invite(
             """
             SELECT id, platform_user_id FROM plum_access_invites
             WHERE code_hash=? AND status='active'
-              AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+              AND (expires_at IS NULL OR expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """ + lock,
             (code_hash,),
         ).fetchone()
@@ -431,16 +431,16 @@ def redeem_plum_access_invite(
                     id, phone, display_name, status, updated_at
                 )
                 VALUES (?, ?, ?, 'active',
-                        strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (platform_user_id, phone, cleaned_name),
             )
             claimed = conn.execute(
                 """
                 UPDATE plum_access_invites
-                SET platform_user_id=?, claimed_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    last_used_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                SET platform_user_id=?, claimed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    last_used_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id=? AND platform_user_id IS NULL
                 """,
                 (platform_user_id, row["id"]),
@@ -451,7 +451,7 @@ def redeem_plum_access_invite(
             conn.execute(
                 """
                 UPDATE platform_users
-                SET display_name=?, updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                SET display_name=?, updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id=? AND status='active'
                 """,
                 (cleaned_name, platform_user_id),
@@ -459,8 +459,8 @@ def redeem_plum_access_invite(
             conn.execute(
                 """
                 UPDATE plum_access_invites
-                SET last_used_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                SET last_used_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id=?
                 """,
                 (row["id"],),
@@ -489,7 +489,7 @@ def seed_plum_dev() -> Dict[str, Any]:
             """
             INSERT INTO platform_users(id, phone, display_name, status, updated_at)
             VALUES (?, ?, 'Plum 测试用户', 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
                 display_name=excluded.display_name,
                 status='active',
@@ -507,7 +507,7 @@ def seed_plum_dev() -> Dict[str, Any]:
             """
             INSERT INTO accounts(id, channel, display_name, status, onboarding_state, app_id, updated_at)
             VALUES (?, 'native', 'Plum Test Entry', 'active', 'complete', ?,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO NOTHING
             """,
             (entry_account_id, PLUM_APP_ID),
@@ -521,7 +521,7 @@ def seed_plum_dev() -> Dict[str, Any]:
             """
             INSERT INTO profiles(account_id, display_name, updated_at)
             VALUES (?, 'Plum Test Entry',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO NOTHING
             """,
             (entry_account_id,),
@@ -613,8 +613,8 @@ def list_characters() -> List[Dict[str, Any]]:
                 FROM plum_character_badge_assignments a
                 JOIN plum_character_badges b ON b.id=a.badge_id
                 WHERE a.character_id=? AND b.status='active'
-                  AND (a.starts_at IS NULL OR a.starts_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
-                  AND (a.ends_at IS NULL OR a.ends_at > strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                  AND (a.starts_at IS NULL OR a.starts_at <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+                  AND (a.ends_at IS NULL OR a.ends_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 ORDER BY a.sort_order, b.code
                 """,
                 (item["id"],),
@@ -713,7 +713,7 @@ def create_or_get_conversation(
                 platform_user_id, character_id, state, updated_at
             )
             VALUES (?, ?, 'connected',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(platform_user_id, character_id) DO UPDATE SET
                 state='connected', updated_at=excluded.updated_at
             """,
@@ -760,7 +760,7 @@ def create_or_get_conversation(
                     character_prompt_version, status, updated_at
                 )
                 VALUES (?, ?, ?, ?, 'active',
-                        strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (
                     platform_user_id, character_id, runtime_account_id,
@@ -776,8 +776,8 @@ def create_or_get_conversation(
                 business_day, metadata_json, updated_at
             )
             VALUES (?, ?, ?, 'Plum Test User', 'active',
-                    date('now', '+8 hours'), '{}',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD'), '{}',
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id, session_key) DO UPDATE SET
                 status='active', ended_at=NULL, close_reason=NULL,
                 updated_at=excluded.updated_at
@@ -802,7 +802,7 @@ def create_or_get_conversation(
                 runtime_session_id, model_profile, status, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 conversation_id, platform_user_id, character_id, runtime_account_id,
@@ -1061,7 +1061,7 @@ def _set_character_reaction(
                     f"""
                     UPDATE plum_character_stats
                     SET {count_column}={count_column}+1, stats_version=stats_version+1,
-                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE character_id=?
                     """,
                     (character_id,),
@@ -1077,7 +1077,7 @@ def _set_character_reaction(
                     UPDATE plum_character_stats
                     SET {count_column}=CASE WHEN {count_column}>0 THEN {count_column}-1 ELSE 0 END,
                         stats_version=stats_version+1,
-                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE character_id=?
                     """,
                     (character_id,),
@@ -1168,7 +1168,7 @@ def update_conversation_model(
         updated = conn.execute(
             """
             UPDATE plum_conversations SET model_profile=?,
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND platform_user_id=? AND status='active'
             """,
             (model_profile, conversation_id, platform_user_id),
@@ -1185,7 +1185,7 @@ def touch_conversation(*, conversation_id: str, platform_user_id: str) -> None:
         conn.execute(
             """
             UPDATE plum_conversations SET
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND platform_user_id=? AND status='active'
             """,
             (conversation_id, platform_user_id),
@@ -1202,8 +1202,8 @@ def restart_conversation(
         conn.execute(
             """
             UPDATE plum_conversations SET status='archived',
-                archived_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                archived_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND platform_user_id=? AND status='active'
             """,
             (conversation_id, platform_user_id),
@@ -1211,9 +1211,9 @@ def restart_conversation(
         session_id = int(current["runtime_session_id"])
         conn.execute(
             """
-            UPDATE sessions SET status='closed', ended_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+            UPDATE sessions SET status='closed', ended_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                 close_reason='plum_restart', session_key=session_key || ':' || id,
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND account_id=? AND status='active'
             """,
             (session_id, current["runtime_account_id"]),
@@ -1224,8 +1224,8 @@ def restart_conversation(
                 account_id, session_key, sender_id, sender_name, status,
                 business_day, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, 'Plum Test User', 'active', date('now', '+8 hours'), '{}',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, 'Plum Test User', 'active', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD'), '{}',
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (current["runtime_account_id"], _ACTIVE_SESSION_KEY, platform_user_id),
         )
@@ -1241,7 +1241,7 @@ def restart_conversation(
                 runtime_session_id, model_profile, status, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 new_id, platform_user_id, current["character_id"],

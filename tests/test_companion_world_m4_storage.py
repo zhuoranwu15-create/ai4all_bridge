@@ -28,7 +28,8 @@ def _runtime_account(name: str = "M4 居民") -> str:
         conn.execute(
             "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
             "VALUES (?, 'native', ?, 'zhaoxi', "
-            "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+            "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+            "'YYYY-MM-DD HH24:MI:SS'))",
             (account_id, name),
         )
     return account_id

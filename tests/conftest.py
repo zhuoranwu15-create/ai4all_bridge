@@ -94,7 +94,7 @@ def pytest_collection_modifyitems(config, items):
 
 
 def _dsn_from_conn(conn) -> str:
-    """从 pytest-postgresql 的连接推出 URL 形式 DSN（供 is_postgres 识别 + 业务层直连）。"""
+    """从 pytest-postgresql 的连接推出供业务层直连的 URL 形式 DSN。"""
     info = conn.info
     if info.host and info.host.startswith("/"):
         # 本地 unix socket：host 放进 query，URL 主体留空 host
@@ -593,10 +593,8 @@ def fresh_db(test_settings):
     for p in patches:
         p.start()
     try:
-        from app.db._backend import is_postgres
-        # 护栏：主测试后端必须路由到 pytest-postgresql 克隆库，不能静默回落 SQLite，
-        # 也不能继承 .env 中的外部数据库。schema 已在 session 模板中迁移完成。
-        assert is_postgres(), "主 pytest 必须使用 PostgreSQL 临时库"
+        # 护栏：主测试后端必须路由到 pytest-postgresql 克隆库，不能继承 .env
+        # 中的外部数据库。schema 已在 session 模板中迁移完成。
         assert test_settings.database_url, "PG 临时库 database_url 不应为空"
         yield test_settings
     finally:

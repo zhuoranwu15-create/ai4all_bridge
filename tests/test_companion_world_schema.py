@@ -2,14 +2,14 @@
 
 覆盖：迁移建表/索引/唯一约束、universe 幂等 get-or-create、resident 偏唯一 + 容量真相、
 ai_conversation 唯一、L3 append-only + fact_type 过滤 + status 过滤 + **跨 universe 锚隔离**，
-以及 PG 并发 append 不覆盖（§9/D-12，SQLite skip）。
+以及 PostgreSQL 并发 append 不覆盖（§9/D-12）。
 """
 import concurrent.futures
 
 import pytest
 
 import app.db as db
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db._core import (
     _MIGRATIONS,
     _migration_0030_companion_world_candidates,
@@ -74,7 +74,8 @@ def _runtime_account(name: str = "居民") -> str:
         conn.execute(
             "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
             "VALUES (?, 'native', ?, 'zhaoxi', "
-            "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+            "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+            "'YYYY-MM-DD HH24:MI:SS'))",
             (acc, name),
         )
     return acc
@@ -436,11 +437,9 @@ def test_l3_status_filter_excludes_superseded(fresh_db):
 
 
 # ---------------------------------------------------------------------------
-# 4. PG 并发：同一 universe 两 resident 并发 append 不覆盖（§9/D-12，SQLite skip）
+# 4. PG 并发：同一 universe 两 resident 并发 append 不覆盖（§9/D-12）
 # ---------------------------------------------------------------------------
 def test_concurrent_l3_append_no_overwrite(fresh_db):
-    if not is_postgres():
-        pytest.skip("L3 append-only 并发不覆盖只在 PG 算数（§9 硬门禁，SQLite 单写者不作数）")
 
     pu = _pu("19911110009")
     w = db.get_or_create_home_universe(platform_user_id=pu)

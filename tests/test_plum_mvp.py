@@ -909,24 +909,16 @@ def test_plum_rename_migration_preserves_legacy_rows(fresh_db, monkeypatch):
             (invite["id"],),
         ).fetchone()
         assert restored_invite["label"] == "migration tester"
-        columns = (
-            {
-                str(row["column_name"])
-                for row in conn.execute(
-                    """
-                    SELECT column_name FROM information_schema.columns
-                    WHERE table_name='plum_character_memories'
-                    """
-                ).fetchall()
-            }
-            if db.is_postgres()
-            else {
-                str(row["name"])
-                for row in conn.execute(
-                    "PRAGMA table_info(plum_character_memories)"
-                ).fetchall()
-            }
-        )
+        columns = {
+            str(row["column_name"])
+            for row in conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema=current_schema()
+                  AND table_name='plum_character_memories'
+                """
+            ).fetchall()
+        }
         assert "plum_conversation_id" in columns
         assert "fibre_conversation_id" not in columns
         account = conn.execute(

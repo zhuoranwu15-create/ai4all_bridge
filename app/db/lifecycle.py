@@ -44,7 +44,7 @@ def unbind_account_channel(
         bi = conn.execute(
             """
             UPDATE binding_intents
-            SET status = 'revoked', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            SET status = 'revoked', updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ? AND status = 'completed'
             """,
             (account_id,),
@@ -53,8 +53,8 @@ def unbind_account_channel(
             """
             UPDATE reminders
             SET status = 'cancelled',
-                cancelled_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                cancelled_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ? AND status = 'pending'
             """,
             (account_id,),
@@ -71,7 +71,7 @@ def unbind_account_channel(
             UPDATE content_invitations
             SET status = 'cancelled',
                 policy_reason = 'account_unbound',
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ?
               AND status IN ('candidate', 'sending', 'invited', 'accepted')
             """,
@@ -80,7 +80,7 @@ def unbind_account_channel(
         conn.execute(
             """
             UPDATE proactive_account_state
-            SET enabled = 0, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            SET enabled = 0, updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ?
             """,
             (account_id,),
@@ -375,7 +375,7 @@ def wipe_account_data(
         conn.execute(
             """
             UPDATE accounts
-            SET status = 'deactivated', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            SET status = 'deactivated', updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (account_id,),
@@ -438,7 +438,7 @@ def reenable_proactive_after_rebind(*, account_id: str) -> None:
         conn.execute(
             """
             UPDATE proactive_account_state
-            SET enabled = 1, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            SET enabled = 1, updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ?
             """,
             (account_id,),

@@ -49,7 +49,9 @@ SELECT
   (SELECT COUNT(*) FROM account_owner_bindings WHERE status='active') AS active_bindings,
   (SELECT COUNT(*) FROM platform_user_sessions) AS sessions_total,
   (SELECT COUNT(*) FROM platform_user_sessions
-     WHERE expires_at > datetime('now', '+8 hours')) AS sessions_unexpired,
+     WHERE expires_at > to_char(
+       (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+     )) AS sessions_unexpired,
   (SELECT COUNT(*) FROM subscriptions WHERE status='active') AS active_subscriptions,
   (SELECT COUNT(*) FROM entitlement_wallets WHERE status='active') AS active_wallets,
   (SELECT COUNT(*) FROM entitlement_ledger) AS ledger_entries,

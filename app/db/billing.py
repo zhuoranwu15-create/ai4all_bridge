@@ -132,10 +132,10 @@ def create_or_get_platform_user_by_phone(
         conn.execute(
             """
             INSERT INTO platform_users(id, phone, display_name, updated_at)
-            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(phone) DO UPDATE SET
                 display_name = COALESCE(excluded.display_name, platform_users.display_name),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (_new_id("user"), normalized_phone, cleaned_display_name),
         )
@@ -192,7 +192,7 @@ def update_platform_user_profile(
     with _tx(None) as tx:
         if assignments:
             assignments.append(
-                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+                "updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')"
             )
             params.append(platform_user_id)
             tx.execute(
@@ -287,7 +287,7 @@ def _get_usable_referral_code_in_conn(
         WHERE rc.code = ?
           AND rc.app_id = ?
           AND rc.status = 'active'
-          AND (rc.expires_at IS NULL OR rc.expires_at > datetime('now', '+8 hours'))
+          AND (rc.expires_at IS NULL OR rc.expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
           AND (rc.max_uses IS NULL OR rc.used_count < rc.max_uses)
           AND (
               rc.platform_user_id IS NULL
@@ -348,7 +348,7 @@ def get_or_create_personal_referral_code_for_user(
                         INSERT INTO referral_codes(
                             id, platform_user_id, app_id, code, code_type, status, updated_at
                         )
-                        VALUES (?, ?, ?, ?, 'personal', 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        VALUES (?, ?, ?, ?, 'personal', 'active', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                         """,
                         (
                             _new_id("refcode"),
@@ -420,7 +420,7 @@ def validate_referral_code(
                 reason = "disabled"
             elif any_row is not None and any_row["expires_at"]:
                 expired = conn.execute(
-                    "SELECT ? <= datetime('now', '+8 hours') AS expired",
+                    "SELECT ? <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') AS expired",
                     (any_row["expires_at"],),
                 ).fetchone()["expired"]
                 reason = "expired" if expired else _referral_code_unavailable_reason(any_row)
@@ -507,15 +507,15 @@ def register_platform_user_with_referral(
             cursor = conn.execute(
                 """
                 UPDATE phone_verifications
-                SET token_consumed_at = datetime('now', '+8 hours')
+                SET token_consumed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE verified_token = ?
                   AND phone = ?
                   AND token_consumed_at IS NULL
-                  AND token_expires_at > datetime('now', '+8 hours')
+                  AND token_expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 """,
                 (verified_token, normalized_phone),
             )
-            # rowcount 替代 SQLite 专有 changes()（两后端一致）
+            # rowcount 直接反映本次原子 UPDATE 是否成功消费 token。
             if cursor.rowcount == 0:
                 raise ValueError("invalid_otp_token")
 
@@ -523,7 +523,7 @@ def register_platform_user_with_referral(
         cursor = conn.execute(
             """
             INSERT INTO platform_users(id, phone, display_name, updated_at)
-            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(phone) DO NOTHING
             """,
             (candidate_user_id, normalized_phone, cleaned_display_name),
@@ -541,7 +541,7 @@ def register_platform_user_with_referral(
                 """
                 UPDATE platform_users
                 SET display_name = COALESCE(?, display_name),
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                 """,
                 (cleaned_display_name, platform_user_id),
@@ -577,7 +577,7 @@ def register_platform_user_with_referral(
                         referral_code_id, app_id, status, review_status,
                         metadata_json, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, 'registered', 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, ?, 'registered', 'pending', ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                     """,
                     (
                         relationship_id,
@@ -604,16 +604,16 @@ def register_platform_user_with_referral(
                 """
                 UPDATE referral_codes
                 SET used_count = used_count + 1,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                   AND app_id = ?
                   AND status = 'active'
-                  AND (expires_at IS NULL OR expires_at > datetime('now', '+8 hours'))
+                  AND (expires_at IS NULL OR expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                   AND (max_uses IS NULL OR used_count < max_uses)
                 """,
                 (code_row["id"], app_id_clean),
             )
-            # rowcount 替代 SQLite 专有 changes()（两后端一致）
+            # rowcount 直接反映本次原子 UPDATE 是否成功消费 code。
             if cursor.rowcount == 0:
                 raise ValueError("invalid_invite_code")
             if code_row["platform_user_id"]:
@@ -673,7 +673,7 @@ def upsert_subscription_for_user(
                 INSERT INTO subscriptions(
                     id, platform_user_id, app_id, plan, status, updated_at
                 )
-                VALUES (?, ?, ?, ?, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                VALUES (?, ?, ?, ?, 'active', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 ON CONFLICT(platform_user_id, app_id) WHERE status = 'active'
                 DO UPDATE SET
                     plan = excluded.plan,
@@ -705,7 +705,7 @@ def upsert_subscription_for_user(
                     """
                     UPDATE subscriptions
                     SET plan=?, status=?,
-                        updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE id=? AND app_id=?
                     """,
                     (cleaned_plan, cleaned_status, subscription_id, app_id_clean),
@@ -717,7 +717,7 @@ def upsert_subscription_for_user(
                     INSERT INTO subscriptions(
                         id, platform_user_id, app_id, plan, status, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                     """,
                     (
                         subscription_id,
@@ -868,7 +868,7 @@ def _ensure_wallet_in_conn(
             id, account_id, platform_user_id, app_id,
             balance_shell_micros, status, updated_at
         )
-        VALUES (?, ?, ?, ?, 0, 'active', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, ?, ?, 0, 'active', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(platform_user_id, app_id) WHERE status = 'active' DO NOTHING
         """,
         (_new_id("wallet"), account_id, platform_user_id, app_id),
@@ -967,7 +967,7 @@ def _apply_wallet_ledger_in_conn(
     conn.execute(
         """
         UPDATE entitlement_wallets
-        SET balance_shell_micros = balance_shell_micros + ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+        SET balance_shell_micros = balance_shell_micros + ?, updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ? AND app_id = ?
         """,
         (int(amount_shell_micros), wallet["id"], app_id),
@@ -1097,7 +1097,7 @@ def reserve_fixed_shells(
             """
             UPDATE entitlement_wallets
             SET balance_shell_micros=balance_shell_micros-?,
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND app_id=? AND status='active'
               AND balance_shell_micros>=?
             """,
@@ -1229,14 +1229,18 @@ def _beijing_timestamp_in_conn(
     *,
     modifier: Optional[str] = None,
 ) -> str:
-    modifiers = ["'+8 hours'"]
     if modifier:
-        modifiers.append("?")
-    sql = (
-        "SELECT strftime('%Y-%m-%d %H:%M:%S', "
-        f"datetime('now', {', '.join(modifiers)}))"
-    )
-    params = (modifier,) if modifier else ()
+        sql = (
+            "SELECT to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, "
+            "'YYYY-MM-DD HH24:MI:SS')"
+        )
+        params = (modifier,)
+    else:
+        sql = (
+            "SELECT to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+            "'YYYY-MM-DD HH24:MI:SS')"
+        )
+        params = None
     return str(conn.execute(sql, params).fetchone()[0])
 
 
@@ -1256,7 +1260,7 @@ def _mark_referral_soft_review_if_needed_in_conn(
               AND app_id = ?
               AND status IN ('registered', 'bound', 'qualified', 'rewarded')
               AND review_status != 'failed'
-              AND created_at >= datetime('now', '+8 hours', ?)
+              AND created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 inviter_platform_user_id,
@@ -1288,7 +1292,7 @@ def _mark_referral_soft_review_if_needed_in_conn(
         """
         UPDATE referral_relationships
         SET metadata_json = ?,
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
           AND app_id = ?
         """,
@@ -1326,7 +1330,7 @@ def _ensure_referral_soft_review_hold_in_conn(
         SET status = 'qualified',
             review_status = 'pending',
             metadata_json = ?,
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
           AND app_id = ?
           AND reward_ledger_id IS NULL
@@ -1341,12 +1345,13 @@ def _ensure_referral_soft_review_hold_in_conn(
         review_id = _new_id("review")
         conn.execute(
             """
-            INSERT OR IGNORE INTO meaningful_message_reviews(
+            INSERT INTO meaningful_message_reviews(
                 id, referral_relationship_id, invitee_platform_user_id,
                 account_id, app_id, message_ids_json, reviewer_type, status,
                 reason, metadata_json
             )
             VALUES (?, ?, ?, ?, ?, ?, 'ai', 'pending', ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (
                 review_id,
@@ -1408,7 +1413,7 @@ def _release_delayed_referral_reward_in_conn(
         UPDATE referral_relationships
         SET review_status = 'passed',
             metadata_json = ?,
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
           AND app_id = ?
           AND reward_ledger_id IS NULL
@@ -1578,7 +1583,7 @@ def _mark_referral_relationship_bound_in_conn(
             UPDATE referral_relationships
             SET status = 'bound',
                 metadata_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND app_id = ?
               AND status IN ('pending_registration', 'registered')
@@ -1673,7 +1678,7 @@ def _apply_referral_reward_in_conn(
             SET status = 'qualified',
                 review_status = 'passed',
                 metadata_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND app_id = ?
               AND reward_ledger_id IS NULL
@@ -1709,8 +1714,8 @@ def _apply_referral_reward_in_conn(
         SET status = 'rewarded',
             review_status = 'passed',
             reward_ledger_id = ?,
-            rewarded_at = COALESCE(rewarded_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            rewarded_at = COALESCE(rewarded_at, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         WHERE id = ?
           AND app_id = ?
           AND reward_ledger_id IS NULL
@@ -1989,7 +1994,7 @@ def process_referral_message_for_account(
                 SET meaningful_message_count = ?,
                     status = ?,
                     metadata_json = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                   AND app_id = ?
                   AND reward_ledger_id IS NULL
@@ -2049,12 +2054,13 @@ def process_referral_message_for_account(
                     review_id = _new_id("review")
                     conn.execute(
                         """
-                        INSERT OR IGNORE INTO meaningful_message_reviews(
+                        INSERT INTO meaningful_message_reviews(
                             id, referral_relationship_id, invitee_platform_user_id,
                             account_id, app_id, message_ids_json, reviewer_type, status,
                             reason, metadata_json
                         )
                         VALUES (?, ?, ?, ?, ?, ?, 'ai', 'passed', ?, ?)
+                        ON CONFLICT DO NOTHING
                         """,
                         (
                             review_id,
@@ -2089,7 +2095,7 @@ def process_referral_message_for_account(
                         UPDATE referral_relationships
                         SET status = 'qualified',
                             review_status = 'passed',
-                            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                         WHERE id = ?
                           AND app_id = ?
                           AND reward_ledger_id IS NULL
@@ -2696,7 +2702,7 @@ def create_ai4all_account_for_user(
                     conn.execute(
                         """
                         INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
-                        VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                        VALUES (?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                         """,
                         (account_id, _clean_text(initial_channel) or "openclaw-weixin", cleaned_display_name, app_id_clean),
                     )
@@ -2710,7 +2716,7 @@ def create_ai4all_account_for_user(
         conn.execute(
             """
             INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
-            VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (account_id, cleaned_display_name, cleaned_prompt),
         )
@@ -2720,18 +2726,15 @@ def create_ai4all_account_for_user(
                 INSERT INTO account_owner_bindings(
                     platform_user_id, account_id, binding_method, status, app_id, updated_at
                 )
-                VALUES (?, ?, ?, 'active', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                VALUES (?, ?, ?, 'active', ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (platform_user_id, account_id, _clean_text(binding_method) or "web_onboarding", app_id_clean),
             )
         except IntegrityError as err:
             # 竞态兜底:并发在软检查后同时插入,由部分唯一索引挡住;整笔事务由 connect() 回滚,
-            # 不留孤儿账号。翻译成与软检查一致的清晰错误。跨后端匹配:PG 报索引名,
-            # SQLite 报冲突列名(platform_user_id, app_id),两者任一命中即视为该唯一索引冲突。
+            # 不留孤儿账号。按 PostgreSQL 约束名翻译成与软检查一致的清晰错误。
             err_text = str(err)
-            if "ux_owner_binding_active_user_app" in err_text or (
-                "platform_user_id" in err_text and "app_id" in err_text
-            ):
+            if "ux_owner_binding_active_user_app" in err_text:
                 raise ValueError(
                     f"platform_user already has an active account for app '{app_id_clean}'"
                 ) from err
@@ -2820,7 +2823,7 @@ def insert_resident_runtime_account(
                 conn.execute(
                     """
                     INSERT INTO accounts(id, channel, display_name, app_id, updated_at)
-                    VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                     """,
                     (
                         account_id,
@@ -2840,7 +2843,7 @@ def insert_resident_runtime_account(
     conn.execute(
         """
         INSERT INTO profiles(account_id, display_name, system_prompt, updated_at)
-        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         """,
         (account_id, cleaned_display_name, cleaned_prompt),
     )
@@ -3131,7 +3134,7 @@ def create_binding_intent(
                 id, platform_user_id, account_id, openclaw_login_session_key,
                 channel, status, manual_login_command, node_id, expires_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, 'created', ?, ?, datetime('now', '+8 hours', '+30 minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, 'created', ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('+30 minutes')::interval, 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 binding_intent_id,
@@ -3176,8 +3179,8 @@ def update_binding_intent(
                 qr_data_url = ?,
                 raw_result_json = ?,
                 error = ?,
-                completed_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE completed_at END,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                completed_at = CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE completed_at END,
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -3215,7 +3218,7 @@ def set_binding_intent_error(
             SET status = ?,
                 raw_result_json = ?,
                 error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -3261,9 +3264,9 @@ def get_binding_intent(
             conn.execute(
                 """
                 UPDATE binding_intents
-                SET status = 'expired', updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                SET status = 'expired', updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'qr_created'
-                  AND expires_at < datetime('now', '+8 hours')
+                  AND expires_at < to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 """,
                 (binding_intent_id,),
             )
@@ -3354,7 +3357,7 @@ def get_active_binding_intent_for_channel_account(
                 FROM binding_intents
                 WHERE channel = ?
                   AND status = 'completed'
-                  AND json_extract(raw_result_json, '$.channel_account_id') IN ({placeholders})
+                  AND safe_json_extract_text(raw_result_json, ARRAY['channel_account_id']) IN ({placeholders})
                 ORDER BY completed_at DESC, updated_at DESC
                 LIMIT 1
                 """,
@@ -3460,9 +3463,9 @@ def get_or_create_session(
         conn.execute(
             f"""
             INSERT INTO accounts(id, channel, updated_at)
-            VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
-                {_channel_update_clause}updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                {_channel_update_clause}updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (account_id, channel),
         )
@@ -3476,14 +3479,14 @@ def get_or_create_session(
                 account_id, session_key, sender_id, chat_id, sender_name,
                 business_day, carryover_summary, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id, session_key) DO UPDATE SET
                 sender_id = COALESCE(excluded.sender_id, sessions.sender_id),
                 chat_id = COALESCE(excluded.chat_id, sessions.chat_id),
                 sender_name = COALESCE(excluded.sender_name, sessions.sender_name),
                 business_day = COALESCE(sessions.business_day, excluded.business_day),
                 carryover_summary = COALESCE(sessions.carryover_summary, excluded.carryover_summary),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 account_id,
@@ -3504,9 +3507,9 @@ def get_or_create_session(
         conn.execute(
             """
             INSERT INTO profiles(account_id, updated_at)
-            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO UPDATE SET
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (account_id,),
         )
@@ -3554,9 +3557,9 @@ def get_or_create_account_active_session(
         conn.execute(
             f"""
             INSERT INTO accounts(id, channel, updated_at)
-            VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(id) DO UPDATE SET
-                {_channel_update_clause}updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                {_channel_update_clause}updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (account_id, channel),
         )
@@ -3567,9 +3570,9 @@ def get_or_create_account_active_session(
         conn.execute(
             """
             INSERT INTO profiles(account_id, updated_at)
-            VALUES (?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO UPDATE SET
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (account_id,),
         )
@@ -3600,10 +3603,10 @@ def get_or_create_account_active_session(
                     UPDATE sessions
                     SET session_key = ?,
                         status = 'closed',
-                        ended_at = COALESCE(ended_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
+                        ended_at = COALESCE(ended_at, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
                         close_reason = COALESCE(close_reason, ?),
                         carryover_summary = COALESCE(NULLIF(carryover_summary, ''), ?),
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE id = ?
                     """,
                     (
@@ -3623,7 +3626,7 @@ def get_or_create_account_active_session(
                         chat_id = COALESCE(?, chat_id),
                         sender_name = COALESCE(?, sender_name),
                         business_day = COALESCE(business_day, ?),
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE id = ?
                     """,
                     (
@@ -3642,7 +3645,7 @@ def get_or_create_account_active_session(
                     account_id, session_key, sender_id, chat_id, sender_name,
                     business_day, carryover_summary, metadata_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                 """,
                 (
                     account_id,
@@ -3746,7 +3749,7 @@ def increment_session_turn_count(
             """
             UPDATE sessions
             SET turn_count = COALESCE(turn_count, 0) + ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (count, session_id),

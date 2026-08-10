@@ -6,7 +6,7 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db._core import NEW_USER_GRANT_SHELL_MICROS
 from app.db.billing import _shell_micros_for_tokens
 
@@ -311,8 +311,6 @@ def test_m0039_supersedes_only_older_active_subscription(fresh_db):
 
 
 def test_pg_concurrent_cross_product_charges_and_subscription_upserts(fresh_db):
-    if not is_postgres():
-        pytest.skip("跨产品并发约束以 PostgreSQL 为准")
     registry, user_id, zhaoxi_id, test_id = _two_product_accounts("13800037406")
     zhaoxi_before = _balance(zhaoxi_id)
     test_before = _balance(test_id, registry=registry)

@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import pytest
 
 import app.db as db
-from app.db._backend import is_postgres
 from app.products.mingchan.application.visits import (
     CompanionWorldVisitService,
     VisitError,
@@ -519,8 +518,6 @@ def test_visit_expiry_scheduler_is_bounded_and_reuses_existing_process(fresh_db)
 
 
 def test_pg_same_code_double_redeem_has_one_winner(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     _owner, invitation = _owner_invite("19965105001")
     visitors = [_user("19965105002"), _user("19965105003")]
 
@@ -540,8 +537,6 @@ def test_pg_same_code_double_redeem_has_one_winner(fresh_db):
 
 
 def test_pg_visitor_third_fourth_competition_never_exceeds_three(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     visitor = _user("19965106000")
     invitations = [_owner_invite(f"1996510600{index}")[1] for index in range(1, 5)]
     service = CompanionWorldVisitService()
@@ -566,8 +561,6 @@ def test_pg_visitor_third_fourth_competition_never_exceeds_three(fresh_db):
 
 
 def test_pg_owner_third_fourth_slot_competition_never_exceeds_three(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner = _user("19965107001")
     _confirm_world(owner)
     service = CompanionWorldVisitService()
@@ -595,8 +588,6 @@ def test_pg_owner_third_fourth_slot_competition_never_exceeds_three(fresh_db):
 
 
 def test_pg_accept_vs_cancel_has_one_terminal_decision(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner, invitation = _owner_invite("19965108001")
     visitor = _user("19965108002")
     visit = CompanionWorldVisitService().redeem(
@@ -630,8 +621,6 @@ def test_pg_accept_vs_cancel_has_one_terminal_decision(fresh_db):
 
 
 def test_pg_revoke_vs_feed_serializes_acl_decision(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner, visitor, visit = _active_visit("19965109001", "19965109002")
     _publish(owner)
 
@@ -674,8 +663,6 @@ def test_pg_revoke_vs_feed_serializes_acl_decision(fresh_db):
 
 
 def test_pg_block_vs_reverse_redeem_finishes_fail_closed(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     first, second, forward = _active_visit("19965110001", "19965110002")
     _confirm_world(second)
     reverse_invitation = CompanionWorldVisitService().create_invite(second, now=NOW)

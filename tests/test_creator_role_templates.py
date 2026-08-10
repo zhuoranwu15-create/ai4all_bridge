@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import concurrent.futures
-import sqlite3
-
 import pytest
 
 import app.db as db
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db._core import (
     _MIGRATIONS,
     _migration_0013_campaign_codes,
@@ -82,14 +80,9 @@ def test_creator_role_schema_indexes_current_head_and_idempotency(fresh_db):
         for table in _TABLES:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 
-        if is_postgres():
-            rows = conn.execute(
-                "SELECT indexname AS name FROM pg_indexes WHERE schemaname = current_schema()"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index'"
-            ).fetchall()
+        rows = conn.execute(
+            "SELECT indexname AS name FROM pg_indexes WHERE schemaname = current_schema()"
+        ).fetchall()
         assert _INDEXES.issubset({row["name"] for row in rows})
 
         _migration_0059_creator_role_templates(conn)
@@ -98,45 +91,47 @@ def test_creator_role_schema_indexes_current_head_and_idempotency(fresh_db):
         _migration_0060_creator_role_template_opening_and_summary(conn)
 
 
-def test_migration_59_fails_closed_for_existing_reserved_operator_code():
-    conn = sqlite3.connect(":memory:")
-    try:
+def test_migration_59_fails_closed_for_existing_reserved_operator_code(fresh_db):
+    with db.connect() as conn:
         _migration_0013_campaign_codes(conn)
         conn.execute(
             "INSERT INTO campaign_codes(id, code, campaign_key) VALUES ('c1', 'UrT_old', 'x')"
         )
+        before = conn.execute(
+            "SELECT COUNT(*) AS n FROM creator_role_templates"
+        ).fetchone()["n"]
         with pytest.raises(RuntimeError, match="reserved urt_ prefix"):
             _migration_0059_creator_role_templates(conn)
-        row = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' "
-            "AND name = 'creator_role_templates'"
-        ).fetchone()
-        assert row is None
-    finally:
-        conn.close()
+        after = conn.execute(
+            "SELECT COUNT(*) AS n FROM creator_role_templates"
+        ).fetchone()["n"]
+        assert after == before
 
 
-def test_migration_60_upgrades_existing_migration_59_rows_compatibly():
-    conn = sqlite3.connect(":memory:")
-    conn.row_factory = sqlite3.Row
-    try:
+def test_migration_60_upgrades_existing_migration_59_rows_compatibly(fresh_db):
+    with db.connect() as conn:
         conn.executescript(
             """
-            CREATE TABLE creator_role_template_versions (
-                id TEXT PRIMARY KEY,
-                creator_role_template_id TEXT NOT NULL,
-                ai_name TEXT NOT NULL
-            );
-            CREATE TABLE account_creator_role_template_attribution (
-                account_id TEXT PRIMARY KEY,
-                creator_role_template_version_id TEXT NOT NULL
-            );
+            DROP TABLE IF EXISTS creator_role_template_summary_review_runs;
+            ALTER TABLE creator_role_template_versions DROP COLUMN opening_line;
+            ALTER TABLE creator_role_template_versions DROP COLUMN generated_summary;
+            ALTER TABLE creator_role_template_versions DROP COLUMN public_summary;
+            ALTER TABLE creator_role_template_versions DROP COLUMN summary_edit_status;
+            ALTER TABLE account_creator_role_template_attribution
+                DROP COLUMN opening_line_snapshot;
             INSERT INTO creator_role_template_versions(
-                id, creator_role_template_id, ai_name
-            ) VALUES ('v-old', 't-old', '旧角色');
+                id, creator_role_template_id, version_no, ai_name,
+                personality_text, mission_text
+            ) VALUES ('v-old', 't-old', 1, '旧角色', '旧性格', '旧使命');
             INSERT INTO account_creator_role_template_attribution(
-                account_id, creator_role_template_version_id
-            ) VALUES ('a-old', 'v-old');
+                account_id, creator_role_template_id,
+                creator_role_template_version_id, creator_platform_user_id,
+                campaign_code, ai_name_snapshot, personality_snapshot,
+                mission_snapshot, attributed_at
+            ) VALUES (
+                'a-old', 't-old', 'v-old', 'pu-old', 'urt_old',
+                '旧角色', '旧性格', '旧使命', '2026-08-10 00:00:00'
+            );
             """
         )
         _migration_0060_creator_role_template_opening_and_summary(conn)
@@ -162,8 +157,6 @@ def test_migration_60_upgrades_existing_migration_59_rows_compatibly():
         conn.execute(
             "SELECT 1 FROM creator_role_template_summary_review_runs WHERE 1 = 0"
         ).fetchall()
-    finally:
-        conn.close()
 
 
 def test_domain_validates_all_four_fields_and_generated_code_entropy():

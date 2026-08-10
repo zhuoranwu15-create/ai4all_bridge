@@ -1,4 +1,4 @@
-"""Companion World 的 PG 权威并发门禁（SQLite 单写者不作数）。"""
+"""Companion World 的 PostgreSQL 权威并发门禁。"""
 import concurrent.futures
 import json
 import threading
@@ -7,7 +7,6 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import is_postgres
 from app.products.mingchan.domain.companion_world import (
     CompanionWorldError,
     CompanionWorldService,
@@ -30,8 +29,6 @@ def _draft(name: str) -> TemplateDraft:
 
 
 def test_concurrent_tenth_and_eleventh_resident_only_one_commits(fresh_db):
-    if not is_postgres():
-        pytest.skip("world row lock 并发正确性以 PG 为准")
 
     user_id = db.create_or_get_platform_user_by_phone(
         phone="19950002001", display_name="并发用户"
@@ -95,8 +92,6 @@ def test_concurrent_tenth_and_eleventh_resident_only_one_commits(fresh_db):
 
 
 def test_two_residents_concurrently_append_l3_without_overwrite(fresh_db):
-    if not is_postgres():
-        pytest.skip("L3 多 writer append 并发正确性以 PG 为准")
 
     user_id = db.create_or_get_platform_user_by_phone(
         phone="19950002002", display_name="L3 并发用户"
@@ -153,8 +148,6 @@ def _m3_world(phone: str, name: str):
 
 
 def test_m3_concurrent_ai_slot_claim_creates_one_row(fresh_db):
-    if not is_postgres():
-        pytest.skip("AI slot claim 并发正确性以 PG 为准")
 
     _, scope = _m3_world("19950002003", "Feed 并发用户")
     barrier = threading.Barrier(4)
@@ -179,8 +172,6 @@ def test_m3_concurrent_ai_slot_claim_creates_one_row(fresh_db):
 
 
 def test_m3_concurrent_human_reservation_is_one_per_platform_user(fresh_db):
-    if not is_postgres():
-        pytest.skip("真人级 reservation 并发正确性以 PG 为准")
 
     user_id, scope = _m3_world("19950002004", "通知并发用户")
     barrier = threading.Barrier(2)
@@ -215,8 +206,6 @@ def test_m3_concurrent_human_reservation_is_one_per_platform_user(fresh_db):
 
 
 def test_m3_concurrent_outbox_workers_claim_disjoint_rows(fresh_db):
-    if not is_postgres():
-        pytest.skip("outbox SKIP LOCKED 并发正确性以 PG 为准")
 
     _, scope = _m3_world("19950002005", "Outbox 并发用户")
     for index, (date, slot) in enumerate(
@@ -269,8 +258,6 @@ def test_m3_concurrent_outbox_workers_claim_disjoint_rows(fresh_db):
 
 
 def test_m3_concurrent_user_feed_replay_creates_one_post_and_outbox(fresh_db):
-    if not is_postgres():
-        pytest.skip("用户 Feed 幂等竞争正确性以 PG 为准")
 
     user_id, _scope = _m3_world("19950002006", "用户 Feed 并发")
     barrier = threading.Barrier(4)
@@ -302,8 +289,6 @@ def test_m3_concurrent_user_feed_replay_creates_one_post_and_outbox(fresh_db):
 
 
 def test_m3_concurrent_stale_ai_slot_reclaim_has_one_winner(fresh_db):
-    if not is_postgres():
-        pytest.skip("AI slot stale lease 重领正确性以 PG 为准")
 
     _user_id, scope = _m3_world("19950002007", "Slot 重领并发")
     original, created = db.claim_ai_feed_slot(
@@ -344,8 +329,6 @@ def test_m3_concurrent_stale_ai_slot_reclaim_has_one_winner(fresh_db):
 
 
 def test_m3_concurrent_visible_notifications_keep_owner_limit(fresh_db):
-    if not is_postgres():
-        pytest.skip("通知真人锁与 200 条上限并发正确性以 PG 为准")
 
     user_id, scope = _m3_world("19950002008", "通知上限并发")
     barrier = threading.Barrier(2)

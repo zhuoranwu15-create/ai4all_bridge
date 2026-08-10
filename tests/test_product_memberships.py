@@ -14,7 +14,6 @@ from app.bootstrap.product_registry import (
     ProductRegistry,
     build_test_product_registry,
 )
-from app.db._backend import is_postgres
 
 
 def test_production_registry_enables_all_shipped_products():
@@ -164,8 +163,6 @@ def test_m0037_backfills_quota_overrides_without_changing_user_count(fresh_db):
 
 
 def test_concurrent_membership_ensure_creates_exactly_once(fresh_db):
-    if not is_postgres():
-        pytest.skip("membership 并发唯一性以 PG 为准")
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037104")
 

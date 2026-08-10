@@ -124,7 +124,7 @@ def _lock_template_row(
     app_id: str,
     template_id: str,
 ):
-    """用无值变化 UPDATE 在 SQLite/PG 上取得同一模板的写锁并返回 live 行。"""
+    """用无值变化 UPDATE 取得同一模板的行锁并返回 live 行。"""
     cursor = conn.execute(
         """
         UPDATE creator_role_templates SET updated_at = updated_at
@@ -559,7 +559,7 @@ def apply_creator_role_template_attribution(
 
     now = attributed_at or beijing_now_str()
     with _tx(conn) as tx:
-        # 无值变化 UPDATE 同时在 SQLite/PG 上取得模板写锁，避免停用、删除、发布新版
+        # 无值变化 UPDATE 取得模板写锁，避免停用、删除、发布新版
         # 与实例化互相穿透；同一模板的 used_count 也因此不会丢更新。
         locked = tx.execute(
             """

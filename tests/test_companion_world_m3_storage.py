@@ -2,7 +2,6 @@
 import pytest
 
 import app.db as db
-from app.db._backend import is_postgres
 from app.db._core import _MIGRATIONS, _migration_0033_companion_world_m3_content
 from app.products.mingchan.domain.companion_world import user_post_fingerprint
 
@@ -51,15 +50,11 @@ def test_m3_tables_exist_and_exclude_account_moderation_anchor(fresh_db):
         with db.connect() as conn:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
     with db.connect() as conn:
-        if is_postgres():
-            rows = conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = 'public' AND table_name = 'universe_posts'"
-            ).fetchall()
-            columns = {str(row["column_name"]) for row in rows}
-        else:
-            rows = conn.execute("PRAGMA table_info(universe_posts)").fetchall()
-            columns = {str(row["name"]) for row in rows}
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'universe_posts'"
+        ).fetchall()
+        columns = {str(row["column_name"]) for row in rows}
     assert {"universe_id", "author_platform_user_id", "author_resident_id"} <= columns
     assert "moderation_account_id" not in columns
 

@@ -22,19 +22,45 @@ def _dsn_from_conn(conn) -> str:
 
 
 def _build_source_sqlite(path: str) -> None:
-    """用 app 的迁移函数在裸 sqlite3 连接上建全量 schema，再灌入样本数据。"""
-    from app.db._core import (
-        _migration_0001_baseline,
-        _migration_0002_llm_runtime_config,
-        _migration_0003_user_meta,
-    )
-
+    """Build the minimal historical SQLite source schema used by this test."""
     conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row  # 迁移函数的 _ensure_column 用 row["name"] 访问 PRAGMA 结果
     try:
-        _migration_0001_baseline(conn)
-        _migration_0002_llm_runtime_config(conn)
-        _migration_0003_user_meta(conn)
+        conn.executescript(
+            """
+            CREATE TABLE accounts (
+                id TEXT PRIMARY KEY
+            );
+            CREATE TABLE platform_users (
+                id TEXT PRIMARY KEY,
+                phone TEXT
+            );
+            CREATE TABLE entitlement_wallets (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                platform_user_id TEXT NOT NULL,
+                balance_shell_micros INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE entitlement_ledger (
+                id TEXT PRIMARY KEY,
+                wallet_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                platform_user_id TEXT NOT NULL,
+                entry_type TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                amount_shell_micros INTEGER NOT NULL,
+                balance_after_shell_micros INTEGER NOT NULL,
+                idempotency_key TEXT NOT NULL
+            );
+            CREATE TABLE account_owner_bindings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                platform_user_id TEXT NOT NULL,
+                account_id TEXT NOT NULL,
+                app_id TEXT NOT NULL DEFAULT 'zhaoxi',
+                binding_method TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active'
+            );
+            """
+        )
         conn.execute("INSERT INTO accounts (id) VALUES (?)", ("acc1",))
         conn.execute(
             "INSERT INTO platform_users (id, phone) VALUES (?, ?)", ("pu1", "13800000000")

@@ -134,13 +134,13 @@ def upsert_channel_binding(
                 account_id, channel, session_key, channel_account_id,
                 sender_id, chat_id, raw_identity_json, last_seen_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id, channel, session_key) DO UPDATE SET
                 channel_account_id = COALESCE(excluded.channel_account_id, channel_bindings.channel_account_id),
                 sender_id = COALESCE(excluded.sender_id, channel_bindings.sender_id),
                 chat_id = COALESCE(excluded.chat_id, channel_bindings.chat_id),
                 raw_identity_json = excluded.raw_identity_json,
-                last_seen_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                last_seen_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 account_id,
@@ -248,7 +248,7 @@ def insert_message(
                         direction, role, message_type, content, raw_json, latency_ms, error,
                         content_json, media_id, created_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
                     """,
                     (
                         account_id,
@@ -603,7 +603,7 @@ def list_recent_reactivation_outbound_messages(
               AND created_at >= ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+              AND safe_json_extract_text(metadata_json, ARRAY['reactivation']) IN ('1', 'true')
             ORDER BY id DESC
             LIMIT ?
             """,
@@ -632,7 +632,7 @@ def count_reactivation_outbound_for_quota_date(
               AND quota_date = ?
               AND status IN ('pending', 'sending', 'sent')
               AND json_valid(metadata_json)
-              AND CAST(json_extract(metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+              AND safe_json_extract_text(metadata_json, ARRAY['reactivation']) IN ('1', 'true')
             """,
             (account_id, quota_date),
         ).fetchone()
@@ -671,7 +671,7 @@ def list_reactivation_outbound_messages_admin(
               {account_clause}
               {since_clause}
               AND json_valid(o.metadata_json)
-              AND CAST(json_extract(o.metadata_json, '$.reactivation') AS TEXT) IN ('1', 'true')
+              AND safe_json_extract_text(o.metadata_json, ARRAY['reactivation']) IN ('1', 'true')
             ORDER BY o.id DESC
             LIMIT ?
             """,
@@ -1396,7 +1396,7 @@ def update_account(
                 notes = ?,
                 daily_limit = ?,
                 rpm_limit = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -1419,7 +1419,7 @@ def update_account(
                 membership_sets.append("rpm_limit = ?")
                 membership_params.append(rpm_limit)
             membership_sets.append(
-                "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+                "updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')"
             )
             updated_membership = conn.execute(
                 f"UPDATE product_memberships SET {', '.join(membership_sets)} "
@@ -1446,7 +1446,7 @@ def update_account(
                     account_sets.append("rpm_limit = ?")
                     account_params.append(rpm_limit)
                 account_sets.append(
-                    "updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))"
+                    "updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')"
                 )
                 conn.execute(
                     f"UPDATE accounts SET {', '.join(account_sets)} "
@@ -1459,7 +1459,7 @@ def update_account(
 def set_account_debug_flag(*, account_id: str, is_debug: bool) -> None:
     with connect() as conn:
         conn.execute(
-            "UPDATE accounts SET is_debug = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
+            "UPDATE accounts SET is_debug = ?, updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?",
             (1 if is_debug else 0, account_id),
         )
 
@@ -1476,7 +1476,7 @@ def set_account_status(
         return None
     with connect() as conn:
         conn.execute(
-            "UPDATE accounts SET status = ?, updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
+            "UPDATE accounts SET status = ?, updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?",
             (status, account_id),
         )
     if status == "active":
@@ -1566,7 +1566,7 @@ def set_account_onboarding_state(*, account_id: str, state: str) -> None:
         ).fetchone()
         from_state = (row["onboarding_state"] if row else None) or "pending"
         conn.execute(
-            "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) WHERE id = ?",
+            "UPDATE accounts SET onboarding_state = ?, onboarding_updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id = ?",
             (state, account_id),
         )
     # 旁路打点：记录状态转移（仅在状态实际变化时）。失败不影响 onboarding 主流程。
@@ -1832,10 +1832,10 @@ def _increment_daily_usage_in_scope(
         INSERT INTO daily_usage(
             account_id, platform_user_id, app_id, date, message_count, updated_at
         )
-        VALUES (?, ?, ?, ?, 1, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, ?, ?, 1, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(platform_user_id, app_id, date) DO UPDATE SET
             message_count = daily_usage.message_count + 1,
-            updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+            updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
         """,
         (account_id, platform_user_id, app_id, date),
     )
@@ -1932,7 +1932,7 @@ def reserve_daily_quota(
         )
         tx.execute(
             "DELETE FROM daily_quota_reservations WHERE platform_user_id=? AND app_id=? "
-            "AND expires_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))",
+            "AND expires_at <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')",
             (subject, app_id),
         )
         if limit > 0:
@@ -1958,7 +1958,7 @@ def reserve_daily_quota(
             INSERT INTO daily_quota_reservations(
                 id, platform_user_id, app_id, date, account_id, expires_at
             )
-            VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?)))
+            VALUES (?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 reservation_id,
@@ -2095,7 +2095,7 @@ def update_profile_for_account(
                 style = ?,
                 system_prompt = ?,
                 preferences_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE account_id = ?
             """,
             (
@@ -2149,7 +2149,7 @@ def create_phone_verification(
         conn.execute(
             """
             INSERT INTO phone_verifications(id, phone, code, expires_at, created_at)
-            VALUES (?, ?, ?, datetime('now', '+8 hours', ? || ' minutes'), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai') + (? || ' minutes')::interval, 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (verification_id, normalized, code, f"+{expires_minutes}"),
         )
@@ -2168,7 +2168,7 @@ def get_latest_active_verification(phone: str) -> Optional[Dict[str, Any]]:
             SELECT * FROM phone_verifications
             WHERE phone = ?
               AND verified_at IS NULL
-              AND expires_at > datetime('now', '+8 hours')
+              AND expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -2184,7 +2184,7 @@ def count_verifications_last_hour(phone: str) -> int:
             """
             SELECT COUNT(*) FROM phone_verifications
             WHERE phone = ?
-              AND created_at > datetime('now', '+8 hours', '-1 hour')
+              AND created_at > to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-1 hour')::interval, 'YYYY-MM-DD HH24:MI:SS')
             """,
             (normalized,),
         ).fetchone()
@@ -2198,9 +2198,9 @@ def invalidate_verifications_for_phone(phone: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '+8 hours', '-1 second')
+            SET expires_at = to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-1 second')::interval, 'YYYY-MM-DD HH24:MI:SS')
             WHERE phone = ?
-              AND expires_at > datetime('now', '+8 hours')
+              AND expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (normalized,),
         )
@@ -2213,10 +2213,10 @@ def invalidate_other_verifications_for_phone(phone: str, keep_id: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '+8 hours', '-1 second')
+            SET expires_at = to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-1 second')::interval, 'YYYY-MM-DD HH24:MI:SS')
             WHERE phone = ?
               AND id != ?
-              AND expires_at > datetime('now', '+8 hours')
+              AND expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (normalized, keep_id),
         )
@@ -2228,7 +2228,7 @@ def invalidate_verification(verification_id: str) -> None:
         conn.execute(
             """
             UPDATE phone_verifications
-            SET expires_at = datetime('now', '+8 hours', '-1 second')
+            SET expires_at = to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-1 second')::interval, 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (verification_id,),
@@ -2262,9 +2262,9 @@ def set_verification_verified(
         conn.execute(
             """
             UPDATE phone_verifications
-            SET verified_at = datetime('now', '+8 hours'),
+            SET verified_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                 verified_token = ?,
-                token_expires_at = datetime('now', '+8 hours', ? || ' minutes')
+                token_expires_at = to_char((now() AT TIME ZONE 'Asia/Shanghai') + (? || ' minutes')::interval, 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (token, f"+{token_expires_minutes}", verification_id),
@@ -2290,7 +2290,7 @@ def consume_verification_token(verification_id: str) -> Optional[Dict[str, Any]]
         conn.execute(
             """
             UPDATE phone_verifications
-            SET token_consumed_at = datetime('now', '+8 hours')
+            SET token_consumed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (verification_id,),
@@ -2314,7 +2314,7 @@ def get_valid_verification_by_token(
             WHERE verified_token = ?
               AND phone = ?
               AND token_consumed_at IS NULL
-              AND token_expires_at > datetime('now', '+8 hours')
+              AND token_expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (verified_token, normalized),
         ).fetchone()
@@ -2359,7 +2359,7 @@ def create_platform_user_session(
             INSERT INTO platform_user_sessions(
                 id, platform_user_id, app_id, token, expires_at
             )
-            VALUES (?, ?, ?, ?, datetime('now', '+8 hours', ? || ' days'))
+            VALUES (?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai') + (? || ' days')::interval, 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (session_id, platform_user_id, registered_app_id, token, f"+{days}"),
         )
@@ -2396,7 +2396,7 @@ def resolve_session_principal(
             JOIN product_memberships pm
               ON pm.platform_user_id=s.platform_user_id AND pm.app_id=s.app_id
             WHERE s.token=?
-              AND s.expires_at > datetime('now', '+8 hours')
+              AND s.expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
               AND pm.status='active'
             """,
             (cleaned_token,),
@@ -2434,15 +2434,15 @@ def consume_valid_verification_token(
     """Atomically consume a verified token. Returns the row if it was valid and not yet consumed, None otherwise."""
     normalized = _normalize_phone(phone)
     with connect() as conn:
-        # rowcount 取本次 UPDATE 影响行数（sqlite3/psycopg 一致），替代 SQLite 专有 changes()
+        # rowcount 取本次 UPDATE 影响行数。
         cursor = conn.execute(
             """
             UPDATE phone_verifications
-            SET token_consumed_at = datetime('now', '+8 hours')
+            SET token_consumed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE verified_token = ?
               AND phone = ?
               AND token_consumed_at IS NULL
-              AND token_expires_at > datetime('now', '+8 hours')
+              AND token_expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (verified_token, normalized),
         )

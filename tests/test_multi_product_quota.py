@@ -5,7 +5,6 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import is_postgres
 from app.db._core import (
     _migration_0041_quota_app_id_expand,
     _migration_0042_quota_app_id_contract,
@@ -192,8 +191,6 @@ def test_contract_rejects_quota_scope_drift(fresh_db):
 
 
 def test_pg_concurrent_reservation_is_product_independent(fresh_db):
-    if not is_postgres():
-        pytest.skip("跨产品 quota advisory lock 并发以 PostgreSQL 为准")
     _registry, _user_id, zhaoxi_id, test_id = _two_product_accounts("13800037606")
 
     def reserve(index: int):

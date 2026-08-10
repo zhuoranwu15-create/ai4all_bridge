@@ -261,7 +261,7 @@ def _inbound_count_after(*, account_id: str, after: datetime) -> int:
     用于判断「候选生成后用户是否又说过话」。
 
     时区一致性（关键）：``after``（候选 generated_at）与 ``messages.created_at`` **同为
-    北京时间字符串**（created_at 由 insert 显式写 ``datetime('now','+8 hours')``），因此
+    北京时间字符串**（created_at 由 INSERT 显式写 PostgreSQL 北京墙钟），因此
     直接按北京时间比较，**不做 UTC 转换**。曾用 ``local_to_utc_string`` 把阈值 -8h，导致
     生成前 8 小时内的入站被误算为「生成后」而误清候选。``+1s`` 在秒粒度上实现严格 ``>``，
     排除与候选生成同一秒的源消息。

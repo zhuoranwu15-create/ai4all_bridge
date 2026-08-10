@@ -49,7 +49,9 @@ def test_get_latest_active_verification_returns_none_when_expired(fresh_db):
     create_phone_verification(phone="13800000003", code="222222", expires_minutes=10)
     with db_module.connect() as conn:
         conn.execute(
-            "UPDATE phone_verifications SET expires_at = datetime('now', '-1 minute') WHERE phone = ?",
+            "UPDATE phone_verifications SET expires_at = to_char("
+            "(now() AT TIME ZONE 'Asia/Shanghai') - interval '1 minute', "
+            "'YYYY-MM-DD HH24:MI:SS') WHERE phone = ?",
             ("13800000003",),
         )
     assert get_latest_active_verification("13800000003") is None
@@ -505,7 +507,9 @@ def test_register_rejects_expired_token(client):
     result = set_verification_verified(v["id"], token_expires_minutes=10)
     with connect() as conn:
         conn.execute(
-            "UPDATE phone_verifications SET token_expires_at = datetime('now', '-1 minute') WHERE id = ?",
+            "UPDATE phone_verifications SET token_expires_at = to_char("
+            "(now() AT TIME ZONE 'Asia/Shanghai') - interval '1 minute', "
+            "'YYYY-MM-DD HH24:MI:SS') WHERE id = ?",
             (v["id"],),
         )
     res = client.post("/web/register", json={

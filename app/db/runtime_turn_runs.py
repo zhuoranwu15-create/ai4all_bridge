@@ -104,7 +104,7 @@ def mark_runtime_turn_running(turn_id: str) -> bool:
             """
             UPDATE runtime_turn_runs
             SET status='running',
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND status='accepted'
             """,
             (turn_id,),
@@ -119,9 +119,9 @@ def mark_runtime_turn_first_delta(turn_id: str) -> bool:
             UPDATE runtime_turn_runs
             SET first_delta_at=COALESCE(
                     first_delta_at,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 ),
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND status IN ('accepted', 'running')
               AND cancel_requested_at IS NULL
             """,
@@ -140,9 +140,9 @@ def request_runtime_turn_cancel(
             UPDATE runtime_turn_runs
             SET cancel_requested_at=COALESCE(
                     cancel_requested_at,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 ),
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND app_id=? AND account_id=? AND session_id=?
               AND status IN ('accepted', 'running')
             """,
@@ -178,8 +178,8 @@ def finish_runtime_turn_run(
             """
             UPDATE runtime_turn_runs
             SET status=?, assistant_message_id=?, finish_reason=?, error_code=?,
-                updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                completed_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                completed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id=? AND status IN ('accepted', 'running')
             """,
             (status, assistant_message_id, finish_reason, error_code, turn_id),
@@ -198,7 +198,7 @@ def reclaim_stale_runtime_turn_runs(
     modifier = f"-{max(1, int(ttl_seconds))} seconds"
     filters = [
         "status IN ('accepted', 'running')",
-        "updated_at < datetime('now', '+8 hours', ?)",
+        "updated_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')",
     ]
     params: List[Any] = [modifier]
     if app_id is not None:
@@ -223,10 +223,10 @@ def reclaim_stale_runtime_turn_runs(
                 """
                 UPDATE runtime_turn_runs
                 SET status='abandoned', error_code='runtime_turn_timeout',
-                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    completed_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    completed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id=? AND status IN ('accepted', 'running')
-                  AND updated_at < datetime('now', '+8 hours', ?)
+                  AND updated_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
                 """,
                 (turn_id, modifier),
             )

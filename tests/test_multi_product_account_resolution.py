@@ -5,7 +5,6 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import is_postgres
 
 
 def test_same_user_resolves_distinct_entry_account_per_product(fresh_db):
@@ -104,8 +103,6 @@ def test_disabled_membership_cannot_create_resident_runtime_account(fresh_db):
 
 
 def test_concurrent_entry_account_creation_keeps_one_per_user_app(fresh_db):
-    if not is_postgres():
-        pytest.skip("入口账号并发唯一性以 PG 为准")
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037303")
     db.ensure_product_membership(

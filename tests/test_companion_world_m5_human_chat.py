@@ -8,7 +8,6 @@ from datetime import datetime
 import pytest
 
 import app.db as db
-from app.db._backend import is_postgres
 from app.products.mingchan.application.human_chat import (
     CompanionWorldHumanChatService,
     HumanChatError,
@@ -566,8 +565,6 @@ def test_conversation_list_is_participant_scoped_and_preview_is_bounded(
 
 
 def test_pg_concurrent_same_client_message_inserts_once(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner = _user("19965206001")
     visitor = _user("19965206002")
     _visit, conversation = _active(owner, visitor)
@@ -594,8 +591,6 @@ def test_pg_concurrent_same_client_message_inserts_once(fresh_db):
 
 
 def test_pg_send_vs_block_finishes_read_only_without_orphan(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner = _user("19965207001")
     visitor = _user("19965207002")
     visit, conversation = _active(owner, visitor)
@@ -642,8 +637,6 @@ def test_pg_send_vs_block_finishes_read_only_without_orphan(fresh_db):
 
 
 def test_pg_send_vs_exact_expiry_never_commits_message(fresh_db):
-    if not is_postgres():
-        pytest.skip("PG 并发权威门禁")
     owner = _user("19965208001")
     visitor = _user("19965208002")
     visit, conversation = _active(owner, visitor)

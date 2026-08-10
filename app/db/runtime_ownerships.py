@@ -45,7 +45,7 @@ def ensure_runtime_ownership(
                 owner_kind, source_type, source_id, status, updated_at
             )
             VALUES (?, ?, ?, 'user', ?, ?, 'active',
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(runtime_account_id) DO NOTHING
             """,
             (

@@ -9,8 +9,7 @@
   4. 同真人的微信 binding 账号与世界居民账号并发 → 两条 owner 解析路径汇聚同一钱包，
      余额不丢更新；居民不需要 owner_binding。
 
-并发正确性只在 PG 算数（§9：SQLite 单写者天然串行，绿不作数）→ 全部 PG-only，
-SQLite 下 skip。功能正确性另由 tests/test_billing_charges.py 覆盖。
+并发正确性以 PostgreSQL 为准；功能正确性另由 tests/test_billing_charges.py 覆盖。
 """
 import concurrent.futures
 
@@ -18,7 +17,7 @@ import pytest
 
 import app.db as db
 from app.bootstrap.product_registry import build_test_product_registry
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db.billing import _shell_micros_for_tokens
 from tests.factories import make_resident_account, make_user_account
 
@@ -106,8 +105,6 @@ def _charge(account_id: str, idempotency_key: str, source_id: str):
 # 1. 跨居民并发扣款：共享钱包，不同 key，不丢更新
 # ---------------------------------------------------------------------------
 def test_concurrent_cross_resident_charges_no_lost_update(fresh_db):
-    if not is_postgres():
-        pytest.skip("并发不丢更新只在 PG 算数（§9 硬门禁，SQLite 单写者不作数）")
 
     pu, a1, a2 = _user_two_residents("13800030001")
     before = _balance(pu)
@@ -132,8 +129,6 @@ def test_concurrent_cross_resident_charges_no_lost_update(fresh_db):
 # 2. 同 idempotency_key 并发：恰扣一次（双 UNIQUE 挡下双记）
 # ---------------------------------------------------------------------------
 def test_concurrent_same_idempotency_key_charges_once(fresh_db):
-    if not is_postgres():
-        pytest.skip("并发去重只在 PG 算数（§9 硬门禁，SQLite 单写者不作数）")
 
     pu, a = _user_one_account("13800030002")
     before = _balance(pu)
@@ -178,8 +173,6 @@ def test_concurrent_same_idempotency_key_charges_once(fresh_db):
 # 3. 跨真人并发：各自钱包互不误伤（账号隔离）
 # ---------------------------------------------------------------------------
 def test_concurrent_charges_across_users_do_not_interfere(fresh_db):
-    if not is_postgres():
-        pytest.skip("并发不误伤只在 PG 算数（§9 硬门禁，SQLite 单写者不作数）")
 
     pu_a, acc_a = _user_one_account("13800030003")
     pu_b, acc_b = _user_one_account("13800030004")
@@ -206,8 +199,6 @@ def test_concurrent_charges_across_users_do_not_interfere(fresh_db):
 # 4. 微信 binding + 世界居民：两条 owner 解析路径共享钱包，不丢更新
 # ---------------------------------------------------------------------------
 def test_concurrent_binding_and_world_resident_share_wallet(fresh_db):
-    if not is_postgres():
-        pytest.skip("混合归属解析并发只在 PG 算数（§9 硬门禁，SQLite 单写者不作数）")
 
     pu, binding_account, resident_account = _user_binding_and_resident("13800030005")
     assert binding_account != resident_account

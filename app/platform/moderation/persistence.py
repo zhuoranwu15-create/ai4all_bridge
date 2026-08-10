@@ -157,14 +157,15 @@ def create_content_moderation_task(
             raise ValueError("account_id does not belong to app_id")
         conn.execute(
             """
-            INSERT OR IGNORE INTO content_moderation_tasks(
+            INSERT INTO content_moderation_tasks(
                 id, app_id, account_id, session_id, source_type, source_id, message_db_id,
                 outbound_message_id, direction, content_kind, status, risk_level,
                 risk_categories_json, confidence, content_hash, snapshot_text,
                 media_json, sampling_reason, sample_rate_percent, policy_version,
                 prompt_version, idempotency_key, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (
                 task_id,
@@ -320,7 +321,7 @@ def claim_queued_content_moderation_tasks(
             WHERE status = 'queued'
               AND (
                 machine_claimed_at IS NULL
-                OR machine_claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                OR machine_claimed_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
               )
             ORDER BY created_at ASC, id ASC
             LIMIT ?
@@ -332,14 +333,14 @@ def claim_queued_content_moderation_tasks(
             cursor = conn.execute(
                 """
                 UPDATE content_moderation_tasks
-                SET machine_claimed_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
+                SET machine_claimed_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                     machine_attempts = machine_attempts + 1,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                   AND status = 'queued'
                   AND (
                     machine_claimed_at IS NULL
-                    OR machine_claimed_at < strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours', ?))
+                    OR machine_claimed_at < to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
                   )
                 """,
                 (row["id"], stale_modifier),
@@ -378,11 +379,11 @@ def update_content_moderation_task_machine_status(
                 confidence = ?,
                 last_error = ?,
                 machine_completed_at = CASE
-                    WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     ELSE machine_completed_at
                 END,
-                machine_claimed_at = CASE WHEN ? THEN NULL ELSE machine_claimed_at END,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                machine_claimed_at = CASE WHEN ? = 1 THEN NULL ELSE machine_claimed_at END,
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -505,7 +506,7 @@ def claim_content_moderation_task(
             UPDATE content_moderation_tasks
             SET status = 'reviewing',
                 assigned_admin_user_id = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
               AND status IN ('needs_review', 'reviewing', 'blocked', 'escalated')
               AND (assigned_admin_user_id IS NULL OR assigned_admin_user_id = ?)
@@ -552,7 +553,7 @@ def update_content_moderation_task_review_status(
                 reviewed_by_admin_user_id = COALESCE(?, reviewed_by_admin_user_id),
                 reviewed_at = COALESCE(?, reviewed_at),
                 last_error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -802,14 +803,14 @@ def upsert_moderation_account_risk_state(
                 account_id, risk_level, risk_score, sample_multiplier,
                 last_risk_at, metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, COALESCE(?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))), ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, COALESCE(?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')), ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO UPDATE SET
                 risk_level = excluded.risk_level,
                 risk_score = excluded.risk_score,
                 sample_multiplier = excluded.sample_multiplier,
                 last_risk_at = excluded.last_risk_at,
                 metadata_json = excluded.metadata_json,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 account_id,
@@ -853,13 +854,13 @@ def update_moderation_account_risk_controls(
                 proactive_blocked_until, conversation_blocked_until,
                 metadata_json, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')), strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             ON CONFLICT(account_id) DO UPDATE SET
                 risk_level = excluded.risk_level,
                 proactive_blocked_until = excluded.proactive_blocked_until,
                 conversation_blocked_until = excluded.conversation_blocked_until,
                 metadata_json = excluded.metadata_json,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """,
             (
                 account_id,
@@ -908,4 +909,3 @@ def _delete_content_moderation_tasks_where(
         "moderation_results_deleted": results,
         "moderation_tasks_deleted": tasks,
     }
-

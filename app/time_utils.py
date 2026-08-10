@@ -23,8 +23,8 @@ def beijing_now_str() -> str:
 def beijing_naive_now() -> datetime:
     """Return current Beijing (UTC+8) wall-clock as a naive datetime.
 
-    DB timestamp columns store Beijing wall-clock via ``datetime('now','+8 hours')``
-    as naive strings. Scheduler / proactive comparisons must use this instead of
+    DB timestamp columns store Beijing wall-clock as naive strings. Scheduler /
+    proactive comparisons must use this instead of
     ``datetime.now()`` (which is server-local) so that due-time, window and
     quiet-hour checks line up with stored values regardless of host timezone.
     Naive (not aware) on purpose, to stay arithmetic-compatible with the rest of

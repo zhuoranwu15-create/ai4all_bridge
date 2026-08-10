@@ -39,14 +39,16 @@ def _make_user_with_accounts(phone: str, n: int) -> tuple:
                 conn.execute(
                     "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
                     "VALUES (?, 'openclaw-weixin', ?, 'zhaoxi', "
-                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+                    "'YYYY-MM-DD HH24:MI:SS'))",
                     (acc, f"居民{i}"),
                 )
                 conn.execute(
                     "INSERT INTO account_owner_bindings("
                     "platform_user_id, account_id, binding_method, status, app_id, updated_at) "
                     "VALUES (?, ?, 'legacy', 'active', 'zhaoxi', "
-                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+                    "'YYYY-MM-DD HH24:MI:SS'))",
                     (uid, acc),
                 )
                 account_ids.append(acc)
@@ -74,7 +76,7 @@ def _seed_extra_active_wallet(conn, *, account_id, platform_user_id, with_grant=
             id, account_id, platform_user_id, balance_shell_micros, status, updated_at
         )
         VALUES (?, ?, ?, 0, 'active',
-                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         """,
         (wallet_id, account_id, platform_user_id),
     )
@@ -138,7 +140,7 @@ def test_precheck_detects_ambiguous_owner(fresh_db):
             INSERT INTO account_owner_bindings(
                 platform_user_id, account_id, binding_method, status, updated_at
             ) VALUES (?, ?, 'test', 'active',
-                      strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                      to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (other["id"], accounts[0]),
         )

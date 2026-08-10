@@ -1,7 +1,7 @@
 """① wipe_account_data 真人级钱包/daily 保留-删除双分支（D-14/D-09 M1，codex finding ①）。
 
 同真人多号共享一钱包 + 一套 daily 配额；wipe 单号若误按 account_id 删这两张真人级表，会丢同真人
-其他号的余额/配额（PG 无 FK→静默丢失；SQLite FK→其他号 ledger 悬挂致 IntegrityError 整体回滚）。
+其他号的余额/配额，并让其他号 ledger 悬挂。
 验证：wipe 非末号 → 共享钱包/daily 原样保留且**不抛**；wipe 末号 → 真正拆除。走 fresh_db。
 """
 import app.db as db
@@ -30,7 +30,7 @@ def test_wipe_preserves_shared_wallet_when_person_has_other_accounts(fresh_db):
     a2 = make_resident_account(pu, "乙")
 
     # a2 追加一笔手工赠权 → 生成 account_id=a2、引用共享钱包的 ledger 行（正是旧代码删钱包时
-    # 触发 SQLite FK 崩 / PG 悬挂的那类跨号引用）。
+    # 形成旧代码会错误删除共享钱包并留下悬挂引用的跨号场景）。
     db.grant_shells(
         account_id=a2, platform_user_id=pu, amount_shell_micros=1_000_000,
         source_type="manual_grant", source_id="t", idempotency_key="wipe-shared-extra",

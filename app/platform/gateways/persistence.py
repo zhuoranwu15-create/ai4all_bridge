@@ -26,7 +26,7 @@ def set_account_assigned_node(*, account_id: str, node_id: Optional[str]) -> Non
             """
             UPDATE accounts
             SET assigned_node_id = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (_clean_text(node_id), cleaned_account_id),
@@ -88,8 +88,9 @@ def upsert_access_node(
     with connect() as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO access_nodes(node_id, session_count, status, last_heartbeat_at)
-            VALUES (?, 0, 'online', strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            INSERT INTO access_nodes(node_id, session_count, status, last_heartbeat_at)
+            VALUES (?, 0, 'online', to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+            ON CONFLICT DO NOTHING
             """,
             (cleaned_node_id,),
         )
@@ -101,8 +102,8 @@ def upsert_access_node(
                 session_count = COALESCE(?, session_count),
                 max_sessions = COALESCE(?, max_sessions),
                 status = COALESCE(?, status),
-                last_heartbeat_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                last_heartbeat_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE node_id = ?
             """,
             (

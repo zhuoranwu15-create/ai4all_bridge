@@ -1060,7 +1060,9 @@ def test_referral_reward_delays_after_weekly_soft_limit(client, fresh_db):
             """
             UPDATE referral_relationships
             SET metadata_json = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char(
+                    (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+                )
             WHERE id = ?
             """,
             (json.dumps(metadata, ensure_ascii=False), relationship["id"]),
@@ -1118,7 +1120,9 @@ def test_referral_delayed_release_tolerates_missing_review_account(client, fresh
                 referral_code_id, status, meaningful_message_count,
                 review_status, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, 'qualified', 3, 'pending', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, 'qualified', 3, 'pending', ?, to_char(
+                (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+            ))
             """,
             (
                 "refrel_missing_review_account",
@@ -1182,7 +1186,9 @@ def test_referral_soft_limit_ignores_rejected_relationships(client, fresh_db):
                 UPDATE referral_relationships
                 SET status = 'rejected',
                     review_status = 'failed',
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char(
+                        (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+                    )
                 WHERE id = ?
                 """,
                 (relationship_id,),
@@ -1252,7 +1258,9 @@ def test_referral_soft_review_failed_status_is_not_overwritten(client, fresh_db)
                 referral_code_id, status, meaningful_message_count,
                 review_status, metadata_json, updated_at
             )
-            VALUES (?, ?, ?, ?, 'qualified', 3, 'failed', ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, 'qualified', 3, 'failed', ?, to_char(
+                (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+            ))
             """,
             (
                 "refrel_soft_review_failed",
@@ -1561,10 +1569,7 @@ def test_create_account_enforces_one_active_per_user_app(client):
 
 
 def test_owner_binding_partial_unique_index_enforces_and_allows_archived(fresh_db):
-    """§9.3 A2:部分唯一索引在 DB 层挡住第二个 active (user,app);archived 不占名额。
-
-    同时验证 SQLite 冲突消息含冲突列名——create_ai4all_account_for_user 的竞态兜底据此翻译。
-    """
+    """§9.3 A2:部分唯一索引挡住第二个 active (user,app);archived 不占名额。"""
     from app.db._core import connect
     from app.db._backend import IntegrityError
 
@@ -1584,10 +1589,8 @@ def test_owner_binding_partial_unique_index_enforces_and_allows_archived(fresh_d
                 "VALUES ('u9','acc-y','m','active','zhaoxi')"
             )
     msg = str(ei.value)
-    # 兜底翻译条件(billing.create_ai4all_account_for_user):索引名(PG) 或 列名(SQLite) 命中。
-    assert "ux_owner_binding_active_user_app" in msg or (
-        "platform_user_id" in msg and "app_id" in msg
-    )
+    # billing.create_ai4all_account_for_user 按该 PostgreSQL 约束名翻译竞态错误。
+    assert "ux_owner_binding_active_user_app" in msg
 
     # archived 第二绑定允许(部分索引仅约束 active),收敛规范化(archive 非规范)不被索引阻断。
     with connect() as conn:
@@ -1618,7 +1621,9 @@ def test_get_binding_intent_auto_expires_stale_qr(client):
     # Force expires_at to the past
     with db_module.connect() as conn:
         conn.execute(
-            "UPDATE binding_intents SET expires_at = datetime('now', '-1 minute') WHERE id = ?",
+            "UPDATE binding_intents SET expires_at = to_char("
+            "(now() AT TIME ZONE 'Asia/Shanghai') - interval '1 minute', "
+            "'YYYY-MM-DD HH24:MI:SS') WHERE id = ?",
             (intent["id"],),
         )
 
@@ -1732,8 +1737,7 @@ def test_web_unbind_clear_all_allows_new_default_account(client):
 
 
 def test_wipe_account_data_clears_tool_invocations_without_fk_error(fresh_db):
-    """回归：wipe 必须先删 sessions 的子表 tool_invocations，否则 DELETE sessions
-    触发 sqlite3.IntegrityError: FOREIGN KEY constraint failed（线上 500 根因）。"""
+    """回归：wipe 必须先删 session 关联的 tool_invocations，不能留下账号数据。"""
     from app.db import (
         connect,
         create_tool_invocation,
