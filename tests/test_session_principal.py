@@ -113,6 +113,7 @@ def test_m0038_backfills_existing_sessions_without_changing_count(fresh_db):
 
     user = db.create_or_get_platform_user_by_phone(phone="13800037204")
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="迁移存量账号"
     )["account"]
     db.set_account_onboarding_state(account_id=account["id"], state="completed")

@@ -102,11 +102,6 @@ __all__ = [
     'validate_referral_code',
 ]
 
-# App(产品)层默认 id。legacy 调用固定落「朝夕相伴」；所有显式 app_id 都必须先通过
-# 服务端 ProductRegistry，再由 active membership 门禁后才能创建账号。
-DEFAULT_APP_ID = ZHAOXI_APP_ID
-
-
 class InsufficientWalletBalance(ValueError):
     """固定金额预占时产品钱包余额不足。"""
 
@@ -116,7 +111,7 @@ class FixedShellReservationReleased(ValueError):
 
 
 def _registered_app_id(app_id: str, registry: ProductRegistry) -> str:
-    """校验显式产品参数；省略参数可走函数默认值，空值不得回退到朝夕。"""
+    """校验显式产品参数；空值不得回退到任何产品。"""
     cleaned = _clean_text(app_id)
     if not cleaned:
         raise ValueError("app_id is required")
@@ -155,7 +150,8 @@ def create_or_get_platform_user_by_phone(
         _ensure_product_membership_in_conn(
             conn,
             platform_user_id=str(row["id"]),
-            app_id=DEFAULT_APP_ID,
+            # 本函数是旧 Web onboarding helper，不是跨产品注册入口。
+            app_id=ZHAOXI_APP_ID,
         )
     return dict(row)
 
@@ -309,7 +305,7 @@ def _get_usable_referral_code_in_conn(
 def get_or_create_personal_referral_code_for_user(
     *,
     platform_user_id: str,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """返回真人在指定产品内稳定的个人邀请码，缺失时幂等创建。"""
@@ -401,7 +397,7 @@ def get_or_create_personal_referral_code_for_user(
 def validate_referral_code(
     *,
     code: Optional[str],
-    expected_app_id: str = DEFAULT_APP_ID,
+    expected_app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """在预期产品内校验邀请码，不消费 used_count。"""
@@ -449,7 +445,7 @@ def validate_referral_code(
 def preview_referral_code(
     *,
     code: Optional[str],
-    expected_app_id: str = DEFAULT_APP_ID,
+    expected_app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """返回指定产品的邀请码公开脱敏预览。"""
@@ -495,7 +491,7 @@ def register_platform_user_with_referral(
     display_name: Optional[str] = None,
     invite_code: Optional[str] = None,
     verified_token: Optional[str] = None,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     """注册/更新真人，并仅在首次创建产品 membership 时消费本产品邀请码。
@@ -651,7 +647,7 @@ def upsert_subscription_for_user(
     platform_user_id: str,
     plan: str = "free",
     status: str = "active",
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     cleaned_plan = _clean_text(plan) or "free"
@@ -745,7 +741,7 @@ def upsert_subscription_for_user(
 def get_latest_subscription_for_user(
     *,
     platform_user_id: str,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Optional[Dict[str, Any]]:
     app_id_clean = _registered_app_id(app_id, registry)
@@ -1806,7 +1802,7 @@ def _release_due_delayed_referral_rewards_for_inviter_in_conn(
 def retry_qualified_referral_rewards_for_user(
     *,
     platform_user_id: str,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """Retry already-qualified referral rewards once the inviter has an active account."""
@@ -1825,7 +1821,7 @@ def release_due_referral_rewards_for_user(
     *,
     platform_user_id: str,
     limit: int = 100,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """Release delayed referral rewards whose soft-review hold has elapsed."""
@@ -1844,7 +1840,7 @@ def release_due_referral_rewards_for_user(
 def release_due_referral_rewards(
     limit: int = 200,
     *,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """Release all delayed referral rewards that are due, for admin or scheduler runs."""
@@ -2123,7 +2119,7 @@ def list_referral_relationships(
     limit: int = 50,
     inviter_platform_user_id: Optional[str] = None,
     invitee_platform_user_id: Optional[str] = None,
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> List[Dict[str, Any]]:
     """List referral relationships for admin diagnostics without exposing phone numbers."""
@@ -2656,7 +2652,7 @@ def create_ai4all_account_for_user(
     is_new_membership: bool = False,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     from app.db.accounts import get_account, get_profile_for_account
@@ -3028,7 +3024,7 @@ def get_or_create_default_ai4all_account_for_user(
     is_new_membership: bool = False,
     initial_channel: str = "openclaw-weixin",
     binding_method: str = "web_onboarding",
-    app_id: str = DEFAULT_APP_ID,
+    app_id: str,
     registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY,
 ) -> Dict[str, Any]:
     existing = get_active_bound_account_for_user_in_app(

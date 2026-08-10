@@ -74,8 +74,12 @@ def test_platform_user_upsert_ensures_zhaoxi_membership_idempotently(fresh_db):
 
 
 def test_registration_returns_product_newness_and_rolls_back_with_membership(fresh_db):
-    first = db.register_platform_user_with_referral(phone="13800037105")
-    second = db.register_platform_user_with_referral(phone="13800037105")
+    first = db.register_platform_user_with_referral(
+        phone="13800037105", app_id="zhaoxi"
+    )
+    second = db.register_platform_user_with_referral(
+        phone="13800037105", app_id="zhaoxi"
+    )
     assert first["is_new_user"] is True
     assert first["is_new_membership"] is True
     assert second["is_new_user"] is False
@@ -85,7 +89,9 @@ def test_registration_returns_product_newness_and_rolls_back_with_membership(fre
         "app.db.billing._ensure_product_membership_in_conn",
         side_effect=RuntimeError("membership write failed"),
     ), pytest.raises(RuntimeError, match="membership write failed"):
-        db.register_platform_user_with_referral(phone="13800037106")
+        db.register_platform_user_with_referral(
+            phone="13800037106", app_id="zhaoxi"
+        )
     assert db.get_platform_user_by_phone(phone="13800037106") is None
 
 

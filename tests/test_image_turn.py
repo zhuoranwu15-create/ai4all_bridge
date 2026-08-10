@@ -194,6 +194,7 @@ def test_record_image_understanding_charge_fixed_and_idempotent(monkeypatch, fre
 
     user = db.create_or_get_platform_user_by_phone(phone="13800000001")
     bundle = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="计费账号"
     )
     account_id = bundle["account"]["id"]

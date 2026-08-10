@@ -19,6 +19,7 @@ def _two_product_accounts(phone: str):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone=phone)
     zhaoxi = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕入口"
     )["account"]
     db.ensure_product_membership(

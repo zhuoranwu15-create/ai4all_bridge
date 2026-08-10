@@ -368,7 +368,11 @@ def test_get_and_set_onboarding_state(fresh_db):
     from app.db import create_ai4all_account_for_user, create_or_get_platform_user_by_phone
 
     user = create_or_get_platform_user_by_phone(phone="13900000001")
-    result = create_ai4all_account_for_user(platform_user_id=user["id"], display_name="测试用户")
+    result = create_ai4all_account_for_user(
+        platform_user_id=user["id"],
+        display_name="测试用户",
+        app_id="zhaoxi",
+    )
     account_id = result["account"]["id"]
 
     state = get_account_onboarding_state(account_id=account_id)

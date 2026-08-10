@@ -31,6 +31,7 @@ _PER_DEBIT = _shell_micros_for_tokens(billable_tokens=_INPUT_TOKENS + _OUTPUT_TO
 def _user_one_account(phone: str):
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="并发计费")
     a = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="居民"
     )["account"]["id"]
     return user["id"], a

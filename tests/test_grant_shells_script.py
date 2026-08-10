@@ -6,6 +6,7 @@ def _create_wallet_account(*, phone: str = "13800006001") -> dict:
 
     user = create_or_get_platform_user_by_phone(phone=phone, display_name="Shell User")
     result = create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"],
         display_name="Shell Bot",
     )
@@ -232,6 +233,7 @@ def test_grant_isolates_wallet_and_idempotency_by_account_app(fresh_db):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800006007")
     zhaoxi_id = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕赠送账号"
     )["account"]["id"]
     db.ensure_product_membership(

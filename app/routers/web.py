@@ -930,6 +930,7 @@ def web_register(payload: WebRegisterRequest) -> dict:
         "platform_user": platform_user,
         "subscription": get_latest_subscription_for_user(
             platform_user_id=platform_user["id"],
+            app_id=ZHAOXI_APP_ID,
         ),
     }
 
@@ -949,6 +950,7 @@ def web_register_and_binding_intent(
     try:
         account_result = get_or_create_default_ai4all_account_for_user(
             platform_user_id=platform_user["id"],
+            app_id=ZHAOXI_APP_ID,
             display_name=None,
             plan="free",
             campaign_code=payload.campaign_code,
@@ -1101,6 +1103,7 @@ def web_login(payload: WebLoginRequest) -> dict:
     expected_creator_id = _trusted_creator_id_from_registration(registration)
     account_result = get_or_create_default_ai4all_account_for_user(
         platform_user_id=platform_user["id"],
+        app_id=ZHAOXI_APP_ID,
         display_name=None,
         plan="free",
         campaign_code=payload.campaign_code,

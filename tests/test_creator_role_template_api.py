@@ -33,13 +33,16 @@ def _principal(user_id: str) -> SessionPrincipal:
 
 
 def _eligible_creator(phone: str, *, onboarding_state: str = "complete"):
-    registration = db.register_platform_user_with_referral(phone=phone)
+    registration = db.register_platform_user_with_referral(
+        phone=phone, app_id="zhaoxi"
+    )
     user_id = registration["platform_user"]["id"]
     invite_code = db.get_or_create_personal_referral_code_for_user(
         platform_user_id=user_id,
         app_id="zhaoxi",
     )["code"]
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user_id
     )
     db.set_account_onboarding_state(

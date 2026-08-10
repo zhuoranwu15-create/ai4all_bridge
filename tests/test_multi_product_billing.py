@@ -1,5 +1,6 @@
 """MP-02 subscription、wallet、ledger 与 cost 的产品隔离。"""
 import concurrent.futures
+import inspect
 
 import pytest
 
@@ -10,10 +11,50 @@ from app.db._core import NEW_USER_GRANT_SHELL_MICROS
 from app.db.billing import _shell_micros_for_tokens
 
 
+_PRODUCT_SCOPED_API_PARAMETERS = {
+    "get_or_create_personal_referral_code_for_user": "app_id",
+    "validate_referral_code": "expected_app_id",
+    "preview_referral_code": "expected_app_id",
+    "register_platform_user_with_referral": "app_id",
+    "upsert_subscription_for_user": "app_id",
+    "get_latest_subscription_for_user": "app_id",
+    "retry_qualified_referral_rewards_for_user": "app_id",
+    "release_due_referral_rewards_for_user": "app_id",
+    "release_due_referral_rewards": "app_id",
+    "list_referral_relationships": "app_id",
+    "create_ai4all_account_for_user": "app_id",
+    "get_or_create_default_ai4all_account_for_user": "app_id",
+}
+
+
+def test_product_scoped_billing_apis_require_explicit_app_id(fresh_db):
+    for function_name, parameter_name in _PRODUCT_SCOPED_API_PARAMETERS.items():
+        parameter = inspect.signature(getattr(db, function_name)).parameters[
+            parameter_name
+        ]
+        assert parameter.default is inspect.Parameter.empty
+
+    with db.connect() as conn:
+        accounts_before = conn.execute("SELECT COUNT(*) AS n FROM accounts").fetchone()[
+            "n"
+        ]
+    with pytest.raises(TypeError, match="app_id"):
+        db.create_ai4all_account_for_user(
+            platform_user_id="missing-product-scope",
+            display_name="不应创建的朝夕账号",
+        )
+    with db.connect() as conn:
+        accounts_after = conn.execute("SELECT COUNT(*) AS n FROM accounts").fetchone()[
+            "n"
+        ]
+    assert accounts_after == accounts_before
+
+
 def _two_product_accounts(phone: str):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone=phone)
     zhaoxi = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕入口"
     )["account"]
     db.ensure_product_membership(
@@ -182,9 +223,11 @@ def test_subscription_keeps_status_history_per_product(fresh_db):
     registry, user_id, _zhaoxi_id, _test_id = _two_product_accounts("13800037404")
 
     cancelled = db.upsert_subscription_for_user(
+        app_id="zhaoxi",
         platform_user_id=user_id, plan="free", status="cancelled"
     )
     active = db.upsert_subscription_for_user(
+        app_id="zhaoxi",
         platform_user_id=user_id, plan="pro", status="active"
     )
     test_active = db.upsert_subscription_for_user(
@@ -197,7 +240,10 @@ def test_subscription_keeps_status_history_per_product(fresh_db):
 
     assert cancelled["status"] == "cancelled"
     assert active["id"] != cancelled["id"]
-    assert db.get_latest_subscription_for_user(platform_user_id=user_id)["id"] == active["id"]
+    assert db.get_latest_subscription_for_user(
+        platform_user_id=user_id,
+        app_id="zhaoxi",
+    )["id"] == active["id"]
     assert db.get_latest_subscription_for_user(
         platform_user_id=user_id,
         app_id="test_product",
@@ -291,6 +337,7 @@ def test_pg_concurrent_cross_product_charges_and_subscription_upserts(fresh_db):
     def upsert_subscription(index: int):
         if index % 2 == 0:
             return db.upsert_subscription_for_user(
+                app_id="zhaoxi",
                 platform_user_id=user_id, plan="pro", status="active"
             )
         return db.upsert_subscription_for_user(

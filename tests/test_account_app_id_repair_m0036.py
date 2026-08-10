@@ -57,6 +57,7 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
     """版本 22–24 已占用但列缺失时，m0036 应补齐 schema、数据与唯一约束。"""
     user = db.create_or_get_platform_user_by_phone(phone="13800003601")
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="迁移修复测试"
     )["account"]
 

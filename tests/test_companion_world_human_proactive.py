@@ -91,6 +91,7 @@ def test_owner_activity_aggregation_excludes_other_product_bindings(fresh_db):
         "19966001004"
     )
     zhaoxi_id = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user_id, display_name="朝夕渠道角色"
     )["account"]["id"]
     db.ensure_product_membership(

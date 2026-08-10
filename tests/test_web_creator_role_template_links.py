@@ -61,7 +61,9 @@ def _verified_token(phone: str) -> str:
 
 
 def _seed_creator(phone: str, suffix: str):
-    registration = db.register_platform_user_with_referral(phone=phone)
+    registration = db.register_platform_user_with_referral(
+        phone=phone, app_id="zhaoxi"
+    )
     creator_id = registration["platform_user"]["id"]
     invite_code = db.get_or_create_personal_referral_code_for_user(
         platform_user_id=creator_id,
@@ -255,6 +257,7 @@ def test_invalid_invite_cannot_use_valid_template_as_owner_proof(fresh_db):
 def test_existing_member_and_creator_current_ai_never_consume_template(fresh_db):
     creator_id, _, published = _seed_creator("13810001004", "守护")
     creator_account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=creator_id,
         campaign_code=published.template.campaign_code,
         expected_creator_platform_user_id=creator_id,
@@ -283,8 +286,11 @@ def test_template_attribution_failure_rolls_back_all_template_side_effects(
     fresh_db,
 ):
     creator_id, _, published = _seed_creator("13810001005", "回滚")
-    invitee = db.register_platform_user_with_referral(phone="13910001005")
+    invitee = db.register_platform_user_with_referral(
+        phone="13910001005", app_id="zhaoxi"
+    )
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["platform_user"]["id"]
     )
     account_id = account["account"]["id"]
@@ -316,8 +322,11 @@ def test_template_attribution_failure_rolls_back_all_template_side_effects(
 
 def test_template_dispatcher_is_idempotent_and_debug_context_cannot_consume(fresh_db):
     creator_id, _, published = _seed_creator("13810001006", "幂等")
-    invitee = db.register_platform_user_with_referral(phone="13910001006")
+    invitee = db.register_platform_user_with_referral(
+        phone="13910001006", app_id="zhaoxi"
+    )
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["platform_user"]["id"]
     )
     account_id = account["account"]["id"]
@@ -353,8 +362,11 @@ def test_template_dispatcher_is_idempotent_and_debug_context_cannot_consume(fres
 
 def test_concurrent_template_attribution_counts_exactly_once(fresh_db):
     creator_id, _, published = _seed_creator("13810001013", "并发")
-    invitee = db.register_platform_user_with_referral(phone="13910001013")
+    invitee = db.register_platform_user_with_referral(
+        phone="13910001013", app_id="zhaoxi"
+    )
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["platform_user"]["id"]
     )
     account_id = account["account"]["id"]
@@ -396,8 +408,11 @@ def test_inactive_template_falls_back_without_partial_attribution(
     reason,
 ):
     creator_id, _, published = _seed_creator("13810001011", reason)
-    invitee = db.register_platform_user_with_referral(phone="13910001011")
+    invitee = db.register_platform_user_with_referral(
+        phone="13910001011", app_id="zhaoxi"
+    )
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["platform_user"]["id"]
     )
     with db.connect() as conn:
@@ -434,8 +449,11 @@ def test_template_code_exists_for_campaign_visit_even_when_disabled(fresh_db):
 
 def test_wipe_deletes_template_snapshot_but_preserves_common_funnel_anchor(fresh_db):
     creator_id, _, published = _seed_creator("13810001008", "清理")
-    invitee = db.register_platform_user_with_referral(phone="13910001008")
+    invitee = db.register_platform_user_with_referral(
+        phone="13910001008", app_id="zhaoxi"
+    )
     account = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["platform_user"]["id"]
     )
     account_id = account["account"]["id"]

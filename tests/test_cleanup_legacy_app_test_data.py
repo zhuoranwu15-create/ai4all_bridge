@@ -90,6 +90,7 @@ def test_cleanup_refuses_legacy_resident_with_weixin_binding(fresh_db):
         phone="19977000003", display_name="cleanup-blocked"
     )
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="受保护微信账号"
     )["account"]
     _seed_world(
@@ -123,6 +124,7 @@ def test_preservation_precheck_accepts_protected_zhaoxi_world(fresh_db):
         phone="19977000063", display_name="preserved-zhaoxi"
     )
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="保留微信账号"
     )["account"]
     _seed_world(app_id="zhaoxi", suffix="63", runtime_account_id=account["id"])

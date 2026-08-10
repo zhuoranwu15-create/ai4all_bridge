@@ -8,6 +8,7 @@ def _two_product_accounts(phone: str):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone=phone)
     zhaoxi = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕入口"
     )["account"]["id"]
     db.ensure_product_membership(
@@ -103,15 +104,19 @@ def test_wipe_test_product_never_deletes_legacy_zhaoxi_daily_or_assets(fresh_db)
 def test_wipe_preserves_wallet_audit_chain_referenced_by_referral_reward(fresh_db):
     inviter = db.create_or_get_platform_user_by_phone(phone="13800037503")
     inviter_account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"], display_name="推荐邀请人"
     )["account"]["id"]
     code = db.get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"]
     )
     invitee = db.register_platform_user_with_referral(
+        app_id="zhaoxi",
         phone="13800037504", invite_code=code["code"]
     )["platform_user"]
     invitee_account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["id"], display_name="推荐被邀请人"
     )["account"]["id"]
     session = db.get_or_create_session(

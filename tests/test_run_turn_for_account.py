@@ -118,6 +118,7 @@ def test_non_private_ignored_at_adapter():
 def test_disabled_membership_is_rejected_before_turn_side_effects(fresh_db, caplog):
     user = db.create_or_get_platform_user_by_phone(phone="13800037901")
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="停服账号"
     )["account"]
     db.update_product_membership_status(

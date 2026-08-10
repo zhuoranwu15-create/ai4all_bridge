@@ -12,6 +12,7 @@ def test_same_user_resolves_distinct_entry_account_per_product(fresh_db):
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037301")
     zhaoxi = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕入口"
     )
     db.ensure_product_membership(

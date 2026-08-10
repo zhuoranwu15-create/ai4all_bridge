@@ -54,9 +54,11 @@ def _pu(phone: str, name: str = "居民") -> str:
 
 
 def _account(pu: str, name: str = "居民") -> str:
-    return db.create_ai4all_account_for_user(platform_user_id=pu, display_name=name)[
-        "account"
-    ]["id"]
+    return db.create_ai4all_account_for_user(
+        platform_user_id=pu,
+        display_name=name,
+        app_id="zhaoxi",
+    )["account"]["id"]
 
 
 def _runtime_account(name: str = "居民") -> str:

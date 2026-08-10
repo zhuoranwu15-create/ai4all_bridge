@@ -18,6 +18,7 @@ def _create_account(*, phone: str = "13800007001") -> str:
 
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="计费用户")
     bundle = db.get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="计费 Bot"
     )
     return bundle["account"]["id"]

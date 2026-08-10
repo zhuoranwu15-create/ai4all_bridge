@@ -62,7 +62,11 @@ def test_wipe_last_account_tears_down_person_wallet(fresh_db):
     pu = db.create_or_get_platform_user_by_phone(
         phone="13900040002", display_name="末号拆除"
     )["id"]
-    a1 = db.create_ai4all_account_for_user(platform_user_id=pu, display_name="独")["account"]["id"]
+    a1 = db.create_ai4all_account_for_user(
+        platform_user_id=pu,
+        display_name="独",
+        app_id="zhaoxi",
+    )["account"]["id"]
     db.increment_daily_usage(account_id=a1, date=_DATE)
 
     stats = db.wipe_account_data(account_id=a1)

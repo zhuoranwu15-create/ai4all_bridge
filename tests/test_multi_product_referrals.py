@@ -19,6 +19,7 @@ def _inviter_with_two_product_codes(phone: str):
     registry = build_test_product_registry()
     inviter = db.create_or_get_platform_user_by_phone(phone=phone)
     zhaoxi_account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"], display_name="朝夕邀请人"
     )["account"]["id"]
     db.ensure_product_membership(
@@ -31,6 +32,7 @@ def _inviter_with_two_product_codes(phone: str):
         registry=registry,
     )["account"]["id"]
     zhaoxi_code = db.get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"]
     )
     test_code = db.get_or_create_personal_referral_code_for_user(
@@ -161,6 +163,7 @@ def test_meaningful_reviews_and_rewards_are_product_isolated(fresh_db):
     )
     invitee_id = zhaoxi["platform_user"]["id"]
     z_invitee = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee_id, display_name="朝夕被邀请人"
     )["account"]["id"]
     t_invitee = db.create_ai4all_account_for_user(
@@ -231,6 +234,7 @@ def test_m0044_sqlite_rebuild_preserves_relationships_reviews_and_fk(fresh_db):
     )
     invitee_id = zhaoxi["platform_user"]["id"]
     z_account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee_id, display_name="重建被邀请人"
     )["account"]["id"]
     _create_messages_and_process(
@@ -271,6 +275,7 @@ def test_m0043_realigns_relationship_and_review_from_authoritative_parents(fresh
         registry=registry,
     )["platform_user"]
     account_id = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["id"], display_name="expand 回填被邀请人"
     )["account"]["id"]
     _create_messages_and_process(
@@ -310,6 +315,7 @@ def test_referral_contract_rejects_review_scope_drift(fresh_db):
     )
     invitee_id = zhaoxi["platform_user"]["id"]
     z_account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee_id, display_name="漂移被邀请人"
     )["account"]["id"]
     _create_messages_and_process(
@@ -524,10 +530,15 @@ def test_sqlite_referral_reward_lock_fallback_is_idempotent(fresh_db):
         "13800037717"
     )
     invitee = db.register_platform_user_with_referral(
-        phone="13800037718", invite_code=zcode["code"], registry=registry
+        phone="13800037718",
+        invite_code=zcode["code"],
+        app_id="zhaoxi",
+        registry=registry,
     )["platform_user"]
     account_id = db.create_ai4all_account_for_user(
-        platform_user_id=invitee["id"], display_name="SQLite 被邀请人"
+        platform_user_id=invitee["id"],
+        display_name="SQLite 被邀请人",
+        app_id="zhaoxi",
     )["account"]["id"]
     _create_messages_and_process(
         account_id=account_id, prefix="sqlite-lock-fallback", registry=registry

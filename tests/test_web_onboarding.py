@@ -294,6 +294,7 @@ def test_full_invite_code_does_not_consume_otp(client):
         },
     ).json()["platform_user"]
     code = get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"],
     )
     with connect() as conn:
@@ -365,6 +366,7 @@ def test_web_login_with_invite_code_creates_referral_relationship(client):
         },
     ).json()["platform_user"]
     code = get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"],
     )
 
@@ -383,7 +385,9 @@ def test_web_login_with_invite_code_creates_referral_relationship(client):
 
     assert res.status_code == 200
     invitee = res.json()["platform_user"]
-    relationships = list_referral_relationships(invitee_platform_user_id=invitee["id"])
+    relationships = list_referral_relationships(
+        app_id="zhaoxi", invitee_platform_user_id=invitee["id"]
+    )
     assert len(relationships) == 1
     assert relationships[0]["inviter_platform_user_id"] == inviter["id"]
     assert relationships[0]["status"] == "registered"
@@ -506,6 +510,7 @@ def test_default_account_ignores_legacy_ai4all_display_name(fresh_db):
 
     user = create_or_get_platform_user_by_phone(phone="13800000119")
     result = get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"],
         display_name="AI4ALL 助手",
     )
@@ -643,6 +648,7 @@ def test_admin_account_wallet_is_read_only_and_does_not_duplicate_grant(client):
 
     user = create_or_get_platform_user_by_phone(phone="13800000310")
     account = create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"],
         display_name="No Wallet Bot",
     )["account"]
@@ -753,6 +759,7 @@ def test_referral_invite_rewards_inviter_after_three_meaningful_messages(client,
     invitee_data = invitee_res.json()
     invitee_account = invitee_data["account"]
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     assert len(relationships) == 1
@@ -803,6 +810,7 @@ def test_referral_invite_rewards_inviter_after_three_meaningful_messages(client,
     assert duplicate.status_code == 200
 
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     assert relationships[0]["status"] == "rewarded"
@@ -843,6 +851,7 @@ def test_referral_reward_retries_after_inviter_gets_active_account(client, fresh
     fresh_db.rate_limit_daily = 0
     inviter = create_or_get_platform_user_by_phone(phone="13800000320")
     code = get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"],
     )
 
@@ -904,6 +913,7 @@ def test_referral_reward_retries_after_inviter_gets_active_account(client, fresh
         assert res.status_code == 200
 
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     assert relationships[0]["status"] == "qualified"
@@ -911,10 +921,12 @@ def test_referral_reward_retries_after_inviter_gets_active_account(client, fresh
     assert relationships[0]["reward_ledger_id"] is None
 
     inviter_account = get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter["id"],
     )["account"]
     wallet = get_wallet_summary(account_id=inviter_account["id"])
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     assert relationships[0]["status"] == "rewarded"
@@ -972,11 +984,13 @@ def test_referral_reward_delays_after_weekly_soft_limit(client, fresh_db):
     invitee_data = invitee_res.json()
 
     inviter_relationships = list_referral_relationships(
+        app_id="zhaoxi",
         inviter_platform_user_id=inviter_user["id"],
         limit=10,
     )
     assert len(inviter_relationships) == 6
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     relationship = relationships[0]
@@ -1022,6 +1036,7 @@ def test_referral_reward_delays_after_weekly_soft_limit(client, fresh_db):
         assert res.status_code == 200
 
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     relationship = relationships[0]
@@ -1068,6 +1083,7 @@ def test_referral_reward_delays_after_weekly_soft_limit(client, fresh_db):
     assert len(reward_entries) == 1
 
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee_data["platform_user"]["id"],
     )
     assert relationships[0]["status"] == "rewarded"
@@ -1088,6 +1104,7 @@ def test_referral_delayed_release_tolerates_missing_review_account(client, fresh
     inviter_user = inviter_login["platform_user"]
     code = client.get("/web/me/referral-code", headers=inviter_headers).json()["referral_code"]
     code_row = get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter_user["id"],
     )
     assert code_row["code"] == code["code"]
@@ -1119,9 +1136,10 @@ def test_referral_delayed_release_tolerates_missing_review_account(client, fresh
             ),
         )
 
-    released = release_due_referral_rewards(limit=10)
+    released = release_due_referral_rewards(app_id="zhaoxi", limit=10)
     assert len([item for item in released if item["source_type"] == "referral_reward"]) == 1
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee["id"],
     )
     assert relationships[0]["status"] == "rewarded"
@@ -1152,6 +1170,7 @@ def test_referral_soft_limit_ignores_rejected_relationships(client, fresh_db):
         )
         assert res.status_code == 200
         relationship = list_referral_relationships(
+            app_id="zhaoxi",
             invitee_platform_user_id=res.json()["platform_user"]["id"],
         )[0]
         rejected_ids.append(relationship["id"])
@@ -1180,6 +1199,7 @@ def test_referral_soft_limit_ignores_rejected_relationships(client, fresh_db):
     )
     assert res.status_code == 200
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         inviter_platform_user_id=inviter_user["id"],
         limit=10,
     )
@@ -1205,10 +1225,12 @@ def test_referral_soft_review_failed_status_is_not_overwritten(client, fresh_db)
     inviter_headers, inviter_login = _get_login_data("13800000440", client)
     inviter_user = inviter_login["platform_user"]
     code = get_or_create_personal_referral_code_for_user(
+        app_id="zhaoxi",
         platform_user_id=inviter_user["id"],
     )
     invitee = create_or_get_platform_user_by_phone(phone="13800000441")
     invitee_account = get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=invitee["id"],
         display_name=None,
         plan="free",
@@ -1266,6 +1288,7 @@ def test_referral_soft_review_failed_status_is_not_overwritten(client, fresh_db)
         message_db_id=message_db_id,
     )
     relationships = list_referral_relationships(
+        app_id="zhaoxi",
         invitee_platform_user_id=invitee["id"],
     )
     assert relationships[0]["status"] == "qualified"
@@ -1519,12 +1542,14 @@ def test_create_account_enforces_one_active_per_user_app(client):
     create_platform_user_session(platform_user_id=user["id"], days=7)
 
     first = create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="第一个", require_display_name=False,
     )
     assert ACCOUNT_ID_RE.match(first["account"]["id"])
 
     with pytest.raises(ValueError, match="already has an active account"):
         create_ai4all_account_for_user(
+            app_id="zhaoxi",
             platform_user_id=user["id"], display_name="第二个", require_display_name=False,
         )
 

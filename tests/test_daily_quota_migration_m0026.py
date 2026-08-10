@@ -88,6 +88,7 @@ def test_m0023_orphan_no_binding_backfills_account_id(fresh_db):
     """
     user = db.create_or_get_platform_user_by_phone(phone="13800030003", display_name="孤儿迁移")
     acc = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="孤儿"
     )["account"]["id"]
     with db.connect() as conn:

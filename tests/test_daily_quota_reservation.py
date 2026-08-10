@@ -19,6 +19,7 @@ _DATE = "2026-07-19"
 def _user_with_account(phone: str):
     user = db.create_or_get_platform_user_by_phone(phone=phone, display_name="预占用户")
     a = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="居民"
     )["account"]["id"]
     return user["id"], a

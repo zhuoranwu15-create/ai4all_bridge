@@ -28,6 +28,7 @@ def _make_user_with_accounts(phone: str, n: int) -> tuple:
     uid = user["id"]
     account_ids = [
         db.create_ai4all_account_for_user(
+            app_id="zhaoxi",
             platform_user_id=uid, display_name="居民0"
         )["account"]["id"]
     ]
