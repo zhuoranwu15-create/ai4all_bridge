@@ -150,3 +150,48 @@ def test_m0070_backfills_existing_tasks_and_enforces_required_app_id(
                     )
         finally:
             close_pg_pool()
+
+
+def test_m0071_scopes_idempotency_by_product_and_preserves_retries(
+    test_settings, empty_pg_database
+):
+    from app.db import close_pg_pool, connect, create_content_moderation_task, migrate_db_through
+
+    with patch("app.db.settings", test_settings):
+        try:
+            migrate_db_through(target_version=71, expected_current_version=0)
+            _insert_account(account_id="idem-zx", app_id="zhaoxi")
+            _insert_account(account_id="idem-mc", app_id="mingchan")
+
+            first = _create_task(account_id="idem-zx", app_id="zhaoxi", suffix="shared")
+            second = _create_task(account_id="idem-mc", app_id="mingchan", suffix="shared")
+            retry = create_content_moderation_task(
+                app_id="zhaoxi",
+                account_id="idem-zx",
+                session_id=None,
+                source_type="message",
+                source_id="different-source",
+                message_db_id=None,
+                outbound_message_id=None,
+                direction="inbound",
+                content_kind="text",
+                status="queued",
+                risk_level="unknown",
+                snapshot_text="changed retry payload",
+                policy_version="retry_policy",
+                idempotency_key="moderation-scope:shared",
+            )
+
+            assert first["id"] != second["id"]
+            assert retry["id"] == first["id"]
+            with connect() as conn:
+                index = conn.execute(
+                    "SELECT indexname AS name FROM pg_indexes "
+                    "WHERE schemaname=current_schema() "
+                    "AND tablename='content_moderation_tasks'"
+                ).fetchall()
+                assert "ux_moderation_tasks_app_idempotency" in {
+                    row["name"] for row in index
+                }
+        finally:
+            close_pg_pool()

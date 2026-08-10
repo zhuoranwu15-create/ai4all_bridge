@@ -2940,6 +2940,43 @@ def _migration_0070_moderation_task_product_scope(conn: Connection) -> None:
     )
 
 
+def _migration_0071_moderation_task_app_idempotency(conn: Connection) -> None:
+    """把审核任务幂等性从全局 key 收紧为产品 + key。"""
+
+    rows = conn.execute(
+        """
+        SELECT tc.constraint_name,
+               COUNT(*) AS column_count,
+               MAX(kcu.column_name) AS column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema=tc.constraint_schema
+         AND kcu.constraint_name=tc.constraint_name
+         AND kcu.table_name=tc.table_name
+        WHERE tc.constraint_schema=current_schema()
+          AND tc.constraint_type='UNIQUE'
+          AND tc.table_name='content_moderation_tasks'
+        GROUP BY tc.constraint_name
+        """
+    ).fetchall()
+    for row in rows:
+        if int(row["column_count"]) != 1 or row["column_name"] != "idempotency_key":
+            continue
+        constraint = str(row["constraint_name"])
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", constraint):
+            raise RuntimeError("unexpected moderation unique constraint name")
+        conn.execute(
+            f'ALTER TABLE "content_moderation_tasks" DROP CONSTRAINT "{constraint}"'
+        )
+
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_moderation_tasks_app_idempotency
+        ON content_moderation_tasks(app_id, idempotency_key)
+        """
+    )
+
+
 __all__ = [
     "_billing_contract_violation_counts",
     "_billing_idempotency_contract_violation_counts",
@@ -2986,6 +3023,7 @@ __all__ = [
     "_migration_0068_runtime_turn_runs",
     "_migration_0069_runtime_turn_cancellation",
     "_migration_0070_moderation_task_product_scope",
+    "_migration_0071_moderation_task_app_idempotency",
     "_phase1_contract_violation_counts",
     "_quota_contract_violation_counts",
     "_referral_contract_violation_counts",

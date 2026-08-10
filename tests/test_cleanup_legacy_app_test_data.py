@@ -141,7 +141,7 @@ def test_preservation_precheck_accepts_protected_zhaoxi_world(fresh_db):
     report = build_preservation_plan()
 
     assert report["mode"] == "preserve_legacy_zhaoxi"
-    assert report["schema_version"] == 70
+    assert report["schema_version"] == 71
     assert report["product_owner_unique"] is True
     assert report["safe_to_enable"] is True
     assert report["legacy_counts_retained"]["legacy_worlds"] == 1

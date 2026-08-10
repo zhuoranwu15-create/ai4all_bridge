@@ -165,7 +165,7 @@ def create_content_moderation_task(
                 prompt_version, idempotency_key, metadata_json, created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (app_id, idempotency_key) DO NOTHING
             """,
             (
                 task_id,
