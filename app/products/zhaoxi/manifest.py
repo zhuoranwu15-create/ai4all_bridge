@@ -44,11 +44,20 @@ def install_operational_routes(app: FastAPI) -> None:
 
     from app.products.zhaoxi.api import admin_accounts
     from app.products.zhaoxi.api import admin_dreaming
-    from app.products.zhaoxi.api import admin_moderation
     from app.products.zhaoxi.api import admin_proactive
     from app.products.zhaoxi.api import debug
+    from app.platform.moderation import admin as admin_moderation
+    from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 
     app.include_router(debug.router)
+    admin_moderation.register_proactive_restrict_handler(
+        lambda *, account_id, muted_until, reason: apply_proactive_message_settings_patch(
+            account_id=account_id,
+            patch={"muted_until": muted_until},
+            source="admin",
+            reason=reason,
+        )
+    )
     app.include_router(admin_moderation.router)
     app.include_router(admin_accounts.router)
     app.include_router(admin_proactive.router)

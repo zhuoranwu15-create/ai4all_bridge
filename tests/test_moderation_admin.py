@@ -259,3 +259,21 @@ def test_admin_actions_restrict_proactive_and_disable_account(client):
     assert get_account(account_id="acc-mod-action")["status"] == "disabled"
     risk_state = get_moderation_account_risk_state(account_id="acc-mod-action")
     assert risk_state["risk_level"] == "disabled"
+def test_restrict_proactive_rejects_non_zhaoxi_product_without_side_effects():
+    from fastapi import HTTPException
+
+    from app.platform.moderation.admin import _apply_moderation_admin_action
+
+    try:
+        _apply_moderation_admin_action(
+            task={"id": "task-mingchan", "app_id": "mingchan", "account_id": "acc-mingchan", "status": "needs_review"},
+            action="restrict_proactive",
+            admin_user={"id": "admin-1", "role": "admin"},
+            reason="scope test",
+            request_path="/admin/moderation/tasks/task-mingchan/actions",
+        )
+    except HTTPException as err:
+        assert err.status_code == 400
+        assert "only supported for the zhaoxi product" in str(err.detail)
+    else:
+        raise AssertionError("non-zhaoxi restrict_proactive must be rejected")

@@ -555,7 +555,7 @@ def fresh_db(test_settings):
         # S4 图片机审批处理：节流间隔、批量与公网基址都从这里读。
         patch("app.platform.media.moderation.settings", test_settings),
         patch("app.products.zhaoxi.api.debug.settings", test_settings),
-        patch("app.products.zhaoxi.api.admin_moderation.settings", test_settings),
+        patch("app.platform.moderation.admin.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_proactive.settings", test_settings),
         patch("app.products.zhaoxi.api.admin_dreaming.settings", test_settings),
         patch("app.routers.admin_ops.settings", test_settings),
@@ -637,7 +637,7 @@ def client(fresh_db):
         patch("app.products.mingchan.api.notifications.settings", fresh_db),
         patch("app.platform.media.asr.settings", fresh_db),
         patch("app.products.zhaoxi.api.debug.settings", fresh_db),
-        patch("app.products.zhaoxi.api.admin_moderation.settings", fresh_db),
+        patch("app.platform.moderation.admin.settings", fresh_db),
         patch("app.products.zhaoxi.api.admin_proactive.settings", fresh_db),
         patch("app.products.zhaoxi.api.admin_dreaming.settings", fresh_db),
         patch("app.routers.admin_ops.settings", fresh_db),

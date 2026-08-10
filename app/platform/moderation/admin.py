@@ -1,20 +1,43 @@
-"""Admin moderation 路由（/admin/...）。从 app.main 拆出，函数体逐字保留。
-settings 在本模块绑定，测试需 patch "app.products.zhaoxi.api.admin_moderation.settings"。"""
+"""跨产品 moderation admin 路由（/admin/...）。
+
+路由属于 platform；产品专属动作必须显式按任务 app_id 校验。
+"""
 import logging
+from typing import Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from app.config import settings
 from app.routers.deps import get_admin_user, require_admin_user, require_reviewer_or_admin
 from app.routers.serializers import _normalize_optional_state_datetime, _normalize_ts, _now_db_time
-from app.db import claim_content_moderation_task, get_content_moderation_export, get_content_moderation_stats, get_content_moderation_task, insert_admin_access_event, insert_content_moderation_action, list_content_moderation_actions, list_content_moderation_results, list_content_moderation_tasks, set_account_status, update_content_moderation_task_review_status, update_moderation_account_risk_controls
+from app.db.accounts import set_account_status
+from app.db.admin import insert_admin_access_event
+from app.platform.moderation.persistence import (
+    claim_content_moderation_task,
+    get_content_moderation_export,
+    get_content_moderation_stats,
+    get_content_moderation_task,
+    insert_content_moderation_action,
+    list_content_moderation_actions,
+    list_content_moderation_results,
+    list_content_moderation_tasks,
+    update_content_moderation_task_review_status,
+    update_moderation_account_risk_controls,
+)
 from app.platform.moderation import export as moderation_export
-from app.products.zhaoxi.proactive.preferences import apply_proactive_message_settings_patch
 from app.time_utils import beijing_now
 from datetime import timedelta
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("ai4all")
 router = APIRouter()
+_PROACTIVE_RESTRICT_HANDLER: Optional[Callable[..., dict]] = None
+
+
+def register_proactive_restrict_handler(handler: Callable[..., dict]) -> None:
+    """Register the product-owned proactive restriction action at composition time."""
+
+    global _PROACTIVE_RESTRICT_HANDLER
+    _PROACTIVE_RESTRICT_HANDLER = handler
 
 
 class ModerationDecisionRequest(BaseModel):
@@ -143,6 +166,13 @@ def _apply_moderation_admin_action(
     updated_task = task
 
     if clean_action == "restrict_proactive":
+        if str(task.get("app_id") or "") != "zhaoxi":
+            raise HTTPException(
+                status_code=400,
+                detail="restrict_proactive is only supported for the zhaoxi product",
+            )
+        if _PROACTIVE_RESTRICT_HANDLER is None:
+            raise HTTPException(status_code=503, detail="proactive restriction handler is not installed")
         until = _normalize_optional_state_datetime(
             proactive_blocked_until or _default_proactive_blocked_until(),
             field_name="proactive_blocked_until",
@@ -156,10 +186,9 @@ def _apply_moderation_admin_action(
                 "last_admin_task_id": task["id"],
             },
         )
-        settings_result = apply_proactive_message_settings_patch(
+        settings_result = _PROACTIVE_RESTRICT_HANDLER(
             account_id=str(task["account_id"]),
-            patch={"muted_until": until},
-            source="admin",
+            muted_until=until,
             reason=reason or f"moderation task {task['id']}",
         )
         metadata = {
