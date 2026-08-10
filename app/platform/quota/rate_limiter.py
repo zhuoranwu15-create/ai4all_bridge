@@ -5,14 +5,13 @@ check_rpm 在单一 DB 事务内：清过期命中行、计数、未达限则插
 
 并发正确性：DELETE→COUNT→INSERT 这套「检查后插入」在 PG 多写者（aliyun1+aliyun2
 并发写同一库，READ COMMITTED）下存在 TOCTOU——两请求可同时 COUNT 到未超限再各自
-INSERT，击穿 RPM。故 PG 路径在事务开头按账号取**事务级 advisory 锁**串行化同账号的
-检查-插入（不同账号互不阻塞）。SQLite 单写者本就串行，无需加锁（_advisory 为 no-op）。
+INSERT，击穿 RPM。故在事务开头按账号取**事务级 advisory 锁**串行化同账号的
+检查-插入（不同账号互不阻塞）。
 """
 import hashlib
 import time
 from typing import Optional
 
-from app.db._backend import is_postgres
 from app.db._core import _tx, product_quota_subject
 
 
@@ -54,10 +53,9 @@ class RateLimiter:
         now = _now if _now is not None else time.time()
         cutoff = now - max(float(window_seconds), 0.001)
         with _tx(None) as tx:
-            if is_postgres():
-                # 事务级 advisory 锁：同账号的检查-插入串行化，避免并发击穿 RPM。
-                # 锁随事务提交/回滚自动释放，无需显式解锁。SQLite 路径跳过（单写者已串行）。
-                tx.execute("SELECT pg_advisory_xact_lock(?)", (_advisory_key(account_id),))
+            # 事务级 advisory 锁：同账号的检查-插入串行化，避免并发击穿 RPM。
+            # 锁随事务提交/回滚自动释放，无需显式解锁。
+            tx.execute("SELECT pg_advisory_xact_lock(?)", (_advisory_key(account_id),))
             tx.execute(
                 "DELETE FROM rpm_hits WHERE account_id = ? AND hit_at < ?",
                 (account_id, cutoff),

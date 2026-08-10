@@ -18,38 +18,21 @@ from scripts.cleanup_legacy_app_test_data import (  # noqa: E402
 )
 from app.bootstrap.product_registry import MINGCHAN_APP_ID  # noqa: E402
 from app.db import connect  # noqa: E402
-from app.db._backend import is_postgres  # noqa: E402
 
 
 def _has_product_owner_unique(conn) -> bool:
     """确认数据库已具备 ``universes(app_id, owner)`` 唯一契约。"""
-
-    if is_postgres():
-        row = conn.execute(
-            """
-            SELECT 1
-            FROM pg_indexes
-            WHERE schemaname = current_schema()
-              AND tablename = 'universes'
-              AND indexdef LIKE 'CREATE UNIQUE INDEX% (app_id, owner_platform_user_id)%'
-            LIMIT 1
-            """
-        ).fetchone()
-        return row is not None
-    indexes = conn.execute("PRAGMA index_list('universes')").fetchall()
-    for index in indexes:
-        if not bool(index["unique"]):
-            continue
-        columns = conn.execute(
-            "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
-            (str(index["name"]),),
-        ).fetchall()
-        if [str(column["name"]) for column in columns] == [
-            "app_id",
-            "owner_platform_user_id",
-        ]:
-            return True
-    return False
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = current_schema()
+          AND tablename = 'universes'
+          AND indexdef LIKE 'CREATE UNIQUE INDEX% (app_id, owner_platform_user_id)%'
+        LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
 
 
 def build_preservation_plan(*, conn=None) -> Dict[str, Any]:
@@ -108,7 +91,7 @@ def main() -> int:
     parser.add_argument(
         "--database-url",
         default=None,
-        help="可选覆盖 PostgreSQL DATABASE_URL；SQLite 临时库请设置 DATABASE_PATH",
+        help="可选覆盖 PostgreSQL DATABASE_URL",
     )
     parser.add_argument(
         "--cleanup-legacy",

@@ -324,7 +324,9 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
                 f"""
                 UPDATE character_templates
                 SET status='retired',
-                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at=to_char(
+                        (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+                    )
                 WHERE id IN ({placeholders})
                   AND app_id = ?
                 """,
@@ -367,7 +369,9 @@ def import_presets(records: Sequence[PresetRecord], *, dry_run: bool) -> ImportR
                 f"""
                 UPDATE character_templates
                 SET {assignments},
-                    updated_at=strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at=to_char(
+                        (now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'
+                    )
                 WHERE id = ?
                   AND app_id = ?
                 """,

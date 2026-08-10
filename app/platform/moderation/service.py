@@ -17,6 +17,7 @@ from app.platform.moderation.models import (
     max_risk_level,
 )
 from app.platform.moderation.policy import should_run_llm_review
+from app.platform.moderation.product_policy import resolve_moderation_policy
 from app.platform.moderation.sensitive_words import check_text_rules
 
 logger = logging.getLogger("ai4all.moderation.service")
@@ -25,22 +26,6 @@ INBOUND_SYNC_POLICY_VERSION = "moderation_inbound_sync_v1"
 
 # 仅文本类内容走阿里云同步文本云审核；图片等仍走第一阶段异步审核，维持既有边界。
 _INBOUND_SYNC_CONTENT_KINDS = {"text", "voice_transcript"}
-
-
-def _enabled() -> bool:
-    return bool(getattr(settings, "moderation_enabled", True))
-
-
-def _llm_enabled() -> bool:
-    return bool(getattr(settings, "moderation_llm_enabled", False))
-
-
-def _aliyun_inbound_sync_enabled() -> bool:
-    """入站是否走阿里云同步筛查：总开关与入站同步开关同时为真。"""
-
-    return bool(getattr(settings, "moderation_aliyun_enabled", False)) and bool(
-        getattr(settings, "moderation_aliyun_inbound_sync_enabled", True)
-    )
 
 
 # 视为“放行/已结案”的任务状态，用于幂等命中时的决策判定。
@@ -73,10 +58,12 @@ def _media_to_dict(media: Optional[Any]) -> Dict[str, Any]:
     return {key: raw[key] for key in allowed_keys if key in raw and raw[key] is not None}
 
 
-def _status_for_rule_and_sampling(rule: RuleDecision, run_llm_review: bool) -> tuple[str, str]:
+def _status_for_rule_and_sampling(
+    rule: RuleDecision, run_llm_review: bool, *, llm_enabled: bool
+) -> tuple[str, str]:
     if rule.level in {"review", "block", "escalate", "error"}:
         return "needs_review", rule.level
-    if run_llm_review and _llm_enabled():
+    if run_llm_review and llm_enabled:
         return "queued", "unknown"
     return "machine_passed", "pass"
 
@@ -101,6 +88,7 @@ def enqueue_message_for_moderation(
     *,
     message_db_id: int,
     account_id: str,
+    app_id: str,
     session_id: Optional[int],
     direction: str,
     content_kind: str,
@@ -111,11 +99,15 @@ def enqueue_message_for_moderation(
 ) -> Optional[Dict[str, Any]]:
     """Create a moderation task for a persisted conversation message."""
 
-    if not _enabled():
+    policy = resolve_moderation_policy(app_id)
+    if not policy.enabled:
         return None
     source_id = str(message_db_id)
     idempotency_key = f"message:{account_id}:{message_db_id}:{direction}"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
@@ -125,6 +117,7 @@ def enqueue_message_for_moderation(
         text=text,
         direction=direction,
         content_kind=content_kind,
+        terms_path=policy.sensitive_terms_path,
     )
     sampling = should_run_llm_review(
         account_id=account_id,
@@ -135,8 +128,11 @@ def enqueue_message_for_moderation(
         text_length=len(text or ""),
         rule_level=rule.level,
     )
-    status, risk_level = _status_for_rule_and_sampling(rule, sampling.run_llm_review)
+    status, risk_level = _status_for_rule_and_sampling(
+        rule, sampling.run_llm_review, llm_enabled=policy.llm_enabled
+    )
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type="message",
@@ -159,9 +155,10 @@ def enqueue_message_for_moderation(
         idempotency_key=idempotency_key,
         metadata={
             **(metadata or {}),
+            "app_id": policy.app_id,
             "source_message_id": source_message_id,
             "llm_review_selected": sampling.run_llm_review,
-            "llm_enabled": _llm_enabled(),
+            "llm_enabled": policy.llm_enabled,
         },
     )
     _insert_rule_result(task["id"], account_id, rule)
@@ -172,6 +169,7 @@ def screen_inbound_message_sync(
     *,
     message_db_id: int,
     account_id: str,
+    app_id: str,
     session_id: Optional[int],
     content_kind: str,
     text: Optional[str],
@@ -185,7 +183,8 @@ def screen_inbound_message_sync(
     返回的决策用于在 turn_service 决定是否生成本轮 AI 回复。
     """
 
-    if not _enabled():
+    policy = resolve_moderation_policy(app_id)
+    if not policy.enabled:
         return InboundScreenDecision(allowed=True, reason="moderation_disabled")
 
     # 非文本类（图片等）暂不接入审核：尚未接入图片安全模型，直接放行且不建任务，
@@ -193,11 +192,12 @@ def screen_inbound_message_sync(
     if content_kind not in _INBOUND_SYNC_CONTENT_KINDS:
         return InboundScreenDecision(allowed=True, reason="inbound_non_text_skipped")
 
-    # 未启用阿里云入站同步：保持第一阶段异步审核，主链路放行。
-    if not _aliyun_inbound_sync_enabled():
+    # 未启用阿里云入站同步（含 Plum 等海外产品的固定关闭）：保持异步审核，主链路放行。
+    if not policy.aliyun_inbound_sync_enabled:
         enqueue_message_for_moderation(
             message_db_id=message_db_id,
             account_id=account_id,
+            app_id=app_id,
             session_id=session_id,
             direction="inbound",
             content_kind=content_kind,
@@ -209,7 +209,10 @@ def screen_inbound_message_sync(
         return InboundScreenDecision(allowed=True, reason="aliyun_inbound_sync_disabled")
 
     idempotency_key = f"message:{account_id}:{message_db_id}:inbound"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         status = str(existing.get("status") or "")
         return InboundScreenDecision(
@@ -229,6 +232,7 @@ def screen_inbound_message_sync(
         text=normalized_text,
         direction="inbound",
         content_kind=content_kind,
+        terms_path=policy.sensitive_terms_path,
     )
 
     # 2) 阿里云云审核（主引擎）。
@@ -252,6 +256,7 @@ def screen_inbound_message_sync(
 
     confidence_values = [c for c in (rule.confidence, cloud.confidence) if c is not None]
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type="message",
@@ -274,6 +279,7 @@ def screen_inbound_message_sync(
         idempotency_key=idempotency_key,
         metadata={
             **(metadata or {}),
+            "app_id": policy.app_id,
             "source_message_id": source_message_id,
             "engine": "aliyun_text_moderation_plus",
             "aliyun_degraded": degraded,
@@ -308,11 +314,12 @@ def screen_inbound_message_sync(
 
 
 def enqueue_outbound_for_moderation(
-    *, outbound_message: Mapping[str, Any]
+    *, outbound_message: Mapping[str, Any], app_id: str
 ) -> Optional[Dict[str, Any]]:
     """Create a moderation task from a product-owned outbound ledger row."""
 
-    if not _enabled():
+    policy = resolve_moderation_policy(app_id)
+    if not policy.enabled:
         return None
     if outbound_message.get("id") is None or not outbound_message.get("account_id"):
         return None
@@ -320,7 +327,10 @@ def enqueue_outbound_for_moderation(
     account_id = str(outbound["account_id"])
     source_id = str(outbound["id"])
     idempotency_key = f"outbound:{account_id}:{source_id}"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
@@ -330,6 +340,7 @@ def enqueue_outbound_for_moderation(
         text=text,
         direction="outbound",
         content_kind="text",
+        terms_path=policy.sensitive_terms_path,
     )
     sampling = should_run_llm_review(
         account_id=account_id,
@@ -340,8 +351,11 @@ def enqueue_outbound_for_moderation(
         text_length=len(text),
         rule_level=rule.level,
     )
-    status, risk_level = _status_for_rule_and_sampling(rule, sampling.run_llm_review)
+    status, risk_level = _status_for_rule_and_sampling(
+        rule, sampling.run_llm_review, llm_enabled=policy.llm_enabled
+    )
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=None,
         source_type="outbound_message",
@@ -363,10 +377,11 @@ def enqueue_outbound_for_moderation(
         prompt_version=getattr(settings, "moderation_llm_prompt_version", None),
         idempotency_key=idempotency_key,
         metadata={
+            "app_id": policy.app_id,
             "outbound_source": outbound.get("source"),
             "product_category": outbound.get("product_category"),
             "llm_review_selected": sampling.run_llm_review,
-            "llm_enabled": _llm_enabled(),
+            "llm_enabled": policy.llm_enabled,
         },
     )
     _insert_rule_result(task["id"], account_id, rule)
@@ -376,6 +391,7 @@ def enqueue_outbound_for_moderation(
 def create_sync_block_task(
     *,
     account_id: str,
+    app_id: str,
     session_id: Optional[int],
     source_type: str,
     source_id: str,
@@ -388,15 +404,20 @@ def create_sync_block_task(
 ) -> Optional[Dict[str, Any]]:
     """Persist a pre-send block decision and its original unsafe snapshot."""
 
-    if not _enabled():
+    policy = resolve_moderation_policy(app_id)
+    if not policy.enabled:
         return None
     idempotency_key = f"{source_type}:{account_id}:{source_id}:pre_send"
-    existing = get_content_moderation_task_by_idempotency_key(idempotency_key=idempotency_key)
+    existing = get_content_moderation_task_by_idempotency_key(
+        app_id=policy.app_id,
+        idempotency_key=idempotency_key,
+    )
     if existing is not None:
         return existing
 
     risk_level = decision.level if decision.level in {"block", "escalate"} else "block"
     task = create_content_moderation_task(
+        app_id=policy.app_id,
         account_id=account_id,
         session_id=session_id,
         source_type=source_type,
@@ -419,9 +440,10 @@ def create_sync_block_task(
         idempotency_key=idempotency_key,
         metadata={
             **(metadata or {}),
+            "app_id": policy.app_id,
             "sync_guard": True,
             "llm_review_selected": False,
-            "llm_enabled": _llm_enabled(),
+            "llm_enabled": policy.llm_enabled,
         },
     )
     rule = RuleDecision(

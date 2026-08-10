@@ -66,6 +66,52 @@ class ProductAfterTurnContext:
 AfterTurnHook = Callable[[ProductAfterTurnContext], Optional[Awaitable[Any]]]
 
 
+class ProductOnboarding(Protocol):
+    """产品可选的「首轮引导」能力。
+
+    只有真正带 onboarding 状态机的产品（当前仅朝夕）实现本端口。没有引导流程的产品把
+    ``ProductTurnServices.onboarding`` 置为 ``None``，Runtime 整条短路。此前这 6 个方法
+    直接长在 ``ProductTurnServices`` 上，鸣蝉/Plum 只能编一组用不上的状态常量、再用
+    ``raise RuntimeError`` 桩住实现——「本产品没有引导」只能靠运行时异常表达，
+    等于把朝夕的流程泄漏进了通用 turn 契约。
+    """
+
+    # onboarding 状态机取值；由产品自行定义，Runtime 只做相等比较，不解释语义。
+    pending: str
+    step1_sent: str
+    step2_sent: str
+    step3_sent: str
+    complete: str
+    welcome_text: str
+
+    def is_active(self, state: str) -> bool:
+        """返回给定状态是否仍在引导过程中。"""
+
+    def get_state(self, account_id: str) -> str:
+        """读取账号在当前产品内的引导状态。"""
+
+    def start(self, account_id: str) -> None:
+        """记录首个欢迎步骤已发送。"""
+
+    async def extract_info(self, *, user_text: str, current_state: str) -> dict:
+        """从用户本轮输入提取引导信息。"""
+
+    def apply_info(
+        self, *, account_id: str, extracted: dict, current_state: str
+    ) -> dict:
+        """按产品规则写入已提取的引导信息。"""
+
+    def advance(
+        self,
+        *,
+        account_id: str,
+        current_state: str,
+        extracted: Optional[dict],
+        session_turn_count: int,
+    ) -> Optional[str]:
+        """推进引导状态，返回推进后的状态；无变化返回 None。"""
+
+
 class ProductTurnServices(Protocol):
     """Runtime 所需的最小产品能力；实现由产品 manifest 显式注入。"""
 
@@ -73,12 +119,8 @@ class ProductTurnServices(Protocol):
     registry: "ProductRegistry"
     allowed_channels: Tuple[str, ...]
     tool_policy: "ToolPolicy"
-    onboarding_pending: str
-    onboarding_step1_sent: str
-    onboarding_step2_sent: str
-    onboarding_step3_sent: str
-    onboarding_complete: str
-    onboarding_welcome_text: str
+    # None = 该产品没有首轮引导；Runtime 不做任何 onboarding 回调。
+    onboarding: Optional[ProductOnboarding]
 
     def localized_message(
         self,
@@ -105,25 +147,6 @@ class ProductTurnServices(Protocol):
     ) -> ProductSessionSetup:
         """准备产品 session、profile 和必要的账号级产品状态。"""
 
-    def is_onboarding_active(self, state: str) -> bool:
-        """返回给定产品 onboarding 状态是否仍在进行。"""
-
-    def get_onboarding_state(self, account_id: str) -> str:
-        """读取账号在当前产品内的 onboarding 状态。"""
-
-    def start_onboarding(self, account_id: str) -> None:
-        """记录产品 onboarding 已发送首个欢迎步骤。"""
-
-    async def extract_onboarding_info(
-        self, *, user_text: str, current_state: str
-    ) -> dict:
-        """从用户本轮输入提取 onboarding 信息。"""
-
-    def apply_onboarding_info(
-        self, *, account_id: str, extracted: dict, current_state: str
-    ) -> dict:
-        """按产品规则写入已提取的 onboarding 信息。"""
-
     def load_prompt_context(
         self,
         *,
@@ -138,17 +161,11 @@ class ProductTurnServices(Protocol):
         include_tool_instructions: bool,
         now: datetime,
     ) -> ProductPromptContext:
-        """加载产品 profile、persona、mission 与 onboarding 的中性 prompt 投影。"""
+        """加载产品 profile、persona、mission 与 onboarding 的中性 prompt 投影。
 
-    def advance_onboarding(
-        self,
-        *,
-        account_id: str,
-        current_state: str,
-        extracted: Optional[dict],
-        session_turn_count: int,
-    ) -> Optional[str]:
-        """推进产品 onboarding，返回推进后的状态；无变化返回 None。"""
+        无 onboarding 的产品收到的是中性默认值（``onboarding_state=""``、
+        ``onboarding_active=False``、两个 pre_* 为 None）。
+        """
 
     def after_turn_hooks(self) -> Tuple[Tuple[str, AfterTurnHook], ...]:
         """返回产品拥有的 after-turn hooks，顺序稳定。"""

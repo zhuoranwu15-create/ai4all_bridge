@@ -15,7 +15,7 @@ from scripts.precheck_mingchan_clean_start import build_preservation_plan
 
 
 def test_cleanup_database_url_override_rejects_sqlite_url():
-    """SQLite URL 不能静默回落标准库；临时 SQLite 必须显式设置路径。"""
+    """SQLite URL 必须被拒绝，不能作为主应用数据库配置。"""
 
     with pytest.raises(ValueError, match="only accepts PostgreSQL"):
         configure_database_url_override("sqlite:////private/tmp/cleanup.sqlite3")
@@ -90,6 +90,7 @@ def test_cleanup_refuses_legacy_resident_with_weixin_binding(fresh_db):
         phone="19977000003", display_name="cleanup-blocked"
     )
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="受保护微信账号"
     )["account"]
     _seed_world(
@@ -123,6 +124,7 @@ def test_preservation_precheck_accepts_protected_zhaoxi_world(fresh_db):
         phone="19977000063", display_name="preserved-zhaoxi"
     )
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="保留微信账号"
     )["account"]
     _seed_world(app_id="zhaoxi", suffix="63", runtime_account_id=account["id"])
@@ -139,7 +141,7 @@ def test_preservation_precheck_accepts_protected_zhaoxi_world(fresh_db):
     report = build_preservation_plan()
 
     assert report["mode"] == "preserve_legacy_zhaoxi"
-    assert report["schema_version"] == 69
+    assert report["schema_version"] == 71
     assert report["product_owner_unique"] is True
     assert report["safe_to_enable"] is True
     assert report["legacy_counts_retained"]["legacy_worlds"] == 1

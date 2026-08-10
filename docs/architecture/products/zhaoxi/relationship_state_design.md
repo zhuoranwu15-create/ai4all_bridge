@@ -17,7 +17,7 @@
 
 ## 2. 当前 DB 现状
 
-双后端 schema 当前已有 `account_user_meta` 表；本地/测试默认 SQLite，生产以 PostgreSQL 为准。
+当前 PostgreSQL schema 已有 `account_user_meta` 表；本地开发、主测试与生产均以 PostgreSQL 为准。
 
 当前字段：
 

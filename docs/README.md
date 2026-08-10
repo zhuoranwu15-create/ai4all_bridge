@@ -19,6 +19,7 @@
 | [技术总平面](architecture/system_design.md) | 状态所有权、数据模型与技术平面 |
 | [多产品模块化单体 ADR](architecture/shared/data/multi_product_modular_monolith_design.md) | 产品边界、身份/资产隔离与第二产品接入原则 |
 | [新增产品开发清单](guides/adding-product.md) | 真实新产品开工时必须落实的代码、隔离与验收步骤 |
+| [回归测试指南](guides/testing.md) | 按产品、平台和共享模块运行 PostgreSQL 测试 |
 | [路线图](roadmap.md) | 稳定愿景、原则和暂不做边界 |
 
 ## 目录职责

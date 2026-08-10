@@ -221,7 +221,7 @@ curl -X PATCH \
   }'
 ```
 
-`next_scan_at` 和 `cooldown_until` 支持 ISO datetime 或 `YYYY-MM-DD HH:MM:SS`，会规范化为 `YYYY-MM-DD HH:MM:SS` 存入 SQLite。
+`next_scan_at` 和 `cooldown_until` 支持 ISO datetime 或 `YYYY-MM-DD HH:MM:SS`，会规范化为 `YYYY-MM-DD HH:MM:SS` 存入 PostgreSQL。
 
 手动触发隐藏 LLM 账号主动检查候选生成：
 
@@ -392,13 +392,13 @@ tail -120 ~/.openclaw/tmp/openclaw-501/openclaw-$(date +%F).log
 - 生产 PG 备份和可恢复点；记录发布人、时间、代码 SHA。
 - central/standalone 只运行一个 Dreaming scheduler。推荐独立 proactive 进程承担：`DREAMING_SCHEDULER_ENABLED=false`、`PROACTIVE_DREAMING_SCHEDULER_ENABLED=true`；纯 node 不运行 L3 compact。
 
-在部署任何包含 m0025 钱包上迁的代码前，必须对**生产 PG**运行只读预检（本地 SQLite 结果不作发布依据）：
+在部署任何包含 m0025 钱包上迁的代码前，必须对**生产 PG**运行只读预检：
 
 ```bash
 .venv/bin/python scripts/precheck_wallet_migration.py
 ```
 
-命令读取当前部署环境的 `DATABASE_URL`，不要把含凭证的连接串直接写进发布记录或共享命令行。预期输出 `is_postgres = True`、退出码为 0/`PASS`，四类 BLOCK（`ambiguous_owner`、`orphan_wallet`、`owner_drift`、`primary_undefined`）均为 0；多钱包/多次赠权清单须归档到发布记录。任何 BLOCK 非零都必须先人工修数，禁止依赖 m0025 自动猜测归属。若生产已执行 m0025，仍须保存当前只读复核结果，但不得把迁移后的 PASS 倒推成“迁移前已预检”。
+命令读取当前部署环境的 `DATABASE_URL`，不要把含凭证的连接串直接写进发布记录或共享命令行。预期退出码为 0/`PASS`，四类 BLOCK（`ambiguous_owner`、`orphan_wallet`、`owner_drift`、`primary_undefined`）均为 0；多钱包/多次赠权清单须归档到发布记录。任何 BLOCK 非零都必须先人工修数，禁止依赖 m0025 自动猜测归属。若生产已执行 m0025，仍须保存当前只读复核结果，但不得把迁移后的 PASS 倒推成“迁移前已预检”。
 
 先确保：
 
@@ -408,7 +408,6 @@ COMPANION_WORLD_L3_BACKGROUND_ENABLED=false
 COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 make test-unit
 make test
-make test-pg
 git diff --check
 ```
 
@@ -628,7 +627,7 @@ COMPANION_WORLD_PROACTIVE_SAFETY_ENABLED=true
 - 调度：`/admin/dreaming/scheduler` 的 `last_run.memory_compaction` 和 heartbeat；确认只有 central writer。
 - 主动消息：`companion_world_human_level_proactive_blocked` 命中量与每真人实际触达数，确认无 N×。
 
-扩量前再次运行 `make test-pg`、模板 dry-run、backfill 幂等复跑和第 5 步对账。
+扩量前再次运行 `make test`、模板 dry-run、backfill 幂等复跑和第 5 步对账。
 
 ### 8. 回滚
 
@@ -748,7 +747,7 @@ WHERE r.scope = 'human' AND r.delivery_status = 'reserved'
   AND v.delivered_at > '2026-07-21 12:00:00';
 ```
 
-本地 SQLite 对账时，唯一需要改写的是 `::timestamp + INTERVAL '24 hours'`，替换为 `datetime(a.delivered_at, '+24 hours')`；其他查询可直接使用。示例时间不得原样用于生产。
+主应用本地与生产均使用上面的 PostgreSQL 查询；示例时间不得原样用于生产。
 
 ### 5. 回滚
 
@@ -850,7 +849,7 @@ WHERE COALESCE(
 ) >= 8;
 ```
 
-SQLite 执行最后一条时，把取值表达式替换为 `COALESCE(json_extract(eligibility_snapshot_json, '$.active_count'), 999)`；其余查询可直接使用。对账只读，不得通过删除 event、letter、resident 或 outbox 来“修复”结果。
+主应用本地与生产均执行上面的 PostgreSQL 查询。对账只读，不得通过删除 event、letter、resident 或 outbox 来“修复”结果。
 
 ### M4 回滚
 

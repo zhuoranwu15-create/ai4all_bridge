@@ -148,7 +148,7 @@ bridge 拿不到图是**钩子层没暴露媒体**，不是图没下载。推荐
 3. **OpenClaw patch（B1/B2）+ bridge 联调**：产出补丁，bridge 填 media，真机微信发图端到端验证。
 4. **可选增强**：原图保留、图片单独限流/计费细化、单段式多模态、OCR 强化。
 
-**测试策略**（遵循 CLAUDE.md）：窄改动跑 `tests/test_image_turn.py` 等聚焦测试；触及共享链路（turn/持久化/计费/prompt）再跑全量。测试用内存 SQLite，无需起服务。
+**测试策略**：窄改动跑 `tests/test_image_turn.py` 等聚焦测试；触及共享链路（turn/持久化/计费/prompt）再跑全量。主测试使用 pytest-postgresql 临时 PG，无需启动服务。
 
 ---
 

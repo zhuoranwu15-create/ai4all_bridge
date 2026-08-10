@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 from .companion_world import create_character_template
 
@@ -99,9 +99,7 @@ def create_resident_wish(
 ) -> Tuple[Dict[str, Any], bool]:
     """单事务受理 wish + durable job；返回 ``(wish, created)``。"""
     with connect() as tx:
-        if not is_postgres():
-            tx.execute("BEGIN IMMEDIATE")
-        lock = " FOR UPDATE OF u, p" if is_postgres() else ""
+        lock = " FOR UPDATE OF u, p"
         scope = tx.execute(
             """
             SELECT u.*, p.status AS owner_status
@@ -195,9 +193,7 @@ def withdraw_resident_wish(
 ) -> Tuple[Optional[Dict[str, Any]], bool, Optional[str]]:
     """原子收回；返回 ``(wish, replayed, error_code)``。"""
     with connect() as tx:
-        if not is_postgres():
-            tx.execute("BEGIN IMMEDIATE")
-        suffix = " FOR UPDATE" if is_postgres() else ""
+        suffix = " FOR UPDATE"
         row = tx.execute(
             "SELECT w.* FROM resident_wishes w "
             "JOIN universes u ON u.id = w.universe_id "
@@ -240,11 +236,9 @@ def withdraw_resident_wish(
 def claim_resident_wish_job(
     *, now: str, lease_expires_at: str, claim_token: str
 ) -> Optional[Dict[str, Any]]:
-    """跨进程 claim 一笔到期 job；PG 使用 SKIP LOCKED，SQLite 用 IMMEDIATE 串行化。"""
+    """使用 SKIP LOCKED 跨进程 claim 一笔到期 job。"""
     with connect() as tx:
-        if not is_postgres():
-            tx.execute("BEGIN IMMEDIATE")
-        lock = " FOR UPDATE OF j, w SKIP LOCKED" if is_postgres() else ""
+        lock = " FOR UPDATE OF j, w SKIP LOCKED"
         row = tx.execute(
             """
             SELECT j.id AS job_id, j.wish_id
@@ -342,9 +336,7 @@ def fail_resident_wish_job(
 ) -> str:
     """安全地重排失败任务；跨过 72h 截止线时原子转 ``unfulfilled``。"""
     with connect() as tx:
-        if not is_postgres():
-            tx.execute("BEGIN IMMEDIATE")
-        suffix = " FOR UPDATE OF w, j" if is_postgres() else ""
+        suffix = " FOR UPDATE OF w, j"
         row = tx.execute(
             """
             SELECT w.*, j.status AS job_status, j.claim_token AS job_claim_token
@@ -402,9 +394,7 @@ def deliver_resident_wish(
 ) -> Dict[str, Any]:
     """单事务创建生成模板/唯一来信并完成 wish/job，保证 exactly-once 投递。"""
     with connect() as tx:
-        if not is_postgres():
-            tx.execute("BEGIN IMMEDIATE")
-        lock = " FOR UPDATE OF w, j, u, p" if is_postgres() else ""
+        lock = " FOR UPDATE OF w, j, u, p"
         row = tx.execute(
             """
             SELECT w.*, j.status AS job_status, j.claim_token AS job_claim_token,

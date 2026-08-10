@@ -90,6 +90,7 @@ def test_precheck_distinguishes_historical_unbind_from_real_quota_fallback(fresh
 
     user = create_or_get_platform_user_by_phone(phone="13800037003")
     account = create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="历史账号"
     )["account"]
     with connect() as conn:
@@ -129,6 +130,7 @@ def test_expanded_precheck_accepts_one_active_billing_scope_per_product(fresh_db
     registry = build_test_product_registry()
     user = db.create_or_get_platform_user_by_phone(phone="13800037004")
     db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="朝夕入口"
     )
     db.ensure_product_membership(

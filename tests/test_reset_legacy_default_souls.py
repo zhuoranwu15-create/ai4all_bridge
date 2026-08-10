@@ -7,7 +7,6 @@ def _settings(tmp_path):
     s = MagicMock()
     s.user_profiles_dir = str(tmp_path / "profiles")
     s.system_dir = str(tmp_path / "system")
-    s.database_path = str(tmp_path / "test.db")
     return s
 
 

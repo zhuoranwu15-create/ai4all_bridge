@@ -3,7 +3,8 @@
 更新时间：2026-08-04
 
 状态：**仓库开发与开发机验证完成，首次发布待执行。MC-00～MC-06 的代码、脚本和文档工作已收口；
-MC-07 的聚焦门禁、SQLite/PG 全量回归与隔离临时库 cleanup 演练已完成。仍待外部 Native App 切换、
+MC-07 当时的 SQLite/PG 双档结果是历史验收记录。当前主测试已收敛为 PostgreSQL 单档，聚焦门禁与
+隔离临时库 cleanup 演练已完成。仍待外部 Native App 切换、
 生产备份/清理/启用、scheduler 上线及微信/App 真机验收；这些完成前本文不得归档。**
 
 Owner：`shared`（同时影响 `product:zhaoxi`、`product:mingchan`、Agent Runtime、Platform 与 composition root）
@@ -264,11 +265,11 @@ scripts/run_mingchan_wish_worker.py                # 鸣蝉异步许愿（如仍
 
 ### 8.4 开发机与线上机分工
 
-当前工作区是开发机。开发阶段只允许执行可重复、可验证的仓库内操作：代码/文档拆分、SQLite
-测试、临时 PostgreSQL 测试、生成 precheck/cleanup 工具以及对本地测试数据做演练。不得从开发机
+当前工作区是开发机。开发阶段只允许执行可重复、可验证的仓库内操作：代码/文档拆分、隔离
+PostgreSQL 测试、生成 precheck/cleanup 工具以及对本地测试数据做演练。不得从开发机
 直接清理生产数据、启用生产鸣蝉、改线上反代或启动线上 scheduler。
 
-代码合并并完成双后端回归后，以下动作只能在生产 central 节点按 runbook 顺序人工执行：
+代码合并并完成 PostgreSQL 回归后，以下动作只能在生产 central 节点按 runbook 顺序人工执行：
 
 1. 确认当前部署版本、PG 主库连接和 central/node 角色，暂停 App/World 写入口及相关 worker；
 2. 对生产 PostgreSQL 做可恢复备份，记录备份标识、表计数与朝夕关键业务基线；
@@ -711,8 +712,8 @@ scripts/cleanup_legacy_app_test_data.py
   turn 渠道/产品错配检查晚于 registry 与副作用、双产品 `422` handler 互相覆盖、lifecycle 单个维护步骤
   拖垮整次 tick，以及朝夕 web-search debug 使用了不允许的伪渠道。
 - 增加 cleanup 双后端测试，覆盖只读 plan、只删朝夕 legacy World/模板、保留鸣蝉控制组、重复 apply
-  幂等，以及 resident 绑定真实微信时整批拒绝且零写入。另收紧 CLI：`--database-url` 只接受 PostgreSQL，
-  临时 SQLite 必须显式设置 `DATABASE_URL=''` 与 `DATABASE_PATH`，避免静默回落标准开发库。
+  幂等，以及 resident 绑定真实微信时整批拒绝且零写入。该段记录的是 2026-08-04 当时的过渡实现；
+  当前 CLI 和主应用均只接受 PostgreSQL，不再存在 `DATABASE_PATH` 回落。
 - 聚焦结果：鸣蝉/Companion World 扩展组 `317 passed, 27 skipped`；受影响回归组
   `122 passed, 2 skipped`；cleanup 在 SQLite、临时 PostgreSQL 均通过。层级边界、文档链接、OpenAPI、
   产品互相 import 门禁和静态检查通过。

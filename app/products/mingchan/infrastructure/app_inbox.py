@@ -122,7 +122,7 @@ def app_inbox_fingerprint(
 
 
 class SqlAppNotificationRepository:
-    """AppNotificationRepository 的 SQLite/PG adapter。"""
+    """AppNotificationRepository 的 PostgreSQL adapter。"""
 
     def get_notification_for_owner(
         self, notification_id: str, platform_user_id: str

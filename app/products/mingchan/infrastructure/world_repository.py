@@ -1,4 +1,4 @@
-"""Companion World 的 SQL adapter（SQLite/PG 共用，事务由 connect() 承载）。"""
+"""Companion World 的 PostgreSQL adapter，事务由 connect() 承载。"""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ from app.bootstrap.product_registry import (
     ProductRegistry,
 )
 from app.config import settings
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import connect
 from app.db.billing import insert_resident_runtime_account
 from app.products.mingchan.domain.companion_world.contracts import (
@@ -199,10 +199,6 @@ class SqlCompanionWorldRepository(WorldRepository):
             yield self
             return
         with connect() as conn:
-            # SQLite 的 SELECT 不自动开事务，且最外层 SAVEPOINT RELEASE 会提前提交；
-            # BEGIN IMMEDIATE 同时提供 world 写串行与完整 rollback 边界。PG 由驱动自动 BEGIN。
-            if not is_postgres():
-                conn.execute("BEGIN IMMEDIATE")
             yield SqlCompanionWorldRepository(conn, registry=self._registry)
 
     def _required_conn(self) -> Connection:

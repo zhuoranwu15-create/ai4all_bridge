@@ -45,7 +45,7 @@ def main() -> int:
 
     mode = "APPLY（将写入文件与 DB）" if args.apply else "DRY-RUN（仅预演）"
     print(f"模式: {mode}")
-    print(f"数据库: {settings.database_path}")
+    print("数据库: PostgreSQL")
     print(f"记忆目录: {settings.user_profiles_dir}")
     print(f"账号过滤: {args.account or '全部'}\n")
 

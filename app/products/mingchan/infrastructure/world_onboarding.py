@@ -1,4 +1,4 @@
-"""鸣蝉 World onboarding 的 SQLite/PostgreSQL repository。"""
+"""鸣蝉 World onboarding 的 PostgreSQL repository。"""
 from __future__ import annotations
 
 import json
@@ -10,7 +10,7 @@ from app.bootstrap.product_registry import (
     PRODUCTION_PRODUCT_REGISTRY,
     ProductRegistry,
 )
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import connect
 from app.db.product_memberships import _require_active_product_membership_in_conn
 from app.products.mingchan.domain.companion_world.onboarding import (
@@ -136,14 +136,12 @@ class SqlMingchanWorldOnboardingRepository(MingchanWorldOnboardingRepository):
 
     @contextmanager
     def transaction(self) -> Iterator[MingchanWorldOnboardingRepository]:
-        """开启单事务；PG 依赖驱动事务，SQLite 预先获得 writer 锁。"""
+        """复用现有事务，或开启独立 PostgreSQL 事务。"""
 
         if self._conn is not None:
             yield self
             return
         with connect() as conn:
-            if not is_postgres():
-                conn.execute("BEGIN IMMEDIATE")
             yield SqlMingchanWorldOnboardingRepository(
                 registry=self._registry,
                 conn=conn,

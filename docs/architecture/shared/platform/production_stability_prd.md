@@ -2,9 +2,13 @@
 
 更新时间：2026-06-02
 
-阶段：阿里云小规模外测前
+阶段：阿里云小规模外测前（历史 PRD，当前实施状态见生产 Runbook）
 
-目标环境：单台或少量 ECS、SQLite、FastAPI、OpenClaw Gateway、独立 proactive / dreaming scheduler 进程
+> 本文保留 2026-06-02 的需求基线和实施记录。当前主应用数据库已统一为 PostgreSQL，文中的
+> SQLite 主库、`DATABASE_PATH` 和手工 SQLite 备份命令不再是可执行运维指引；当前操作以
+> [`production_runbook.md`](../../../ops/production_runbook.md) 为准。
+
+目标环境（当前）：少量 ECS、中心 PostgreSQL、FastAPI、OpenClaw Gateway、独立 scheduler 进程
 
 ## 1. 背景
 
@@ -41,7 +45,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - 大规模用户增长监控体系。
 - 复杂 BI 仪表盘。
 - 多地域容灾。
-- 高可用 SQLite 架构改造。
+- PostgreSQL 高可用架构改造。
 - 默认开放明文聊天日志查询。
 
 ## 4. 当前现状
@@ -53,7 +57,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - 多处 logger：`turn_service`、`llm`、`dreaming`、`scheduler`、`openclaw_gateway` 等。
 - Admin/debug API：可查部分会话、消息、主动任务和隐私访问。
 - 部署文档中有手动检查项：pytest、health、OpenClaw status、真实冒烟。
-- SQLite 标准库路径：`data/ai4all.sqlite3`。
+- 中心 PostgreSQL 已作为业务主库，连接由 `DATABASE_URL` 提供。
 - proactive scheduler / dreaming scheduler 是独立进程，存在进程级可用性风险。
 
 主要缺口：
@@ -154,7 +158,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - ECS 网络流量。
 - 进程存活。
 - 端口存活。
-- SQLite 文件大小。
+- PostgreSQL 数据库容量与 WAL/备份增长。
 - `data/backups` 是否持续增长。
 
 ## 7. 健康检查设计
@@ -187,7 +191,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 
 建议检查：
 
-- SQLite 可连接。
+- PostgreSQL 可连接并可执行只读探针。
 - `data/user_profiles` 可读写。
 - `data/system` 可读。
 - 关键配置存在：`LLM_API_KEY`、`AI4ALL_BRIDGE_SECRET`、`ADMIN_TOKEN`。
@@ -269,7 +273,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 | CPU | 5 分钟平均 > 85% |
 | 内存 | 5 分钟平均 > 85% |
 | 磁盘 | > 80% P2，> 90% P1 |
-| SQLite 备份失败 | 当日未生成备份 P1 |
+| PostgreSQL 备份失败 | 当日未生成有效 `db.dump` P1 |
 
 ## 9. 日志设计
 
@@ -329,7 +333,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 
 ### 10.1 v0.1：轻量实现
 
-新增一个本地状态文件或 SQLite 表记录运行状态：
+新增 PostgreSQL 表记录运行状态：
 
 - `runtime_health`
 - `runtime_metric_events`
@@ -344,7 +348,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 优点：
 
 - 不引入新服务。
-- 和当前 SQLite 架构兼容。
+- 复用当前 PostgreSQL，不引入新服务。
 - 适合小规模外测。
 
 ### 10.2 v0.2：可选增强
@@ -387,7 +391,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - LLM 大面积失败怎么办。
 - 微信收不到回复怎么办。
 - proactive scheduler 停止怎么办。
-- SQLite 备份与恢复。
+- PostgreSQL 备份、`pg_restore` 与主备切换。
 - 磁盘满处理。
 - 如何临时停用某个账号。
 - 如何回滚最近版本。
@@ -470,7 +474,7 @@ AI4ALL 微信 Bot 当前已具备基础日志、`/health`、部署检查和部�
 - `AI4ALL_BRIDGE_SECRET` 不是默认 `dev-secret`。
 - `ADMIN_TOKEN` 不是默认 `dev-admin-token`。
 - `LLM_API_KEY` 已配置。
-- `DATABASE_PATH=data/ai4all.sqlite3` 指向标准数据库。
+- `DATABASE_URL` 指向当前 PostgreSQL 主库；不得把连接串或口令写入文档。
 
 不得把完整 webhook、token、API key 写入文档或提交仓库。
 
@@ -624,14 +628,13 @@ MONITOR_OPENCLAW_CHANNEL=openclaw-weixin \
 
 ```bash
 cd /opt/ai4all-weixin-bot
-mkdir -p data/backups
-sqlite3 data/ai4all.sqlite3 ".backup 'data/backups/ai4all_$(date +%Y%m%d_%H%M%S).sqlite3'"
-tar -czf "data/backups/user_profiles_$(date +%Y%m%d_%H%M%S).tar.gz" data/user_profiles data/system
+.venv/bin/python scripts/backup_data.py --dry-run
+.venv/bin/python scripts/backup_data.py
 ```
 
 后续需要补充自动备份检查：
 
-- 当日没有 SQLite 备份时报警。
+- 当日没有通过 `pg_restore --list` 完整性校验的 PostgreSQL dump 时报警。
 - 当日没有 user_profiles / system 备份时报警。
 - 备份目录过大时提醒清理或同步 OSS。
 
@@ -644,7 +647,7 @@ tar -czf "data/backups/user_profiles_$(date +%Y%m%d_%H%M%S).tar.gz" data/user_pr
 - LLM 大面积失败怎么办。
 - 微信收不到回复怎么办。
 - proactive scheduler 停止怎么办。
-- SQLite 备份与恢复。
+- PostgreSQL 备份、恢复与主备切换。
 - 磁盘满处理。
 - 如何临时停用某个账号。
 - 如何回滚最近版本。

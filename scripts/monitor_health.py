@@ -17,7 +17,6 @@ if str(ROOT) not in sys.path:
 
 from app.config import settings  # noqa: E402
 from app.db import (  # noqa: E402
-    checkpoint_wal,
     get_account_water_level,
     get_database_storage_stats,
     get_scheduler_heartbeat,
@@ -146,46 +145,6 @@ def _check_backup_staleness(backups_dir: Path, max_age_seconds: int) -> Optional
     return None
 
 
-def _check_wal_size(max_bytes: int, *, checkpoint_on_bloat: bool = True) -> Optional[str]:
-    """``-wal`` 文件超阈值时先尝试 TRUNCATE checkpoint 自愈，仍超才返回错误串。
-
-    -wal 膨胀通常是 checkpoint 被长读连接压住的信号。先主动截断回收；若截断后仍超阈值，
-    说明确有读连接卡住（或写入回收确实压不住），此时才告警，语义比单纯告警更准。
-    max_bytes<=0 表示关闭该检查。
-    """
-    if max_bytes <= 0:
-        return None
-    try:
-        stats = get_database_storage_stats()
-    except Exception as err:
-        return f"wal: storage stats unavailable: {err}"
-    wal_bytes = int(stats.get("wal_bytes") or 0)
-    if wal_bytes <= max_bytes:
-        return None
-
-    checkpoint_note = ""
-    if checkpoint_on_bloat:
-        try:
-            ckpt = checkpoint_wal()
-            # 注意：截断成功时 wal_bytes_after 为 0（falsy），不能用 `or` 回退旧值
-            wal_after = ckpt.get("wal_bytes_after")
-            wal_bytes = int(wal_after) if wal_after is not None else wal_bytes
-            checkpoint_note = (
-                f" after checkpoint(TRUNCATE busy={ckpt.get('busy')} "
-                f"checkpointed={ckpt.get('checkpointed_frames')}/{ckpt.get('log_frames')})"
-            )
-        except Exception as err:
-            checkpoint_note = f" checkpoint failed: {err}"
-        if wal_bytes <= max_bytes:
-            return None
-
-    return (
-        f"wal: -wal too large {wal_bytes}B max={max_bytes}B{checkpoint_note} "
-        f"(journal_mode={stats.get('journal_mode')} "
-        f"autocheckpoint_pages={stats.get('wal_autocheckpoint_pages')})"
-    )
-
-
 def _check_disk_usage(
     path: str,
     *,
@@ -244,6 +203,37 @@ def _record_water_level(record_file: str) -> Optional[str]:
     print(
         f"water-level recorded total={snapshot.get('total_bound_accounts')} {active_summary}".strip()
     )
+    return None
+
+
+def _check_database(
+    *, state: Dict, max_connection_percent: float, max_replication_lag_seconds: float,
+    max_growth_percent: float,
+) -> Optional[str]:
+    """Check PostgreSQL capacity/replication and compare size with prior sample."""
+    try:
+        stats = get_database_storage_stats()
+    except Exception as err:  # noqa: BLE001
+        return f"database: metrics unavailable: {err}"
+    problems: List[str] = []
+    usage = stats.get("connection_usage_percent")
+    if max_connection_percent > 0 and usage is not None and usage >= max_connection_percent:
+        problems.append(f"connections={usage:.1f}% max={max_connection_percent:.0f}%")
+    lag = stats.get("replication_lag_seconds")
+    replay = stats.get("replay_lag_seconds")
+    lags = [float(v) for v in (lag, replay) if v is not None]
+    if max_replication_lag_seconds > 0 and lags and max(lags) >= max_replication_lag_seconds:
+        problems.append(f"replication_lag={max(lags):.1f}s max={max_replication_lag_seconds:.1f}s")
+    current = stats.get("db_bytes")
+    previous = state.get("database_db_bytes")
+    if max_growth_percent > 0 and current is not None and previous:
+        growth = (float(current) - float(previous)) * 100.0 / float(previous)
+        if growth >= max_growth_percent:
+            problems.append(f"growth={growth:.1f}% max={max_growth_percent:.1f}%")
+    if current is not None:
+        state["database_db_bytes"] = int(current)
+    if problems:
+        return "database: " + ", ".join(problems)
     return None
 
 
@@ -418,29 +408,20 @@ def main() -> int:
         help="alert when newest backup is older than this (default 26h); 0 disables",
     )
     parser.add_argument(
-        "--check-wal",
-        action=argparse.BooleanOptionalAction,
-        default=_env_bool("MONITOR_CHECK_WAL", True),
-        help="alert when the SQLite -wal file grows too large (checkpoint starvation)",
-    )
-    parser.add_argument(
-        "--wal-max-bytes",
-        type=int,
-        default=int(os.getenv("MONITOR_WAL_MAX_BYTES", str(128 * 1024 * 1024))),
-        help="alert when -wal exceeds this many bytes (default 128MB); 0 disables",
-    )
-    parser.add_argument(
-        "--wal-checkpoint-on-bloat",
-        action=argparse.BooleanOptionalAction,
-        default=_env_bool("MONITOR_WAL_CHECKPOINT_ON_BLOAT", True),
-        help="run a TRUNCATE checkpoint to self-heal before alerting on -wal bloat",
-    )
-    parser.add_argument(
         "--check-disk",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("MONITOR_CHECK_DISK", True),
         help="alert when the log filesystem is running low on space",
     )
+    parser.add_argument("--check-database", action=argparse.BooleanOptionalAction,
+                        default=_env_bool("MONITOR_CHECK_DATABASE", True),
+                        help="check PostgreSQL connections, replication lag, and size growth")
+    parser.add_argument("--database-max-connection-percent", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_CONNECTION_PERCENT", "85")))
+    parser.add_argument("--database-max-replication-lag-seconds", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_REPLICATION_LAG_SECONDS", "60")))
+    parser.add_argument("--database-max-growth-percent", type=float,
+                        default=float(os.getenv("MONITOR_DATABASE_MAX_GROWTH_PERCENT", "20")))
     parser.add_argument(
         "--disk-path",
         default=os.getenv("MONITOR_DISK_PATH", "/var/log"),
@@ -500,6 +481,7 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    state = _load_state(args.state_file)
     errors: List[str] = []
     ok, health = _http_get_json(args.url, args.timeout)
     if not ok:
@@ -529,19 +511,22 @@ def main() -> int:
         if error:
             errors.append(error)
 
-    if args.check_wal:
-        error = _check_wal_size(
-            args.wal_max_bytes,
-            checkpoint_on_bloat=args.wal_checkpoint_on_bloat,
-        )
-        if error:
-            errors.append(error)
-
     if args.check_disk:
         error = _check_disk_usage(
             args.disk_path,
             max_used_percent=args.disk_max_used_percent,
             min_free_bytes=args.disk_min_free_bytes,
+        )
+        if error:
+            errors.append(error)
+
+    if args.check_database:
+        _ensure_schema_best_effort()
+        error = _check_database(
+            state=state,
+            max_connection_percent=args.database_max_connection_percent,
+            max_replication_lag_seconds=args.database_max_replication_lag_seconds,
+            max_growth_percent=args.database_max_growth_percent,
         )
         if error:
             errors.append(error)
@@ -552,8 +537,6 @@ def main() -> int:
         wl_error = _record_water_level(args.water_level_file)
         if wl_error:
             print(wl_error, file=sys.stderr)
-
-    state = _load_state(args.state_file)
 
     if not errors:
         recovery_alert = _should_send_recovery_alert(

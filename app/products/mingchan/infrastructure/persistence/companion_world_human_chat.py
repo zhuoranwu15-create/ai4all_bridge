@@ -6,7 +6,7 @@ import json
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 
 #: 列表页预览截断长度。正文上限 4000 字，一页最多 100 条，不截断会让列表响应到 400KB。
@@ -33,13 +33,11 @@ __all__ = [
 
 @contextmanager
 def _human_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用外层事务；独立 SQLite 写使用 IMMEDIATE。"""
+    """复用调用方事务，或建立独立 PostgreSQL 写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -58,7 +56,7 @@ def create_human_conversation_for_visit(
     if owner_platform_user_id == visitor_platform_user_id:
         raise ValueError("human conversation participants must differ")
     conversation_id = conversation_id or _new_id("hconv")
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     with _human_write_tx(conn) as tx:
         visit = tx.execute(
             "SELECT v.id, v.owner_platform_user_id, v.visitor_platform_user_id, v.status "
@@ -267,7 +265,7 @@ def lock_human_conversation(
     *, conversation_id: str, conn: Connection
 ) -> Optional[Dict[str, Any]]:
     """在调用方事务内锁真人 conversation 行。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = conn.execute(
         "SELECT * FROM human_conversations WHERE id = ?" + suffix,
         (conversation_id,),

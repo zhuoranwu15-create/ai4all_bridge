@@ -3,15 +3,14 @@
 import pytest
 
 import app.db as db
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db._core import (
     _MIGRATIONS,
     _migration_0036_repair_account_app_id,
     migrate_db_through,
 )
 
-# 回放终点取当前 head，而不是写死版本号：SQLite 分支走 init_db()（必然重放到 head），
-# 写死的话每加一条迁移就假红一次。
+# 回放终点取当前 head，而不是写死版本号，避免每加一条迁移就假红一次。
 _HEAD_VERSION = _MIGRATIONS[-1][0]
 
 
@@ -41,22 +40,20 @@ def _drop_post_v35_plum_schema(conn) -> None:
 
 
 def _columns(conn, table: str) -> set[str]:
-    """返回指定表的列名，兼容 SQLite 与 PostgreSQL 测试后端。"""
-    if is_postgres():
-        rows = conn.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_schema = current_schema() AND table_name = ?",
-            (table,),
-        ).fetchall()
-        return {str(row["column_name"]) for row in rows}
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return {str(row["name"]) for row in rows}
+    """返回当前 PostgreSQL schema 中指定表的列名。"""
+    rows = conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = ?",
+        (table,),
+    ).fetchall()
+    return {str(row["column_name"]) for row in rows}
 
 
 def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
     """版本 22–24 已占用但列缺失时，m0036 应补齐 schema、数据与唯一约束。"""
     user = db.create_or_get_platform_user_by_phone(phone="13800003601")
     account = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="迁移修复测试"
     )["account"]
 
@@ -75,13 +72,8 @@ def test_m0036_repairs_collided_schema_and_is_idempotent(fresh_db):
         # 后续版本记录，让 init_db 从 m0036 按序重放，而不是制造不可能的迁移空洞。
         conn.execute("DELETE FROM schema_migrations WHERE version >= 36")
 
-    if is_postgres():
-        # 常规 PG init_db 已禁止既有库跨 Phase 1 contract；迁移回放测试显式走受控 API。
-        migrate_db_through(
-            target_version=_HEAD_VERSION, expected_current_version=35
-        )
-    else:
-        db.init_db()
+    # 常规 init_db 已禁止既有库跨 Phase 1 contract；迁移回放测试显式走受控 API。
+    migrate_db_through(target_version=_HEAD_VERSION, expected_current_version=35)
 
     with db.connect() as conn:
         assert "app_id" in _columns(conn, "accounts")

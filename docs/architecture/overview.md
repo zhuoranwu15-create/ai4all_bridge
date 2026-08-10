@@ -61,8 +61,8 @@ flowchart TB
     end
 
     subgraph state["状态与外部依赖"]
-        pg["PostgreSQL<br/>生产中心 source of truth / 并发权威"]
-        sqlite["SQLite<br/>开发、测试默认（非生产退路）"]
+        pg["PostgreSQL<br/>主应用本地 / 测试 / 生产 source of truth"]
+        sqlite["SQLite<br/>nearline / TDAI / 历史迁移工具"]
         systemFiles["data/system<br/>系统级 context / 配置视图"]
         channelState["接入节点本地状态<br/>微信凭据 / context token"]
         providers["LLM · Search · SMS/Captcha · WeChat iLink"]
@@ -80,7 +80,7 @@ flowchart TB
     platform --> pg
     world --> pg
     runtime --> pg
-    platform -.->|"同一 repository 契约二选一"| sqlite
+    platform -.->|"分析派生 / 过渡工具"| sqlite
     runtime --> systemFiles
     openclaw --> channelState
     api --> providers
@@ -247,13 +247,14 @@ OpenClaw 仍然是重要参考，尤其是 Agent Loop、context engine、tool sc
 ```text
 AI4ALL_ROLE=standalone
 FastAPI Backend + Web/App/Admin routes
-DATABASE_URL 为空 → SQLite；非空 → PostgreSQL
+DATABASE_URL → 本地 PostgreSQL
 OpenClaw Gateway + ai4all-openclaw-bridge local process
 single-worker 时可启用 in-process scheduler；推荐独立 scheduler 进程
 ```
 
-适合开发、双后端测试和真实微信链路验证。SQLite 是 dev/test 默认档，不是生产后端或生产
-回滚通道；生产故障恢复必须在 PostgreSQL 的备份、主备和恢复体系内完成。
+适合本地开发、PostgreSQL 测试和真实微信链路验证。主应用拒绝空或非 PostgreSQL
+`DATABASE_URL`，不存在 SQLite 回滚通道；生产故障恢复必须在 PostgreSQL 的备份、主备和
+恢复体系内完成。
 
 ### 当前生产形态（aliyun1 central+node + aliyun2 厚 node）
 
@@ -286,7 +287,7 @@ aliyun1 central,node                     aliyun2 node
 
 | 角色 | 跑什么 | 碰中心 DB? |
 | --- | --- | --- |
-| `standalone`（默认） | 本地开发的一体化 Web/App/Admin、turn 与可选 scheduler | 是；默认 SQLite，也可显式使用 PG |
+| `standalone`（默认） | 本地开发的一体化 Web/App/Admin、turn 与可选 scheduler | 是；本地使用 PG |
 | `central` | Web/App/Admin 控制面、schema migration、central-only scheduler 与节点编排 | 是；生产使用 PG |
 | `node` | 归属账号的本地 turn、OpenClaw bridge、微信会话与 node agent | **是；生产直连中心 PG，但不跑 migration** |
 | `central,node` | central 与 node 能力同机组合；当前 aliyun1 形态 | 是；生产本机连接中心 PG |
@@ -306,7 +307,7 @@ aliyun1 central,node                     aliyun2 node
    `app_id=mingchan`；生产验证和 clean-start 完成前不得启用 `mingchan`。多居民、L3、Feed/通知、
    lifecycle/mailbox、visit 和 human chat 继续受 AST 分层门禁保护。
 3. 真人级 wallet/quota/override 已上迁 `platform_user`；每位居民仍以独立 runtime account 持有 L1/L2、session/messages，World 只通过端口组合 Runtime。
-4. 当前生产为中心 PostgreSQL + 两个厚节点本地 turn；SQLite 只承担开发与测试，竞态正确性以 PostgreSQL 测试为权威。
+4. 当前生产为中心 PostgreSQL + 两个厚节点本地 turn；本地开发和主 pytest 也统一使用 PostgreSQL。
 5. legacy Companion World 主能力、语音输入与 v1.5 媒体/许愿能力曾以朝夕配置启用；拆分期间维持现有行为，不视为鸣蝉已生产启用。客户端切换后仍必须以鸣蝉配置接口返回的能力位为准。
 6. 当前模块化单体、共享 PG 与 central-only scheduler 单 writer 是明确约束。进入多地域 active-active、按世界分片或 scheduler 拆服务前，必须先设计任务所有权、lease/fencing 与跨分片锁，不能直接横向复制现有 worker。
 

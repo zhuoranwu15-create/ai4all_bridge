@@ -103,17 +103,108 @@ def _update_relationship_after_turn(atx: ProductAfterTurnContext):
     )
 
 
+class ZhaoxiOnboarding:
+    """朝夕首轮引导的 ProductOnboarding 实现。
+
+    这些方法此前直接长在 ``ZhaoxiTurnServices`` 上，迫使没有引导流程的鸣蝉/Plum 一起实现。
+    收进独立能力对象后，「有没有 onboarding」由 ``ZhaoxiTurnServices.onboarding`` 是否为
+    None 表达，行为逐项与拆分前一致。
+    """
+
+    pending = ONBOARDING_PENDING
+    step1_sent = ONBOARDING_STEP1_SENT
+    step2_sent = ONBOARDING_STEP2_SENT
+    step3_sent = ONBOARDING_STEP3_SENT
+    complete = ONBOARDING_COMPLETE
+    welcome_text = product_message("onboarding_welcome")
+
+    def is_active(self, state: str) -> bool:
+        """判断朝夕 onboarding 是否仍在进行。"""
+
+        return is_onboarding_active(state)
+
+    def get_state(self, account_id: str) -> str:
+        """读取朝夕账号 onboarding 状态。"""
+
+        return get_account_onboarding_state(account_id=account_id)
+
+    def start(self, account_id: str) -> None:
+        """把朝夕 onboarding 标记为已发送第一步。"""
+
+        set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
+
+    async def extract_info(self, *, user_text: str, current_state: str) -> dict:
+        """调用朝夕 onboarding 提取器。"""
+
+        return await extract_onboarding_info_async(
+            user_text=user_text,
+            current_state=current_state,
+        )
+
+    def apply_info(
+        self, *, account_id: str, extracted: dict, current_state: str
+    ) -> dict:
+        """按朝夕活码预设规则写入 onboarding 信息。"""
+
+        overrides = resolve_onboarding_identity_overrides(account_id)
+        return apply_extracted_onboarding_info(
+            account_id=account_id,
+            extracted=extracted,
+            current_state=current_state,
+            has_forced_soul_preset=overrides.forced_personality,
+            has_forced_ai_name=overrides.forced_ai_name,
+        )
+
+    def advance(
+        self,
+        *,
+        account_id: str,
+        current_state: str,
+        extracted: Optional[dict],
+        session_turn_count: int,
+    ) -> Optional[str]:
+        """推进朝夕 onboarding，并在完成时幂等分配使命。"""
+
+        if current_state == ONBOARDING_PENDING:
+            set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
+            return ONBOARDING_STEP1_SENT
+        if extracted is None:
+            return None
+        confirmation_ask_count = (
+            max(0, int(session_turn_count) - 2)
+            if current_state == ONBOARDING_STEP2_SENT
+            else 0
+        )
+        overrides = resolve_onboarding_identity_overrides(account_id)
+        new_state = next_onboarding_state(
+            current_state=current_state,
+            extracted=extracted,
+            user_name_ask_count=0,
+            persona_ask_count=0,
+            confirmation_ask_count=confirmation_ask_count,
+            has_forced_soul_preset=overrides.forced_personality,
+            has_forced_ai_name=overrides.forced_ai_name,
+        )
+        if new_state == current_state:
+            return None
+        set_account_onboarding_state(account_id=account_id, state=new_state)
+        if new_state == ONBOARDING_COMPLETE:
+            try:
+                assign_mission_if_absent(account_id=account_id)
+            except Exception as err:
+                logger.error("mission assignment failed account=%s error=%s", account_id, err)
+        return new_state
+
+
+ZHAOXI_ONBOARDING = ZhaoxiOnboarding()
+
+
 class ZhaoxiTurnServices:
     """朝夕现有 turn 业务规则的显式 ProductTurnServices 实现。"""
 
     app_id = ZHAOXI_APP_ID
     tool_policy = ZHAOXI_TOOL_POLICY
-    onboarding_pending = ONBOARDING_PENDING
-    onboarding_step1_sent = ONBOARDING_STEP1_SENT
-    onboarding_step2_sent = ONBOARDING_STEP2_SENT
-    onboarding_step3_sent = ONBOARDING_STEP3_SENT
-    onboarding_complete = ONBOARDING_COMPLETE
-    onboarding_welcome_text = product_message("onboarding_welcome")
+    onboarding = ZHAOXI_ONBOARDING
 
     def __init__(
         self,
@@ -184,45 +275,6 @@ class ZhaoxiTurnServices:
             business_day=business_day,
             state=state,
             profile_path=profile_path,
-        )
-
-    def is_onboarding_active(self, state: str) -> bool:
-        """判断朝夕 onboarding 是否仍在进行。"""
-
-        return is_onboarding_active(state)
-
-    def get_onboarding_state(self, account_id: str) -> str:
-        """读取朝夕账号 onboarding 状态。"""
-
-        return get_account_onboarding_state(account_id=account_id)
-
-    def start_onboarding(self, account_id: str) -> None:
-        """把朝夕 onboarding 标记为已发送第一步。"""
-
-        set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
-
-    async def extract_onboarding_info(
-        self, *, user_text: str, current_state: str
-    ) -> dict:
-        """调用朝夕 onboarding 提取器。"""
-
-        return await extract_onboarding_info_async(
-            user_text=user_text,
-            current_state=current_state,
-        )
-
-    def apply_onboarding_info(
-        self, *, account_id: str, extracted: dict, current_state: str
-    ) -> dict:
-        """按朝夕活码预设规则写入 onboarding 信息。"""
-
-        overrides = resolve_onboarding_identity_overrides(account_id)
-        return apply_extracted_onboarding_info(
-            account_id=account_id,
-            extracted=extracted,
-            current_state=current_state,
-            has_forced_soul_preset=overrides.forced_personality,
-            has_forced_ai_name=overrides.forced_ai_name,
         )
 
     def load_prompt_context(
@@ -320,46 +372,6 @@ class ZhaoxiTurnServices:
             onboarding_context=onboarding_context,
         )
 
-    def advance_onboarding(
-        self,
-        *,
-        account_id: str,
-        current_state: str,
-        extracted: Optional[dict],
-        session_turn_count: int,
-    ) -> Optional[str]:
-        """推进朝夕 onboarding，并在完成时幂等分配使命。"""
-
-        if current_state == ONBOARDING_PENDING:
-            set_account_onboarding_state(account_id=account_id, state=ONBOARDING_STEP1_SENT)
-            return ONBOARDING_STEP1_SENT
-        if extracted is None:
-            return None
-        confirmation_ask_count = (
-            max(0, int(session_turn_count) - 2)
-            if current_state == ONBOARDING_STEP2_SENT
-            else 0
-        )
-        overrides = resolve_onboarding_identity_overrides(account_id)
-        new_state = next_onboarding_state(
-            current_state=current_state,
-            extracted=extracted,
-            user_name_ask_count=0,
-            persona_ask_count=0,
-            confirmation_ask_count=confirmation_ask_count,
-            has_forced_soul_preset=overrides.forced_personality,
-            has_forced_ai_name=overrides.forced_ai_name,
-        )
-        if new_state == current_state:
-            return None
-        set_account_onboarding_state(account_id=account_id, state=new_state)
-        if new_state == ONBOARDING_COMPLETE:
-            try:
-                assign_mission_if_absent(account_id=account_id)
-            except Exception as err:
-                logger.error("mission assignment failed account=%s error=%s", account_id, err)
-        return new_state
-
     def after_turn_hooks(self) -> Tuple[Tuple[str, AfterTurnHook], ...]:
         """返回朝夕记忆和关系状态 hooks。"""
 
@@ -371,4 +383,9 @@ class ZhaoxiTurnServices:
 
 ZHAOXI_TURN_SERVICES = ZhaoxiTurnServices()
 
-__all__ = ["ZHAOXI_TURN_SERVICES", "ZhaoxiTurnServices"]
+__all__ = [
+    "ZHAOXI_ONBOARDING",
+    "ZHAOXI_TURN_SERVICES",
+    "ZhaoxiOnboarding",
+    "ZhaoxiTurnServices",
+]

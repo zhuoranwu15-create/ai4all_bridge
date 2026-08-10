@@ -3,23 +3,20 @@ import json
 import logging
 import math
 import re
-from app.db._backend import IntegrityError, Row, is_postgres
+from app.db._backend import IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from app.config import settings
 from app.time_utils import beijing_naive_now
 from app.db._core import (
     _clean_text,
-    _db_path,
     _new_id,
     connect,
 )
 __all__ = [
-    'checkpoint_wal',
     'create_faq_message',
     'get_account_water_level',
     'get_database_storage_stats',
@@ -193,7 +190,7 @@ def create_faq_message(
         raise ValueError("invalid faq moderation status")
     cleaned_parent_id = _clean_text(parent_id)
     message_id = _new_id("faq")
-    published_at_expr = "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))" if cleaned_status == "published" else "NULL"
+    published_at_expr = "to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')" if cleaned_status == "published" else "NULL"
     categories_json = json.dumps(moderation_categories or [], ensure_ascii=False)
     metadata_json = json.dumps(metadata or {}, ensure_ascii=False)
     with connect() as conn:
@@ -216,7 +213,7 @@ def create_faq_message(
                 moderation_reason, moderation_categories_json, metadata_json,
                 published_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {published_at_expr}, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, {published_at_expr}, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 message_id,
@@ -235,7 +232,7 @@ def create_faq_message(
                 """
                 UPDATE faq_messages
                 SET reply_count = reply_count + 1,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                 """,
                 (cleaned_parent_id,),
@@ -302,12 +299,12 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
         ).fetchone()
         if message is None:
             return None
-        # INSERT OR IGNORE + rowcount 判断是否新点赞：避免「捕获 IntegrityError 后继续用连接」，
-        # 该模式在 PG 下会因唯一冲突中止整个事务（SQLite 可继续，PG 不行）。
+        # ON CONFLICT DO NOTHING + rowcount 判断是否新点赞，避免异常中止事务。
         like_cursor = conn.execute(
             """
-            INSERT OR IGNORE INTO faq_message_likes(id, message_id, voter_key)
+            INSERT INTO faq_message_likes(id, message_id, voter_key)
             VALUES (?, ?, ?)
+            ON CONFLICT DO NOTHING
             """,
             (_new_id("fqlike"), cleaned_id, cleaned_voter_key),
         )
@@ -317,7 +314,7 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
                 """
                 UPDATE faq_messages
                 SET like_count = like_count + 1,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ?
                 """,
                 (cleaned_id,),
@@ -333,85 +330,44 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
     return result
 
 
-def _file_size_bytes(path: Path) -> int:
-    """文件大小（字节）；不存在或不可读时返回 0。"""
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
 def get_database_storage_stats() -> Dict[str, Any]:
-    """SQLite 存储与 WAL 运行态指标，用于 ops 监控。
-
-    重点观测 ``-wal`` 文件大小：WAL 模式下若有长生命周期读连接（如独立调度器进程）
-    压住 checkpoint，``-wal`` 会持续增长。这里只读取、不主动 checkpoint。
-    """
-    if is_postgres():
-        # PG 后端无 WAL 文件/PRAGMA 概念：返回库大小，其余 SQLite 专有字段置空。
-        with connect() as conn:
-            size_row = conn.execute(
-                "SELECT pg_database_size(current_database()) AS db_bytes"
-            ).fetchone()
-        return {
-            "db_bytes": int(size_row["db_bytes"]) if size_row and size_row["db_bytes"] is not None else None,
-            "wal_bytes": None,
-            "shm_bytes": None,
-            "journal_mode": None,
-            "synchronous": None,
-            "wal_autocheckpoint_pages": None,
-        }
-    db_path = _db_path()
-    wal_path = db_path.with_name(db_path.name + "-wal")
-    shm_path = db_path.with_name(db_path.name + "-shm")
+    """Return PostgreSQL capacity, connection, and replication metrics."""
     with connect() as conn:
-        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
-        synchronous = conn.execute("PRAGMA synchronous").fetchone()
-        wal_autocheckpoint = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
+        size_row = conn.execute(
+            """SELECT current_database() AS database_name,
+                      pg_database_size(current_database()) AS db_bytes,
+                      current_setting('max_connections')::int AS max_connections,
+                      (SELECT count(*) FROM pg_stat_activity) AS current_connections"""
+        ).fetchone()
+        replica_row = conn.execute(
+            """SELECT count(*) AS replica_count,
+                      COALESCE(max(EXTRACT(EPOCH FROM (now() - reply_time))), 0) AS max_lag_seconds
+               FROM pg_stat_replication"""
+        ).fetchone()
+        receiver_row = conn.execute(
+            """SELECT COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())), 0)
+                      AS replay_lag_seconds
+               WHERE pg_is_in_recovery()"""
+        ).fetchone()
+    max_connections = int(size_row["max_connections"]) if size_row else None
+    current_connections = int(size_row["current_connections"]) if size_row else None
     return {
-        "db_bytes": _file_size_bytes(db_path),
-        "wal_bytes": _file_size_bytes(wal_path),
-        "shm_bytes": _file_size_bytes(shm_path),
-        "journal_mode": journal_mode[0] if journal_mode else None,
-        # synchronous: 0=OFF 1=NORMAL 2=FULL 3=EXTRA
-        "synchronous": int(synchronous[0]) if synchronous else None,
-        "wal_autocheckpoint_pages": int(wal_autocheckpoint[0]) if wal_autocheckpoint else None,
-    }
-
-
-def checkpoint_wal(*, mode: str = "TRUNCATE") -> Dict[str, Any]:
-    """主动对 WAL 做一次 checkpoint，回收 ``-wal`` 文件，用于 ops 自愈。
-
-    默认 TRUNCATE：checkpoint 后把 ``-wal`` 截断回 0 字节。若存在长生命周期读连接
-    压住 WAL 帧，SQLite 只能做部分 checkpoint 并返回 ``busy=1``，``-wal`` 不会缩小——
-    调用方可据此判断「是否真有读连接卡住」。跨进程操作共享 WAL，从任一连接发起均可。
-
-    仅 WAL 模式有意义；非 WAL 模式下该 PRAGMA 是无害的 no-op。
-    """
-    mode = (mode or "TRUNCATE").upper()
-    if mode not in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"):
-        raise ValueError(f"unsupported wal_checkpoint mode: {mode}")
-    if is_postgres():
-        # PG 无应用级 WAL checkpoint（属服务端职责）：返回 no-op 结果，结构对齐。
-        return {
-            "mode": mode,
-            "busy": None,
-            "log_frames": None,
-            "checkpointed_frames": None,
-            "wal_bytes_after": None,
-        }
-    with connect() as conn:
-        # 返回单行 (busy, log_frames, checkpointed_frames)
-        row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
-    busy, log_frames, checkpointed_frames = (row[0], row[1], row[2]) if row else (None, None, None)
-    wal_path = _db_path().with_name(_db_path().name + "-wal")
-    return {
-        "mode": mode,
-        # busy=1 表示有读/写连接挡住，未能完整 checkpoint
-        "busy": int(busy) if busy is not None else None,
-        "log_frames": int(log_frames) if log_frames is not None else None,
-        "checkpointed_frames": int(checkpointed_frames) if checkpointed_frames is not None else None,
-        "wal_bytes_after": _file_size_bytes(wal_path),
+        "backend": "postgresql",
+        "database_name": size_row["database_name"] if size_row else None,
+        "db_bytes": (
+            int(size_row["db_bytes"])
+            if size_row and size_row["db_bytes"] is not None
+            else None
+        ),
+        "max_connections": max_connections,
+        "current_connections": current_connections,
+        "connection_usage_percent": (
+            current_connections * 100.0 / max_connections
+            if max_connections else None
+        ),
+        "replica_count": int(replica_row["replica_count"] or 0) if replica_row else 0,
+        "replication_lag_seconds": float(replica_row["max_lag_seconds"] or 0) if replica_row else None,
+        "replay_lag_seconds": float(receiver_row["replay_lag_seconds"] or 0) if receiver_row else None,
     }
 
 
@@ -444,7 +400,7 @@ def get_account_water_level(*, active_windows_minutes=(15, 60, 1440)) -> Dict[st
                 """
                 SELECT COUNT(DISTINCT account_id) AS active
                 FROM channel_bindings
-                WHERE last_seen_at >= datetime('now', '+8 hours', ?)
+                WHERE last_seen_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
                 """,
                 (f"-{window} minutes",),
             ).fetchone()
@@ -464,7 +420,7 @@ def get_inbound_message_rate(
     """统计各滚动时间窗口内的入站消息数与去重账号数（实时入站监控用）。
 
     单条 SQL 用条件 SUM 一次算出所有窗口，避免逐窗口扫表。`created_at` 存北京时间，
-    与 `datetime('now','+8 hours')` 比较，与 get_ops_metrics 时区约定一致。
+    与 PostgreSQL 中的北京时间墙钟表达式比较，与 get_ops_metrics 时区约定一致。
     返回按窗口升序排列的 ``[{"minutes": N, "count": M, "unique_accounts": U}, ...]``。
     """
     # 去重 + 过滤非正数，按窗口升序，保证查询列与返回顺序稳定
@@ -473,11 +429,11 @@ def get_inbound_message_rate(
         return []
     # 为每个窗口生成一个条件 SUM；最大窗口用于 WHERE 预过滤减少扫描
     select_exprs = ", ".join(
-        f"SUM(CASE WHEN created_at >= datetime('now', '+8 hours', '-{m} minutes') "
+        f"SUM(CASE WHEN created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-{m} minutes')::interval, 'YYYY-MM-DD HH24:MI:SS') "
         f"THEN 1 ELSE 0 END) AS w{m}_count, "
-        f"COUNT(DISTINCT CASE WHEN created_at >= datetime('now', '+8 hours', '-{m} minutes') "
+        f"COUNT(DISTINCT CASE WHEN created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-{m} minutes')::interval, 'YYYY-MM-DD HH24:MI:SS') "
         f"THEN account_id ELSE NULL END) AS w{m}_unique_accounts, "
-        f"datetime('now', '+8 hours', '-{m} minutes') AS w{m}_since"
+        f"to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-{m} minutes')::interval, 'YYYY-MM-DD HH24:MI:SS') AS w{m}_since"
         for m in windows
     )
     max_window = windows[-1]
@@ -488,8 +444,8 @@ def get_inbound_message_rate(
             FROM messages
             WHERE direction = 'inbound'
               AND role = 'user'
-              AND created_at >= datetime('now', '+8 hours', '-{max_window} minutes')
-              AND created_at <= datetime('now', '+8 hours')
+              AND created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + ('-{max_window} minutes')::interval, 'YYYY-MM-DD HH24:MI:SS')
+              AND created_at <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """
         ).fetchone()
     return [
@@ -511,12 +467,12 @@ def get_today_inbound_message_rate() -> Dict[str, Any]:
             SELECT
                 COUNT(*) AS count,
                 COUNT(DISTINCT account_id) AS unique_accounts,
-                date('now', '+8 hours') || ' 00:00:00' AS since
+                to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') || ' 00:00:00' AS since
             FROM messages
             WHERE direction = 'inbound'
               AND role = 'user'
-              AND created_at >= date('now', '+8 hours') || ' 00:00:00'
-              AND created_at <= datetime('now', '+8 hours')
+              AND created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD') || ' 00:00:00'
+              AND created_at <= to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             """
         ).fetchone()
     return {
@@ -557,11 +513,11 @@ def get_recent_reply_latencies(*, limit: int = 10) -> List[Dict[str, Any]]:
                 CASE
                     WHEN u.id IS NULL THEN NULL
                     WHEN r.latency_ms IS NOT NULL THEN r.latency_ms
-                    ELSE CAST(ROUND((julianday(r.created_at) - julianday(u.created_at)) * 86400000) AS INTEGER)
+                    ELSE CAST(ROUND(EXTRACT(EPOCH FROM ((r.created_at)::timestamp - (u.created_at)::timestamp)) * 1000) AS INTEGER)
                 END AS latency_ms,
                 CASE
                     WHEN u.id IS NULL THEN NULL
-                    ELSE CAST(ROUND((julianday(r.created_at) - julianday(u.created_at)) * 86400000) AS INTEGER)
+                    ELSE CAST(ROUND(EXTRACT(EPOCH FROM ((r.created_at)::timestamp - (u.created_at)::timestamp)) * 1000) AS INTEGER)
                 END AS created_at_delta_ms,
                 CASE
                     WHEN u.id IS NULL THEN 'missing_inbound'
@@ -618,7 +574,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 AVG(CASE WHEN latency_ms IS NOT NULL THEN latency_ms ELSE NULL END) AS avg_latency_ms,
                 MAX(latency_ms) AS max_latency_ms
             FROM messages
-            WHERE created_at >= datetime('now', '+8 hours', ?)
+            WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
             """,
             (modifier,),
         ).fetchone()
@@ -630,7 +586,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_total,
                 SUM(CASE WHEN status IN ('pending', 'sending') THEN 1 ELSE 0 END) AS pending_total
             FROM outbound_messages
-            WHERE created_at >= datetime('now', '+8 hours', ?)
+            WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
             """,
             (modifier,),
         ).fetchone()
@@ -641,7 +597,7 @@ def get_ops_metrics(*, window_minutes: int = 60) -> Dict[str, Any]:
                 SUM(CASE WHEN status IN ('completed', 'already_connected') THEN 1 ELSE 0 END) AS success_total,
                 SUM(CASE WHEN status IN ('failed', 'expired', 'cancelled') THEN 1 ELSE 0 END) AS failed_total
             FROM binding_intents
-            WHERE created_at >= datetime('now', '+8 hours', ?)
+            WHERE created_at >= to_char((now() AT TIME ZONE 'Asia/Shanghai') + (?)::interval, 'YYYY-MM-DD HH24:MI:SS')
             """,
             (modifier,),
         ).fetchone()

@@ -2,7 +2,7 @@
 
 用法：
   python -m nearline.run_etl
-  python nearline/run_etl.py --source-db /path/to/ai4all.sqlite3
+  python nearline/run_etl.py --source-db /path/to/source_snapshot.sqlite3
 """
 
 import argparse
@@ -18,7 +18,11 @@ from nearline.analytics.warehouse import etl  # noqa: E402
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="nearline ETL：增量刷新 dim_/fct_")
-    parser.add_argument("--source-db", default=None, help="覆盖操作库路径（默认 data/ai4all.sqlite3）")
+    parser.add_argument(
+        "--source-db",
+        default=None,
+        help="覆盖 PG 导出的 SQLite 源快照（默认 nearline/data/source_snapshot.sqlite3）",
+    )
     args = parser.parse_args(argv)
     stats = etl.refresh_all(args.source_db)
     print(f"[etl] {stats}")

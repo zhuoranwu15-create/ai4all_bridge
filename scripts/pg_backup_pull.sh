@@ -40,7 +40,7 @@ print(f"DB_PASS={q(unquote(p.password or ''))}")
 PYEOF
 )"
 
-if [ -z "${DB_HOST:-}" ]; then log "解析 DATABASE_URL 失败(可能为空=SQLite模式)"; exit 3; fi
+if [ -z "${DB_HOST:-}" ]; then log "解析 PostgreSQL DATABASE_URL 失败"; exit 3; fi
 
 STAMP="$(date '+%Y%m%d_%H%M')"
 OUT="$BACKUP_DIR/ai4all_${STAMP}.dump"

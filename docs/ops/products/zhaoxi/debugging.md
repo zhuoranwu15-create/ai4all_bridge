@@ -316,8 +316,8 @@ curl -s "http://localhost:8180/debug/traces/<trace_id>" \
 # 上下文文件
 cat data/user_profiles/<account_id>/USER.md
 
-# 数据库消息
-sqlite3 data/ai4all.sqlite3 "SELECT content FROM messages ORDER BY id DESC LIMIT 5;"
+# 数据库消息（DATABASE_URL 从本机 .env 注入，不要把连接串贴进共享记录）
+psql "$DATABASE_URL" -c "SELECT content FROM messages ORDER BY id DESC LIMIT 5;"
 ```
 
 默认安全模式下，API 明文访问需要管理员通过 `/admin/plaintext-grants` 审批授权。开发机临时明文开关只用于测试数据；共享环境和真实用户问题仍按授权流程处理。
@@ -327,7 +327,7 @@ sqlite3 data/ai4all.sqlite3 "SELECT content FROM messages ORDER BY id DESC LIMIT
 ## 数据库直接查询
 
 ```bash
-sqlite3 data/ai4all.sqlite3 "SELECT id, display_name, status FROM accounts;"
-sqlite3 data/ai4all.sqlite3 "SELECT id, account_id, created_at FROM sessions ORDER BY id DESC LIMIT 10;"
-sqlite3 data/ai4all.sqlite3 "SELECT id, session_id, substr(content,1,80) FROM messages ORDER BY id DESC LIMIT 10;"
+psql "$DATABASE_URL" -c "SELECT id, display_name, status FROM accounts;"
+psql "$DATABASE_URL" -c "SELECT id, account_id, created_at FROM sessions ORDER BY id DESC LIMIT 10;"
+psql "$DATABASE_URL" -c "SELECT id, session_id, substr(content,1,80) FROM messages ORDER BY id DESC LIMIT 10;"
 ```

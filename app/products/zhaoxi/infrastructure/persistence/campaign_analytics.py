@@ -12,7 +12,7 @@
 因此相同 code/日期范围天然得到同一套聚合口径。
 
 所有查询均以 campaign_code 约束，只出聚合计数、不返回单账号明细。按天分桶统一用
-substr(col,1,10)（SQLite/PG 通用，列存北京墙钟裸串 'YYYY-MM-DD HH:MM:SS'）。
+substr(col,1,10)（列存北京墙钟裸串 'YYYY-MM-DD HH:MM:SS'）。
 """
 import logging
 from typing import Any, Dict, List, Optional

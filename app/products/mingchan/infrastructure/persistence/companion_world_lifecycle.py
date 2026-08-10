@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
@@ -38,13 +38,11 @@ _ALLOWED_TRANSITIONS = {
 
 @contextmanager
 def _lifecycle_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用外层事务；独立 SQLite 写使用 IMMEDIATE 保证读后写原子性。"""
+    """复用调用方事务，或建立独立 PostgreSQL 写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -123,7 +121,7 @@ def _lock_resident_scope(
     resident_id: str,
 ) -> Dict[str, Any]:
     """按 owner→world→resident 顺序锁定并验证 lifecycle 隔离锚。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     world = tx.execute(
         "SELECT id FROM universes "
         "WHERE id = ? AND owner_platform_user_id = ? AND app_id = ? "
@@ -302,7 +300,7 @@ def lock_resident_lifecycle_commit_scope(
     *, event_id: str, conn: Connection
 ) -> Optional[Dict[str, Any]]:
     """按 event→world→resident 顺序锁定 offline 提交锚并返回重校验快照。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     event_row = conn.execute(
         "SELECT * FROM resident_lifecycle_events WHERE id = ?" + suffix,
         (_clean_required(event_id, "event_id"),),

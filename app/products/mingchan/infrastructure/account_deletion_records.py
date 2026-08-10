@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import is_postgres
 from app.db._core import _new_id, _tx, connect
 
 DELETION_REASON_CODES = (
@@ -32,8 +31,6 @@ def record_deletion_execution(
     current = now.strftime("%Y-%m-%d %H:%M:%S")
     request_id = _new_id("adr")
     with connect() as conn:
-        if not is_postgres():
-            conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO account_deletion_requests(

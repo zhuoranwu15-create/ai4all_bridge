@@ -18,7 +18,6 @@ from app.bootstrap.product_registry import (
 from app.db import get_or_create_session
 from app.products.mingchan.tools.registry import MINGCHAN_TOOL_POLICY
 
-_ONBOARDING_COMPLETE = "complete"
 _PROFILE_FILENAMES = ("AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md")
 
 
@@ -36,12 +35,9 @@ class MingchanTurnServices:
 
     app_id = MINGCHAN_APP_ID
     tool_policy = MINGCHAN_TOOL_POLICY
-    onboarding_pending = "pending"
-    onboarding_step1_sent = "step1_sent"
-    onboarding_step2_sent = "step2_sent"
-    onboarding_step3_sent = "step3_sent"
-    onboarding_complete = _ONBOARDING_COMPLETE
-    onboarding_welcome_text = ""
+    # 居民人设在 World 确认阶段就已完成，聊天 turn 内没有引导流程。
+    # None 让 Runtime 整条短路，取代此前那组恒返回 False / raise 的桩实现。
+    onboarding = None
 
     def __init__(
         self,
@@ -103,36 +99,6 @@ class MingchanTurnServices:
             profile_path=None,
         )
 
-    def is_onboarding_active(self, state: str) -> bool:
-        """居民人设已在 World 确认阶段完成，不进入朝夕聊天 onboarding。"""
-
-        return False
-
-    def get_onboarding_state(self, account_id: str) -> str:
-        """鸣蝉居民 turn 恒按已完成人设初始化处理。"""
-
-        del account_id
-        return self.onboarding_complete
-
-    def start_onboarding(self, account_id: str) -> None:
-        """防止未来渠道能力误配后静默进入朝夕 onboarding。"""
-
-        raise RuntimeError(f"mingchan onboarding is not supported: {account_id}")
-
-    async def extract_onboarding_info(
-        self, *, user_text: str, current_state: str
-    ) -> dict:
-        """鸣蝉居民不使用 turn 内 onboarding 提取。"""
-
-        raise RuntimeError(f"mingchan onboarding is not supported: {current_state}")
-
-    def apply_onboarding_info(
-        self, *, account_id: str, extracted: dict, current_state: str
-    ) -> dict:
-        """鸣蝉居民不允许 turn 内改写人设。"""
-
-        raise RuntimeError(f"mingchan onboarding is not supported: {account_id}")
-
     def load_prompt_context(
         self,
         *,
@@ -180,18 +146,6 @@ class MingchanTurnServices:
             agent_self_state=None,
             onboarding_context="",
         )
-
-    def advance_onboarding(
-        self,
-        *,
-        account_id: str,
-        current_state: str,
-        extracted: Optional[dict],
-        session_turn_count: int,
-    ) -> Optional[str]:
-        """鸣蝉居民没有 turn 内 onboarding 状态机。"""
-
-        raise RuntimeError(f"mingchan onboarding is not supported: {account_id}")
 
     def after_turn_hooks(self) -> Tuple[Tuple[str, AfterTurnHook], ...]:
         """当前居民 turn 不复用朝夕记忆或关系 hook。"""

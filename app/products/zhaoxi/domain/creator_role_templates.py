@@ -152,7 +152,7 @@ class CreatorRoleTemplate:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "CreatorRoleTemplate":
-        """从 SQLite/PG 兼容行构造领域 DTO。"""
+        """从 repository row 构造领域 DTO。"""
         return cls(
             id=row["id"],
             app_id=row["app_id"],
@@ -197,7 +197,7 @@ class CreatorRoleTemplateVersion:
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "CreatorRoleTemplateVersion":
-        """从 SQLite/PG 兼容行构造版本 DTO。"""
+        """从 repository row 构造版本 DTO。"""
         return cls(
             id=row["id"],
             creator_role_template_id=row["creator_role_template_id"],

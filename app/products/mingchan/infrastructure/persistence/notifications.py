@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
@@ -31,13 +31,11 @@ __all__ = [
 
 @contextmanager
 def _notification_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用调用方事务或建立通知写事务；SQLite 用 IMMEDIATE 保证读后写原子性。"""
+    """复用调用方事务，或建立独立 PostgreSQL 通知写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -68,7 +66,7 @@ def get_app_notification_for_owner(
 
 def _lock_notification_owner(tx: Connection, platform_user_id: str) -> None:
     """按全局锁序锁定真人；不存在时拒绝继续写入。"""
-    lock_suffix = " FOR UPDATE" if is_postgres() else ""
+    lock_suffix = " FOR UPDATE"
     owner = tx.execute(
         "SELECT id FROM platform_users WHERE id = ?" + lock_suffix,
         (platform_user_id,),
@@ -408,7 +406,7 @@ def mark_app_notification_read(
             """
             UPDATE app_notifications
             SET read_at = ?, expires_at = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ?
               AND delivery_status = 'visible'
               AND expires_at > ? AND read_at IS NULL
@@ -442,7 +440,7 @@ def mark_all_app_notifications_read(
             """
             UPDATE app_notifications
             SET read_at = ?, expires_at = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE platform_user_id = ? AND app_id = ? AND delivery_status = 'visible'
               AND expires_at > ? AND read_at IS NULL
             """,
@@ -461,7 +459,7 @@ def cleanup_app_notifications_batch(
     ).strftime("%Y-%m-%d %H:%M:%S")
     cancelled = 0
     deleted = 0
-    lock_suffix = " FOR UPDATE SKIP LOCKED" if is_postgres() else ""
+    lock_suffix = " FOR UPDATE SKIP LOCKED"
     with _notification_write_tx(None) as tx:
         rows = tx.execute(
             """
@@ -480,7 +478,7 @@ def cleanup_app_notifications_batch(
                 UPDATE app_notifications
                 SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                     terminal_reason = 'claim_expired', claim_token = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE app_id = ? AND delivery_status = 'reserved' AND claim_expires_at <= ?
                   AND id IN ({placeholders})
                 """,
@@ -561,8 +559,8 @@ def reserve_human_app_notification(
 ) -> Tuple[Optional[Dict[str, Any]], bool]:
     """为真人级 App-only 触达原子预留隐藏通知，返回 ``(row, acquired)``。
 
-    PG 先锁 platform user，再检查滚动 24 小时 visible 与未过期 reservation；因此同一
-    真人的多个 resident/due worker 不会各自占一条。SQLite 只提供等价功能回退。
+    先锁 platform user，再检查滚动 24 小时 visible 与未过期 reservation；因此同一
+    真人的多个 resident/due worker 不会各自占一条。
     同幂等键同 fingerprint 返回原行，异 fingerprint fail-closed。
     """
     if not str(idempotency_key or "").strip():
@@ -579,7 +577,7 @@ def reserve_human_app_notification(
     except ValueError as err:
         raise ValueError("now must be Beijing naive database time") from err
     with _notification_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE"
         owner = tx.execute(
             "SELECT id FROM platform_users WHERE id = ?" + lock_suffix,
             (platform_user_id,),
@@ -604,7 +602,7 @@ def reserve_human_app_notification(
             UPDATE app_notifications
             SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                 terminal_reason = 'claim_expired', claim_token = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE platform_user_id = ? AND app_id = ? AND scope = 'human'
               AND delivery_status = 'reserved' AND claim_expires_at <= ?
             """,
@@ -650,7 +648,7 @@ def reserve_human_app_notification(
                     SET delivery_status = 'reserved', metadata_json = ?,
                         claim_token = ?, claim_expires_at = ?, cancelled_at = NULL,
                         terminal_reason = NULL, expires_at = NULL,
-                        updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                        updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                     WHERE id = ? AND platform_user_id = ? AND app_id = ?
                       AND delivery_status = 'cancelled'
                     """,
@@ -787,7 +785,7 @@ def cancel_human_app_notification(
             UPDATE app_notifications
             SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                 terminal_reason = ?, claim_token = NULL, claim_expires_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ? AND scope = 'human'
               AND delivery_status = 'reserved' AND claim_token = ?
             """,
@@ -866,7 +864,7 @@ def finalize_human_app_notification(
             )
         else:
             # 只锁 resident，避免 JOIN 查询顺带锁 universe/conversation 打乱全局锁序。
-            lock_suffix = " FOR UPDATE OF r" if is_postgres() else ""
+            lock_suffix = " FOR UPDATE OF r"
             row = tx.execute(
                 """
                 SELECT r.id AS resident_id, r.runtime_account_id,
@@ -899,7 +897,7 @@ def finalize_human_app_notification(
                 SET delivery_status = 'cancelled', cancelled_at = ?, expires_at = ?,
                     terminal_reason = 'speaker_unavailable', claim_token = NULL,
                     claim_expires_at = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND platform_user_id = ? AND app_id = ?
                   AND delivery_status = 'reserved'
                   AND claim_token = ?
@@ -931,7 +929,7 @@ def finalize_human_app_notification(
                 target_type = ?, target_id = ?, delivered_at = ?, expires_at = ?,
                 claim_token = NULL, claim_expires_at = NULL, cancelled_at = NULL,
                 terminal_reason = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND app_id = ? AND universe_id = ?
               AND scope = 'human' AND delivery_status = 'reserved'
               AND claim_token = ? AND claim_expires_at > ?

@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Dict
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import is_postgres
 from app.db._core import _tx, connect
 
 QUIET_LEVELS = ("standard", "quiet")
@@ -36,8 +35,6 @@ def set_notification_preferences(
         raise ValueError("invalid quiet_level")
     current = now.strftime("%Y-%m-%d %H:%M:%S")
     with connect() as conn:
-        if not is_postgres():
-            conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO product_notification_preferences(

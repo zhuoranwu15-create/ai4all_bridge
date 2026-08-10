@@ -262,7 +262,7 @@ Phase 2(按需,Q2 已决定本次提前落 app_id 列):
 - **收敛**:同 `(user, 'zhaoxi')` 二次建号被唯一索引拒 + 清晰错;`get_first_active` `>1` 告警路径;m0022/m0023 幂等(SQLite + PG 双跑);`web_create_agent` 已删(404)。
 - **channel 改名**:m0024 后全表无 `'app'` 残留;`app_api` 端到端一轮(建 session→发消息→回包)。
 - **人设**:App 组装 prompt 的 L1/L2/L3 **不含"微信"**、自称 **"朝夕"**;**微信 prompt 逐字节快照与改前一致**(原则一硬验收线)。
-- **回归**:`make test-fast` 全量 + 聚焦 `test_turn_service` / `prompt_builder`;触及 schema/billing 故建议提交前 `make test` + `make test-pg`。
+- **回归**：`make test-fast` + 聚焦 `test_turn_service` / `prompt_builder`；触及 schema/billing 时提交前运行 `make test`。
 
 ### 9.5 上线顺序与回滚
 

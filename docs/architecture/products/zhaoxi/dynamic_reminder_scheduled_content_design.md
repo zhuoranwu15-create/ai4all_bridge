@@ -225,7 +225,7 @@ DYNAMIC_REMINDER_FORCE_FIRST_TOOL=web_search  # 首轮强制工具
   - 重复扫描不重复搜索/发送；`touch_stale` 跳过且不搜索、提醒仍推进；
   - 搜索失败不发、进重试；
   - `fixed` 提醒回归不变。
-- 触及共享 schema/调度/工具/出站策略：先跑聚焦测试，再 `make test`（PG 侧 `make test-pg`）。
+- 触及共享 schema/调度/工具/出站策略：先跑聚焦测试，再运行 PG-only 的 `make test`。
 
 ---
 

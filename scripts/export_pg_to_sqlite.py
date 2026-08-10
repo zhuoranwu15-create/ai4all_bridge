@@ -6,8 +6,7 @@
 把 nearline 需要的少数几张操作表从 PG 导成一份新 SQLite，再让 run_daily 经
 `NEARLINE_SOURCE_DB` 指向该快照。nearline 全部 SQLite 方言代码因此零改动。
 
-只读 PG、只写目标 SQLite；原子落盘（先写 .tmp 再 rename）。仅在 PG 模式有意义；
-SQLite 模式下 nearline 本就读活库，运行本脚本会快速失败提醒。
+只读 PG、只写 nearline 目标 SQLite；原子落盘（先写 .tmp 再 rename）。
 
 用法：
   .venv/bin/python scripts/export_pg_to_sqlite.py --dest nearline/data/source_snapshot.sqlite3
@@ -26,7 +25,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import settings  # noqa: E402
-from app.db._backend import is_postgres  # noqa: E402
 
 # nearline 经 source 连接读取的操作库表（与 nearline/analytics/* 的 FROM/JOIN 对齐）。
 # 新增被 nearline 读取的操作表时，必须同步加进这里，否则日报读不到该表。
@@ -120,8 +118,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     database_url = args.database_url or settings.database_url
     if not (database_url or "").lower().startswith(("postgres://", "postgresql://")):
-        print("DATABASE_URL 非 PostgreSQL：无需导出，nearline 应直接读 SQLite 操作库。",
-              file=sys.stderr)
+        print("必须提供 PostgreSQL DATABASE_URL 才能生成 nearline SQLite 快照。", file=sys.stderr)
         return 2
 
     dest_path = Path(args.dest)

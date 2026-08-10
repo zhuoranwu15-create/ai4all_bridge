@@ -8,7 +8,7 @@ M1-0 前置门：M1-1 迁移把 `entitlement_wallets` 唯一键从 `account_id` 
 不写任何数据、不改 .env、不调 init_db（避免误跑迁移）。
 
 背景见 ADR D-14（docs/architecture/products/mingchan/companion_world_3_0_refactor_design.md §D-14）。
-本地 SQLite 只有 2 个 user，不代表生产——**发布判定必须在生产 PG 上跑**。
+发布判定必须在目标 PostgreSQL 上运行。
 
 阻断发布条件（任一 total>0 即 BLOCK，禁止执行 M1-1 迁移，须先人工修数）：
   1. ambiguous_owner   —— 单个 account 有 >1 条 active owner binding，归属歧义，
@@ -26,7 +26,7 @@ WARN（不自动阻断，但须人工过目）：负余额钱包、非 PG 运行
     .venv/bin/python scripts/precheck_wallet_migration.py \
         --pg "postgresql://ai4all:***@localhost:5432/ai4all"
 
-    # 不传 --pg 则用当前 .env 的 DATABASE_URL（留空=本地 SQLite，仅供冒烟）
+    # 不传 --pg 则使用当前 .env 的 PostgreSQL DATABASE_URL
     .venv/bin/python scripts/precheck_wallet_migration.py
 """
 import argparse
@@ -170,7 +170,6 @@ class CheckResult:
 @dataclass
 class PrecheckReport:
     """整个预检的结构化结果（可单测；main() 只负责打印与退出码）。"""
-    is_postgres: bool
     active_wallets: int
     distinct_owners: int
     multi_wallet_users: List[Dict[str, Any]]
@@ -201,8 +200,6 @@ def run_precheck(conn, *, sample_limit: int = 50) -> PrecheckReport:
 
     conn 由调用方用 `app.db._core.connect()` 提供（生产为 PG）。本函数不写任何数据。
     """
-    from app.db import _core
-
     totals = conn.execute(_SQL_TOTALS).fetchone()
     _, multi_wallet = _count_and_sample(
         conn, _SQL_MULTI_WALLET_USERS,
@@ -223,7 +220,6 @@ def run_precheck(conn, *, sample_limit: int = 50) -> PrecheckReport:
         )
 
     return PrecheckReport(
-        is_postgres=_core.is_postgres(),
         active_wallets=int(totals["active_wallets"]),
         distinct_owners=int(totals["distinct_owners"]),
         multi_wallet_users=multi_wallet,
@@ -234,9 +230,7 @@ def run_precheck(conn, *, sample_limit: int = 50) -> PrecheckReport:
 
 def _print_report(report: PrecheckReport) -> None:
     print("=== 后端 ===")
-    print(f"  is_postgres = {report.is_postgres}")
-    if not report.is_postgres:
-        print("  [WARN] 非 PG 运行：结果不作发布依据（本地 SQLite 仅供冒烟）")
+    print("  postgresql")
 
     print("=== 盘点 ===")
     print(f"  active 钱包总数 = {report.active_wallets}")
@@ -275,6 +269,7 @@ def main() -> int:
     from app.db import _core
 
     with _core.connect() as conn:
+        conn.execute("SET TRANSACTION READ ONLY")
         report = run_precheck(conn, sample_limit=args.sample_limit)
 
     _print_report(report)

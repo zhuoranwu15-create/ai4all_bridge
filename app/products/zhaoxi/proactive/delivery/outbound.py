@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from app.bootstrap.product_registry import ZHAOXI_APP_ID
 from app.platform.channels import get_channel_capability
 from app.config import settings
 from app.time_utils import beijing_naive_now, beijing_now
@@ -134,6 +135,7 @@ def enqueue_proactive_text(
     if decision.allowed:
         sync_decision = check_sync_guard(
             account_id=account_id,
+            app_id=ZHAOXI_APP_ID,
             text=text,
             direction="outbound",
             content_kind="text",
@@ -176,6 +178,7 @@ def enqueue_proactive_text(
             try:
                 blocked_task = create_sync_block_task(
                     account_id=account_id,
+                    app_id=ZHAOXI_APP_ID,
                     session_id=None,
                     source_type="outbound_message",
                     source_id=str(outbound["id"]),
@@ -230,7 +233,7 @@ def enqueue_proactive_text(
     )
     if outbound["status"] == "pending":
         try:
-            enqueue_outbound_for_moderation(outbound_message=outbound)
+            enqueue_outbound_for_moderation(outbound_message=outbound, app_id=ZHAOXI_APP_ID)
         except Exception as err:
             logger.exception(
                 "proactive moderation enqueue failed account=%s outbound_id=%s error=%s",

@@ -1,6 +1,6 @@
 # 数据持有情况说明
 
-> 版本：2026-06-11 · 维护：运维/合规
+> 版本：2026-08-10 · 维护：运维/合规
 > 用途：盘点 AI4ALL 微信 Bot 系统当前实际持有的用户/个人数据——存什么、存哪里、保留多久、是否加密。
 > 加密现状统一为「明文 / 待评估」，落地加密方案后续单独讨论，不在本次范围。
 
@@ -11,9 +11,10 @@ OpenClaw 侧仅负责微信通道与 raw payload，先前排查未发现 IP 等�
 
 ## 1. 后端业务数据库
 
-- 位置：`data/ai4all.sqlite3`（标准库，SQLite）。
+- 位置：中心 PostgreSQL（连接由各节点本机 `DATABASE_URL` 配置；凭证不得写入文档或日志）。
 - 保留期：**永久**。代码中不存在针对 `messages`、daily notes、`debug_traces` 等任何业务表的滚动清理/过期删除任务；数据写入后长期保留。
-- 备份：`scripts/backup_data.py` 滚动保留最近 **14 份**目录（`backup_retention_count`），更旧的自动删除。
+- 备份：`scripts/backup_data.py` 以 `pg_dump -Fc` 生成 `db.dump`，并滚动保留最近 **14 份**目录
+  （`backup_retention_count`）；另有异机冷备与 PostgreSQL 流复制。
 - 加密：明文 / 待评估。
 
 | 数据类别 | 主要表 | 是否含个人信息 | 说明 |
@@ -29,11 +30,12 @@ OpenClaw 侧仅负责微信通道与 raw payload，先前排查未发现 IP 等�
 | 后台与审计 | `admin_users`、`admin_access_events`、`admin_plaintext_grants` | 是（管理员操作、明文查看授权记录） | |
 | FAQ | `faq_messages`、`faq_message_likes` | 低 | |
 
-> 解绑硬删除：`wipe_account_data()`（`app/db.py`）按 `account_id` 删除上述子表 + 提交后清理画像目录。新增账号/会话子表必须同步加入，否则触发 FK 失败整事务回滚（历史踩坑）。
+> 解绑硬删除：账号清理服务按 `account_id` 删除上述子表，并在事务提交后清理画像副本。新增账号/会话
+> 子表必须同步加入清理清单；任何未按 `account_id` 约束的清理都是 bug。
 
 ## 2. 账号级画像文件
 
-- 位置：`data/user_profiles/<account_id>/`。
+- 权威数据：PostgreSQL `account_profile_files`；`data/user_profiles/<account_id>/` 是存量/运行期兼容副本。
 - 内容：`SOUL.md`、`IDENTITY.md`、`USER.md`、`MEMORY.md`，以及 `memory/YYYY-MM-DD.md`（按业务日的原始文字化聊天材料 / daily notes）。
 - 个人信息：是（用户画像、长期记忆、原始聊天材料）。
 - 保留期：**永久**（随账号存在；解绑硬删除时连目录一并清理）。

@@ -2,7 +2,7 @@
 
 把 SOUL/IDENTITY/USER/MEMORY/legacy user_profile.md 以及 memory/YYYY-MM-DD.md daily notes
 的内容收敛进 account_profile_files 表，作为唯一真相（不再裸文件 I/O），供多节点直连共享读取。
-表两后端通用（SQLite/PG 经 _backend 垫片）；account_id 严格隔离——所有读写删都以 account_id 约束。
+表由 PostgreSQL 主库统一存储；account_id 严格隔离——所有读写删都以 account_id 约束。
 
 filename 是账号 profile 目录内的相对路径（如 "SOUL.md"、"memory/2026-06-20.md"），等价于一个
 按账号隔离的极简文件系统。system 级文件（AGENTS.md / TOOLS.md，在 settings.system_dir）不在本层
@@ -110,7 +110,7 @@ def list_filenames(
                 "SELECT filename FROM account_profile_files WHERE account_id = ? ORDER BY filename",
                 (account_id,),
             ).fetchall()
-    # SQLite/PG 的默认 collation 对大小写排序不同，统一在应用层冻结跨后端顺序。
+    # 在应用层冻结大小写排序，避免结果依赖数据库 collation 配置。
     return sorted(str(row["filename"]) for row in rows)
 
 

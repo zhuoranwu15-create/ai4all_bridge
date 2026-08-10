@@ -6,23 +6,20 @@
     .venv/bin/python scripts/diagnose_content_invitations.py
     .venv/bin/python scripts/diagnose_content_invitations.py --account aid_806382741
     .venv/bin/python scripts/diagnose_content_invitations.py --json
-    .venv/bin/python scripts/diagnose_content_invitations.py --run-generation
 
 输出：每个账号的生成前置检查结果、今日聊天摘要，以及调度层策略评估。
-加 --run-generation 时会调用 LLM，但只写入 /tmp 下的临时数据库和 JSON 结果文件，
-不会写入标准数据库。
+脚本默认只读当前 PostgreSQL。``--run-generation`` 写探测必须显式传入隔离的
+``--probe-database-url``，不会触碰应用当前数据库。
 """
 
 import argparse
-from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Allow running from repo root or scripts/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -30,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.config import settings
     from app.db import (
+        close_pg_pool,
         connect,
         get_account,
         get_active_content_invitation,
@@ -64,6 +62,24 @@ def _fmt(dt: datetime) -> str:
     return dt.replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _switch_to_probe_database(url: Optional[str], *, requires_isolation: bool) -> Optional[str]:
+    """Switch this process to an explicitly supplied isolated PostgreSQL URL."""
+
+    if not url:
+        if requires_isolation:
+            raise ValueError("write probes require --probe-database-url pointing to an isolated PostgreSQL database")
+        return None
+    cleaned = str(url).strip()
+    if not cleaned.startswith(("postgresql://", "postgres://")):
+        raise ValueError("--probe-database-url must be a PostgreSQL connection URL")
+    current = str(getattr(settings, "database_url", "") or "").strip()
+    if current and cleaned == current:
+        raise ValueError("probe database must differ from the configured application database")
+    close_pg_pool()
+    settings.database_url = cleaned
+    return current
+
+
 def _compact_invitation(invitation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not invitation:
         return None
@@ -85,33 +101,6 @@ def _compact_invitation(invitation: Optional[Dict[str, Any]]) -> Optional[Dict[s
         "scheduled_at": invitation.get("scheduled_at"),
         "expires_at": invitation.get("expires_at"),
     }
-
-
-@contextmanager
-def temporary_database_copy() -> Iterator[str]:
-    """Point repository DB helpers at a copied SQLite file for write-safe dry-runs."""
-    original_path = str(getattr(settings, "database_path", "data/ai4all.sqlite3"))
-    source = Path(original_path)
-    if not source.is_absolute():
-        source = Path.cwd() / source
-    if not source.exists():
-        raise FileNotFoundError(f"database not found: {source}")
-
-    with tempfile.TemporaryDirectory(prefix="ai4all_content_invitation_") as tmp_dir:
-        temp_path = Path(tmp_dir) / source.name
-        src_conn = sqlite3.connect(str(source))
-        dst_conn = sqlite3.connect(str(temp_path))
-        try:
-            src_conn.backup(dst_conn)
-        finally:
-            dst_conn.close()
-            src_conn.close()
-
-        settings.database_path = str(temp_path)
-        try:
-            yield str(temp_path)
-        finally:
-            settings.database_path = original_path
 
 
 def _select_route(account_id: str) -> Optional[Dict[str, Any]]:
@@ -562,7 +551,7 @@ def write_result_file(results: List[Dict[str, Any]], *, output: Optional[str] = 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": _fmt(datetime.now()),
-        "database_path": str(getattr(settings, "database_path", "")),
+        "database": "postgresql",
         "results": results,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -598,7 +587,19 @@ def main() -> None:
         "--output",
         help="--run-generation 的 JSON 结果文件路径；默认写入 /tmp",
     )
+    parser.add_argument(
+        "--probe-database-url",
+        help="隔离 PostgreSQL 数据库 URL；generation/bootstrap 写探测必须显式提供",
+    )
     args = parser.parse_args()
+    requires_isolation = args.run_generation or args.bootstrap_state
+    try:
+        previous_database_url = _switch_to_probe_database(
+            args.probe_database_url,
+            requires_isolation=requires_isolation,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     now = datetime.now()
 
@@ -619,11 +620,8 @@ def main() -> None:
                         account_id=account_id,
                         now=now,
                         sample_limit=args.sample_limit,
-                        bootstrap_state=(
-                            args.run_generation
-                            and (args.bootstrap_state or not args.strict_state)
-                        ),
-                        run_generation=args.run_generation,
+                        bootstrap_state=False,
+                        run_generation=False,
                         require_today_chat_for_generation=not args.include_no_today_chat,
                     )
                 )
@@ -641,20 +639,17 @@ def main() -> None:
                 })
         return items
 
-    if args.run_generation:
-        with temporary_database_copy() as temp_db_path:
-            results = collect_results()
-            result_file = write_result_file(results, output=args.output)
-            for item in results:
-                item["temporary_database_path"] = temp_db_path
-    else:
-        results = collect_results()
+    results = collect_results()
 
     if args.as_json:
         payload = {"result_file": result_file, "results": results}
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         _print_table(results, result_file=result_file)
+
+    if previous_database_url is not None:
+        close_pg_pool()
+        settings.database_url = previous_database_url
 
 
 if __name__ == "__main__":

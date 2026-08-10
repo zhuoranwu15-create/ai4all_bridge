@@ -11,7 +11,11 @@ def test_resident_resolves_via_world_and_has_no_binding(fresh_db):
     u = db.create_or_get_platform_user_by_phone(phone="13800099001", display_name="P")
     uid = u["id"]
     # 形态 A：用户账号（微信 / Web onboarding 入口），发 owner_binding。
-    a1 = db.create_ai4all_account_for_user(platform_user_id=uid, display_name="用户账号")["account"]["id"]
+    a1 = db.create_ai4all_account_for_user(
+        platform_user_id=uid,
+        display_name="用户账号",
+        app_id="zhaoxi",
+    )["account"]["id"]
     # 形态 B：真人世界里的居民 runtime account（内部路径）。
     uni = db.get_or_create_home_universe(platform_user_id=uid)
     tmpl = db.create_character_template(source_type="official", name="居民甲")

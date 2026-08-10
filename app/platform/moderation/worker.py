@@ -12,6 +12,10 @@ from app.platform.moderation.persistence import (
 )
 from app.platform.moderation import image_review, llm_review
 from app.platform.moderation.models import MachineReviewResult, max_risk_level
+from app.platform.moderation.product_policy import (
+    ModerationProductPolicy,
+    resolve_moderation_policy,
+)
 from app.platform.moderation.sensitive_words import check_text_rules
 
 logger = logging.getLogger("ai4all.moderation.worker")
@@ -47,21 +51,42 @@ def _insert_result(task: Dict[str, Any], result: MachineReviewResult) -> None:
     )
 
 
-def _rule_result_recorded(task_id: str) -> bool:
-    """Return True if a deterministic rule result is already stored for the task."""
+def _machine_result_from_record(record: Dict[str, Any]) -> MachineReviewResult:
+    """Restore a normalized machine result from its persistence representation."""
 
-    return any(
-        str(result.get("reviewer_type") or "") == "rule"
-        for result in list_content_moderation_results(task_id=task_id)
+    return MachineReviewResult(
+        reviewer_type=str(record.get("reviewer_type") or ""),
+        engine=str(record.get("engine") or ""),
+        engine_version=str(record.get("engine_version") or ""),
+        level=str(record.get("result_level") or "pass"),
+        categories=list(record.get("categories") or []),
+        confidence=record.get("confidence"),
+        matched_terms=list(record.get("matched_terms") or []),
+        reason=str(record.get("reason") or ""),
+        raw_result=dict(record.get("raw_result") or {}),
+        latency_ms=record.get("latency_ms"),
+        error=record.get("error"),
     )
 
 
-def _result_from_rule(task: Dict[str, Any]) -> MachineReviewResult:
+def _stored_rule_result(task_id: str) -> Optional[MachineReviewResult]:
+    """Return the rule snapshot recorded when the task was enqueued, if present."""
+
+    for record in list_content_moderation_results(task_id=task_id):
+        if str(record.get("reviewer_type") or "") == "rule":
+            return _machine_result_from_record(record)
+    return None
+
+
+def _result_from_rule(
+    task: Dict[str, Any], policy: ModerationProductPolicy
+) -> MachineReviewResult:
     rule = check_text_rules(
         account_id=str(task["account_id"]),
         text=task.get("snapshot_text") or "",
         direction=str(task.get("direction") or ""),
         content_kind=str(task.get("content_kind") or ""),
+        terms_path=policy.sensitive_terms_path,
     )
     return MachineReviewResult(
         reviewer_type="rule",
@@ -122,22 +147,46 @@ def _selected_for_llm(task: Dict[str, Any]) -> bool:
 def process_task(task: Dict[str, Any]) -> Dict[str, Any]:
     """Process one claimed moderation task and update its machine status."""
 
-    results: List[MachineReviewResult] = []
-    # 规则结果通常在 enqueue 时已写入 content_moderation_results；这里重算用于聚合 final_level，
-    # 仅当该 task 还没有 rule 结果时才落库，避免重复行，同时保证 worker 始终留有一条规则结果。
-    rule_result = _result_from_rule(task)
-    results.append(rule_result)
-    if not _rule_result_recorded(str(task["id"])):
-        _insert_result(task, rule_result)
+    policy = resolve_moderation_policy(str(task.get("app_id") or ""))
+    if not policy.enabled:
+        _system_result(
+            task=task,
+            level="pass",
+            reason="machine review skipped because product moderation is disabled",
+        )
+        updated = update_content_moderation_task_machine_status(
+            task_id=str(task["id"]),
+            status="machine_passed",
+            risk_level="pass",
+            risk_categories=[],
+            confidence=None,
+            last_error=None,
+            completed=True,
+            clear_claim=True,
+        )
+        return {
+            "task_id": task["id"],
+            "status": "machine_passed",
+            "risk_level": "pass",
+            "task": updated,
+        }
 
-    image_result = image_review.review_image_task(task)
+    results: List[MachineReviewResult] = []
+    # enqueue 时的规则结果属于审核快照，worker 必须复用；历史任务缺失时才按产品策略补算。
+    rule_result = _stored_rule_result(str(task["id"]))
+    if rule_result is None:
+        rule_result = _result_from_rule(task, policy)
+        _insert_result(task, rule_result)
+    results.append(rule_result)
+
+    image_result = image_review.review_image_task(task) if policy.aliyun_image_enabled else None
     if image_result is not None:
         results.append(image_result)
         _insert_result(task, image_result)
         if image_result.error:
             raise MachineReviewAttemptError(image_result.error)
 
-    if _selected_for_llm(task):
+    if policy.llm_enabled and _selected_for_llm(task):
         llm_result = llm_review.review_text_with_llm(
             account_id=str(task["account_id"]),
             text=str(task.get("snapshot_text") or ""),

@@ -5,25 +5,22 @@
 
     .venv/bin/python scripts/diagnose_reactivation.py
     .venv/bin/python scripts/diagnose_reactivation.py --account aid_806382741
-    .venv/bin/python scripts/diagnose_reactivation.py --run-planning --dispatch-dry-run
     .venv/bin/python scripts/diagnose_reactivation.py --json --output /tmp/reactivation.json
 
-默认只读标准数据库。加 --run-planning 或 --dispatch-dry-run 时会复制 SQLite 到 /tmp，
-所有候选写入、延后、清理都只发生在临时数据库；不会真实发送消息。
+脚本默认只读当前 PostgreSQL。planning/dispatch 写探测必须显式传入隔离的
+``--probe-database-url``，不会触碰应用当前数据库。
 """
 
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
-import sqlite3
 import sys
 import tempfile
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Allow running from repo root or scripts/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -31,6 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from app.config import settings
     from app.db import (
+        close_pg_pool,
         connect,
         get_account,
         get_proactive_account_state,
@@ -69,33 +67,6 @@ def _truncate_text(value: str, limit: int = 160) -> str:
     return text[: max(0, limit - 1)] + "…"
 
 
-@contextmanager
-def temporary_database_copy() -> Iterator[str]:
-    """Point repository DB helpers at a copied SQLite file for write-safe diagnosis."""
-    original_path = str(getattr(settings, "database_path", "data/ai4all.sqlite3"))
-    source = Path(original_path)
-    if not source.is_absolute():
-        source = Path.cwd() / source
-    if not source.exists():
-        raise FileNotFoundError(f"database not found: {source}")
-
-    with tempfile.TemporaryDirectory(prefix="ai4all_reactivation_") as tmp_dir:
-        temp_path = Path(tmp_dir) / source.name
-        src_conn = sqlite3.connect(str(source))
-        dst_conn = sqlite3.connect(str(temp_path))
-        try:
-            src_conn.backup(dst_conn)
-        finally:
-            dst_conn.close()
-            src_conn.close()
-
-        settings.database_path = str(temp_path)
-        try:
-            yield str(temp_path)
-        finally:
-            settings.database_path = original_path
-
-
 def parse_now(value: Optional[str]) -> datetime:
     """Parse --now for reproducible diagnostics."""
     if not value:
@@ -107,6 +78,24 @@ def parse_now(value: Optional[str]) -> datetime:
         except ValueError:
             continue
     raise ValueError("--now must look like '2026-06-05 12:15:00'")
+
+
+def _switch_to_probe_database(url: Optional[str], *, requires_isolation: bool) -> Optional[str]:
+    """Switch this process to an explicitly supplied isolated PostgreSQL URL."""
+
+    if not url:
+        if requires_isolation:
+            raise ValueError("write probes require --probe-database-url pointing to an isolated PostgreSQL database")
+        return None
+    cleaned = str(url).strip()
+    if not cleaned.startswith(("postgresql://", "postgres://")):
+        raise ValueError("--probe-database-url must be a PostgreSQL connection URL")
+    current = str(getattr(settings, "database_url", "") or "").strip()
+    if current and cleaned == current:
+        raise ValueError("probe database must differ from the configured application database")
+    close_pg_pool()
+    settings.database_url = cleaned
+    return current
 
 
 def recent_chat_summary(
@@ -421,7 +410,7 @@ def write_result_file(results: List[Dict[str, Any]], *, output: Optional[str] = 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "generated_at": _fmt(datetime.now()),
-        "database_path": str(getattr(settings, "database_path", "")),
+        "database": "postgresql",
         "results": results,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -551,13 +540,24 @@ def main() -> None:
         help="即使账号最近 72 小时没有聊天记录，也执行 planning 探测",
     )
     parser.add_argument("--output", help="JSON 结果文件路径；默认写入 /tmp")
+    parser.add_argument(
+        "--probe-database-url",
+        help="隔离 PostgreSQL 数据库 URL；planning/dispatch/bootstrap 写探测必须显式提供",
+    )
     args = parser.parse_args()
+    requires_isolation = args.run_planning or args.dispatch_dry_run or args.bootstrap_state
+    try:
+        previous_database_url = _switch_to_probe_database(
+            args.probe_database_url,
+            requires_isolation=requires_isolation,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     now = parse_now(args.now)
     accounts = [{"id": args.account}] if args.account else [
         account for account in list_accounts() if account.get("status") == "active"
     ]
-    needs_temp_db = args.run_planning or args.dispatch_dry_run
     result_file = None
 
     def collect_results() -> List[Dict[str, Any]]:
@@ -570,15 +570,9 @@ def main() -> None:
                         account_id=account_id,
                         now=now,
                         sample_limit=args.sample_limit,
-                        bootstrap_state=(
-                            needs_temp_db
-                            and (
-                                args.bootstrap_state
-                                or (args.run_planning and not args.strict_state)
-                            )
-                        ),
-                        run_planning=args.run_planning,
-                        dispatch_dry_run=args.dispatch_dry_run,
+                        bootstrap_state=False,
+                        run_planning=False,
+                        dispatch_dry_run=False,
                         include_no_recent_chat=args.include_no_recent_chat,
                         use_llm_dedupe=args.llm_dedupe,
                     )
@@ -599,21 +593,18 @@ def main() -> None:
                 )
         return results
 
-    if needs_temp_db:
-        with temporary_database_copy() as temp_db_path:
-            results = collect_results()
-            result_file = write_result_file(results, output=args.output)
-            for item in results:
-                item["temporary_database_path"] = temp_db_path
-    else:
-        results = collect_results()
-        if args.output:
-            result_file = write_result_file(results, output=args.output)
+    results = collect_results()
+    if args.output:
+        result_file = write_result_file(results, output=args.output)
 
     if args.as_json:
         print(json.dumps({"result_file": result_file, "results": results}, ensure_ascii=False, indent=2))
     else:
         _print_table(results, result_file=result_file)
+
+    if previous_database_url is not None:
+        close_pg_pool()
+        settings.database_url = previous_database_url
 
 
 if __name__ == "__main__":

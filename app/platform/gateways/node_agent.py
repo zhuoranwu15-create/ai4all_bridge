@@ -1,6 +1,6 @@
 """瘦接入节点 agent(node-only 远程机,如 aliyun2)。
 
-职责三件,**全程不碰 SQLite**(设计 §7.2):
+职责三件，**全程不直接访问数据库**（设计 §7.2）：
 - **登录 exec 端点**:被中心 `node_gateway` push,内部调本机 `openclaw_gateway` 跑 openclaw。
 - **出站 pull 循环**:轮询中心 `/node/outbound/claim` 领自己归属的待发主动消息,本机发送后
   回报 `/node/outbound/{id}/result`(claim/标记都在中心,设计附录 B)。

@@ -105,31 +105,3 @@ def test_bootstrap_proactive_state_only_for_existing_account(fresh_db):
     assert state is not None
     assert state["enabled"] is True
     assert state["metadata"]["bootstrap_source"] == "diagnose_content_invitations"
-
-
-def test_temporary_database_copy_isolates_invitation_writes(fresh_db):
-    from app.db import create_content_invitation, list_content_invitations_for_account
-    from scripts.diagnose_content_invitations import temporary_database_copy
-
-    _create_account("acc-temp-db")
-    original_path = fresh_db.database_path
-
-    with patch("scripts.diagnose_content_invitations.settings", fresh_db):
-        with temporary_database_copy() as temp_path:
-            assert temp_path != original_path
-            create_content_invitation(
-                account_id="acc-temp-db",
-                topic="AI 产品",
-                invitation_text="我看到几条 AI 产品相关标题，要不要发你看看？",
-                title_items=[
-                    {"title": "标题一", "source_name": "source", "url": "https://example.com/1"},
-                    {"title": "标题二", "source_name": "source", "url": "https://example.com/2"},
-                    {"title": "标题三", "source_name": "source", "url": "https://example.com/3"},
-                ],
-                scheduled_at="2026-06-04 10:00:00",
-                expires_at="2026-06-05 10:00:00",
-            )
-            assert len(list_content_invitations_for_account(account_id="acc-temp-db")) == 1
-
-    assert fresh_db.database_path == original_path
-    assert list_content_invitations_for_account(account_id="acc-temp-db") == []

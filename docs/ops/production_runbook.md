@@ -3,8 +3,8 @@
 更新时间：2026-07-31
 
 适用范围：当前 aliyun1 `central,node` + aliyun2 厚 `node` 生产环境，包括 FastAPI Backend、
-中心 PostgreSQL、OpenClaw Gateway、node agent 与 central-only scheduler。本地 SQLite 操作不属于
-本文的生产恢复路径。
+中心 PostgreSQL、OpenClaw Gateway、node agent 与 central-only scheduler。主应用在开发、测试和
+生产均只使用 PostgreSQL；nearline/TDAI 自有 SQLite 不属于本文的业务库恢复路径。
 
 ## 基础信息
 
@@ -13,7 +13,7 @@
 - Health monitor timer：`ai4all-monitor-health.timer`
 - Backend 本机地址：`http://127.0.0.1:8180`
 - 生产数据库：aliyun1 中心 PostgreSQL；aliyun2 通过内网直连同一 PG
-- 开发/测试默认数据库：`data/ai4all.sqlite3`（不是生产退路）
+- 开发数据库：本地 PostgreSQL 16（默认 `localhost:55432`）；pytest 使用临时 PostgreSQL
 - Admin 状态页：`/ui/ops.html`
 
 不要在日志、文档或飞书群中粘贴用户聊天正文、完整 webhook、API key、验证码或 Authorization header。
@@ -163,7 +163,7 @@ sudo logrotate -d /etc/logrotate.d/nginx; echo "exit=$?"
 
 ## 备份与恢复
 
-生产备份统一使用仓库脚本，它会在 PG 模式执行 `pg_dump -Fc`、`pg_restore --list` 完整性检查，
+生产备份统一使用仓库脚本，它会执行 `pg_dump -Fc`、`pg_restore --list` 完整性检查，
 并归档 system context、存量 profile 视图和加密权限受限的 `.env` 副本：
 
 ```bash
@@ -175,8 +175,8 @@ sudo logrotate -d /etc/logrotate.d/nginx; echo "exit=$?"
 故障切换步骤见 [PG 备份与切换跟踪](pg_backup_failover_tracking.md)。
 
 生产恢复前必须先停止所有写入面，而不只是 aliyun1 的两个进程；至少包括 aliyun1/aliyun2
-backend 和 central-only schedulers。恢复目标必须是 PostgreSQL。`scripts/restore_data.py` 当前只支持
-SQLite 开发档，禁止用于生产 PG 恢复。
+backend 和 central-only schedulers。恢复目标必须是 PostgreSQL，使用经演练的 `pg_restore` 或
+主备切换流程；仓库不提供主应用 SQLite 恢复入口。
 
 完成 `pg_restore`/主备切换并核对 schema、关键表计数和账本后，再按角色恢复服务并验证：
 

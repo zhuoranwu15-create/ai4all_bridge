@@ -148,27 +148,3 @@ def test_dispatch_dry_run_does_not_create_outbound_rows(fresh_db):
     assert result["text"] == "昨晚小家伙睡得乖不乖？"
     assert result["created_outbound_rows"] == 0
     assert list_outbound_messages(account_id="acc-react-dispatch-diag") == []
-
-
-def test_temporary_database_copy_isolates_candidate_writes(fresh_db):
-    from app.products.zhaoxi.proactive.store.candidates import get_reactivation_candidate, upsert_reactivation_candidate
-    from scripts.diagnose_reactivation import temporary_database_copy
-
-    _create_account("acc-react-temp")
-    original_path = fresh_db.database_path
-
-    with patch("scripts.diagnose_reactivation.settings", fresh_db):
-        with temporary_database_copy() as temp_path:
-            assert temp_path != original_path
-            upsert_reactivation_candidate(
-                account_id="acc-react-temp",
-                candidate={
-                    "id": "react-temp-1",
-                    "type": "topic_followup",
-                    "text": "昨天的事后来怎么样了？",
-                },
-            )
-            assert get_reactivation_candidate(account_id="acc-react-temp")["id"] == "react-temp-1"
-
-    assert fresh_db.database_path == original_path
-    assert get_reactivation_candidate(account_id="acc-react-temp") is None

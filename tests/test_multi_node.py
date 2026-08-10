@@ -38,14 +38,29 @@ def test_migration_adds_node_columns_table_index_idempotent(fresh_db):
 
     init_db()  # 二次调用应幂等(加列/建表不报错)
     with connect() as conn:
-        out_cols = {r["name"] for r in conn.execute("PRAGMA table_info(outbound_messages)")}
-        acc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(accounts)")}
-        tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        idxs = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        out_cols = {
+            row["column_name"]
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'outbound_messages'"
+            ).fetchall()
+        }
+        acc_cols = {
+            row["column_name"]
+            for row in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'accounts'"
+            ).fetchall()
+        }
+        access_nodes = conn.execute("SELECT to_regclass('public.access_nodes')").fetchone()[0]
+        dispatch_index = conn.execute(
+            "SELECT 1 FROM pg_indexes WHERE schemaname = 'public' "
+            "AND indexname = 'ix_outbound_messages_node_dispatch'"
+        ).fetchone()
     assert {"node_id", "claimed_at"} <= out_cols
     assert "assigned_node_id" in acc_cols
-    assert "access_nodes" in tables
-    assert "ix_outbound_messages_node_dispatch" in idxs
+    assert access_nodes == "access_nodes"
+    assert dispatch_index is not None
 
 
 # ===== claim_pending_outbound_by_node =====

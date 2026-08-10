@@ -10,13 +10,12 @@ docs/archive/deliveries/companion_world/companion_world_p1_backend_spec.md §2 �
 """
 import json
 import re
-import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, IntegrityError, is_postgres
+from app.db._backend import Connection, IntegrityError
 from app.db._core import (
     APP_ACTIVE_SESSION_KEY,
     _new_id,
@@ -97,10 +96,6 @@ __all__ = [
     "fail_companion_world_outbox",
 ]
 
-_SQLITE_CONVERSATION_LOCKS: Dict[str, threading.Lock] = {}
-_SQLITE_CONVERSATION_LOCKS_GUARD = threading.Lock()
-
-
 def _require_mingchan_app_id(app_id: str) -> None:
     """拒绝把鸣蝉 persistence 当成跨产品查询或写入入口。"""
 
@@ -171,9 +166,9 @@ def lock_universe(
     expected_app_id: str = MINGCHAN_APP_ID,
     conn: Connection,
 ) -> Optional[Dict[str, Any]]:
-    """在调用方事务内读取并锁住 world 行；PG 用 ``FOR UPDATE``，SQLite 验功能语义。"""
+    """在调用方事务内读取并锁住 world 行。"""
     _require_mingchan_app_id(expected_app_id)
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = conn.execute(
         "SELECT * FROM universes WHERE id = ? AND app_id = ?" + suffix,
         (universe_id, expected_app_id),
@@ -190,7 +185,7 @@ def set_universe_onboarding_state(
             """
             UPDATE universes
             SET onboarding_state = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND app_id = ?
             """,
             (onboarding_state, universe_id, MINGCHAN_APP_ID),
@@ -503,7 +498,7 @@ def consume_resident_draft(
             SET status = 'consumed',
                 client_request_id = ?,
                 resident_id = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND platform_user_id = ? AND status = 'open'
             """,
             (client_request_id, resident_id, draft_id, platform_user_id),
@@ -657,8 +652,8 @@ def activate_candidate_resident(
             """
             UPDATE universe_residents
             SET runtime_account_id = ?, status = 'active',
-                joined_at = COALESCE(joined_at, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                joined_at = COALESCE(joined_at, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND universe_id = ?
               AND status = 'candidate' AND runtime_account_id IS NULL
             """,
@@ -691,7 +686,7 @@ def dismiss_unselected_candidate_residents(
             f"""
             UPDATE universe_residents
             SET status = 'dismissed',
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE universe_id = ? AND status = 'candidate' AND origin <> 'legacy'
               {keep_clause}
             """,
@@ -830,8 +825,8 @@ def insert_resident_welcome_message(
 
     必须在调用方事务内执行：建号、激活、建会话与这条消息要么一起成功要么一起回滚，绝不
     出现「有居民但没有开场白」的中间态。所以这里**不能**调
-    ``get_or_create_account_active_session``——它自己 ``connect()`` 开新连接，SQLite 下与
-    外层写事务互锁、PG 下看不到尚未提交的 account 行。
+    ``get_or_create_account_active_session``——它自己 ``connect()`` 开新连接，看不到外层
+    事务中尚未提交的 account 行。
 
     改为就地 upsert ``__app_active__`` session：其余字段留空，等真实一轮对话用
     ``COALESCE`` 补齐；``business_day`` 留 NULL 也不会被判成跨业务日而触发会话轮转。
@@ -848,7 +843,7 @@ def insert_resident_welcome_message(
     conn.execute(
         """
         INSERT INTO sessions(account_id, session_key, metadata_json, updated_at)
-        VALUES (?, ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+        VALUES (?, ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         ON CONFLICT(account_id, session_key) DO NOTHING
         """,
         (
@@ -1076,25 +1071,15 @@ def try_conversation_transaction_lock(
 ) -> Iterator[bool]:
     """在调用方事务内非阻塞获取 conversation 锁。
 
-    PG 锁随 ``conn`` 的事务提交/回滚释放；SQLite 复用 turn 的进程锁，供 M4
-    offline 组合事务与既有 turn 在同一 ``conv:`` 边界上串行。
+    锁随 ``conn`` 的事务提交/回滚释放，供 M4 offline 组合事务与既有 turn
+    在同一 ``conv:`` 边界上串行。
     """
     key = str(conversation_id)
-    if is_postgres():
-        row = conn.execute(
-            "SELECT pg_try_advisory_xact_lock(?) AS acquired",
-            (advisory_lock_key("conv:" + key),),
-        ).fetchone()
-        yield bool(row and row["acquired"])
-        return
-    with _SQLITE_CONVERSATION_LOCKS_GUARD:
-        lock = _SQLITE_CONVERSATION_LOCKS.setdefault(key, threading.Lock())
-    acquired = lock.acquire(blocking=False)
-    try:
-        yield acquired
-    finally:
-        if acquired:
-            lock.release()
+    row = conn.execute(
+        "SELECT pg_try_advisory_xact_lock(?) AS acquired",
+        (advisory_lock_key("conv:" + key),),
+    ).fetchone()
+    yield bool(row and row["acquired"])
 
 
 @contextmanager
@@ -1339,7 +1324,7 @@ def select_human_app_speaker(
             result = dict(row)
             if not lock_resident:
                 return result
-            lock_suffix = " FOR UPDATE" if is_postgres() else ""
+            lock_suffix = " FOR UPDATE"
             locked = tx.execute(
                 "SELECT id, status, runtime_account_id FROM universe_residents "
                 "WHERE id = ? AND universe_id = ?" + lock_suffix,
@@ -1524,13 +1509,12 @@ def compact_universe_facts(
     merged_fact_ids: List[str] = []
     superseded_count = 0
     with _tx(conn) as tx:
-        if is_postgres():
-            # 正常部署由 central scheduler 保证单 writer；同键事务锁额外兜住
-            # admin run-once 与定时任务偶发重叠，避免生成两条 active merged 行。
-            tx.execute(
-                "SELECT pg_advisory_xact_lock(?)",
-                (advisory_lock_key("l3-compact:" + str(universe_id)),),
-            )
+        # 正常部署由 central scheduler 保证单 writer；同键事务锁额外兜住
+        # admin run-once 与定时任务偶发重叠，避免生成两条 active merged 行。
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (advisory_lock_key("l3-compact:" + str(universe_id)),),
+        )
         rows = tx.execute(
             """
             SELECT * FROM universe_memory_facts
@@ -1600,13 +1584,11 @@ def compact_universe_facts(
 # ---------------------------------------------------------------------------
 @contextmanager
 def _m3_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用调用方事务或建立 M3 写事务；SQLite 用 IMMEDIATE 串行化读后写。"""
+    """复用调用方事务，或建立独立 PostgreSQL M3 写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -1695,7 +1677,7 @@ def claim_ai_feed_slot(
             UPDATE universe_posts
             SET claimed_at = ?, claim_token = ?, next_attempt_at = NULL,
                 attempt_count = attempt_count + 1,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'generating'
               AND slot_window_end_at > ?
               AND (claim_token IS NULL OR claimed_at <= ?)
@@ -2233,7 +2215,7 @@ def retire_feed_post_with_outbox(
                 """
                 UPDATE universe_posts
                 SET status = 'deleted', terminal_reason = ?, deleted_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND universe_id = ? AND status = 'published'
                 """,
                 (reason_code, deleted_at, post_id, current_row["universe_id"]),
@@ -2310,7 +2292,7 @@ def publish_ai_feed_post_with_outbox(
         payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
     )
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE"
         row = tx.execute(
             """
             SELECT p.*, r.status AS author_status
@@ -2336,7 +2318,7 @@ def publish_ai_feed_post_with_outbox(
                 """
                 UPDATE universe_posts
                 SET text = ?, status = 'published', published_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (clean_text, published_at, post_id, claim_token),
@@ -2400,7 +2382,7 @@ def claim_companion_world_outbox(
     with _m3_write_tx(conn) as tx:
         # 只锁 outbox 行；若连同 universe 一起锁，同一 World 的多条事件会被
         # 第一个 worker 的根行锁全部挡住，破坏 SKIP LOCKED 分片。
-        lock_suffix = " FOR UPDATE OF o SKIP LOCKED" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE OF o SKIP LOCKED"
         stale_clause = ""
         select_params: List[Any] = [now]
         if stale_before is not None:
@@ -2433,7 +2415,7 @@ def claim_companion_world_outbox(
             UPDATE companion_world_outbox
             SET status = 'processing', attempts = attempts + 1,
                 claimed_at = ?, claim_token = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id IN ({placeholders})
               AND (status = 'pending'{update_stale_clause})
             """,
@@ -2648,7 +2630,7 @@ def defer_ai_feed_post(
                 UPDATE universe_posts
                 SET status = 'skipped', terminal_reason = 'retry_exhausted',
                     claim_token = NULL, next_attempt_at = NULL,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (post_id, claim_token),
@@ -2658,7 +2640,7 @@ def defer_ai_feed_post(
                 """
                 UPDATE universe_posts
                 SET claimed_at = NULL, claim_token = NULL, next_attempt_at = ?,
-                    updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                    updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
                 WHERE id = ? AND status = 'generating' AND claim_token = ?
                 """,
                 (next_attempt_at, post_id, claim_token),
@@ -2688,7 +2670,7 @@ def skip_ai_feed_post(
             UPDATE universe_posts
             SET status = 'skipped', terminal_reason = ?, claim_token = NULL,
                 next_attempt_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'generating' {token_clause}
             """,
             tuple(params),
@@ -2705,7 +2687,7 @@ def close_expired_ai_feed_slots(
     """关闭已越过 slot window 的 generating 行；绝不跨窗口补发。"""
     clean_limit = max(1, min(int(limit), 1000))
     with _m3_write_tx(conn) as tx:
-        lock_suffix = " FOR UPDATE OF p SKIP LOCKED" if is_postgres() else ""
+        lock_suffix = " FOR UPDATE OF p SKIP LOCKED"
         rows = tx.execute(
             """
             SELECT p.id FROM universe_posts p
@@ -2728,7 +2710,7 @@ def close_expired_ai_feed_slots(
             UPDATE universe_posts
             SET status = 'skipped', terminal_reason = 'window_closed',
                 claim_token = NULL, next_attempt_at = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE status = 'generating' AND id IN ({placeholders})
             """,
             tuple(ids),
@@ -2750,7 +2732,7 @@ def complete_companion_world_outbox(
             UPDATE companion_world_outbox
             SET status = 'delivered', delivered_at = ?, claim_token = NULL,
                 last_error = NULL,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'processing' AND claim_token = ?
             """,
             (delivered_at, outbox_id, claim_token),
@@ -2778,7 +2760,7 @@ def fail_companion_world_outbox(
             SET status = CASE WHEN attempts >= ? THEN 'dead' ELSE 'pending' END,
                 available_at = ?, claim_token = NULL, claimed_at = NULL,
                 last_error = ?,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ? AND status = 'processing' AND claim_token = ?
             """,
             (

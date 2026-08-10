@@ -2,8 +2,7 @@
 
 预检是 D-14 钱包上迁的 money 路径发布闸，自身必须可信：干净多钱包用户应 PASS，
 四条阻断条件（ambiguous_owner / orphan_wallet / owner_drift / primary_undefined）
-各自注入后应 BLOCK。生产真值在 PG（本地 SQLite 仅 2 user）；此处只验查询与判定逻辑
-的正确性，走内存 SQLite（fresh_db）。
+各自注入后应 BLOCK。此处在 fresh_db 提供的隔离 PostgreSQL 中验证查询与判定逻辑。
 """
 import app.db as db
 from app.db._core import NEW_USER_GRANT_SHELL_MICROS
@@ -28,6 +27,7 @@ def _make_user_with_accounts(phone: str, n: int) -> tuple:
     uid = user["id"]
     account_ids = [
         db.create_ai4all_account_for_user(
+            app_id="zhaoxi",
             platform_user_id=uid, display_name="居民0"
         )["account"]["id"]
     ]
@@ -39,14 +39,16 @@ def _make_user_with_accounts(phone: str, n: int) -> tuple:
                 conn.execute(
                     "INSERT INTO accounts(id, channel, display_name, app_id, updated_at) "
                     "VALUES (?, 'openclaw-weixin', ?, 'zhaoxi', "
-                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+                    "'YYYY-MM-DD HH24:MI:SS'))",
                     (acc, f"居民{i}"),
                 )
                 conn.execute(
                     "INSERT INTO account_owner_bindings("
                     "platform_user_id, account_id, binding_method, status, app_id, updated_at) "
                     "VALUES (?, ?, 'legacy', 'active', 'zhaoxi', "
-                    "strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))",
+                    "to_char((now() AT TIME ZONE 'Asia/Shanghai'), "
+                    "'YYYY-MM-DD HH24:MI:SS'))",
                     (uid, acc),
                 )
                 account_ids.append(acc)
@@ -74,7 +76,7 @@ def _seed_extra_active_wallet(conn, *, account_id, platform_user_id, with_grant=
             id, account_id, platform_user_id, balance_shell_micros, status, updated_at
         )
         VALUES (?, ?, ?, 0, 'active',
-                strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
         """,
         (wallet_id, account_id, platform_user_id),
     )
@@ -138,7 +140,7 @@ def test_precheck_detects_ambiguous_owner(fresh_db):
             INSERT INTO account_owner_bindings(
                 platform_user_id, account_id, binding_method, status, updated_at
             ) VALUES (?, ?, 'test', 'active',
-                      strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                      to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (other["id"], accounts[0]),
         )

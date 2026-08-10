@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
@@ -41,13 +41,11 @@ _STORAGE_TRANSITION_TARGETS = {"read", "deferred", "declined", "expired"}
 
 @contextmanager
 def _letter_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用外层事务；独立 SQLite 写使用 IMMEDIATE 串行读后写。"""
+    """复用调用方事务，或建立独立 PostgreSQL 写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -81,7 +79,7 @@ def _lock_world_for_owner(
     tx: Connection, *, universe_id: str, owner_platform_user_id: str
 ) -> None:
     """按 owner→world 锚锁定 confirmed home world。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = tx.execute(
         "SELECT id FROM universes WHERE id = ? AND owner_platform_user_id = ? "
         "AND app_id = ? AND status = 'active' AND onboarding_state = 'confirmed'"
@@ -341,7 +339,7 @@ def prepare_character_letter_delivery(
     conn: Connection,
 ) -> Dict[str, Any]:
     """锁定 world、过期旧信并重算投递资格，返回确定性 catalog 候选。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     world = conn.execute(
         "SELECT * FROM universes WHERE id = ? AND app_id = ?" + suffix,
         (_clean_required(universe_id, "universe_id"), MINGCHAN_APP_ID),
@@ -389,7 +387,7 @@ def prepare_character_letter_delivery(
             "status": "blocked_cooldown",
             "last_delivered_at": str(last_row["delivered_at"]),
         }
-    catalog_lock = " FOR UPDATE OF c" if is_postgres() else ""
+    catalog_lock = " FOR UPDATE OF c"
     catalog = conn.execute(
         """
         SELECT c.*
@@ -566,7 +564,7 @@ def lock_character_letter_accept_scope(
     conn: Connection,
 ) -> Optional[Dict[str, Any]]:
     """按 ``world → letter/catalog/template`` 顺序锁定一次 owner accept 的事实快照。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     world = conn.execute(
         "SELECT * FROM universes WHERE owner_platform_user_id = ? AND app_id = ? "
         "AND status = 'active' AND onboarding_state = 'confirmed'" + suffix,
@@ -574,7 +572,7 @@ def lock_character_letter_accept_scope(
     ).fetchone()
     if world is None:
         return None
-    row_lock = " FOR UPDATE OF l, c, t" if is_postgres() else ""
+    row_lock = " FOR UPDATE OF l, c, t"
     row = conn.execute(
         """
         SELECT l.*,
@@ -775,7 +773,7 @@ def transition_open_character_letter(
         raise ValueError("terminal_reason is required")
 
     with _letter_write_tx(conn) as tx:
-        suffix = " FOR UPDATE" if is_postgres() else ""
+        suffix = " FOR UPDATE"
         current = tx.execute(
             "SELECT * FROM character_letters "
             "WHERE id = ? AND owner_platform_user_id = ?" + suffix,

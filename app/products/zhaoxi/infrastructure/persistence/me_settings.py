@@ -14,7 +14,6 @@ import json
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.db._backend import is_postgres
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
@@ -63,8 +62,6 @@ def record_deletion_execution(
     current = _db_time(now)
     request_id = _new_id("adr")
     with connect() as conn:
-        if not is_postgres():
-            conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO account_deletion_requests(
@@ -129,8 +126,6 @@ def set_notification_preferences(
         raise ValueError("invalid quiet_level")
     current = _db_time(now)
     with connect() as conn:
-        if not is_postgres():
-            conn.execute("BEGIN IMMEDIATE")
         cursor = conn.execute(
             """
             UPDATE app_notification_preferences

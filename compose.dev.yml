@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ai4all
+      POSTGRES_PASSWORD: ai4all-local
+      POSTGRES_DB: ai4all_dev
+    ports:
+      - "127.0.0.1:${LOCAL_PG_PORT:-55432}:5432"
+    volumes:
+      - ai4all-postgres-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai4all -d ai4all_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  ai4all-postgres-dev:

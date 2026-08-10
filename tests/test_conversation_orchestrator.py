@@ -17,6 +17,7 @@ def _create_completed_binding(*, phone: str, channel_account_id: str) -> dict:
 
     user = create_or_get_platform_user_by_phone(phone=phone)
     account_bundle = get_or_create_default_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"],
         display_name="Test Account",
     )
@@ -141,5 +142,4 @@ def test_normal_chat_does_not_load_daily_notes_into_prompt(client):
     system_prompt = mock_generate.call_args.kwargs["system_prompt"]
     assert "【今日备注】" not in system_prompt
     assert "daily notes should not be loaded" not in system_prompt
-
 

@@ -728,15 +728,9 @@ location = /user/creator-role-templates.html {
   tests/test_db_campaign.py \
   tests/test_db_campaign_analytics.py -q
 
-AI4ALL_TEST_DB=postgres .venv/bin/pytest \
-  tests/test_creator_role_templates.py \
-  tests/test_web_creator_role_template_links.py \
-  tests/test_web_onboarding.py \
-  tests/test_db_campaign.py \
-  tests/test_db_campaign_analytics.py -q
 ```
 
-改动触及 schema、注册、referral、prompt/tool 和账号 wipe，合并前还必须执行完整 SQLite 与 PG 回归。
+改动触及 schema、注册、referral、prompt/tool 和账号 wipe，合并前还必须执行完整 PG 回归。
 
 ## 13. 实施切分与发布
 
@@ -744,7 +738,7 @@ AI4ALL_TEST_DB=postgres .venv/bin/pytest \
 
 - migration 59/60、code namespace、slot/版本/review/summary review/attribution/event persistence；
 - LLM reviewer 和纯 profile renderer；
-- 全部领域/双后端测试；feature flag 保持关闭。
+- 全部领域测试；feature flag 保持关闭。
 
 ### Phase B：注册与 Runtime（已完成）
 

@@ -9,7 +9,7 @@ fresh_db 建好时 m0023 已在空库上跑过（回填/合并 = no-op），故�
   - 唯一索引重建后，两号经公共 API 读到同一份共享计数、继续 increment 命中同一行；
   - 可重复执行（幂等）。
 
-走内存/临时 SQLite（fresh_db）。
+使用 fresh_db 提供的隔离 PostgreSQL。
 """
 import app.db as db
 from app.db._core import (
@@ -88,6 +88,7 @@ def test_m0023_orphan_no_binding_backfills_account_id(fresh_db):
     """
     user = db.create_or_get_platform_user_by_phone(phone="13800030003", display_name="孤儿迁移")
     acc = db.create_ai4all_account_for_user(
+        app_id="zhaoxi",
         platform_user_id=user["id"], display_name="孤儿"
     )["account"]["id"]
     with db.connect() as conn:

@@ -209,9 +209,9 @@ def create_tool_invocation(
                 created_at, finished_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')),
-                    CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE NULL END,
-                    strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                    CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END,
+                    to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 cleaned_account_id,
@@ -299,8 +299,8 @@ def update_tool_invocation(
                 result_json = COALESCE(?, result_json),
                 latency_ms = COALESCE(?, latency_ms),
                 error = ?,
-                finished_at = CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE finished_at END,
-                updated_at = strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))
+                finished_at = CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE finished_at END,
+                updated_at = to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
             WHERE id = ?
             """,
             (
@@ -378,8 +378,8 @@ def create_search_provider_run(
                 error, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?,
-                    CASE WHEN ? THEN strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')) ELSE NULL END,
-                    ?, ?, strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours')))
+                    CASE WHEN ? = 1 THEN to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') ELSE NULL END,
+                    ?, ?, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 tool_invocation_id,

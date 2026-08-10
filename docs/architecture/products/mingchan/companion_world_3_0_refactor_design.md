@@ -452,7 +452,7 @@ def create_resident_with_runtime(        # *
 
 **双后端与迁移**：SQLite 聚焦 + PG 真实事务均过；backfill 可重复运行、不重复建 world/resident/grant；关 P1 flag 可退回 legacy API/auth 入口但不删除 world 数据，L3 后台与 proactive safety 分别由独立开关控制。
 
-**PG 保真门禁（硬，2026-07-19；基础设施已就位）**：凡涉及**锁 / 事务 / 钱包扣款 / 容量 / 配额预占**的 3.0 新逻辑，**必须有 PG lane 测试**，**SQLite 档通过不作数**。理由：SQLite 无法复现 `FOR UPDATE`/advisory lock/真事务隔离语义（D-12）。**注（核对 2026-07-19）：PG lane 与阻塞式 CI 已存在**——`Makefile:31` `test-pg`、`.github/workflows/tests.yml:35` `pg-tests`（无 `continue-on-error`，push/PR 到 main 强制）。故 M0 **无需**「转阻塞式」动作，只需**为 M1/M2 新逻辑补 PG 用例**。SQLite 仅保留 dev/test 秒级反馈；它不是生产回滚通道。**是否彻底删除 SQLite 为独立清爽性任务、不阻断本重构**（后端分歧现仅 `_backend.py` 545 行 + `is_postgres()` 13 处，删除收益有限而代价是每日测试速度/本地零配置，条件成熟再单独评估）。
+**PG 保真门禁（硬，2026-07-19；2026-08-10 收敛为唯一主测试后端）**：凡涉及**锁 / 事务 / 钱包扣款 / 容量 / 配额预占**的 3.0 新逻辑，必须由 PostgreSQL 测试证明，因为 SQLite 无法复现 `FOR UPDATE`、advisory lock 和真实事务隔离语义（D-12）。当前 `make test` 与 CI 都固定使用 pytest-postgresql，并以预迁移模板加速；不再维护重复 SQLite 全量档。
 
 ---
 
