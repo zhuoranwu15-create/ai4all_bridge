@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from app.db._backend import Connection, IntegrityError, Row, is_postgres
+from app.db._backend import Connection, IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
@@ -1632,12 +1632,11 @@ def _first_rewardable_account_for_platform_user_in_conn(
 
 
 def _lock_referral_relationship_in_conn(conn: Connection, relationship_id: str) -> None:
-    """PG 上串行化同一邀请关系的计数、审核和发奖；SQLite 依赖单 writer。"""
-    if is_postgres():
-        conn.execute(
-            "SELECT pg_advisory_xact_lock(?)",
-            (advisory_lock_key("referral-reward:" + relationship_id),),
-        )
+    """串行化同一邀请关系的计数、审核和发奖。"""
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(?)",
+        (advisory_lock_key("referral-reward:" + relationship_id),),
+    )
 
 
 def _apply_referral_reward_in_conn(
@@ -2802,8 +2801,6 @@ def insert_resident_runtime_account(
     """
     from app.agent_runtime.persistence import profile_storage
 
-    if not is_postgres() and not conn.in_transaction:
-        raise RuntimeError("insert_resident_runtime_account requires an active transaction")
     cleaned_display_name = _clean_text(display_name)
     if not cleaned_display_name:
         raise ValueError("display_name is required")
@@ -2899,10 +2896,6 @@ def create_resident_runtime_account(
     from app.db import create_resident
 
     with connect() as conn:
-        # SQLite 的最外层 SAVEPOINT 在 RELEASE 时会提交；先显式开启外层事务，确保后续
-        # resident 插入失败可把 account/profile 一并回滚。PG 首条查询会自动开启事务。
-        if not is_postgres():
-            conn.execute("BEGIN IMMEDIATE")
         # 世界归属解析的锚：universe 必须存在（否则居民永远解析不到真人钱包）。
         universe = conn.execute(
             "SELECT owner_platform_user_id FROM universes WHERE id = ?", (universe_id,)

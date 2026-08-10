@@ -22,7 +22,6 @@ from app.db import (
     mark_human_conversation_read,
     mark_universe_visit_terminal,
 )
-from app.db._backend import is_postgres
 from app.db._core import connect
 from app.platform.media.moderation import media_moderation_ready
 from app.platform.media.persistence import mark_media_assets_referenced
@@ -53,8 +52,7 @@ def _db_time(value: datetime) -> str:
 
 
 def _write_begin(conn) -> None:
-    if not is_postgres():
-        conn.execute("BEGIN IMMEDIATE")
+    """Compatibility hook; psycopg starts the transaction on the first statement."""
 
 
 def _read_only_reason(row: Dict[str, Any], *, write_enabled: bool) -> Optional[str]:

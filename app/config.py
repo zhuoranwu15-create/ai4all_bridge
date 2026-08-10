@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     feishu_error_log_alert_min_interval_seconds: int = 300
     feishu_error_log_alert_timeout_seconds: float = 3.0
     feishu_error_log_alert_max_chars: int = 3500
+    # Transitional offline-tool setting only. The main runtime never opens this path;
+    # remaining script consumers are removed in the next cleanup phase.
     database_path: str = "data/ai4all.sqlite3"
     user_profiles_dir: str = "data/user_profiles"
     system_dir: str = "data/system"
@@ -143,8 +145,8 @@ class Settings(BaseSettings):
         False, "CHAT_STREAMING_ENABLED"
     )
 
-    # ===== 数据库后端（厚节点改造，见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
-    # 空(默认)=用 database_path 的 SQLite，行为逐字节不变；postgresql://user:pwd@host:5432/db = PG 后端。
+    # ===== 主应用 PostgreSQL（见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
+    # 主运行时必填；空值或非 PostgreSQL URL 会在首次连接（FastAPI startup）直接失败。
     database_url: str = ""
     db_pool_min_size: int = 1            # PG 连接池下限(仅 database_url 为 PG 时生效)
     db_pool_max_size: int = 8            # PG 连接池上限；Σ(各节点上限)+中心自身 ≤ PG max_connections

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._schema_utils import _ensure_column
 
 
@@ -1140,65 +1140,29 @@ def _migration_0063_companion_world_owner_product_unique(conn: Connection) -> No
     if duplicate is not None:
         raise RuntimeError("m0063 duplicate universe app/owner rows")
 
-    if is_postgres():
-        rows = conn.execute(
-            """
-            SELECT c.conname
-            FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            JOIN LATERAL (
-                SELECT array_agg(a.attname ORDER BY key_col.ordinality) AS columns
-                FROM unnest(c.conkey) WITH ORDINALITY AS key_col(attnum, ordinality)
-                JOIN pg_attribute a
-                  ON a.attrelid = t.oid AND a.attnum = key_col.attnum
-            ) names ON TRUE
-            WHERE n.nspname = current_schema()
-              AND t.relname = 'universes'
-              AND c.contype = 'u'
-              AND names.columns = ARRAY['owner_platform_user_id']::name[]
-            """
-        ).fetchall()
-        for row in rows:
-            name = str(row["conname"])
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                raise RuntimeError("unexpected universes unique constraint name")
-            conn.execute(f'ALTER TABLE universes DROP CONSTRAINT "{name}"')
-    else:
-        # executescript 会先结束 sqlite3 的隐式事务；foreign_keys=OFF 因而能生效。
-        # legacy_alter_table 防止 RENAME 把所有子表 FK 目标改成临时表名。
-        conn.executescript(
-            """
-            PRAGMA foreign_keys = OFF;
-            PRAGMA legacy_alter_table = ON;
-            ALTER TABLE universes RENAME TO universes_m0063_old;
-            CREATE TABLE universes (
-                id TEXT PRIMARY KEY,
-                owner_platform_user_id TEXT NOT NULL,
-                legacy_primary_account_id TEXT,
-                status TEXT NOT NULL DEFAULT 'active',
-                onboarding_state TEXT NOT NULL DEFAULT 'preparing',
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))),
-                app_id TEXT NOT NULL DEFAULT 'zhaoxi',
-                FOREIGN KEY(owner_platform_user_id) REFERENCES platform_users(id),
-                UNIQUE(app_id, owner_platform_user_id)
-            );
-            INSERT INTO universes(
-                id, owner_platform_user_id, legacy_primary_account_id, status,
-                onboarding_state, created_at, updated_at, app_id
-            )
-            SELECT id, owner_platform_user_id, legacy_primary_account_id, status,
-                   onboarding_state, created_at, updated_at, app_id
-            FROM universes_m0063_old;
-            DROP TABLE universes_m0063_old;
-            PRAGMA legacy_alter_table = OFF;
-            PRAGMA foreign_keys = ON;
-            """
-        )
-        violation = conn.execute("PRAGMA foreign_key_check").fetchone()
-        if violation is not None:
-            raise RuntimeError("m0063 SQLite foreign key check failed")
+    rows = conn.execute(
+        """
+        SELECT c.conname
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_namespace n ON n.oid = t.relnamespace
+        JOIN LATERAL (
+            SELECT array_agg(a.attname ORDER BY key_col.ordinality) AS columns
+            FROM unnest(c.conkey) WITH ORDINALITY AS key_col(attnum, ordinality)
+            JOIN pg_attribute a
+              ON a.attrelid = t.oid AND a.attnum = key_col.attnum
+        ) names ON TRUE
+        WHERE n.nspname = current_schema()
+          AND t.relname = 'universes'
+          AND c.contype = 'u'
+          AND names.columns = ARRAY['owner_platform_user_id']::name[]
+        """
+    ).fetchall()
+    for row in rows:
+        name = str(row["conname"])
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise RuntimeError("unexpected universes unique constraint name")
+        conn.execute(f'ALTER TABLE universes DROP CONSTRAINT "{name}"')
 
     conn.executescript(
         """

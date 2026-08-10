@@ -18,7 +18,6 @@ from app.db import (
     transition_resident_lifecycle_event,
     try_conversation_transaction_lock,
 )
-from app.db._backend import is_postgres
 from app.db._core import connect
 from app.products.mingchan.domain.companion_world.lifecycle import (
     LifecycleEvidenceRef,
@@ -528,8 +527,6 @@ def approve_lifecycle_event(
     now_text = _db_time(now)
     try:
         with connect() as tx:
-            if not is_postgres():
-                tx.execute("BEGIN IMMEDIATE")
             scope = lock_resident_lifecycle_commit_scope(event_id=event_id, conn=tx)
             if scope is None:
                 raise LifecycleCommitError("lifecycle_event_not_found")

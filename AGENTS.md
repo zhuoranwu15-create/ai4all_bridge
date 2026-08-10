@@ -42,14 +42,13 @@ make run
 （aliyun1 + aliyun2 厚节点）自 2026-06-21 起已全量切到 PG：aliyun1 本地 PG，aliyun2
 直连中心 PG。
 
-当前仍保留 `DATABASE_URL` 留空时的主应用 SQLite 兼容代码，后续阶段删除；主 pytest 已固定
-使用临时 PostgreSQL。nearline SQLite 分析库、PG→SQLite 快照和 TDAI 自身 SQLite 继续
-保留，不属于主应用后端清理范围。
+主应用运行时和主 pytest 均固定使用 PostgreSQL；`DATABASE_URL` 为空或不是 PostgreSQL
+连接串时，首次数据库连接会直接失败，不再回落或创建 SQLite 主库。nearline SQLite 分析库、
+PG→SQLite 快照和 TDAI 自身 SQLite 继续保留，不属于主应用后端清理范围。
 
 **「注释掉 `DATABASE_URL` 回落 SQLite」自 2026-07-26 起不再是生产退路**：切 PG 后一个多月的新数据不会同步回 `data/ai4all.sqlite3`，回落等于回到切换当天的快照。生产遇险走 PG 自身的备份/主备，不走后端回落。
 
-主应用 SQLite 从来不是生产退路；当前兼容路径仅服务迁移过程。下文 `app/db/*` 等描述在
-兼容路径删除前仍覆盖两后端。
+主应用 SQLite 不是生产退路。历史 SQLite→PG 导入工具只处理离线旧快照，不是运行时后端。
 
 ## 鉴权
 

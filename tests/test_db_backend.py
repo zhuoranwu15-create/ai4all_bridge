@@ -1,13 +1,10 @@
-"""app.db._backend 垫片层单测。
+"""app.db._backend PostgreSQL 兼容层单测。
 
 覆盖：
 - 占位符翻译器（纯函数，PG 路径的核心、最高复用风险点）。
-- 后端选择（database_url 空 → SQLite）。
-- SQLite 默认路径经垫片仍能正常连接、读写、提交/回滚，行为不变。
-
-PG 真实连接需 psycopg + 活动 PG 实例，本机不具备，故 PG 部分仅测纯逻辑（翻译器）。
+- SQLite 风格 SQL 到 PostgreSQL 的临时方言翻译。
+- 主应用拒绝空 URL 和 SQLite URL，不存在本地文件回落。
 """
-import sqlite3
 import types
 
 import pytest
@@ -263,19 +260,22 @@ def test_split_sql_statements_strips_comments_and_splits():
 
 
 # ---------------------------------------------------------------------------
-# 后端选择
+# PostgreSQL-only 配置门禁
 # ---------------------------------------------------------------------------
 
 def _fake_settings(**kw):
     s = types.SimpleNamespace()
-    s.database_path = kw.get("database_path", "data/ai4all.sqlite3")
     s.database_url = kw.get("database_url", "")
     return s
 
 
-def test_is_postgres_false_by_default(monkeypatch):
-    monkeypatch.setattr(_backend, "_settings", lambda: _fake_settings())
-    assert _backend.is_postgres() is False
+@pytest.mark.parametrize("url", ["", "sqlite:///data/ai4all.sqlite3", "mysql://u:p@h/db"])
+def test_database_url_rejects_non_postgres_configuration(monkeypatch, url):
+    monkeypatch.setattr(
+        _backend, "_settings", lambda: _fake_settings(database_url=url)
+    )
+    with pytest.raises(RuntimeError, match="requires PostgreSQL DATABASE_URL"):
+        _backend.database_url()
 
 
 @pytest.mark.parametrize(
@@ -286,69 +286,12 @@ def test_is_postgres_false_by_default(monkeypatch):
         "POSTGRESQL://u@h/db",
     ],
 )
-def test_is_postgres_true_for_pg_urls(monkeypatch, url):
+def test_database_url_accepts_postgres_urls(monkeypatch, url):
     monkeypatch.setattr(_backend, "_settings", lambda: _fake_settings(database_url=url))
-    assert _backend.is_postgres() is True
+    assert _backend.database_url() == url
 
 
-# ---------------------------------------------------------------------------
-# SQLite 默认路径经垫片端到端
-# ---------------------------------------------------------------------------
-
-def test_sqlite_connect_raw_roundtrip(monkeypatch, tmp_path):
-    db = tmp_path / "t.sqlite3"
-    monkeypatch.setattr(
-        _backend, "_settings", lambda: _fake_settings(database_path=str(db))
-    )
-    # _connect_sqlite 经 _core._db_path 解析路径，需把 _core 的 settings 也指向同一处
-    from app.db import _core
-
-    monkeypatch.setattr(_core, "_settings", lambda: _fake_settings(database_path=str(db)))
-
-    conn = _backend.connect_raw()
-    try:
-        assert isinstance(conn, sqlite3.Connection)
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)")
-        conn.execute("INSERT INTO t (name) VALUES (?)", ("hello",))
-        row = conn.execute("SELECT name FROM t WHERE id = ?", (1,)).fetchone()
-        # row_factory=Row：dict 与 index 双访问
-        assert row["name"] == "hello"
-        assert row[0] == "hello"
-        # PRAGMA foreign_keys 已开启
-        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-    finally:
-        conn.close()
-
-
-def test_connect_contextmanager_commits_and_rolls_back(monkeypatch, tmp_path):
-    db = tmp_path / "t.sqlite3"
-    fake = lambda: _fake_settings(database_path=str(db))
-    from app.db import _core
-
-    monkeypatch.setattr(_backend, "_settings", fake)
-    monkeypatch.setattr(_core, "_settings", fake)
-
-    # 成功路径提交
-    with _core.connect() as conn:
-        conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
-        conn.execute("INSERT INTO t (v) VALUES (?)", ("a",))
-    with _core.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
-
-    # 异常路径回滚
-    with pytest.raises(RuntimeError):
-        with _core.connect() as conn:
-            conn.execute("INSERT INTO t (v) VALUES (?)", ("b",))
-            raise RuntimeError("boom")
-    with _core.connect() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
-
-
-def test_integrity_error_alias_includes_sqlite():
-    assert sqlite3.IntegrityError in _backend.IntegrityError
-    # except 元组语义：能捕获 sqlite3.IntegrityError
-    try:
-        raise sqlite3.IntegrityError("x")
-    except _backend.IntegrityError:
-        caught = True
-    assert caught
+def test_connect_raw_has_no_sqlite_fallback(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(_backend, "_connect_postgres", lambda: sentinel)
+    assert _backend.connect_raw() is sentinel

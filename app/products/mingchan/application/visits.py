@@ -32,7 +32,7 @@ from app.db import (
     mark_universe_visit_active,
     mark_universe_visit_terminal,
 )
-from app.db._backend import IntegrityError, is_postgres
+from app.db._backend import IntegrityError
 from app.db._core import connect
 from app.products.mingchan.domain.companion_world.visits import VisitPolicy
 from app.time_utils import parse_db_timestamp
@@ -53,8 +53,7 @@ def _db_time(value: datetime) -> str:
 
 
 def _write_begin(conn) -> None:
-    if not is_postgres():
-        conn.execute("BEGIN IMMEDIATE")
+    """Compatibility hook; psycopg starts the transaction on the first statement."""
 
 
 def _code_hash(code: str) -> str:

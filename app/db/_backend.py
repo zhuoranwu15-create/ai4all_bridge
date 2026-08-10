@@ -1,53 +1,22 @@
-"""DB 后端中立垫片层（SQLite 默认 / PostgreSQL 厚节点改造）。
+"""PostgreSQL persistence adapter for the main AI4ALL application.
 
-目的：把 SQLite 与 PostgreSQL 的方言差异收敛到本文件，让上层 app/db/*.py 的
-`?` 占位符、`sqlite3.*` 引用无需逐处手改即可在两套后端运行。
-设计依据见 docs/architecture/shared/data/thick_node_postgres_refactor.md §4.2。
-
-后端由 settings.database_url 选择：
-- 空字符串（默认）→ SQLite。connect_raw() 直接返回原生 sqlite3 连接，
-  连接对象与改造前逐字节一致，**零行为变化**。
-- postgresql://… → PostgreSQL。惰性 import psycopg；游标自动把 `?`→`%s`、
-  转义字面量 `%`，Row 同时支持 row["col"] 与 row[0]。
-
-SQLite 路径**不依赖 psycopg**；psycopg 仅在选 PG 时 import，未安装也不影响
-SQLite 部署与测试。
+The main runtime is PostgreSQL-only.  This module temporarily retains the SQL
+translation and row-compatibility layer used by existing repositories; removing
+that compatibility debt is a separate PG-native cleanup phase.
 """
 import re
-import sqlite3
 import threading
-from pathlib import Path
-from typing import Any, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, List, Optional, Sequence
+
+from psycopg.errors import IntegrityError
 
 from app.config import settings as _default_settings
 
 # ---------------------------------------------------------------------------
-# 后端中立类型 / 异常别名（供上层 type hint 与 except 使用）
+# Persistence type aliases used by repository annotations.
 # ---------------------------------------------------------------------------
-# 注意：这些名字用于注解与异常捕获，不做运行时强校验。SQLite 下即 sqlite3 的
-# 同名对象；PG 连接对象 duck-type 兼容，注解不受影响。
-Row = sqlite3.Row
-Connection = sqlite3.Connection
-
-
-def _build_integrity_errors() -> Tuple[type, ...]:
-    """聚合两套后端的 IntegrityError，供 `except IntegrityError` 同时捕获。
-
-    psycopg 未安装（纯 SQLite 部署）时退化为单元素元组，except 语义不变。
-    返回元组而非单类型，故 `from app.db._backend import IntegrityError` 与
-    `app.db._backend.IntegrityError` 两种引用方式都稳定可用。
-    """
-    errors: List[type] = [sqlite3.IntegrityError]
-    try:  # psycopg 仅 PG 部署存在；缺失时忽略
-        import psycopg  # noqa: WPS433 (惰性 import 是有意为之)
-
-        errors.append(psycopg.errors.IntegrityError)
-    except Exception:
-        pass
-    return tuple(errors)
-
-
-IntegrityError = _build_integrity_errors()
+Row = Any
+Connection = Any
 
 
 # ---------------------------------------------------------------------------
@@ -65,12 +34,31 @@ def _settings():
     return getattr(_pkg, "settings", _default_settings)
 
 
-def database_url() -> str:
+def _configured_database_url() -> str:
+    """Return the configured URL without asserting its backend.
+
+    Kept private so transitional offline scripts can still inspect configuration;
+    every main-runtime connection goes through :func:`database_url` below.
+    """
     return (getattr(_settings(), "database_url", "") or "").strip()
 
 
+def database_url() -> str:
+    """Return a PostgreSQL URL or fail before any database connection is opened."""
+    url = _configured_database_url()
+    if not url.lower().startswith(("postgres://", "postgresql://")):
+        raise RuntimeError(
+            "AI4ALL main application requires PostgreSQL DATABASE_URL; "
+            "SQLite and empty DATABASE_URL are no longer supported"
+        )
+    return url
+
+
 def is_postgres() -> bool:
-    return database_url().lower().startswith(("postgres://", "postgresql://"))
+    """Compatibility probe for transitional scripts; main runtime is always PG."""
+    return _configured_database_url().lower().startswith(
+        ("postgres://", "postgresql://")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,34 +286,8 @@ def split_sql_statements(script: str) -> List[str]:
 
 
 # ---------------------------------------------------------------------------
-# SQLite 后端（默认；与改造前完全一致）
+# PostgreSQL adapter (temporarily exposing the repository compatibility API).
 # ---------------------------------------------------------------------------
-
-def _connect_sqlite() -> sqlite3.Connection:
-    """打开 SQLite 连接并设置 bridge 级 PRAGMA（搬自原 _core.connect）。"""
-    from app.db._core import _db_path  # 延迟 import 避免与 _core 循环依赖
-
-    conn = sqlite3.connect(_db_path(), timeout=5.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA busy_timeout = 5000")
-        conn.execute("PRAGMA journal_mode = WAL")
-        # WAL 的标准搭档：commit 不再每次 fsync，仅在 checkpoint 时落盘。
-        # 最坏情况（OS 崩溃/断电）只丢断电前最后几条已提交事务，绝不损坏库。
-        conn.execute("PRAGMA synchronous = NORMAL")
-        conn.execute("PRAGMA foreign_keys = ON")
-    except Exception:
-        conn.close()
-        raise
-    return conn
-
-
-# ---------------------------------------------------------------------------
-# PostgreSQL 后端（惰性；psycopg 包装为 sqlite3 兼容接口）
-# ---------------------------------------------------------------------------
-# 说明：本环境暂无 psycopg / 本地 PG，PG 路径尚未运行期验证，待 PG 实例就绪后
-# 按 §4.8 验收。SQLite 路径已通过现有测试套验证。
-
 class _HybridRow:
     """同时支持 row["col"]（dict 风格）与 row[0]（index 风格）的行对象。
 
@@ -469,7 +431,6 @@ class _PgConnection:
 # ---------------------------------------------------------------------------
 # PG 连接池（厚节点每轮 turn 跨机访问 PG，连接复用避免 connect churn / 降延迟 /
 # 限 PG 连接数：Σ(各节点 db_pool_max_size)+中心 ≤ PG max_connections）。
-# 仅 PG 部署构建；SQLite 路径完全不触达本段。
 # ---------------------------------------------------------------------------
 _pg_pool = None
 _pg_pool_conninfo: Optional[str] = None
@@ -535,11 +496,10 @@ def _connect_postgres() -> "_PgConnection":
 # ---------------------------------------------------------------------------
 
 def connect_raw():
-    """按 settings.database_url 打开底层连接（不含事务管理）。
+    """Open a PostgreSQL connection from the application pool.
 
-    事务（commit/rollback/close）由上层 app.db._core.connect 的 contextmanager 负责，
-    两套后端共用同一套事务语义。
+    Transaction commit/rollback/close remains owned by ``app.db._core.connect``.
+    ``database_url()`` validates the required PostgreSQL configuration before the
+    pool is created, so an empty URL can never fall back to a local database file.
     """
-    if is_postgres():
-        return _connect_postgres()
-    return _connect_sqlite()
+    return _connect_postgres()

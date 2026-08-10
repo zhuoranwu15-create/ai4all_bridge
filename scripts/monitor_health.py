@@ -17,9 +17,7 @@ if str(ROOT) not in sys.path:
 
 from app.config import settings  # noqa: E402
 from app.db import (  # noqa: E402
-    checkpoint_wal,
     get_account_water_level,
-    get_database_storage_stats,
     get_scheduler_heartbeat,
     init_db,
 )
@@ -144,46 +142,6 @@ def _check_backup_staleness(backups_dir: Path, max_age_seconds: int) -> Optional
             f"newest={newest.isoformat(timespec='seconds')}"
         )
     return None
-
-
-def _check_wal_size(max_bytes: int, *, checkpoint_on_bloat: bool = True) -> Optional[str]:
-    """``-wal`` 文件超阈值时先尝试 TRUNCATE checkpoint 自愈，仍超才返回错误串。
-
-    -wal 膨胀通常是 checkpoint 被长读连接压住的信号。先主动截断回收；若截断后仍超阈值，
-    说明确有读连接卡住（或写入回收确实压不住），此时才告警，语义比单纯告警更准。
-    max_bytes<=0 表示关闭该检查。
-    """
-    if max_bytes <= 0:
-        return None
-    try:
-        stats = get_database_storage_stats()
-    except Exception as err:
-        return f"wal: storage stats unavailable: {err}"
-    wal_bytes = int(stats.get("wal_bytes") or 0)
-    if wal_bytes <= max_bytes:
-        return None
-
-    checkpoint_note = ""
-    if checkpoint_on_bloat:
-        try:
-            ckpt = checkpoint_wal()
-            # 注意：截断成功时 wal_bytes_after 为 0（falsy），不能用 `or` 回退旧值
-            wal_after = ckpt.get("wal_bytes_after")
-            wal_bytes = int(wal_after) if wal_after is not None else wal_bytes
-            checkpoint_note = (
-                f" after checkpoint(TRUNCATE busy={ckpt.get('busy')} "
-                f"checkpointed={ckpt.get('checkpointed_frames')}/{ckpt.get('log_frames')})"
-            )
-        except Exception as err:
-            checkpoint_note = f" checkpoint failed: {err}"
-        if wal_bytes <= max_bytes:
-            return None
-
-    return (
-        f"wal: -wal too large {wal_bytes}B max={max_bytes}B{checkpoint_note} "
-        f"(journal_mode={stats.get('journal_mode')} "
-        f"autocheckpoint_pages={stats.get('wal_autocheckpoint_pages')})"
-    )
 
 
 def _check_disk_usage(
@@ -418,24 +376,6 @@ def main() -> int:
         help="alert when newest backup is older than this (default 26h); 0 disables",
     )
     parser.add_argument(
-        "--check-wal",
-        action=argparse.BooleanOptionalAction,
-        default=_env_bool("MONITOR_CHECK_WAL", True),
-        help="alert when the SQLite -wal file grows too large (checkpoint starvation)",
-    )
-    parser.add_argument(
-        "--wal-max-bytes",
-        type=int,
-        default=int(os.getenv("MONITOR_WAL_MAX_BYTES", str(128 * 1024 * 1024))),
-        help="alert when -wal exceeds this many bytes (default 128MB); 0 disables",
-    )
-    parser.add_argument(
-        "--wal-checkpoint-on-bloat",
-        action=argparse.BooleanOptionalAction,
-        default=_env_bool("MONITOR_WAL_CHECKPOINT_ON_BLOAT", True),
-        help="run a TRUNCATE checkpoint to self-heal before alerting on -wal bloat",
-    )
-    parser.add_argument(
         "--check-disk",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("MONITOR_CHECK_DISK", True),
@@ -526,14 +466,6 @@ def main() -> int:
         if not backups_dir.is_absolute():
             backups_dir = ROOT / backups_dir
         error = _check_backup_staleness(backups_dir, args.backup_max_age_seconds)
-        if error:
-            errors.append(error)
-
-    if args.check_wal:
-        error = _check_wal_size(
-            args.wal_max_bytes,
-            checkpoint_on_bloat=args.wal_checkpoint_on_bloat,
-        )
         if error:
             errors.append(error)
 

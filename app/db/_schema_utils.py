@@ -8,7 +8,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
+
+
+def _is_offline_sqlite_connection(conn: Connection) -> bool:
+    """Recognize explicit SQLite connections used by legacy import tooling only."""
+    return type(conn).__module__ == "sqlite3"
 
 
 def product_quota_subject(*, platform_user_id: str, app_id: str) -> str:
@@ -21,26 +26,29 @@ def product_quota_subject(*, platform_user_id: str, app_id: str) -> str:
 
 
 def _table_exists(conn: Connection, table: str) -> bool:
-    if is_postgres():
-        row = conn.execute("SELECT to_regclass(?) AS r", (table,)).fetchone()
-        return row is not None and row["r"] is not None
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-    ).fetchone()
-    return row is not None
+    if _is_offline_sqlite_connection(conn):
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+        return row is not None
+    row = conn.execute("SELECT to_regclass(?) AS r", (table,)).fetchone()
+    return row is not None and row["r"] is not None
 
 
 def _ensure_column(conn: Connection, table: str, column: str, definition: str) -> None:
-    if is_postgres():
+    if _is_offline_sqlite_connection(conn):
+        existing = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        exists = column in existing
+    else:
         row = conn.execute(
             "SELECT 1 FROM information_schema.columns "
             "WHERE table_name = ? AND column_name = ?",
             (table, column),
         ).fetchone()
         exists = row is not None
-    else:
-        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-        exists = column in existing
     if not exists:
         # ALTER 无参数，PG 路径经垫片自动方言翻译（definition 多为简单类型，无需翻译）
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

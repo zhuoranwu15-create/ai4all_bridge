@@ -110,16 +110,10 @@ cp .env.example .env
 
 ## Storage
 
-主应用本地开发与生产均使用 PostgreSQL；本地入口见上面的 `make pg-local-*`。本阶段代码仍按
-`DATABASE_URL` 保留 SQLite 兼容路径，后续阶段再删除；主 pytest 已固定使用临时 PostgreSQL，
-并从预迁移模板为每个测试克隆隔离数据库。nearline 分析库、PG→SQLite 快照和 TDAI 自身
-SQLite 不属于主应用后端，继续保留。
-
-迁移期 SQLite 默认路径是：
-
-```text
-data/ai4all.sqlite3
-```
+主应用本地开发、测试和生产均使用 PostgreSQL；本地入口见上面的 `make pg-local-*`。
+`DATABASE_URL` 为空或不是 PostgreSQL 连接串时主应用拒绝连接，不会创建 SQLite 主库。
+pytest 从预迁移模板为每个测试克隆隔离数据库。nearline 分析库、PG→SQLite 快照和 TDAI
+自身 SQLite 不属于主应用后端，继续保留。
 
 生产 PostgreSQL 连接串只写入部署环境的 `.env`，不要提交真实凭证；仓库模板中的 DSN
 仅用于 loopback Compose。部署和切换步骤见

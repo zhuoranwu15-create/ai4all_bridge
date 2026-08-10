@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._schema_utils import _ensure_column, _table_exists
 
 
@@ -405,26 +405,18 @@ def _migration_0067_plum_product_rename(conn: Connection) -> None:
     legacy_conversation_column = f"{legacy_prefix}_conversation_id"
     plum_conversation_column = "plum_conversation_id"
     if _table_exists(conn, memories_table):
-        if is_postgres():
-            rows = conn.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_name=? AND column_name IN (?, ?)
-                """,
-                (
-                    memories_table,
-                    legacy_conversation_column,
-                    plum_conversation_column,
-                ),
-            ).fetchall()
-            columns = {str(row["column_name"]) for row in rows}
-        else:
-            columns = {
-                str(row["name"])
-                for row in conn.execute(
-                    f"PRAGMA table_info({memories_table})"
-                ).fetchall()
-            }
+        rows = conn.execute(
+            """
+            SELECT column_name FROM information_schema.columns
+            WHERE table_name=? AND column_name IN (?, ?)
+            """,
+            (
+                memories_table,
+                legacy_conversation_column,
+                plum_conversation_column,
+            ),
+        ).fetchall()
+        columns = {str(row["column_name"]) for row in rows}
         if (
             legacy_conversation_column in columns
             and plum_conversation_column in columns
@@ -459,27 +451,26 @@ def _migration_0067_plum_product_rename(conn: Connection) -> None:
                 (plum_prefix, legacy_prefix),
             )
 
-    if is_postgres():
-        for _legacy_table, plum_table in table_pairs:
-            if not _table_exists(conn, plum_table):
-                continue
-            constraints = conn.execute(
-                """
-                SELECT conname
-                FROM pg_constraint
-                WHERE conrelid=to_regclass(?) AND conname LIKE ?
-                """,
-                (plum_table, f"{legacy_prefix}_%"),
-            ).fetchall()
-            for row in constraints:
-                old_name = str(row["conname"])
-                new_name = old_name.replace(legacy_prefix, plum_prefix, 1)
-                if not re.fullmatch(r"[a-z_][a-z0-9_]*", old_name):
-                    raise RuntimeError(f"unsafe legacy constraint name: {old_name!r}")
-                conn.execute(
-                    f"ALTER TABLE {plum_table} "
-                    f"RENAME CONSTRAINT {old_name} TO {new_name}"
-                )
+    for _legacy_table, plum_table in table_pairs:
+        if not _table_exists(conn, plum_table):
+            continue
+        constraints = conn.execute(
+            """
+            SELECT conname
+            FROM pg_constraint
+            WHERE conrelid=to_regclass(?) AND conname LIKE ?
+            """,
+            (plum_table, f"{legacy_prefix}_%"),
+        ).fetchall()
+        for row in constraints:
+            old_name = str(row["conname"])
+            new_name = old_name.replace(legacy_prefix, plum_prefix, 1)
+            if not re.fullmatch(r"[a-z_][a-z0-9_]*", old_name):
+                raise RuntimeError(f"unsafe legacy constraint name: {old_name!r}")
+            conn.execute(
+                f"ALTER TABLE {plum_table} "
+                f"RENAME CONSTRAINT {old_name} TO {new_name}"
+            )
 
     conn.executescript(
         """

@@ -17,7 +17,6 @@ from app.db import (
     insert_resident_runtime_account,
     list_session_messages_before,
 )
-from app.db._backend import is_postgres
 from app.db.product_memberships import _ensure_product_membership_in_conn
 from app.products.plum.infrastructure.fixtures import (
     BADGES,
@@ -410,7 +409,7 @@ def redeem_plum_access_invite(
     cleaned_name = str(display_name or "").strip()[:40]
     if not cleaned_name:
         raise ValueError("display_name_required")
-    lock = " FOR UPDATE" if is_postgres() else ""
+    lock = " FOR UPDATE"
     with connect() as conn:
         row = conn.execute(
             """
@@ -708,10 +707,6 @@ def create_or_get_conversation(
         ).fetchone()
         if character is None:
             raise ValueError("character not found")
-        # SQLite 的只读 SELECT 不会开启事务；persona account + binding + session +
-        # conversation 必须处于同一个显式事务。PG 首条查询已自动开启事务。
-        if not is_postgres() and not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO plum_user_character_relationships(
@@ -1053,8 +1048,6 @@ def _set_character_reaction(
         ).fetchone()
         if character is None:
             raise ValueError("character not found")
-        if not is_postgres() and not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
         if active:
             changed = conn.execute(
                 f"""

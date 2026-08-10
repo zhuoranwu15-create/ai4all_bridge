@@ -7,7 +7,6 @@ import re
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.config import settings
@@ -230,28 +229,18 @@ def _normalize_phone(phone: str) -> str:
 
 
 def _settings():
-    """返回实时 settings 对象。
-
-    通过包命名空间 `app.db.settings` 动态读取，使测试中 `patch("app.db.settings")`
-    能路由整个 db 层到临时工作区（拆包后各子模块的模块级 settings 名字在 import 期
-    已绑定，直接用会绕过 patch）。
-    """
+    """Return the live package settings object used by repository helpers."""
     import app.db as _pkg
+
     return getattr(_pkg, "settings", settings)
-
-
-def _db_path() -> Path:
-    path = Path(_settings().database_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path
 
 
 @contextmanager
 def connect() -> Iterator[Connection]:
-    """打开 DB 连接（后端由 settings.database_url 决定），成功提交、异常回滚。
+    """打开 PostgreSQL 连接，成功提交、异常回滚。
 
-    连接的获取/方言差异收敛在 app.db._backend；本函数只负责事务边界，两套后端
-    （SQLite 默认 / PostgreSQL）共用同一套 commit/rollback/close 语义。
+    连接获取与暂存的 SQL 兼容逻辑收敛在 ``app.db._backend``；本函数只负责
+    transaction 边界。
     """
     from app.db import _backend
 
@@ -288,17 +277,10 @@ def _tx(conn: Optional[Connection]) -> Iterator[Connection]:
 def _savepoint(conn: Connection, name: str = "sp") -> Iterator[None]:
     """子事务保存点：把可能触发唯一冲突的语句隔离起来，冲突时只回滚到保存点而非整笔事务。
 
-    PG 在任一语句报错后会中止整个事务，后续语句一律 InFailedSqlTransaction；因此
-    「INSERT 失败 → 捕获 IntegrityError → 同一连接继续重试/查询」的模式在 PG 必须靠
-    SAVEPOINT 才能继续（SQLite 同样支持 SAVEPOINT，两后端行为一致）。
-
-    SQLite 上必须先显式开事务：Python sqlite3 只在 DML 前隐式 BEGIN，``SAVEPOINT`` 不算
-    DML，于是它成为**最外层**保存点，对应的 ``RELEASE`` 会直接提交——外层 ``connect()``
-    之后再 rollback 就什么也回滚不掉（表现为「认领失败了但消息还在」）。PG 侧连接恒为
-    ``autocommit=False``，事务一直开着，不需要也不能再 BEGIN。
+    PostgreSQL 在任一语句报错后会中止整个事务，后续语句一律
+    ``InFailedSqlTransaction``；因此「INSERT 失败 → 捕获 IntegrityError → 同一连接
+    继续重试/查询」必须靠 SAVEPOINT 隔离。
     """
-    if not is_postgres() and not conn.in_transaction:
-        conn.execute("BEGIN IMMEDIATE")
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
@@ -375,19 +357,17 @@ def _guard_unattended_pg_migrations(conn: Connection) -> None:
 def init_db() -> None:
     """应用所有待执行的 schema 迁移（版本由 schema_migrations 表跟踪）。
 
-    PG 后端：用事务级 advisory lock 防止多节点同时 DDL。持锁节点完成迁移后提交释放，
+    用事务级 advisory lock 防止多节点同时 DDL。持锁节点完成迁移后提交释放，
     后续节点持锁时迁移已全部应用，幂等跳过。既有 PG 库不得由应用启动跨越
-    Phase 1 contract，必须使用受控逐闸 runner；空库与 SQLite 路径不受影响。
+    Phase 1 contract，必须使用受控逐闸 runner；空库不受该 contract 闸影响。
     另有 opt-in 闸：PG 上有待执行迁移时，只有受控部署进程可以应用（见 AUTO_MIGRATE_ENV）。
     """
     with connect() as conn:
-        if is_postgres():
-            conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
-            _guard_automatic_phase1_contract_migrations(conn)
-            _guard_unattended_pg_migrations(conn)
+        conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
+        _guard_automatic_phase1_contract_migrations(conn)
+        _guard_unattended_pg_migrations(conn)
         _run_migrations(conn)
-        if is_postgres():
-            _ensure_pg_functions(conn)
+        _ensure_pg_functions(conn)
 
 
 def migrate_db_through(
@@ -402,8 +382,7 @@ def migrate_db_through(
     if target_version not in known_versions:
         raise ValueError(f"unknown migration target: {target_version}")
     with connect() as conn:
-        if is_postgres():
-            conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
+        conn.execute(f"SELECT pg_advisory_xact_lock({_PG_MIGRATION_LOCK_ID})")
         _ensure_schema_migrations_table(conn)
         current = _applied_schema_version(conn)
         if current == target_version:
@@ -415,8 +394,7 @@ def migrate_db_through(
                 f"target={target_version}"
             )
         _run_migrations(conn, target_version=target_version)
-        if is_postgres():
-            _ensure_pg_functions(conn)
+        _ensure_pg_functions(conn)
         after = _applied_schema_version(conn)
         if after != target_version:
             raise RuntimeError(
@@ -503,27 +481,11 @@ def _ensure_schema_migrations_table(conn: Connection) -> None:
 
 
 def _applied_schema_version(conn: Connection) -> int:
-    """返回已应用的最大迁移版本。
-
-    历史 SQLite 库用 PRAGMA user_version 记录版本，schema_migrations 表为空；
-    首次升级时把旧 user_version 回填进新表，避免幂等迁移被重复执行。
-    """
+    """返回 PostgreSQL 中已应用的最大迁移版本。"""
     row = conn.execute(
         "SELECT COALESCE(MAX(version), 0) AS v FROM schema_migrations"
     ).fetchone()
-    current = (row["v"] if row is not None else 0) or 0
-    if current == 0 and not is_postgres():
-        legacy = conn.execute("PRAGMA user_version").fetchone()[0]
-        if legacy and int(legacy) > 0:
-            now = beijing_now_str()
-            for ver in range(1, int(legacy) + 1):
-                conn.execute(
-                    "INSERT OR IGNORE INTO schema_migrations (version, applied_at) "
-                    "VALUES (?, ?)",
-                    (ver, now),
-                )
-            current = int(legacy)
-    return int(current)
+    return int((row["v"] if row is not None else 0) or 0)
 
 
 def _run_migrations(

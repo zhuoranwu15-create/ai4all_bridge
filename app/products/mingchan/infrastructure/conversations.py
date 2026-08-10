@@ -1,4 +1,4 @@
-"""鸣蝉居民会话的 SQLite/PostgreSQL repository adapter。"""
+"""鸣蝉居民会话的 PostgreSQL repository adapter。"""
 from __future__ import annotations
 
 from typing import Optional, Sequence

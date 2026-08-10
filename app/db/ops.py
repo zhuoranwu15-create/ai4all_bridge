@@ -3,23 +3,20 @@ import json
 import logging
 import math
 import re
-from app.db._backend import IntegrityError, Row, is_postgres
+from app.db._backend import IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from app.config import settings
 from app.time_utils import beijing_naive_now
 from app.db._core import (
     _clean_text,
-    _db_path,
     _new_id,
     connect,
 )
 __all__ = [
-    'checkpoint_wal',
     'create_faq_message',
     'get_account_water_level',
     'get_database_storage_stats',
@@ -333,85 +330,19 @@ def like_faq_message(*, message_id: str, voter_key: str) -> Optional[Dict[str, A
     return result
 
 
-def _file_size_bytes(path: Path) -> int:
-    """文件大小（字节）；不存在或不可读时返回 0。"""
-    try:
-        return path.stat().st_size
-    except OSError:
-        return 0
-
-
 def get_database_storage_stats() -> Dict[str, Any]:
-    """SQLite 存储与 WAL 运行态指标，用于 ops 监控。
-
-    重点观测 ``-wal`` 文件大小：WAL 模式下若有长生命周期读连接（如独立调度器进程）
-    压住 checkpoint，``-wal`` 会持续增长。这里只读取、不主动 checkpoint。
-    """
-    if is_postgres():
-        # PG 后端无 WAL 文件/PRAGMA 概念：返回库大小，其余 SQLite 专有字段置空。
-        with connect() as conn:
-            size_row = conn.execute(
-                "SELECT pg_database_size(current_database()) AS db_bytes"
-            ).fetchone()
-        return {
-            "db_bytes": int(size_row["db_bytes"]) if size_row and size_row["db_bytes"] is not None else None,
-            "wal_bytes": None,
-            "shm_bytes": None,
-            "journal_mode": None,
-            "synchronous": None,
-            "wal_autocheckpoint_pages": None,
-        }
-    db_path = _db_path()
-    wal_path = db_path.with_name(db_path.name + "-wal")
-    shm_path = db_path.with_name(db_path.name + "-shm")
+    """Return PostgreSQL database size for ops metrics."""
     with connect() as conn:
-        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()
-        synchronous = conn.execute("PRAGMA synchronous").fetchone()
-        wal_autocheckpoint = conn.execute("PRAGMA wal_autocheckpoint").fetchone()
+        size_row = conn.execute(
+            "SELECT pg_database_size(current_database()) AS db_bytes"
+        ).fetchone()
     return {
-        "db_bytes": _file_size_bytes(db_path),
-        "wal_bytes": _file_size_bytes(wal_path),
-        "shm_bytes": _file_size_bytes(shm_path),
-        "journal_mode": journal_mode[0] if journal_mode else None,
-        # synchronous: 0=OFF 1=NORMAL 2=FULL 3=EXTRA
-        "synchronous": int(synchronous[0]) if synchronous else None,
-        "wal_autocheckpoint_pages": int(wal_autocheckpoint[0]) if wal_autocheckpoint else None,
-    }
-
-
-def checkpoint_wal(*, mode: str = "TRUNCATE") -> Dict[str, Any]:
-    """主动对 WAL 做一次 checkpoint，回收 ``-wal`` 文件，用于 ops 自愈。
-
-    默认 TRUNCATE：checkpoint 后把 ``-wal`` 截断回 0 字节。若存在长生命周期读连接
-    压住 WAL 帧，SQLite 只能做部分 checkpoint 并返回 ``busy=1``，``-wal`` 不会缩小——
-    调用方可据此判断「是否真有读连接卡住」。跨进程操作共享 WAL，从任一连接发起均可。
-
-    仅 WAL 模式有意义；非 WAL 模式下该 PRAGMA 是无害的 no-op。
-    """
-    mode = (mode or "TRUNCATE").upper()
-    if mode not in ("PASSIVE", "FULL", "RESTART", "TRUNCATE"):
-        raise ValueError(f"unsupported wal_checkpoint mode: {mode}")
-    if is_postgres():
-        # PG 无应用级 WAL checkpoint（属服务端职责）：返回 no-op 结果，结构对齐。
-        return {
-            "mode": mode,
-            "busy": None,
-            "log_frames": None,
-            "checkpointed_frames": None,
-            "wal_bytes_after": None,
-        }
-    with connect() as conn:
-        # 返回单行 (busy, log_frames, checkpointed_frames)
-        row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
-    busy, log_frames, checkpointed_frames = (row[0], row[1], row[2]) if row else (None, None, None)
-    wal_path = _db_path().with_name(_db_path().name + "-wal")
-    return {
-        "mode": mode,
-        # busy=1 表示有读/写连接挡住，未能完整 checkpoint
-        "busy": int(busy) if busy is not None else None,
-        "log_frames": int(log_frames) if log_frames is not None else None,
-        "checkpointed_frames": int(checkpointed_frames) if checkpointed_frames is not None else None,
-        "wal_bytes_after": _file_size_bytes(wal_path),
+        "backend": "postgresql",
+        "db_bytes": (
+            int(size_row["db_bytes"])
+            if size_row and size_row["db_bytes"] is not None
+            else None
+        ),
     }
 
 

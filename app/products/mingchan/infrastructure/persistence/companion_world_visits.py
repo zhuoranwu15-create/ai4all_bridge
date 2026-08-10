@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from app.bootstrap.product_registry import MINGCHAN_APP_ID
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._core import _new_id, _tx, connect
 
 __all__ = [
@@ -48,13 +48,11 @@ _VISIT_STATUSES = {
 
 @contextmanager
 def _visit_write_tx(conn: Optional[Connection]) -> Iterator[Connection]:
-    """复用外层事务；独立 SQLite 写用 IMMEDIATE 串行读后写。"""
+    """复用调用方事务，或建立独立 PostgreSQL 写事务。"""
     if conn is not None:
         yield conn
         return
     with connect() as own:
-        if not is_postgres():
-            own.execute("BEGIN IMMEDIATE")
         yield own
 
 
@@ -68,7 +66,7 @@ def _required(value: str, field: str) -> str:
 def _lock_owner_world(
     tx: Connection, *, universe_id: str, owner_platform_user_id: str
 ) -> Dict[str, Any]:
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = tx.execute(
         "SELECT id, owner_platform_user_id, status, onboarding_state FROM universes "
         "WHERE id = ? AND owner_platform_user_id = ? AND app_id = ?" + suffix,
@@ -202,7 +200,7 @@ def get_universe_invite_by_code_hash(
     *, code_hash: str, conn: Optional[Connection] = None, for_update: bool = False
 ) -> Optional[Dict[str, Any]]:
     """内部按完整 hash 解析 invite；公开 API 不得暴露该查询结果。"""
-    suffix = " FOR UPDATE" if for_update and is_postgres() else ""
+    suffix = " FOR UPDATE" if for_update else ""
     with _tx(conn) as tx:
         row = tx.execute(
             "SELECT i.* FROM universe_invites i "
@@ -263,7 +261,7 @@ def insert_pending_universe_visit(
             universe_id=universe_id,
             owner_platform_user_id=owner_platform_user_id,
         )
-        suffix = " FOR UPDATE" if is_postgres() else ""
+        suffix = " FOR UPDATE"
         invite = tx.execute(
             "SELECT * FROM universe_invites WHERE id = ? AND universe_id = ? "
             "AND owner_platform_user_id = ?" + suffix,
@@ -465,7 +463,7 @@ def lock_platform_user_for_visit(
     *, platform_user_id: str, conn: Connection
 ) -> Dict[str, Any]:
     """按 M5 总锁序锁一个真人主体；不存在时拒绝继续。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = conn.execute(
         "SELECT id, display_name FROM platform_users WHERE id = ?" + suffix,
         (platform_user_id,),
@@ -479,7 +477,7 @@ def lock_universe_visit(
     *, visit_id: str, conn: Connection
 ) -> Optional[Dict[str, Any]]:
     """在调用方事务内锁 visit 行。"""
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = conn.execute(
         "SELECT v.* FROM universe_visits v JOIN universes u ON u.id = v.universe_id "
         "WHERE v.id = ? AND u.app_id = ?" + suffix,
@@ -499,7 +497,7 @@ def mark_universe_invite_terminal(
     """把 active invite 置 revoked/expired 并释放其 world slot。"""
     if target_status not in {"revoked", "expired"}:
         raise ValueError("invalid invite terminal status")
-    suffix = " FOR UPDATE" if is_postgres() else ""
+    suffix = " FOR UPDATE"
     row = conn.execute(
         "SELECT i.* FROM universe_invites i JOIN universes u ON u.id = i.universe_id "
         "WHERE i.id = ? AND i.owner_platform_user_id = ? AND u.app_id = ?"

@@ -252,8 +252,9 @@ OpenClaw Gateway + ai4all-openclaw-bridge local process
 single-worker 时可启用 in-process scheduler；推荐独立 scheduler 进程
 ```
 
-适合本地开发、PostgreSQL 测试和真实微信链路验证。主应用 SQLite 兼容层仅在迁移清理期间
-保留，不是开发默认或生产回滚通道；生产故障恢复必须在 PostgreSQL 的备份、主备和恢复体系内完成。
+适合本地开发、PostgreSQL 测试和真实微信链路验证。主应用拒绝空或非 PostgreSQL
+`DATABASE_URL`，不存在 SQLite 回滚通道；生产故障恢复必须在 PostgreSQL 的备份、主备和
+恢复体系内完成。
 
 ### 当前生产形态（aliyun1 central+node + aliyun2 厚 node）
 

@@ -10,7 +10,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from app.db._backend import Connection, is_postgres
+from app.db._backend import Connection
 from app.db._schema_utils import _ensure_column, product_quota_subject
 
 # 与 _core 同名，logging.getLogger 返回同一实例，日志 channel 不变。
@@ -1952,16 +1952,11 @@ def _migration_0031_platform_user_quota_overrides(conn: Connection) -> None:
 
 
 def _migration_0032_rpm_hit_double_precision(conn: Connection) -> None:
-    """PG：把 Unix epoch 命中时间从单精度 REAL 升级为双精度。
-
-    PostgreSQL REAL 只有 24 位尾数，2026 epoch 的量化步长约 128 秒，会让 60 秒 RPM
-    窗口随机误删刚写入的命中；SQLite REAL 本就是 8 字节浮点，无需迁移。
-    """
-    if is_postgres():
-        conn.execute(
-            "ALTER TABLE rpm_hits ALTER COLUMN hit_at TYPE DOUBLE PRECISION "
-            "USING hit_at::double precision"
-        )
+    """把 Unix epoch 命中时间从 PostgreSQL REAL 升级为双精度。"""
+    conn.execute(
+        "ALTER TABLE rpm_hits ALTER COLUMN hit_at TYPE DOUBLE PRECISION "
+        "USING hit_at::double precision"
+    )
 
 
 def _migration_0036_repair_account_app_id(conn: Connection) -> None:
@@ -2636,22 +2631,19 @@ def _migration_0044_referral_app_id_contract(conn: Connection) -> None:
         summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
         raise RuntimeError(f"m0044 referral reconcile failed: {summary}")
 
-    if is_postgres():
-        constraints = conn.execute(
-            """
-            SELECT conname
-            FROM pg_constraint
-            WHERE conrelid='referral_relationships'::regclass
-              AND contype='u'
-            """
-        ).fetchall()
-        for constraint in constraints:
-            name = str(constraint["conname"])
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                raise RuntimeError("unexpected referral unique constraint name")
-            conn.execute(f'ALTER TABLE referral_relationships DROP CONSTRAINT "{name}"')
-    else:
-        _rebuild_referral_relationships_sqlite(conn)
+    constraints = conn.execute(
+        """
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid='referral_relationships'::regclass
+          AND contype='u'
+        """
+    ).fetchall()
+    for constraint in constraints:
+        name = str(constraint["conname"])
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise RuntimeError("unexpected referral unique constraint name")
+        conn.execute(f'ALTER TABLE referral_relationships DROP CONSTRAINT "{name}"')
 
     conn.executescript(
         """
@@ -2777,25 +2769,9 @@ def _migration_0045_multi_product_phase1_contract(conn: Connection) -> None:
         "referral_relationships",
         "meaningful_message_reviews",
     )
-    if is_postgres():
-        # PG 的 SET NOT NULL 是最终 schema contract；前置聚合校验已保证不会因 NULL 失败。
-        for table in app_id_tables:
-            conn.execute(f"ALTER TABLE {table} ALTER COLUMN app_id SET NOT NULL")
-    else:
-        # SQLite expand 时列已直接以 NOT NULL 添加。若历史分支留下 nullable schema，拒绝
-        # 在最终 contract 偷偷重建业务大表，要求先显式修复该异常迁移路径。
-        nullable_tables = []
-        for table in app_id_tables:
-            columns = {
-                str(row["name"]): int(row["notnull"])
-                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-            }
-            if columns.get("app_id") != 1:
-                nullable_tables.append(table)
-        if nullable_tables:
-            raise RuntimeError(
-                "m0045 nullable app_id schema: " + ", ".join(nullable_tables)
-            )
+    # SET NOT NULL 是最终 schema contract；前置聚合校验已保证不会因 NULL 失败。
+    for table in app_id_tables:
+        conn.execute(f"ALTER TABLE {table} ALTER COLUMN app_id SET NOT NULL")
 
     # 幂等确认终态查询/唯一 arbiter，避免 contract 阶段重写业务数据或 SQLite 重建。
     conn.executescript(
@@ -3079,10 +3055,7 @@ def _migration_0046_billing_idempotency_contract(conn: Connection) -> None:
         summary = ", ".join(f"{name}={total}" for name, total in sorted(blocking.items()))
         raise RuntimeError(f"m0046 billing idempotency reconcile failed: {summary}")
 
-    if is_postgres():
-        _drop_pg_global_billing_idempotency_constraints(conn)
-    else:
-        _rebuild_billing_idempotency_sqlite(conn)
+    _drop_pg_global_billing_idempotency_constraints(conn)
     conn.executescript(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS ux_entitlement_ledger_app_idempotency
@@ -3274,17 +3247,7 @@ def _migration_0069_runtime_turn_cancellation(conn: Connection) -> None:
 def _migration_0070_moderation_task_product_scope(conn: Connection) -> None:
     """给审核任务补齐产品归属，并拒绝空值、孤儿和跨产品漂移。"""
 
-    if is_postgres():
-        _ensure_column(conn, "content_moderation_tasks", "app_id", "TEXT")
-    else:
-        # SQLite 不能原地 SET NOT NULL。空串默认只用于完成加列；下方触发器会拒绝
-        # 新 writer 省略 app_id，避免把平台默认值重新固化为某个产品。
-        _ensure_column(
-            conn,
-            "content_moderation_tasks",
-            "app_id",
-            "TEXT NOT NULL DEFAULT ''",
-        )
+    _ensure_column(conn, "content_moderation_tasks", "app_id", "TEXT")
 
     conn.execute(
         """
@@ -3314,35 +3277,9 @@ def _migration_0070_moderation_task_product_scope(conn: Connection) -> None:
             f"violations={int(violations['n'])}"
         )
 
-    if is_postgres():
-        conn.execute(
-            "ALTER TABLE content_moderation_tasks ALTER COLUMN app_id SET NOT NULL"
-        )
-    else:
-        columns = {
-            str(row["name"]): int(row["notnull"])
-            for row in conn.execute(
-                "PRAGMA table_info(content_moderation_tasks)"
-            ).fetchall()
-        }
-        if columns.get("app_id") != 1:
-            raise RuntimeError("m0070 moderation task app_id must be NOT NULL")
-        conn.executescript(
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_moderation_tasks_app_id_insert
-            BEFORE INSERT ON content_moderation_tasks
-            FOR EACH ROW WHEN NEW.app_id IS NULL OR TRIM(NEW.app_id) = ''
-            BEGIN
-                SELECT RAISE(ABORT, 'content_moderation_tasks.app_id is required');
-            END;
-            CREATE TRIGGER IF NOT EXISTS trg_moderation_tasks_app_id_update
-            BEFORE UPDATE OF app_id ON content_moderation_tasks
-            FOR EACH ROW WHEN NEW.app_id IS NULL OR TRIM(NEW.app_id) = ''
-            BEGIN
-                SELECT RAISE(ABORT, 'content_moderation_tasks.app_id is required');
-            END;
-            """
-        )
+    conn.execute(
+        "ALTER TABLE content_moderation_tasks ALTER COLUMN app_id SET NOT NULL"
+    )
 
     conn.executescript(
         """

@@ -1,4 +1,4 @@
-"""鸣蝉通知的 SQLite/PostgreSQL adapter。"""
+"""鸣蝉通知的 PostgreSQL adapter。"""
 from __future__ import annotations
 
 from typing import Any, Dict, Optional, Sequence, Tuple

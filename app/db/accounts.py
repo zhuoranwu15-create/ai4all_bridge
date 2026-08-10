@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from app.db._backend import Connection, IntegrityError, Row, is_postgres
+from app.db._backend import Connection, IntegrityError, Row
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -1905,10 +1905,10 @@ def reserve_daily_quota(
 ) -> Optional[str]:
     """原子预占一格 daily 配额，返回 reservation token；已满返回 None（limit<=0 不限、必得 token）。
 
-    强制口径 = daily_usage.message_count（已确认）+ 当日活跃 reservation 数 < limit。PG 路径先取单键
-    事务级 advisory 锁（'quota:'||platform_user）串行化同真人的检查-预占，消除 TOCTOU/超卖；SQLite
-    单写者天然串行。预占行带 expires_at = now + ttl_minutes，崩溃悬挂由 TTL 回收。account_id 内部解析
-    成 platform_user 聚合键（孤儿号回退 account_id）。
+    强制口径 = daily_usage.message_count（已确认）+ 当日活跃 reservation 数 < limit。先取单键
+    事务级 advisory 锁（'quota:'||platform_user）串行化同真人的检查-预占，消除 TOCTOU/超卖。
+    预占行带 expires_at = now + ttl_minutes，崩溃悬挂由 TTL 回收。account_id 内部解析成
+    platform_user 聚合键（孤儿号回退 account_id）。
 
     调用契约：去重（insert_message 幂等）须由调用方**先于**本函数、**同一 conn** 内完成
     （ADR「去重先于预占同事务」，重试不吃配额）。
@@ -1918,19 +1918,18 @@ def reserve_daily_quota(
         assert scope is not None
         subject = str(scope["subject"])
         app_id = str(scope["app_id"])
-        if is_postgres():
-            tx.execute(
-                "SELECT pg_advisory_xact_lock(?)",
-                (
-                    advisory_lock_key(
-                        "quota:"
-                        + product_quota_subject(
-                            platform_user_id=subject,
-                            app_id=app_id,
-                        )
-                    ),
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (
+                advisory_lock_key(
+                    "quota:"
+                    + product_quota_subject(
+                        platform_user_id=subject,
+                        app_id=app_id,
+                    )
                 ),
-            )
+            ),
+        )
         tx.execute(
             "DELETE FROM daily_quota_reservations WHERE platform_user_id=? AND app_id=? "
             "AND expires_at <= strftime('%Y-%m-%d %H:%M:%S', datetime('now', '+8 hours'))",

@@ -195,7 +195,8 @@ db_pool_max_size: int = 8       # 单节点连接池上限（× 节点数 ≤ PG
 2. 真实 `data/ai4all.sqlite3` 快照经迁移脚本导入 PG，行数/账本对拍一致（脚本 + 真 PG 测试**已落地**；待对真实快照实跑一次最终确认）。
 3. PostgreSQL 全量回归绿；测试模板只迁移一次、逐测试数据库仍完全隔离。
 4. `send_mock_turn.py` 对 PG 库完成一轮收发、计费、记忆写入正确。
-5. 主 pytest 固定使用 PostgreSQL；运行时 SQLite 兼容层在后续清理阶段删除。
+5. 主运行时和 pytest 均固定使用 PostgreSQL；空或非 PG `DATABASE_URL` fail fast，
+   SQL 方言翻译层留待后续 PG-native 收敛阶段删除。
 
 ---
 

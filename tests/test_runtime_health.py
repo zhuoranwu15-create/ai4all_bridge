@@ -123,6 +123,8 @@ def test_ops_metrics_counts_recent_message_and_outbound_errors(fresh_db):
     assert metrics["messages"]["error_total"] == 1
     assert metrics["messages"]["avg_latency_ms"] == 123.0
     assert metrics["outbound_messages"]["failed_total"] == 1
+    assert metrics["database"]["backend"] == "postgresql"
+    assert int(metrics["database"]["db_bytes"]) > 0
     assert metrics["recent_errors"]["messages"][0]["error"] == "llm failed"
     assert metrics["recent_errors"]["outbound_messages"][0]["error"] == "send failed"
 
@@ -511,63 +513,3 @@ def test_monitor_openclaw_check_reports_probe_failure(monkeypatch):
     error = monitor_health._check_openclaw("openclaw-weixin", 5.0)
 
     assert error == "openclaw status failed: gateway unreachable"
-
-
-def test_monitor_wal_check_self_heals_before_alert(monkeypatch):
-    from scripts import monitor_health
-
-    monkeypatch.setattr(
-        monitor_health,
-        "get_database_storage_stats",
-        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
-    )
-    # checkpoint 成功把 -wal 截到阈值以下 → 不告警
-    monkeypatch.setattr(
-        monitor_health,
-        "checkpoint_wal",
-        lambda: {"busy": 0, "log_frames": 10, "checkpointed_frames": 10, "wal_bytes_after": 0},
-    )
-
-    assert monitor_health._check_wal_size(100) is None
-
-
-def test_monitor_wal_check_alerts_when_checkpoint_cannot_reclaim(monkeypatch):
-    from scripts import monitor_health
-
-    monkeypatch.setattr(
-        monitor_health,
-        "get_database_storage_stats",
-        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
-    )
-    # 读连接卡住：busy=1，-wal 没缩小 → 仍告警，并带上 checkpoint 诊断
-    monkeypatch.setattr(
-        monitor_health,
-        "checkpoint_wal",
-        lambda: {"busy": 1, "log_frames": 50, "checkpointed_frames": 0, "wal_bytes_after": 200},
-    )
-
-    error = monitor_health._check_wal_size(100)
-
-    assert error is not None
-    assert "too large" in error
-    assert "busy=1" in error
-
-
-def test_monitor_wal_check_skips_checkpoint_when_disabled(monkeypatch):
-    from scripts import monitor_health
-
-    monkeypatch.setattr(
-        monitor_health,
-        "get_database_storage_stats",
-        lambda: {"wal_bytes": 200, "journal_mode": "wal", "wal_autocheckpoint_pages": 1000},
-    )
-
-    def fail():
-        raise AssertionError("checkpoint should not run when disabled")
-
-    monkeypatch.setattr(monitor_health, "checkpoint_wal", fail)
-
-    error = monitor_health._check_wal_size(100, checkpoint_on_bloat=False)
-
-    assert error is not None
-    assert "too large" in error

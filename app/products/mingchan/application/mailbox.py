@@ -33,7 +33,6 @@ from app.db import (
     retire_character_letter_catalog_entry,
     transition_open_character_letter,
 )
-from app.db._backend import is_postgres
 from app.db._core import connect
 from app.products.mingchan.domain.companion_world.mailbox import (
     CharacterLetterRecord,
@@ -204,8 +203,6 @@ class CompanionWorldMailboxService:
         )
         expires_at = _db_time(now + timedelta(days=self.policy.letter_ttl_days))
         with connect() as tx:
-            if not is_postgres():
-                tx.execute("BEGIN IMMEDIATE")
             prepared = prepare_character_letter_delivery(
                 universe_id=universe_id,
                 now=now_text,
@@ -353,8 +350,6 @@ class CompanionWorldMailboxService:
         expired = False
         result: Optional[Dict[str, Any]] = None
         with connect() as tx:
-            if not is_postgres():
-                tx.execute("BEGIN IMMEDIATE")
             letter = lock_character_letter_accept_scope(
                 letter_id=letter_id,
                 owner_platform_user_id=platform_user_id,

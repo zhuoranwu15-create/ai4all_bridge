@@ -37,7 +37,7 @@ def pg_settings(postgresql_db, monkeypatch):
 
 
 def test_pg_backend_selected(pg_settings):
-    assert _backend.is_postgres() is True
+    assert _backend.database_url() == pg_settings.database_url
 
 
 def test_pg_roundtrip_placeholder_and_hybrid_row(pg_settings):
