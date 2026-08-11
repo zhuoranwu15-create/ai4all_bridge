@@ -19,6 +19,11 @@ def _drop_post_v35_plum_schema(conn) -> None:
 
     for table in (
         "plum_access_invites",
+        "plum_storyline_state",
+        "plum_storylines",
+        "plum_connection_character_adoptions",
+        "plum_connection_relationship_state",
+        "plum_connection_runtime_bindings",
         "plum_character_badge_assignments",
         "plum_conversation_pins",
         "plum_character_comments",
@@ -28,15 +33,20 @@ def _drop_post_v35_plum_schema(conn) -> None:
         "plum_character_stats",
         "plum_user_character_relationships",
         "plum_character_bindings",
-        "plum_user_personas",
         "plum_conversations",
+        "plum_connections",
+        "plum_user_personas",
+        "plum_character_version_tags",
+        "plum_tags",
+        "plum_character_versions",
         "plum_model_profiles",
         "plum_character_badges",
         "plum_characters",
+        "plum_works",
         "plum_public_profiles",
         "runtime_ownerships",
     ):
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
 
 def _columns(conn, table: str) -> set[str]:

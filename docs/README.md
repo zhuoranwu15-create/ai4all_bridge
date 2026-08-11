@@ -14,6 +14,8 @@
 | [产品目录](products/README.md) | 已注册产品、`app_id`、状态和产品文档入口 |
 | [朝夕总 PRD](products/zhaoxi/prd.md) | 朝夕产品定位、范围与验收口径 |
 | [鸣蝉总 PRD](products/mingchan/prd.md) | Native App / Companion World 产品边界与启用门槛 |
+| [Plum 总 PRD](products/plum/prd.md) | 海外 AI 角色聊天与互动内容产品的愿景、价值原则和核心体验 |
+| [Plum 总数据模型](products/plum/plum-data-model.md) | User、Persona、Character、Connection、Storyline、Runtime 和资产如何关联与迁移 |
 | [总体架构](architecture/overview.md) | 系统分层、依赖方向、核心链路与部署形态 |
 | [核心模型与术语](architecture/core-model.md) | 平台、产品、形态、渠道、身份作用域和代码所有权如何区分 |
 | [技术总平面](architecture/system_design.md) | 状态所有权、数据模型与技术平面 |

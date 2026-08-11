@@ -47,6 +47,11 @@ from app.db.migrations.plum import (
     _migration_0065_fibre_character_experience,
     _migration_0066_fibre_public_test_auth,
     _migration_0067_plum_product_rename,
+    _migration_0072_plum_character_content_foundation,
+    _migration_0073_plum_connection_foundation,
+    _migration_0074_plum_storyline_foundation,
+    _migration_0075_plum_system_work_ownership,
+    _migration_0076_plum_character_create_idempotency,
 )
 from app.db.migrations.shared import (
     _billing_contract_violation_counts,
@@ -716,6 +721,11 @@ _MIGRATIONS = [
     (69, _migration_0069_runtime_turn_cancellation),
     (70, _migration_0070_moderation_task_product_scope),
     (71, _migration_0071_moderation_task_app_idempotency),
+    (72, _migration_0072_plum_character_content_foundation),
+    (73, _migration_0073_plum_connection_foundation),
+    (74, _migration_0074_plum_storyline_foundation),
+    (75, _migration_0075_plum_system_work_ownership),
+    (76, _migration_0076_plum_character_create_idempotency),
 ]
 
 

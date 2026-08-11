@@ -21,7 +21,7 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Dict, List, Sequence, Set
+from typing import Dict, List, Mapping, Optional, Sequence, Set
 
 # 允许从仓库根直接运行
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -116,16 +116,31 @@ def _reset_identity(pconn, table: str, identity_cols: Set[str]) -> None:
     pconn.commit()
 
 
-def reconcile(sconn: sqlite3.Connection, pconn, tables: Sequence[str]) -> Dict:
-    """逐表行数对拍 + 账本按 wallet 勾稽。返回结构化报告（ok=False 表示行数不一致）。"""
+def reconcile(
+    sconn: sqlite3.Connection,
+    pconn,
+    tables: Sequence[str],
+    *,
+    pg_baseline_counts: Optional[Mapping[str, int]] = None,
+) -> Dict:
+    """逐表对拍复制增量，并执行账本按 wallet 勾稽。"""
+
+    baseline_counts = pg_baseline_counts or {}
     report: Dict = {"ok": True, "tables": {}, "ledger": None}
     for table in tables:
         s_n = sconn.execute(f"SELECT COUNT(*) FROM {_qi(table)}").fetchone()[0]
         with pconn.cursor() as cur:
             cur.execute(f"SELECT COUNT(*) FROM {_qi(table)}")
             p_n = cur.fetchone()[0]
-        match = int(s_n) == int(p_n)
-        report["tables"][table] = {"sqlite": int(s_n), "pg": int(p_n), "match": match}
+        baseline = int(baseline_counts.get(table, 0))
+        copied_n = int(p_n) - baseline
+        match = int(s_n) == copied_n
+        table_report = {"sqlite": int(s_n), "pg": copied_n, "match": match}
+        if baseline:
+            # 新迁移可能预置系统主体等基础行；对拍迁移增量，同时保留总数供审计。
+            table_report["pg_total"] = int(p_n)
+            table_report["pg_baseline"] = baseline
+        report["tables"][table] = table_report
         if not match:
             report["ok"] = False
 
@@ -179,13 +194,25 @@ def migrate(sqlite_path: str, pg_dsn: str, *, batch: int = 500, truncate: bool =
         tables = [t for t in src_tables if t in tgt_tables]
         skipped = [t for t in src_tables if t not in tgt_tables]
 
+        baseline_counts: Dict[str, int] = {}
+        if not truncate:
+            with pconn.cursor() as cur:
+                for table in tables:
+                    cur.execute(f"SELECT COUNT(*) FROM {_qi(table)}")
+                    baseline_counts[table] = int(cur.fetchone()[0])
+
         copied: Dict[str, int] = {}
         for table in tables:
             copied[table] = copy_table(sconn, pconn, table, batch=batch, truncate=truncate)
 
         result: Dict = {"copied": copied, "skipped": skipped, "reconcile": None}
         if do_reconcile:
-            result["reconcile"] = reconcile(sconn, pconn, tables)
+            result["reconcile"] = reconcile(
+                sconn,
+                pconn,
+                tables,
+                pg_baseline_counts=baseline_counts,
+            )
         return result
     finally:
         sconn.close()
