@@ -4,4 +4,5 @@
 
 | 产品 | 计划入口 |
 | --- | --- |
+| Plum | [注册登录与用户创建角色开发准备](plum/registration_login_character_create_readiness.md) |
 | 朝夕相伴 | [朝夕计划](zhaoxi/README.md) |

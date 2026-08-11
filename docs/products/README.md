@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 朝夕相伴 | `zhaoxi` | 已启用 | [产品 manifest](zhaoxi/README.md) |
 | 鸣蝉 | `mingchan` | 拆分实施中，生产未启用 | [产品 manifest](mingchan/README.md) |
-| Plum | `plum` | 文档与平台接入实施中，生产状态待确认 | [产品 manifest](plum/README.md) |
+| Plum | `plum` | 核心 PRD 已建立，专题需求与生产状态待确认 | [产品 manifest](plum/README.md) |
 
 鸣蝉是已经冻结边界、正在从原 App/Companion World 实现中拆出的真实产品，不属于候选占位。
 Fatetell、Nooki 等候选产品尚未冻结可开发的核心 PRD，因此不建立空目录或占位能力文档。

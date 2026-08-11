@@ -24,7 +24,6 @@ from app.db import (
     SessionPrincipal,
     ActiveRuntimeTurnError,
     create_runtime_turn_run,
-    create_platform_user_session,
     finish_runtime_turn_run,
     get_platform_user,
     get_duplicate_reply_record,
@@ -44,6 +43,7 @@ from app.products.plum.api.contracts import (
     CreateConversationRequest,
     CreateTurnRequest,
     RedeemAccessCodeRequest,
+    RestartConversationRequest,
     UpdateModelRequest,
 )
 from app.products.plum.api.deps import (
@@ -51,8 +51,10 @@ from app.products.plum.api.deps import (
     require_plum_available,
     require_plum_principal,
 )
+from app.products.plum.application.identity import create_plum_login_session
 from app.products.plum.application.turn_services import PLUM_TURN_SERVICES
 from app.products.plum.infrastructure.repository import (
+    PlumConflictError,
     create_or_get_conversation,
     redeem_plum_access_invite,
     get_character_experience,
@@ -121,9 +123,9 @@ def redeem_access_code(
             access_code=payload.access_code,
             display_name=payload.display_name,
         )
-        session = create_platform_user_session(
-            platform_user_id=str(identity["platform_user_id"]),
-            app_id=PLUM_APP_ID,
+        login = create_plum_login_session(
+            verified_platform_user_id=str(identity["platform_user_id"]),
+            display_name=str(identity["display_name"]),
             days=max(1, int(settings.plum_session_days)),
         )
     except ValueError as err:
@@ -134,7 +136,7 @@ def redeem_access_code(
     csrf_token = secrets.token_urlsafe(24)
     _set_auth_cookies(
         response,
-        session_token=str(session["token"]),
+        session_token=str(login["session"]["token"]),
         csrf_token=csrf_token,
     )
     _no_store(response)
@@ -144,7 +146,7 @@ def redeem_access_code(
             "id": identity["platform_user_id"],
             "display_name": identity["display_name"],
         },
-        "expires_at": session["expires_at"],
+        "expires_at": login["session"]["expires_at"],
         "wallet": _wallet(str(identity["platform_user_id"])),
     }
 
@@ -400,6 +402,7 @@ def change_model(
 @router.post("/conversations/{conversation_id}/restart")
 def restart(
     conversation_id: str,
+    payload: RestartConversationRequest,
     response: Response,
     principal: SessionPrincipal = Depends(require_plum_principal),
 ) -> dict:
@@ -407,7 +410,10 @@ def restart(
         conversation = restart_conversation(
             conversation_id=conversation_id,
             platform_user_id=principal.platform_user_id,
+            creation_idempotency_key=payload.idempotency_key,
         )
+    except PlumConflictError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
     experience = get_character_experience(

@@ -1,4 +1,8 @@
-"""Plum 本地/测试联调资料；不参与共享 Runtime。"""
+"""Plum 本地/测试联调资料；不参与共享 Runtime。
+
+内置 Character 内容随批准版本冻结。修改 ``REFERENCE_CHARACTERS`` 时必须同步提升
+``FIXTURE_VERSION``，并先提供对应的新版本发布路径；seed 不会原地覆盖已有 Character。
+"""
 
 FIXTURE_VERSION = "reference_fixture_v1"
 

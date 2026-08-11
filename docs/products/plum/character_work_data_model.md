@@ -1,11 +1,13 @@
 # Plum Work / Character 数据模型设计
 
 更新时间：2026-08-11  
-状态：团队评审稿；本文件定义 Create V1 的领域边界与建议表结构，不代表迁移已经实施
+状态：核心产品关系已冻结；迁移 72 已实施内容基础，迁移 76 与 Repository 已实施 Create 幂等和原子发布；正式审核/API 与 Edit 尚未实施
 
 ## 1. 目标与核心结论
 
-Create V1 首期只允许一次创建一个角色，但数据库从第一天保留 `Work 1 ── N Character` 的结构，避免未来增加多角色、世界观和世界书时重做角色主键与归属关系。
+Create V1 首期只允许一次创建一个角色，但数据库从第一天采用 `Work 1 ── N Character`：一个 Work
+可以包含多个 Character，一个 Character 必须且只能属于一个 Work。若同一概念角色出现在不同 Work，
+应创建不同的 `character_id`，不在 Work 之间复用同一 Character 资产。
 
 本期采用以下原则：
 
@@ -15,20 +17,22 @@ Create V1 首期只允许一次创建一个角色，但数据库从第一天保�
 4. Create/Edit 提交先做同步机器审核。审核失败不改变正式内容；成功后在同一事务写版本、Tags 并更新当前投影。
 5. `content_version` 记录完整角色内容版本；现有 `prompt_version` 只记录会影响 AI 回复的运行版本。
 6. V1 不建立服务端草稿、人工审核队列、World、世界书、用户身份或多角色关系表。这些能力保留清晰扩展点，确认需求后再建模。
+7. Character 发布新版本后，所有已有 Persona–Character Connection 自动采用新版本；Character 下架后已有 Connection 也不能继续互动。
+8. 内容分级区分创作者声明、平台最终有效分级和版本化访问策略，旧 `content_rating` 只作为兼容投影。
 
 ## 2. 领域关系
 
 ```text
 Platform User
   └── owns Plum Work
-        └── contains one or more Character instances
+        └── contains one or more Character assets
               ├── has immutable approved Versions
               ├── has controlled Tags per Version
               └── binds independently to each consumer Runtime
 ```
 
-- 一个 Work 可以拥有多个 Character 实例。
-- 一个 Character 实例只能属于一个 Work。
+- 一个 Work 可以拥有多个 Character 资产。
+- 一个 Character 资产必须且只能属于一个 Work，数据库最终以非空 `work_id` 和外键保证该约束。
 - 同一概念角色可以出现在不同 Work，但每个 Work 中是不同的 `character_id`，设定和聊天历史互不污染。
 - 未来若需要跨作品复用“角色原型”，再建立独立 Character Template / Identity 资源；V1 不预建空字段。
 
@@ -39,13 +43,17 @@ Work 是稳定的作品容器和权限边界。V1 服务层限制每个 Work 只
 | 字段 | 取值 / 约束 | 解释 | 示例 |
 | --- | --- | --- | --- |
 | `id` | TEXT，主键 | Work 唯一 ID | `work_01JXYZ...` |
-| `owner_platform_user_id` | TEXT，必填 | 真正的资源所有者；所有 Create/Edit/Archive 权限从这里判断 | `pusr_01J...` |
+| `owner_kind` | `platform_user / system`，必填 | 区分真人创作者资产与平台内置资产 | `platform_user` |
+| `owner_platform_user_id` | TEXT，真人 Work 必填、系统 Work 必须为空 | 真人资源所有者；Create/Edit/Archive 权限从这里判断 | `pusr_01J...` |
 | `creator_profile_id` | TEXT，必填 | 对外展示的创作者身份；不参与权限判断 | `fprof_creator_plum` |
 | `lifecycle_status` | `active / archived` | Work 自身生命周期，不等同于单个角色是否公开或被下架 | `active` |
 | `created_at` | 时间，必填 | Work 创建时间 | `2026-08-11 14:00:00` |
 | `updated_at` | 时间，必填 | Work 最后更新时间 | `2026-08-12 10:20:00` |
 
 V1 明确不放入 Work 的字段：作品名称、作品封面、World、世界书、公共故事背景、故事前提、角色关系和主要角色。这些语义在多角色产品方案确定后再设计。
+
+平台内置 Character 的 Work 使用 `owner_kind='system'`，不在 `platform_users` 中创建假真人；真人 Work
+使用 `owner_kind='platform_user'`，且数据库要求非空 `owner_platform_user_id`。
 
 ## 4. `plum_characters`
 
@@ -66,7 +74,7 @@ V1 明确不放入 Work 的字段：作品名称、作品封面、World、世界
 
 | 字段 | 状态 | 取值 / 约束 | 解释 | 示例 |
 | --- | --- | --- | --- | --- |
-| `id` | 现有 | TEXT，主键 | 角色实例 ID；聊天、收藏、评论等关系继续引用它 | `char_01JABC...` |
+| `id` | 现有 | TEXT，主键 | 角色资产 ID；聊天、收藏、评论等关系继续引用它 | `char_01JABC...` |
 | `work_id` | 新增 | TEXT，最终必填，引用 `plum_works.id` | 角色所属作品；所有权从 Work 获取 | `work_01JXYZ...` |
 | `creator_profile_id` | 现有兼容 | TEXT | 消费者接口当前读取的创作者身份投影，不得用于鉴权 | `fprof_creator_plum` |
 
@@ -84,7 +92,11 @@ V1 明确不放入 Work 的字段：作品名称、作品封面、World、世界
 | `tagline` | 现有兼容 | TEXT，必填 | 现有卡片和聊天接口使用；新版本发布时写入与 `intro` 相同的内容，由各页面自行截断 | 与 `intro` 相同 |
 | `greeting` | 现有兼容 | TEXT，必填 | Create 页的 Opening Scene；仅用于初始化新聊天的第一条角色内容 | `*Luna closes the door.* “You came.”` |
 | `tags_json` | 现有兼容 | JSON 文本数组 | 当前 Feed/Chat 的标签展示投影；由当前版本 Tags 生成，不是长期唯一数据源 | `["Romance","Fantasy"]` |
-| `content_rating` | 现有，调整枚举 | `limited / limitless` | 内容等级；用于发现和访问策略，不能绕过平台安全规则 | `limited` |
+| `creator_declared_rating` | 新增 | 平台分级代码，必填 | 创作者对当前版本内容等级的声明，不直接决定访问权限 | `mature` |
+| `platform_effective_rating` | 新增 | 平台分级代码，必填 | 审核后生效的最终内容等级，是 Feed 和访问判断的权威来源 | `mature` |
+| `access_policy_version` | 新增 | TEXT，必填 | 计算年龄、地区和内容访问资格时使用的策略版本 | `plum-rating-v1` |
+| `moderation_decision_id` | 新增 | TEXT；新发布必填，迁移历史可空 | 关联使当前版本生效的真实审核决定；历史内容不伪造审核记录 | `moddec_01J...` |
+| `content_rating` | 现有兼容 | TEXT | `platform_effective_rating` 的兼容投影；不得再作为独立可写权威字段 | `mature` |
 | `visibility` | 新增 | `public / private`，默认 `public` | Private 不进入公共 Feed、搜索或推荐，但所有者仍可编辑和聊天 | `public` |
 
 Gender 的 V1 默认模型身份如下；不依赖用户在 Character Settings 中重复填写：
@@ -97,12 +109,15 @@ Gender 的 V1 默认模型身份如下；不依赖用户在 Character Settings �
 
 V1 不提供 Pronouns 输入框。未来如支持自定义代词，应增加独立结构化字段，而不是要求模型从 Settings 猜测。
 
-现有 `content_rating` 数据迁移映射：
+现有 `content_rating` 迁移时先同时回填声明分级和平台有效分级，并记录专用迁移审核决定。以下仅是
+历史代码到首版策略的初始映射，不得把 `limited / limitless` 继续作为永久分级体系：
 
 ```text
-general -> limited
-mature  -> limitless
+general -> policy-defined general tier
+mature  -> policy-defined mature tier
 ```
+
+最终分级代码、年龄阈值和地区可用性由独立内容访问策略冻结；无论分级为何，都不能绕过平台安全规则。
 
 ### 4.4 图片与取景
 
@@ -153,6 +168,10 @@ Create V1 不依赖 AI 自动拆分 Character Settings：
 | `sort_order` | 现有系统字段 | 整数 | 当前运营排序兼容字段 | `20` |
 | `capabilities_json` | 现有系统字段 | JSON 文本 | 当前角色能力；Create V1 固定文本聊天，不提供 Voice | `{"text":true,"voice":false}` |
 | `fixture_version` | 现有系统字段 | TEXT，可空 | 内置样例数据版本；用户创建角色为空 | `tipsy-reference-v2` |
+
+内置 Character seed 只负责首次创建，不会原地覆盖或重新激活已有 Character。修改
+`REFERENCE_CHARACTERS` 必须同步提升 `FIXTURE_VERSION`，并先通过正式发布流程创建新的不可变
+Character Version；该发布流程尚未实现时，seed 会对版本漂移显式失败，禁止静默刷新当前投影。
 | `created_at` | 现有 | 时间 | 角色记录创建时间 | `2026-08-11 14:00:00` |
 | `updated_at` | 现有 | 时间 | 当前投影最后更新时间 | `2026-08-12 10:20:00` |
 
@@ -184,9 +203,13 @@ Create V1 不依赖 AI 自动拆分 Character Settings：
 | `intro` | TEXT，必填 | Character Intro 的唯一创作者输入；发布时同时投影到 `intro` 和 `tagline` | `A guarded stargazer...` |
 | `opening_scene` | TEXT，必填 | Opening Scene 原文；发布时投影到 `greeting` | `*Luna looks up.* “You're early.”` |
 | `character_settings` | TEXT，必填 | 私有长期角色设定原文 | `# Roles and Goals...` |
+| `scenario_prompt` | TEXT，可空 | 兼容已有长期故事前提；Create V1 默认空 | `You and the user work at a remote observatory.` |
 | `example_dialogues` | TEXT，可空 | 私有范例对话原文 | `{{user}}: ...` |
 | `response_rules` | TEXT，可空 | 私有回复规则原文 | `Never decide for the user.` |
-| `content_rating` | `limited / limitless` | 该版本内容等级 | `limited` |
+| `creator_declared_rating` | 平台分级代码 | 创作者提交该版本时声明的内容等级 | `mature` |
+| `platform_effective_rating` | 平台分级代码 | 审核后确定的最终有效等级 | `mature` |
+| `access_policy_version` | TEXT | 该版本发布时使用的内容访问策略版本 | `plum-rating-v1` |
+| `moderation_decision_id` | TEXT；新发布必填，迁移历史可空 | 使该版本生效的真实审核决定 | `moddec_01J...` |
 | `visibility` | `public / private` | 该版本公开范围 | `public` |
 | `created_at` | 时间 | 该版本审核通过并生效的时间 | `2026-08-12 10:20:00` |
 
@@ -253,6 +276,10 @@ PRIMARY KEY (character_id, version_number, tag_id)
        5. 标记 Portrait media 为 referenced
 ```
 
+迁移 76 与 `publish_created_character()` 已实现 owner-scoped 幂等记录及上述单事务写入。该函数只接受
+服务端已验证的审核决定，不直接挂载 HTTP；正式 Create API 必须先接入海外审核 adapter，不能把审核字段
+暴露给客户端。Creator Public Profile 在事务内按 User get-or-create，权限仍只以 Work owner 判断。
+
 ### 7.2 编辑
 
 编辑请求携带 `base_version`，防止两个浏览器标签页静默覆盖：
@@ -280,11 +307,26 @@ prompt_version  = 影响 AI 回复的运行版本
 
 | 编辑内容 | `content_version` | `prompt_version` | 解释 |
 | --- | --- | --- | --- |
-| Portrait、Avatar crop、Intro、Tags、Rating、Visibility | +1 | 不变 | 不改变 AI 行为 |
+| Portrait、Avatar crop、Intro、Tags、分级、Visibility | +1 | 不变 | 不改变 AI 行为，但 Connection 仍记录已采用的新内容版本 |
 | Opening Scene | +1 | 不变 | 只影响以后新建聊天的开场，不改写历史会话 |
 | Name、Gender、Character Settings、Example Dialogues、Response Rules | +1 | +1 | 改变 Runtime 身份或回复行为 |
 
-现有 `plum_character_bindings.character_prompt_version` 继续记录用户绑定时使用的 Prompt 版本。开始新会话或生成新回复前发现版本落后时，后端必须先刷新或重建该用户与角色的 Runtime，并在成功后更新绑定版本；当前实现只在首次绑定时复制 Prompt，后续实现 PR 必须补齐这一行为。
+Character 新版本审核通过并生效后，所有已有 Connection 自动采用该版本：
+
+- Connection 保存当前采用的 `character_id + content_version`，并保留版本切换审计；
+- 纯展示内容变化只更新 Connection 的已采用内容版本，不重建 Runtime；
+- `prompt_version` 变化时，在生成下一条回复前原子刷新或重建该 Connection 的 Runtime；刷新失败时不得
+  更新已采用版本，也不得在同一轮生成中混用新旧 Prompt；
+- 每个生成 Turn 记录实际采用的 Character `content_version`、`prompt_version` 和访问策略版本，保证
+  升级前后的历史回复可以审计；
+- Character 升级保留 Connection 的关系、记忆和剧情；Opening Scene 只用于重开后创建的新 Connection，
+  不插入已有 Conversation；
+- 最新平台有效分级或访问策略使当前 User 不再具备资格时暂停 Connection，不得回退旧版本绕过访问控制；
+- `taken_down` 优先于升级流程，下架后新旧 Connection 都不得继续生成角色回复。
+
+现有 `plum_character_bindings` 以 `platform_user_id + character_id` 唯一，不能表达同一 Persona 与 Character
+的多个独立 Connection。它只能作为迁移期兼容结构；生产实现应改为 Connection 级 Runtime Binding，
+`character_prompt_version` 只用于缓存失效，不能代替 Character Version。
 
 ## 8. 不放入上述表的内容
 
@@ -316,4 +358,4 @@ World 应独立版本化并由 Work 固定绑定某一版本；Character 不能�
 3. 现有内置角色建立初始 Work 和 Version 1；不能根据文案自动推断 Gender，允许在数据补齐前为空。
 4. 普通消费者 DTO 明确列字段，绝不能使用 `SELECT *` 后删除少数字段的方式暴露私有 Settings、Examples 或 Prompt。
 5. 当前投影、版本行、Tags 和媒体引用必须在同一数据库事务生效；任何一步失败都不得出现“页面是新版本、Runtime 仍是旧版本”的半完成状态。
-6. 本文未授权直接执行生产迁移。实现 PR 需要单独提供迁移顺序、回填验证、回滚方案和 PostgreSQL 聚焦测试。
+6. 迁移 72 与 76、Create 原子发布 Repository 已在代码中实现并带 PostgreSQL 聚焦测试；正式环境仍须通过受控迁移闸执行，部署前核对回填计数和备份，不由普通应用启动隐式跨越。

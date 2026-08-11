@@ -56,8 +56,41 @@ def test_plum_seed_is_idempotent_and_product_scoped(fresh_db, monkeypatch):
         platform_user_id="user_plum_test", app_id="plum"
     )
     assert membership["status"] == "active"
+    with db.connect() as conn:
+        foundation = conn.execute(
+            """
+            SELECT COUNT(DISTINCT ch.work_id) AS work_count,
+                   COUNT(DISTINCT cv.character_id) AS versioned_count,
+                   COUNT(*) FILTER (WHERE cv.version_number=1) AS v1_count
+            FROM plum_characters ch
+            JOIN plum_character_versions cv
+              ON cv.character_id=ch.id AND cv.version_number=ch.content_version
+            WHERE ch.fixture_version=?
+            """,
+            (repository.FIXTURE_VERSION,),
+        ).fetchone()
+        assert foundation["work_count"] == 10
+        assert foundation["versioned_count"] == 10
+        assert foundation["v1_count"] == 10
     wallet = db.get_wallet_summary(account_id=first["entry_account_id"])
     assert wallet["wallet"]["balance_shell_micros"] == 1_000_000_000
+
+
+def test_plum_seed_rejects_silent_builtin_fixture_drift(fresh_db, monkeypatch):
+    """内置内容版本变化必须走发布路径，seed 不得静默保留或覆盖旧内容。"""
+
+    _configure_plum(monkeypatch, fresh_db)
+    repository.seed_plum_dev()
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE plum_characters SET fixture_version='reference_fixture_old'
+            WHERE id='char_ref_after_hours'
+            """
+        )
+
+    with pytest.raises(RuntimeError, match="fixture version drift"):
+        repository.seed_plum_catalog()
 
 
 def test_plum_feed_is_public_without_session(fresh_db, monkeypatch):
@@ -358,7 +391,8 @@ def test_plum_http_core_flow_charges_fixed_price_once(fresh_db, monkeypatch):
         assert turn.json()["wallet"]["balance"] == 997
 
         restarted = client.post(
-            f"/api/v1/products/plum/conversations/{conversation['id']}/restart"
+            f"/api/v1/products/plum/conversations/{conversation['id']}/restart",
+            json={"idempotency_key": "restart-plum-1"},
         )
         assert restarted.status_code == 200
         assert restarted.json()["conversation"]["id"] != conversation["id"]

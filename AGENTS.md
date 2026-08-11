@@ -81,6 +81,7 @@ PG→SQLite 快照和 TDAI 自身 SQLite 继续保留，不属于主应用后端
 ## 测试
 
 ```bash
+# 仓库全集；Coding Agent 默认不得运行，除非用户明确要求完整回归
 .venv/bin/pytest tests/ -v
 .venv/bin/pytest tests/test_turn_service.py -v
 ```
@@ -94,8 +95,10 @@ PG→SQLite 快照和 TDAI 自身 SQLite 继续保留，不属于主应用后端
 测试选择策略：
 
 - 窄范围代码改动，优先运行直接覆盖被改模块或行为的聚焦测试。
-- 只有当改动触及共享基础设施、请求路由、持久化/schema、计费、prompt/tool 执行、跨模块契约，或准备提交较大改动时，才运行全量测试。
-- 如果用户明确要求完整回归，运行全量测试。
+- Plum、鸣蝉（Mingchan）或朝夕（Zhaoxi）的单产品任务，默认只运行对应产品测试，以及被本次改动直接影响的 platform/shared/迁移契约聚焦测试；不得因为改动涉及 schema、路由、Runtime 或准备提交 PR 就自动运行 `tests/` 全集。
+- 同时修改多个产品时，运行这些产品测试集合的并集，再补直接受影响的共享测试；不要扩展成无关产品全集。
+- 只有用户明确要求“完整回归 / 全量测试”，或正在执行已经明确规定的 CI、发布门禁时，才运行 `.venv/bin/pytest tests/` 或 `make test`。
+- 具体产品和共享模块命令见 [`docs/guides/testing.md`](docs/guides/testing.md)。
 
 ## 开发脚本
 
