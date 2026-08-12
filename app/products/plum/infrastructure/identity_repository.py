@@ -71,7 +71,10 @@ def create_google_oauth_challenge(
 def get_google_oauth_challenge(*, state: str) -> Dict[str, Any]:
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM plum_identity_challenges WHERE provider='google' AND target_hash=? AND status='pending' FOR UPDATE",
+            """SELECT * FROM plum_identity_challenges
+               WHERE provider='google' AND target_hash=? AND status='pending'
+                 AND expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+               FOR UPDATE""",
             (_oauth_digest(f"state:{state}"),),
         ).fetchone()
         if row is None:
