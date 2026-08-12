@@ -58,10 +58,13 @@ def require_plum_principal(request: Request) -> SessionPrincipal:
         return principal
 
     env = str(settings.app_env or "").strip().lower()
-    if (
-        not bool(settings.plum_dev_mode)
-        or env not in _DEV_ENVS
-    ):
+    # Formal authentication takes precedence over the development fixed user.
+    # Keep PLUM_DEV_MODE available for local product behavior, but never inject
+    # the seed identity once Email or Google sign-in is enabled.
+    formal_auth_enabled = bool(getattr(settings, "plum_email_auth_enabled", False)) or bool(
+        getattr(settings, "plum_google_auth_enabled", False)
+    )
+    if not bool(settings.plum_dev_mode) or env not in _DEV_ENVS or formal_auth_enabled:
         raise HTTPException(status_code=401, detail="authentication_required")
     platform_user_id = str(settings.plum_test_user_id).strip()
     with connect() as conn:
@@ -114,7 +117,10 @@ def optional_plum_actor(request: Request) -> Optional[PlumActorPrincipal]:
         if guest is not None:
             return guest
     env = str(settings.app_env or "").strip().lower()
-    if bool(settings.plum_dev_mode) and env in _DEV_ENVS:
+    formal_auth_enabled = bool(getattr(settings, "plum_email_auth_enabled", False)) or bool(
+        getattr(settings, "plum_google_auth_enabled", False)
+    )
+    if bool(settings.plum_dev_mode) and env in _DEV_ENVS and not formal_auth_enabled:
         try:
             return require_plum_principal(request)
         except HTTPException:
