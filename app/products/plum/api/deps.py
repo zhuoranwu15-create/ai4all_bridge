@@ -141,7 +141,10 @@ def require_plum_actor(request: Request) -> PlumActorPrincipal:
         ):
             raise HTTPException(status_code=403, detail="csrf_validation_failed")
     else:
-        _require_csrf(request)
+        # Cookie-backed Member sessions require CSRF; the local fixed seed has
+        # no browser session and keeps the existing development-only behavior.
+        if request.cookies.get(str(settings.plum_session_cookie_name)):
+            _require_csrf(request)
     return actor
 
 

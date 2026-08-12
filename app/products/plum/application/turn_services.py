@@ -28,6 +28,7 @@ class PlumTurnServices:
     tool_policy = PLUM_TOOL_POLICY
     # Plum 没有聊天内引导流程；None 让 Runtime 整条短路，取代此前那组 raise 桩实现。
     onboarding = None
+    provisional_actor_owner_kinds = ("guest",)
 
     def __init__(self, registry: ProductRegistry = PRODUCTION_PRODUCT_REGISTRY) -> None:
         self.registry = registry

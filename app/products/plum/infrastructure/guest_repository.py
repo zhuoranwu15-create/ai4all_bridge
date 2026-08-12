@@ -185,6 +185,25 @@ def upsert_guest_profile(
             """,
             (platform_user_id, pronouns, relationship_preference, json.dumps(genres)),
         )
+        persona_id = f"fpersona_guest_{uuid.uuid5(uuid.NAMESPACE_URL, platform_user_id).hex}"
+        conn.execute(
+            """
+            INSERT INTO plum_user_personas(
+                id, platform_user_id, display_name, description, prompt_text,
+                status, is_default, version
+            )
+            VALUES (?, ?, 'You', 'Guest onboarding profile', ?, 'active', 1, 1)
+            ON CONFLICT(id) DO UPDATE SET
+                prompt_text=excluded.prompt_text,
+                status='active', is_default=1,
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            """,
+            (
+                persona_id,
+                platform_user_id,
+                "The user enters the story as themselves. Pronouns: " + pronouns + ".",
+            ),
+        )
     profile = get_guest_profile(platform_user_id=platform_user_id)
     if profile is None:
         raise RuntimeError("guest profile was not saved")
@@ -205,12 +224,192 @@ def get_guest_quota(*, platform_user_id: str) -> Dict[str, int]:
     }
 
 
+def reserve_guest_action(
+    *,
+    platform_user_id: str,
+    character_id: str,
+    conversation_id: str,
+    client_action_id: str,
+    action_kind: str,
+) -> Dict[str, Any]:
+    """Atomically deduplicate and reserve one server-authoritative Guest action."""
+
+    if action_kind not in {"message", "continue"}:
+        raise ValueError("guest_action_invalid")
+    with connect() as conn:
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (f"plum-guest-quota:{platform_user_id}",),
+        )
+        receipt = conn.execute(
+            """
+            SELECT * FROM plum_guest_action_receipts
+            WHERE platform_user_id=? AND client_action_id=?
+            """,
+            (platform_user_id, client_action_id),
+        ).fetchone()
+        if receipt is not None:
+            if (
+                str(receipt["action_kind"]) != action_kind
+                or str(receipt["conversation_id"] or "") != conversation_id
+            ):
+                raise ValueError("guest_action_idempotency_conflict")
+            stored_response = receipt["response_json"]
+            if isinstance(stored_response, str):
+                stored_response = json.loads(stored_response)
+            stored_response = dict(stored_response or {})
+            status = str(receipt["status"])
+            if status == "rejected":
+                return {
+                    "deduplicated": True,
+                    "reason": stored_response.get("reason"),
+                    "receipt": dict(receipt),
+                }
+            if status == "completed":
+                return {
+                    "deduplicated": True,
+                    "reason": None,
+                    "completed": True,
+                    **stored_response,
+                    "receipt": dict(receipt),
+                }
+            if status in {"accepted", "pending"}:
+                return {
+                    "deduplicated": True,
+                    "reason": None,
+                    "in_progress": True,
+                    **stored_response,
+                    "receipt": dict(receipt),
+                }
+            if status == "failed":
+                conn.execute(
+                    """
+                    UPDATE plum_guest_action_receipts
+                    SET status='accepted',
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                    WHERE platform_user_id=? AND client_action_id=? AND status='failed'
+                    """,
+                    (platform_user_id, client_action_id),
+                )
+            return {
+                "deduplicated": True,
+                "reason": None,
+                "finish_required": True,
+                "retrying": True,
+                **stored_response,
+                "receipt": dict(receipt),
+            }
+        usage = conn.execute(
+            "SELECT typed_accepted, continue_accepted FROM plum_guest_usage WHERE platform_user_id=? FOR UPDATE",
+            (platform_user_id,),
+        ).fetchone()
+        if usage is None:
+            raise ValueError("guest_session_expired")
+        reason = None
+        character_usage = None
+        if action_kind == "message" and int(usage["typed_accepted"]) >= int(settings.plum_guest_typed_limit):
+            reason = "typed_limit"
+        if action_kind == "continue":
+            character_usage = conn.execute(
+                """
+                SELECT continue_accepted FROM plum_guest_character_usage
+                WHERE platform_user_id=? AND character_id=?
+                """,
+                (platform_user_id, character_id),
+            ).fetchone()
+            if int(usage["continue_accepted"]) >= int(settings.plum_guest_continue_limit):
+                reason = "global_continue_limit"
+            elif character_usage and int(character_usage["continue_accepted"]) >= int(settings.plum_guest_character_continue_limit):
+                reason = "character_continue_limit"
+        action_sequence = (
+            int(usage["typed_accepted"]) + 1
+            if action_kind == "message"
+            else int(usage["continue_accepted"]) + 1
+        )
+        character_action_sequence = (
+            int(character_usage["continue_accepted"] if character_usage else 0) + 1
+            if action_kind == "continue"
+            else None
+        )
+        status = "rejected" if reason else "accepted"
+        response = (
+            {"reason": reason}
+            if reason
+            else {
+                "action_sequence": action_sequence,
+                "character_action_sequence": character_action_sequence,
+            }
+        )
+        conn.execute(
+            """
+            INSERT INTO plum_guest_action_receipts(
+                platform_user_id, client_action_id, action_kind,
+                conversation_id, status, response_json
+            ) VALUES (?, ?, ?, ?, ?, ?::jsonb)
+            """,
+            (
+                platform_user_id,
+                client_action_id,
+                action_kind,
+                conversation_id,
+                status,
+                json.dumps(response),
+            ),
+        )
+        if reason:
+            return {"deduplicated": False, "reason": reason}
+        column = "typed_accepted" if action_kind == "message" else "continue_accepted"
+        conn.execute(
+            f"""
+            UPDATE plum_guest_usage SET {column}={column}+1,
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE platform_user_id=?
+            """,
+            (platform_user_id,),
+        )
+        if action_kind == "continue":
+            conn.execute(
+                """
+                INSERT INTO plum_guest_character_usage(
+                    platform_user_id, character_id, continue_accepted
+                ) VALUES (?, ?, 1)
+                ON CONFLICT(platform_user_id, character_id) DO UPDATE SET
+                    continue_accepted=plum_guest_character_usage.continue_accepted+1,
+                    updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                """,
+                (platform_user_id, character_id),
+            )
+    return {
+        "deduplicated": False,
+        "reason": None,
+        "finish_required": True,
+        "action_sequence": action_sequence,
+        "character_action_sequence": character_action_sequence,
+    }
+
+
+def finish_guest_action(
+    *, platform_user_id: str, client_action_id: str, success: bool
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE plum_guest_action_receipts
+            SET status=?, updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE platform_user_id=? AND client_action_id=? AND status='accepted'
+            """,
+            ("completed" if success else "failed", platform_user_id, client_action_id),
+        )
+
+
 __all__ = [
     "GuestPrincipal",
     "create_guest_session",
     "get_guest_profile",
     "get_guest_quota",
     "guest_csrf_matches",
+    "finish_guest_action",
+    "reserve_guest_action",
     "resolve_guest_principal",
     "upsert_guest_profile",
 ]

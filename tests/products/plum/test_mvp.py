@@ -38,6 +38,8 @@ def _configure_plum(monkeypatch, fresh_db):
     config.plum_guest_typed_limit = 2
     config.plum_guest_continue_limit = 8
     config.plum_guest_character_continue_limit = 2
+    config.plum_guest_provider_id = "deepseek"
+    config.plum_guest_max_output_tokens = 384
     monkeypatch.setattr(repository, "settings", config)
     monkeypatch.setattr(guest_repository, "settings", config)
     return config

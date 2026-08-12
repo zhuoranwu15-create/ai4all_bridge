@@ -154,6 +154,10 @@ class Settings(BaseSettings):
     plum_guest_character_continue_limit: int = _plum_setting(
         2, "GUEST_CHARACTER_CONTINUE_LIMIT"
     )
+    plum_guest_provider_id: str = _plum_setting("deepseek", "GUEST_PROVIDER_ID")
+    plum_guest_max_output_tokens: int = _plum_setting(
+        384, "GUEST_MAX_OUTPUT_TOKENS"
+    )
 
     # ===== 主应用 PostgreSQL（见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 主运行时必填；空值或非 PostgreSQL URL 会在首次连接（FastAPI startup）直接失败。

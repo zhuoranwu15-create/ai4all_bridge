@@ -14,6 +14,7 @@ from app.bootstrap.product_registry import (
     ProductRegistry,
 )
 from app.config import settings
+from app.agent_runtime.persistence import profile_storage
 from app.db import (
     connect,
     ensure_runtime_ownership,
@@ -273,6 +274,14 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
         ("fast", settings.plum_fast_provider_id, "快速", "响应更快，适合轻松日常", 1_000_000, 0),
         ("balanced", settings.plum_balanced_provider_id, "均衡", "质量与速度兼顾", 3_000_000, 1),
         ("immersive", settings.plum_immersive_provider_id, "沉浸", "更细腻、更有角色感", 5_000_000, 0),
+        (
+            "guest_free",
+            str(getattr(settings, "plum_guest_provider_id", "deepseek")),
+            "Guest Free",
+            "Internal acquisition tier",
+            0,
+            0,
+        ),
     )
     for profile in profiles:
         conn.execute(
@@ -1089,7 +1098,7 @@ def list_model_profiles() -> List[Dict[str, Any]]:
             """
             SELECT profile, display_name, description, coin_cost_micros,
                    is_default, config_version
-            FROM plum_model_profiles WHERE enabled=1
+            FROM plum_model_profiles WHERE enabled=1 AND profile<>'guest_free'
             ORDER BY coin_cost_micros, profile
             """
         ).fetchall()
@@ -1345,25 +1354,67 @@ def _ensure_connection_runtime_in_conn(conn, *, connection) -> str:
         )
         if part
     )
-    runtime = insert_resident_runtime_account(
-        platform_user_id=str(connection["platform_user_id"]),
-        display_name=str(version["display_name"]),
-        initial_channel="native",
-        app_id=PLUM_APP_ID,
-        soul_seed=soul,
-        identity_seed=f"# 身份\n\n名字：{version['display_name']}\n",
-        registry=PRODUCTION_PRODUCT_REGISTRY,
-        conn=conn,
-    )
-    runtime_account_id = str(runtime["account"]["id"])
-    ensure_runtime_ownership(
-        runtime_account_id=runtime_account_id,
-        platform_user_id=str(connection["platform_user_id"]),
-        app_id=PLUM_APP_ID,
-        source_type="plum_connection",
-        source_id=str(connection["id"]),
-        conn=conn,
-    )
+    owner = conn.execute(
+        "SELECT subject_kind FROM platform_users WHERE id=? AND status='active'",
+        (connection["platform_user_id"],),
+    ).fetchone()
+    if owner is None:
+        raise ValueError("platform_user_not_active")
+    if str(owner["subject_kind"]) == "guest":
+        runtime_account_id = f"aid_guest_{uuid.uuid4().hex[:24]}"
+        conn.execute(
+            """
+            INSERT INTO accounts(
+                id, channel, display_name, status, onboarding_state, app_id
+            ) VALUES (?, 'native', ?, 'active', 'complete', ?)
+            """,
+            (runtime_account_id, str(version["display_name"]), PLUM_APP_ID),
+        )
+        conn.execute(
+            "INSERT INTO profiles(account_id, display_name) VALUES (?, ?)",
+            (runtime_account_id, str(version["display_name"])),
+        )
+        profile_storage.write_file(runtime_account_id, "SOUL.md", soul, conn=conn)
+        profile_storage.write_file(
+            runtime_account_id,
+            "IDENTITY.md",
+            f"# 身份\n\n名字：{version['display_name']}\n",
+            conn=conn,
+        )
+        conn.execute(
+            """
+            INSERT INTO runtime_ownerships(
+                runtime_account_id, platform_user_id, app_id, owner_kind,
+                source_type, source_id, status
+            ) VALUES (?, ?, ?, 'guest', 'plum_connection', ?, 'active')
+            """,
+            (
+                runtime_account_id,
+                connection["platform_user_id"],
+                PLUM_APP_ID,
+                connection["id"],
+            ),
+        )
+    else:
+        runtime = insert_resident_runtime_account(
+            platform_user_id=str(connection["platform_user_id"]),
+            display_name=str(version["display_name"]),
+            initial_channel="native",
+            app_id=PLUM_APP_ID,
+            soul_seed=soul,
+            identity_seed=f"# 身份\n\n名字：{version['display_name']}\n",
+            registry=PRODUCTION_PRODUCT_REGISTRY,
+            conn=conn,
+        )
+        runtime_account_id = str(runtime["account"]["id"])
+        ensure_runtime_ownership(
+            runtime_account_id=runtime_account_id,
+            platform_user_id=str(connection["platform_user_id"]),
+            app_id=PLUM_APP_ID,
+            source_type="plum_connection",
+            source_id=str(connection["id"]),
+            conn=conn,
+        )
     conn.execute(
         """
         INSERT INTO plum_connection_runtime_bindings(
@@ -1486,6 +1537,7 @@ def create_or_get_conversation(
     platform_user_id: str,
     character_id: str,
     persona_id: Optional[str] = None,
+    model_profile: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create or restore the active Persona–Character Connection conversation."""
 
@@ -1528,7 +1580,10 @@ def create_or_get_conversation(
                 creation_reason="initial",
             )
         return _create_conversation_for_connection_in_conn(
-            conn, connection=connection, character=character
+            conn,
+            connection=connection,
+            character=character,
+            model_profile=model_profile,
         )
 
 

@@ -32,6 +32,8 @@ def _guest_client(monkeypatch, fresh_db) -> TestClient:
     config.plum_guest_typed_limit = 2
     config.plum_guest_continue_limit = 8
     config.plum_guest_character_continue_limit = 2
+    config.plum_guest_provider_id = "deepseek"
+    config.plum_guest_max_output_tokens = 384
     monkeypatch.setattr(plum_api, "settings", config)
     monkeypatch.setattr(plum_deps, "settings", config)
     monkeypatch.setattr(guest_repository, "settings", config)

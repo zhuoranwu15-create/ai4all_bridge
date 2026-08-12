@@ -75,9 +75,26 @@ class UpdateModelRequest(BaseModel):
     model_profile: Literal["fast", "balanced", "immersive"]
 
 
+class TurnAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["message", "continue"]
+    text: Optional[str] = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_action_text(self):
+        cleaned = str(self.text or "").strip()
+        if self.kind == "message" and not cleaned:
+            raise ValueError("message text required")
+        if self.kind == "continue" and cleaned:
+            raise ValueError("continue action cannot include text")
+        self.text = cleaned or None
+        return self
+
+
 class CreateTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=2000)
+    text: Optional[str] = Field(default=None, max_length=2000)
+    action: Optional[TurnAction] = None
     client_message_id: str = Field(min_length=8, max_length=128)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
@@ -87,4 +104,8 @@ class CreateTurnRequest(BaseModel):
 
         if self.client_message_id.strip() != self.idempotency_key.strip():
             raise ValueError("client_message_id and idempotency_key must match")
+        if self.action is None and not str(self.text or "").strip():
+            raise ValueError("text or action required")
+        if self.action is not None and self.text is not None:
+            raise ValueError("text and action are mutually exclusive")
         return self

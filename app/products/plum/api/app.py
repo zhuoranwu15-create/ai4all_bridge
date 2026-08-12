@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.agent_runtime.llm.providers import get_llm_provider
 from app.agent_runtime.turns.service import (
@@ -83,12 +83,28 @@ from app.products.plum.infrastructure.guest_repository import (
     get_guest_profile,
     get_guest_quota,
     upsert_guest_profile,
+    finish_guest_action,
+    reserve_guest_action,
 )
 from app.platform.quota.rate_limiter import RateLimiter
 
 router = APIRouter(tags=["plum"])
 _auth_rate_limiter = RateLimiter()
 logger = logging.getLogger("ai4all.plum")
+
+_GUEST_CONTINUE_PROMPT = (
+    "Continue the scene naturally from the character's perspective. "
+    "Do not ask the user to supply a hidden prompt."
+)
+
+
+def _guest_continue_prompt(*, character_action_sequence: Optional[int]) -> str:
+    if character_action_sequence == 2:
+        return (
+            f"{_GUEST_CONTINUE_PROMPT} Advance the scene and naturally ask the user "
+            "one concrete question they can answer."
+        )
+    return _GUEST_CONTINUE_PROMPT
 
 
 def _set_auth_cookies(response: Response, *, session_token: str, csrf_token: str) -> None:
@@ -364,7 +380,7 @@ def _wallet(platform_user_id: str) -> dict:
     }
 
 
-def _conversation_or_404(conversation_id: str, principal: SessionPrincipal) -> dict:
+def _conversation_or_404(conversation_id: str, principal: PlumActorPrincipal) -> dict:
     conversation = get_conversation(
         conversation_id=conversation_id,
         platform_user_id=principal.platform_user_id,
@@ -485,12 +501,17 @@ def unfavorite_character(
 def create_conversation(
     payload: CreateConversationRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_member),
+    principal: PlumActorPrincipal = Depends(require_plum_actor),
 ) -> dict:
+    if isinstance(principal, GuestPrincipal) and get_guest_profile(
+        platform_user_id=principal.platform_user_id
+    ) is None:
+        raise HTTPException(status_code=403, detail="guest_profile_required")
     try:
         conversation = create_or_get_conversation(
             platform_user_id=principal.platform_user_id,
             character_id=payload.character_id,
+            model_profile=("guest_free" if isinstance(principal, GuestPrincipal) else None),
         )
     except ValueError as err:
         raise HTTPException(status_code=404, detail=str(err)) from err
@@ -598,11 +619,15 @@ def create_turn(
     conversation_id: str,
     payload: CreateTurnRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_member),
+    principal: PlumActorPrincipal = Depends(require_plum_actor),
 ) -> dict:
-    text = payload.text.strip()
+    if isinstance(principal, GuestPrincipal) and payload.action is None:
+        raise HTTPException(status_code=422, detail="guest_action_required")
+    action_kind = payload.action.kind if payload.action else "message"
+    text = str(payload.action.text if payload.action else payload.text or "").strip()
     if not text:
-        raise HTTPException(status_code=422, detail="message_empty")
+        if action_kind != "continue":
+            raise HTTPException(status_code=422, detail="message_empty")
     conversation = _conversation_or_404(conversation_id, principal)
     model = get_model_profile(str(conversation["model_profile"]))
     if model is None:
@@ -613,22 +638,75 @@ def create_turn(
         raise HTTPException(status_code=503, detail="model_provider_unavailable") from err
     if not provider.enabled:
         raise HTTPException(status_code=503, detail="model_provider_unavailable")
+    guest_finish_required = False
+    character_action_sequence = None
+    if isinstance(principal, GuestPrincipal):
+        if str(conversation["model_profile"]) != "guest_free":
+            raise HTTPException(status_code=403, detail="guest_model_restricted")
+        try:
+            reservation = reserve_guest_action(
+                platform_user_id=principal.platform_user_id,
+                character_id=str(conversation["character_id"]),
+                conversation_id=conversation_id,
+                client_action_id=payload.idempotency_key.strip(),
+                action_kind=action_kind,
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        if reservation.get("reason"):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "guest_sign_in_required",
+                    "reason": str(reservation["reason"]),
+                },
+            )
+        if reservation.get("in_progress"):
+            raise HTTPException(status_code=409, detail="turn_idempotency_conflict")
+        if reservation.get("completed"):
+            reply_row = get_duplicate_reply_record(
+                account_id=str(conversation["runtime_account_id"]),
+                reply_to_message_id=payload.client_message_id.strip(),
+            )
+            if reply_row is None:
+                raise HTTPException(status_code=409, detail="turn_replay_unavailable")
+            _no_store(response)
+            return {
+                "status": "duplicate",
+                "reply": {
+                    "message_id": reply_row["message_id"],
+                    "text": str(reply_row["content"]),
+                },
+                "charged_coins": 0,
+                "wallet": None,
+                "guest_quota": get_guest_quota(
+                    platform_user_id=principal.platform_user_id
+                ),
+                "deduplicated": True,
+            }
+        guest_finish_required = bool(reservation.get("finish_required"))
+        character_action_sequence = reservation.get("character_action_sequence")
+    if action_kind == "continue":
+        text = _guest_continue_prompt(
+            character_action_sequence=character_action_sequence
+        )
     reservation_key = (
         f"plum-turn:{conversation_id}:{payload.idempotency_key.strip()}"
     )
     try:
-        reserve_fixed_shells(
-            account_id=str(conversation["runtime_account_id"]),
-            platform_user_id=principal.platform_user_id,
-            amount_shell_micros=int(model["coin_cost_micros"]),
-            idempotency_key=reservation_key,
-            source_id=conversation_id,
-            metadata={
-                "model_profile": model["profile"],
-                "provider_id": model["provider_id"],
-                "config_version": model["config_version"],
-            },
-        )
+        if not isinstance(principal, GuestPrincipal):
+            reserve_fixed_shells(
+                account_id=str(conversation["runtime_account_id"]),
+                platform_user_id=principal.platform_user_id,
+                amount_shell_micros=int(model["coin_cost_micros"]),
+                idempotency_key=reservation_key,
+                source_id=conversation_id,
+                metadata={
+                    "model_profile": model["profile"],
+                    "provider_id": model["provider_id"],
+                    "config_version": model["config_version"],
+                },
+            )
     except InsufficientWalletBalance as err:
         raise HTTPException(status_code=402, detail="insufficient_coins") from err
     except FixedShellReservationReleased as err:
@@ -661,21 +739,39 @@ def create_turn(
                 sender_name="Plum 测试用户",
                 provider_id=str(model["provider_id"]),
                 usage_billing_enabled=False,
+                max_output_tokens=(
+                    int(settings.plum_guest_max_output_tokens)
+                    if isinstance(principal, GuestPrincipal)
+                    else None
+                ),
+                persist_inbound_message=action_kind != "continue",
             ),
             product_services=PLUM_TURN_SERVICES,
         )
     except Exception as err:
-        release_fixed_shell_reservation(
-            account_id=str(conversation["runtime_account_id"]),
-            platform_user_id=principal.platform_user_id,
-            reservation_idempotency_key=reservation_key,
+        logger.exception(
+            "Plum turn generation failed conversation=%s actor=%s",
+            conversation_id,
+            principal.platform_user_id,
         )
+        if not isinstance(principal, GuestPrincipal):
+            release_fixed_shell_reservation(
+                account_id=str(conversation["runtime_account_id"]),
+                platform_user_id=principal.platform_user_id,
+                reservation_idempotency_key=reservation_key,
+            )
+        if guest_finish_required:
+            finish_guest_action(
+                platform_user_id=principal.platform_user_id,
+                client_action_id=payload.idempotency_key.strip(),
+                success=False,
+            )
         raise HTTPException(status_code=502, detail="generation_failed") from err
 
     charge_kept = turn_response.status in {"ok", "duplicate"} and bool(
         turn_response.reply
     )
-    if not charge_kept:
+    if not charge_kept and not isinstance(principal, GuestPrincipal):
         release_fixed_shell_reservation(
             account_id=str(conversation["runtime_account_id"]),
             platform_user_id=principal.platform_user_id,
@@ -685,6 +781,12 @@ def create_turn(
         touch_conversation(
             conversation_id=conversation_id,
             platform_user_id=principal.platform_user_id,
+        )
+    if isinstance(principal, GuestPrincipal) and guest_finish_required:
+        finish_guest_action(
+            platform_user_id=principal.platform_user_id,
+            client_action_id=payload.idempotency_key.strip(),
+            success=charge_kept,
         )
     reply_row = get_duplicate_reply_record(
         account_id=str(conversation["runtime_account_id"]),
@@ -700,7 +802,16 @@ def create_turn(
         "charged_coins": (
             int(model["coin_cost_micros"]) // 1_000_000 if charge_kept else 0
         ),
-        "wallet": _wallet(principal.platform_user_id),
+        "wallet": (
+            None
+            if isinstance(principal, GuestPrincipal)
+            else _wallet(principal.platform_user_id)
+        ),
+        "guest_quota": (
+            get_guest_quota(platform_user_id=principal.platform_user_id)
+            if isinstance(principal, GuestPrincipal)
+            else None
+        ),
         "deduplicated": turn_response.status == "duplicate",
     }
 
@@ -710,8 +821,10 @@ def _sse(event: str, data: dict) -> str:
 
 
 def _release_stream_reservation(
-    *, conversation: dict, principal: SessionPrincipal, reservation_key: str
+    *, conversation: dict, principal: PlumActorPrincipal, reservation_key: str
 ) -> None:
+    if isinstance(principal, GuestPrincipal):
+        return
     release_fixed_shell_reservation(
         account_id=str(conversation["runtime_account_id"]),
         platform_user_id=principal.platform_user_id,
@@ -720,7 +833,7 @@ def _release_stream_reservation(
 
 
 def _reclaim_stale_stream_runs(
-    *, conversation: dict, principal: SessionPrincipal
+    *, conversation: dict, principal: PlumActorPrincipal
 ) -> None:
     """Clear stale active guards and refund unseen Plum turns on the next request."""
     reclaimed = reclaim_stale_runtime_turn_runs(
@@ -752,13 +865,17 @@ def _reclaim_stale_stream_runs(
 def create_turn_stream(
     conversation_id: str,
     payload: CreateTurnRequest,
-    principal: SessionPrincipal = Depends(require_plum_member),
+    principal: PlumActorPrincipal = Depends(require_plum_actor),
 ):
     if not bool(settings.plum_chat_streaming_enabled):
         raise HTTPException(status_code=503, detail="chat_streaming_disabled")
-    text = payload.text.strip()
+    if isinstance(principal, GuestPrincipal) and payload.action is None:
+        raise HTTPException(status_code=422, detail="guest_action_required")
+    action_kind = payload.action.kind if payload.action else "message"
+    text = str(payload.action.text if payload.action else payload.text or "").strip()
     if not text:
-        raise HTTPException(status_code=422, detail="message_empty")
+        if action_kind != "continue":
+            raise HTTPException(status_code=422, detail="message_empty")
     request_id = payload.idempotency_key.strip()
     client_message_id = payload.client_message_id.strip()
     conversation = _conversation_or_404(conversation_id, principal)
@@ -771,6 +888,39 @@ def create_turn_stream(
         raise HTTPException(status_code=503, detail="model_provider_unavailable") from err
     if not provider.enabled:
         raise HTTPException(status_code=503, detail="model_provider_unavailable")
+    guest_finish_required = False
+    guest_recovery_required = False
+    character_action_sequence = None
+    if isinstance(principal, GuestPrincipal):
+        if str(conversation["model_profile"]) != "guest_free":
+            raise HTTPException(status_code=403, detail="guest_model_restricted")
+        try:
+            reservation = reserve_guest_action(
+                platform_user_id=principal.platform_user_id,
+                character_id=str(conversation["character_id"]),
+                conversation_id=conversation_id,
+                client_action_id=request_id,
+                action_kind=action_kind,
+            )
+        except ValueError as err:
+            raise HTTPException(status_code=409, detail=str(err)) from err
+        if reservation.get("reason"):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": "guest_sign_in_required",
+                    "reason": str(reservation["reason"]),
+                },
+            )
+        guest_recovery_required = bool(
+            reservation.get("in_progress") or reservation.get("completed")
+        )
+        guest_finish_required = bool(reservation.get("finish_required"))
+        character_action_sequence = reservation.get("character_action_sequence")
+    if action_kind == "continue":
+        text = _guest_continue_prompt(
+            character_action_sequence=character_action_sequence
+        )
 
     account_id = str(conversation["runtime_account_id"])
     _reclaim_stale_stream_runs(conversation=conversation, principal=principal)
@@ -787,7 +937,19 @@ def create_turn_stream(
             reply_to_message_id=client_message_id,
         )
         if reply_row is None:
+            if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                finish_guest_action(
+                    platform_user_id=principal.platform_user_id,
+                    client_action_id=request_id,
+                    success=False,
+                )
             raise HTTPException(status_code=409, detail="turn_replay_unavailable")
+        if isinstance(principal, GuestPrincipal) and guest_finish_required:
+            finish_guest_action(
+                platform_user_id=principal.platform_user_id,
+                client_action_id=request_id,
+                success=True,
+            )
 
         def replay():
             yield _sse(
@@ -818,7 +980,14 @@ def create_turn_stream(
                     "message_id": reply_row["message_id"],
                     "finish_reason": existing_run.get("finish_reason") or "stop",
                     "charged_coins": int(model["coin_cost_micros"]) // 1_000_000,
-                    "wallet": _wallet(principal.platform_user_id),
+                    "wallet": (
+                        None if isinstance(principal, GuestPrincipal)
+                        else _wallet(principal.platform_user_id)
+                    ),
+                    "guest_quota": (
+                        get_guest_quota(platform_user_id=principal.platform_user_id)
+                        if isinstance(principal, GuestPrincipal) else None
+                    ),
                     "deduplicated": True,
                 },
             )
@@ -832,21 +1001,27 @@ def create_turn_stream(
             },
         )
 
+    if isinstance(principal, GuestPrincipal) and guest_recovery_required:
+        # A receipt without a Runtime run means the previous request stopped
+        # between quota reservation and run creation. Reuse the same quota.
+        guest_finish_required = True
+
     reservation_key = f"plum-turn:{conversation_id}:{request_id}"
     try:
-        reserve_fixed_shells(
-            account_id=account_id,
-            platform_user_id=principal.platform_user_id,
-            amount_shell_micros=int(model["coin_cost_micros"]),
-            idempotency_key=reservation_key,
-            source_id=conversation_id,
-            metadata={
-                "model_profile": model["profile"],
-                "provider_id": model["provider_id"],
-                "config_version": model["config_version"],
-                "transport": "sse",
-            },
-        )
+        if not isinstance(principal, GuestPrincipal):
+            reserve_fixed_shells(
+                account_id=account_id,
+                platform_user_id=principal.platform_user_id,
+                amount_shell_micros=int(model["coin_cost_micros"]),
+                idempotency_key=reservation_key,
+                source_id=conversation_id,
+                metadata={
+                    "model_profile": model["profile"],
+                    "provider_id": model["provider_id"],
+                    "config_version": model["config_version"],
+                    "transport": "sse",
+                },
+            )
     except InsufficientWalletBalance as err:
         raise HTTPException(status_code=402, detail="insufficient_coins") from err
     except FixedShellReservationReleased as err:
@@ -870,6 +1045,12 @@ def create_turn_stream(
             principal=principal,
             reservation_key=reservation_key,
         )
+        if isinstance(principal, GuestPrincipal) and guest_finish_required:
+            finish_guest_action(
+                platform_user_id=principal.platform_user_id,
+                client_action_id=request_id,
+                success=False,
+            )
         raise HTTPException(status_code=409, detail="conversation_turn_active") from err
     except Exception as err:
         logger.exception(
@@ -887,8 +1068,20 @@ def create_turn_stream(
             principal=principal,
             reservation_key=reservation_key,
         )
+        if isinstance(principal, GuestPrincipal) and guest_finish_required:
+            finish_guest_action(
+                platform_user_id=principal.platform_user_id,
+                client_action_id=request_id,
+                success=False,
+            )
         raise HTTPException(status_code=503, detail="runtime_turn_unavailable") from err
     if not created:
+        if isinstance(principal, GuestPrincipal) and guest_finish_required:
+            finish_guest_action(
+                platform_user_id=principal.platform_user_id,
+                client_action_id=request_id,
+                success=False,
+            )
         raise HTTPException(status_code=409, detail="turn_idempotency_conflict")
 
     identity = ResolvedIdentity(
@@ -913,6 +1106,11 @@ def create_turn_stream(
         sender_name="Plum 测试用户",
         provider_id=str(model["provider_id"]),
         usage_billing_enabled=False,
+        max_output_tokens=(
+            int(settings.plum_guest_max_output_tokens)
+            if isinstance(principal, GuestPrincipal) else None
+        ),
+        persist_inbound_message=action_kind != "continue",
         turn_id=turn_id,
         client_message_id=client_message_id,
         idempotency_key=request_id,
@@ -940,6 +1138,10 @@ def create_turn_stream(
                             "request_id": request_id,
                             "model_profile": model["profile"],
                             "reserved_coins": int(model["coin_cost_micros"]) // 1_000_000,
+                            "guest_quota": (
+                                get_guest_quota(platform_user_id=principal.platform_user_id)
+                                if isinstance(principal, GuestPrincipal) else None
+                            ),
                         },
                     )
                 elif event.kind == "text_delta":
@@ -966,6 +1168,12 @@ def create_turn_stream(
                         finish_reason="stop",
                     )
                     settled = True
+                    if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                        finish_guest_action(
+                            platform_user_id=principal.platform_user_id,
+                            client_action_id=request_id,
+                            success=True,
+                        )
                     touch_conversation(
                         conversation_id=conversation_id,
                         platform_user_id=principal.platform_user_id,
@@ -978,7 +1186,14 @@ def create_turn_stream(
                             "message_id": message_id,
                             "finish_reason": "stop",
                             "charged_coins": int(model["coin_cost_micros"]) // 1_000_000,
-                            "wallet": _wallet(principal.platform_user_id),
+                            "wallet": (
+                                None if isinstance(principal, GuestPrincipal)
+                                else _wallet(principal.platform_user_id)
+                            ),
+                            "guest_quota": (
+                                get_guest_quota(platform_user_id=principal.platform_user_id)
+                                if isinstance(principal, GuestPrincipal) else None
+                            ),
                             "deduplicated": False,
                         },
                     )
@@ -1006,6 +1221,12 @@ def create_turn_stream(
                             platform_user_id=principal.platform_user_id,
                         )
                     settled = True
+                    if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                        finish_guest_action(
+                            platform_user_id=principal.platform_user_id,
+                            client_action_id=request_id,
+                            success=saw_delta,
+                        )
                     yield _sse(
                         "turn.cancelled",
                         {
@@ -1013,7 +1234,10 @@ def create_turn_stream(
                             "turn_id": turn_id,
                             "message_id": message_id,
                             "charged_coins": int(model["coin_cost_micros"]) // 1_000_000 if saw_delta else 0,
-                            "wallet": _wallet(principal.platform_user_id),
+                            "wallet": (
+                                None if isinstance(principal, GuestPrincipal)
+                                else _wallet(principal.platform_user_id)
+                            ),
                         },
                     )
                 elif event.kind in {"failed", "deduplicated"}:
@@ -1029,6 +1253,12 @@ def create_turn_stream(
                         reservation_key=reservation_key,
                     )
                     settled = True
+                    if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                        finish_guest_action(
+                            platform_user_id=principal.platform_user_id,
+                            client_action_id=request_id,
+                            success=False,
+                        )
                     yield _sse(
                         "turn.failed",
                         {
@@ -1037,7 +1267,10 @@ def create_turn_stream(
                             "code": error_code,
                             "retryable": True,
                             "charged_coins": 0,
-                            "wallet": _wallet(principal.platform_user_id),
+                            "wallet": (
+                                None if isinstance(principal, GuestPrincipal)
+                                else _wallet(principal.platform_user_id)
+                            ),
                         },
                     )
         except Exception as err:
@@ -1059,6 +1292,12 @@ def create_turn_stream(
                     reservation_key=reservation_key,
                 )
                 settled = True
+                if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                    finish_guest_action(
+                        platform_user_id=principal.platform_user_id,
+                        client_action_id=request_id,
+                        success=False,
+                    )
             yield _sse(
                 "turn.failed",
                 {
@@ -1067,7 +1306,10 @@ def create_turn_stream(
                     "code": "stream_internal_error",
                     "retryable": True,
                     "charged_coins": 0,
-                    "wallet": _wallet(principal.platform_user_id),
+                    "wallet": (
+                        None if isinstance(principal, GuestPrincipal)
+                        else _wallet(principal.platform_user_id)
+                    ),
                 },
             )
         finally:
@@ -1101,6 +1343,12 @@ def create_turn_stream(
                         conversation=conversation,
                         principal=principal,
                         reservation_key=reservation_key,
+                    )
+                if isinstance(principal, GuestPrincipal) and guest_finish_required:
+                    finish_guest_action(
+                        platform_user_id=principal.platform_user_id,
+                        client_action_id=request_id,
+                        success=saw_delta,
                     )
 
     return StreamingResponse(
