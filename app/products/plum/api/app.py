@@ -339,7 +339,7 @@ def start_google_oauth(
         location = authorization_url(state=state, nonce=nonce, code_challenge=challenge)
     except (ValueError, GoogleOAuthError) as err:
         raise HTTPException(status_code=503, detail=str(err)) from None
-    response = RedirectResponse(location=location, status_code=307)
+    response = RedirectResponse(url=location, status_code=307)
     response.set_cookie(
         key="plum_google_oauth", value=json.dumps({"state": state, "nonce": nonce, "verifier": verifier}),
         httponly=True, secure=bool(settings.plum_session_cookie_secure), samesite="lax", path="/",
@@ -401,7 +401,7 @@ def google_oauth_callback(
             member_id = target_id
     except (ValueError, GoogleOAuthError, KeyError, json.JSONDecodeError) as err:
         raise HTTPException(status_code=400, detail=str(err)) from None
-    response = RedirectResponse(location=str(challenge.get("return_to") or "/") + ("&" if "?" in str(challenge.get("return_to") or "/") else "?") + "auth=google_success", status_code=303)
+    response = RedirectResponse(url=str(challenge.get("return_to") or "/") + ("&" if "?" in str(challenge.get("return_to") or "/") else "?") + "auth=google_success", status_code=303)
     _set_auth_cookies(response, session_token=str(login["session"]["token"]), csrf_token=secrets.token_urlsafe(24))
     response.delete_cookie("plum_google_oauth", path="/")
     response.delete_cookie(str(settings.plum_guest_session_cookie_name), path="/")
