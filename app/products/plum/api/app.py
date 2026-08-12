@@ -177,6 +177,7 @@ def _set_guest_cookies(
 
 def _capabilities() -> dict:
     return {
+        "chat_streaming": bool(settings.plum_chat_streaming_enabled),
         "guest_chat": bool(settings.plum_guest_chat_enabled),
         "email_auth": bool(settings.plum_email_auth_enabled),
         "google_auth": bool(settings.plum_google_auth_enabled),
@@ -689,7 +690,7 @@ def create_conversation(
 def conversation_history(
     response: Response,
     limit: int = Query(default=30, ge=1, le=100),
-    principal: SessionPrincipal = Depends(require_plum_member),
+    principal: PlumActorPrincipal = Depends(require_plum_actor),
 ) -> dict:
     """Return the authenticated user's active character conversations."""
 
@@ -708,7 +709,7 @@ def conversation_detail(
     conversation_id: str,
     response: Response,
     limit: int = Query(default=100, ge=1, le=100),
-    principal: SessionPrincipal = Depends(require_plum_member),
+    principal: PlumActorPrincipal = Depends(require_plum_actor),
 ) -> dict:
     conversation = _conversation_or_404(conversation_id, principal)
     experience = get_character_experience(
@@ -722,8 +723,19 @@ def conversation_detail(
         "status": "ok",
         "conversation": conversation,
         "messages": list_conversation_messages(conversation, limit=limit),
-        "models": list_model_profiles(),
-        "wallet": _wallet(principal.platform_user_id),
+        "models": (
+            [] if isinstance(principal, GuestPrincipal) else list_model_profiles()
+        ),
+        "wallet": (
+            None
+            if isinstance(principal, GuestPrincipal)
+            else _wallet(principal.platform_user_id)
+        ),
+        "guest_quota": (
+            get_guest_quota(platform_user_id=principal.platform_user_id)
+            if isinstance(principal, GuestPrincipal)
+            else None
+        ),
         "experience": experience,
     }
 

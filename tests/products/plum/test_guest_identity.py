@@ -96,6 +96,7 @@ def test_visitor_context_and_disabled_capabilities(fresh_db, monkeypatch):
         "profile_complete": False,
     }
     assert context.json()["capabilities"] == {
+        "chat_streaming": True,
         "guest_chat": True,
         "email_auth": False,
         "google_auth": False,

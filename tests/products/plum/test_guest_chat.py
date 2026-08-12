@@ -95,6 +95,30 @@ def test_guest_conversation_uses_free_model_and_no_wallet(fresh_db, monkeypatch)
         ).fetchone()["n"] == 0
 
 
+def test_guest_can_read_own_conversation_detail_and_history(fresh_db, monkeypatch):
+    client = _client(monkeypatch, fresh_db)
+    with client:
+        csrf, _ = _onboard(client)
+        created = client.post(
+            "/api/v1/products/plum/conversations",
+            headers={"X-Plum-CSRF": csrf},
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        detail = client.get(
+            f"/api/v1/products/plum/conversations/{created['id']}"
+        )
+        history = client.get("/api/v1/products/plum/conversations")
+        context = client.get("/api/v1/products/plum/auth/context")
+
+    assert detail.status_code == 200
+    assert detail.json()["conversation"]["id"] == created["id"]
+    assert detail.json()["models"] == []
+    assert detail.json()["wallet"] is None
+    assert detail.json()["guest_quota"]["typed_remaining"] == 2
+    assert [item["id"] for item in history.json()["items"]] == [created["id"]]
+    assert context.json()["capabilities"]["chat_streaming"] is False
+
+
 def test_guest_typed_quota_is_global_and_idempotent(fresh_db, monkeypatch):
     client = _client(monkeypatch, fresh_db)
 
