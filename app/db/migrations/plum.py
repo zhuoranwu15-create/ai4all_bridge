@@ -1721,6 +1721,98 @@ def _migration_0076_plum_character_create_idempotency(conn: Connection) -> None:
     )
 
 
+def _migration_0077_plum_guest_identity_foundation(conn: Connection) -> None:
+    """Add provisional Plum subjects, Guest sessions, profiles and quota state."""
+
+    conn.execute("ALTER TABLE platform_users ALTER COLUMN phone DROP NOT NULL")
+    _ensure_column(
+        conn,
+        "platform_users",
+        "subject_kind",
+        "TEXT NOT NULL DEFAULT 'member'",
+    )
+    _ensure_column(conn, "platform_users", "merged_into_platform_user_id", "TEXT")
+    _ensure_column(conn, "platform_users", "merged_at", "TEXT")
+    _ensure_constraint(
+        conn,
+        "platform_users",
+        "ck_platform_users_subject_kind",
+        "CHECK(subject_kind IN ('guest', 'member', 'merged'))",
+    )
+    _ensure_constraint(
+        conn,
+        "platform_users",
+        "ck_platform_users_merge_target",
+        "CHECK((subject_kind='merged') = (merged_into_platform_user_id IS NOT NULL))",
+    )
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS plum_guest_sessions (
+            id TEXT PRIMARY KEY,
+            token_hash TEXT NOT NULL UNIQUE CHECK(LENGTH(token_hash)=64),
+            platform_user_id TEXT NOT NULL UNIQUE REFERENCES platform_users(id),
+            csrf_hash TEXT NOT NULL CHECK(LENGTH(csrf_hash)=64),
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK(status IN ('active', 'promoted', 'revoked', 'expired')),
+            expires_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            created_ip_hash TEXT,
+            user_agent_hash TEXT,
+            promoted_at TEXT,
+            revoked_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            CHECK((status='promoted') = (promoted_at IS NOT NULL)),
+            CHECK((status='revoked') = (revoked_at IS NOT NULL))
+        );
+        CREATE INDEX IF NOT EXISTS ix_plum_guest_sessions_expiry
+            ON plum_guest_sessions(status, expires_at);
+
+        CREATE TABLE IF NOT EXISTS plum_guest_profiles (
+            platform_user_id TEXT PRIMARY KEY REFERENCES platform_users(id),
+            adult_confirmed_at TEXT NOT NULL,
+            pronouns TEXT NOT NULL CHECK(BTRIM(pronouns) <> ''),
+            relationship_preference TEXT,
+            genres_json JSONB NOT NULL DEFAULT '[]'::jsonb
+                CHECK(jsonb_typeof(genres_json)='array'),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+        );
+
+        CREATE TABLE IF NOT EXISTS plum_guest_usage (
+            platform_user_id TEXT PRIMARY KEY REFERENCES platform_users(id),
+            typed_accepted BIGINT NOT NULL DEFAULT 0 CHECK(typed_accepted >= 0),
+            continue_accepted BIGINT NOT NULL DEFAULT 0 CHECK(continue_accepted >= 0),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
+        );
+
+        CREATE TABLE IF NOT EXISTS plum_guest_character_usage (
+            platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            character_id TEXT NOT NULL REFERENCES plum_characters(id),
+            continue_accepted BIGINT NOT NULL DEFAULT 0 CHECK(continue_accepted >= 0),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, character_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS plum_guest_action_receipts (
+            platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            client_action_id TEXT NOT NULL CHECK(BTRIM(client_action_id) <> ''),
+            action_kind TEXT NOT NULL CHECK(action_kind IN ('message', 'continue')),
+            conversation_id TEXT,
+            status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'rejected', 'completed', 'failed')),
+            response_json JSONB,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, client_action_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_plum_guest_action_receipts_conversation
+            ON plum_guest_action_receipts(conversation_id, created_at)
+            WHERE conversation_id IS NOT NULL;
+        """
+    )
+
+
 __all__ = [
     "_migration_0064_fibre_mvp",
     "_migration_0065_fibre_character_experience",
@@ -1731,4 +1823,5 @@ __all__ = [
     "_migration_0074_plum_storyline_foundation",
     "_migration_0075_plum_system_work_ownership",
     "_migration_0076_plum_character_create_idempotency",
+    "_migration_0077_plum_guest_identity_foundation",
 ]

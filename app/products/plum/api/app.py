@@ -5,6 +5,8 @@ import json
 import logging
 import secrets
 import uuid
+from urllib.parse import urlsplit
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -45,11 +47,16 @@ from app.products.plum.api.contracts import (
     RedeemAccessCodeRequest,
     RestartConversationRequest,
     UpdateModelRequest,
+    UpdateGuestProfileRequest,
 )
 from app.products.plum.api.deps import (
+    GuestPrincipal,
+    PlumActorPrincipal,
+    optional_plum_actor,
     plum_session_token,
     require_plum_available,
-    require_plum_principal,
+    require_plum_member,
+    require_plum_actor,
 )
 from app.products.plum.application.identity import create_plum_login_session
 from app.products.plum.application.turn_services import PLUM_TURN_SERVICES
@@ -70,6 +77,12 @@ from app.products.plum.infrastructure.repository import (
     set_character_like,
     touch_conversation,
     update_conversation_model,
+)
+from app.products.plum.infrastructure.guest_repository import (
+    create_guest_session,
+    get_guest_profile,
+    get_guest_quota,
+    upsert_guest_profile,
 )
 from app.platform.quota.rate_limiter import RateLimiter
 
@@ -103,6 +116,154 @@ def _set_auth_cookies(response: Response, *, session_token: str, csrf_token: str
 def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(str(settings.plum_session_cookie_name), path="/")
     response.delete_cookie(str(settings.plum_csrf_cookie_name), path="/")
+
+
+def _set_guest_cookies(
+    response: Response, *, session_token: str, csrf_token: str
+) -> None:
+    max_age = max(1, int(settings.plum_guest_session_days)) * 86400
+    common = {
+        "secure": bool(settings.plum_session_cookie_secure),
+        "samesite": "strict",
+        "path": "/",
+        "max_age": max_age,
+    }
+    response.set_cookie(
+        key=str(settings.plum_guest_session_cookie_name),
+        value=session_token,
+        httponly=True,
+        **common,
+    )
+    response.set_cookie(
+        key=str(settings.plum_csrf_cookie_name),
+        value=csrf_token,
+        httponly=False,
+        **common,
+    )
+
+
+def _capabilities() -> dict:
+    return {
+        "guest_chat": bool(settings.plum_guest_chat_enabled),
+        "email_auth": bool(settings.plum_email_auth_enabled),
+        "google_auth": bool(settings.plum_google_auth_enabled),
+        "apple_auth": bool(settings.plum_apple_auth_enabled),
+        "invite_auth": bool(settings.plum_public_test_auth_enabled),
+    }
+
+
+def _auth_context(actor: Optional[PlumActorPrincipal]) -> dict:
+    base = {"status": "ok", "capabilities": _capabilities()}
+    if actor is None:
+        return {
+            **base,
+            "actor": {"kind": "visitor", "user": None, "profile_complete": False},
+            "guest_quota": None,
+            "wallet": None,
+            "session_expires_at": None,
+        }
+    if isinstance(actor, GuestPrincipal):
+        profile = get_guest_profile(platform_user_id=actor.platform_user_id)
+        return {
+            **base,
+            "actor": {
+                "kind": "guest",
+                "user": {"id": actor.platform_user_id, "display_name": None},
+                "profile_complete": profile is not None,
+                "profile": profile,
+            },
+            "guest_quota": get_guest_quota(platform_user_id=actor.platform_user_id),
+            "wallet": None,
+            "session_expires_at": actor.expires_at,
+        }
+    user = get_platform_user(platform_user_id=actor.platform_user_id) or {}
+    return {
+        **base,
+        "actor": {
+            "kind": "member",
+            "user": {"id": actor.platform_user_id, "display_name": user.get("display_name")},
+            "profile_complete": True,
+        },
+        "guest_quota": None,
+        "wallet": _wallet(actor.platform_user_id),
+        "session_expires_at": actor.expires_at,
+    }
+
+
+def _require_same_origin_guest_create(request: Request) -> None:
+    """The CSRF-less Guest bootstrap only accepts same-origin browser requests."""
+
+    fetch_site = str(request.headers.get("Sec-Fetch-Site") or "").lower()
+    if fetch_site and fetch_site not in {"same-origin", "none"}:
+        raise HTTPException(status_code=403, detail="cross_site_request_rejected")
+    origin = str(request.headers.get("Origin") or "").strip()
+    if not origin:
+        raise HTTPException(status_code=403, detail="origin_required")
+    requested = urlsplit(origin)
+    expected = urlsplit(str(request.base_url))
+    if (requested.scheme, requested.netloc) != (expected.scheme, expected.netloc):
+        raise HTTPException(status_code=403, detail="cross_site_request_rejected")
+
+
+@router.get("/auth/context")
+def auth_context(
+    response: Response,
+    actor: Optional[PlumActorPrincipal] = Depends(optional_plum_actor),
+) -> dict:
+    _no_store(response)
+    return _auth_context(actor)
+
+
+@router.post("/auth/guest/session")
+def create_or_restore_guest_session(
+    request: Request,
+    response: Response,
+    actor: Optional[PlumActorPrincipal] = Depends(optional_plum_actor),
+) -> dict:
+    require_plum_available()
+    if not bool(settings.plum_guest_chat_enabled):
+        raise HTTPException(status_code=404, detail="guest_chat_disabled")
+    _require_same_origin_guest_create(request)
+    client_host = request.client.host if request.client else "unknown"
+    if not _auth_rate_limiter.check_rpm(
+        f"plum-guest-create:{client_host}", 10, window_seconds=60.0
+    ):
+        raise HTTPException(status_code=429, detail="too_many_guest_sessions")
+    if actor is not None:
+        _no_store(response)
+        return _auth_context(actor)
+    created = create_guest_session(
+        days=max(1, int(settings.plum_guest_session_days)),
+        client_ip=client_host,
+        user_agent=request.headers.get("User-Agent"),
+    )
+    _set_guest_cookies(
+        response,
+        session_token=str(created["token"]),
+        csrf_token=str(created["csrf_token"]),
+    )
+    _no_store(response)
+    return _auth_context(created["principal"])
+
+
+@router.patch("/auth/guest/profile")
+def update_guest_profile(
+    payload: UpdateGuestProfileRequest,
+    response: Response,
+    actor: PlumActorPrincipal = Depends(require_plum_actor),
+) -> dict:
+    if not isinstance(actor, GuestPrincipal):
+        raise HTTPException(status_code=409, detail="guest_profile_not_available")
+    if not payload.adult_confirmed:
+        raise HTTPException(status_code=403, detail="adult_confirmation_required")
+    upsert_guest_profile(
+        platform_user_id=actor.platform_user_id,
+        pronouns=payload.pronouns,
+        relationship_preference=payload.relationship_preference,
+        genres=payload.genres,
+    )
+    _no_store(response)
+    return _auth_context(actor)
 
 
 @router.post("/auth/access-code")
@@ -154,7 +315,7 @@ def redeem_access_code(
 @router.get("/auth/me")
 def auth_me(
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     user = get_platform_user(platform_user_id=principal.platform_user_id)
     if user is None:
@@ -172,7 +333,7 @@ def auth_me(
 def logout(
     request: Request,
     response: Response,
-    _principal: SessionPrincipal = Depends(require_plum_principal),
+    _principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     token = plum_session_token(request)
     if token:
@@ -216,7 +377,7 @@ def _conversation_or_404(conversation_id: str, principal: SessionPrincipal) -> d
 @router.get("/bootstrap")
 def bootstrap(
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     _no_store(response)
     return {
@@ -266,7 +427,7 @@ def _set_reaction(
 def like_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id, principal=principal, reaction="like", active=True
@@ -279,7 +440,7 @@ def like_character(
 def unlike_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id, principal=principal, reaction="like", active=False
@@ -292,7 +453,7 @@ def unlike_character(
 def favorite_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id,
@@ -308,7 +469,7 @@ def favorite_character(
 def unfavorite_character(
     character_id: str,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     result = _set_reaction(
         character_id=character_id,
@@ -324,7 +485,7 @@ def unfavorite_character(
 def create_conversation(
     payload: CreateConversationRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     try:
         conversation = create_or_get_conversation(
@@ -341,7 +502,7 @@ def create_conversation(
 def conversation_history(
     response: Response,
     limit: int = Query(default=30, ge=1, le=100),
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     """Return the authenticated user's active character conversations."""
 
@@ -360,7 +521,7 @@ def conversation_detail(
     conversation_id: str,
     response: Response,
     limit: int = Query(default=100, ge=1, le=100),
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     conversation = _conversation_or_404(conversation_id, principal)
     experience = get_character_experience(
@@ -385,7 +546,7 @@ def change_model(
     conversation_id: str,
     payload: UpdateModelRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     try:
         conversation = update_conversation_model(
@@ -404,7 +565,7 @@ def restart(
     conversation_id: str,
     payload: RestartConversationRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     try:
         conversation = restart_conversation(
@@ -437,7 +598,7 @@ def create_turn(
     conversation_id: str,
     payload: CreateTurnRequest,
     response: Response,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     text = payload.text.strip()
     if not text:
@@ -591,7 +752,7 @@ def _reclaim_stale_stream_runs(
 def create_turn_stream(
     conversation_id: str,
     payload: CreateTurnRequest,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ):
     if not bool(settings.plum_chat_streaming_enabled):
         raise HTTPException(status_code=503, detail="chat_streaming_disabled")
@@ -956,7 +1117,7 @@ def create_turn_stream(
 def cancel_turn_stream(
     conversation_id: str,
     request_id: str,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ):
     """Persist a cooperative Stop signal before the browser tears down its stream."""
     conversation = _conversation_or_404(conversation_id, principal)

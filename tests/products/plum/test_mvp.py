@@ -12,6 +12,7 @@ from app.db._core import _migration_0067_plum_product_rename, _table_exists
 from app.products.plum.api import app as plum_api
 from app.products.plum.api import deps as plum_deps
 from app.products.plum.infrastructure import repository
+from app.products.plum.infrastructure import guest_repository
 from app.products.plum.manifest import install_public_routes
 
 
@@ -28,7 +29,17 @@ def _configure_plum(monkeypatch, fresh_db):
     config.plum_session_days = 30
     config.plum_session_cookie_secure = False
     config.plum_chat_streaming_enabled = False
+    config.plum_guest_chat_enabled = False
+    config.plum_email_auth_enabled = False
+    config.plum_google_auth_enabled = False
+    config.plum_apple_auth_enabled = False
+    config.plum_guest_session_cookie_name = "plum_guest_session"
+    config.plum_guest_session_days = 30
+    config.plum_guest_typed_limit = 2
+    config.plum_guest_continue_limit = 8
+    config.plum_guest_character_continue_limit = 2
     monkeypatch.setattr(repository, "settings", config)
+    monkeypatch.setattr(guest_repository, "settings", config)
     return config
 
 

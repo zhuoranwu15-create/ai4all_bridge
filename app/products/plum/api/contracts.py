@@ -1,5 +1,5 @@
 """Plum MVP 请求契约。"""
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,6 +18,24 @@ class RedeemAccessCodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     access_code: str = Field(min_length=16, max_length=160)
     display_name: str = Field(min_length=1, max_length=40)
+
+
+class UpdateGuestProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    adult_confirmed: bool
+    pronouns: Literal["she_her", "he_him", "they_them", "other"]
+    relationship_preference: Optional[Literal[
+        "male", "female", "all", "no_preference"
+    ]] = None
+    genres: List[str] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def normalize_genres(self):
+        cleaned = [str(value).strip() for value in self.genres]
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("genres must be non-empty and unique")
+        self.genres = cleaned
+        return self
 
 
 class CreateCharacterRequest(BaseModel):

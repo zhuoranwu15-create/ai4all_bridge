@@ -141,6 +141,19 @@ class Settings(BaseSettings):
     plum_chat_streaming_enabled: bool = _plum_setting(
         True, "CHAT_STREAMING_ENABLED"
     )
+    plum_guest_chat_enabled: bool = _plum_setting(False, "GUEST_CHAT_ENABLED")
+    plum_email_auth_enabled: bool = _plum_setting(False, "EMAIL_AUTH_ENABLED")
+    plum_google_auth_enabled: bool = _plum_setting(False, "GOOGLE_AUTH_ENABLED")
+    plum_apple_auth_enabled: bool = _plum_setting(False, "APPLE_AUTH_ENABLED")
+    plum_guest_session_cookie_name: str = _plum_setting(
+        "plum_guest_session", "GUEST_SESSION_COOKIE_NAME"
+    )
+    plum_guest_session_days: int = _plum_setting(30, "GUEST_SESSION_DAYS")
+    plum_guest_typed_limit: int = _plum_setting(2, "GUEST_TYPED_LIMIT")
+    plum_guest_continue_limit: int = _plum_setting(8, "GUEST_CONTINUE_LIMIT")
+    plum_guest_character_continue_limit: int = _plum_setting(
+        2, "GUEST_CHARACTER_CONTINUE_LIMIT"
+    )
 
     # ===== 主应用 PostgreSQL（见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 主运行时必填；空值或非 PostgreSQL URL 会在首次连接（FastAPI startup）直接失败。
