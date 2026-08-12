@@ -54,6 +54,7 @@ from app.db.migrations.plum import (
     _migration_0076_plum_character_create_idempotency,
     _migration_0077_plum_guest_identity_foundation,
     _migration_0078_plum_external_identity_challenges,
+    _migration_0079_plum_identity_merge_constraints,
 )
 from app.db.migrations.shared import (
     _billing_contract_violation_counts,
@@ -730,6 +731,7 @@ _MIGRATIONS = [
     (76, _migration_0076_plum_character_create_idempotency),
     (77, _migration_0077_plum_guest_identity_foundation),
     (78, _migration_0078_plum_external_identity_challenges),
+    (79, _migration_0079_plum_identity_merge_constraints),
 ]
 
 

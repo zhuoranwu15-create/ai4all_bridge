@@ -108,18 +108,24 @@ def resolve_guest_principal(*, token: str) -> Optional[GuestPrincipal]:
               AND (
                     pu.subject_kind='guest'
                     OR (
-                        pu.subject_kind='member'
+                        pu.subject_kind IN ('member', 'merged')
                         AND EXISTS (
                             SELECT 1
                             FROM plum_identity_challenges challenge
-                            JOIN platform_external_identities identity
+                            LEFT JOIN platform_external_identities identity
                               ON identity.platform_user_id=pu.id
                              AND identity.provider=challenge.provider
                              AND identity.status='active'
+                            LEFT JOIN plum_identity_merge_runs merge_run
+                              ON merge_run.guest_platform_user_id=pu.id
+                             AND merge_run.status='pending'
                             WHERE challenge.guest_platform_user_id=pu.id
                               AND challenge.status='pending'
                               AND challenge.provider='email'
-                              AND challenge.metadata_json->'promotion'->>'identity_id'=identity.id
+                              AND (
+                                  challenge.metadata_json->'promotion'->>'identity_id'=identity.id
+                                  OR challenge.metadata_json->'merge'->>'run_id'=merge_run.id
+                              )
                         )
                     )
                   )

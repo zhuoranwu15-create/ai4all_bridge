@@ -1878,6 +1878,61 @@ def _migration_0078_plum_external_identity_challenges(conn: Connection) -> None:
     )
 
 
+def _migration_0079_plum_identity_merge_constraints(conn: Connection) -> None:
+    """Allow one transaction to transfer an entire Guest aggregate owner."""
+
+    constraints = (
+        ("plum_connections", "FOREIGN KEY (persona_id, platform_user_id)"),
+        (
+            "plum_connection_runtime_bindings",
+            "FOREIGN KEY (connection_id, platform_user_id)",
+        ),
+        (
+            "plum_connection_runtime_bindings",
+            "FOREIGN KEY (runtime_account_id, platform_user_id)",
+        ),
+        (
+            "plum_storylines",
+            "FOREIGN KEY (connection_id, platform_user_id, character_id)",
+        ),
+        (
+            "plum_storyline_state",
+            "FOREIGN KEY (storyline_id, platform_user_id)",
+        ),
+        (
+            "plum_conversations",
+            "FOREIGN KEY (connection_id, platform_user_id, character_id)",
+        ),
+        (
+            "plum_conversations",
+            "FOREIGN KEY (storyline_id, platform_user_id, connection_id, character_id)",
+        ),
+    )
+    for table, definition_prefix in constraints:
+        if not re.fullmatch(r"[a-z_][a-z0-9_]*", table):
+            raise RuntimeError("unsafe Plum constraint identifier")
+        row = conn.execute(
+            """
+            SELECT conname, condeferrable FROM pg_constraint
+            WHERE conrelid=to_regclass(?) AND contype='f'
+              AND pg_get_constraintdef(oid) LIKE ?
+            """,
+            (table, f"{definition_prefix}%"),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(
+                f"missing Plum merge constraint: {table}.{definition_prefix}"
+            )
+        if not bool(row["condeferrable"]):
+            name = str(row["conname"])
+            if not re.fullmatch(r"[a-z_][a-z0-9_]*", name):
+                raise RuntimeError("unsafe Plum constraint identifier")
+            conn.execute(
+                f"ALTER TABLE {table} ALTER CONSTRAINT {name} "
+                "DEFERRABLE INITIALLY DEFERRED"
+            )
+
+
 __all__ = [
     "_migration_0064_fibre_mvp",
     "_migration_0065_fibre_character_experience",
@@ -1890,4 +1945,5 @@ __all__ = [
     "_migration_0076_plum_character_create_idempotency",
     "_migration_0077_plum_guest_identity_foundation",
     "_migration_0078_plum_external_identity_challenges",
+    "_migration_0079_plum_identity_merge_constraints",
 ]

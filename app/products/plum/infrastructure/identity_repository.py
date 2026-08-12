@@ -323,6 +323,355 @@ def promote_guest_with_email(
     }
 
 
+def resolve_email_identity(*, normalized_email: str) -> Optional[Dict[str, Any]]:
+    email = normalize_email(normalized_email)
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT identity.*, users.display_name, users.status AS user_status,
+                   users.subject_kind, membership.status AS membership_status
+            FROM platform_external_identities identity
+            JOIN platform_users users ON users.id=identity.platform_user_id
+            LEFT JOIN product_memberships membership
+              ON membership.platform_user_id=users.id AND membership.app_id=?
+            WHERE identity.provider='email' AND identity.provider_subject=?
+              AND identity.status='active'
+            """,
+            (PLUM_APP_ID, email),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def merge_guest_into_email_member(
+    *,
+    challenge_id: str,
+    guest_platform_user_id: str,
+    target_platform_user_id: str,
+    normalized_email: str,
+) -> Dict[str, Any]:
+    """Move the explicit Guest-owned Plum aggregate to one existing Member."""
+
+    email = normalize_email(normalized_email)
+    if guest_platform_user_id == target_platform_user_id:
+        raise ValueError("identity_merge_same_subject")
+    merge_run_id = f"pimr_{uuid.uuid4().hex}"
+    with connect() as conn:
+        conn.execute("SET CONSTRAINTS ALL DEFERRED")
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (f"plum-external-identity:email:{email}",),
+        )
+        for platform_user_id in sorted(
+            (guest_platform_user_id, target_platform_user_id)
+        ):
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                (f"plum-user-merge:{platform_user_id}",),
+            )
+        challenge = conn.execute(
+            "SELECT * FROM plum_identity_challenges WHERE id=? FOR UPDATE",
+            (challenge_id,),
+        ).fetchone()
+        if challenge is None or str(challenge["status"]) != "pending":
+            raise ValueError("email_challenge_consumed")
+        if str(challenge["guest_platform_user_id"] or "") != guest_platform_user_id:
+            raise ValueError("email_challenge_actor_mismatch")
+        identity = conn.execute(
+            """
+            SELECT * FROM platform_external_identities
+            WHERE provider='email' AND provider_subject=? AND status='active'
+            FOR UPDATE
+            """,
+            (email,),
+        ).fetchone()
+        if identity is None or str(identity["platform_user_id"]) != target_platform_user_id:
+            raise ValueError("email_identity_changed")
+        users = conn.execute(
+            "SELECT id, status, subject_kind FROM platform_users WHERE id IN (?, ?) FOR UPDATE",
+            (guest_platform_user_id, target_platform_user_id),
+        ).fetchall()
+        by_id = {str(row["id"]): row for row in users}
+        guest = by_id.get(guest_platform_user_id)
+        target = by_id.get(target_platform_user_id)
+        existing_run = conn.execute(
+            "SELECT * FROM plum_identity_merge_runs WHERE guest_platform_user_id=? FOR UPDATE",
+            (guest_platform_user_id,),
+        ).fetchone()
+        is_recovery = (
+            existing_run is not None
+            and str(existing_run["status"]) == "pending"
+            and str(existing_run["target_platform_user_id"])
+            == target_platform_user_id
+            and str(existing_run["identity_id"]) == str(identity["id"])
+        )
+        if (
+            guest is None
+            or str(guest["status"]) != "active"
+            or str(guest["subject_kind"])
+            not in ({"merged"} if is_recovery else {"guest"})
+        ):
+            raise ValueError("guest_not_mergeable")
+        if (
+            target is None
+            or str(target["status"]) != "active"
+            or str(target["subject_kind"]) != "member"
+        ):
+            raise ValueError("identity_target_disabled")
+        membership = conn.execute(
+            """
+            SELECT status FROM product_memberships
+            WHERE platform_user_id=? AND app_id=? FOR UPDATE
+            """,
+            (target_platform_user_id, PLUM_APP_ID),
+        ).fetchone()
+        if membership is None or str(membership["status"]) != "active":
+            raise ValueError("identity_target_disabled")
+        if existing_run is not None:
+            if (
+                str(existing_run["target_platform_user_id"])
+                != target_platform_user_id
+                or str(existing_run["identity_id"]) != str(identity["id"])
+            ):
+                raise ValueError("identity_merge_conflict")
+            merge_run_id = str(existing_run["id"])
+            if is_recovery:
+                metadata = challenge["metadata_json"]
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                prior = dict(dict(metadata or {}).get("merge") or {})
+                return {
+                    "platform_user_id": target_platform_user_id,
+                    "merge_run_id": merge_run_id,
+                    "merge": {
+                        "mode": "merged",
+                        "conversations_moved": int(
+                            prior.get("conversations_moved", 0)
+                        ),
+                    },
+                }
+            raise ValueError("email_challenge_consumed")
+        else:
+            conn.execute(
+                """
+                INSERT INTO plum_identity_merge_runs(
+                    id, guest_platform_user_id, target_platform_user_id,
+                    identity_id, status
+                ) VALUES (?, ?, ?, ?, 'pending')
+                """,
+                (
+                    merge_run_id,
+                    guest_platform_user_id,
+                    target_platform_user_id,
+                    identity["id"],
+                ),
+            )
+
+        guest_connections = conn.execute(
+            """
+            SELECT id, character_id FROM plum_connections
+            WHERE platform_user_id=? AND status='active'
+            ORDER BY id
+            """,
+            (guest_platform_user_id,),
+        ).fetchall()
+        moved = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM plum_conversations WHERE platform_user_id=?",
+                (guest_platform_user_id,),
+            ).fetchone()["n"]
+        )
+        for connection in guest_connections:
+            target_connections = conn.execute(
+                """
+                SELECT id FROM plum_connections
+                WHERE platform_user_id=? AND character_id=? AND status='active'
+                ORDER BY updated_at DESC, id
+                FOR UPDATE
+                """,
+                (target_platform_user_id, connection["character_id"]),
+            ).fetchall()
+            for target_connection in target_connections:
+                conn.execute(
+                    """
+                    UPDATE plum_conversations
+                    SET status='archived', archived_at=COALESCE(
+                            archived_at,
+                            to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                        ),
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                    WHERE connection_id=? AND status='active'
+                    """,
+                    (target_connection["id"],),
+                )
+                conn.execute(
+                    """
+                    UPDATE plum_storylines
+                    SET status='archived', archived_at=COALESCE(
+                            archived_at,
+                            to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                        ),
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                    WHERE connection_id=? AND status='active'
+                    """,
+                    (target_connection["id"],),
+                )
+                conn.execute(
+                    """
+                    UPDATE plum_connections
+                    SET status='archived', archived_at=COALESCE(
+                            archived_at,
+                            to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                        ),
+                        updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+                    WHERE id=? AND status='active'
+                    """,
+                    (target_connection["id"],),
+                )
+
+        # A Member can have only one active default Persona. Keep their default;
+        # import the Guest Persona without rewriting immutable prompt/profile data.
+        conn.execute(
+            """
+            UPDATE plum_user_personas SET is_default=0
+            WHERE platform_user_id=? AND status='active' AND is_default=1
+            """,
+            (guest_platform_user_id,),
+        )
+        conn.execute(
+            "UPDATE plum_user_personas SET platform_user_id=? WHERE platform_user_id=?",
+            (target_platform_user_id, guest_platform_user_id),
+        )
+        owner_tables = (
+            "plum_connections",
+            "plum_connection_runtime_bindings",
+            "plum_storylines",
+            "plum_storyline_state",
+            "plum_conversations",
+        )
+        for table in owner_tables:
+            conn.execute(
+                f"UPDATE {table} SET platform_user_id=? WHERE platform_user_id=?",
+                (target_platform_user_id, guest_platform_user_id),
+            )
+        conn.execute(
+            """
+            UPDATE plum_conversations SET model_profile=(
+                SELECT profile FROM plum_model_profiles
+                WHERE enabled=1 AND profile<>'guest_free'
+                ORDER BY is_default DESC, coin_cost_micros LIMIT 1
+            ), updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE platform_user_id=? AND status='active' AND model_profile='guest_free'
+            """,
+            (target_platform_user_id,),
+        )
+        conn.execute(
+            """
+            UPDATE runtime_ownerships
+            SET platform_user_id=?, owner_kind='resident', source_type='guest_import',
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE platform_user_id=? AND app_id=? AND owner_kind='guest' AND status='active'
+            """,
+            (target_platform_user_id, guest_platform_user_id, PLUM_APP_ID),
+        )
+        conn.execute(
+            "UPDATE sessions SET sender_id=? WHERE sender_id=?",
+            (target_platform_user_id, guest_platform_user_id),
+        )
+        conn.execute(
+            """
+            UPDATE platform_users
+            SET subject_kind='merged', merged_into_platform_user_id=?,
+                merged_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id=?
+            """,
+            (target_platform_user_id, guest_platform_user_id),
+        )
+        conn.execute(
+            """
+            UPDATE plum_identity_challenges
+            SET metadata_json=metadata_json || ?::jsonb,
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id=? AND status='pending'
+            """,
+            (
+                json.dumps(
+                    {
+                        "merge": {
+                            "run_id": merge_run_id,
+                            "target_platform_user_id": target_platform_user_id,
+                            "conversations_moved": moved,
+                        }
+                    }
+                ),
+                challenge_id,
+            ),
+        )
+    return {
+        "platform_user_id": target_platform_user_id,
+        "merge_run_id": merge_run_id,
+        "merge": {"mode": "merged", "conversations_moved": moved},
+    }
+
+
+def finalize_email_merge(
+    *, challenge_id: str, guest_platform_user_id: str, merge_run_id: str
+) -> None:
+    with connect() as conn:
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (f"plum-identity-challenge:{challenge_id}",),
+        )
+        run = conn.execute(
+            "SELECT * FROM plum_identity_merge_runs WHERE id=? FOR UPDATE",
+            (merge_run_id,),
+        ).fetchone()
+        challenge = conn.execute(
+            "SELECT * FROM plum_identity_challenges WHERE id=? FOR UPDATE",
+            (challenge_id,),
+        ).fetchone()
+        if run is None or challenge is None or str(challenge["status"]) != "pending":
+            raise ValueError("email_challenge_consumed")
+        if str(run["guest_platform_user_id"]) != guest_platform_user_id:
+            raise ValueError("email_challenge_actor_mismatch")
+        conn.execute(
+            """
+            UPDATE plum_guest_sessions
+            SET status='promoted', promoted_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE platform_user_id=? AND status='active'
+            """,
+            (guest_platform_user_id,),
+        )
+        conn.execute(
+            """
+            UPDATE plum_identity_challenges
+            SET status='consumed', consumed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id=? AND status='pending'
+            """,
+            (challenge_id,),
+        )
+        conn.execute(
+            """
+            UPDATE plum_identity_merge_runs
+            SET status='completed', completed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
+                result_json=?::jsonb,
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            WHERE id=? AND status='pending'
+            """,
+            (
+                json.dumps(
+                    {
+                        "target_platform_user_id": run["target_platform_user_id"],
+                        "guest_platform_user_id": guest_platform_user_id,
+                    }
+                ),
+                merge_run_id,
+            ),
+        )
+
+
 def finalize_email_promotion(
     *, challenge_id: str, guest_platform_user_id: str
 ) -> None:
@@ -364,8 +713,11 @@ def finalize_email_promotion(
 __all__ = [
     "abandon_email_challenge",
     "create_email_challenge",
+    "finalize_email_merge",
     "finalize_email_promotion",
+    "merge_guest_into_email_member",
     "normalize_email",
     "promote_guest_with_email",
+    "resolve_email_identity",
     "verify_email_challenge",
 ]

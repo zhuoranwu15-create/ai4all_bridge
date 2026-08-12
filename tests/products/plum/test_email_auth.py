@@ -10,6 +10,7 @@ from app.db._backend import IntegrityError
 from app.db._core import (
     _MIGRATIONS,
     _migration_0078_plum_external_identity_challenges,
+    _migration_0079_plum_identity_merge_constraints,
 )
 from app.products.plum.api import app as plum_api
 from app.products.plum.api import deps as plum_deps
@@ -79,13 +80,15 @@ def _onboard(client):
 def test_m0078_adds_external_identity_and_challenge_schema(
     test_settings, empty_pg_database
 ):
+    assert (78, _migration_0078_plum_external_identity_challenges) in _MIGRATIONS
     assert _MIGRATIONS[-1] == (
-        78,
-        _migration_0078_plum_external_identity_challenges,
+        79,
+        _migration_0079_plum_identity_merge_constraints,
     )
     with patch("app.db.settings", test_settings):
         db.migrate_db_through(target_version=77, expected_current_version=0)
         db.migrate_db_through(target_version=78, expected_current_version=77)
+        db.migrate_db_through(target_version=79, expected_current_version=78)
         with db.connect() as conn:
             for table in (
                 "platform_external_identities",
@@ -99,6 +102,22 @@ def test_m0078_adds_external_identity_and_challenge_schema(
                 VALUES ('pusr_email_schema', NULL, 'Email Schema')
                 """
             )
+            deferrable = conn.execute(
+                """
+                SELECT COUNT(*) AS n
+                FROM pg_constraint
+                WHERE conrelid IN (
+                    'plum_connections'::regclass,
+                    'plum_connection_runtime_bindings'::regclass,
+                    'plum_storylines'::regclass,
+                    'plum_storyline_state'::regclass,
+                    'plum_conversations'::regclass
+                )
+                  AND contype='f' AND condeferrable
+                  AND pg_get_constraintdef(oid) LIKE '%platform_user_id%'
+                """
+            ).fetchone()
+            assert deferrable["n"] >= 7
             conn.execute(
                 """
                 INSERT INTO platform_external_identities(
@@ -333,3 +352,264 @@ def test_email_verify_recovers_after_session_issue_without_duplicate_grant(
         ).fetchone()
     assert counts["grants"] == 1
     assert counts["identities"] == 1
+
+
+def _create_existing_email_member(email: str) -> str:
+    member_id = "pusr_returning_email"
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO platform_users(id, phone, display_name, status, subject_kind)
+            VALUES (?, NULL, 'Returning Member', 'active', 'member')
+            """,
+            (member_id,),
+        )
+    repository.ensure_plum_user(
+        platform_user_id=member_id,
+        display_name="Returning Member",
+    )
+    with db.connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO platform_external_identities(
+                id, platform_user_id, provider, provider_subject,
+                normalized_email, email_verified
+            ) VALUES ('peid_returning_email', ?, 'email', ?, ?, 1)
+            """,
+            (member_id, email, email),
+        )
+    return member_id
+
+
+def test_email_otp_merges_guest_into_returning_member_with_guest_story_active(
+    fresh_db, monkeypatch
+):
+    client = _client(monkeypatch, fresh_db)
+    member_id = _create_existing_email_member("returning@example.com")
+    member_conversation = repository.create_or_get_conversation(
+        platform_user_id=member_id,
+        character_id="char_ref_after_hours",
+    )
+    sent = {}
+    monkeypatch.setattr(
+        plum_api,
+        "send_login_code",
+        lambda **kwargs: sent.update(kwargs),
+    )
+    with client:
+        csrf, guest_id = _onboard(client)
+        guest_shared = client.post(
+            "/api/v1/products/plum/conversations",
+            headers={"X-Plum-CSRF": csrf},
+            json={"character_id": "char_ref_after_hours"},
+        ).json()["conversation"]
+        guest_other = client.post(
+            "/api/v1/products/plum/conversations",
+            headers={"X-Plum-CSRF": csrf},
+            json={"character_id": "char_ref_dangerous_promise"},
+        ).json()["conversation"]
+        challenge = client.post(
+            "/api/v1/products/plum/auth/email/challenges",
+            headers={"X-Plum-CSRF": csrf},
+            json={"email": "returning@example.com"},
+        ).json()["challenge_id"]
+        verified = client.post(
+            "/api/v1/products/plum/auth/email/verify",
+            headers={"X-Plum-CSRF": csrf},
+            json={"challenge_id": challenge, "code": sent["code"]},
+        )
+
+    assert verified.status_code == 200
+    assert verified.json()["actor"]["user"] == {
+        "id": member_id,
+        "display_name": "Returning Member",
+    }
+    assert verified.json()["merge"] == {
+        "mode": "merged",
+        "conversations_moved": 2,
+    }
+    assert verified.json()["grant"] == {"amount": 1000, "was_applied": False}
+    assert client.cookies.get("plum_guest_session") is None
+    with db.connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, platform_user_id, status, runtime_account_id
+            FROM plum_conversations
+            WHERE id IN (?, ?, ?)
+            ORDER BY id
+            """,
+            (
+                member_conversation["id"],
+                guest_shared["id"],
+                guest_other["id"],
+            ),
+        ).fetchall()
+        guest_user = conn.execute(
+            "SELECT subject_kind, merged_into_platform_user_id FROM platform_users WHERE id=?",
+            (guest_id,),
+        ).fetchone()
+        ownership = conn.execute(
+            """
+            SELECT platform_user_id, owner_kind, source_type
+            FROM runtime_ownerships WHERE runtime_account_id=?
+            """,
+            (guest_shared["runtime_account_id"],),
+        ).fetchone()
+        counts = conn.execute(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM entitlement_ledger
+                 WHERE platform_user_id=? AND source_type='new_user_grant') AS grants,
+                (SELECT COUNT(*) FROM plum_identity_merge_runs
+                 WHERE guest_platform_user_id=? AND status='completed') AS merge_runs
+            """,
+            (member_id, guest_id),
+        ).fetchone()
+    by_id = {str(row["id"]): row for row in rows}
+    assert by_id[member_conversation["id"]]["status"] == "archived"
+    assert by_id[guest_shared["id"]]["status"] == "active"
+    assert by_id[guest_other["id"]]["status"] == "active"
+    assert by_id[guest_shared["id"]]["platform_user_id"] == member_id
+    assert dict(guest_user) == {
+        "subject_kind": "merged",
+        "merged_into_platform_user_id": member_id,
+    }
+    assert dict(ownership) == {
+        "platform_user_id": member_id,
+        "owner_kind": "resident",
+        "source_type": "guest_import",
+    }
+    assert dict(counts) == {"grants": 1, "merge_runs": 1}
+
+
+def test_returning_email_merge_recovers_after_session_issue(fresh_db, monkeypatch):
+    client = _client(monkeypatch, fresh_db)
+    member_id = _create_existing_email_member("recover-merge@example.com")
+    sent = {}
+    monkeypatch.setattr(
+        plum_api,
+        "send_login_code",
+        lambda **kwargs: sent.update(kwargs),
+    )
+    original_create_session = identity_application.create_platform_user_session
+    calls = {"count": 0}
+
+    def fail_first_session(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("temporary merge session failure")
+        return original_create_session(**kwargs)
+
+    monkeypatch.setattr(
+        identity_application,
+        "create_platform_user_session",
+        fail_first_session,
+    )
+    with client:
+        csrf, guest_id = _onboard(client)
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            headers={"X-Plum-CSRF": csrf},
+            json={"character_id": "char_ref_dangerous_promise"},
+        ).json()["conversation"]
+        challenge = client.post(
+            "/api/v1/products/plum/auth/email/challenges",
+            headers={"X-Plum-CSRF": csrf},
+            json={"email": "recover-merge@example.com"},
+        ).json()["challenge_id"]
+        payload = {"challenge_id": challenge, "code": sent["code"]}
+        with pytest.raises(RuntimeError, match="temporary merge session failure"):
+            client.post(
+                "/api/v1/products/plum/auth/email/verify",
+                headers={"X-Plum-CSRF": csrf},
+                json=payload,
+            )
+        retried = client.post(
+            "/api/v1/products/plum/auth/email/verify",
+            headers={"X-Plum-CSRF": csrf},
+            json=payload,
+        )
+
+    assert retried.status_code == 200
+    assert retried.json()["actor"]["user"]["id"] == member_id
+    with db.connect() as conn:
+        row = conn.execute(
+            """
+            SELECT c.platform_user_id,
+                   (SELECT COUNT(*) FROM plum_identity_merge_runs
+                    WHERE guest_platform_user_id=?) AS merge_runs,
+                   (SELECT COUNT(*) FROM entitlement_ledger
+                    WHERE platform_user_id=? AND source_type='new_user_grant') AS grants
+            FROM plum_conversations c WHERE c.id=?
+            """,
+            (guest_id, member_id, conversation["id"]),
+        ).fetchone()
+    assert dict(row) == {
+        "platform_user_id": member_id,
+        "merge_runs": 1,
+        "grants": 1,
+    }
+
+
+def test_returning_email_disabled_membership_keeps_guest_unchanged(
+    fresh_db, monkeypatch
+):
+    client = _client(monkeypatch, fresh_db)
+    member_id = _create_existing_email_member("disabled@example.com")
+    with db.connect() as conn:
+        conn.execute(
+            """
+            UPDATE product_memberships SET status='disabled'
+            WHERE platform_user_id=? AND app_id='plum'
+            """,
+            (member_id,),
+        )
+    sent = {}
+    monkeypatch.setattr(
+        plum_api,
+        "send_login_code",
+        lambda **kwargs: sent.update(kwargs),
+    )
+    with client:
+        csrf, guest_id = _onboard(client)
+        conversation = client.post(
+            "/api/v1/products/plum/conversations",
+            headers={"X-Plum-CSRF": csrf},
+            json={"character_id": "char_ref_dangerous_promise"},
+        ).json()["conversation"]
+        challenge = client.post(
+            "/api/v1/products/plum/auth/email/challenges",
+            headers={"X-Plum-CSRF": csrf},
+            json={"email": "disabled@example.com"},
+        ).json()["challenge_id"]
+        response = client.post(
+            "/api/v1/products/plum/auth/email/verify",
+            headers={"X-Plum-CSRF": csrf},
+            json={"challenge_id": challenge, "code": sent["code"]},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "identity_target_disabled"
+    with db.connect() as conn:
+        unchanged = conn.execute(
+            """
+            SELECT u.subject_kind, s.status AS guest_session_status,
+                   c.platform_user_id, challenge.status AS challenge_status,
+                   (SELECT COUNT(*) FROM plum_identity_merge_runs
+                    WHERE guest_platform_user_id=?) AS merge_runs
+            FROM platform_users u
+            JOIN plum_guest_sessions s ON s.platform_user_id=u.id
+            JOIN plum_conversations c ON c.platform_user_id=u.id
+            JOIN plum_identity_challenges challenge
+              ON challenge.guest_platform_user_id=u.id
+            WHERE u.id=? AND c.id=? AND challenge.id=?
+            """,
+            (guest_id, guest_id, conversation["id"], challenge),
+        ).fetchone()
+    assert dict(unchanged) == {
+        "subject_kind": "guest",
+        "guest_session_status": "active",
+        "platform_user_id": guest_id,
+        "challenge_status": "pending",
+        "merge_runs": 0,
+    }

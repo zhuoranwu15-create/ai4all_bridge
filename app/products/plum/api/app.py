@@ -95,9 +95,12 @@ from app.products.plum.infrastructure.email_sender import (
 from app.products.plum.infrastructure.identity_repository import (
     abandon_email_challenge,
     create_email_challenge,
+    finalize_email_merge,
     finalize_email_promotion,
+    merge_guest_into_email_member,
     normalize_email,
     promote_guest_with_email,
+    resolve_email_identity,
     verify_email_challenge,
 )
 from app.platform.quota.rate_limiter import RateLimiter
@@ -362,21 +365,51 @@ def verify_email_login_challenge(
             code=payload.code,
             guest_platform_user_id=actor.platform_user_id,
         )
-        promoted = promote_guest_with_email(
-            challenge_id=payload.challenge_id,
-            guest_platform_user_id=actor.platform_user_id,
-            normalized_email=str(verified["normalized_email"]),
-            preferred_name=payload.preferred_name,
+        existing = resolve_email_identity(
+            normalized_email=str(verified["normalized_email"])
         )
-        login = create_plum_login_session(
-            verified_platform_user_id=actor.platform_user_id,
-            display_name=str(promoted["display_name"]),
-            days=max(1, int(settings.plum_session_days)),
-        )
-        finalize_email_promotion(
-            challenge_id=payload.challenge_id,
-            guest_platform_user_id=actor.platform_user_id,
-        )
+        if existing is None or str(existing["platform_user_id"]) == actor.platform_user_id:
+            completed = promote_guest_with_email(
+                challenge_id=payload.challenge_id,
+                guest_platform_user_id=actor.platform_user_id,
+                normalized_email=str(verified["normalized_email"]),
+                preferred_name=payload.preferred_name,
+            )
+            login = create_plum_login_session(
+                verified_platform_user_id=actor.platform_user_id,
+                display_name=str(completed["display_name"]),
+                days=max(1, int(settings.plum_session_days)),
+            )
+            finalize_email_promotion(
+                challenge_id=payload.challenge_id,
+                guest_platform_user_id=actor.platform_user_id,
+            )
+            member_id = actor.platform_user_id
+        else:
+            target_id = str(existing["platform_user_id"])
+            if (
+                str(existing["user_status"]) != "active"
+                or str(existing["subject_kind"]) != "member"
+                or str(existing["membership_status"] or "") != "active"
+            ):
+                raise ValueError("identity_target_disabled")
+            completed = merge_guest_into_email_member(
+                challenge_id=payload.challenge_id,
+                guest_platform_user_id=actor.platform_user_id,
+                target_platform_user_id=target_id,
+                normalized_email=str(verified["normalized_email"]),
+            )
+            login = create_plum_login_session(
+                verified_platform_user_id=target_id,
+                display_name=str(existing["display_name"] or "Plum User"),
+                days=max(1, int(settings.plum_session_days)),
+            )
+            finalize_email_merge(
+                challenge_id=payload.challenge_id,
+                guest_platform_user_id=actor.platform_user_id,
+                merge_run_id=str(completed["merge_run_id"]),
+            )
+            member_id = target_id
     except ValueError as err:
         detail = str(err)
         status_code = 409 if detail in {
@@ -384,6 +417,9 @@ def verify_email_login_challenge(
             "email_challenge_actor_mismatch",
             "email_identity_merge_required",
             "guest_not_promotable",
+            "guest_not_mergeable",
+            "identity_merge_conflict",
+            "identity_target_disabled",
         } else 400
         raise HTTPException(status_code=status_code, detail=detail) from None
     csrf_token = secrets.token_urlsafe(24)
@@ -394,20 +430,20 @@ def verify_email_login_challenge(
     )
     response.delete_cookie(str(settings.plum_guest_session_cookie_name), path="/")
     _no_store(response)
-    grant_applied = bool(promoted["is_new_membership"])
+    is_new_membership = bool(completed.get("is_new_membership", False))
     return {
         "status": "ok",
         "actor": {
             "kind": "member",
             "user": {
-                "id": actor.platform_user_id,
-                "display_name": promoted["display_name"],
+                "id": member_id,
+                "display_name": login["platform_user"]["display_name"],
             },
         },
-        "is_new_membership": bool(promoted["is_new_membership"]),
-        "merge": promoted["merge"],
-        "grant": {"amount": 1000, "was_applied": grant_applied},
-        "wallet": _wallet(actor.platform_user_id),
+        "is_new_membership": is_new_membership,
+        "merge": completed["merge"],
+        "grant": {"amount": 1000, "was_applied": is_new_membership},
+        "wallet": _wallet(member_id),
         "expires_at": login["session"]["expires_at"],
     }
 
