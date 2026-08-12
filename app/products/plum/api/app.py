@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hmac
 import logging
 import secrets
 import uuid
@@ -9,7 +10,7 @@ from urllib.parse import urlsplit
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse
 
 from app.agent_runtime.llm.providers import get_llm_provider
 from app.agent_runtime.turns.service import (
@@ -97,11 +98,23 @@ from app.products.plum.infrastructure.identity_repository import (
     create_email_challenge,
     finalize_email_merge,
     finalize_email_promotion,
+    finalize_google_promotion,
     merge_guest_into_email_member,
     normalize_email,
     promote_guest_with_email,
     resolve_email_identity,
     verify_email_challenge,
+    create_google_oauth_challenge,
+    get_google_oauth_challenge,
+    promote_guest_with_google,
+    resolve_external_identity,
+)
+from app.products.plum.infrastructure.google_oauth import (
+    GoogleOAuthError,
+    authorization_url,
+    create_pkce_pair,
+    exchange_code,
+    verify_token_response,
 )
 from app.platform.quota.rate_limiter import RateLimiter
 
@@ -149,6 +162,14 @@ def _set_auth_cookies(response: Response, *, session_token: str, csrf_token: str
 def _clear_auth_cookies(response: Response) -> None:
     response.delete_cookie(str(settings.plum_session_cookie_name), path="/")
     response.delete_cookie(str(settings.plum_csrf_cookie_name), path="/")
+
+
+def _safe_return_to(value: str) -> str:
+    candidate = str(value or "/").strip()
+    parsed = urlsplit(candidate)
+    if not candidate.startswith("/") or candidate.startswith("//") or parsed.scheme or parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid_return_to")
+    return candidate
 
 
 def _set_guest_cookies(
@@ -289,6 +310,102 @@ def create_or_restore_guest_session(
     )
     _no_store(response)
     return _auth_context(created["principal"])
+
+
+@router.get("/auth/oauth/google/start")
+def start_google_oauth(
+    request: Request,
+    actor: PlumActorPrincipal = Depends(require_plum_actor),
+    return_to: str = Query(default="/", max_length=500),
+) -> RedirectResponse:
+    require_plum_available()
+    if not bool(settings.plum_google_auth_enabled):
+        raise HTTPException(status_code=404, detail="google_auth_disabled")
+    if not isinstance(actor, GuestPrincipal):
+        raise HTTPException(status_code=409, detail="guest_session_required")
+    safe_return = _safe_return_to(return_to)
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    verifier, challenge = create_pkce_pair()
+    try:
+        create_google_oauth_challenge(
+            guest_platform_user_id=actor.platform_user_id,
+            return_to=safe_return,
+            state=state,
+            nonce=nonce,
+            code_verifier=verifier,
+            code_challenge=challenge,
+        )
+        location = authorization_url(state=state, nonce=nonce, code_challenge=challenge)
+    except (ValueError, GoogleOAuthError) as err:
+        raise HTTPException(status_code=503, detail=str(err)) from None
+    response = RedirectResponse(location=location, status_code=307)
+    response.set_cookie(
+        key="plum_google_oauth", value=json.dumps({"state": state, "nonce": nonce, "verifier": verifier}),
+        httponly=True, secure=bool(settings.plum_session_cookie_secure), samesite="lax", path="/",
+        max_age=max(60, int(settings.plum_oauth_state_ttl_seconds)),
+    )
+    return response
+
+
+@router.get("/auth/oauth/google/callback")
+def google_oauth_callback(
+    request: Request,
+    code: str = Query(min_length=1),
+    state: str = Query(min_length=1),
+) -> RedirectResponse:
+    require_plum_available()
+    if not bool(settings.plum_google_auth_enabled):
+        raise HTTPException(status_code=404, detail="google_auth_disabled")
+    raw = request.cookies.get("plum_google_oauth")
+    try:
+        binding = json.loads(raw or "{}")
+        if not hmac.compare_digest(str(binding.get("state", "")), state):
+            raise GoogleOAuthError("oauth_state_invalid")
+        challenge = get_google_oauth_challenge(state=state)
+        if str(challenge.get("nonce")) != str(binding.get("nonce")):
+            raise GoogleOAuthError("oauth_nonce_invalid")
+        expected_binding = hmac.new(
+            str(settings.plum_oauth_state_pepper or settings.plum_email_otp_pepper).encode("utf-8"),
+            f"nonce:{binding.get('nonce')}:{binding.get('verifier')}".encode("utf-8"),
+            "sha256",
+        ).hexdigest()
+        if not hmac.compare_digest(str(challenge.get("secret_hash")), expected_binding):
+            raise GoogleOAuthError("oauth_pkce_invalid")
+        token_payload = exchange_code(code=code, code_verifier=str(binding.get("verifier", "")))
+        identity = verify_token_response(token_payload, nonce=str(binding["nonce"]))
+        guest_id = str(challenge.get("guest_platform_user_id") or "")
+        if not guest_id:
+            raise GoogleOAuthError("oauth_actor_invalid")
+        existing = resolve_external_identity(provider="google", provider_subject=identity.subject)
+        if existing is None or str(existing["platform_user_id"]) == guest_id:
+            completed = promote_guest_with_google(
+                challenge_id=str(challenge["challenge_id"]), guest_platform_user_id=guest_id,
+                provider_subject=identity.subject, normalized_email=identity.email,
+                display_name=identity.display_name, profile=identity.profile,
+            )
+            login = create_plum_login_session(verified_platform_user_id=guest_id, display_name=identity.display_name, days=max(1, int(settings.plum_session_days)))
+            finalize_google_promotion(challenge_id=str(challenge["challenge_id"]), guest_platform_user_id=guest_id)
+            member_id = guest_id
+        else:
+            target_id = str(existing["platform_user_id"])
+            if str(existing["user_status"]) != "active" or str(existing["subject_kind"]) != "member" or str(existing["membership_status"] or "") != "active":
+                raise GoogleOAuthError("identity_target_disabled")
+            completed = merge_guest_into_email_member(
+                challenge_id=str(challenge["challenge_id"]), guest_platform_user_id=guest_id,
+                target_platform_user_id=target_id, normalized_email=identity.email,
+                provider="google", provider_subject=identity.subject,
+            )
+            login = create_plum_login_session(verified_platform_user_id=target_id, display_name=str(existing.get("display_name") or identity.display_name), days=max(1, int(settings.plum_session_days)))
+            finalize_email_merge(challenge_id=str(challenge["challenge_id"]), guest_platform_user_id=guest_id, merge_run_id=str(completed["merge_run_id"]))
+            member_id = target_id
+    except (ValueError, GoogleOAuthError, KeyError, json.JSONDecodeError) as err:
+        raise HTTPException(status_code=400, detail=str(err)) from None
+    response = RedirectResponse(location=str(challenge.get("return_to") or "/") + ("&" if "?" in str(challenge.get("return_to") or "/") else "?") + "auth=google_success", status_code=303)
+    _set_auth_cookies(response, session_token=str(login["session"]["token"]), csrf_token=secrets.token_urlsafe(24))
+    response.delete_cookie("plum_google_oauth", path="/")
+    response.delete_cookie(str(settings.plum_guest_session_cookie_name), path="/")
+    return response
 
 
 @router.patch("/auth/guest/profile")

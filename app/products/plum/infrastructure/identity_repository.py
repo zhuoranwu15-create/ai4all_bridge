@@ -32,6 +32,116 @@ def _pepper() -> bytes:
     return value.encode("utf-8")
 
 
+def _oauth_pepper() -> bytes:
+    value = str(settings.plum_oauth_state_pepper or settings.plum_email_otp_pepper or "")
+    if len(value) < 32:
+        raise ValueError("google_auth_not_configured")
+    return value.encode("utf-8")
+
+
+def _oauth_digest(value: str) -> str:
+    return hmac.new(_oauth_pepper(), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def create_google_oauth_challenge(
+    *, guest_platform_user_id: Optional[str], return_to: str, state: str,
+    nonce: str, code_verifier: str, code_challenge: str,
+) -> Dict[str, Any]:
+    challenge_id = f"pich_{uuid.uuid4().hex}"
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO plum_identity_challenges(
+                id, kind, provider, target_hash, secret_hash,
+                guest_platform_user_id, max_attempts, expires_at, metadata_json
+            ) VALUES (?, 'oauth_state', 'google', ?, ?, ?, 1,
+                to_char((now() AT TIME ZONE 'Asia/Shanghai') + (? || ' seconds')::interval,
+                        'YYYY-MM-DD HH24:MI:SS'), ?::jsonb)
+            """,
+            (
+                challenge_id, _oauth_digest(f"state:{state}"),
+                _oauth_digest(f"nonce:{nonce}:{code_verifier}"), guest_platform_user_id,
+                f"+{max(60, int(settings.plum_oauth_state_ttl_seconds))}",
+                json.dumps({"return_to": return_to, "nonce": nonce, "code_challenge": code_challenge}),
+            ),
+        )
+    return {"challenge_id": challenge_id}
+
+
+def get_google_oauth_challenge(*, state: str) -> Dict[str, Any]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM plum_identity_challenges WHERE provider='google' AND target_hash=? AND status='pending' FOR UPDATE",
+            (_oauth_digest(f"state:{state}"),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("oauth_state_invalid")
+        metadata = row["metadata_json"]
+        if isinstance(metadata, str): metadata = json.loads(metadata)
+    return {"challenge_id": row["id"], "guest_platform_user_id": row["guest_platform_user_id"], "secret_hash": row["secret_hash"], **dict(metadata or {})}
+
+
+def consume_google_oauth_challenge(*, challenge_id: str) -> None:
+    with connect() as conn:
+        row = conn.execute("SELECT status FROM plum_identity_challenges WHERE id=? FOR UPDATE", (challenge_id,)).fetchone()
+        if row is None or str(row["status"]) != "pending":
+            raise ValueError("oauth_state_consumed")
+        conn.execute(
+            "UPDATE plum_identity_challenges SET status='consumed', consumed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id=? AND status='pending'",
+            (challenge_id,),
+        )
+    return None
+
+
+def resolve_external_identity(*, provider: str, provider_subject: str) -> Optional[Dict[str, Any]]:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT identity.*, users.display_name, users.status AS user_status, users.subject_kind, membership.status AS membership_status FROM platform_external_identities identity JOIN platform_users users ON users.id=identity.platform_user_id LEFT JOIN product_memberships membership ON membership.platform_user_id=users.id AND membership.app_id=? WHERE identity.provider=? AND identity.provider_subject=? AND identity.status='active'",
+            (PLUM_APP_ID, provider, provider_subject),
+        ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def promote_guest_with_google(*, challenge_id: str, guest_platform_user_id: str, provider_subject: str, normalized_email: str, display_name: str, profile: Dict[str, Any]) -> Dict[str, Any]:
+    email = normalize_email(normalized_email)
+    name = str(display_name or "").strip()[:40] or email.split("@", 1)[0][:40] or "Plum User"
+    identity_id = f"peid_{uuid.uuid4().hex}"
+    with connect() as conn:
+        conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (f"plum-external-identity:google:{provider_subject}",))
+        guest = conn.execute("SELECT * FROM platform_users WHERE id=? FOR UPDATE", (guest_platform_user_id,)).fetchone()
+        challenge = conn.execute("SELECT * FROM plum_identity_challenges WHERE id=? FOR UPDATE", (challenge_id,)).fetchone()
+        if challenge is None or str(challenge["status"]) != "pending": raise ValueError("oauth_state_consumed")
+        if str(challenge["guest_platform_user_id"] or "") != guest_platform_user_id: raise ValueError("oauth_actor_mismatch")
+        existing = conn.execute("SELECT * FROM platform_external_identities WHERE provider='google' AND provider_subject=? AND status='active' FOR UPDATE", (provider_subject,)).fetchone()
+        if existing is not None and str(existing["platform_user_id"]) == guest_platform_user_id:
+            identity_id = str(existing["id"])
+            metadata = challenge["metadata_json"]
+            if isinstance(metadata, str): metadata = json.loads(metadata)
+            prior = dict(dict(metadata or {}).get("promotion") or {})
+            name = str(prior.get("display_name") or guest["display_name"] or name)
+            is_recovery = True
+        elif existing is not None:
+            raise ValueError("identity_merge_required")
+        else:
+            is_recovery = False
+        if guest is None or str(guest["status"]) != "active" or str(guest["subject_kind"]) not in ({"member"} if is_recovery else {"guest"}): raise ValueError("guest_not_promotable")
+        if not is_recovery:
+            conn.execute("UPDATE platform_users SET subject_kind='member', display_name=?, updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id=?", (name, guest_platform_user_id))
+            conn.execute("INSERT INTO platform_external_identities(id, platform_user_id, provider, provider_subject, normalized_email, email_verified, profile_json, last_authenticated_at) VALUES (?, ?, 'google', ?, ?, 1, ?::jsonb, to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))", (identity_id, guest_platform_user_id, provider_subject, email, json.dumps(profile)))
+        membership = _ensure_product_membership_in_conn(conn, platform_user_id=guest_platform_user_id, app_id=PLUM_APP_ID, registry=PRODUCTION_PRODUCT_REGISTRY)
+        if membership["membership"]["status"] != "active": raise ValueError("product_membership_disabled")
+        is_new_membership = bool(membership["is_new_membership"])
+        if not is_recovery:
+            conn.execute("UPDATE plum_identity_challenges SET metadata_json=metadata_json || ?::jsonb WHERE id=? AND status='pending'", (json.dumps({"promotion": {"identity_id": identity_id, "display_name": name, "is_new_membership": is_new_membership}}), challenge_id))
+        else:
+            metadata = challenge["metadata_json"]
+            if isinstance(metadata, str): metadata = json.loads(metadata)
+            is_new_membership = bool(dict(dict(metadata or {}).get("promotion") or {}).get("is_new_membership", False))
+        conn.execute("UPDATE runtime_ownerships SET owner_kind=CASE WHEN source_type='plum_connection' THEN 'resident' ELSE 'product_entry' END, updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE platform_user_id=? AND app_id=? AND owner_kind='guest' AND status='active'", (guest_platform_user_id, PLUM_APP_ID))
+        conn.execute("UPDATE plum_conversations SET model_profile=(SELECT profile FROM plum_model_profiles WHERE enabled=1 AND profile<>'guest_free' ORDER BY is_default DESC, coin_cost_micros LIMIT 1), updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE platform_user_id=? AND status='active' AND model_profile='guest_free'", (guest_platform_user_id,))
+    return {"platform_user_id": guest_platform_user_id, "display_name": name, "identity_id": identity_id, "is_new_membership": is_new_membership, "merge": {"mode": "promoted", "conversations_moved": 0}}
+
+
 def _digest(value: str) -> str:
     return hmac.new(_pepper(), value.encode("utf-8"), hashlib.sha256).hexdigest()
 
@@ -348,10 +458,15 @@ def merge_guest_into_email_member(
     guest_platform_user_id: str,
     target_platform_user_id: str,
     normalized_email: str,
+    provider: str = "email",
+    provider_subject: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Move the explicit Guest-owned Plum aggregate to one existing Member."""
 
-    email = normalize_email(normalized_email)
+    email = normalize_email(normalized_email) if normalized_email else None
+    subject = provider_subject or email
+    if provider not in {"email", "google"} or not subject:
+        raise ValueError("identity_provider_invalid")
     if guest_platform_user_id == target_platform_user_id:
         raise ValueError("identity_merge_same_subject")
     merge_run_id = f"pimr_{uuid.uuid4().hex}"
@@ -359,7 +474,7 @@ def merge_guest_into_email_member(
         conn.execute("SET CONSTRAINTS ALL DEFERRED")
         conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-            (f"plum-external-identity:email:{email}",),
+            (f"plum-external-identity:{provider}:{subject}",),
         )
         for platform_user_id in sorted(
             (guest_platform_user_id, target_platform_user_id)
@@ -377,15 +492,11 @@ def merge_guest_into_email_member(
         if str(challenge["guest_platform_user_id"] or "") != guest_platform_user_id:
             raise ValueError("email_challenge_actor_mismatch")
         identity = conn.execute(
-            """
-            SELECT * FROM platform_external_identities
-            WHERE provider='email' AND provider_subject=? AND status='active'
-            FOR UPDATE
-            """,
-            (email,),
+            "SELECT * FROM platform_external_identities WHERE provider=? AND provider_subject=? AND status='active' FOR UPDATE",
+            (provider, subject),
         ).fetchone()
         if identity is None or str(identity["platform_user_id"]) != target_platform_user_id:
-            raise ValueError("email_identity_changed")
+            raise ValueError("identity_changed")
         users = conn.execute(
             "SELECT id, status, subject_kind FROM platform_users WHERE id IN (?, ?) FOR UPDATE",
             (guest_platform_user_id, target_platform_user_id),
@@ -710,13 +821,44 @@ def finalize_email_promotion(
         )
 
 
+def finalize_google_promotion(*, challenge_id: str, guest_platform_user_id: str) -> None:
+    """Mark a successful Google promotion and retire its Guest session."""
+    with connect() as conn:
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (f"plum-identity-challenge:{challenge_id}",),
+        )
+        challenge = conn.execute(
+            "SELECT status, guest_platform_user_id FROM plum_identity_challenges WHERE id=? FOR UPDATE",
+            (challenge_id,),
+        ).fetchone()
+        if challenge is None or str(challenge["status"]) != "pending":
+            raise ValueError("oauth_state_consumed")
+        if str(challenge["guest_platform_user_id"] or "") != guest_platform_user_id:
+            raise ValueError("oauth_actor_mismatch")
+        conn.execute(
+            """UPDATE plum_guest_sessions SET status='promoted', promoted_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE platform_user_id=? AND status='active'""",
+            (guest_platform_user_id,),
+        )
+        conn.execute(
+            """UPDATE plum_identity_challenges SET status='consumed', consumed_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'), updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS') WHERE id=? AND status='pending'""",
+            (challenge_id,),
+        )
+
+
 __all__ = [
     "abandon_email_challenge",
+    "consume_google_oauth_challenge",
     "create_email_challenge",
     "finalize_email_merge",
     "finalize_email_promotion",
+    "finalize_google_promotion",
     "merge_guest_into_email_member",
     "normalize_email",
+    "create_google_oauth_challenge",
+    "get_google_oauth_challenge",
+    "promote_guest_with_google",
+    "resolve_external_identity",
     "promote_guest_with_email",
     "resolve_email_identity",
     "verify_email_challenge",

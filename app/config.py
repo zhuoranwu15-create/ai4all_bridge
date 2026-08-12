@@ -166,6 +166,23 @@ class Settings(BaseSettings):
     )
     plum_google_auth_enabled: bool = _plum_setting(False, "GOOGLE_AUTH_ENABLED")
     plum_apple_auth_enabled: bool = _plum_setting(False, "APPLE_AUTH_ENABLED")
+    plum_google_client_id: str = _plum_setting("", "GOOGLE_CLIENT_ID")
+    plum_google_client_secret: str = _plum_setting("", "GOOGLE_CLIENT_SECRET")
+    plum_google_redirect_uri: str = _plum_setting("", "GOOGLE_REDIRECT_URI")
+    plum_google_authorization_endpoint: str = _plum_setting(
+        "https://accounts.google.com/o/oauth2/v2/auth", "GOOGLE_AUTHORIZATION_ENDPOINT"
+    )
+    plum_google_token_endpoint: str = _plum_setting(
+        "https://oauth2.googleapis.com/token", "GOOGLE_TOKEN_ENDPOINT"
+    )
+    plum_google_jwks_uri: str = _plum_setting(
+        "https://www.googleapis.com/oauth2/v3/certs", "GOOGLE_JWKS_URI"
+    )
+    plum_google_issuer: str = _plum_setting(
+        "https://accounts.google.com", "GOOGLE_ISSUER"
+    )
+    plum_oauth_state_ttl_seconds: int = _plum_setting(600, "OAUTH_STATE_TTL_SECONDS")
+    plum_oauth_state_pepper: str = _plum_setting("", "OAUTH_STATE_PEPPER")
     plum_guest_session_cookie_name: str = _plum_setting(
         "plum_guest_session", "GUEST_SESSION_COOKIE_NAME"
     )
