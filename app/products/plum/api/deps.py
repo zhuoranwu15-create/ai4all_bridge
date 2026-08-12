@@ -46,7 +46,10 @@ def require_plum_principal(request: Request) -> SessionPrincipal:
 
     require_plum_available()
     token = request.cookies.get(str(settings.plum_session_cookie_name)) or ""
-    if token and bool(settings.plum_public_test_auth_enabled):
+    # Session cookies are issued by every formal provider (Email, Google and
+    # legacy access-code auth). Their validity must not depend on whether the
+    # legacy public-test access-code entry point remains enabled.
+    if token:
         principal = resolve_session_principal(
             token=token,
             expected_app_id=PLUM_APP_ID,

@@ -78,6 +78,27 @@ def _onboard(client):
     return csrf, profile.json()["actor"]["user"]["id"]
 
 
+def test_formal_session_logout_does_not_depend_on_public_test_auth(
+    fresh_db, monkeypatch
+):
+    client = _client(monkeypatch, fresh_db)
+    plum_deps.settings.plum_public_test_auth_enabled = False
+    member_id = _create_existing_email_member("logout@example.com")
+    session = db.create_platform_user_session(
+        platform_user_id=member_id, app_id="plum", days=30
+    )
+    client.cookies.set("plum_session", session["token"])
+    client.cookies.set("plum_csrf", "logout-csrf")
+
+    response = client.delete(
+        "/api/v1/products/plum/auth/session/current",
+        headers={"X-Plum-CSRF": "logout-csrf"},
+    )
+
+    assert response.status_code == 200
+    assert client.get("/api/v1/products/plum/auth/context").json()["actor"]["kind"] == "visitor"
+
+
 def test_m0078_adds_external_identity_and_challenge_schema(
     test_settings, empty_pg_database
 ):
