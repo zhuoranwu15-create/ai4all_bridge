@@ -38,6 +38,18 @@ class UpdateGuestProfileRequest(BaseModel):
         return self
 
 
+class CreateEmailChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+
+
+class VerifyEmailChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge_id: str = Field(min_length=8, max_length=100)
+    code: str = Field(pattern=r"^\d{6}$")
+    preferred_name: Optional[str] = Field(default=None, max_length=40)
+
+
 class CreateCharacterRequest(BaseModel):
     """Create V1 client input; review outcome and system fields are server-owned."""
 

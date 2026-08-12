@@ -43,11 +43,13 @@ from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import CHANNEL_APP, get_channel_capability
 from app.products.plum.api.contracts import (
     CreateConversationRequest,
+    CreateEmailChallengeRequest,
     CreateTurnRequest,
     RedeemAccessCodeRequest,
     RestartConversationRequest,
     UpdateModelRequest,
     UpdateGuestProfileRequest,
+    VerifyEmailChallengeRequest,
 )
 from app.products.plum.api.deps import (
     GuestPrincipal,
@@ -85,6 +87,18 @@ from app.products.plum.infrastructure.guest_repository import (
     upsert_guest_profile,
     finish_guest_action,
     reserve_guest_action,
+)
+from app.products.plum.infrastructure.email_sender import (
+    PlumEmailDeliveryUnavailable,
+    send_login_code,
+)
+from app.products.plum.infrastructure.identity_repository import (
+    abandon_email_challenge,
+    create_email_challenge,
+    finalize_email_promotion,
+    normalize_email,
+    promote_guest_with_email,
+    verify_email_challenge,
 )
 from app.platform.quota.rate_limiter import RateLimiter
 
@@ -280,6 +294,122 @@ def update_guest_profile(
     )
     _no_store(response)
     return _auth_context(actor)
+
+
+@router.post("/auth/email/challenges", status_code=202)
+def create_email_login_challenge(
+    payload: CreateEmailChallengeRequest,
+    request: Request,
+    response: Response,
+    actor: PlumActorPrincipal = Depends(require_plum_actor),
+) -> dict:
+    require_plum_available()
+    if not bool(settings.plum_email_auth_enabled):
+        raise HTTPException(status_code=404, detail="email_auth_disabled")
+    if not isinstance(actor, GuestPrincipal):
+        raise HTTPException(status_code=409, detail="guest_session_required")
+    client_host = request.client.host if request.client else "unknown"
+    if not _auth_rate_limiter.check_rpm(
+        f"plum-email-challenge:{client_host}", 10, window_seconds=60.0
+    ):
+        raise HTTPException(status_code=429, detail="too_many_login_attempts")
+    try:
+        email = normalize_email(payload.email)
+        created = create_email_challenge(
+            normalized_email=email,
+            guest_platform_user_id=actor.platform_user_id,
+        )
+        send_login_code(
+            email=email,
+            code=str(created["code"]),
+            expires_minutes=int(created["expires_minutes"]),
+        )
+    except PlumEmailDeliveryUnavailable as err:
+        if "created" in locals():
+            abandon_email_challenge(challenge_id=str(created["challenge_id"]))
+        raise HTTPException(status_code=503, detail="email_provider_unavailable") from err
+    except ValueError as err:
+        detail = str(err)
+        if detail == "email_challenge_too_frequent":
+            raise HTTPException(status_code=429, detail=detail) from None
+        if detail == "email_auth_not_configured":
+            raise HTTPException(status_code=503, detail=detail) from None
+        raise HTTPException(status_code=422, detail=detail) from None
+    _no_store(response)
+    return {
+        "status": "accepted",
+        "challenge_id": created["challenge_id"],
+        "retry_after_seconds": max(1, int(settings.plum_email_otp_resend_seconds)),
+    }
+
+
+@router.post("/auth/email/verify")
+def verify_email_login_challenge(
+    payload: VerifyEmailChallengeRequest,
+    response: Response,
+    actor: PlumActorPrincipal = Depends(require_plum_actor),
+) -> dict:
+    require_plum_available()
+    if not bool(settings.plum_email_auth_enabled):
+        raise HTTPException(status_code=404, detail="email_auth_disabled")
+    if not isinstance(actor, GuestPrincipal):
+        # Visitor account creation and returning-identity login are delivered
+        # with the merge/returning-member capability block.
+        raise HTTPException(status_code=409, detail="guest_session_required")
+    try:
+        verified = verify_email_challenge(
+            challenge_id=payload.challenge_id,
+            code=payload.code,
+            guest_platform_user_id=actor.platform_user_id,
+        )
+        promoted = promote_guest_with_email(
+            challenge_id=payload.challenge_id,
+            guest_platform_user_id=actor.platform_user_id,
+            normalized_email=str(verified["normalized_email"]),
+            preferred_name=payload.preferred_name,
+        )
+        login = create_plum_login_session(
+            verified_platform_user_id=actor.platform_user_id,
+            display_name=str(promoted["display_name"]),
+            days=max(1, int(settings.plum_session_days)),
+        )
+        finalize_email_promotion(
+            challenge_id=payload.challenge_id,
+            guest_platform_user_id=actor.platform_user_id,
+        )
+    except ValueError as err:
+        detail = str(err)
+        status_code = 409 if detail in {
+            "email_challenge_consumed",
+            "email_challenge_actor_mismatch",
+            "email_identity_merge_required",
+            "guest_not_promotable",
+        } else 400
+        raise HTTPException(status_code=status_code, detail=detail) from None
+    csrf_token = secrets.token_urlsafe(24)
+    _set_auth_cookies(
+        response,
+        session_token=str(login["session"]["token"]),
+        csrf_token=csrf_token,
+    )
+    response.delete_cookie(str(settings.plum_guest_session_cookie_name), path="/")
+    _no_store(response)
+    grant_applied = bool(promoted["is_new_membership"])
+    return {
+        "status": "ok",
+        "actor": {
+            "kind": "member",
+            "user": {
+                "id": actor.platform_user_id,
+                "display_name": promoted["display_name"],
+            },
+        },
+        "is_new_membership": bool(promoted["is_new_membership"]),
+        "merge": promoted["merge"],
+        "grant": {"amount": 1000, "was_applied": grant_applied},
+        "wallet": _wallet(actor.platform_user_id),
+        "expires_at": login["session"]["expires_at"],
+    }
 
 
 @router.post("/auth/access-code")

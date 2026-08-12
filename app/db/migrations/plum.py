@@ -1813,6 +1813,71 @@ def _migration_0077_plum_guest_identity_foundation(conn: Connection) -> None:
     )
 
 
+def _migration_0078_plum_external_identity_challenges(conn: Connection) -> None:
+    """External identities and one-time login challenges for formal Plum auth."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS platform_external_identities (
+            id TEXT PRIMARY KEY,
+            platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            provider TEXT NOT NULL CHECK(provider IN ('email', 'google', 'apple')),
+            provider_subject TEXT NOT NULL CHECK(BTRIM(provider_subject) <> ''),
+            normalized_email TEXT,
+            email_verified BIGINT NOT NULL DEFAULT 0 CHECK(email_verified IN (0, 1)),
+            profile_json JSONB NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(profile_json)='object'),
+            status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'disabled')),
+            last_authenticated_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(provider, provider_subject)
+        );
+        CREATE INDEX IF NOT EXISTS ix_platform_external_identities_owner
+            ON platform_external_identities(platform_user_id, status);
+        CREATE INDEX IF NOT EXISTS ix_platform_external_identities_email
+            ON platform_external_identities(normalized_email, status)
+            WHERE normalized_email IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS plum_identity_challenges (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL CHECK(kind IN ('email_otp', 'oauth_state')),
+            provider TEXT NOT NULL CHECK(provider IN ('email', 'google', 'apple')),
+            target_hash TEXT,
+            secret_hash TEXT NOT NULL CHECK(LENGTH(secret_hash)=64),
+            guest_platform_user_id TEXT REFERENCES platform_users(id),
+            attempt_count BIGINT NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
+            max_attempts BIGINT NOT NULL CHECK(max_attempts > 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK(status IN ('pending', 'consumed', 'expired', 'failed')),
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT,
+            metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb CHECK(jsonb_typeof(metadata_json)='object'),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            CHECK((status='consumed') = (consumed_at IS NOT NULL))
+        );
+        CREATE INDEX IF NOT EXISTS ix_plum_identity_challenges_target
+            ON plum_identity_challenges(provider, target_hash, status, expires_at);
+        CREATE INDEX IF NOT EXISTS ix_plum_identity_challenges_guest
+            ON plum_identity_challenges(guest_platform_user_id, status, created_at)
+            WHERE guest_platform_user_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS plum_identity_merge_runs (
+            id TEXT PRIMARY KEY,
+            guest_platform_user_id TEXT NOT NULL UNIQUE REFERENCES platform_users(id),
+            target_platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            identity_id TEXT NOT NULL REFERENCES platform_external_identities(id),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'completed', 'failed')),
+            result_json JSONB,
+            completed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            CHECK((status='completed') = (completed_at IS NOT NULL))
+        );
+        """
+    )
+
+
 __all__ = [
     "_migration_0064_fibre_mvp",
     "_migration_0065_fibre_character_experience",
@@ -1824,4 +1889,5 @@ __all__ = [
     "_migration_0075_plum_system_work_ownership",
     "_migration_0076_plum_character_create_idempotency",
     "_migration_0077_plum_guest_identity_foundation",
+    "_migration_0078_plum_external_identity_challenges",
 ]

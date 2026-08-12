@@ -13,6 +13,7 @@ from app.db._core import (
     _migration_0075_plum_system_work_ownership,
     _migration_0076_plum_character_create_idempotency,
     _migration_0077_plum_guest_identity_foundation,
+    _migration_0078_plum_external_identity_challenges,
 )
 
 
@@ -316,13 +317,14 @@ def test_m0075_replaces_fake_platform_user_with_explicit_system_work_owner(
     db.close_pg_pool()
 
 
-def test_m0077_is_registered_as_current_schema_head(test_settings):
-    assert _MIGRATIONS[-1] == (77, _migration_0077_plum_guest_identity_foundation)
+def test_m0077_remains_available_at_current_schema_head(test_settings):
+    assert (77, _migration_0077_plum_guest_identity_foundation) in _MIGRATIONS
+    assert _MIGRATIONS[-1] == (78, _migration_0078_plum_external_identity_challenges)
     with patch("app.db.settings", test_settings):
         with db.connect() as conn:
             assert conn.execute(
                 "SELECT MAX(version) AS v FROM schema_migrations"
-            ).fetchone()["v"] == 77
+            ).fetchone()["v"] == 78
             for table in (
                 "plum_works",
                 "plum_character_versions",

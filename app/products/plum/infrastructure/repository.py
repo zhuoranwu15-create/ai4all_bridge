@@ -309,10 +309,22 @@ def _seed_catalog_in_conn(conn, *, platform_user_id: Optional[str] = None) -> No
 def _seed_default_persona_in_conn(
     conn, *, platform_user_id: str, display_name: str
 ) -> None:
+    existing = conn.execute(
+        """
+        SELECT id FROM plum_user_personas
+        WHERE platform_user_id=? AND is_default=1
+        LIMIT 1
+        """,
+        (platform_user_id,),
+    ).fetchone()
     persona_id = (
-        "fpersona_test_default"
-        if platform_user_id == str(settings.plum_test_user_id)
-        else f"fpersona_{uuid.uuid5(uuid.NAMESPACE_URL, platform_user_id).hex}"
+        str(existing["id"])
+        if existing is not None
+        else (
+            "fpersona_test_default"
+            if platform_user_id == str(settings.plum_test_user_id)
+            else f"fpersona_{uuid.uuid5(uuid.NAMESPACE_URL, platform_user_id).hex}"
+        )
     )
     conn.execute(
         """

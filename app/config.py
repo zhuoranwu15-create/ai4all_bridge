@@ -143,6 +143,26 @@ class Settings(BaseSettings):
     )
     plum_guest_chat_enabled: bool = _plum_setting(False, "GUEST_CHAT_ENABLED")
     plum_email_auth_enabled: bool = _plum_setting(False, "EMAIL_AUTH_ENABLED")
+    plum_email_otp_pepper: str = _plum_setting("", "EMAIL_OTP_PEPPER")
+    plum_email_otp_expires_minutes: int = _plum_setting(
+        10, "EMAIL_OTP_EXPIRES_MINUTES"
+    )
+    plum_email_otp_max_attempts: int = _plum_setting(
+        5, "EMAIL_OTP_MAX_ATTEMPTS"
+    )
+    plum_email_otp_resend_seconds: int = _plum_setting(
+        60, "EMAIL_OTP_RESEND_SECONDS"
+    )
+    plum_email_sender_mode: str = _plum_setting("disabled", "EMAIL_SENDER_MODE")
+    plum_email_smtp_host: str = _plum_setting("", "EMAIL_SMTP_HOST")
+    plum_email_smtp_port: int = _plum_setting(587, "EMAIL_SMTP_PORT")
+    plum_email_smtp_username: str = _plum_setting("", "EMAIL_SMTP_USERNAME")
+    plum_email_smtp_password: str = _plum_setting("", "EMAIL_SMTP_PASSWORD")
+    plum_email_smtp_from: str = _plum_setting("", "EMAIL_SMTP_FROM")
+    plum_email_smtp_starttls: bool = _plum_setting(True, "EMAIL_SMTP_STARTTLS")
+    plum_email_smtp_timeout_seconds: float = _plum_setting(
+        10.0, "EMAIL_SMTP_TIMEOUT_SECONDS"
+    )
     plum_google_auth_enabled: bool = _plum_setting(False, "GOOGLE_AUTH_ENABLED")
     plum_apple_auth_enabled: bool = _plum_setting(False, "APPLE_AUTH_ENABLED")
     plum_guest_session_cookie_name: str = _plum_setting(

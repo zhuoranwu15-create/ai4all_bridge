@@ -104,7 +104,25 @@ def resolve_guest_principal(*, token: str) -> Optional[GuestPrincipal]:
             JOIN platform_users pu ON pu.id=s.platform_user_id
             WHERE s.token_hash=? AND s.status='active'
               AND s.expires_at > to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
-              AND pu.status='active' AND pu.subject_kind='guest'
+              AND pu.status='active'
+              AND (
+                    pu.subject_kind='guest'
+                    OR (
+                        pu.subject_kind='member'
+                        AND EXISTS (
+                            SELECT 1
+                            FROM plum_identity_challenges challenge
+                            JOIN platform_external_identities identity
+                              ON identity.platform_user_id=pu.id
+                             AND identity.provider=challenge.provider
+                             AND identity.status='active'
+                            WHERE challenge.guest_platform_user_id=pu.id
+                              AND challenge.status='pending'
+                              AND challenge.provider='email'
+                              AND challenge.metadata_json->'promotion'->>'identity_id'=identity.id
+                        )
+                    )
+                  )
             """,
             (_digest(cleaned),),
         ).fetchone()
