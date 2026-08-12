@@ -235,6 +235,17 @@ def _require_same_origin_guest_create(request: Request) -> None:
         raise HTTPException(status_code=403, detail="origin_required")
     requested = urlsplit(origin)
     expected = urlsplit(str(request.base_url))
+    if (requested.scheme, requested.netloc) == (expected.scheme, expected.netloc):
+        return
+    configured = {
+        str(item).strip().rstrip("/")
+        for item in str(getattr(settings, "plum_web_origins", "") or "").split(",")
+        if str(item).strip()
+    }
+    if origin.rstrip("/") in configured:
+        return
+    if str(getattr(settings, "app_env", "")) in {"local", "test"} and requested.hostname in {"localhost", "127.0.0.1"}:
+        return
     if (requested.scheme, requested.netloc) != (expected.scheme, expected.netloc):
         raise HTTPException(status_code=403, detail="cross_site_request_rejected")
 

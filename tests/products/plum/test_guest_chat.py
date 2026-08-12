@@ -30,6 +30,7 @@ def _client(monkeypatch, fresh_db):
     config.plum_guest_session_days = 30
     config.plum_guest_chat_enabled = True
     config.plum_email_auth_enabled = False
+    config.plum_web_origins = ""
     config.plum_google_auth_enabled = False
     config.plum_apple_auth_enabled = False
     config.plum_guest_typed_limit = 2

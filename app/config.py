@@ -143,6 +143,7 @@ class Settings(BaseSettings):
     )
     plum_guest_chat_enabled: bool = _plum_setting(False, "GUEST_CHAT_ENABLED")
     plum_email_auth_enabled: bool = _plum_setting(False, "EMAIL_AUTH_ENABLED")
+    plum_web_origins: str = _plum_setting("", "WEB_ORIGINS")
     plum_email_otp_pepper: str = _plum_setting("", "EMAIL_OTP_PEPPER")
     plum_email_otp_expires_minutes: int = _plum_setting(
         10, "EMAIL_OTP_EXPIRES_MINUTES"
