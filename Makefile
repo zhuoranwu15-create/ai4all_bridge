@@ -112,9 +112,12 @@ plum-local-init:
 		PLUM_PUBLIC_TEST_AUTH_ENABLED=false \
 		$(PY) scripts/seed_plum_dev.py
 
+# 游客态与邮箱验证码登录是当前联调主链路，本地默认打开；
+# SMTP 凭据与 PLUM_EMAIL_OTP_PEPPER 仍从 .env 读取，不写进 Makefile。
 plum-local-run:
 	APP_ENV=local DATABASE_URL="$(PLUM_DATABASE_URL)" PLUM_ENABLED=true PLUM_DEV_MODE=true \
 		PLUM_PUBLIC_TEST_AUTH_ENABLED=false PLUM_CHAT_STREAMING_ENABLED=true \
+		PLUM_GUEST_CHAT_ENABLED=true PLUM_EMAIL_AUTH_ENABLED=true \
 		PROACTIVE_SCHEDULER_ENABLED=false DREAMING_SCHEDULER_ENABLED=false \
 		USER_META_SCHEDULER_ENABLED=false \
 		.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port $(PLUM_DEV_PORT) --reload
