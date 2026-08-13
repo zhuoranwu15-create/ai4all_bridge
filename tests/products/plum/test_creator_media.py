@@ -30,6 +30,9 @@ def _configure_plum(monkeypatch, fresh_db, *, dev_mode: bool) -> MagicMock:
     config.plum_balanced_provider_id = "chatgpt"
     config.plum_immersive_provider_id = "deepseek-v4-pro"
     config.plum_public_test_auth_enabled = True
+    config.plum_guest_chat_enabled = False
+    config.plum_email_auth_enabled = False
+    config.plum_google_auth_enabled = False
     config.plum_session_cookie_name = "plum_session"
     config.plum_csrf_cookie_name = "plum_csrf"
     config.plum_session_days = 30
