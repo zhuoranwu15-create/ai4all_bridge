@@ -1,5 +1,5 @@
 """Plum MVP 请求契约。"""
-from typing import List, Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,6 +18,36 @@ class RedeemAccessCodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     access_code: str = Field(min_length=16, max_length=160)
     display_name: str = Field(min_length=1, max_length=40)
+
+
+class UpdateGuestProfileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    adult_confirmed: bool
+    pronouns: Literal["she_her", "he_him", "they_them", "other"]
+    relationship_preference: Optional[Literal[
+        "male", "female", "all", "no_preference"
+    ]] = None
+    genres: List[str] = Field(default_factory=list, max_length=12)
+
+    @model_validator(mode="after")
+    def normalize_genres(self):
+        cleaned = [str(value).strip() for value in self.genres]
+        if any(not value for value in cleaned) or len(cleaned) != len(set(cleaned)):
+            raise ValueError("genres must be non-empty and unique")
+        self.genres = cleaned
+        return self
+
+
+class CreateEmailChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    email: str = Field(min_length=3, max_length=254)
+
+
+class VerifyEmailChallengeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    challenge_id: str = Field(min_length=8, max_length=100)
+    code: str = Field(pattern=r"^\d{6}$")
+    preferred_name: Optional[str] = Field(default=None, max_length=40)
 
 
 class CreateCharacterRequest(BaseModel):
@@ -57,9 +87,26 @@ class UpdateModelRequest(BaseModel):
     model_profile: Literal["fast", "balanced", "immersive"]
 
 
+class TurnAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["message", "continue"]
+    text: Optional[str] = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def validate_action_text(self):
+        cleaned = str(self.text or "").strip()
+        if self.kind == "message" and not cleaned:
+            raise ValueError("message text required")
+        if self.kind == "continue" and cleaned:
+            raise ValueError("continue action cannot include text")
+        self.text = cleaned or None
+        return self
+
+
 class CreateTurnRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    text: str = Field(min_length=1, max_length=2000)
+    text: Optional[str] = Field(default=None, max_length=2000)
+    action: Optional[TurnAction] = None
     client_message_id: str = Field(min_length=8, max_length=128)
     idempotency_key: str = Field(min_length=8, max_length=128)
 
@@ -69,4 +116,8 @@ class CreateTurnRequest(BaseModel):
 
         if self.client_message_id.strip() != self.idempotency_key.strip():
             raise ValueError("client_message_id and idempotency_key must match")
+        if self.action is None and not str(self.text or "").strip():
+            raise ValueError("text or action required")
+        if self.action is not None and self.text is not None:
+            raise ValueError("text and action are mutually exclusive")
         return self

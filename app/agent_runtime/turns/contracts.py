@@ -121,6 +121,7 @@ class ProductTurnServices(Protocol):
     tool_policy: "ToolPolicy"
     # None = 该产品没有首轮引导；Runtime 不做任何 onboarding 回调。
     onboarding: Optional[ProductOnboarding]
+    provisional_actor_owner_kinds: Tuple[str, ...]
 
     def localized_message(
         self,

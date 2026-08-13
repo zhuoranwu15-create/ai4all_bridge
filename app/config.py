@@ -141,6 +141,61 @@ class Settings(BaseSettings):
     plum_chat_streaming_enabled: bool = _plum_setting(
         True, "CHAT_STREAMING_ENABLED"
     )
+    plum_guest_chat_enabled: bool = _plum_setting(False, "GUEST_CHAT_ENABLED")
+    plum_email_auth_enabled: bool = _plum_setting(False, "EMAIL_AUTH_ENABLED")
+    plum_web_origins: str = _plum_setting("", "WEB_ORIGINS")
+    plum_email_otp_pepper: str = _plum_setting("", "EMAIL_OTP_PEPPER")
+    plum_email_otp_expires_minutes: int = _plum_setting(
+        10, "EMAIL_OTP_EXPIRES_MINUTES"
+    )
+    plum_email_otp_max_attempts: int = _plum_setting(
+        5, "EMAIL_OTP_MAX_ATTEMPTS"
+    )
+    plum_email_otp_resend_seconds: int = _plum_setting(
+        60, "EMAIL_OTP_RESEND_SECONDS"
+    )
+    plum_email_sender_mode: str = _plum_setting("disabled", "EMAIL_SENDER_MODE")
+    plum_email_smtp_host: str = _plum_setting("", "EMAIL_SMTP_HOST")
+    plum_email_smtp_port: int = _plum_setting(587, "EMAIL_SMTP_PORT")
+    plum_email_smtp_username: str = _plum_setting("", "EMAIL_SMTP_USERNAME")
+    plum_email_smtp_password: str = _plum_setting("", "EMAIL_SMTP_PASSWORD")
+    plum_email_smtp_from: str = _plum_setting("", "EMAIL_SMTP_FROM")
+    plum_email_smtp_starttls: bool = _plum_setting(True, "EMAIL_SMTP_STARTTLS")
+    plum_email_smtp_timeout_seconds: float = _plum_setting(
+        10.0, "EMAIL_SMTP_TIMEOUT_SECONDS"
+    )
+    plum_google_auth_enabled: bool = _plum_setting(False, "GOOGLE_AUTH_ENABLED")
+    plum_apple_auth_enabled: bool = _plum_setting(False, "APPLE_AUTH_ENABLED")
+    plum_google_client_id: str = _plum_setting("", "GOOGLE_CLIENT_ID")
+    plum_google_client_secret: str = _plum_setting("", "GOOGLE_CLIENT_SECRET")
+    plum_google_redirect_uri: str = _plum_setting("", "GOOGLE_REDIRECT_URI")
+    plum_google_authorization_endpoint: str = _plum_setting(
+        "https://accounts.google.com/o/oauth2/v2/auth", "GOOGLE_AUTHORIZATION_ENDPOINT"
+    )
+    plum_google_token_endpoint: str = _plum_setting(
+        "https://oauth2.googleapis.com/token", "GOOGLE_TOKEN_ENDPOINT"
+    )
+    plum_google_jwks_uri: str = _plum_setting(
+        "https://www.googleapis.com/oauth2/v3/certs", "GOOGLE_JWKS_URI"
+    )
+    plum_google_issuer: str = _plum_setting(
+        "https://accounts.google.com", "GOOGLE_ISSUER"
+    )
+    plum_oauth_state_ttl_seconds: int = _plum_setting(600, "OAUTH_STATE_TTL_SECONDS")
+    plum_oauth_state_pepper: str = _plum_setting("", "OAUTH_STATE_PEPPER")
+    plum_guest_session_cookie_name: str = _plum_setting(
+        "plum_guest_session", "GUEST_SESSION_COOKIE_NAME"
+    )
+    plum_guest_session_days: int = _plum_setting(30, "GUEST_SESSION_DAYS")
+    plum_guest_typed_limit: int = _plum_setting(2, "GUEST_TYPED_LIMIT")
+    plum_guest_continue_limit: int = _plum_setting(8, "GUEST_CONTINUE_LIMIT")
+    plum_guest_character_continue_limit: int = _plum_setting(
+        2, "GUEST_CHARACTER_CONTINUE_LIMIT"
+    )
+    plum_guest_provider_id: str = _plum_setting("deepseek", "GUEST_PROVIDER_ID")
+    plum_guest_max_output_tokens: int = _plum_setting(
+        384, "GUEST_MAX_OUTPUT_TOKENS"
+    )
 
     # ===== 主应用 PostgreSQL（见 docs/architecture/shared/data/thick_node_postgres_refactor.md）=====
     # 主运行时必填；空值或非 PostgreSQL URL 会在首次连接（FastAPI startup）直接失败。

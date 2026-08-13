@@ -25,7 +25,7 @@ from app.platform.media.persistence import (
     pending_expires_at,
 )
 from app.platform.quota.rate_limiter import rate_limiter
-from app.products.plum.api.deps import require_plum_principal
+from app.products.plum.api.deps import require_plum_member
 
 router = APIRouter(tags=["plum-creator-media"])
 
@@ -43,7 +43,7 @@ async def upload_creator_portrait(
     file: UploadFile = File(...),
     kind: str = Form(default="image"),
     purpose: str = Form(default="character_portrait"),
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> dict:
     """解码并标准化 Create V1 立绘，返回 owner-only 预览地址。"""
 
@@ -114,7 +114,7 @@ async def upload_creator_portrait(
 @router.get("/creator/media/{media_id}")
 def read_creator_media(
     media_id: str,
-    principal: SessionPrincipal = Depends(require_plum_principal),
+    principal: SessionPrincipal = Depends(require_plum_member),
 ) -> Response:
     """只允许 owner 读取尚未发布的 Create 媒体，跨账号统一返回 404。"""
 

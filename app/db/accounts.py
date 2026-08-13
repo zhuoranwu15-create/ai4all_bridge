@@ -1354,6 +1354,16 @@ def get_account_product_access(*, account_id: str) -> Optional[Dict[str, Any]]:
         ).fetchone()
         if account is None:
             return None
+        ownership = conn.execute(
+            """
+            SELECT ro.platform_user_id, ro.owner_kind, pu.subject_kind
+            FROM runtime_ownerships ro
+            JOIN platform_users pu ON pu.id=ro.platform_user_id
+            WHERE ro.runtime_account_id=? AND ro.status='active'
+            LIMIT 1
+            """,
+            (account_id,),
+        ).fetchone()
         platform_user_id = resolve_owner_platform_user_id(conn, account_id)
         membership = None
         if platform_user_id is not None:
@@ -1370,6 +1380,8 @@ def get_account_product_access(*, account_id: str) -> Optional[Dict[str, Any]]:
         "app_id": str(account["app_id"]),
         "platform_user_id": platform_user_id,
         "membership_status": str(membership["status"]) if membership else None,
+        "owner_kind": str(ownership["owner_kind"]) if ownership else None,
+        "subject_kind": str(ownership["subject_kind"]) if ownership else None,
     }
 
 
@@ -1711,6 +1723,23 @@ def resolve_effective_quota_limits(
                 "app_id": app_id,
                 "quota_subject": scope["subject"],
             }
+        if scope.get("provisional"):
+            return {
+                "daily_limit": int(
+                    default_daily
+                    if account["daily_limit"] is None
+                    else account["daily_limit"]
+                ),
+                "rpm_limit": int(
+                    default_rpm
+                    if account["rpm_limit"] is None
+                    else account["rpm_limit"]
+                ),
+                "source": "provisional_actor",
+                "platform_user_id": platform_user_id,
+                "app_id": app_id,
+                "quota_subject": scope["subject"],
+            }
         membership = conn.execute(
             """
             SELECT daily_limit, rpm_limit
@@ -1794,6 +1823,24 @@ def _resolve_quota_scope(
     ).fetchone()
     if owner_in_app is None:
         raise ValueError("quota scope mismatch")
+    provisional = cursor.execute(
+        """
+        SELECT 1
+        FROM runtime_ownerships ro
+        JOIN platform_users pu ON pu.id=ro.platform_user_id
+        WHERE ro.runtime_account_id=? AND ro.platform_user_id=?
+          AND ro.app_id=? AND ro.status='active' AND ro.owner_kind='guest'
+          AND pu.subject_kind='guest' AND pu.status='active'
+        """,
+        (account_id, platform_user_id, app_id),
+    ).fetchone()
+    if provisional is not None:
+        return {
+            "platform_user_id": platform_user_id,
+            "subject": platform_user_id,
+            "app_id": app_id,
+            "provisional": True,
+        }
     if membership is None or membership["status"] != "active":
         raise ValueError("active product membership required")
     return {

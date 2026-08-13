@@ -16,6 +16,9 @@ from app.db._core import (
     _migration_0067_plum_product_rename,
     _migration_0070_moderation_task_product_scope,
     _migration_0076_plum_character_create_idempotency,
+    _migration_0077_plum_guest_identity_foundation,
+    _migration_0078_plum_external_identity_challenges,
+    _migration_0079_plum_identity_merge_constraints,
 )
 from app.products.zhaoxi.domain.creator_role_templates import (
     AI_NAME_MAX_CHARS,
@@ -72,12 +75,12 @@ def _create(owner_id: str, suffix: str = ""):
 
 
 def test_creator_role_schema_indexes_current_head_and_idempotency(fresh_db):
-    assert _MIGRATIONS[-1] == (76, _migration_0076_plum_character_create_idempotency)
+    assert _MIGRATIONS[-1] == (79, _migration_0079_plum_identity_merge_constraints)
     with db.connect() as conn:
         version = conn.execute(
             "SELECT MAX(version) AS version FROM schema_migrations"
         ).fetchone()["version"]
-        assert int(version) == 76
+        assert int(version) == 79
         for table in _TABLES:
             conn.execute(f"SELECT 1 FROM {table} WHERE 1 = 0").fetchall()
 

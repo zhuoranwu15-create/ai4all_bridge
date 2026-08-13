@@ -7,6 +7,7 @@ psycopg-pool==3.2.8
 pytest==8.3.4
 pytest-postgresql==7.0.2
 httpx==0.28.1
+cryptography==46.0.7
 python-multipart==0.0.20
 qrcode[pil]==8.0
 # 原本是 qrcode[pil] 的间接依赖，v1.5 起被媒体上传直接 import（EXIF 剥离重编码），显式化。

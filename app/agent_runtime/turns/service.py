@@ -4,7 +4,7 @@ import queue
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 
 from app.time_utils import (
@@ -102,6 +102,20 @@ _GENERATION_ERROR_REPLY = "我这边刚刚有点卡住了，你可以稍后再�
 # COUNT。阈值是启动期 Settings（改需重启），eligibility 在固定阈值下单调递增，故进程内
 # sticky 缓存始终一致。
 _tdai_memory_eligible_accounts: set = set()
+
+
+def _product_access_allowed(access: Optional[Dict[str, Any]], product_services) -> bool:
+    if access is None or access["platform_user_id"] is None:
+        return True
+    if access["membership_status"] == "active":
+        return True
+    allowed = tuple(
+        getattr(product_services, "provisional_actor_owner_kinds", ()) or ()
+    )
+    return (
+        str(access.get("owner_kind") or "") in allowed
+        and str(access.get("subject_kind") or "") == "guest"
+    )
 
 
 def _localized_product_message(
@@ -1015,6 +1029,16 @@ def _prepare_turn(
             metadata={**identity_response_metadata(identity, account_id), "latency_ms": latency_ms},
         )
 
+    llm_provider = resolve_active_llm_provider(
+        tier_for_task(TASK_MAIN_REPLY), provider_id=ctx.provider_id
+    )
+    if ctx.max_output_tokens is not None:
+        llm_provider = replace(
+            llm_provider,
+            max_output_tokens=max(
+                1, min(llm_provider.max_output_tokens, int(ctx.max_output_tokens))
+            ),
+        )
     return _TurnSetup(
         account_id=account_id,
         identity=identity,
@@ -1033,10 +1057,7 @@ def _prepare_turn(
         onboarding_state=onboarding_state,
         onboarding_active=onboarding_active,
         effective_daily=effective_daily,
-        llm_provider=resolve_active_llm_provider(
-            tier_for_task(TASK_MAIN_REPLY),
-            provider_id=ctx.provider_id,
-        ),
+        llm_provider=llm_provider,
         cap=cap,
     )
 
@@ -1095,30 +1116,33 @@ def _persist_and_screen_inbound(
     inbound_db_started = time.monotonic()
     quota_reservation_id: Optional[str] = None
     with db_connect() as conn:
-        inserted_id = insert_message(
-            account_id=account_id,
-            session_id=session["id"],
-            message_id=message_id,
-            reply_to_message_id=None,
-            direction="inbound",
-            role="user",
-            message_type=ctx.message_type,
-            content=text,
-            raw=_turn_message_raw(
-                source="openclaw_turn",
-                identity=identity,
+        if ctx.persist_inbound_message:
+            inserted_id = insert_message(
                 account_id=account_id,
-                binding=binding,
-                raw_payload=ctx.raw,
-                extra={
-                    "message_id": message_id,
-                    "message_type": ctx.message_type,
-                },
-            ),
-            content_json=ctx.display_content,
-            media_id=ctx.media_asset_id,
-            conn=conn,
-        )
+                session_id=session["id"],
+                message_id=message_id,
+                reply_to_message_id=None,
+                direction="inbound",
+                role="user",
+                message_type=ctx.message_type,
+                content=text,
+                raw=_turn_message_raw(
+                    source="openclaw_turn",
+                    identity=identity,
+                    account_id=account_id,
+                    binding=binding,
+                    raw_payload=ctx.raw,
+                    extra={
+                        "message_id": message_id,
+                        "message_type": ctx.message_type,
+                    },
+                ),
+                content_json=ctx.display_content,
+                media_id=ctx.media_asset_id,
+                conn=conn,
+            )
+        else:
+            inserted_id = 0
         if inserted_id is not None and ctx.media_asset_id:
             # 与入站消息插入同一事务：认领失败则整条消息一起回滚，不留 referenced 孤儿。
             try:
@@ -1175,34 +1199,35 @@ def _persist_and_screen_inbound(
     # 入站内容同步筛查（阿里云云审核为主 + 本地红线补充）。命中即停止本轮回复并进入人工队列。
     # 阿里云未开启时内部回退第一阶段异步审核并放行；筛查自身异常时 fail-open（放行本轮回复）。
     inbound_screen = None
-    inbound_moderation_started = time.monotonic()
-    try:
-        inbound_content_kind = "voice_transcript" if ctx.message_type == "voice" else ctx.message_type
-        inbound_screen = screen_inbound_message_sync(
-            message_db_id=int(inserted_id),
-            account_id=account_id,
-            app_id=ctx.app_id,
-            session_id=int(session["id"]),
-            content_kind=inbound_content_kind,
-            text=text,
-            media=ctx.media,
-            source_message_id=message_id,
-            metadata={
-                "message_type": ctx.message_type,
-                "image_described": image_described,
-                "image_understanding_failed": image_understanding_failed,
-            },
-        )
-    except Exception as err:
-        logger.exception(
-            "inbound moderation screen failed account=%s message_db_id=%s error=%s",
-            account_id,
-            inserted_id,
-            err,
-        )
-        inbound_screen = None
-    finally:
-        _record_timing(timings, "inbound_moderation_ms", inbound_moderation_started)
+    if ctx.persist_inbound_message:
+        inbound_moderation_started = time.monotonic()
+        try:
+            inbound_content_kind = "voice_transcript" if ctx.message_type == "voice" else ctx.message_type
+            inbound_screen = screen_inbound_message_sync(
+                message_db_id=int(inserted_id),
+                account_id=account_id,
+                app_id=ctx.app_id,
+                session_id=int(session["id"]),
+                content_kind=inbound_content_kind,
+                text=text,
+                media=ctx.media,
+                source_message_id=message_id,
+                metadata={
+                    "message_type": ctx.message_type,
+                    "image_described": image_described,
+                    "image_understanding_failed": image_understanding_failed,
+                },
+            )
+        except Exception as err:
+            logger.exception(
+                "inbound moderation screen failed account=%s message_db_id=%s error=%s",
+                account_id,
+                inserted_id,
+                err,
+            )
+            inbound_screen = None
+        finally:
+            _record_timing(timings, "inbound_moderation_ms", inbound_moderation_started)
     inbound_blocked = bool(inbound_screen is not None and not inbound_screen.allowed)
     if inbound_blocked:
         # 命中风险的入站原文打审核标记：从后续所有 LLM 上下文/记忆/turn 计数中剔除，避免下一轮被重新喂给模型。
@@ -1219,21 +1244,22 @@ def _persist_and_screen_inbound(
                 err,
             )
 
-    referral_started = time.monotonic()
-    try:
-        process_referral_message_for_account(
-            account_id=account_id,
-            message_db_id=int(inserted_id),
-        )
-    except Exception as err:
-        logger.exception(
-            "referral message processing failed account=%s message_db_id=%s error=%s",
-            account_id,
-            inserted_id,
-            err,
-        )
-    finally:
-        _record_timing(timings, "referral_ms", referral_started)
+    if ctx.persist_inbound_message:
+        referral_started = time.monotonic()
+        try:
+            process_referral_message_for_account(
+                account_id=account_id,
+                message_db_id=int(inserted_id),
+            )
+        except Exception as err:
+            logger.exception(
+                "referral message processing failed account=%s message_db_id=%s error=%s",
+                account_id,
+                inserted_id,
+                err,
+            )
+        finally:
+            _record_timing(timings, "referral_ms", referral_started)
 
     # VL 成功后记一次独立的图片理解成本事件（固定贝壳，带总开关，与 chat 扣费相互独立）。
     if image_described:
@@ -2138,6 +2164,8 @@ class ChannelTurnInput:
     provider_id: Optional[str] = None
     # 产品已在 Runtime 外完成固定价预占/结算时关闭按 token 计费；每日配额仍按成功 turn 结算。
     usage_billing_enabled: bool = True
+    max_output_tokens: Optional[int] = None
+    persist_inbound_message: bool = True
     # 流式入口使用；同步入口保持 None，由 Runtime 生成安全默认值。
     turn_id: Optional[str] = None
     client_message_id: Optional[str] = None
@@ -2286,11 +2314,7 @@ def run_product_turn_stream(
     if access is not None and access["app_id"] != ctx.app_id:
         yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_scope_mismatch")
         return
-    if (
-        access is not None
-        and access["platform_user_id"] is not None
-        and access["membership_status"] != "active"
-    ):
+    if not _product_access_allowed(access, product_services):
         yield RuntimeTurnEvent(kind="failed", turn_id=turn_id, error_code="product_membership_required")
         return
 
@@ -2599,11 +2623,7 @@ def run_product_turn(
             message_id=ctx.message_id or ctx.event_id,
         )
         return response
-    if (
-        access is not None
-        and access["platform_user_id"] is not None
-        and access["membership_status"] != "active"
-    ):
+    if not _product_access_allowed(access, product_services):
         reason = (
             "product_membership_disabled"
             if access["membership_status"] == "disabled"

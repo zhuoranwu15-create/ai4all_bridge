@@ -13,6 +13,7 @@ from app.db._core import (
     _MIGRATIONS,
     _migration_0073_plum_connection_foundation,
     _migration_0076_plum_character_create_idempotency,
+    _migration_0079_plum_identity_merge_constraints,
 )
 from app.products.plum.infrastructure import repository
 
@@ -432,11 +433,12 @@ def test_taken_down_character_blocks_existing_connection_and_restart(
 
 
 def test_m0073_foundation_remains_available_at_current_schema_head(fresh_db):
-    assert _MIGRATIONS[-1] == (76, _migration_0076_plum_character_create_idempotency)
+    assert (76, _migration_0076_plum_character_create_idempotency) in _MIGRATIONS
+    assert _MIGRATIONS[-1] == (79, _migration_0079_plum_identity_merge_constraints)
     with db.connect() as conn:
         assert conn.execute(
             "SELECT MAX(version) AS v FROM schema_migrations"
-        ).fetchone()["v"] == 76
+        ).fetchone()["v"] == 79
         for table in (
             "plum_connections",
             "plum_connection_character_adoptions",
