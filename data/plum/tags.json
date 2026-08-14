@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "tags": [
+    {
+      "id": "tag_original_character",
+      "code": "original_character",
+      "display_name": "Original Character",
+      "status": "active",
+      "sort_order": 10
+    },
+    {
+      "id": "tag_romance",
+      "code": "romance",
+      "display_name": "Romance",
+      "status": "active",
+      "sort_order": 20
+    },
+    {
+      "id": "tag_fantasy",
+      "code": "fantasy",
+      "display_name": "Fantasy",
+      "status": "active",
+      "sort_order": 30
+    },
+    {
+      "id": "tag_anime",
+      "code": "anime",
+      "display_name": "Anime",
+      "status": "active",
+      "sort_order": 40
+    },
+    {
+      "id": "tag_school",
+      "code": "school",
+      "display_name": "School",
+      "status": "active",
+      "sort_order": 50
+    },
+    {
+      "id": "tag_mafia",
+      "code": "mafia",
+      "display_name": "Mafia",
+      "status": "active",
+      "sort_order": 60
+    },
+    {
+      "id": "tag_royalty",
+      "code": "royalty",
+      "display_name": "Royalty",
+      "status": "active",
+      "sort_order": 70
+    },
+    {
+      "id": "tag_villain",
+      "code": "villain",
+      "display_name": "Villain",
+      "status": "active",
+      "sort_order": 80
+    },
+    {
+      "id": "tag_supernatural",
+      "code": "supernatural",
+      "display_name": "Supernatural",
+      "status": "active",
+      "sort_order": 90
+    },
+    {
+      "id": "tag_vampire",
+      "code": "vampire",
+      "display_name": "Vampire",
+      "status": "active",
+      "sort_order": 100
+    },
+    {
+      "id": "tag_sci_fi",
+      "code": "sci_fi",
+      "display_name": "Sci-Fi",
+      "status": "active",
+      "sort_order": 110
+    },
+    {
+      "id": "tag_horror",
+      "code": "horror",
+      "display_name": "Horror",
+      "status": "active",
+      "sort_order": 120
+    },
+    {
+      "id": "tag_comedy",
+      "code": "comedy",
+      "display_name": "Comedy",
+      "status": "active",
+      "sort_order": 130
+    },
+    {
+      "id": "tag_historical",
+      "code": "historical",
+      "display_name": "Historical",
+      "status": "active",
+      "sort_order": 140
+    },
+    {
+      "id": "tag_mystery",
+      "code": "mystery",
+      "display_name": "Mystery",
+      "status": "active",
+      "sort_order": 150
+    },
+    {
+      "id": "tag_adventure",
+      "code": "adventure",
+      "display_name": "Adventure",
+      "status": "active",
+      "sort_order": 160
+    },
+    {
+      "id": "tag_rpg",
+      "code": "rpg",
+      "display_name": "RPG",
+      "status": "active",
+      "sort_order": 170
+    },
+    {
+      "id": "tag_fluff",
+      "code": "fluff",
+      "display_name": "Fluff",
+      "status": "active",
+      "sort_order": 180
+    },
+    {
+      "id": "tag_slow_burn",
+      "code": "slow_burn",
+      "display_name": "Slow Burn",
+      "status": "active",
+      "sort_order": 190
+    },
+    {
+      "id": "tag_enemies_to_lovers",
+      "code": "enemies_to_lovers",
+      "display_name": "Enemies to Lovers",
+      "status": "active",
+      "sort_order": 200
+    }
+  ]
+}

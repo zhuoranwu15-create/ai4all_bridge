@@ -6,6 +6,7 @@ import json
 from app.config import settings
 from app.db import init_db
 from app.products.plum.infrastructure.repository import seed_plum_dev
+from app.products.plum.infrastructure.tags import sync_tag_config
 from scripts.init_local_postgres import _validated_conninfo
 
 
@@ -18,7 +19,9 @@ def main() -> None:
     except ValueError as exc:
         raise SystemExit(f"Plum dev seed requires the loopback ai4all_plum_dev database: {exc}")
     init_db()
-    print(json.dumps(seed_plum_dev(), ensure_ascii=False, indent=2))
+    result = seed_plum_dev()
+    result["tags"] = sync_tag_config()
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

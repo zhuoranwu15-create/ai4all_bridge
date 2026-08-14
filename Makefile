@@ -9,12 +9,14 @@ LOCAL_PG_PORT ?= 55432
 LOCAL_DATABASE_URL ?= postgresql://ai4all:ai4all-local@127.0.0.1:$(LOCAL_PG_PORT)/ai4all_dev
 PLUM_DATABASE_URL ?= postgresql://ai4all:ai4all-local@127.0.0.1:$(LOCAL_PG_PORT)/ai4all_plum_dev
 PLUM_DEV_PORT ?= 8180
+PLUM_CHARACTER_MODERATION_MOCK_STATUS ?= pending_review
 
 .PHONY: help test test-unit test-fast test-zhaoxi test-mingchan test-plum \
 	test-plum-fast test-plum-db test-platform test-shared \
 	test-shared-runtime test-shared-infrastructure test-shared-contracts \
 	pg-local-up pg-local-init pg-local-status \
-	pg-local-stop pg-local-reset run plum-local-init plum-local-run plum-local-start
+	pg-local-stop pg-local-reset run plum-local-init plum-local-run plum-local-start \
+	sync-plum-tags
 
 help:
 	@echo "make test       # PostgreSQL 全量测试（预迁移模板 + 逐测试克隆）"
@@ -39,6 +41,7 @@ help:
 	@echo "make plum-local-init # 初始化 Plum 隔离 PG 库与固定测试账号"
 	@echo "make plum-local-run  # 启动 Plum 本地后端（SSE 流式，端口 8180）"
 	@echo "make plum-local-start # 初始化并启动 Plum 本地测试后端（推荐入口）"
+	@echo "make sync-plum-tags # 校验并同步 Plum 离线 Tag 词表到 DATABASE_URL"
 
 # 唯一全量档：固定使用 pytest-postgresql 临时实例。
 test:
@@ -88,7 +91,7 @@ pg-local-up:
 
 pg-local-init:
 	AI4ALL_ALLOW_AUTO_MIGRATE=1 LOCAL_DATABASE_URL="$(LOCAL_DATABASE_URL)" \
-		PLUM_DATABASE_URL="$(PLUM_DATABASE_URL)" $(PY) scripts/init_local_postgres.py
+		PLUM_DATABASE_URL="$(PLUM_DATABASE_URL)" $(PY) -m scripts.init_local_postgres
 
 pg-local-status:
 	LOCAL_PG_PORT=$(LOCAL_PG_PORT) $(COMPOSE) ps
@@ -105,18 +108,22 @@ pg-local-reset:
 run:
 	DATABASE_URL="$(LOCAL_DATABASE_URL)" .venv/bin/uvicorn app.main:app --reload --port 8180
 
+sync-plum-tags:
+	$(PY) -m scripts.sync_plum_tags
+
 # Plum 前后端联调强制使用隔离的本地 PG 数据库，不读取 .env 中的 DATABASE_URL。
 # 模型密钥仍从 .env 读取；PLUM_DATABASE_URL 可覆盖，但初始化脚本只接受 loopback + 固定库名。
 plum-local-init:
 	APP_ENV=local DATABASE_URL="$(PLUM_DATABASE_URL)" PLUM_ENABLED=true PLUM_DEV_MODE=true \
 		PLUM_PUBLIC_TEST_AUTH_ENABLED=false \
-		$(PY) scripts/seed_plum_dev.py
+		$(PY) -m scripts.seed_plum_dev
 
 # 游客态与邮箱验证码登录是当前联调主链路，本地默认打开；
 # SMTP 凭据与 PLUM_EMAIL_OTP_PEPPER 仍从 .env 读取，不写进 Makefile。
 plum-local-run:
 	APP_ENV=local DATABASE_URL="$(PLUM_DATABASE_URL)" PLUM_ENABLED=true PLUM_DEV_MODE=true \
 		PLUM_PUBLIC_TEST_AUTH_ENABLED=false PLUM_CHAT_STREAMING_ENABLED=true \
+		PLUM_CHARACTER_MODERATION_MOCK_STATUS="$(PLUM_CHARACTER_MODERATION_MOCK_STATUS)" \
 		PLUM_GUEST_CHAT_ENABLED=true PLUM_EMAIL_AUTH_ENABLED=true \
 		PROACTIVE_SCHEDULER_ENABLED=false DREAMING_SCHEDULER_ENABLED=false \
 		USER_META_SCHEDULER_ENABLED=false \

@@ -509,11 +509,15 @@ def publish_created_character(
     visibility: str = "private",
     portrait_position_x: int = 50,
     portrait_position_y: int = 50,
+    portrait_zoom: int = 100,
     avatar_position_x: int = 50,
     avatar_position_y: int = 50,
+    avatar_zoom: int = 100,
     example_dialogues: str = "",
     response_rules: str = "",
     access_policy_version: str = "plum-rating-v1",
+    work_id: Optional[str] = None,
+    portrait_already_referenced: bool = False,
 ) -> Dict[str, Any]:
     """Atomically publish one already-approved user-created Character.
 
@@ -530,7 +534,7 @@ def publish_created_character(
     )
     if len(request_key) < 8:
         raise ValueError("idempotency_key_too_short")
-    name = _required_bounded_text(display_name, field="display_name", max_length=40)
+    name = _required_bounded_text(display_name, field="display_name", max_length=50)
     cleaned_gender = str(gender or "").strip()
     if cleaned_gender not in {"male", "female", "non_binary"}:
         raise ValueError("gender_invalid")
@@ -582,6 +586,12 @@ def publish_created_character(
     }
     if any(value < 0 or value > 100 for value in positions.values()):
         raise ValueError("portrait_position_invalid")
+    cleaned_portrait_zoom = int(portrait_zoom)
+    if cleaned_portrait_zoom < 100 or cleaned_portrait_zoom > 200:
+        raise ValueError("portrait_zoom_invalid")
+    cleaned_avatar_zoom = int(avatar_zoom)
+    if cleaned_avatar_zoom < 100 or cleaned_avatar_zoom > 200:
+        raise ValueError("avatar_zoom_invalid")
 
     # Only client-controlled normalized content participates in replay identity.
     # A retry keeps the original server review result instead of creating a new
@@ -591,6 +601,8 @@ def publish_created_character(
         "gender": cleaned_gender,
         "portrait_media_id": media_id,
         **positions,
+        "portrait_zoom": cleaned_portrait_zoom,
+        "avatar_zoom": cleaned_avatar_zoom,
         "intro": cleaned_intro,
         "opening_scene": cleaned_opening,
         "character_settings": cleaned_settings,
@@ -605,8 +617,12 @@ def publish_created_character(
             client_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
     ).hexdigest()
-    work_id = f"work_{uuid.uuid4().hex}"
+    created_work_id = (
+        _required_bounded_text(work_id, field="work_id", max_length=100)
+        if work_id is not None else f"work_{uuid.uuid4().hex}"
+    )
     character_id = f"char_{uuid.uuid4().hex}"
+    portrait_ref = f"/api/v1/products/plum/characters/{character_id}/portrait"
 
     with connect() as conn:
         access = conn.execute(
@@ -633,7 +649,7 @@ def publish_created_character(
             ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(platform_user_id, idempotency_key) DO NOTHING
             """,
-            (owner_id, request_key, request_hash, work_id, character_id),
+            (owner_id, request_key, request_hash, created_work_id, character_id),
         )
         request_row = conn.execute(
             """
@@ -661,7 +677,9 @@ def publish_created_character(
         if (
             asset is None
             or str(asset["kind"]) != "image"
-            or str(asset["status"]) != "pending"
+            or str(asset["status"]) != (
+                "referenced" if portrait_already_referenced else "pending"
+            )
         ):
             raise ValueError("creator_media_not_claimable")
 
@@ -727,7 +745,7 @@ def publish_created_character(
             ) VALUES (?, 'platform_user', ?, ?, 'active',
                       to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
-            (work_id, owner_id, profile_id),
+            (created_work_id, owner_id, profile_id),
         )
         conn.execute(
             """
@@ -737,25 +755,27 @@ def publish_created_character(
                 scenario_prompt, speaking_style, example_dialogues,
                 prompt_version, content_version, status, sort_order,
                 creator_profile_id, content_rating, gender, portrait_media_id,
-                portrait_position_x, portrait_position_y,
-                avatar_position_x, avatar_position_y,
+                portrait_position_x, portrait_position_y, portrait_zoom,
+                avatar_position_x, avatar_position_y, avatar_zoom,
                 creator_declared_rating, platform_effective_rating,
                 access_policy_version, moderation_decision_id, visibility,
                 capabilities_json, fixture_version, published_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, '#7c3aed', ?,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, '#7c3aed', ?,
                       '', ?, ?, 1, 1, 'active', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                      ?, ?, ?, ?, '{"text":true,"voice":false}', NULL,
+                      ?, ?, ?, ?, ?, ?, '{"text":true,"voice":false}', NULL,
                       to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'),
                       to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS'))
             """,
             (
                 character_id,
-                work_id,
+                created_work_id,
                 name,
                 cleaned_intro,
                 cleaned_intro,
                 cleaned_opening,
                 json.dumps(tag_names, ensure_ascii=False),
+                portrait_ref,
+                portrait_ref,
                 cleaned_settings,
                 cleaned_rules,
                 cleaned_examples,
@@ -765,8 +785,10 @@ def publish_created_character(
                 media_id,
                 positions["portrait_position_x"],
                 positions["portrait_position_y"],
+                cleaned_portrait_zoom,
                 positions["avatar_position_x"],
                 positions["avatar_position_y"],
+                cleaned_avatar_zoom,
                 cleaned_declared_rating,
                 cleaned_effective_rating,
                 policy_version,
@@ -779,13 +801,15 @@ def publish_created_character(
             INSERT INTO plum_character_versions(
                 character_id, version_number, prompt_version, display_name,
                 gender, portrait_media_id, portrait_position_x,
-                portrait_position_y, avatar_position_x, avatar_position_y,
+                portrait_position_y, portrait_zoom,
+                avatar_position_x, avatar_position_y,
+                avatar_zoom,
                 intro, opening_scene, character_settings, scenario_prompt,
                 example_dialogues, response_rules, creator_declared_rating,
                 platform_effective_rating, access_policy_version,
                 moderation_decision_id, visibility
-            ) VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?, ?,
-                      ?, ?, ?)
+            ) VALUES (?, 1, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?,
+                      ?, ?, ?, ?, ?)
             """,
             (
                 character_id,
@@ -794,8 +818,10 @@ def publish_created_character(
                 media_id,
                 positions["portrait_position_x"],
                 positions["portrait_position_y"],
+                cleaned_portrait_zoom,
                 positions["avatar_position_x"],
                 positions["avatar_position_y"],
+                cleaned_avatar_zoom,
                 cleaned_intro,
                 cleaned_opening,
                 cleaned_settings,
@@ -821,17 +847,126 @@ def publish_created_character(
             "INSERT INTO plum_character_stats(character_id) VALUES (?)",
             (character_id,),
         )
-        try:
-            mark_media_assets_referenced(
-                media_ids=[media_id],
-                owner_platform_user_id=owner_id,
-                conn=conn,
-            )
-        except ValueError as err:
-            raise ValueError("creator_media_not_claimable") from err
+        if not portrait_already_referenced:
+            try:
+                mark_media_assets_referenced(
+                    media_ids=[media_id],
+                    owner_platform_user_id=owner_id,
+                    conn=conn,
+                )
+            except ValueError as err:
+                raise ValueError("creator_media_not_claimable") from err
         return _created_character_result_in_conn(
             conn, platform_user_id=owner_id, idempotency_key=request_key
         )
+
+
+def publish_character_revision(
+    *, platform_user_id: str, work_id: str, character_id: str,
+    idempotency_key: str, display_name: str, gender: str,
+    portrait_media_id: str, intro: str, opening_scene: str,
+    character_settings: str, tag_ids: List[str], creator_declared_rating: str,
+    approved_moderation_decision_id: str, platform_effective_rating: str,
+    visibility: str = "private", portrait_position_x: int = 50,
+    portrait_position_y: int = 50, portrait_zoom: int = 100,
+    avatar_position_x: int = 50,
+    avatar_position_y: int = 50, avatar_zoom: int = 100,
+    example_dialogues: str = "",
+    response_rules: str = "", access_policy_version: str = "plum-rating-v1",
+) -> Dict[str, Any]:
+    """Publish an immutable next version while existing chats retain their pin."""
+
+    owner_id = _required_bounded_text(platform_user_id, field="platform_user_id", max_length=100)
+    cleaned_work_id = _required_bounded_text(work_id, field="work_id", max_length=100)
+    cleaned_character_id = _required_bounded_text(character_id, field="character_id", max_length=100)
+    request_key = _required_bounded_text(idempotency_key, field="idempotency_key", max_length=128)
+    name = _required_bounded_text(display_name, field="display_name", max_length=50)
+    media_id = _required_bounded_text(portrait_media_id, field="portrait_media_id", max_length=100)
+    cleaned_intro = _required_bounded_text(intro, field="intro", max_length=500)
+    cleaned_opening = _required_bounded_text(opening_scene, field="opening_scene", max_length=2000)
+    cleaned_settings = _required_bounded_text(character_settings, field="character_settings", max_length=12000)
+    cleaned_examples = str(example_dialogues or "").strip()
+    cleaned_rules = str(response_rules or "").strip()
+    cleaned_tags = [str(value).strip() for value in tag_ids]
+    cleaned_gender = str(gender).strip()
+    cleaned_visibility = str(visibility).strip()
+    declared_rating = str(creator_declared_rating).strip()
+    effective_rating = str(platform_effective_rating).strip()
+    decision_id = _required_bounded_text(approved_moderation_decision_id, field="approved_moderation_decision_id", max_length=160)
+    policy_version = _required_bounded_text(access_policy_version, field="access_policy_version", max_length=80)
+    positions = tuple(int(value) for value in (portrait_position_x, portrait_position_y, avatar_position_x, avatar_position_y))
+    cleaned_portrait_zoom = int(portrait_zoom)
+    cleaned_avatar_zoom = int(avatar_zoom)
+    if cleaned_gender not in {"male", "female", "non_binary"} or cleaned_visibility not in {"private", "public"}:
+        raise ValueError("character_payload_invalid")
+    if declared_rating not in {"general", "mature"} or effective_rating not in {"general", "mature"}:
+        raise ValueError("character_payload_invalid")
+    if not 1 <= len(cleaned_tags) <= 5 or any(not value for value in cleaned_tags) or len(set(cleaned_tags)) != len(cleaned_tags):
+        raise ValueError("character_tag_invalid")
+    if len(cleaned_examples) > 6000 or len(cleaned_rules) > 3000 or any(value < 0 or value > 100 for value in positions) or not 100 <= cleaned_portrait_zoom <= 200 or not 100 <= cleaned_avatar_zoom <= 200:
+        raise ValueError("character_payload_invalid")
+    payload = {
+        "display_name": name, "gender": cleaned_gender, "portrait_media_id": media_id,
+        "positions": positions, "portrait_zoom": cleaned_portrait_zoom,
+        "avatar_zoom": cleaned_avatar_zoom,
+        "intro": cleaned_intro, "opening_scene": cleaned_opening,
+        "character_settings": cleaned_settings, "example_dialogues": cleaned_examples,
+        "response_rules": cleaned_rules, "tag_ids": sorted(cleaned_tags),
+        "creator_declared_rating": declared_rating, "visibility": cleaned_visibility,
+    }
+    request_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    portrait_ref = f"/api/v1/products/plum/characters/{cleaned_character_id}/portrait"
+
+    with connect() as conn:
+        replay = conn.execute(
+            "SELECT request_hash, version_number FROM plum_character_version_publish_requests WHERE platform_user_id=? AND idempotency_key=?",
+            (owner_id, request_key),
+        ).fetchone()
+        if replay is not None:
+            if str(replay["request_hash"]) != request_hash:
+                raise PlumConflictError("character_version_idempotency_conflict")
+            row = conn.execute("SELECT * FROM plum_characters WHERE id=? AND work_id=?", (cleaned_character_id, cleaned_work_id)).fetchone()
+            if row is None:
+                raise RuntimeError("published_character_revision_missing")
+            return dict(row)
+        character = conn.execute(
+            """
+            SELECT ch.content_version, ch.prompt_version FROM plum_characters ch
+            JOIN plum_works w ON w.id=ch.work_id
+            WHERE ch.id=? AND ch.work_id=? AND ch.status='active'
+              AND w.owner_platform_user_id=? AND w.lifecycle_status='active'
+            FOR UPDATE
+            """,
+            (cleaned_character_id, cleaned_work_id, owner_id),
+        ).fetchone()
+        if character is None:
+            raise ValueError("published_character_not_editable")
+        asset = conn.execute("SELECT kind, status FROM media_assets WHERE id=? AND owner_platform_user_id=?", (media_id, owner_id)).fetchone()
+        if asset is None or str(asset["kind"]) != "image" or str(asset["status"]) != "referenced":
+            raise ValueError("creator_media_not_claimable")
+        placeholders = ",".join("?" for _ in cleaned_tags)
+        tags = conn.execute(f"SELECT id, display_name FROM plum_tags WHERE id IN ({placeholders}) AND status='active' ORDER BY sort_order, id", tuple(cleaned_tags)).fetchall()
+        if len(tags) != len(cleaned_tags):
+            raise ValueError("character_tag_invalid")
+        version = int(character["content_version"]) + 1
+        prompt_version = int(character["prompt_version"]) + 1
+        conn.execute(
+            """INSERT INTO plum_character_version_publish_requests(platform_user_id,idempotency_key,request_hash,work_id,character_id,version_number) VALUES (?,?,?,?,?,?)""",
+            (owner_id, request_key, request_hash, cleaned_work_id, cleaned_character_id, version),
+        )
+        conn.execute(
+            """INSERT INTO plum_character_versions(character_id,version_number,prompt_version,display_name,gender,portrait_media_id,portrait_position_x,portrait_position_y,portrait_zoom,avatar_position_x,avatar_position_y,avatar_zoom,intro,opening_scene,character_settings,scenario_prompt,example_dialogues,response_rules,creator_declared_rating,platform_effective_rating,access_policy_version,moderation_decision_id,visibility) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,?)""",
+            (cleaned_character_id, version, prompt_version, name, cleaned_gender, media_id, positions[0], positions[1], cleaned_portrait_zoom, positions[2], positions[3], cleaned_avatar_zoom, cleaned_intro, cleaned_opening, cleaned_settings, cleaned_examples, cleaned_rules, declared_rating, effective_rating, policy_version, decision_id, cleaned_visibility),
+        )
+        for tag in tags:
+            conn.execute("INSERT INTO plum_character_version_tags(character_id,version_number,tag_id) VALUES (?,?,?)", (cleaned_character_id, version, tag["id"]))
+        tag_names = [str(tag["display_name"]) for tag in tags]
+        conn.execute(
+            """UPDATE plum_characters SET display_name=?,tagline=?,intro=?,greeting=?,tags_json=?,avatar_ref=?,cover_ref=?,persona_prompt=?,speaking_style=?,example_dialogues=?,prompt_version=?,content_version=?,content_rating=?,gender=?,portrait_media_id=?,portrait_position_x=?,portrait_position_y=?,portrait_zoom=?,avatar_position_x=?,avatar_position_y=?,avatar_zoom=?,creator_declared_rating=?,platform_effective_rating=?,access_policy_version=?,moderation_decision_id=?,visibility=?,updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'),'YYYY-MM-DD HH24:MI:SS') WHERE id=? AND work_id=?""",
+            (name, cleaned_intro, cleaned_intro, cleaned_opening, json.dumps(tag_names, ensure_ascii=False), portrait_ref, portrait_ref, cleaned_settings, cleaned_rules, cleaned_examples, prompt_version, version, effective_rating, cleaned_gender, media_id, positions[0], positions[1], cleaned_portrait_zoom, positions[2], positions[3], cleaned_avatar_zoom, declared_rating, effective_rating, policy_version, decision_id, cleaned_visibility, cleaned_character_id, cleaned_work_id),
+        )
+        row = conn.execute("SELECT * FROM plum_characters WHERE id=?", (cleaned_character_id,)).fetchone()
+        return dict(row)
 
 
 def _access_code_hash(access_code: str) -> str:
@@ -2199,6 +2334,7 @@ __all__ = [
     "list_user_conversations",
     "create_plum_access_invite", "redeem_plum_access_invite",
     "publish_created_character",
+    "publish_character_revision",
     "restart_conversation", "seed_plum_catalog", "seed_plum_dev",
     "set_character_favorite",
     "set_character_like", "touch_conversation", "update_conversation_model",

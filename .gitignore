@@ -24,6 +24,9 @@ data/moderation/*
 !data/companion_world/
 data/companion_world/*
 !data/companion_world/presets_v1.json
+!data/plum/
+data/plum/*
+!data/plum/tags.json
 !data/system/
 !data/system/**
 ai4all.db

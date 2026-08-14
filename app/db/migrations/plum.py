@@ -1933,6 +1933,72 @@ def _migration_0079_plum_identity_merge_constraints(conn: Connection) -> None:
             )
 
 
+def _migration_0080_plum_creation_drafts(conn: Connection) -> None:
+    """Persist owner-scoped Creation drafts separately from published versions."""
+
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS plum_creation_drafts (
+            work_id TEXT PRIMARY KEY,
+            owner_platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            revision BIGINT NOT NULL DEFAULT 1 CHECK(revision > 0),
+            content_json TEXT NOT NULL,
+            portrait_media_id TEXT,
+            lifecycle_status TEXT NOT NULL DEFAULT 'active'
+                CHECK(lifecycle_status IN ('active', 'archived')),
+            moderation_status TEXT NOT NULL DEFAULT 'not_submitted'
+                CHECK(moderation_status IN ('not_submitted', 'pending_review', 'approved', 'rejected')),
+            moderation_categories_json TEXT NOT NULL DEFAULT '[]',
+            moderation_provider_reference TEXT,
+            published_character_id TEXT,
+            submitted_at TEXT,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            updated_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            UNIQUE(work_id, owner_platform_user_id),
+            FOREIGN KEY(portrait_media_id, owner_platform_user_id)
+                REFERENCES media_assets(id, owner_platform_user_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_plum_creation_drafts_owner_updated
+            ON plum_creation_drafts(owner_platform_user_id, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS ix_plum_creation_drafts_owner_moderation
+            ON plum_creation_drafts(owner_platform_user_id, moderation_status, updated_at DESC);
+        CREATE TABLE IF NOT EXISTS plum_character_version_publish_requests (
+            platform_user_id TEXT NOT NULL REFERENCES platform_users(id),
+            idempotency_key TEXT NOT NULL CHECK(BTRIM(idempotency_key) <> ''),
+            request_hash TEXT NOT NULL CHECK(LENGTH(request_hash)=64),
+            work_id TEXT NOT NULL,
+            character_id TEXT NOT NULL,
+            version_number BIGINT NOT NULL CHECK(version_number > 1),
+            created_at TEXT NOT NULL DEFAULT (to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')),
+            PRIMARY KEY(platform_user_id, idempotency_key),
+            UNIQUE(character_id, version_number),
+            FOREIGN KEY(work_id, platform_user_id)
+                REFERENCES plum_works(id, owner_platform_user_id),
+            FOREIGN KEY(character_id, version_number)
+                REFERENCES plum_character_versions(character_id, version_number)
+                DEFERRABLE INITIALLY DEFERRED
+        );
+        """
+    )
+
+
+def _migration_0081_plum_avatar_zoom(conn: Connection) -> None:
+    """Persist the creator-selected avatar crop zoom on every published version."""
+
+    definition = "INTEGER NOT NULL DEFAULT 100 CHECK(avatar_zoom BETWEEN 100 AND 200)"
+    _ensure_column(conn, "plum_characters", "avatar_zoom", definition)
+    _ensure_column(conn, "plum_character_versions", "avatar_zoom", definition)
+
+
+def _migration_0082_plum_portrait_zoom(conn: Connection) -> None:
+    """Persist the creator-selected full portrait crop zoom."""
+
+    definition = "INTEGER NOT NULL DEFAULT 100 CHECK(portrait_zoom BETWEEN 100 AND 200)"
+    _ensure_column(conn, "plum_characters", "portrait_zoom", definition)
+    _ensure_column(conn, "plum_character_versions", "portrait_zoom", definition)
+
+
 __all__ = [
     "_migration_0064_fibre_mvp",
     "_migration_0065_fibre_character_experience",
@@ -1946,4 +2012,7 @@ __all__ = [
     "_migration_0077_plum_guest_identity_foundation",
     "_migration_0078_plum_external_identity_challenges",
     "_migration_0079_plum_identity_merge_constraints",
+    "_migration_0080_plum_creation_drafts",
+    "_migration_0081_plum_avatar_zoom",
+    "_migration_0082_plum_portrait_zoom",
 ]

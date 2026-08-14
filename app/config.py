@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     # Plum API 可部署开关；开发身份仍受 plum_dev_mode + 非生产环境双重限制。
     plum_enabled: bool = _plum_setting(True, "ENABLED")
     plum_dev_mode: bool = _plum_setting(True, "DEV_MODE")
+    plum_character_moderation_mock_status: str = _plum_setting(
+        "", "CHARACTER_MODERATION_MOCK_STATUS"
+    )
     plum_test_user_id: str = _plum_setting("user_plum_test", "TEST_USER_ID")
     plum_test_phone: str = _plum_setting(
         "plum-test@local.invalid", "TEST_PHONE"

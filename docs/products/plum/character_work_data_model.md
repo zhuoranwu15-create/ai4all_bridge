@@ -167,7 +167,7 @@ Create V1 不依赖 AI 自动拆分 Character Settings：
 | `heat_count` | 现有系统字段 | 非负整数 | 热度/互动聚合值，创作者不能修改 | `48200` |
 | `sort_order` | 现有系统字段 | 整数 | 当前运营排序兼容字段 | `20` |
 | `capabilities_json` | 现有系统字段 | JSON 文本 | 当前角色能力；Create V1 固定文本聊天，不提供 Voice | `{"text":true,"voice":false}` |
-| `fixture_version` | 现有系统字段 | TEXT，可空 | 内置样例数据版本；用户创建角色为空 | `tipsy-reference-v2` |
+| `fixture_version` | 现有系统字段 | TEXT，可空 | 内置样例数据版本；用户创建角色为空 | `plum-reference-v2` |
 
 内置 Character seed 只负责首次创建，不会原地覆盖或重新激活已有 Character。修改
 `REFERENCE_CHARACTERS` 必须同步提升 `FIXTURE_VERSION`，并先通过正式发布流程创建新的不可变
@@ -238,6 +238,19 @@ Tags 必须是平台受控词表，Create/Edit 只提交稳定 `tag_id`，不接
 | `updated_at` | 时间 | 最后更新时间 | `2026-08-12 10:20:00` |
 
 Tag 分类、同义词、互斥规则和多语言翻译表等到产品给出正式 Tag 集合后再设计。本期不把竞品截图里的词直接当生产数据。
+
+V1 运营词表以 `data/plum/tags.json` 作为版本化离线输入源，使用下面的命令校验并幂等同步到
+`plum_tags`：
+
+```bash
+.venv/bin/python -m scripts.sync_plum_tags
+# 或：make sync-plum-tags
+```
+
+同步允许修改展示名、启用状态和排序，但不允许改变既有 `id / code` 身份。配置文件中遗漏的
+数据库 Tag 不会被自动禁用；需要下线时必须显式写入 `status=disabled`，以免一次不完整上传造成
+批量误下线。运行时 API 和创建校验都读取数据库，不在请求过程中直接读取配置文件。未来运营
+后台接管后继续维护同一张表，客户端合同和历史版本关系无需改变。
 
 ### 6.2 `plum_character_version_tags`
 

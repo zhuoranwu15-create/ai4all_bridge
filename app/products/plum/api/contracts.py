@@ -55,13 +55,15 @@ class CreateCharacterRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     idempotency_key: str = Field(min_length=8, max_length=128)
-    display_name: str = Field(min_length=1, max_length=40)
+    display_name: str = Field(min_length=1, max_length=50)
     gender: Literal["male", "female", "non_binary"]
     portrait_media_id: str = Field(min_length=1, max_length=100)
     portrait_position_x: int = Field(default=50, ge=0, le=100)
     portrait_position_y: int = Field(default=50, ge=0, le=100)
+    portrait_zoom: int = Field(default=100, ge=100, le=200)
     avatar_position_x: int = Field(default=50, ge=0, le=100)
     avatar_position_y: int = Field(default=50, ge=0, le=100)
+    avatar_zoom: int = Field(default=100, ge=100, le=200)
     intro: str = Field(min_length=1, max_length=500)
     opening_scene: str = Field(min_length=1, max_length=2000)
     character_settings: str = Field(min_length=1, max_length=12000)
@@ -70,6 +72,8 @@ class CreateCharacterRequest(BaseModel):
     tag_ids: List[str] = Field(min_length=1, max_length=5)
     creator_declared_rating: Literal["general", "mature"]
     visibility: Literal["private", "public"] = "private"
+    adult_confirmed: bool
+    rights_confirmed: bool
 
     @model_validator(mode="after")
     def require_unique_tags(self):
@@ -80,6 +84,48 @@ class CreateCharacterRequest(BaseModel):
             raise ValueError("tag_ids must be non-empty and unique")
         self.tag_ids = cleaned
         return self
+
+
+class CreationDraftContent(BaseModel):
+    """Incomplete, creator-owned snapshot; review fields remain server-owned."""
+
+    model_config = ConfigDict(extra="forbid")
+    display_name: str = Field(default="", max_length=50)
+    gender: Literal["", "male", "female", "non_binary"] = ""
+    portrait_media_id: str = Field(default="", max_length=100)
+    portrait_position_x: int = Field(default=50, ge=0, le=100)
+    portrait_position_y: int = Field(default=50, ge=0, le=100)
+    portrait_zoom: int = Field(default=100, ge=100, le=200)
+    avatar_position_x: int = Field(default=50, ge=0, le=100)
+    avatar_position_y: int = Field(default=50, ge=0, le=100)
+    avatar_zoom: int = Field(default=100, ge=100, le=200)
+    intro: str = Field(default="", max_length=500)
+    opening_scene: str = Field(default="", max_length=2000)
+    character_settings: str = Field(default="", max_length=12000)
+    example_dialogues: str = Field(default="", max_length=6000)
+    response_rules: str = Field(default="", max_length=3000)
+    tag_ids: List[str] = Field(default_factory=list, max_length=5)
+    creator_declared_rating: Literal["general", "mature"] = "general"
+    visibility: Literal["private", "public"] = "private"
+    adult_confirmed: bool = False
+    rights_confirmed: bool = False
+
+
+class CreateCreationDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    content: CreationDraftContent
+
+
+class UpdateCreationDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    content: CreationDraftContent
+
+
+class PublishCreationDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=8, max_length=128)
 
 
 class UpdateModelRequest(BaseModel):

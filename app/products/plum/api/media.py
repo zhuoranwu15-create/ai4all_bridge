@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 
 from app.config import settings
-from app.db import SessionPrincipal
+from app.db import SessionPrincipal, connect
 from app.platform.media.assets import (
     MEDIA_KIND_IMAGE,
     MediaDecodeFailedError,
@@ -25,7 +25,7 @@ from app.platform.media.persistence import (
     pending_expires_at,
 )
 from app.platform.quota.rate_limiter import rate_limiter
-from app.products.plum.api.deps import require_plum_member
+from app.products.plum.api.deps import optional_plum_actor, require_plum_member
 
 router = APIRouter(tags=["plum-creator-media"])
 
@@ -131,6 +131,41 @@ def read_creator_media(
     return Response(
         content=payload,
         media_type=str(asset["mime"]),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/characters/{character_id}/portrait")
+def read_published_character_portrait(
+    character_id: str,
+    actor=Depends(optional_plum_actor),
+) -> Response:
+    """Serve an active public portrait, or a private portrait to its owner."""
+
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT ch.visibility, w.owner_platform_user_id, asset.mime, asset.storage_path
+            FROM plum_characters ch
+            JOIN plum_works w ON w.id=ch.work_id
+            JOIN media_assets asset ON asset.id=ch.portrait_media_id
+            WHERE ch.id=? AND ch.status='active' AND w.lifecycle_status='active'
+            """,
+            (str(character_id).strip(),),
+        ).fetchone()
+    owner_id = str(row["owner_platform_user_id"]) if row is not None else ""
+    actor_owner_id = str(getattr(actor, "platform_user_id", "") or "")
+    if row is None or (
+        str(row["visibility"]) != "public" and actor_owner_id != owner_id
+    ):
+        raise HTTPException(status_code=404, detail="character_portrait_not_found")
+    try:
+        payload = read_media_file(str(row["storage_path"]))
+    except (FileNotFoundError, ValueError) as err:
+        raise HTTPException(status_code=404, detail="character_portrait_not_found") from err
+    return Response(
+        content=payload,
+        media_type=str(row["mime"]),
         headers={"Cache-Control": "private, no-store"},
     )
 
