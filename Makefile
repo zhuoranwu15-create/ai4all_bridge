@@ -108,7 +108,7 @@ run:
 # Plum 前后端联调强制使用隔离的本地 PG 数据库，不读取 .env 中的 DATABASE_URL。
 # 模型密钥仍从 .env 读取；PLUM_DATABASE_URL 可覆盖，但初始化脚本只接受 loopback + 固定库名。
 plum-local-init:
-	APP_ENV=local DATABASE_URL="$(PLUM_DATABASE_URL)" PLUM_ENABLED=true PLUM_DEV_MODE=true \
+	PYTHONPATH=. APP_ENV=local DATABASE_URL="$(PLUM_DATABASE_URL)" PLUM_ENABLED=true PLUM_DEV_MODE=true \
 		PLUM_PUBLIC_TEST_AUTH_ENABLED=false \
 		$(PY) scripts/seed_plum_dev.py
 

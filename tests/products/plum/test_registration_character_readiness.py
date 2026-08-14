@@ -1,16 +1,24 @@
 """Plum 注册登录编排与用户 Character 原子创建准备。"""
 
+from unittest.mock import MagicMock
+
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 import app.db as db
+from app.products.plum.api import app as plum_api
+from app.products.plum.api import deps as plum_deps
 from app.platform.media.persistence import insert_media_asset
 from app.products.plum.api.contracts import CreateCharacterRequest
 from app.products.plum.application.identity import create_plum_login_session
+from app.products.plum.manifest import install_public_routes
 from app.products.plum.infrastructure.repository import (
     PlumConflictError,
     create_or_get_conversation,
     list_characters,
+    list_creator_characters,
     publish_created_character,
     seed_plum_catalog,
 )
@@ -71,6 +79,41 @@ def _publish(owner_id: str, media_id: str, **overrides):
     }
     payload.update(overrides)
     return publish_created_character(**payload)
+
+
+def _character_create_client(monkeypatch, *, app_env: str = "test"):
+    config = MagicMock(wraps=plum_api.settings)
+    config.app_env = app_env
+    config.plum_enabled = True
+    config.plum_dev_mode = False
+    config.plum_email_auth_enabled = False
+    config.plum_google_auth_enabled = False
+    config.plum_session_cookie_name = "plum_session"
+    config.plum_csrf_cookie_name = "plum_csrf"
+    monkeypatch.setattr(plum_api, "settings", config)
+    monkeypatch.setattr(plum_deps, "settings", config)
+    app = FastAPI()
+    install_public_routes(app)
+    return TestClient(app)
+
+
+def _character_create_payload(media_id: str, **overrides):
+    payload = {
+        "idempotency_key": "create-character-api-001",
+        "display_name": "Luna",
+        "gender": "female",
+        "portrait_media_id": media_id,
+        "intro": "A guarded stargazer.",
+        "opening_scene": "The observatory door opens.",
+        "character_settings": "You are Luna, an observant astronomer.",
+        "tag_ids": ["tag_romance", "tag_fantasy"],
+        "creator_declared_rating": "general",
+        "visibility": "private",
+        "adult_confirmed": True,
+        "rights_confirmed": True,
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_verified_user_login_provisions_plum_once_and_issues_audience_session(
@@ -238,6 +281,104 @@ def test_character_create_rejects_cross_owner_media_without_partial_rows(fresh_d
         ).fetchone()["n"] == 0
         assert conn.execute(
             "SELECT status FROM media_assets WHERE id='media_creator_a'"
+        ).fetchone()["status"] == "pending"
+
+
+def test_creator_character_list_is_owner_scoped_and_includes_private_content(fresh_db):
+    _insert_user("user_studio_a", "studio-a@local.invalid", "Studio A")
+    _insert_user("user_studio_b", "studio-b@local.invalid", "Studio B")
+    create_plum_login_session(verified_platform_user_id="user_studio_a")
+    create_plum_login_session(verified_platform_user_id="user_studio_b")
+    _insert_tags()
+    _insert_portrait(media_id="media_studio_a", owner_id="user_studio_a")
+    created = _publish("user_studio_a", "media_studio_a")
+
+    owner_items = list_creator_characters(platform_user_id="user_studio_a")
+    outsider_items = list_creator_characters(platform_user_id="user_studio_b")
+
+    assert [item["id"] for item in owner_items] == [created["character_id"]]
+    assert owner_items[0]["work_id"] == created["work_id"]
+    assert owner_items[0]["visibility"] == "private"
+    assert owner_items[0]["tags"] == [
+        {"id": "tag_fantasy", "display_name": "Fantasy"},
+        {"id": "tag_romance", "display_name": "Romance"},
+    ]
+    assert owner_items[0]["portrait_ref"].endswith("/media_studio_a")
+    assert outsider_items == []
+
+
+def test_character_create_api_requires_csrf_and_publishes_for_owner(
+    fresh_db, monkeypatch
+):
+    _insert_user("user_create_api", "create-api@local.invalid", "API Creator")
+    login = create_plum_login_session(
+        verified_platform_user_id="user_create_api"
+    )
+    _insert_tags()
+    _insert_portrait(media_id="media_create_api", owner_id="user_create_api")
+
+    with _character_create_client(monkeypatch) as client:
+        client.cookies.set("plum_session", login["session"]["token"])
+        client.cookies.set("plum_csrf", "csrf-create-api")
+        missing_csrf = client.post(
+            "/api/v1/products/plum/creator/characters",
+            json=_character_create_payload("media_create_api"),
+        )
+        assert missing_csrf.status_code == 403
+
+        created = client.post(
+            "/api/v1/products/plum/creator/characters",
+            headers={"X-Plum-CSRF": "csrf-create-api"},
+            json=_character_create_payload("media_create_api"),
+        )
+        assert created.status_code == 200
+        assert created.json()["character"]["moderation_decision_id"].startswith(
+            "localmod_"
+        )
+        character_id = created.json()["character"]["character_id"]
+
+        replay = client.post(
+            "/api/v1/products/plum/creator/characters",
+            headers={"X-Plum-CSRF": "csrf-create-api"},
+            json=_character_create_payload("media_create_api"),
+        )
+        tags = client.get("/api/v1/products/plum/creator/tags")
+        studio = client.get("/api/v1/products/plum/creator/characters")
+
+    assert replay.status_code == 200
+    assert replay.json()["character"]["character_id"] == character_id
+    assert [item["id"] for item in tags.json()["items"]] == [
+        "tag_fantasy",
+        "tag_romance",
+    ]
+    assert [item["id"] for item in studio.json()["items"]] == [character_id]
+
+
+def test_character_create_api_fails_closed_without_production_moderation(
+    fresh_db, monkeypatch
+):
+    _insert_user("user_create_prod", "create-prod@local.invalid", "Prod Creator")
+    login = create_plum_login_session(
+        verified_platform_user_id="user_create_prod"
+    )
+    _insert_tags()
+    _insert_portrait(media_id="media_create_prod", owner_id="user_create_prod")
+
+    with _character_create_client(monkeypatch, app_env="production") as client:
+        client.cookies.set("plum_session", login["session"]["token"])
+        client.cookies.set("plum_csrf", "csrf-create-prod")
+        response = client.post(
+            "/api/v1/products/plum/creator/characters",
+            headers={"X-Plum-CSRF": "csrf-create-prod"},
+            json=_character_create_payload("media_create_prod"),
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "character_moderation_unavailable"
+    assert list_creator_characters(platform_user_id="user_create_prod") == []
+    with db.connect() as conn:
+        assert conn.execute(
+            "SELECT status FROM media_assets WHERE id='media_create_prod'"
         ).fetchone()["status"] == "pending"
 
 

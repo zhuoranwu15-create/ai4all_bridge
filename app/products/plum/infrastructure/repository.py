@@ -964,6 +964,21 @@ def seed_plum_dev() -> Dict[str, Any]:
         raise ValueError("PLUM_TEST_USER_ID and PLUM_TEST_PHONE are required")
     entry_account_id = "aid_plum_test"
     with connect() as conn:
+        # Local-only controlled vocabulary. Production taxonomy remains an
+        # explicit product decision and is never inferred from fixture labels.
+        conn.execute(
+            """
+            INSERT INTO plum_tags(id, code, display_name, sort_order, status)
+            VALUES ('tag_romance', 'romance', 'Romance', 10, 'active'),
+                   ('tag_fantasy', 'fantasy', 'Fantasy', 20, 'active')
+            ON CONFLICT(id) DO UPDATE SET
+                code=excluded.code,
+                display_name=excluded.display_name,
+                sort_order=excluded.sort_order,
+                status='active',
+                updated_at=to_char((now() AT TIME ZONE 'Asia/Shanghai'), 'YYYY-MM-DD HH24:MI:SS')
+            """
+        )
         conn.execute(
             """
             INSERT INTO platform_users(id, phone, display_name, status, updated_at)
@@ -1102,6 +1117,77 @@ def list_characters() -> List[Dict[str, Any]]:
             item["badges"] = [dict(badge) for badge in badge_rows]
             items.append(item)
     return items
+
+
+def list_creator_characters(*, platform_user_id: str) -> List[Dict[str, Any]]:
+    """Return the current User's Character projections for creator management."""
+
+    owner_id = _required_bounded_text(
+        platform_user_id, field="platform_user_id", max_length=100
+    )
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT ch.id, ch.work_id, ch.display_name, ch.gender, ch.intro,
+                   ch.tagline, ch.avatar_ref, ch.cover_ref,
+                   ch.portrait_media_id, ch.status, ch.visibility,
+                   ch.creator_declared_rating, ch.platform_effective_rating,
+                   ch.content_version, ch.prompt_version, ch.published_at,
+                   ch.updated_at
+            FROM plum_characters ch
+            JOIN plum_works w ON w.id=ch.work_id
+            WHERE w.owner_kind='platform_user'
+              AND w.owner_platform_user_id=?
+            ORDER BY ch.updated_at DESC, ch.id
+            """,
+            (owner_id,),
+        ).fetchall()
+        tag_rows = conn.execute(
+            """
+            SELECT rel.character_id, tag.id, tag.display_name
+            FROM plum_character_version_tags rel
+            JOIN plum_characters ch
+              ON ch.id=rel.character_id
+             AND ch.content_version=rel.version_number
+            JOIN plum_works w ON w.id=ch.work_id
+            JOIN plum_tags tag ON tag.id=rel.tag_id
+            WHERE w.owner_kind='platform_user'
+              AND w.owner_platform_user_id=?
+            ORDER BY rel.character_id, tag.sort_order, tag.id
+            """,
+            (owner_id,),
+        ).fetchall()
+        tags_by_character: Dict[str, List[Dict[str, str]]] = {}
+        for tag in tag_rows:
+            tags_by_character.setdefault(str(tag["character_id"]), []).append(
+                {"id": str(tag["id"]), "display_name": str(tag["display_name"])}
+            )
+        items: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["tags"] = tags_by_character.get(str(item["id"]), [])
+            media_id = str(item.pop("portrait_media_id") or "").strip()
+            item["portrait_ref"] = (
+                str(item.get("cover_ref") or item.get("avatar_ref") or "").strip()
+                or (f"/api/v1/products/plum/creator/media/{media_id}" if media_id else None)
+            )
+            items.append(item)
+    return items
+
+
+def list_creator_tags() -> List[Dict[str, str]]:
+    """Return the active controlled vocabulary accepted by Character create."""
+
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, code, display_name
+            FROM plum_tags
+            WHERE status='active'
+            ORDER BY sort_order, id
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_model_profiles() -> List[Dict[str, Any]]:
@@ -2195,7 +2281,8 @@ __all__ = [
     "PlumConflictError",
     "create_or_get_conversation", "get_character_experience",
     "get_conversation", "get_entry_account_id", "get_model_profile",
-    "list_characters", "list_conversation_messages", "list_model_profiles",
+    "list_characters", "list_creator_characters", "list_creator_tags",
+    "list_conversation_messages", "list_model_profiles",
     "list_user_conversations",
     "create_plum_access_invite", "redeem_plum_access_invite",
     "publish_created_character",
