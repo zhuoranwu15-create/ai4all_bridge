@@ -103,10 +103,10 @@ def test_m0078_adds_external_identity_and_challenge_schema(
     test_settings, empty_pg_database
 ):
     assert (78, _migration_0078_plum_external_identity_challenges) in _MIGRATIONS
-    assert _MIGRATIONS[-1] == (
+    assert (
         79,
         _migration_0079_plum_identity_merge_constraints,
-    )
+    ) in _MIGRATIONS
     with patch("app.db.settings", test_settings):
         db.migrate_db_through(target_version=77, expected_current_version=0)
         db.migrate_db_through(target_version=78, expected_current_version=77)

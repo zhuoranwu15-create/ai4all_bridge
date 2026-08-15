@@ -72,8 +72,8 @@ class CreateCharacterRequest(BaseModel):
     tag_ids: List[str] = Field(min_length=1, max_length=5)
     creator_declared_rating: Literal["general", "mature"]
     visibility: Literal["private", "public"] = "private"
-    adult_confirmed: bool
-    rights_confirmed: bool
+    adult_confirmed: Literal[True]
+    rights_confirmed: Literal[True]
 
     @model_validator(mode="after")
     def require_unique_tags(self):
