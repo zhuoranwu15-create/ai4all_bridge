@@ -43,6 +43,7 @@ from app.db import (
 from app.platform.auth.identity import ResolvedIdentity
 from app.platform.channels import CHANNEL_APP, get_channel_capability
 from app.products.plum.api.contracts import (
+    CreateCharacterRequest,
     CreateConversationRequest,
     CreateEmailChallengeRequest,
     CreateTurnRequest,
@@ -62,6 +63,10 @@ from app.products.plum.api.deps import (
     require_plum_actor,
 )
 from app.products.plum.application.identity import create_plum_login_session
+from app.products.plum.application.character_moderation import (
+    CharacterModerationUnavailable,
+    character_moderation_plugin,
+)
 from app.products.plum.application.turn_services import PLUM_TURN_SERVICES
 from app.products.plum.infrastructure.repository import (
     PlumConflictError,
@@ -72,10 +77,13 @@ from app.products.plum.infrastructure.repository import (
     get_entry_account_id,
     get_model_profile,
     list_characters,
+    list_creator_characters,
+    list_creator_tags,
     list_conversation_messages,
     list_model_profiles,
     list_user_conversations,
     restart_conversation,
+    publish_created_character,
     set_character_favorite,
     set_character_like,
     touch_conversation,
@@ -717,6 +725,76 @@ def feed(
 
     _no_store(response)
     return {"status": "ok", "items": list_characters()}
+
+
+@router.get("/creator/characters")
+def creator_characters(
+    response: Response,
+    principal: SessionPrincipal = Depends(require_plum_member),
+) -> dict:
+    """Return owner-scoped Character summaries for My Studio."""
+
+    _no_store(response)
+    return {
+        "status": "ok",
+        "items": list_creator_characters(
+            platform_user_id=principal.platform_user_id
+        ),
+    }
+
+
+@router.get("/creator/tags")
+def creator_tags(
+    response: Response,
+    _principal: SessionPrincipal = Depends(require_plum_member),
+) -> dict:
+    """Return the active controlled Tag vocabulary accepted by create."""
+
+    _no_store(response)
+    return {"status": "ok", "items": list_creator_tags()}
+
+
+@router.post("/creator/characters")
+def create_creator_character(
+    payload: CreateCharacterRequest,
+    response: Response,
+    principal: SessionPrincipal = Depends(require_plum_member),
+) -> dict:
+    """Validate, review and atomically publish one owner-scoped Character."""
+
+    create_input = payload.model_dump(
+        exclude={"adult_confirmed", "rights_confirmed"}
+    )
+    try:
+        decision = character_moderation_plugin(app_env=settings.app_env).review(
+            platform_user_id=principal.platform_user_id,
+            normalized_payload=create_input,
+            creator_declared_rating=payload.creator_declared_rating,
+        )
+    except CharacterModerationUnavailable as err:
+        raise HTTPException(
+            status_code=503, detail="character_moderation_unavailable"
+        ) from err
+    if decision.status != "approved":
+        raise HTTPException(status_code=422, detail="character_moderation_rejected")
+    try:
+        created = publish_created_character(
+            platform_user_id=principal.platform_user_id,
+            approved_moderation_decision_id=decision.decision_id,
+            platform_effective_rating=decision.effective_rating,
+            **create_input,
+        )
+    except PlumConflictError as err:
+        raise HTTPException(status_code=409, detail=str(err)) from err
+    except ValueError as err:
+        detail = str(err)
+        if detail == "creator_media_not_claimable":
+            raise HTTPException(status_code=409, detail=detail) from err
+        if detail == "character_tag_invalid":
+            raise HTTPException(status_code=422, detail=detail) from err
+        raise HTTPException(status_code=422, detail="character_payload_invalid") from err
+    _no_store(response)
+    return {"status": "ok", "character": created}
 
 
 def _set_reaction(
